@@ -55,9 +55,11 @@ task_start → plan → develop → QA → close
 | **close** | Internally run `task_verify`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
 
 After every child close, the Goal executor performs self-improvement before
-selecting the next child: it surfaces friction signals into `learnings.jsonl`,
-promotes recurring keys into Tier 2 patterns, and
-prunes stale entries.
+selecting the next child: it may append friction signals to `learnings.jsonl`,
+then reports recurring keys from distinct verified task runs as Tier 2
+candidates. The candidate-reporting step changes neither the raw ledger nor
+pattern files; durable pattern changes require a separately reviewed Harness
+task.
 
 ## TASK.json (4 fields)
 
@@ -120,9 +122,9 @@ All under `plugin/scripts/`. Stdlib only.
 | Script | Purpose | Output |
 |--------|---------|--------|
 | `health.py` | Weighted composite 0-10 score | stdout |
-| `promote_learnings.py` | Tier 3 → Tier 2 promotion + stale pruning | `doc/harness/patterns/` |
+| `promote_learnings.py` | Current-run-validated Tier 2 candidate reporting; no durable writes | stdout |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/` |
-| `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/` |
+| `retro.py` | Weekly retrospective (git + receipt-verified closes + learnings) | stdout; `--save` writes `doc/harness/retros/` |
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
@@ -149,12 +151,13 @@ skills, patterns, or tests.
 ```
 CLAUDE.md                     # Tier 1: key facts, loaded every session
 doc/harness/patterns/*.md     # Tier 2: detailed patterns, read when relevant
-doc/harness/learnings.jsonl   # Tier 3: raw signals, session-transient
+doc/harness/learnings.jsonl   # Tier 3: append-only raw signal ledger
 ```
 
-The post-close self-improvement pass auto-promotes keys with 2+ occurrences
-from Tier 3 → Tier 2, prunes stale entries (>90 days, keeps
-eureka/calibration forever), and reports Tier 1 candidates. It completes before
+Within the post-close self-improvement pass, candidate reporting identifies keys
+repeated across 2+ receipt-verified task runs for a separately reviewed Tier 2
+change. That reporting step performs no durable writes; other self-improvement
+steps may append signals or save a due retro. The pass completes before
 `goal_next_task`, so every child contributes to subsequent work.
 `qa_codifier.py` separately turns validated QA failures into regression tests.
 
@@ -175,6 +178,11 @@ eureka/calibration forever), and reports Tier 1 candidates. It completes before
 | Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
 | Codex SessionStart/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Register the root rollout at startup or immediately before spawn, then bind runtime subagent starts and completions from MCP-hosted daemon threads without a detached process |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
+
+Codex MCP servers are loaded for the lifetime of the Codex session. After a
+Harness runtime update, start a new Codex session before relying on watcher
+changes; replacing the installed files does not hot-reload an existing MCP
+process.
 
 All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session. Gates signal decisions via stdout JSON (`hookSpecificOutput.permissionDecision`), so blocking survives the `|| true` wrapper while a script crash still exits 0.
 

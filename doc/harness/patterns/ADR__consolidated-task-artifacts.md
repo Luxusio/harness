@@ -169,6 +169,18 @@ backfill receipts; the lifecycle watcher remains the sole publisher.
 Acceptance intent lives in `PLAN.md`. User corrections are promoted directly
 into the plan or durable documentation.
 
+`PLAN_SESSION.json` is optional transient planning scratch, not a supported
+control artifact. Normal same-session planning does not create it. A planner
+may use it only for cross-turn or delegated recovery and removes it after
+successful PLAN.md publication; stale legacy copies are ignored rather than
+migrated.
+
+`PROGRESS.md` is the persistent scope/resume aid with seven canonical keys:
+`phase`, `current_ac`, `partial_ac`, `completed_acs`, `allowed_paths`,
+`test_paths`, and `forbidden_paths`. It does not duplicate task identity,
+acceptance decisions, timestamps, attempts, or receipt evidence. Legacy
+verbose/prose copies remain best-effort readable.
+
 ## Consequences
 
 The runtime has one stream, one schema, one read per operation, and one

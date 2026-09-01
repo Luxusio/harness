@@ -12,7 +12,7 @@ updated: 2026-03-30
 - [INF arch initial-stack-assumptions](INF__arch__initial-stack-assumptions.md)
 - [REQ process cli-artifact-writes](REQ__process__cli-artifact-writes.md) — agents must use CLI tool for protected artifact writes; direct inline writes waste 500-2000 tokens
 - [INF harness spec-exists](INF__harness__spec-exists.md) — harness architecture spec at doc/harness/ (SPEC.md, IMPORT_LIST.md, AUTO_ROUTING.md)
-- [REQ process plan-skill-review-pipeline](REQ__process__plan-skill-review-pipeline.md) — plan skill must run 7-phase dual-voice pipeline; old linear procedure retired (2026-04-10)
+- [REQ process plan-skill-review-pipeline](REQ__process__plan-skill-review-pipeline.md) — plan skill conservatively selects compact or full planning; compact may skip plan-time Engineering Review, while implementation `review-code` remains mandatory
 - [GUIDE document taxonomy](GUIDE__document-taxonomy.md) — durable project knowledge uses typed documents under `doc/<area>/`
 - [REQ process subagent-receipt-binding](REQ__process__subagent-receipt-binding.md) — every hook-observed subagent stop records exactly one completion receipt; provenance checks must match the transcript shape the runtime actually emits (2026-08-27)
 - [GUIDE mcp tool-naming](GUIDE__mcp-tool-naming.md) — Claude plugin uses `mcp__plugin_harness_harness__`, Codex uses bare names, `mcp__harness__` is legacy/banned in `plugin/`; dev sessions exposing bare names see qa-* relay (expected, not a bug)

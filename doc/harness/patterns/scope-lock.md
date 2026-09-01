@@ -10,11 +10,10 @@ enforced by `plugin/scripts/prewrite_gate.py`.
 ## PROGRESS.md schema
 
 ```yaml
-task_id: TASK__my-feature
-phase: 3
-completed_acs: []
+phase: implementation
 current_ac: AC-001
 partial_ac: null
+completed_acs: []
 
 # Scope lock (prewrite_gate reads these three arrays)
 allowed_paths:
@@ -30,11 +29,13 @@ forbidden_paths:
   - src/billing.py        # separate concern
   - db/migrations/        # separate task
 
-decisions: []
-attempts: []
-notes: []
-updated: 2026-04-17T00:00:00Z
 ```
+
+These are the seven canonical top-level keys. `phase`, `current_ac`, and
+`partial_ac` are strings or null; the other four values are lists of strings.
+Task identity comes from the parent directory, acceptance intent from PLAN.md,
+and review/QA evidence from RECEIPTS.jsonl. Detailed notes, decisions, attempts,
+and timestamps belong in checkpoints, durable docs, or the final report.
 
 ## Gate behavior
 
@@ -50,8 +51,9 @@ updated: 2026-04-17T00:00:00Z
 
 ## Migration guidance
 
-Existing tasks without PROGRESS.md are unaffected — scope lock is opt-in via PROGRESS.md presence.
-New tasks get PROGRESS.md written by the plan skill at Phase 3.1.
+Existing tasks without PROGRESS.md are unaffected. Legacy verbose/prose files
+remain best-effort readable and are not bulk migrated. New files are written by
+the develop coordinator at Phase 3.1 using the seven-key canonical shape.
 
 ## Pattern entries
 

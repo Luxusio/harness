@@ -100,7 +100,9 @@ Applies to any fix loop in develop: per-AC fix, Phase 7 verification fix, Phase 
 browser debug (browser-verification.md). If the SAME issue fails to resolve after
 3 consecutive fix attempts, STOP. Do not try a 4th attempt.
 
-Track attempts per-issue in PROGRESS.md under `attempts:` (see Phase 3 schema).
+Track attempts per issue in working context and include the current count and
+last failure in an auto-checkpoint note when a session boundary is possible.
+Do not add an `attempts` key to canonical PROGRESS.md.
 An "issue" is identified by {test_name | symptom | file:line} — different
 failures in the same cycle don't share a counter.
 

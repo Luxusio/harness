@@ -82,10 +82,12 @@ durable contract.
 
 ### Review Status table (end of PLAN.md)
 
-Assemble from the phase-transition summaries and decisions kept in working
-context. Do not create another chronological file.
+Assemble from the selected procedure's truthful assessment state and decisions
+kept in working context. Do not create another chronological file.
 
-```
+Full procedure:
+
+```markdown
 ## Review Status
 
 | Phase | Ran | Voices | Confirmed | Disagree | User Challenges |
@@ -96,12 +98,28 @@ context. Do not create another chronological file.
 | 4 DX | <yes/skipped> | <dual/—> | <N/—> | <N/—> | <N/—> |
 
 **Auto-decided:** <N> | **Taste surfaced:** <N> | **User Challenges:** <N>
-**Execution mode:** <light/standard>
+**Planning procedure:** <compact/full>
+**Execution mode:** <standard/micro>
+```
+
+Compact procedure:
+
+```markdown
+## Review Status
+
+| Assessment | Ran | Evidence | Escalations after inspection | User Challenges |
+|------------|-----|----------|------------------------------|-----------------|
+| Compact code/context assessment | yes | <named files/flows> | none | <N> |
+
+**Planning procedure:** compact
+**Execution mode:** standard
 ```
 
 ### Plan Review Report
 
-```
+Full procedure:
+
+```markdown
 ## Plan Review Report
 
 | Phase | Ran | Status | Findings |
@@ -112,6 +130,18 @@ context. Do not create another chronological file.
 | 4 DX Review | <yes/no (no DX scope)> | — | — |
 
 **VERDICT:** REVIEWED — plan has passed the full dual-voice pipeline.
+```
+
+Compact procedure:
+
+```markdown
+## Plan Review Report
+
+| Assessment | Status | Findings |
+|------------|--------|----------|
+| Compact code/context assessment | complete | <N> confirmed; post-inspection escalation recheck clear |
+
+**VERDICT:** ASSESSED_COMPACT — low-risk plan passed the bounded code/context assessment; no full dual-voice review is claimed.
 ```
 
 If review state is unavailable, use a placeholder table with all "—" and a
@@ -163,14 +193,16 @@ Schema (one JSON line per entry, append to `doc/harness/learnings.jsonl`):
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-# echo '{"ts":"'"$_TS"'","type":"operational|pitfall|eureka|feedback","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"FACT + FIX","source":"observed"}' >> doc/harness/learnings.jsonl
+# echo '{"ts":"'"$_TS"'","type":"operational|pitfall|eureka|feedback","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"FACT + FIX","source":"observed","task":"TASK__<id>","task_run_id":"<TASK.json run_id>"}' >> doc/harness/learnings.jsonl
 ```
 
 `type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries that contradict conventional wisdom. `type=feedback` for user-stated preferences that should shape future behavior. Creates file if absent. Silent-fail on write error. Never blocks task close.
 
-## 6.9 Close session
+## 6.9 Remove optional planning scratch
 
-Set `PLAN_SESSION.json.state` to `closed`. Task is now ready for implementation.
+After every successful `write_plan`, remove task-local PLAN_SESSION.json when it
+exists. PLAN.md and TASK.json are sufficient for resume. Leave scratch in place
+only when publication failed and it carries recovery value.
 
 ## 6.10 Completion report
 
@@ -181,7 +213,8 @@ Task:    TASK__<id>
 Plan:    doc/harness/tasks/TASK__<id>/PLAN.md
 
 Phases run:        <list, e.g. 0, 1, 2, 3, 4, 5, 6>
-Execution mode:    <light/standard>
+Planning procedure:<compact/full>
+Execution mode:    <standard/micro>
 Auto-decided:      <N> decisions
 Taste surfaced:    <N> items
 User Challenges:   <N> items

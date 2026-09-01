@@ -46,7 +46,7 @@ expansion.
 
 At Phase 2, ask whether to re-plan, narrow, or proceed when search disproves the
 premise. At Phase 5, ask whether to revert, add to scope, or defer a necessary
-out-of-plan edit. Persist the choice in PLAN/PROGRESS or a durable artifact.
+out-of-plan edit. Persist the choice in PLAN.md, a checkpoint note, or a durable artifact.
 
 ## Error Philosophy
 
@@ -142,7 +142,23 @@ retry only that dependency path sequentially. Load
 
 ### Phase 3.1: Scope Lock
 
-Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
+The coordinator is the only PROGRESS.md writer. New files use exactly these
+seven top-level keys and no narrative bookkeeping fields:
+
+```yaml
+phase: implementation
+current_ac: AC-001
+partial_ac: null
+completed_acs: []
+allowed_paths: []
+test_paths: []
+forbidden_paths: []
+```
+
+`phase`, `current_ac`, and `partial_ac` are strings or null;
+`completed_acs` and all path fields are lists of strings. Existing verbose or
+prose task files remain readable on a best-effort basis and are not bulk
+rewritten. Declare allowed / test / forbidden paths before each file edit:
 - allowed → proceed. test → proceed. forbidden → BLOCK + escalate. unlisted → WARN, auto-add to allowed with note.
 
 ### Phase 3: Implement
@@ -158,10 +174,12 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    current validation, auth, transactions, concurrency safety, cleanup,
    security, accessibility, tests, or requested behavior for fewer lines.
 
-After each AC, record status, targeted tests, completeness, deferred edges,
-decisions and failed attempts in PROGRESS. A completed AC needs its happy path,
-important negative/edge paths and regression evidence; partial work remains
-explicit. Each worker runs its own targeted tests. Full-suite verification
+After each AC, update `phase`, `current_ac`, `partial_ac`, and `completed_acs`.
+Keep detailed decisions, test evidence, deferred edges, and failed-attempt
+history in PLAN.md, receipts, checkpoint notes, or the final report instead of
+adding PROGRESS keys. A completed AC needs its happy path, important
+negative/edge paths and regression evidence; partial work remains explicit.
+Each worker runs its own targeted tests. Full-suite verification
 belongs to the required qa-* agents; hooks record their lifecycle and
 `task_verify` requires completed explicit PASS verdicts.
 
@@ -190,7 +208,7 @@ Runs continuously during Phase 3.
 
   *Regression rule:* if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
 
-  *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in PROGRESS.md and the final verification evidence.
+  *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in the final verification evidence and, when resume needs it, a checkpoint note.
 
   QA agents may include `codifiable:` YAML blocks in their final response for
   future regression-test extraction. Do not write critic artifacts for this.
@@ -209,7 +227,7 @@ After all ACs done. Each runs only if prerequisite exists.
 
 Haiku agent cross-references every AC against `git diff --stat` and classifies each as DONE / PARTIAL / NOT DONE / CHANGED + category (CODE / TEST / MIGRATION / CONFIG / DOCS). Be conservative with DONE (file touched ≠ AC done); be generous with CHANGED (goal met by different means).
 
-For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; log scope-cut + blocked in PROGRESS.md; mark evolved as CHANGED with the new approach.
+For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; report scope-cut + blocked in the checkpoint/final evidence; mark evolved as CHANGED with the new approach.
 
 ### Phase 4.5–4.8: Quality Audit Pipeline
 
@@ -231,7 +249,7 @@ extra plan file.
 
 `git diff --name-only` — each file is:
 - In scope → proceed.
-- Related but unlisted → acceptable, note in PROGRESS.md or final response.
+- Related but unlisted → acceptable, add the path to the appropriate PROGRESS list and explain it in the final response.
 - Unrelated → revert. Belongs in a separate task.
 - Missing from plan but necessary → note as "unplanned-but-necessary".
 

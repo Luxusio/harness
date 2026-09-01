@@ -669,6 +669,116 @@ class TestReadinessIsTriState(unittest.TestCase):
         )
         self.assertIn("Do not spawn them yet", gated["next_action"])
 
+    def test_live_worker_error_is_exposed_as_unrecordable(self):
+        harness_server = _server()
+
+        class Manager:
+            def worker_error(self, thread_id):
+                self.thread_id = thread_id
+                return "RuntimeError: receipt lock unavailable"
+
+        class Server:
+            watcher_manager = Manager()
+            watcher_thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: False,
+             ), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {
+                     "root_thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 },
+             ):
+            status = harness_server._watcher_status(
+                task_dir="", task_id="t", run_id="r",
+            )
+
+        self.assertIs(status["receipts_recordable"], False)
+        self.assertIn("receipt lock unavailable", status["last_watcher_error"])
+
+    def test_earlier_receipt_does_not_mask_live_worker_error(self):
+        harness_server = _server()
+
+        class Manager:
+            @staticmethod
+            def worker_error(_thread_id):
+                return "RuntimeError: receipt lock unavailable"
+
+        class Server:
+            watcher_manager = Manager()
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: True,
+             ), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {
+                     "root_thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 },
+             ):
+            status = harness_server._watcher_status(
+                task_dir="task", task_id="t", run_id="r",
+            )
+
+        self.assertIs(status["receipts_recordable"], False)
+        self.assertIn("receipt lock unavailable", status["last_watcher_error"])
+
+    def test_diagnostic_root_id_cannot_hide_current_worker_error(self):
+        harness_server = _server()
+        current = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+        planted = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+
+        class Manager:
+            queried = []
+
+            @classmethod
+            def worker_error(cls, thread_id):
+                cls.queried.append(thread_id)
+                return (
+                    "RuntimeError: receipt lock unavailable"
+                    if thread_id == current else ""
+                )
+
+        class Server:
+            watcher_manager = Manager()
+            watcher_thread_id = current
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.dict(
+                 os.environ, {"CODEX_THREAD_ID": ""}, clear=False,
+             ), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "read_session_hint", lambda *_a, **_k: planted,
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: True,
+             ), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {
+                     "root_thread_id": planted,
+                 },
+             ):
+            status = harness_server._watcher_status(
+                task_dir="task", task_id="t", run_id="r",
+            )
+
+        self.assertEqual(Manager.queried, [current])
+        self.assertIs(status["receipts_recordable"], False)
+        self.assertIn("receipt lock unavailable", status["last_watcher_error"])
+
     def test_a_receipt_from_this_run_disproves_the_warning(self):
         """The file the close gate reads is better evidence than a heuristic."""
         harness_server = _server()
@@ -680,6 +790,8 @@ class TestReadinessIsTriState(unittest.TestCase):
                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {},
             ), mock.patch.object(
                 harness_server, "_server_runtime", lambda: "claude",
+            ), mock.patch.object(
+                harness_server, "_SERVER", None,
             ):
                 status = harness_server._watcher_status(
                     task_dir=task_dir, task_id="t", run_id=run_id,
@@ -735,6 +847,40 @@ class TestReadinessIsTriState(unittest.TestCase):
             self._status_with_live_server(harness_server, "codex")["manager_running"],
             True,
         )
+
+    def test_dead_codex_manager_is_unrecordable(self):
+        harness_server = _server()
+
+        class Manager:
+            @staticmethod
+            def is_running():
+                return False
+
+            @staticmethod
+            def worker_error(_thread_id):
+                return ""
+
+        class Server:
+            watcher_manager = Manager()
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: False,
+             ), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {},
+             ):
+            status = harness_server._watcher_status(
+                task_dir="", task_id="t", run_id="r",
+            )
+
+        self.assertIs(status["receipts_recordable"], False)
+        self.assertIs(status["manager_running"], False)
+        self.assertIn("not running", status["receipts_unrecordable_reason"])
 
     def test_untrusted_reason_cannot_impersonate_an_instruction(self):
         """The diagnostics file can arrive with a clone; next_action is trusted."""
@@ -1389,6 +1535,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
 
     def test_exact_published_marker_is_required_and_registration_succeeds(self):
         harness_server = _server()
+        server = mock.Mock(watcher_thread_id="stale")
 
         def restore(payload, **kwargs):
             data = json.loads(payload.decode("utf-8"))
@@ -1434,6 +1581,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
 
             with \
              mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
+             mock.patch.object(harness_server, "_SERVER", server), \
              mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
              mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=restore):
                 result = harness_server._register_task_start_watcher(
@@ -1446,6 +1594,8 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
             )
 
         self.assertIs(result["registered"], True)
+        self.assertEqual(result["thread_id"], self.session_id)
+        self.assertEqual(server.watcher_thread_id, self.session_id)
         self.assertIs(diagnostics["registration_present"], True)
         self.assertEqual(diagnostics["last_registration_error"], "")
 

@@ -1,7 +1,6 @@
 import importlib
 import os
 import sys
-import tempfile
 import unittest
 
 
@@ -16,44 +15,34 @@ class TestPromoteLearningsFeedbackRules(unittest.TestCase):
         importlib.reload(promote_learnings)
         self.module = promote_learnings
 
-    def test_feedback_rule_renders_readable_prose(self):
-        entry = {
-            "type": "feedback-rule",
-            "key": "runtime-specific-plugin-changes",
-            "trigger": "changing runtime-specific harness plugin behavior",
-            "action": "review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`",
-            "verification": "explaining in `HANDOFF.md` which side changed and why any other side was left unchanged",
-            "reason": "prevents runtime port drift",
-            "insight": '{"trigger":"do not render this raw"}',
-        }
-
-        body = self.module._entry_detail(entry, 2)
-
-        self.assertIn("When changing runtime-specific harness plugin behavior", body)
-        self.assertIn("Verify by explaining in `HANDOFF.md`", body)
-        self.assertIn("Why: prevents runtime port drift.", body)
-        self.assertNotIn('{"trigger"', body)
-        self.assertNotIn("trigger:", body)
-
-    def test_append_pattern_uses_feedback_rule_renderer(self):
-        entry = {
+    def test_feedback_rule_fields_use_shared_markdown_validator(self):
+        base = {
+            "ts": "2026-08-31T12:00:00Z",
             "type": "feedback-rule",
             "key": "feedback-rule-capture",
-            "trigger": "a user correction names a reusable future situation",
-            "action": "capture only the conditional behavior rule",
-            "verification": "recording status none, captured, or rejected in HANDOFF",
-            "insight": "raw fallback should not appear",
+            "insight": "Capture a reusable correction.",
+            "task": "TASK__current",
+            "task_run_id": "run-current",
+            "trigger": "a user correction recurs",
+            "action": "capture the conditional behavior",
+            "verification": "check the durable result",
         }
+        self.assertTrue(self.module._valid_learning_candidate(base))
+        for field in ("trigger", "action", "verification"):
+            unsafe = dict(base)
+            unsafe[field] = "Unsafe\n## injected"
+            self.assertFalse(self.module._valid_learning_candidate(unsafe))
 
-        with tempfile.TemporaryDirectory() as td:
-            path = self.module._append_pattern(td, "general", entry["key"], entry, 2, False)
-            with open(path, encoding="utf-8") as f:
-                content = f.read()
-
-        self.assertIn("## feedback-rule-capture", content)
-        self.assertIn("When a user correction names a reusable future situation", content)
-        self.assertIn("Verify by recording status none, captured, or rejected in HANDOFF.", content)
-        self.assertNotIn("raw fallback should not appear", content)
+    def test_plain_feedback_does_not_require_rule_fields(self):
+        entry = {
+            "ts": "2026-08-31T12:00:00Z",
+            "type": "feedback",
+            "key": "feedback-capture",
+            "insight": "Preserve this reusable feedback.",
+            "task": "TASK__current",
+            "task_run_id": "run-current",
+        }
+        self.assertTrue(self.module._valid_learning_candidate(entry))
 
 
 if __name__ == "__main__":

@@ -10,7 +10,11 @@ Sub-file for plan/SKILL.md. Each of the 4 review phases follows the same dual-vo
 
 Spawn two voices. Voice A is always an Agent subagent, independent (no prior-phase context). Voice B's transport is selected by the `cross_model_voice` field set at Phase 0.3; it carries the same prompt plus a `## Prior phase findings` section (terse bullet summary from earlier consensus tables). **Exception:** Phase 2 (Design) — both voices fully independent to prevent aesthetic anchoring.
 
-**Voice B transport (read `cross_model_voice` from PLAN_SESSION.json):**
+**Voice B transport:** use the freshly probed working-context value. Optional
+PLAN_SESSION.json may supply a recovery hint only. On resume, validate the hint
+against the four allowed values below, re-probe current command/tool
+availability, and re-apply `HARNESS_DISABLE_CROSS_MODEL=1`; an invalid,
+unavailable, disabled, stale, or malformed hint falls back to `agent`.
 
 | Value | Transport | Command |
 |-------|-----------|---------|
@@ -106,7 +110,7 @@ Do not create a chronological side file. PLAN.md is the durable review record.
 
 ---
 
-## Phase 1 — CEO Review (always runs)
+## Phase 1 — CEO Review (full procedure)
 
 Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-ceo-review/SKILL.md`. Conflict priority: **P1 + P2**.
 
@@ -167,7 +171,7 @@ Brief format: `| dimension | score | finding | fix |` — score each dimension 0
 
 ---
 
-## Phase 3 — Engineering Review (always runs)
+## Phase 3 — Engineering Review (full procedure)
 
 Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 + P3**.
 
@@ -235,7 +239,9 @@ cat >> doc/harness/tasks/TASK__<id>/deferred-scope.md << EOF
 EOF
 ```
 
-Create file at Phase 1 start (`touch`). Phase 6.2 incorporates summary into PLAN.md "NOT in scope" with cross-references. Collected in `light` mode too.
+Full planning creates this file at Phase 1 start (`touch`), and Phase 6.2
+incorporates its summary into PLAN.md "NOT in scope". Compact planning does not
+create the sidecar; any deferred item is written directly into PLAN.md.
 
 ---
 

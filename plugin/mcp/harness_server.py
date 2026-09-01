@@ -341,6 +341,8 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
     """
     if _server_runtime() != "codex":
         return None
+    if _SERVER is not None:
+        _SERVER.watcher_thread_id = ""
 
     payload_data = {"cwd": repo_root}
     session_hint = read_session_hint(repo_root) or ""
@@ -376,13 +378,23 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
             reason = f"{type(exc).__name__}: {exc}"
 
     if registered and outcome.get("status") in (None, _REGISTRATION_REGISTERED):
+        registered_thread_id = str(outcome.get("thread_id") or session_hint or "")
+        if _SERVER is not None:
+            # The diagnostics file is advisory. Retain the exact identity that
+            # successfully passed registration and active-task binding so live
+            # manager errors can be queried in MCP hosts without thread env.
+            _SERVER.watcher_thread_id = registered_thread_id
         _write_watcher_diagnostics({
             "registration_present": True,
             "last_registration_error": "",
             "last_registration_note": "",
-            "root_thread_id": outcome.get("thread_id") or session_hint or None,
+            "root_thread_id": registered_thread_id or None,
         }, repo_root)
-        return {"registered": True, "reason": ""}
+        return {
+            "registered": True,
+            "reason": "",
+            "thread_id": registered_thread_id,
+        }
 
     reason = reason or str(outcome.get("reason") or "")
     if not reason:
@@ -485,6 +497,13 @@ def _watcher_status(
     except Exception:
         capability_warning = ""
     manager_running = _SERVER.watcher_manager is not None if _SERVER is not None else None
+    if _SERVER is not None and _SERVER.watcher_manager is not None:
+        is_running = getattr(_SERVER.watcher_manager, "is_running", None)
+        if callable(is_running):
+            try:
+                manager_running = bool(is_running())
+            except Exception:
+                manager_running = False
     if _WatcherManager is None or _server_runtime() != "codex":
         # No Codex watcher is expected in this runtime, so a definite False
         # would report a component as broken for not doing what it was never
@@ -498,6 +517,26 @@ def _watcher_status(
         or diagnostics.get("last_watcher_error")
         or ""
     )
+    if _SERVER is not None and _SERVER.watcher_manager is not None:
+        worker_error = getattr(_SERVER.watcher_manager, "worker_error", None)
+        if callable(worker_error):
+            try:
+                # The diagnostics file is display-only, attacker-influenced
+                # data. Index authoritative in-memory worker state by the
+                # exact identity retained after successful task registration.
+                # The env fallback supports older direct hosts, but ordinary
+                # Codex MCP processes have no CODEX_THREAD_ID of their own.
+                current_thread_id = str(
+                    getattr(_SERVER, "watcher_thread_id", "")
+                    or os.environ.get("CODEX_THREAD_ID")
+                    or ""
+                )
+                if current_thread_id:
+                    last_watcher_error = worker_error(
+                        current_thread_id
+                    ) or last_watcher_error
+            except Exception:
+                pass
 
     # Readiness is per-runtime. `capability_warning` inspects the *Claude*
     # plugin registration only, so on Codex it is silent even when the Codex
@@ -531,6 +570,10 @@ def _watcher_status(
         unrecordable_summary = "Receipt watcher failed to start."
         unrecordable_reason = f"Receipt watcher failed to start: {last_watcher_error}"
         recordable = False
+    elif _server_runtime() == "codex" and manager_running is False:
+        unrecordable_summary = "Receipt watcher manager is not running."
+        unrecordable_reason = "Receipt watcher manager is not running."
+        recordable = False
     elif capability_warning and not _run_has_receipts(task_dir, run_id, snapshot):
         # A suspicion, not an observation: this inspects plugin registration,
         # not whether receipts are actually being written. Checked against the
@@ -544,9 +587,10 @@ def _watcher_status(
         unrecordable_reason = capability_warning
         recordable = None
 
-    if recordable is not True and _run_has_receipts(task_dir, run_id, snapshot):
-        # The live run has already recorded a receipt. Whatever the signal says,
-        # it is contradicted by the file the close gate reads.
+    if recordable is None and _run_has_receipts(task_dir, run_id, snapshot):
+        # A receipt disproves only the heuristic capability warning. Positive
+        # live failures (worker error, dead manager, failed registration) may
+        # occur after an earlier start receipt and must remain fail-closed.
         unrecordable_summary = ""
         unrecordable_reason = ""
         recordable = True
@@ -1551,6 +1595,7 @@ class McpServer:
         self.protocol_version = SUPPORTED_PROTOCOLS[0]
         self.framed_stdio = False
         self.watcher_manager = None
+        self.watcher_thread_id = ""
         self.last_watcher_error = ""
         self.runtime = ""
         global _SERVER
@@ -1576,6 +1621,7 @@ class McpServer:
     def close(self) -> None:
         manager = self.watcher_manager
         self.watcher_manager = None
+        self.watcher_thread_id = ""
         if manager is not None:
             try:
                 manager.stop()

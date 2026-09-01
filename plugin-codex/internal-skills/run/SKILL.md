@@ -97,7 +97,7 @@ Use inline execution as the fallback for roles that normally benefit from indepe
 
 ## Sub-file
 
-`${HARNESS_PLUGIN_ROOT}/internal-skills/run/self-improvement.md` — signal detection, auto-fix, tiered-learning promotion + pruning pipeline (runs after each task close).
+`${HARNESS_PLUGIN_ROOT}/internal-skills/run/self-improvement.md` — signal detection, auto-fix, and validated tiered-learning promotion with an append-only raw ledger (runs after each task close).
 
 ## Voice
 
@@ -329,8 +329,9 @@ After every task close, run the pipeline in `self-improvement.md` (Claude tree):
   evidence tier instead of removing a gate.
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)
-- Promote learnings: Tier 3 (jsonl) -> Tier 2 (patterns/*.md) -> Tier 1 (CLAUDE.md or AGENTS.md)
-- Prune promoted entries and stale (>90 day) non-eureka entries
+- Promote learnings only when a validated entry matches the just-closed receipt-verified task/run; distinct verified historical task/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
+- Preserve `learnings.jsonl` as append-only; promotion never rewrites or prunes raw rows, and no-signal runs remain no-write
+- Trigger retro independently after three receipt-verified task closes, using retro.py's shared close predicate rather than task-directory activity
 
 Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up tasks
 are different: they must be run or explicitly blocked before DONE.

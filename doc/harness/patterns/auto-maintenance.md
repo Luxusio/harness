@@ -5,15 +5,38 @@ updated: 2026-08-13
 
 # Auto-Maintenance Pattern
 
-The harness post-close pipeline (run/self-improvement.md) automatically fires
-retrospectives and hygiene audits after each task close, surfacing output in the
-close-time command output.
+The harness post-close pipeline (run/self-improvement.md) conditionally evaluates
+learning candidate reporting and retrospectives after close. It stays non-gating and only
+surfaces output that changed a durable artifact or needs attention.
+
+## Learning candidate-reporting semantics
+
+Automatic reporting requires at least one validated learning row bound to the
+just-closed task id and TASK.json run_id. Knowledge rows use an allowlisted type,
+canonical timestamp, bounded key and human insight; feedback rules also contain
+trigger, action, and verification. One valid row from each distinct
+receipt-verified closed task/run may meet the repetition threshold, but backlog
+alone cannot trigger a run and duplicate rows from one run count once.
+Diagnostic gate/crash/bypass/stop/codifier rows are not candidates. The raw
+learnings ledger is append-only and the close-time pass never rewrites or prunes
+it. Qualifying keys are reported only; the pass performs no durable pattern
+writes. Applying a candidate requires a separately reviewed Harness task.
 
 ## Retro auto-trigger semantics
 
-Threshold: `>= 3 tasks closed since the mtime of the most recent doc/harness/retros/*.md`.
+Threshold: `>= 3 receipt-verified tasks closed since the mtime of the most recent doc/harness/retros/*.md`.
 
 - If no prior retros exist: threshold seeds from first task close (first 3 closes triggers first retro).
+- A close counts only when TASK.json is safely readable, its fingerprint matches
+  RECEIPTS.jsonl, and TASK.json publication mtime is newer than the cutoff. The
+  TASK/status/TASK identity check stays inside one receipt transaction.
+- Open, blocked, reopened, invalid, unsafe, and merely touched task directories do not count.
+- The tasks root is descriptor-bound and rejects symlink, writable, or rebound state.
+- The auto-trigger and retro report share `retro.py`'s verified-close predicate.
+- Retro reads only validated metadata from a descriptor-bound, owner-controlled
+  regular learning ledger; free-form insight text is never rendered.
+- `--save` publishes through a descriptor-bound, no-follow retros directory and
+  rejects unsafe existing report leaves.
 - `retro.py --save` writes to `doc/harness/retros/<date>.md`.
 - First-ever fire emits banner: `Auto-retro enabled. Silence with HARNESS_DISABLE_RETRO=1.`
 - Pipeline wraps call in `|| true` — retro failure never blocks task close.

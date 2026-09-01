@@ -117,7 +117,7 @@ When first-principles reaches a conclusion contradicting conventional wisdom:
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"ONE_LINE_SUMMARY","source":"first-principles","task":"TASK__<id>","task_run_id":"<TASK.json run_id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 Only genuine first-principles discoveries. Non-blocking.
 

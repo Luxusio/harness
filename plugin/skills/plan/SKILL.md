@@ -1,12 +1,12 @@
 ---
 name: plan
-description: Harness-native 7-phase dual-voice review pipeline that writes PLAN.md and related task contract artefacts via MCP.
+description: Harness-native planning pipeline with a compact low-risk branch and a full dual-voice branch; both write PLAN.md and task lens declarations via MCP.
 argument-hint: <task-slug>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__write_plan
 ---
 
-Harness-native 7-phase dual-voice review pipeline. Runs structured review across CEO, Design, Engineering, and DX lenses; builds adversarial consensus via two independent voices; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
+Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full 7-phase dual-voice review. Both publish the final task contract through the protected-artifact MCP.
 
 > Current artifact model: acceptance criteria live in `PLAN.md`; `write_plan`
 > publishes it with required lens declarations in `TASK.json`.
@@ -17,28 +17,29 @@ This skill is split across four sub-files. Load on demand:
 
 | File | Content |
 |------|---------|
-| `intake.md` | Phase 0 (spawned detection, session recovery, task pack read, git context, base branch, scope detection, execution-mode branch) |
+| `intake.md` | Phase 0 (spawned detection, session recovery, task pack read, git context, base branch, scope detection, planning-procedure branch) |
 | `review-phases.md` | Phases 1-4 (dual-voice template + per-lens dimensions, checklists, degradation matrix) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, AskUserQuestion format |
 | `write-artifacts.md` | Phase 6 (PLAN.md / TASK.json lens declarations + MCP writes, learnings, close) |
 
-Phase 5 (user-facing gate) stays inline below.
+Phase 5 (procedure-aware user gate) stays inline below.
 
 ---
 
 ## Invariants
 
-- **Dual Voice required.** Every review phase (1-4) spawns Voice A and Voice B via Agent. Single-voice is prohibited; degradation matrix applies when a voice fails.
-- **Premise gate mandatory.** Phase 1.1 emits exactly one AskUserQuestion before Phase 5. Premises are never auto-decided.
+- **Full-plan Dual Voice required.** Every full-plan review phase (1-4) spawns Voice A and Voice B via Agent. Single-voice is prohibited; degradation matrix applies when a voice fails.
+- **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
+- **Premise gate mandatory for full plans.** Phase 1.1 emits exactly one AskUserQuestion before Phase 5. Compact plans ask only when a real User Challenge exists.
 - **Never-auto decisions.** User Challenge items get their own AskUserQuestion at Phase 5.3.
 - **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `write_plan`. Never Write/Edit them directly.
 - **Zero browser-flag participation.** Does not invent or inspect undeclared browser verification flags.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
-- **Never abort.** Both-voices-fail surfaces as a finding and continues. Blocked is terminal only for premise gate refusal. Never silently redirect to a shorter path. Auto-decide never redirects to interactive mid-pipeline.
+- **Never abort.** In full planning, both-voices-fail surfaces as a finding and continues; premise refusal may block. Never silently shorten a selected full procedure. Compact may escalate to full after inspection, but never bypasses its own fail-closed assessment.
 - **Auto-decide mode.** When active, resolves intermediate AskUserQuestion except premise gate and User Challenge items via the 6 Decision Principles. Replaces judgment, not analysis depth.
 - **Spawned session.** `spawned_session: true` or `HARNESS_SPAWNED=1` → force auto-decide, auto-resolve ALL AskUserQuestion (including premise gate), suppress upgrade/usage-stats prompts, emit prose completion instead of waiting.
-- **Sequential execution.** 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase completes fully before next.
+- **Sequential execution by procedure.** Compact runs 0 → bounded assessment → 5.0 → 5.3 only when challenged → 6. Full runs 0 → 1 → 2 → 3 → 4 → 5 → 6. Review phases never overlap.
 
 ## Voice
 
@@ -51,14 +52,14 @@ Plan-orchestrator voice: opinionated, concrete, builder-to-builder. The plan-ski
 - Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
 - No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These signal AI prose; cut them.
 - Korean/English bilingual context: technical terms stay English, explanations may use Korean.
-- The user has context you do not. Cross-model agreement is a recommendation, not a decision. The user decides at premise gate (1.1) and User Challenge gate (5.3).
+- The user has context you do not. Cross-model agreement is a recommendation, not a decision. Full planning uses premise, User Challenge, and final approval gates; compact asks only genuine User Challenges.
 
 Good: "Phase 3 Eng. AC-004 verification command already passes pre-edit (grep hit at write-artifacts.md:140). EUREKA — re-scope AC-004 to a smaller addition. Surface before writing PLAN.md."
 Bad: "I've completed the engineering review phase and identified some considerations regarding AC-004 that may warrant additional examination."
 
 ## Anti-shortcut clause
 
-PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writing every finding into one PLAN.md write and signaling completion without firing AskUserQuestion at the premise gate, User Challenges, or final approval is the precise failure mode the May 2026 transcript bug surfaced — the orchestrator explored, found issues, and dumped them into a deliverable rather than walking the user through them. If you have ANY non-trivial finding (Voice A/B disagreement, premise weakness, scope ambiguity, mode-selection edge case), the path from finding to PLAN.md write goes THROUGH AskUserQuestion (parent format at `decision-principles.md` § AskUserQuestion Format). Zero-finding phases are the only path that bypasses interactive surfacing. If you find yourself wanting to write PLAN.md with findings before asking, stop — that's the bug.
+PLAN.md is the output of the selected planning procedure, not a substitute for it. Full planning must pass premise, User Challenge, and final approval gates. Compact planning may publish without premise/final approval only after its bounded inspection and escalation recheck pass; every genuine User Challenge still goes through AskUserQuestion. Never hide a finding inside PLAN.md instead of surfacing the gate required by the selected procedure.
 
 ## Confusion Protocol
 
@@ -112,17 +113,20 @@ Iterate every non-skip-listed section at full depth. See `review-phases.md` for 
 
 ---
 
-## PLAN_SESSION.json lifecycle
+## Optional PLAN_SESSION.json scratch
 
-Open at Phase 0; update through Phase 6.
+Keep ordinary same-session planning state in working context. Do not create
+PLAN_SESSION.json by default. It may be created when planning is explicitly
+resumable, delegated across contexts, or otherwise needs recovery across a turn.
+It is scratch only and never controls task routing or artifact ownership.
 
 | State | Phase | Condition |
 |-------|-------|-----------|
 | `context_open` | 0-5 | Set at Phase 0 start |
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
-| `closed` | post-6 | After all MCP artifact writes complete |
+| `closed` | post-6 | Transitional state immediately before scratch removal |
 
-Required: `{"state": "...", "phase": "...", "source": "plan-skill"}`. PLAN_SESSION.json is task-local planning state only; artifact ownership is enforced by the `write_plan` MCP tool.
+When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}` and may include transport hints. Remove it after a successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
 
 
 ---
@@ -137,21 +141,30 @@ Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md
 
 ## Phase orchestration (load sub-files for detail)
 
-1. **Phase 0** — `intake.md`. Always runs.
-2. **Phase 1 — CEO Review** — `review-phases.md` § Phase 1. Always runs. Premise gate at 1.1 is mandatory user interaction.
-3. **Phase 2 — Design Review** — `review-phases.md` § Phase 2. Only if `ui_scope=true` and not `execution_mode: light`.
-4. **Phase 3 — Engineering Review** — `review-phases.md` § Phase 3. Always runs.
-5. **Phase 4 — DX Review** — `review-phases.md` § Phase 4. Only if `dx_scope=true` and not `execution_mode: light`.
-6. **Phase 5 — Final Approval Gate** — inline below.
-7. **Phase 6 — Write artefacts** — `write-artifacts.md`. Always runs.
+1. **Phase 0** — `intake.md`. Always runs and selects `compact` or `full` planning procedure; TASK.json remains `standard` or `micro` only.
+2. **Compact branch** — for conservatively classified low-risk standard work, perform one bounded assessment and proceed to Phase 5. Ask only genuine User Challenges.
+3. **Full branch Phase 1 — CEO Review** — `review-phases.md` § Phase 1. Premise gate at 1.1 is mandatory user interaction.
+4. **Full branch Phase 2 — Design Review** — `review-phases.md` § Phase 2. Only if `ui_scope=true`.
+5. **Full branch Phase 3 — Engineering Review** — `review-phases.md` § Phase 3.
+6. **Full branch Phase 4 — DX Review** — `review-phases.md` § Phase 4. Only if `dx_scope=true`.
+7. **Phase 5 — Final Approval Gate** — inline below. Compact plans may proceed without a confirmation only when there are no User Challenges and intent/scope are already explicit.
+8. **Phase 6 — Write artefacts** — `write-artifacts.md`. Always runs.
 
 ---
 
-## Phase 5: Final Approval Gate (always runs)
+## Phase 5: Procedure-aware user gate
+
+Branch once after §5.0:
+
+- **compact:** retain decisions/themes for PLAN.md, run §5.3 only when actual
+  User Challenges exist, then proceed directly to Phase 6. With zero challenges,
+  proceed directly from §5.0 to Phase 6. Compact does not emit the §5.1 approval
+  summary and does not run §5.4.1 `Approve plan?`.
+- **full:** run §§5.1 through 5.4.1 as written.
 
 ### 5.0 Pre-Gate verification (max 2 retries)
 
-Verify required outputs before collecting decisions:
+For `full`, verify required outputs before collecting decisions:
 - [ ] Phase 1: premise challenge user-confirmed; CEO consensus retained; phase-transition summary
 - [ ] Phase 2 (if ran): Design consensus retained; phase-transition summary
 - [ ] Phase 3: Engineering consensus retained; phase-transition summary
@@ -164,6 +177,15 @@ If missing after 2 retries, proceed to 5.1 with warning block:
 ⚠ Pre-Gate Warning: proceeding with incomplete phase outputs.
 Missing: <list>
 ```
+
+For `compact`, verify instead:
+- [ ] named code/docs were inspected;
+- [ ] every escalation family was rechecked after inspection;
+- [ ] no unknown, discovered escalation, or unresolved material choice remains;
+- [ ] the compact assessment row and canonical PLAN.md fields are complete.
+
+Missing compact evidence is not warning-only. Escalate to full Phase 1 and do
+not publish or attest a compact plan.
 
 ### 5.1 Plan approval summary (user-facing)
 
@@ -217,7 +239,7 @@ The reader of this output is the implementer or later reviewer, not the user at 
 ### 5.3 User Challenge gate
 
 Cognitive load:
-- **0 challenges:** skip entirely, go to 5.4.
+- **0 challenges:** compact goes directly to Phase 6; full goes to 5.4.
 - **1-7 challenges:** one AskUserQuestion per, in order. Do not batch.
 - **8+ challenges:** warning at top, group by phase:
   ```
@@ -246,9 +268,13 @@ Map `Other` (AskUserQuestion's built-in free-text escape) to option 3 (Modify) �
 
 ### 5.4 Final scope confirmation
 
-If 5.3 responses changed scope, confirm updated scope before Phase 6.
+Full procedure only. If 5.3 responses changed scope, confirm updated scope
+before Phase 6. Compact incorporates the user's challenge answer and proceeds
+without a second confirmation.
 
 ### 5.4.1 Gate response options
+
+Full procedure only. Compact never runs this subsection.
 
 Invoke `AskUserQuestion` with the §5.1 summary visible in the preceding agent message and the following gate question. Binary options — modify and interrogate collapse into the built-in `Other` free-text mechanism.
 
@@ -274,17 +300,13 @@ Options (2 — keep this order so the Recommended label sticks to Approve):
 
 ---
 
-## Execution mode branches
+## Planning procedure branches
 
-| Mode | Phase 2 | Phase 4 | Dual voice | Mandatory outputs | Deferred scope | auto_decide |
-|------|---------|---------|------------|-------------------|----------------|-------------|
-| `light` | skip | skip | single-voice | single-voice versions | collected | premise+challenge still gated |
-| `standard` | ui_scope gate | dx_scope gate | required | full dual-voice checklists | collected | CEO→SELECTIVE EXPANSION, DX→DX POLISH |
-
-- **light**: Phases 0, 1, 3, 5, 6 with single-voice reasoning. Mandatory checklists still apply (single-voice versions). Gate options A-E available; summary simplified (no per-phase voice consensus scores).
-- **standard**: default. Full pipeline.
-
-Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decided (except spawned mode auto-resolves premise gate).
+The exact TASK.json mode remains `standard|micro`. Standard work uses the
+fail-closed compact/full selection in `intake.md` Phase 0.7. Compact planning
+collapses plan-time review into one bounded assessment but retains the same
+canonical PLAN.md output and every develop-time verification boundary. Full
+planning follows Phases 0 through 6 and the complete dual-voice checklists.
 
 ---
 
@@ -293,8 +315,8 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
 Capstone — restating six load-bearing rules in one place. Most also appear in Invariants; consolidated here for at-a-glance reference.
 
 - **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Both-voices-fail surfaces as a finding and continues.
-- **Two gates.** The non-auto-decided AskUserQuestions are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3 — when both voices agree the user's stated direction should change. Everything else is auto-decided via the 6 Decision Principles.
+- **User gates.** Full planning asks for premise confirmation and User Challenges. Compact planning asks only genuine User Challenges; it does not manufacture a premise or approval round when intent is already explicit.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail. No silent auto-decisions.
 - **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
 - **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.
-- **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase builds on the last in working context.
+- **Sequential order.** Compact: Phase 0 → bounded assessment → 5 (only if challenged) → 6. Full: Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Review phases never overlap.

@@ -51,7 +51,8 @@ Record these values as if selected during every setup:
 - Q2 (Audience) → `doc/harness/manifest.yaml` `audience:` (신규 필드).
   Design-review 스킬의 default persona 판단에 사용.
 - Q3 (Status quo) → `doc/harness/manifest.yaml` `execution_mode_default:`.
-  light → 기본 maintenance 많음. sprinted → 리뷰 강제 많음.
+  기본값은 `standard`; 명시적 one-shot no-plan 작업만 `micro`를 사용한다.
+  compact/full planning은 persisted execution mode가 아니라 plan 절차 선택이다.
 - Q4 (Wedge) →
   - `manifest.yaml` `maintenance_default:`
   - `CONTRACTS.local.md` C-101 — "이 프로젝트에서 활성화된 하네스 범위" 선언

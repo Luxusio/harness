@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime, timezone, timedelta
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +93,40 @@ class TestAuditStaleFiles(unittest.TestCase):
             mtime_after = os.path.getmtime(learn_path)
             self.assertEqual(mtime_before, mtime_after, "learnings.jsonl should not be mutated")
 
+    def test_stale_warning_is_aggregate_and_skips_unsafe_paths(self):
+        entries = [{
+            "key": "SECRET_KEY\nINJECT",
+            "files": ["SECRET_PATH_DO_NOT_PRINT", "../SECRET_OUTSIDE"],
+            "source": "SECRET_SOURCE",
+            "insight": "SECRET_INSIGHT",
+        }]
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            count = self.module._audit_stale_files(entries, REPO_ROOT)
+
+        output = buf.getvalue()
+        self.assertEqual(count, 1)
+        self.assertEqual(output, "[hygiene] classification=stale-file count=1\n")
+        self.assertNotIn("SECRET", output)
+
+    def test_stale_audit_skips_malformed_types_and_physical_escape(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            with open(os.path.join(outside, "present"), "w", encoding="utf-8") as stream:
+                stream.write("outside\n")
+            os.symlink(outside, os.path.join(root, "escape"))
+            entries = [
+                {"files": 123},
+                {"files": [
+                    None, ".", "..", "../outside",
+                    "escape/present", "escape/missing", "bad\ud800name", "bad\x7fname",
+                ]},
+            ]
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                count = self.module._audit_stale_files(entries, root)
+            self.assertEqual(count, 0)
+            self.assertEqual(buf.getvalue(), "")
+
 
 class TestAuditContradictions(unittest.TestCase):
     """AC-010: _audit_contradictions flags recent same-key conflicts."""
@@ -121,6 +156,57 @@ class TestAuditContradictions(unittest.TestCase):
             sys.stderr = old_stderr
         self.assertGreater(count, 0, "Should flag recent contradiction")
         self.assertIn("contradiction", buf.getvalue())
+
+    def test_contradiction_warning_never_renders_free_form_payloads(self):
+        entries = [
+            {
+                "key": "shared-rule",
+                "ts": "2026-08-01T00:00:00Z",
+                "insight": "SECRET_TOKEN_ABC",
+                "source": "SECRET_SOURCE_ONE",
+            },
+            {
+                "key": "shared-rule",
+                "ts": "2026-08-02T00:00:00Z",
+                "insight": "SECRET_TOKEN_XYZ",
+                "source": "SECRET_SOURCE_TWO",
+            },
+        ]
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            count = self.module._audit_contradictions(entries)
+
+        output = buf.getvalue()
+        self.assertEqual(count, 1)
+        self.assertIn("key='shared-rule'", output)
+        self.assertIn("classification=recent-window", output)
+        self.assertNotIn("SECRET_TOKEN", output)
+        self.assertNotIn("SECRET_SOURCE", output)
+
+    def test_contradiction_audit_skips_malformed_key_types(self):
+        entries = [
+            {"key": ["not", "hashable"], "ts": "2026-08-01T00:00:00Z"},
+            {"key": 123, "ts": "2026-08-02T00:00:00Z"},
+            {"key": "invalid key", "ts": "2026-08-03T00:00:00Z"},
+        ]
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            count = self.module._audit_contradictions(entries)
+        self.assertEqual(count, 0)
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_contradiction_audit_skips_mixed_timestamp_types(self):
+        entries = [
+            {"key": "valid-key", "ts": "2026-08-01T00:00:00Z"},
+            {"key": "valid-key", "ts": 123},
+            {"key": "valid-key", "ts": ["not", "a", "timestamp"]},
+            {"key": "valid-key", "ts": {"bad": "timestamp"}},
+        ]
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            count = self.module._audit_contradictions(entries)
+        self.assertEqual(count, 0)
+        self.assertEqual(buf.getvalue(), "")
 
     def test_old_different_source_not_flagged(self):
         """Entries >30 days apart with different sources should not be flagged."""

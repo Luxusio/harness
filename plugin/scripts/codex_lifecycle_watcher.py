@@ -9,6 +9,7 @@ and never launches a detached operating-system process.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 try:
     import fcntl
@@ -54,6 +55,7 @@ POLL_SECONDS = 0.20
 IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
+MAX_RECORD_OBSERVATION_ATTEMPTS = 3
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
 REGISTRATION_VERSION = 11
 REGISTRATION_OWNER = "codex_root_hook"
@@ -955,6 +957,7 @@ class Watcher:
         self.session_cwd = os.path.realpath(session_cwd or repo_root)
         self.calls: dict[str, dict[str, Any]] = {}
         self.by_agent: dict[str, dict[str, Any]] = {}
+        self.receipt_progress = 0
 
     @staticmethod
     def _receipt_agent_id(item: dict[str, Any]) -> str:
@@ -967,15 +970,27 @@ class Watcher:
     def _invalidate(self, item: dict[str, Any], reason: str) -> None:
         if item.get("invalid"):
             return
-        item["invalid"] = True
         if not item.get("completed") or not item.get("task_dir"):
+            item["invalid"] = True
             return
         lens = _infer_receipt_lens(item.get("task_name", ""))
         summary = "VERDICT: PENDING"
         if lens.startswith("review-"):
             summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=1 OPTIONAL=0"
         summary += f"\nRuntime watcher invalidated: {reason}"
-        record_subagent_receipt(item["task_dir"], {
+        pending_exists = any(
+            receipt.get("runtime_id") == item.get("runtime_id")
+            and receipt.get("event") == "completed"
+            and receipt.get("source") == self._receipt_source(item)
+            and receipt.get("agent_id") == self._receipt_agent_id(item)
+            and receipt.get("lens") == lens
+            and receipt.get("task_run_id") == item.get("task_run_id")
+            and receipt.get("agent_type") == item.get("task_name")
+            and receipt.get("verdict") == "PENDING"
+            for receipt in receipt_snapshot(item["task_dir"]).entries
+        )
+        if not pending_exists:
+            record_subagent_receipt(item["task_dir"], {
             "source": self._receipt_source(item),
             "event": "completed",
             "agent_id": self._receipt_agent_id(item),
@@ -987,7 +1002,12 @@ class Watcher:
             # A second terminal for the exact identity invalidates the
             # lifecycle under the normal duplicate-terminal fail-closed rule.
             "runtime_id": item.get("runtime_id", ""),
-        })
+            })
+            self.receipt_progress += 1
+        # Publish the fail-closed terminal before suppressing later attempts.
+        # The watch loop rolls in-memory state back and replays this record if
+        # either the snapshot or append fails transiently.
+        item["invalid"] = True
 
     def _set_once(self, item: dict[str, Any], key: str, value: Any) -> bool:
         if key in item:
@@ -1053,6 +1073,7 @@ class Watcher:
                     "summary": "Codex runtime spawn observed before child completion",
                     "runtime_id": runtime_id,
                 })
+            self.receipt_progress += 1
         item.update({
             "started": True,
             "task_dir": task_dir,
@@ -1107,6 +1128,7 @@ class Watcher:
                 "summary": child_final,
                 "runtime_id": item["runtime_id"],
             })
+            self.receipt_progress += 1
         item["completed"] = True
 
     def retry(self) -> None:
@@ -1227,6 +1249,8 @@ def watch(
     session_cwd: str | None = None,
     stop_event: threading.Event | None = None,
     idle_seconds: float = IDLE_SECONDS,
+    on_error: Any | None = None,
+    recovering: bool = False,
 ) -> int:
     """Tail one registered root rollout inside an MCP-owned thread."""
     repo_root = os.path.realpath(repo_root)
@@ -1254,6 +1278,39 @@ def watch(
     stop_event = stop_event or threading.Event()
     rollout_age = max(0.0, time.time() - rollout_info.st_mtime)
     last_data = time.monotonic() - min(rollout_age, idle_seconds)
+    observation_failed = bool(recovering)
+    failed_position: int | None = None
+    failed_attempts = 0
+
+    def notify(message: str) -> None:
+        if on_error is None:
+            return
+        try:
+            on_error(message)
+        except Exception:
+            pass
+
+    def observe(action: Any) -> bool:
+        """Retry one record from a rolled-back in-memory lifecycle state."""
+        nonlocal observation_failed
+        state = copy.deepcopy((
+            watcher.calls,
+            watcher.by_agent,
+            watcher.receipt_progress,
+        ))
+        progress_before = watcher.receipt_progress
+        try:
+            action()
+        except Exception as exc:
+            watcher.calls, watcher.by_agent, watcher.receipt_progress = state
+            observation_failed = True
+            detail = " ".join(str(exc).split())[:240]
+            notify(f"{type(exc).__name__}: {detail}".rstrip())
+            return False
+        if observation_failed and watcher.receipt_progress > progress_before:
+            observation_failed = False
+            notify("")
+        return True
     try:
         handle.seek(max(0, offset))
         while not stop_event.is_set() and time.monotonic() - last_data < idle_seconds:
@@ -1267,7 +1324,7 @@ def watch(
                 except OSError:
                     return 3
                 handle.seek(position)
-                watcher.retry()
+                observe(watcher.retry)
                 stop_event.wait(POLL_SECONDS)
                 continue
             if len(raw) > MAX_LINE_BYTES:
@@ -1290,9 +1347,33 @@ def watch(
                 continue
             event = _load_json_line(raw)
             if event is None:
-                return 3
+                # A malformed record is not lifecycle evidence. Reject only
+                # that record so a corrupt diagnostic/tool-output line cannot
+                # permanently blind the watcher to later independent agents.
+                observation_failed = True
+                notify(f"invalid rollout record at offset {position}")
+                last_data = time.monotonic()
+                continue
             last_data = time.monotonic()
-            watcher.feed(event)
+            if not observe(lambda: watcher.feed(event)):
+                # Retry a transient failure from the rolled-back lifecycle
+                # state, but never let one permanently rejected record blind
+                # the tail to later independent agents. Externally appended
+                # receipts remain idempotently detectable during replay.
+                if failed_position == position:
+                    failed_attempts += 1
+                else:
+                    failed_position = position
+                    failed_attempts = 1
+                if failed_attempts < MAX_RECORD_OBSERVATION_ATTEMPTS:
+                    handle.seek(position)
+                    stop_event.wait(POLL_SECONDS)
+                    continue
+                failed_position = None
+                failed_attempts = 0
+                continue
+            failed_position = None
+            failed_attempts = 0
     finally:
         handle.close()
     return 0
@@ -1318,11 +1399,20 @@ class WatcherManager:
         self.workers: dict[str, threading.Thread] = {}
         self.seen: set[str] = set()
         self.worker_results: dict[str, int] = {}
+        self.worker_errors: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def _worker(self, registration: dict[str, Any], lease: Any) -> None:
         thread_id = str(registration["thread_id"])
+        def note_error(message: str) -> None:
+            with self._lock:
+                if message:
+                    self.worker_errors[thread_id] = message[:320]
+                else:
+                    self.worker_errors.pop(thread_id, None)
         try:
+            with self._lock:
+                recovering = bool(self.worker_errors.get(thread_id))
             result = watch(
                 self.repo_root,
                 thread_id,
@@ -1330,13 +1420,31 @@ class WatcherManager:
                 int(registration["offset"]),
                 session_cwd=str(registration.get("session_cwd") or self.repo_root),
                 stop_event=self.stop_event,
+                on_error=note_error,
+                recovering=recovering,
             )
-        except Exception:
+            if result != 0:
+                note_error(f"watcher exited with status {result}")
+        except Exception as exc:
             result = 4
+            note_error(f"{type(exc).__name__}: {' '.join(str(exc).split())[:240]}".rstrip())
         finally:
             lease.close()
         with self._lock:
             self.worker_results[thread_id] = result
+
+    def worker_error(self, thread_id: str) -> str:
+        """Return a bounded advisory error for one registered root watcher."""
+        with self._lock:
+            return self.worker_errors.get(thread_id, "")
+
+    def is_running(self) -> bool:
+        """Report the manager thread itself, not merely its container object."""
+        return bool(
+            self.thread is not None
+            and self.thread.is_alive()
+            and not self.stop_event.is_set()
+        )
 
     def scan_once(self) -> int:
         """Start one daemon worker for every newly registered root thread."""

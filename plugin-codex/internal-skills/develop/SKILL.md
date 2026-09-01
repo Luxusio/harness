@@ -36,7 +36,7 @@ concrete tradeoffs. Required verification is not scope expansion.
 
 At Phase 2, ask whether to re-plan, narrow, or proceed when search disproves the
 premise. At Phase 5, ask whether to revert, add to scope, or defer a necessary
-out-of-plan edit. Persist the choice in PLAN/PROGRESS or a durable artifact.
+out-of-plan edit. Persist the choice in PLAN.md, a checkpoint note, or a durable artifact.
 
 ## Error Philosophy
 
@@ -120,7 +120,23 @@ Handle `needs-coordinator-review` before generic rollback: never retry with the 
 
 ### Phase 3.1: Scope Lock
 
-Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
+The coordinator is the only PROGRESS.md writer. New files use exactly these
+seven top-level keys and no narrative bookkeeping fields:
+
+```yaml
+phase: implementation
+current_ac: AC-001
+partial_ac: null
+completed_acs: []
+allowed_paths: []
+test_paths: []
+forbidden_paths: []
+```
+
+`phase`, `current_ac`, and `partial_ac` are strings or null;
+`completed_acs` and all path fields are lists of strings. Existing verbose or
+prose task files remain readable on a best-effort basis and are not bulk
+rewritten. Declare allowed / test / forbidden paths before each file edit:
 - allowed -> proceed. test -> proceed. forbidden -> BLOCK + escalate. unlisted -> WARN, auto-add to allowed with note.
 
 ### Phase 3: Implement
@@ -134,9 +150,11 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    worker to read that file before editing; parent context is not sufficient.
 3. **Codex tool surface:** use `read_file` for reads, `apply_patch` for edits/writes (Codex envelope-oriented), `shell` for Bash commands. Multi-edit is one `apply_patch` envelope per file. Where the Claude flow says `Edit`/`Write`/`MultiEdit`, read it as `apply_patch`.
 
-After each AC, record status, targeted tests, completeness, deferred edges,
-decisions and attempts in PROGRESS. Completed behavior needs important negative
-paths and regression evidence. Full-suite verification belongs to the required
+After each AC, update `phase`, `current_ac`, `partial_ac`, and `completed_acs`.
+Keep detailed decisions, test evidence, deferred edges, and failed-attempt
+history in PLAN.md, receipts, checkpoint notes, or the final report instead of
+adding PROGRESS keys. Completed behavior needs important negative paths and
+regression evidence. Full-suite verification belongs to the required
 qa-* agents; browser evidence may run inline only when that is the available
 path.
 
@@ -163,7 +181,7 @@ Runs continuously during Phase 3.
 
   *Regression rule:* if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
 
-  *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in PROGRESS.md and final verification evidence.
+  *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in final verification evidence and, when resume needs it, a checkpoint note.
 
   *QA codifier* (after Phase 7 PASS, before close):
   ```bash
@@ -185,7 +203,7 @@ After all ACs done. Each runs only if prerequisite exists.
 
 On Claude this is a haiku sub-agent. On Codex, use `spawn_agent` when available for an independent completion audit; otherwise run the same pass inline as fallback. Cross-reference every AC against PLAN targets, implementation notes, and test evidence, then classify each as DONE / PARTIAL / NOT DONE / CHANGED + category (CODE / TEST / MIGRATION / CONFIG / DOCS). Be conservative with DONE; be generous with CHANGED (goal met by different means).
 
-For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; log scope-cut + blocked in PROGRESS.md; mark evolved as CHANGED with the new approach.
+For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; report scope-cut + blocked in checkpoint/final evidence; mark evolved as CHANGED with the new approach.
 
 ### Phase 4.5-4.8: Quality Audit
 
@@ -206,7 +224,7 @@ extra plan file.
 Compare files you intentionally edited with PLAN targets. Harness does not
 enumerate them for you. Classify each known edit:
 - In scope -> proceed.
-- Related but unlisted -> acceptable, note in PROGRESS.md or final response.
+- Related but unlisted -> acceptable, add the path to the appropriate PROGRESS list and explain it in the final response.
 - Unrelated -> revert. Belongs in a separate task.
 - Missing from plan but necessary -> note as "unplanned-but-necessary".
 

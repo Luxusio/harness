@@ -17,7 +17,7 @@ Sub-file for run/SKILL.md. After each task close, regardless of outcome, run thi
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"harness-improvement","source":"run","key":"SHORT_KEY","insight":"DESCRIPTION","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"harness-improvement","source":"run","key":"SHORT_KEY","insight":"DESCRIPTION","task":"'"<task_id>"'","task_run_id":"'"<task_run_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 ## Evidence-backed backlog shaping
@@ -196,22 +196,39 @@ Reject feedback-derived entries when they lack a trigger, action, or verificatio
 
 ---
 
-## Mandatory promotion + pruning (after every task close)
+## Signal-driven candidate reporting (after task close)
 
-Housekeeping, not a gate. If any step fails, log a warning and continue. learnings.jsonl is staging, not permanent storage.
+Housekeeping, not a gate. If any step fails, log a warning and continue.
+learnings.jsonl is an append-only raw signal ledger; reporting never rewrites or
+prunes it.
 
 If it returns `"queued"`, report the queued task and stop unless the user
 explicitly asks to continue. If it returns `"none"`, continue the normal
 self-improvement pipeline.
 
-### Steps 1–5: Automated promotion + pruning
+### Automated validated candidate reporting
 
-All five steps (aggregate by key, promote to Tier 2 patterns, prune promoted,
-prune stale >90 days, report Tier 1 candidates) are handled by a single script:
+Validation and distinct verified-run aggregation are handled by one script.
+It reports Tier 2 candidates but performs no durable writes; applying a
+candidate requires a separately reviewed Harness task. Automatic close-time
+mode always binds the current task and TASK.json run_id:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py 2>/dev/null || true
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py \
+  --task "<task_id>" --task-run-id "<task_run_id>" 2>/dev/null || true
 ```
+
+The validator accepts only knowledge types (`operational`, `pitfall`, `eureka`,
+`feedback`, `feedback-rule`, `harness-improvement`) with canonical UTC `ts`,
+bounded nonempty `key` and human-readable `insight`, plus matching `task` and
+`task_run_id`. Feedback rules also require `trigger`, `action`, and
+`verification`. Diagnostic gate/crash/bypass/stop/codifier rows are retained
+but never promoted. A valid current-run key may count at most
+one valid row from each distinct receipt-verified closed task/run for that key
+toward the threshold. Caller/row assertions, open or stale-fingerprint tasks,
+and duplicate rows from one run do not count. With no valid current-run signal,
+candidate reporting is a no-write no-op. Even with qualifying signals, the
+script changes neither Tier 2 patterns nor the raw ledger.
 ### Step 5c: Auto-retro trigger
 
 After promote_learnings.py, check if a retro should fire (>=3 tasks closed since last retro):
@@ -219,23 +236,8 @@ After promote_learnings.py, check if a retro should fire (>=3 tasks closed since
 ```bash
 _LAST_RETRO=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1)
 _LAST_RETRO_TS=$(stat -c %Y "$_LAST_RETRO" 2>/dev/null || echo 0)
-_TASKS_SINCE=$(python3 -c "
-import os
-last_ts = int('$_LAST_RETRO_TS')
-count = 0
-root = 'doc/harness/tasks'
-if os.path.isdir(root):
-    for name in os.listdir(root):
-        path = os.path.join(root, name)
-        if name.startswith('TASK__') and os.path.isdir(path):
-            try:
-                if int(os.path.getmtime(path)) > last_ts:
-                    count += 1
-            except OSError:
-                pass
-print(count)
-" 2>/dev/null || echo 0)
-if [ "\${_TASKS_SINCE:-0}" -ge 3 ] && [ "\${HARNESS_DISABLE_RETRO:-}" != "1" ]; then
+_TASKS_SINCE=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --count-closed-since "$_LAST_RETRO_TS" 2>/dev/null || echo 0)
+if [ "${_TASKS_SINCE:-0}" -ge 3 ] && [ "${HARNESS_DISABLE_RETRO:-}" != "1" ]; then
   _RETRO_FIRST=$([ -z "$_LAST_RETRO" ] && echo "true" || echo "false")
   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --save 2>/dev/null && _RETRO_OUT=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1) || _RETRO_OUT=""
   if [ "$_RETRO_FIRST" = "true" ] && [ -n "$_RETRO_OUT" ]; then
@@ -251,15 +253,15 @@ that no threshold was met.
 
 
 The script:
-- Promotes keys with ≥2 occurrences to `doc/harness/patterns/<topic>.md`
-- Auto-maps keys to topic files (test→testing.md, build→build.md, verify→verification.md, etc.)
-- Prunes promoted + stale (>90 day, non-eureka) entries from learnings.jsonl
-- Reports Tier 1 candidates (pattern docs with 2+ git commits → promote one-liner to CLAUDE.md)
+- In automatic mode, first requires a valid current task/run signal
+- Reports keys with ≥2 valid occurrences as Tier 2 candidates
+- Requires a separately reviewed Harness task for any durable pattern change
+- Never rewrites or prunes the append-only raw ledger
 
 Use `--dry-run` to preview without modifying files. `--threshold N` to adjust the promotion bar.
 
 ### Step 5b: Promote Tier 2 → Tier 1 (CLAUDE.md)
 
-When `promote_learnings.py` reports Tier 1 candidates, manually promote the key fact
+When a reviewed task identifies a Tier 1 candidate, manually promote the key fact
 as a one-liner into the project `CLAUDE.md` under the appropriate section.
 Details stay in the pattern doc.

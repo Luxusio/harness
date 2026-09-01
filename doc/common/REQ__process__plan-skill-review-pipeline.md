@@ -1,38 +1,51 @@
 # REQ process plan-skill-review-pipeline
 tags: [req, process, plan-skill, review-pipeline]
-summary: plan skill must run the 7-phase dual-voice review pipeline; old linear procedure is retired.
+summary: plan skill must conservatively select a compact low-risk procedure or the full dual-voice review pipeline; both publish canonical PLAN.md.
 freshness: current
 updated: 2026-08-12
 verified_at: 2026-08-12T00:00:00Z
 
 ## Requirement
 
-`plugin/skills/plan/SKILL.md` implements a **7-phase review pipeline**. The old
-9-step linear procedure and its separate acceptance ledger are retired and
-must not be restored.
+`plugin/skills/plan/SKILL.md` implements two planning procedures inside the
+existing task lifecycle. Low-risk, bounded, unambiguous standard tasks may use
+a compact assessment. Everything else uses the full 7-phase review pipeline.
+Both publish canonical PLAN.md; neither changes TASK.json execution modes or
+develop-time verification gates. The old 9-step linear procedure and its
+separate acceptance ledger are retired and must not be restored.
+
+## Procedure selection
+
+Compact selection is automatic only when all relevant acceptance, path-scope,
+test, and durable-doc choices are evident and blast radius is low. Explicit
+full-plan requests win. Missing/uncertain inputs and security/auth/permissions/
+secrets, data/schema/migrations, public API or observable UI behavior,
+destructive operations, dependencies/platform/configuration/workflow-control,
+material user choices, cross-component scope, and high-risk maintenance all
+force the full procedure. File count alone is not an eligibility rule.
 
 ## Phase structure
 
 | Phase | Name | Condition |
 |-------|------|-----------|
-| 0 | Intake + Context | always |
-| 1 | CEO Review | always (mandatory premise AskUserQuestion) |
-| 2 | Design Review | ui_scope: true only |
-| 3 | Engineering Review | always |
-| 4 | DX Review | dx_scope: true only |
-| 4.5 | Outside Voice — Final Plan Challenge | always (skipped in light) |
-| 5 | Final Approval Gate | always |
-| 5.5 | Spec Review Loop | always (skipped in light) |
+| 0 | Intake + Context + procedure selection | always |
+| compact | Bounded code/context assessment | low-risk standard tasks only |
+| 1 | CEO Review | full procedure (mandatory premise AskUserQuestion) |
+| 2 | Design Review | full procedure and ui_scope: true |
+| 3 | Engineering Review | full procedure |
+| 4 | DX Review | full procedure and dx_scope: true |
+| 5 | Procedure-aware user gate | full asks final approval; compact asks only genuine User Challenges and otherwise proceeds directly to publication |
 | 6 | Write PLAN.md + declared lenses in TASK.json | always |
 
 ## Invariants
 
-- **Dual Voice Protocol**: every review phase spawns Voice A (Claude subagent) and Voice B (Codex exec or second independent Agent). Both must complete before consensus is built. Single-voice review is prohibited.
+- **Dual Voice Protocol**: every full-procedure review phase spawns Voice A (Claude subagent) and Voice B (Codex exec or second independent Agent). Both must complete before consensus is built. Single-voice review is prohibited.
 - **Decision Classification**: every contested item is classified as Mechanical (auto-decide silently), Taste (auto-decide + surface at Phase 5.2), or User Challenge (never auto-decide; present at Phase 5.3 with full framing).
 - **User Challenge gate**: both voices must independently agree that the user's direction should change for an item to become a User Challenge. Each User Challenge gets its own AskUserQuestion — never batched.
-- **Premise gate**: Phase 1.1 is the one mandatory user interaction before Phase 5. Premises are never auto-decided.
+- **Premise gate**: Phase 1.1 is mandatory in the full procedure. Compact planning asks only when it finds a genuine User Challenge.
+- **Canonical compact output**: compact planning still writes stable ACs, in/out scope, allowed/test/forbidden paths, verification, and a Durable Docs Decision into PLAN.md.
+- **Unchanged runtime gates**: both procedures retain independent code review, conditional security review, ordered QA, receipts, close fingerprint, Goal continuation, and verified installation.
 - **6 Decision Principles**: applied to every contested item; first applicable principle wins. Conflict resolution priority varies by phase (CEO: P1+P2, Eng: P5+P3, Design: P5+P1).
-- **Adversarial review layers**: Phase 4.5 dispatches a whole-plan fresh-context reviewer between Phase 4 and Phase 5. Phase 5.5 runs a closed adversarial review loop (max 3 rounds, 5 dimensions) after Phase 5 user approval clears, before Phase 6 writes PLAN.md. Both layers fail non-blockingly; findings are informational unless the user accepts them.
 
 ## Harness integration constraints
 
@@ -41,6 +54,8 @@ must not be restored.
 - `PLAN.md` is the mandatory acceptance-intent output.
 - `write_plan` publishes the canonical `required_lenses` set into the exact
   four-field `TASK.json`; it creates no planning metadata or audit sidecar.
+- `PLAN_SESSION.json` is optional recovery scratch. Normal same-session planning
+  does not create it; successful plan publication removes it when present.
 - Verification evidence comes from lifecycle-owned `RECEIPTS.jsonl`.
 
 ## Why the old workflow was replaced

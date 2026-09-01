@@ -2157,13 +2157,14 @@ def _receipt_dir_fd(task_dir):
 
 @contextmanager
 def _receipt_stream_lock(task_dir):
-    task_dir = _validated_receipt_task_dir(task_dir)
+    task_dir = os.path.abspath(os.fspath(task_dir))
     nested = _receipt_lock_binding(task_dir)
     if nested is not None:
         _validate_receipt_dir_binding(nested)
         yield
         _validate_receipt_dir_binding(nested)
         return
+    task_dir = _validated_receipt_task_dir(task_dir)
     component_paths = []
     current = task_dir
     for _ in range(4):
@@ -2250,6 +2251,38 @@ def receipt_stream_transaction(task_dir):
     """Hold the receipt stream stable across verdict and state publication."""
     with _receipt_stream_lock(task_dir):
         yield
+
+
+@contextmanager
+def receipt_stream_transaction_fd(task_fd):
+    """Hold a receipt transaction on an already-bound task directory fd."""
+    locked_fd = os.dup(task_fd)
+    task_dir = os.path.abspath(f"/proc/self/fd/{task_fd}")
+    try:
+        info = os.fstat(locked_fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise RuntimeError("receipt storage integrity unavailable")
+        try:
+            import fcntl
+            fcntl.flock(locked_fd, fcntl.LOCK_EX)
+        except (ImportError, OSError) as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        binding = (
+            task_dir, locked_fd, (info.st_dev, info.st_ino), (),
+        )
+        _validate_receipt_dir_binding(binding)
+        token = _RECEIPT_LOCK_HELD.set(_RECEIPT_LOCK_HELD.get() + (binding,))
+        try:
+            yield
+            _validate_receipt_dir_binding(binding)
+        finally:
+            _RECEIPT_LOCK_HELD.reset(token)
+    finally:
+        os.close(locked_fd)
 
 
 RECEIPT_FIELDS = frozenset({

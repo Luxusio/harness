@@ -207,9 +207,9 @@ All scripts under `plugin/scripts/`. Stdlib only.
 | Script | Purpose | Output | Caller |
 |--------|---------|--------|--------|
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` | develop Phase 3.3 |
-| `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` | run self-improvement |
+| `promote_learnings.py` | Current-run-validated Tier 2 candidate reporting; no durable writes | stdout | run self-improvement |
 | `health.py --dry-run` | Weighted composite 0–10 score | stdout | run Phase 4.5 |
-| `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
+| `retro.py` | Weekly retrospective (git + receipt-verified closes + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
 
 Health is activated via the manifest optional key `health_components` and falls
 back to `test_command` when no components are declared.
@@ -221,17 +221,24 @@ Every skill logs discoveries. Three tiers:
 ```
 CLAUDE.md                    # Tier 1: loaded every session. Key facts only.
 doc/harness/patterns/*.md    # Tier 2: detailed patterns. Read when relevant.
-doc/harness/learnings.jsonl  # Tier 3: raw signals. Session-specific, transient.
+doc/harness/learnings.jsonl  # Tier 3: append-only raw signals.
 ```
 
-**All skills write to Tier 3.** When a signal repeats 2+ times, promote to Tier 2 doc. When a Tier 2 doc is referenced in 2+ tasks, promote the key fact to Tier 1 (CLAUDE.md).
+**All skills write to Tier 3.** Automatic candidate reporting requires a valid signal
+from the just-closed receipt-verified task/run. A key may promote after valid
+occurrences from 2+ distinct receipt-verified closed task/runs; duplicate rows
+from one run count once, and historical backlog alone cannot trigger reporting.
+The reporting pass never rewrites or prunes the raw ledger and never changes
+Tier 2 patterns. Apply a reported candidate only in a separately reviewed
+Harness task. When a Tier 2 doc is referenced in 2+ tasks, promote the key fact
+to Tier 1 (CLAUDE.md).
 
 **Tier 1 entries are one-liners.** Details stay in pattern docs.
 
 Example:
 ```
 # Tier 3 (learnings.jsonl)
-{"key":"test-command","insight":"bun test, not npm test","task":"TASK__001"}
+{"ts":"2026-09-01T00:00:00Z","type":"operational","key":"test-command","insight":"bun test, not npm test","task":"TASK__001","task_run_id":"01a05a20-fb11-7911-bffb-3de43a13c8fb"}
 
 # Tier 2 (doc/harness/patterns/testing.md)
 ## Test command is bun test

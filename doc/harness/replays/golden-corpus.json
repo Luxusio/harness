@@ -3,9 +3,9 @@
   "description": "Curated golden replay corpus for routing, close-gate, note retrieval, next-step, context, and team recovery decisions.",
   "cases": [
     {
-      "id": "routing_docs_sync_light_solo",
+      "id": "routing_docs_sync_standard_solo",
       "kind": "routing",
-      "description": "Docs-sync work should stay light and solo.",
+      "description": "Docs-sync work should stay standard and solo; compact planning is procedural rather than persisted task state.",
       "task_dir": "doc/harness/tasks/TASK__harness-schema-sync",
       "provider_probe": {
         "native_ready": false,
@@ -15,7 +15,7 @@
         "risk_level": "low",
         "maintenance_task": false,
         "planning_mode": "standard",
-        "execution_mode": "light",
+        "execution_mode": "standard",
         "orchestration_mode": "solo",
         "team_status": "skipped",
         "fallback_used": "none"
@@ -41,9 +41,9 @@
       }
     },
     {
-      "id": "routing_harness_maintenance_sprinted_subagents",
+      "id": "routing_harness_maintenance_standard_subagents",
       "kind": "routing",
-      "description": "Harness-surface maintenance should escalate to sprinted and fall back to subagents when no team provider is ready.",
+      "description": "Harness-surface maintenance should stay standard and use subagents when independent lanes exist.",
       "task_dir": "doc/harness/tasks/TASK__cli-first-workflow-v1",
       "provider_probe": {
         "native_ready": false,
@@ -53,16 +53,16 @@
         "risk_level": "high",
         "maintenance_task": true,
         "planning_mode": "standard",
-        "execution_mode": "sprinted",
+        "execution_mode": "standard",
         "orchestration_mode": "subagents",
         "team_status": "fallback",
         "fallback_used": "subagents"
       }
     },
     {
-      "id": "routing_multisurface_build_sprinted_subagents",
+      "id": "routing_multisurface_build_standard_subagents",
       "kind": "routing",
-      "description": "Multi-surface build work should become sprinted and team-preferred, then fall back to subagents when providers are unavailable.",
+      "description": "Multi-surface build work should remain standard and use subagents when independent lanes exist.",
       "task_dir": "doc/harness/tasks/TASK__launch-json-relocate",
       "provider_probe": {
         "native_ready": false,
@@ -72,7 +72,7 @@
         "risk_level": "high",
         "maintenance_task": false,
         "planning_mode": "standard",
-        "execution_mode": "sprinted",
+        "execution_mode": "standard",
         "orchestration_mode": "subagents",
         "team_status": "fallback",
         "fallback_used": "subagents"
@@ -81,7 +81,7 @@
     {
       "id": "close_pass_cli_first_workflow",
       "kind": "close_gate",
-      "description": "A modern sprinted harness task with synced critics should still close cleanly.",
+      "description": "A modern standard harness task with synchronized required lenses should close cleanly.",
       "task_dir": "doc/harness/tasks/TASK__cli-first-workflow-v1",
       "expect": {
         "blocked": false

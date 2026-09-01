@@ -1357,6 +1357,76 @@ def test_manager_restarts_failed_worker_in_same_manager(tmp_path):
     assert manager.worker_results[registration["thread_id"]] == 0
 
 
+def test_manager_retains_bounded_worker_error_diagnostic(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    registration = {
+        "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+        "rollout": "/root-rollout", "offset": 777,
+    }
+
+    def fake_watch(*_args, on_error, **_kwargs):
+        on_error("x" * 1000)
+        return 0
+
+    manager = mod.WatcherManager(str(repo))
+    with mock.patch.object(mod, "registrations", return_value=[registration]), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 1
+        manager.workers[registration["thread_id"]].join()
+
+    assert manager.worker_error(registration["thread_id"]) == "x" * 320
+
+
+def test_manager_records_nonzero_exit_and_clears_only_after_recovery(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    registration = {
+        "thread_id": thread_id, "rollout": "/root-rollout", "offset": 777,
+    }
+    calls = 0
+    error_seen_at_retry = []
+
+    def fake_watch(*_args, on_error, recovering, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert recovering is False
+            return 3
+        error_seen_at_retry.append(manager.worker_error(thread_id))
+        assert recovering is True
+        on_error("")
+        return 0
+
+    manager = mod.WatcherManager(str(repo))
+    with mock.patch.object(mod, "registrations", return_value=[registration]), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 1
+        manager.workers[thread_id].join()
+        assert manager.worker_error(thread_id) == "watcher exited with status 3"
+        assert manager.scan_once() == 1
+        manager.workers[thread_id].join()
+
+    assert error_seen_at_retry == ["watcher exited with status 3"]
+    assert manager.worker_error(thread_id) == ""
+
+
+def test_manager_running_status_tracks_manager_thread(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    manager = mod.WatcherManager(str(repo), scan_seconds=0.01)
+    with mock.patch.object(mod, "registrations", return_value=[]):
+        assert manager.is_running() is False
+        manager.start()
+        assert manager.is_running() is True
+        manager.stop()
+    assert manager.is_running() is False
+
+
 def test_managers_use_cross_process_lease_for_same_registration(tmp_path):
     mod = _load()
     repo = tmp_path / "repo"
@@ -1424,12 +1494,279 @@ def test_watch_drains_oversized_non_evidence_record_and_reads_next_line(
     rollout.parent.mkdir(parents=True, exist_ok=True)
     rollout.write_bytes(session_meta + b"\n" + oversized + b"\n" + b"not-json\n")
 
-    # Reaching the malformed sentinel proves the oversized record did not pin
-    # the watcher at its original offset. Invalid evidence still fails closed.
+    # Neither record is lifecycle evidence, so both are rejected locally and
+    # the root tail remains available for later independent lifecycle events.
     assert mod.watch(
-        str(repo), root_id, str(rollout), len(session_meta) + 1,
-        stop_event=mod.threading.Event(), idle_seconds=0.05,
-    ) == 3
+                str(repo), root_id, str(rollout), len(session_meta) + 1,
+                stop_event=mod.threading.Event(), idle_seconds=0.05,
+    ) == 0
+
+
+def test_watch_continues_after_malformed_record_and_transient_feed_error(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    session_meta = json.dumps({"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}).encode()
+    first = json.dumps({"type": "first", "payload": {}}).encode()
+    second = json.dumps({"type": "second", "payload": {}}).encode()
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_bytes(
+        session_meta + b"\n" + b"not-json\n" + first + b"\n" + second + b"\n"
+    )
+
+    class FakeWatcher:
+        def __init__(self, *_args, **_kwargs):
+            self.seen = []
+            self.failed = False
+            self.calls = {}
+            self.by_agent = {}
+            self.receipt_progress = 0
+
+        def feed(self, event):
+            self.seen.append(event["type"])
+            if event["type"] == "first" and not self.failed:
+                self.failed = True
+                raise RuntimeError("temporary receipt lock failure")
+            if event["type"] == "second":
+                self.receipt_progress += 1
+
+        def retry(self):
+            return None
+
+    errors = []
+    fake = FakeWatcher()
+    with mock.patch.object(mod, "Watcher", return_value=fake):
+        assert mod.watch(
+            str(repo), root_id, str(rollout), len(session_meta) + 1,
+            stop_event=mod.threading.Event(), idle_seconds=0.5,
+            on_error=errors.append,
+        ) == 0
+
+    assert fake.seen == ["first", "first", "second"]
+    assert errors[0].startswith("invalid rollout record at offset ")
+    assert "temporary receipt lock failure" in errors[1]
+    assert errors[-1] == ""
+
+
+def test_watch_quarantines_persistent_feed_error_and_reads_next_line(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    session_meta = json.dumps({"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}).encode()
+    first = json.dumps({"type": "first", "payload": {}}).encode()
+    second = json.dumps({"type": "second", "payload": {}}).encode()
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_bytes(session_meta + b"\n" + first + b"\n" + second + b"\n")
+
+    class FakeWatcher:
+        def __init__(self, *_args, **_kwargs):
+            self.seen = []
+            self.calls = {}
+            self.by_agent = {}
+            self.receipt_progress = 0
+
+        def feed(self, event):
+            self.seen.append(event["type"])
+            if event["type"] == "first":
+                raise RuntimeError("permanent receipt integrity failure")
+
+        def retry(self):
+            return None
+
+    errors = []
+    fake = FakeWatcher()
+    with mock.patch.object(mod, "Watcher", return_value=fake):
+        assert mod.watch(
+            str(repo), root_id, str(rollout), len(session_meta) + 1,
+            stop_event=mod.threading.Event(), idle_seconds=1.0,
+            on_error=errors.append,
+        ) == 0
+
+    assert fake.seen == [
+        "first",
+        "first",
+        "first",
+        "second",
+    ]
+    assert sum("permanent receipt integrity failure" in error for error in errors) == 3
+    assert errors[-1] != ""
+
+
+def test_watch_clears_persistent_error_after_later_receipt_progress(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    session_meta = json.dumps({"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}).encode()
+    first = json.dumps({"type": "first", "payload": {}}).encode()
+    second = json.dumps({"type": "receipt-progress", "payload": {}}).encode()
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_bytes(session_meta + b"\n" + first + b"\n" + second + b"\n")
+
+    class FakeWatcher:
+        def __init__(self, *_args, **_kwargs):
+            self.calls = {}
+            self.by_agent = {}
+            self.receipt_progress = 0
+
+        def feed(self, event):
+            if event["type"] == "first":
+                raise RuntimeError("permanent receipt integrity failure")
+            if event["type"] == "receipt-progress":
+                self.receipt_progress += 1
+
+        def retry(self):
+            return None
+
+    errors = []
+    with mock.patch.object(mod, "Watcher", return_value=FakeWatcher()):
+        assert mod.watch(
+            str(repo), root_id, str(rollout), len(session_meta) + 1,
+            stop_event=mod.threading.Event(), idle_seconds=1.0,
+            on_error=errors.append,
+        ) == 0
+
+    assert sum("permanent receipt integrity failure" in error for error in errors) == 3
+    assert errors[-1] == ""
+
+
+def test_existing_receipts_rebuild_state_without_write_progress(tmp_path):
+    mod = _load()
+    task_dir = tmp_path / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review_existing"
+    call_id = "call_existingReceipt123"
+    watcher = mod.Watcher(str(tmp_path), root_id)
+    watcher.calls[call_id] = {
+        "task_name": "code_review_existing",
+        "task_dir": str(task_dir),
+        "task_run_id": RUN_ID,
+        "output_path": agent_path,
+        "agent_path": agent_path,
+        "child_id": child_id,
+    }
+
+    with mock.patch.object(
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
+    ), mock.patch.object(
+        mod, "_exact_receipt", return_value={"event": "started"},
+    ), mock.patch.object(
+        mod, "record_subagent_receipt",
+        side_effect=AssertionError("existing receipt must not be rewritten"),
+    ):
+        watcher._maybe_start(call_id)
+
+    item = watcher.calls[call_id]
+    assert item["started"] is True
+    assert watcher.receipt_progress == 0
+
+    item["root_final"] = (
+        "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    )
+    with mock.patch.object(
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
+    ), mock.patch.object(
+        mod, "_child_status",
+        return_value=("complete", tmp_path / "child.jsonl", item["root_final"]),
+    ), mock.patch.object(
+        mod, "_exact_receipt", return_value={"event": "completed"},
+    ), mock.patch.object(
+        mod, "record_subagent_receipt",
+        side_effect=AssertionError("existing receipt must not be rewritten"),
+    ):
+        watcher._maybe_complete(item)
+
+    assert item["completed"] is True
+    assert watcher.receipt_progress == 0
+
+
+def test_watch_replays_real_spawn_after_transient_binding_failure(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review_retry"
+    rollout = _rollout_path(codex_home, root_id)
+    meta = {"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}
+    _write_jsonl(rollout, [meta])
+    offset = rollout.stat().st_size
+    with rollout.open("a", encoding="utf-8") as handle:
+        for event in _spawn_events(
+            root_id, child_id, "code_review_retry", agent_path,
+        ):
+            handle.write(json.dumps(event) + "\n")
+    child = _rollout_path(codex_home, child_id)
+    _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
+
+    receipts = []
+    attempts = 0
+
+    def binding(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary task binding failure")
+        return _active_binding(task_dir)
+
+    errors = []
+    with mock.patch.object(
+        mod, "_active_task_binding_for_session", side_effect=binding,
+    ), mock.patch.object(
+        mod, "record_subagent_receipt",
+        side_effect=lambda _td, item: receipts.append(dict(item)) or item,
+    ), mock.patch.object(
+        mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts),
+    ):
+        assert mod.watch(
+            str(repo), root_id, str(rollout), offset,
+            stop_event=mod.threading.Event(), idle_seconds=0.5,
+            on_error=errors.append,
+        ) == 0
+
+    assert attempts >= 2
+    assert [(item["event"], item["lens"]) for item in receipts] == [
+        ("started", "review-code"),
+    ]
+    assert "temporary task binding failure" in errors[0]
+    assert errors[-1] == ""
 
 
 def test_watch_bounds_incomplete_oversized_tail_by_idle_deadline(tmp_path, monkeypatch):
@@ -1615,3 +1952,61 @@ def test_duplicate_identical_root_delivery_is_idempotent(tmp_path, monkeypatch):
             "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0",
         ))
     assert [item.get("verdict") for item in receipts] == [None, "PASS", "PENDING"]
+
+
+def test_conflicting_delivery_retries_transient_pending_receipt_failure(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review"
+    child = _rollout_path(codex_home, child_id)
+    _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
+    receipts = []
+    pending_attempts = 0
+
+    def record(_task_dir, receipt):
+        nonlocal pending_attempts
+        entry = dict(receipt)
+        if entry.get("verdict") == "PENDING":
+            pending_attempts += 1
+            if pending_attempts == 1:
+                raise RuntimeError("temporary receipt lock failure")
+        receipts.append(entry)
+        return entry
+
+    watcher = mod.Watcher(str(repo), root_id)
+    final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    conflict = _delivery(
+        agent_path,
+        "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0",
+    )
+    with mock.patch.object(
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
+    ), mock.patch.object(
+        mod, "record_subagent_receipt", side_effect=record,
+    ), mock.patch.object(
+        mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts),
+    ):
+        for event in _spawn_events(root_id, child_id, "code_review", agent_path):
+            watcher.feed(event)
+        _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
+        watcher.feed(_delivery(agent_path, final))
+        try:
+            watcher.feed(conflict)
+        except RuntimeError as exc:
+            assert "temporary receipt lock failure" in str(exc)
+        else:
+            raise AssertionError("transient invalidation write did not fail")
+        assert watcher.by_agent[agent_path].get("invalid") is not True
+        watcher.feed(conflict)
+
+    assert pending_attempts == 2
+    assert [item.get("verdict") for item in receipts] == [None, "PASS", "PENDING"]
+    assert watcher.by_agent[agent_path]["invalid"] is True
