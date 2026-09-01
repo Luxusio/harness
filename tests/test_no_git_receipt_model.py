@@ -258,6 +258,20 @@ def test_terminal_review_verdict_precedes_other_missing_required_lenses(tmp_path
     assert lib.receipt_runtime_verdict(blocked) == "BLOCKED_ENV"
 
 
+def test_terminal_qa_verdict_precedes_missing_review_receipt(tmp_path):
+    failed = _task(tmp_path / "qa-failed")
+    _receipt(failed, "qa-cli", "qa-fail", "started")
+    _receipt(failed, "qa-cli", "qa-fail", "completed", "FAIL")
+    assert lib.receipt_review_verdict(failed) == "PENDING"
+    assert lib.receipt_runtime_verdict(failed) == "FAIL"
+
+    blocked = _task(tmp_path / "qa-blocked")
+    _receipt(blocked, "qa-cli", "qa-blocked", "started")
+    _receipt(blocked, "qa-cli", "qa-blocked", "completed", "BLOCKED_ENV")
+    assert lib.receipt_review_verdict(blocked) == "PENDING"
+    assert lib.receipt_runtime_verdict(blocked) == "BLOCKED_ENV"
+
+
 def test_receipt_summary_keeps_only_review_contract_and_detail_digest(tmp_path):
     task = _task(tmp_path)
     final = (

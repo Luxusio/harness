@@ -3131,7 +3131,7 @@ def _completed_qa_by_lens(task_dir, snapshot=None):
 
 
 def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
-    """Compute runtime verdict from completed, explicit QA receipts only."""
+    """Compute runtime verdict without letting missing evidence mask negatives."""
     st = state or read_task_control(task_dir)
     if _blocked_artifact_valid(task_dir):
         return "BLOCKED_ENV"
@@ -3139,10 +3139,21 @@ def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
     review_verdict = receipt_review_verdict(task_dir, st, snapshot)
     if review_verdict in {"FAIL", "BLOCKED_ENV"}:
         return review_verdict
-    if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
-        return "PENDING"
     required = _required_qa_lenses(task_dir, st)
     completed = _completed_qa_by_lens(task_dir, snapshot)
+    completed_verdicts = [
+        str(completed[lens].get("verdict") or "").upper()
+        for lens in required if lens in completed
+    ]
+    # A valid current-run QA terminal negative is useful defect/blocker evidence
+    # even when the preceding review receipt was lost. Ordering remains mandatory
+    # for PASS below; missing attestation must never conceal an observed negative.
+    if any(verdict == "FAIL" for verdict in completed_verdicts):
+        return "FAIL"
+    if any(verdict == "BLOCKED_ENV" for verdict in completed_verdicts):
+        return "BLOCKED_ENV"
+    if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
+        return "PENDING"
     review_index = _latest_review_pass_index(task_dir, st, snapshot)
     valid = {
         lens: completed[lens] for lens in required
@@ -3152,10 +3163,6 @@ def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
         )
     }
     verdicts = [str(valid[lens].get("verdict") or "").upper() for lens in required if lens in valid]
-    if any(verdict == "FAIL" for verdict in verdicts):
-        return "FAIL"
-    if any(verdict == "BLOCKED_ENV" for verdict in verdicts):
-        return "BLOCKED_ENV"
     if len(verdicts) == len(required) and all(verdict == "PASS" for verdict in verdicts):
         return "PASS"
     return "PENDING"
