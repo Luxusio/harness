@@ -9,6 +9,17 @@ Orchestrate the full harness development cycle for a task.
 > Current artifact model: `PLAN.md` owns acceptance intent and unified
 > `RECEIPTS.jsonl` owns review/QA evidence.
 
+## Missing receipt policy
+
+Receipt absence never immediately fails or suppresses a substantive lens. Await
+the actual result and label an unreceipted final **NON-ATTESTING**: actual FAIL
+is remediated, actual BLOCKED_ENV uses the standard blocker path, and only an
+actual review PASS advances to substantive QA. Do not repair, restart, resume,
+recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
+call `task_verify` once; close on ordered receipt PASS, otherwise enter the
+stop-judge/`task_blocked` path with a generic attestation-evidence reason.
+Direct finals never authorize PASS or close.
+
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. The public effect is identical (task start -> plan -> develop -> QA -> close), with review and verification retained as internal close gates, but the chain is sequential prose rather than tool calls.
 > - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. The Codex lifecycle watcher records starts and observed completions in `RECEIPTS.jsonl`; never self-author receipt evidence. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
@@ -167,8 +178,10 @@ does not maintain a separate feedback sidecar.
 Skip this phase when Phase 3 closed the task. This is a recovery path for an
 interrupted or older develop flow, not a second QA pass. First call
 `task_context`: when fresh required QA receipts and a PASS verdict already
-exist, call `task_verify` only; spawn QA below only for a missing, failed, or
-stale required lens.
+exist, call `task_verify` only; spawn QA below only for an actually unrun,
+failed, or stale required lens. A missing receipt after an awaited substantive
+final is not an unrun lens and never justifies a receipt-only rerun; apply the
+Missing receipt policy instead.
 
 Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by watcher-recorded QA completions in `RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
 
@@ -260,10 +273,12 @@ Claude tree) before emitting the completion report.
 
 For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
-already-running MCP/hook process still reports a pre-install lifecycle gap, keep
-the task pending and request a new thread; do not write receipts by hand. On
-resume, the stateless root installer may be run again after confirming
-the diff still has fresh review+QA PASS.
+already-running MCP/hook process still reports missing required lifecycle
+evidence after substantive QA and one fresh `task_verify`, use the standard
+stop-judge/`task_blocked` attestation path; do not request a new thread or rerun
+a lens solely for a receipt, and do not write receipts by hand.
+The stateless root installer remains idempotent for ordinary verified-delivery
+retries, but receipt absence is not a reason to invoke it again.
 
 For a Goal child, run `task_close` first, then self-improvement including
 learning promotion; only then call `goal_next_task`.

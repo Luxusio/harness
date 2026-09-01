@@ -3081,15 +3081,19 @@ def receipt_review_verdict(task_dir, state=None, snapshot=None):
     snapshot = snapshot or receipt_snapshot(task_dir)
     completed = _completed_review_by_lens(task_dir, snapshot)
     verdicts = []
+    missing = False
     for lens in required:
         item = completed.get(lens)
         if not item:
-            return "PENDING"
+            missing = True
+            continue
         verdicts.append(str(item.get("verdict") or "").upper())
     if any(verdict == "FAIL" for verdict in verdicts):
         return "FAIL"
     if any(verdict == "BLOCKED_ENV" for verdict in verdicts):
         return "BLOCKED_ENV"
+    if missing:
+        return "PENDING"
     return "PASS" if all(verdict == "PASS" for verdict in verdicts) else "PENDING"
 
 
@@ -3133,6 +3137,8 @@ def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
         return "BLOCKED_ENV"
     snapshot = snapshot or receipt_snapshot(task_dir)
     review_verdict = receipt_review_verdict(task_dir, st, snapshot)
+    if review_verdict in {"FAIL", "BLOCKED_ENV"}:
+        return review_verdict
     if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         return "PENDING"
     required = _required_qa_lenses(task_dir, st)
@@ -3200,15 +3206,41 @@ def emit_compact_context(task_dir, snapshot=None):
 
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
+    elif review_verdict == "FAIL":
+        next_action = (
+            "A required review receipt reports FAIL. Remediate the finding and "
+            "run a fresh review because the implementation changed; do not start QA yet."
+        )
+    elif review_verdict == "BLOCKED_ENV":
+        next_action = (
+            "A required review receipt reports BLOCKED_ENV. Enter the standard "
+            "blocker assessment path; do not start QA."
+        )
     elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         next_action = (
-            "Run and await the required read-only review subagent(s); completion hooks "
-            "must record an explicit PASS for the current task run before QA."
+            "Run and await the required read-only review subagent(s) if a required "
+            "review has not actually completed. "
+            "If its actual PASS final already arrived without a receipt, label it "
+            "NON-ATTESTING and proceed to substantive QA once; do not rerun review "
+            "solely for a receipt. If actual review PASS and actual QA PASS were "
+            "both already awaited without the required receipts, do not rerun "
+            "either lens; enter the stop-judge/task_blocked path with the generic "
+            "attestation-blocker reason. Actual FAIL or BLOCKED_ENV takes precedence."
         )
+    elif runtime_verdict == "FAIL":
+        next_action = (
+            "A required QA receipt reports FAIL. Remediate the finding, then restore "
+            "fresh ordered review and QA evidence because the implementation changed."
+        )
+    elif runtime_verdict == "BLOCKED_ENV":
+        next_action = "A required QA receipt reports BLOCKED_ENV. Enter the standard blocker path."
     elif runtime_verdict != "PASS":
         next_action = (
-            "Run and await the required QA subagent(s); completion hooks must record "
-            "an explicit PASS verdict."
+            "Run and await the required QA subagent(s) if required QA has not "
+            "actually completed. If its "
+            "actual PASS final already arrived without a receipt, label it "
+            "NON-ATTESTING, call task_verify once, then enter the stop-judge/task_blocked "
+            "path if required evidence remains missing; do not rerun QA solely for a receipt."
         )
     else:
         next_action = "Completed QA verdicts present — run task_close."

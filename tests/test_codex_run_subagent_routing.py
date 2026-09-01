@@ -200,6 +200,28 @@ def test_runtime_fallback_notes_are_exception_only():
         assert phrase not in combined
 
 
+def test_run_and_develop_share_missing_receipt_policy():
+    required = (
+        "Missing receipt policy",
+        "NON-ATTESTING",
+        "actual FAIL",
+        "actual BLOCKED_ENV",
+        "actual review PASS",
+        "task_verify` once",
+        "task_blocked",
+        "Direct finals never authorize PASS or close",
+    )
+    for path in (CODEX_RUN, CLAUDE_RUN, CODEX_DEVELOP, CLAUDE_DEVELOP):
+        body = _text(path)
+        normalized = " ".join(body.split())
+        for phrase in required:
+            assert phrase in body, f"{path}: missing {phrase!r}"
+        assert "rerun a lens solely to obtain a receipt" in normalized
+    for path in (CODEX_RUN, CLAUDE_RUN):
+        normalized = " ".join(_text(path).lower().split())
+        assert "missing receipt after an awaited substantive final" in normalized
+
+
 def test_feedback_pattern_records_writing_guidance_only():
     body = _text(GENERAL_PATTERNS)
     section = body.split("## Feedback-Derived Rule Writing", 1)[1]

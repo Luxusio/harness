@@ -94,7 +94,8 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
     if "runtime_verdict" in item or "pass" in item:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
                 "after running QA, or spawn Agent(subagent_type='harness:stop-judge') "
-                "to assess legitimate pause-with-blocker (transitions runtime_verdict "
+                "to assess a legitimate external or attestation pause-with-blocker "
+                "(transitions runtime_verdict "
                 "to BLOCKED_ENV via task_blocked)",
                 "harness:qa-* or harness:stop-judge")
     return "", ""
@@ -257,7 +258,8 @@ def main():
             "Independent review and task_verify are internal close gates. Legitimate exits: "
             "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
             "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
-            "whether the current state is a genuine pause-with-blocker. Stop-judge "
+            "whether the current state is a genuine external or qualified "
+            "attestation pause-with-blocker. Stop-judge "
             "reads PLAN+transcript+work and emits VERDICT_OK_DONE / "
             "VERDICT_OK_BLOCKED / VERDICT_NO_CONTINUE. On VERDICT_OK_BLOCKED it "
             "calls task_blocked to record runtime_verdict=BLOCKED_ENV, write "

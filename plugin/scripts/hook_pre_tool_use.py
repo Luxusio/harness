@@ -115,14 +115,6 @@ def _invalid_review_spawn_name(payload: bytes) -> str:
     )
 
 
-def _receipt_lens_spawn(payload: bytes) -> bool:
-    """Return whether this spawn is expected to produce close-gate evidence."""
-    if _infer_receipt_lens is None:
-        return False
-    lens = _infer_receipt_lens(_spawn_task_name(payload))
-    return lens.startswith(("review-", "qa-", "ux-"))
-
-
 HOOK_TIMEOUT_SECONDS = 5.0
 REGISTRATION_BUDGET_SECONDS = 0.5
 
@@ -227,19 +219,10 @@ def _report_registration_failure(payload: bytes, reason: str) -> None:
     sys.stderr.write(
         "[harness] receipt watcher registration failed: "
         f"{reason}. This subagent's start and completion will NOT be recorded "
-        "in RECEIPTS.jsonl, so task_verify cannot reach PASS from it. Repair "
-        "receipt capability and re-run the lens; do not hand-author receipts.\n"
-    )
-
-
-def _deny_unrecordable_spawn(reason: str) -> None:
-    if emit_permission_decision is None:
-        return
-    emit_permission_decision(
-        "deny",
-        "Harness did not start this review/QA agent because its verdict could "
-        f"not be recorded: {reason}. Restart or repair the Harness MCP server, "
-        "run python3 plugin/scripts/hook_tree_health.py, then retry the lens.",
+        "in RECEIPTS.jsonl, so task_verify cannot reach PASS from it. Continue "
+        "substantive review and QA, label unreceipted results non-attesting, "
+        "then verify once and use task_blocked if required evidence is missing; "
+        "do not hand-author receipts.\n"
     )
 
 
@@ -315,16 +298,12 @@ def main() -> int:
         if invalid_name and emit_permission_decision is not None:
             emit_permission_decision("deny", invalid_name)
             return 0
-        receipt_lens = _receipt_lens_spawn(payload)
         # Registration stays best-effort — per C-12 this hook must never block
-        # the session. What must not stay best-effort is the *result*: an
-        # unregistered spawn produces no receipt, and discovering that after
-        # review and QA have finished wastes the whole verification pass.
+        # the session. Failure is surfaced, but substantive review and QA still
+        # run; only attested close remains unavailable.
         if restore_watcher_registration is None:
             reason = "codex_hook_registration is unavailable in this hook tree"
             _report_registration_failure(payload, reason)
-            if receipt_lens:
-                _deny_unrecordable_spawn(reason)
             return 0
         status: dict = {}
         try:
@@ -336,8 +315,6 @@ def main() -> int:
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
             _report_registration_failure(payload, reason)
-            if receipt_lens:
-                _deny_unrecordable_spawn(reason)
             return 0
         reason = str(status.get("reason") or "")
         if registered:
@@ -347,8 +324,6 @@ def main() -> int:
                     "holds its lease"
                 )
                 _report_registration_failure(payload, reason)
-                if receipt_lens:
-                    _deny_unrecordable_spawn(reason)
                 return 0
             _clear_registration_failure(payload)
         elif status.get("status") == REGISTRATION_FAILED:
@@ -357,8 +332,6 @@ def main() -> int:
                 f"{REGISTRATION_BUDGET_SECONDS}s"
             )
             _report_registration_failure(payload, reason)
-            if receipt_lens:
-                _deny_unrecordable_spawn(reason)
         else:
             # NOT_APPLICABLE: not a Codex rollout, no thread identity, or no
             # open task yet. None of those is a fault to report or to gate on.

@@ -63,7 +63,12 @@ def _receipt(
     if verdict:
         summary = f"VERDICT: {verdict}"
         if lens.startswith("review-"):
-            summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+            fix_now = 1 if verdict == "FAIL" else 0
+            investigate = 1 if verdict == "BLOCKED_ENV" else 0
+            summary += (
+                f"\nFINDING_COUNTS: FIX_NOW={fix_now} "
+                f"INVESTIGATE={investigate} OPTIONAL=0"
+            )
     extra.setdefault("source", "claude_hook")
     extra.setdefault("runtime_id", f"claude:test-session:{agent_id}")
     return _fixture_record(
@@ -229,6 +234,28 @@ def test_receipts_require_matching_start(tmp_path):
     no_start = _task(tmp_path / "no-start")
     _receipt(no_start, "review-code", "review-orphan", "completed", "PASS")
     assert lib.receipt_review_verdict(no_start) == "PENDING"
+
+
+def test_terminal_review_verdict_precedes_other_missing_required_lenses(tmp_path):
+    failed = _task(
+        tmp_path / "failed",
+        {"required_lenses": ["review-code", "review-security", "qa-cli"]},
+    )
+    _receipt(failed, "review-code", "review-fail", "started")
+    _receipt(failed, "review-code", "review-fail", "completed", "FAIL")
+    assert lib.receipt_review_verdict(failed) == "FAIL"
+    assert lib.receipt_runtime_verdict(failed) == "FAIL"
+
+    blocked = _task(
+        tmp_path / "blocked",
+        {"required_lenses": ["review-code", "review-security", "qa-cli"]},
+    )
+    _receipt(blocked, "review-code", "review-blocked", "started")
+    _receipt(
+        blocked, "review-code", "review-blocked", "completed", "BLOCKED_ENV",
+    )
+    assert lib.receipt_review_verdict(blocked) == "BLOCKED_ENV"
+    assert lib.receipt_runtime_verdict(blocked) == "BLOCKED_ENV"
 
 
 def test_receipt_summary_keeps_only_review_contract_and_detail_digest(tmp_path):

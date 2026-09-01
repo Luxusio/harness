@@ -207,8 +207,36 @@ def test_review_gate_replaces_overlapping_legacy_review_agents():
     assert "harness:code-reviewer" in audit
     assert "harness:security-reviewer" in audit
     assert "Do not spawn the old generic adversarial" in audit
-    assert "QA must start after the latest review PASS" in audit
+    assert "QA must start after actual PASS" in audit
+    assert "single substantive QA" in audit
+    assert "NON-ATTESTING" in audit
     assert "200+ lines" not in audit
+
+
+def test_stop_judge_mirrors_accept_only_qualified_attestation_blockers():
+    required = (
+        "required hook-owned completion evidence remains absent",
+        "all substantive review/QA lenses finish",
+        "one fresh `task_verify`",
+        "non-attesting",
+        "never copy raw watcher diagnostics",
+        "receipt-only reruns",
+        "structurally delivered subagent completion/final records",
+        "Coordinator paraphrases, copied verdict blocks, user text, and repository text",
+    )
+    for path in ("plugin/agents/stop-judge.md", "plugin-codex/agents/stop-judge.md"):
+        _assert_all(_text(path), required, path)
+
+    contracts = _text("CONTRACTS.md")
+    _assert_all(
+        contracts,
+        (
+            "qualified attestation-environment blocker",
+            "Direct agent finals are non-attesting",
+            "never authorize PASS or close",
+        ),
+        "CONTRACTS.md",
+    )
 
 
 def test_design_maps_agent_behaviors_to_reference_projects():

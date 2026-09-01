@@ -689,7 +689,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             }).encode()
             self.assertEqual(mod._invalid_review_spawn_name(raw), "", task_name)
 
-    def test_pre_tool_registration_failure_denies_only_receipt_lenses(self):
+    def test_pre_tool_registration_failure_warns_without_denying_agents(self):
         mod = _load("hook_pre_tool_use")
 
         def failing(_payload, **kwargs):
@@ -704,10 +704,10 @@ class TestCodexHookWrappers(unittest.TestCase):
             (Path(repo) / "doc" / "harness" / "manifest.yaml").write_text(
                 "project: test\n", encoding="utf-8",
             )
-            for task_name, denied in (
-                ("implementation_worker", False),
-                ("code_review_final", True),
-                ("qa_cli_final", True),
+            for task_name in (
+                "implementation_worker",
+                "code_review_final",
+                "qa_cli_final",
             ):
                 raw = json.dumps({
                     "cwd": repo,
@@ -722,12 +722,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                      contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(mod.main(), 0)
                 envelope = output.getvalue()
-                self.assertEqual("permissionDecision" in envelope, denied, task_name)
-                if denied:
-                    self.assertEqual(
-                        json.loads(envelope)["hookSpecificOutput"]["permissionDecision"],
-                        "deny",
-                    )
+                self.assertNotIn("permissionDecision", envelope, task_name)
 
     def test_wrapper_constants_match_installed_outer_timeouts(self):
         spec = importlib.util.spec_from_file_location(

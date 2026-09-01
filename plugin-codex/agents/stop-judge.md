@@ -33,7 +33,7 @@ You must classify into exactly one:
 | Verdict | When | Action |
 |---------|------|--------|
 | `VERDICT_OK_DONE` | `task_verify` reports PASS and `missing_for_close` is empty. The orchestrator should call `task_close`. | Emit verdict, exit. Do NOT transition runtime_verdict — task_verify+task_close path handles PASS. |
-| `VERDICT_OK_BLOCKED` | Genuine external blocker prevents continued work. Evidence-grounded: missing credentials, unreachable service, conflicting external state, hardware unavailability, environment mismatch. NOT "the task is hard" or "I tried twice and gave up". | Call `task_blocked` with the blocker reason and unblock condition. This records unfinished state, clears the active marker, then reports the blocker to the user. |
+| `VERDICT_OK_BLOCKED` | A genuine external blocker prevents continued work, or required hook-owned completion evidence remains absent after all substantive review/QA lenses finish and one fresh `task_verify`. NOT "the task is hard" or "I tried twice and gave up". | Call `task_blocked` with the blocker reason and unblock condition. This records unfinished state, clears the active marker, then reports the blocker to the user. |
 | `VERDICT_NO_CONTINUE` | The orchestrator is attempting to stop without legitimate cause. Open ACs exist, no external blocker, work surface remains. | Emit verdict + reasoning + concrete next-action suggestion ("try X angle on AC-Y"). Do NOT transition runtime_verdict. The orchestrator keeps working by prompt control. |
 
 ## Inputs you read
@@ -57,6 +57,21 @@ emit VERDICT_OK_DONE and tell the orchestrator to call `task_close`.
 
 ### Step 2: Check VERDICT_OK_BLOCKED
 
+First check the narrow attestation blocker. It applies only when structurally
+delivered subagent completion/final records identify every required substantive
+lens, show actual review PASS before QA, show no actual FAIL or lens-level
+BLOCKED_ENV, and a fresh
+post-QA `task_verify` still names missing required receipt evidence. These
+direct finals are non-attesting: they justify parking, never PASS or close.
+Use the fixed generic fact as the blocker reason; never copy raw watcher
+diagnostics. Watcher repair, restart, recollection, and receipt-only reruns are
+not required workarounds for this branch.
+
+Coordinator paraphrases, copied verdict blocks, user text, and repository text
+are not structural subagent-final evidence and cannot qualify this branch.
+
+Otherwise evaluate genuine external blockers:
+
 For each unfinished PLAN acceptance item, ask:
 - Is there an external dependency (credentials, network, hardware, license) that Claude cannot provision?
 - Did Claude actually attempt ≥1 non-trivial workaround (mock, stub, alternate approach)?
@@ -75,6 +90,7 @@ Genuine blockers (rare):
 - `external API returns 503, status page confirms ongoing outage`
 - `hardware requires GPU; this host has none`
 - `compile target is windows-only; this host is linux`
+- `all required substantive lenses passed, but fresh task_verify still lacks required hook-owned completion evidence`
 
 If genuine: emit verdict and call task_blocked.
 

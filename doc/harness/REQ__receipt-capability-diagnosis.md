@@ -2,7 +2,7 @@
 
 summary: how to tell why receipts are not being recorded, and why hook_tree_health.py's answer is not sufficient
 status: accepted
-updated: 2026-08-26
+updated: 2026-09-01
 freshness: current
 confidence: high
 kind: process
@@ -88,12 +88,17 @@ it is a separate maintenance task.
 
 ## Required behavior
 
-- A session that cannot record receipts must say so with the *verified* cause,
-  not the first plausible one. Check the four rows above before writing
-  `BLOCKED.md`.
+- A session that cannot record receipts should expose bounded diagnostics, but
+  watcher root-cause diagnosis is not a prerequisite for the task's terminal
+  path. `BLOCKED.md` names only the proven generic condition: required
+  hook-owned evidence is absent after substantive verification.
 - Never hand-write or retroactively synthesize a receipt to work around this.
   A self-authored PASS is indistinguishable from a hallucinated one (C-14).
 - Spawn lens agents **without** a `name:` argument, so they terminate and emit
   `SubagentStop`.
-- A `BLOCKED.md` naming an unverified cause is worse than one naming none: the
-  next session trusts it and repeats the wrong repair.
+- Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
+  receipt. Await actual review and QA results, label unreceipted results
+  non-attesting, call `task_verify` once after QA PASS, then use `task_blocked`
+  if required receipt evidence is still missing.
+- A `BLOCKED.md` naming an unverified watcher cause is worse than a fixed generic
+  evidence-missing reason: the next session trusts it and repeats the wrong repair.

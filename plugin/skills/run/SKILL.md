@@ -10,6 +10,17 @@ Orchestrate the full harness development cycle for a task.
 
 > Current artifact model: `PLAN.md` owns acceptance intent and unified
 > `RECEIPTS.jsonl` owns review/QA evidence.
+
+## Missing receipt policy
+
+Receipt absence never immediately fails or suppresses a substantive lens. Await
+the actual result and label an unreceipted final **NON-ATTESTING**: actual FAIL
+is remediated, actual BLOCKED_ENV uses the standard blocker path, and only an
+actual review PASS advances to substantive QA. Do not repair, restart, resume,
+recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
+call `task_verify` once; close on ordered receipt PASS, otherwise enter the
+stop-judge/`task_blocked` path with a generic attestation-evidence reason.
+Direct finals never authorize PASS or close.
 > Receipt acquisition is normative in
 > `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage,
 > schema, snapshots, and gates are normative in
@@ -108,7 +119,9 @@ recovery path for an interrupted or older develop flow, not a second QA pass.
 
 First call `task_context`. When the required review and QA lenses already have
 completed PASS receipts for the current run, call `task_verify` only. Spawn a
-lens here solely for one that is missing, failed, or stale.
+lens here for one that is actually unrun, failed, or stale. A missing receipt
+after an awaited substantive final is not an unrun lens and never justifies a
+receipt-only rerun; apply the Missing receipt policy instead.
 
 For a lens that must be re-run, follow `develop/SKILL.md` Phase 7 and
 `develop/quality-audit-pipeline.md` — do not restate routing here. Use the
@@ -177,10 +190,12 @@ emitting the completion report.
 
 For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
-already-running MCP/hook process still reports a pre-install lifecycle gap, keep
-the task pending and request a new session; do not write receipts by hand. On
-resume, the stateless root installer may be run again after confirming
-the diff still has fresh review+QA PASS.
+already-running MCP/hook process still reports missing required lifecycle
+evidence after substantive QA and one fresh `task_verify`, use the standard
+stop-judge/`task_blocked` attestation path; do not request a new session or
+rerun a lens solely for a receipt, and do not write receipts by hand.
+The stateless root installer remains idempotent for ordinary verified-delivery
+retries, but receipt absence is not a reason to invoke it again.
 
 For a Goal child, run `task_close` first, then self-improvement including
 learning promotion; only then call `goal_next_task`.

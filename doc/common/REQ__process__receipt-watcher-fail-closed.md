@@ -1,8 +1,8 @@
 # REQ process receipt watcher fail closed
 
-summary: Receipt watcher readiness must be proven before verification agents are spawned, and registration failure must surface at task start rather than at close
+summary: Receipt capability failures must be visible, but they must not suppress substantive review or QA or trigger receipt-only recovery work
 status: accepted
-updated: 2026-08-28
+updated: 2026-09-01
 freshness: current
 confidence: high
 kind: process
@@ -58,23 +58,25 @@ session start; Codex has no equivalent pre-check.
    `watcher_status` tool: `manager_running`, `registration_present`,
    `root_thread_id`, `active_task_id`, `active_run_id`, `rollout_offset`,
    `last_registration_error`, `last_watcher_error`.
-3. **Warn early at `task_start`.** When the watcher is not ready, the harness
-   must not instruct the agent to spawn review subagents, and must say so with
-   explicit recovery text: "현재 세션에는 receipt watcher가 등록되지 않았습니다.
-   새 Codex 세션을 시작한 뒤 task를 resume하십시오."
-
-   **Amended on 2026-08-26 — warn, do not refuse.** The original wording required
-   an immediate `BLOCKED_ENV`. The user rejected that: the task is still created
-   or resumed, and only the spawn instruction is withheld — and only on a
-   positively observed failure, never on this warning alone.
-4. **Receipt handshake per verification stage.** reviewer spawn confirmed ->
-   reviewer completion recognized -> only then QA is allowed. If the review
-   receipt failed to record, an 18-minute full QA run must not start.
-5. **Best-effort registration may remain, but failure must propagate.**
+3. **Warn early at `task_start`, without suppressing useful work.** When the
+   watcher is not ready, the task remains open and the warning directs the
+   orchestrator to await substantive review and QA. It must not prescribe
+   watcher repair, session restart, resume, receipt recollection, or a lens rerun
+   whose only purpose is obtaining a receipt.
+4. **Substantive review precedes substantive QA.** The actual reviewer final,
+   not receipt availability, controls this quality sequence: FAIL is remediated,
+   BLOCKED_ENV uses the genuine blocker path, and only PASS advances to QA. An
+   unreceipted PASS is useful but non-attesting and cannot authorize close.
+5. **Block after substantive QA, not before it.** After an actual QA PASS, call
+   `task_verify` once against a fresh receipt snapshot. Ordered receipt PASS
+   closes normally. If required evidence remains missing, enter the standard
+   stop-judge/`task_blocked` path with a fixed generic attestation-evidence
+   reason. Never copy a watcher diagnostic cause into `BLOCKED.md`.
+6. **Best-effort registration may remain, but failure must propagate.**
    `codex_hook_registration.py:157` retries within a short deadline and returns
    `False`. The hook must consume that return value and reflect it to the user
    and to harness task state.
-6. **Do not silently change `run_id` on an ordinary resume.** A repeat
+7. **Do not silently change `run_id` on an ordinary resume.** A repeat
    `task_start` changed the run id in this incident. A new run invalidates
    existing receipts, so it must warn: "새 evidence run이 생성되었습니다. 이전
    review/QA 결과는 사용할 수 없으며 모두 다시 실행해야 합니다."
@@ -90,23 +92,26 @@ session start; Codex has no equivalent pre-check.
   obstruct**. Left visible rather than deleted because it was the original
   request, but it is not live guidance — acting on it reintroduces the deadlock.
 
-## Recovery for an already-stuck task
+## Terminal behavior for a receipt-blocked task
 
-Open the repo in a new session/thread, resume the task, confirm watcher
-registration, and re-run review and QA. Do not backfill receipts from the
-previous PASS results.
+Do not repair or restart the watcher as part of the task workflow. Preserve the
+substantive review and QA findings in the operator report, label them
+non-attesting, run one fresh `task_verify`, and call `task_blocked` when required
+hook-owned evidence is still absent. A later fresh attested run is an explicit
+operator choice, not an automatic receipt-recovery step.
 
 ## Implementation status
 
 | Requirement | Status | Where |
 |---|---|---|
-| 1 — check before spawn | done, as decided | `hook_pre_tool_use.py` checks and reports; it deliberately exits 0 so the spawn proceeds. `harness_server._gate_next_action` stops the harness from *instructing* a further spawn it cannot attest — but only on an observed failure, never on a suspicion. Blocking the spawn is explicitly rejected — see Settled decisions. |
+| 1 — check before spawn | done, as decided | `hook_pre_tool_use.py` checks and reports; it deliberately exits 0 so the spawn proceeds. `harness_server._gate_next_action` changes terminal guidance but never suppresses substantive verification. |
 | 2 — expose failure cause | done | `harness_server._watcher_status`, returned by `task_start` and `task_context`; `_start_codex_watchers` records `last_watcher_error` instead of swallowing it |
-| 3 — warn at task_start | done, as decided | `task_start` warns `RECEIPT_HOOKS_UNAVAILABLE` and still creates or resumes the task. It does **not** suppress the spawn instruction on that warning alone — the warning is a heuristic about plugin registration, and gating on it deadlocked healthy sessions. Only a positively observed failure withholds the instruction; see "Unknown is not the same as unrecordable". Refusing the task outright is explicitly rejected — see Settled decisions. The Korean recovery string named in the original requirement was not shipped; the delivered text is English and is quoted in `RECEIPT_REPAIR_NEXT_ACTION`. |
-| 4 — per-stage receipt handshake | not implemented | needs the Codex collaboration surface and a live Codex session to verify |
-| 5 — propagate registration failure | done | `hook_pre_tool_use.py` consumes the `restore_watcher_registration` result, records it, and writes a user-visible stderr line; still exits 0 per C-12 |
-| 6 — run_id change warning | done | `task_start` emits `EVIDENCE_RUN_SUPERSEDED` naming both run ids |
-| 7 — no retroactive receipts | held | enforced by `tests/test_receipt_watcher_fail_closed.py::TestNoReceiptSynthesis` |
+| 3 — warn without suppressing lenses | done | `task_start` reports receipt capability separately while routing substantive review and QA to continue. |
+| 4 — actual review before substantive QA | done | canonical run/develop guidance branches on the awaited reviewer final and labels unreceipted results non-attesting. |
+| 5 — one verify then generic block | done | canonical routing performs one fresh `task_verify`, then uses stop-judge/`task_blocked` if required evidence remains absent. |
+| 6 — propagate registration failure | done | `hook_pre_tool_use.py` consumes the registration result and reports it while still exiting 0 per C-12. |
+| 7 — run_id change warning | done | `task_start` emits `EVIDENCE_RUN_SUPERSEDED` naming both run ids. |
+| 8 — no retroactive receipts | held | enforced by `tests/test_receipt_watcher_fail_closed.py::TestNoReceiptSynthesis`. |
 
 `watcher_status` reports fields it cannot determine as `null` rather than
 guessing. A fabricated "ready" would be worse than an admitted unknown. No field
@@ -148,10 +153,9 @@ implemented this REQ hit exactly that on resume.
 
 So a suspicion earns `None` — the same honest "unknown" AC-002 already required
 of `manager_running`, `root_thread_id`, and `rollout_offset` — and only a
-positively observed failure earns `False`. `_gate_next_action` withholds the
-spawn instruction on `False` alone. This is the same **warn, do not obstruct**
-rule as the two settled decisions below, applied to the one signal that had
-quietly been exempted from it.
+positively observed failure earns `False`. That value changes warning and
+terminal guidance, but no longer withholds substantive verification. This
+applies **warn, do not obstruct** consistently to every readiness signal.
 
 Positive disproof outranks every signal: if `RECEIPTS.jsonl` already holds an
 entry for the live `run_id`, receipts are recordable no matter what any
@@ -251,8 +255,8 @@ the hook stamps the payload's `session_id`/`thread_id`, then `CODEX_THREAD_ID`.
 These are assumed to be the same value on Codex, which `_registration_identity`
 supports by rejecting a payload whose `session_id` and `thread_id` disagree.
 If they diverge, bounded task-start registration reports a positive current-run
-failure and withholds lens guidance; a record that cannot be attributed is
-dropped and never authorizes PASS.
+failure and switches to non-attesting verification/block guidance; a record
+that cannot be attributed is dropped and never authorizes PASS.
 
 `root_thread_id` is populated from the validated task-start registration
 identity. `rollout_offset` remains nullable because the control plane does not
@@ -261,6 +265,10 @@ being guessed.
 
 ## Settled decisions
 
+**Missing receipts lead to substantive QA, then a generic blocked task.**
+Decided by the user on 2026-09-01. This supersedes the earlier repair/restart
+and receipt-only rerun recovery. The close gate remains unchanged.
+
 **A watcher error never blocks an agent.** Decided by the user on 2026-08-26.
 `hook_pre_tool_use.py` must report a failed registration and exit 0; it must not
 deny `collaboration.spawn_agent`. Rationale: attestation is a recording concern,
@@ -268,37 +276,34 @@ and losing the ability to record is not a reason to stop the work from running.
 Degrading to "you got the result but no receipt" is strictly better than "you got
 neither." This also keeps the hook aligned with C-12 fail-safe behavior.
 
-Consequence, accepted knowingly: agents spawned in the same message as the
-failing one still run unattested, so a multi-lens batch can complete with no
-receipts. The recovery is to repair receipt capability and re-run the lenses —
-never to hand-author receipts.
+Consequence, accepted knowingly: agents may run unattested and close remains
+impossible. The task still obtains substantive review and QA once, then parks
+with generic missing-evidence `BLOCKED_ENV`; it never hand-authors receipts or
+reruns a lens solely for attestation.
 
 **`task_start` warns and stays open.** Decided by the user on 2026-08-26.
 Requirement 3's original wording asked for an immediate `BLOCKED_ENV` when the
 watcher is unready. That is superseded: `task_start` emits the
 `RECEIPT_HOOKS_UNAVAILABLE` warning and still creates or resumes the task. It
-does **not** suppress the instruction to spawn verification agents on that
-warning alone — see "Unknown is not the same as unrecordable"; gating on a
-heuristic deadlocked healthy sessions, and only a positively observed failure
-withholds the instruction. Rationale is the same
+does **not** suppress verification agents on either a heuristic or a positively
+observed failure. Rationale is the same
 as above and confirmed in practice — the session that produced this REQ planned
 and implemented five tasks under the advisory warning; refusing at the door would
 have prevented all of that work for a condition that only affects recording.
 
-Both decisions reduce to one rule: **warn, do not obstruct.** Receipt capability
-is reported honestly at every surface, and nothing about its absence stops
-planning, implementation, or agent execution. What absence does stop is `close` —
-`task_verify` still requires ordered hook-owned PASS receipts, and that gate is
-unchanged.
+Both decisions reduce to one rule: **warn, do not obstruct substantive work;
+block attested close.** Receipt capability is reported honestly at every
+surface, actual negative results take precedence, and missing ordered receipts
+lead to a generic blocked task only after substantive QA and one fresh verify.
 
 ## Verification
 
 - `tests/test_receipt_watcher_fail_closed.py` — a raising watcher start records
   the cause without raising; `watcher_status` keeps undeterminable fields null;
   a failed registration is recorded while the hook still exits 0; the spawn
-  instruction is replaced when receipts are unrecordable and preserved when they
-  are not; no path writes a receipt. Also: a capability warning alone reports
-  unknown and does **not** withhold the spawn instruction; a receipt for the
+  instruction changes to the non-attesting verification/block journey when
+  receipts are unrecordable; no path writes a receipt. Also: a capability
+  warning alone reports unknown; a receipt for the
   live run overrides the warning; a planted symlink at the diagnostics path is
   refused and its target left untouched; a nested project writes nothing into a
   parent repo; a record from another session is ignored; untrusted reason text

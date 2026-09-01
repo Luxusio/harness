@@ -90,9 +90,9 @@ def _codex_capability_warning() -> str:
         return ""
     return (
         "Codex receipt watcher registration and live host are not positively confirmed for "
-        "this root thread. Do not launch review or QA lenses: their verdicts "
-        "may not be recorded. Repair or refresh the Codex hook registration, "
-        "then rerun this check."
+        "this root thread. Continue substantive review and QA, but treat their "
+        "results as non-attesting when receipts are absent. After QA PASS, call "
+        "task_verify once and use task_blocked if required evidence is still missing."
     )
 
 
@@ -215,12 +215,11 @@ def receipt_capability_warning(config_dir: str | None = None) -> str:
             "This checks which plugin path is registered, not whether receipts "
             "are being written, so it can fire in a session that is in fact "
             "recording — check RECEIPTS.jsonl for the current run before acting. "
-            "If receipts really are missing, subagents will run and return "
-            "verdicts that are never recorded, and task_close will refuse. "
-            "Fix: update the harness plugin so it resolves against "
-            "your marketplace tree (e.g. `/plugin update harness@harness`), then "
-            "restart the session — hook registration is only read at session "
-            "start. Planning and implementation still work in this session."
+            "If receipts really are missing, continue substantive review and QA "
+            "and label their results non-attesting; task_close will still refuse. "
+            "After QA PASS, call task_verify once and use task_blocked when required "
+            "hook-owned evidence remains missing. Watcher repair is out-of-band "
+            "maintenance, not the current task's next action."
         )
     except Exception:
         return ""

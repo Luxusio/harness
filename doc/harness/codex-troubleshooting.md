@@ -136,15 +136,16 @@ for the authoritative acquisition/identity/completion contract and
 [`ADR__consolidated-task-artifacts.md`](patterns/ADR__consolidated-task-artifacts.md)
 for current-stream/schema rejection rules.
 
-**Fix:** Upgrade Harness and Codex together, reinstall, and restart Codex so the
-new watcher is loaded. Start a fresh task run when the existing unified stream
-is unsupported, then start one fresh review or QA agent. Do not edit receipt
-files or reuse old evidence.
+**Task action:** Keep the direct agent final as a substantive, non-attesting
+result. Actual FAIL is remediated, actual BLOCKED_ENV uses the standard blocker
+path, and actual review PASS advances to substantive QA. After QA PASS, call
+`task_verify` once; if required hook-owned evidence is still missing, enter the
+stop-judge/`task_blocked` path with a generic evidence reason. Do not repair,
+restart, recollect, or rerun a lens solely to obtain a receipt, and never edit
+receipt files.
 
-```bash
-python3 install.py --codex-only --force
-# Restart Codex/MCP, then retry the affected review or QA once.
-```
+Upgrading/reinstalling Harness or Codex is optional out-of-band maintainer work,
+not the current task's recovery action.
 
 ---
 

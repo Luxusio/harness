@@ -85,9 +85,11 @@ safe correction.
 
 After fixing a reviewer finding, rerun that routed review before QA. Harness
 does not detect later source edits; deciding whether an unrelated or post-QA
-edit needs another review is developer-owned. QA must start after the latest review PASS
-for every required lens in the current TASK.json generation; an early or
-concurrent QA receipt cannot close the task.
+edit needs another review is developer-owned. QA must start after actual PASS
+finals from every required reviewer. Normally those PASS finals also have
+current-generation receipts. If a receipt is missing, the single substantive QA
+run is NON-ATTESTING and follows the Missing receipt policy; an early,
+concurrent, or review-unordered QA receipt can never close the task.
 
 ## Phase 4.8: Near-zero-cost scan
 

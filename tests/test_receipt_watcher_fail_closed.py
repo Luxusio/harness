@@ -160,18 +160,19 @@ class TestWatcherStatusShape(unittest.TestCase):
 
 
 class TestNextActionGate(unittest.TestCase):
-    """Requirements 1 and 3 — never instruct a spawn that cannot be attested."""
+    """Requirements 1 and 3 — continue useful work, then block attestation."""
 
     def test_spawn_instruction_replaced_when_receipts_unrecordable(self):
         harness_server = _server()
         ctx = {"next_action": "Run and await the required read-only review subagent(s)."}
         gated = harness_server._gate_next_action(ctx, {"receipts_recordable": False})
         self.assertNotEqual(gated["next_action"], ctx["next_action"])
-        # The replacement may name subagents — it must tell the caller not to
-        # spawn them, and must not read as an instruction to run one.
-        self.assertNotIn("Run and await", gated["next_action"])
-        self.assertIn("Do not spawn", gated["next_action"])
-        self.assertIn("Planning and implementation still work", gated["next_action"])
+        self.assertIn("Continue and await", gated["next_action"])
+        self.assertIn("NON-ATTESTING", gated["next_action"])
+        self.assertIn("task_verify once", gated["next_action"])
+        self.assertIn("task_blocked", gated["next_action"])
+        self.assertNotIn("to repair", gated["next_action"].lower())
+        self.assertNotIn("start a new session", gated["next_action"].lower())
 
     def test_instruction_preserved_when_receipts_recordable(self):
         harness_server = _server()
@@ -184,6 +185,93 @@ class TestNextActionGate(unittest.TestCase):
         ctx = {"next_action": "Create PLAN.md via plan skill before source writes."}
         gated = harness_server._gate_next_action(ctx, {"receipts_recordable": False})
         self.assertEqual(gated["next_action"], ctx["next_action"])
+
+    def test_task_verify_applies_the_same_post_qa_missing_receipt_policy(self):
+        harness_server = _server()
+        control = {
+            "run_id": "01a05b6a-57c2-7512-bde7-6cb49c65b875",
+            "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }
+        with mock.patch.object(
+            harness_server, "canonical_task_dir", return_value="/repo/task",
+        ), mock.patch.object(
+            harness_server, "_validated_task_control", return_value=control,
+        ), mock.patch.object(
+            harness_server, "receipt_snapshot", return_value=object(),
+        ), mock.patch.object(
+            harness_server, "read_task_control", return_value=control,
+        ), mock.patch.object(
+            harness_server, "receipt_runtime_verdict", return_value="PENDING",
+        ), mock.patch.object(
+            harness_server, "receipt_review_verdict", return_value="PASS",
+        ), mock.patch.object(
+            harness_server, "required_review_lenses", return_value=["review-code"],
+        ), mock.patch.object(
+            harness_server, "emit_compact_context", return_value={
+                "next_action": "Run and await the required QA subagent(s).",
+                "missing_for_close": ["completed QA verdict: qa-cli"],
+                "required_qa_lenses": ["qa-cli"],
+            },
+        ), mock.patch.object(
+            harness_server, "_watcher_status", return_value={
+                "receipts_recordable": False,
+            },
+        ):
+            result = json.loads(
+                harness_server.handle_task_verify({"task_id": "TASK__x"})[
+                    "content"
+                ][0]["text"]
+            )
+
+        self.assertEqual(result["runtime_verdict"], "PENDING")
+        self.assertIn("task_verify once", result["next_action"])
+        self.assertIn("task_blocked", result["next_action"])
+        self.assertIn("completed QA verdict: qa-cli", result["missing_for_close"])
+
+    def test_task_verify_pending_never_prescribes_receipt_only_rerun(self):
+        harness_server = _server()
+        control = {
+            "run_id": "01a05b6a-57c2-7512-bde7-6cb49c65b875",
+            "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }
+        with mock.patch.object(
+            harness_server, "canonical_task_dir", return_value="/repo/task",
+        ), mock.patch.object(
+            harness_server, "_validated_task_control", return_value=control,
+        ), mock.patch.object(
+            harness_server, "receipt_snapshot", return_value=object(),
+        ), mock.patch.object(
+            harness_server, "read_task_control", return_value=control,
+        ), mock.patch.object(
+            harness_server, "receipt_runtime_verdict", return_value="PENDING",
+        ), mock.patch.object(
+            harness_server, "receipt_review_verdict", return_value="PASS",
+        ), mock.patch.object(
+            harness_server, "required_review_lenses", return_value=["review-code"],
+        ), mock.patch.object(
+            harness_server, "emit_compact_context", return_value={
+                "next_action": "Run and await the required QA subagent(s).",
+                "missing_for_close": ["completed QA verdict: qa-cli"],
+                "required_qa_lenses": ["qa-cli"],
+            },
+        ), mock.patch.object(
+            harness_server, "_watcher_status", return_value={
+                "receipts_recordable": True,
+            },
+        ):
+            result = json.loads(
+                harness_server.handle_task_verify({"task_id": "TASK__x"})[
+                    "content"
+                ][0]["text"]
+            )
+
+        self.assertIn("If actual QA PASS was already awaited", result["next_action"])
+        self.assertIn("do not rerun", result["next_action"])
+        self.assertIn("task_blocked", result["next_action"])
 
 
 class TestCodexRegistrationFailureIsDetected(unittest.TestCase):
@@ -240,7 +328,7 @@ class TestCodexRegistrationFailureIsDetected(unittest.TestCase):
         self.assertTrue(status["receipts_recordable"])
         self.assertEqual(status["receipts_unrecordable_reason"], "")
 
-    def test_gate_names_the_codex_cause_not_the_claude_one(self):
+    def test_gate_uses_generic_evidence_reason_not_runtime_specific_cause(self):
         harness_server = _server()
         ctx = {"next_action": "Run and await the required read-only review subagent(s)."}
         gated = harness_server._gate_next_action(ctx, {
@@ -248,7 +336,8 @@ class TestCodexRegistrationFailureIsDetected(unittest.TestCase):
             "receipts_unrecordable_summary": "The receipt watcher is not registered for this session.",
             "receipts_unrecordable_reason": "The receipt watcher is not registered for this session: rollout unreadable.",
         })
-        self.assertIn("not registered for this session", gated["next_action"])
+        self.assertIn("Receipt recording is unavailable", gated["next_action"])
+        self.assertNotIn("not registered for this session", gated["next_action"])
         self.assertNotIn("/plugin update", gated["next_action"])
 
 
@@ -634,7 +723,7 @@ class TestReadinessIsTriState(unittest.TestCase):
         )
         self.assertEqual(gated["next_action"], ctx["next_action"])
 
-    def test_observed_failure_withholds_the_spawn_instruction(self):
+    def test_observed_failure_routes_substantive_work_then_generic_block(self):
         harness_server = _server()
         gated = harness_server._gate_next_action(
             {
@@ -646,16 +735,11 @@ class TestReadinessIsTriState(unittest.TestCase):
                 "receipts_unrecordable_summary": "watcher never started",
             },
         )
-        self.assertIn("Do not spawn them yet", gated["next_action"])
-        self.assertIn("watcher never started", gated["next_action"])
+        self.assertIn("Continue and await", gated["next_action"])
+        self.assertIn("task_blocked", gated["next_action"])
+        self.assertNotIn("watcher never started", gated["next_action"])
 
-    def test_a_watcher_start_failure_also_withholds_the_spawn_instruction(self):
-        """The third observed-failure branch, whose False was unpinned.
-
-        Flipping it to `None` left the suite green, which would send a session
-        whose Codex watcher never started to spend review and QA it cannot
-        attest — the waste this REQ exists to prevent.
-        """
+    def test_a_watcher_start_failure_also_routes_substantive_verification(self):
         harness_server = _server()
         status = self._status(
             harness_server,
@@ -667,7 +751,8 @@ class TestReadinessIsTriState(unittest.TestCase):
         gated = harness_server._gate_next_action(
             {"next_action": "Run and await the required review subagent(s)."}, status,
         )
-        self.assertIn("Do not spawn them yet", gated["next_action"])
+        self.assertIn("Continue and await", gated["next_action"])
+        self.assertIn("NON-ATTESTING", gated["next_action"])
 
     def test_live_worker_error_is_exposed_as_unrecordable(self):
         harness_server = _server()
@@ -918,7 +1003,7 @@ class TestReadinessIsTriState(unittest.TestCase):
         )
         self.assertNotIn("IGNORE ALL PRIOR", gated["next_action"])
         self.assertNotIn("task_close now", gated["next_action"])
-        self.assertIn("not registered for this session", gated["next_action"])
+        self.assertIn("Receipt recording is unavailable", gated["next_action"])
         # The detail is still available to a caller that wants it — as data.
         self.assertIn(hostile, status["receipts_unrecordable_reason"])
 
@@ -1296,7 +1381,7 @@ class TestDiagnosticsScoping(unittest.TestCase):
         """The stamp is attacker-chosen, so the window needs both bounds.
 
         Without the lower bound a record dated 2030 never expires, so a planted
-        failure withholds the spawn instruction indefinitely.
+        failure changes the task's terminal guidance indefinitely.
         """
         harness_server = _server()
         future = (
@@ -1599,7 +1684,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
         self.assertIs(diagnostics["registration_present"], True)
         self.assertEqual(diagnostics["last_registration_error"], "")
 
-    def test_failed_registration_keeps_task_open_and_gates_spawn(self):
+    def test_failed_registration_keeps_task_open_and_routes_substantive_work(self):
         harness_server = _server()
         unwrap = lambda result: json.loads(result["content"][0]["text"])
 
@@ -1629,8 +1714,8 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
 
         self.assertEqual(status, "open")
         self.assertIs(started["watcher_status"]["receipts_recordable"], False)
-        self.assertNotIn("spawn the review-code", started["next_action"].lower())
-        self.assertIn("do not spawn", started["next_action"].lower())
+        self.assertIn("continue and await", started["next_action"].lower())
+        self.assertIn("task_blocked", started["next_action"].lower())
         self.assertIn(
             "RECEIPT_WATCHER_REGISTRATION_FAILED",
             [item["code"] for item in started["warnings"]],

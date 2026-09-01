@@ -255,7 +255,11 @@ break it immediately.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
 completion receipts, not from critic files or Git snapshots. `BLOCKED_ENV`
-still requires a current stop-judge assessment via `task_blocked`.
+still requires a current stop-judge assessment via `task_blocked`. Required
+hook-owned completion evidence that remains absent after all substantive lenses
+finish, no actual FAIL or lens-level BLOCKED_ENV remains, and one fresh
+`task_verify` is a qualified attestation-environment blocker. Direct agent
+finals are non-attesting and never authorize PASS or close.
 
 **Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Stop-judge 의 의미 판단이 runtime_verdict machine gate 의 input — prose-only 룰의 commentary 화 위험 (§0) 회피. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
 Receipt-backed verification closes the self-authored verdict loophole: the

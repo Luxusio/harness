@@ -26,6 +26,15 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, and ordered review/QA entries in the current task run provide close evidence. Harness does not detect edits after QA; the developer decides when a change warrants rerunning review or QA.
 
+**Missing receipt policy.** Receipt absence never immediately fails or
+suppresses a substantive lens. Await the actual result and label an unreceipted
+final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV uses the
+standard blocker path, and only actual review PASS advances to substantive QA.
+Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
+receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
+PASS, otherwise enter stop-judge/`task_blocked` with a generic
+attestation-evidence reason. Direct finals never authorize PASS or close.
+
 ## Confusion Protocol
 
 For premise, architecture, scope, external-state, or three-attempt ambiguity,
@@ -266,6 +275,11 @@ edit that affects a finding, rerun focused tests and the applicable review.
 Harness does not infer this need from Git. Inline
 self-review is not a strict-compliance fallback.
 
+Normally receipt-backed review PASS precedes Phase 7. Under the Missing receipt
+policy, actual reviewer PASS finals permit one substantive QA run, but review
+and QA remain NON-ATTESTING and can only lead to the generic blocked path unless
+ordered receipts arrive.
+
 Apply the parent run skill's subagent wait UX rule: finish useful local work,
 then wait in one interval of up to 60 seconds; never use rapid short polling or
 agent-status tools as a progress poll. After a timeout, emit one compact user
@@ -287,8 +301,10 @@ semantics. Late observation cannot recover a completed reviewer.
 
 Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/verification-gate.md` for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
 
-Only begin this QA phase after all required Phase 6.6 review lenses PASS. QA
-started before those PASS events is out of order and must be rerun.
+Only begin this QA phase after all required Phase 6.6 reviewer finals actually
+PASS. QA started before those finals is invalid substantive sequencing. Without
+a receipt-backed review PASS, any later QA receipt remains out of order for
+close even though the QA final is still useful under the Missing receipt policy.
 
 **On Codex:** run the required QA lenses declared in `TASK.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
 

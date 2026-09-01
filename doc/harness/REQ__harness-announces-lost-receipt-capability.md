@@ -11,7 +11,7 @@ invalidated_by_paths:
 
 tags: [harness, receipts, drift, verification]
 summary: When the loaded hook tree lacks the receipt subsystem, the harness must announce it at the first moment it can know, instead of presenting as healthy while receipts silently never record.
-updated: 2026-08-28
+updated: 2026-09-01
 
 ## Expected normal behavior
 
@@ -24,14 +24,14 @@ session loaded its hooks from does not contain the Claude machinery, then:
 2. `task_verify` can never reach `runtime_verdict: PASS`.
 3. No standard task can close.
 
-When that is true, the harness must **say so**, naming the offending tree and
-the remedy. Specifically:
+When that is true, the harness must **say so**, naming the offending tree while
+keeping task actions separate from out-of-band maintenance. Specifically:
 
 - `task_start` returns a `RECEIPT_HOOKS_UNAVAILABLE` warning that names the
-  resolved hook root, states that receipts cannot be recorded and close is
-  therefore unreachable, and gives the remedy: update the plugin so it resolves
-  against the marketplace tree, then **restart the session**, because hook
-  registration is read only at session start.
+  resolved hook root and states that receipts cannot be recorded and close is
+  therefore unreachable. Its task action is to continue substantive review and
+  QA, then verify once and park on missing attestation; plugin repair and session
+  restart are out-of-band maintainer choices, not the current task's remedy.
 - The warning is advisory. `task_start` still creates the task: planning and
   implementation remain legitimate work in a session that cannot close.
 - `drift_warn.py` compares repo source against the scripts directory it is
@@ -95,7 +95,7 @@ runtime. Under Codex (`HARNESS_RUNTIME=codex` or a valid `CODEX_THREAD_ID`) it
 does not inspect `~/.claude/plugins/installed_plugins.json`; Codex readiness is
 clean only when the current root thread has a live, validated lifecycle-watcher
 registration. Missing, failed, or indeterminate registration is non-clean and
-must prevent review/QA lens launch. Under Claude, or when a Claude config
+must warn without preventing review/QA lens launch. Under Claude, or when a Claude config
 directory is explicitly supplied, the original registered-tree inspection
 applies.
 

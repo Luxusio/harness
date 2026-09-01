@@ -33,6 +33,15 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, while ordered review and QA entries in the current TASK.json generation provide close evidence. Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
 
+**Missing receipt policy.** Receipt absence never immediately fails or
+suppresses a substantive lens. Await the actual result and label an unreceipted
+final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV uses the
+standard blocker path, and only actual review PASS advances to substantive QA.
+Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
+receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
+PASS, otherwise enter stop-judge/`task_blocked` with a generic
+attestation-evidence reason. Direct finals never authorize PASS or close.
+
 **Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Running the highest available verification tier is not scope expansion. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
 
 ## Confusion Protocol
@@ -286,7 +295,10 @@ required read-only review lens in parallel, await explicit verdicts, and require
 review PASS entries in `RECEIPTS.jsonl` correlated to starts in the current task
 run. Send only `FIX_NOW` findings to the original minimum-sufficient
 implementer. Any edit loops through focused tests/checkpoint and all required
-reviewers again. Do not start Phase 7 QA until review PASS.
+reviewers again. Normally do not start Phase 7 QA until receipt-backed review
+PASS. Under the Missing receipt policy, actual reviewer PASS finals permit one
+substantive QA run, but both review and QA results remain NON-ATTESTING and can
+only lead to the generic blocked path unless ordered receipts arrive.
 
 ### Phase 7: Verification Gate
 
@@ -294,8 +306,10 @@ Read `verification-gate.md` in full. Delegates full-suite test commands from PLA
 
 **Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.
 
-QA must be spawned after Phase 6.6 PASS; a QA run started before the latest
-review PASS is stale evidence and cannot close the task.
+QA must be spawned after actual Phase 6.6 reviewer PASS finals. A QA run started
+before those finals is invalid substantive sequencing. Without a receipt-backed
+review PASS, any later QA receipt remains out of order for close even though the
+QA final is still useful under the Missing receipt policy.
 
 For user-facing changes, also spawn the applicable ux-* lens (`ux-cli`,
 `ux-api`, `ux-browser`, or `ux-desktop`) when manifest support and touched-path

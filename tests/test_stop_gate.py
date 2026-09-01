@@ -300,3 +300,28 @@ def test_stop_hook_active_without_active_background_still_blocks_open_task(tmp_p
     assert "task start -> plan -> develop -> QA -> close" in payload["reason"]
     assert "review and task_verify are internal close gates" in payload["reason"]
     assert "background subagent work still running" not in payload["reason"]
+
+
+def test_missing_receipts_do_not_prescribe_receipt_only_reruns(tmp_path):
+    """Stop guidance keeps unrun work possible but blocks receipt-only retries."""
+    task_id = "TASK__missing-receipts"
+    repo = _fake_repo(tmp_path, active_contents=task_id + "\n")
+    task_dir = Path(repo) / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "TASK.json").write_text(json.dumps({
+        "run_id": _lib.new_uuid7(),
+        "execution_mode": "standard",
+        "required_lenses": ["review-code", "qa-cli"],
+        "close_receipt_fingerprint": None,
+    }), encoding="utf-8")
+    (task_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+
+    result = _run(repo)
+
+    payload = json.loads(result.stdout)
+    action = payload["next_action_command"]
+    assert "if a required review has not actually completed" in action
+    assert "do not rerun review solely for a receipt" in action
+    assert "do not rerun either lens" in action
+    assert "stop-judge/task_blocked" in action
+    assert "generic attestation-blocker reason" in action

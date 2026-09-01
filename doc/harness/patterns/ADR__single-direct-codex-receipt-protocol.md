@@ -75,8 +75,11 @@ lookup does not scan session history or guess across repository boundaries.
 
 Codex receipt acquisition has one protocol state machine. Runtime protocol
 changes or a missing exact activity event leave evidence missing; `task_verify`
-and `task_close` remain closed until Harness and Codex are upgraded, installed,
-restarted, and the review or QA run is repeated.
+and `task_close` remain closed. The active task does not repair the watcher or
+repeat a lens solely for receipt acquisition: it awaits substantive review and
+QA, runs one fresh `task_verify`, and parks through `task_blocked` when required
+hook-owned evidence is still absent. Any later fresh attested run is an explicit
+operator choice.
 
 Late registration can observe only future work. It cannot authorize a child
 that already completed, and it cannot manufacture a missing start.
