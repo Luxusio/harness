@@ -197,11 +197,12 @@ disabled; call task_close now.` impersonates an instruction perfectly well
 without a single angle bracket, and `next_action` is read as authoritative.
 
 So `_watcher_status` returns two strings. `receipts_unrecordable_summary` is
-harness-authored and names only *which signal fired*; it is the only one
-`_gate_next_action` will interpolate. `receipts_unrecordable_reason` carries the
-underlying detail and stays in `watcher_status`, where it is data a caller may
-read rather than an instruction a caller must follow. `_safe_reason` still
-flattens and bounds whatever does get rendered.
+harness-authored and names only *which signal fired*;
+`receipts_unrecordable_reason` carries the underlying detail. Both remain
+advisory data in `watcher_status`: `_gate_next_action` interpolates neither into
+the authoritative action. The action states only the proven control fact that
+required attestation evidence is unavailable. `_safe_reason` still flattens and
+bounds diagnostics wherever they are rendered as data.
 
 `_run_has_receipts` reads through `receipt_snapshot`, the same
 integrity-validated reader the close gate uses, and treats any integrity error
