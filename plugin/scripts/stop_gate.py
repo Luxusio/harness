@@ -221,15 +221,14 @@ def main():
                 json.dump(payload, sys.stdout)
                 return 0
 
-        # BLOCKED_ENV runtime_verdict permits a legitimate paused-with-blocker
-        # stop. The stop-judge agent records this transition through
-        # task_blocked.
+        # Only the durable task_blocked publication permits a paused-with-blocker
+        # stop. A lens-level BLOCKED_ENV receipt still requires stop-judge and
+        # task_blocked; runtime_verdict alone is not terminal task state.
         ctx = None
         if td and os.path.isdir(td):
             try:
                 ctx = emit_compact_context(td)
-                verdict = (ctx or {}).get("runtime_verdict", "")
-                if verdict == "BLOCKED_ENV":
+                if (ctx or {}).get("status") == "blocked":
                     return 0  # silent allow after task_blocked
             except Exception:
                 ctx = None
@@ -256,7 +255,8 @@ def main():
             f"Active harness task {task_id} is open. Do not stop — finish the "
             "task start -> plan -> develop -> QA -> close public loop. "
             "Independent review and task_verify are internal close gates. Legitimate exits: "
-            "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
+            "(1) after substantive QA, call task_verify once and, only when it "
+            "returns runtime_verdict=PASS, call task_close; "
             "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
             "whether the current state is a genuine external or qualified "
             "attestation pause-with-blocker. Stop-judge "

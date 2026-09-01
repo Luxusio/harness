@@ -85,6 +85,55 @@ def _write_claude_start(repo: str, task_id: str, session_id: str, *, ts: str = "
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _write_completed_lenses(repo: str, task_id: str, lenses: list[tuple[str, str]]) -> None:
+    """Write paired lifecycle rows for isolated Stop-hook policy tests."""
+    task_dir = Path(repo) / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    control_path = task_dir / "TASK.json"
+    if not control_path.exists():
+        control_path.write_text(json.dumps({
+            "run_id": _lib.new_uuid7(),
+            "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }), encoding="utf-8")
+    (task_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    run_id = _lib.read_task_control(str(task_dir))["run_id"]
+    rows = []
+    for index, (lens, verdict) in enumerate(lenses):
+        agent_id = f"agent-{index}"
+        common = {
+            "source": "claude_hook",
+            "task_run_id": run_id,
+            "runtime_id": f"claude:test-session:{agent_id}",
+            "agent_id": agent_id,
+            "agent_type": f"harness:{lens}",
+            "lens": lens,
+        }
+        rows.append({
+            **common, "ts": _lib.now_iso(), "event": "started",
+            "verdict": "", "summary": "",
+        })
+        summary = f"VERDICT: {verdict}"
+        if lens.startswith("review-"):
+            summary += (
+                "\nFINDING_COUNTS: FIX_NOW=" + ("1" if verdict == "FAIL" else "0")
+                + " INVESTIGATE=" + ("1" if verdict == "BLOCKED_ENV" else "0")
+                + " OPTIONAL=0"
+            )
+        normalized_verdict, normalized_summary = _lib.normalize_receipt_completion(
+            lens, summary, verdict,
+        )
+        rows.append({
+            **common, "ts": _lib.now_iso(), "event": "completed",
+            "verdict": normalized_verdict, "summary": normalized_summary,
+        })
+    (task_dir / "RECEIPTS.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
 def test_blocks_when_active(tmp_path):
     """AC-001: .active present → stdout is JSON with decision=block."""
     repo = _fake_repo(tmp_path, active_contents="TASK__example-active-task\n")
@@ -145,6 +194,8 @@ def test_reason_contains_task_id_and_exits(tmp_path):
     assert "TASK__alpha-beta-gamma" in reason, reason
     assert "task_close" in reason, reason
     assert "runtime_verdict=PASS" in reason, reason
+    assert "task_verify once" in reason, reason
+    assert "task_verify until" not in reason, reason
     assert "harness:stop-judge" in reason, reason
     assert "BLOCKED_ENV" in reason, reason
     assert "cancel the task" not in reason, reason
@@ -325,3 +376,32 @@ def test_missing_receipts_do_not_prescribe_receipt_only_reruns(tmp_path):
     assert "do not rerun either lens" in action
     assert "stop-judge/task_blocked" in action
     assert "generic attestation-blocker reason" in action
+
+
+def test_review_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
+    task_id = "TASK__review-blocked-receipt"
+    repo = _fake_repo(tmp_path, active_contents=task_id + "\n")
+    _write_completed_lenses(repo, task_id, [("review-code", "BLOCKED_ENV")])
+
+    result = _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0"})
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "task_blocked" in payload["reason"]
+    assert "standard blocker assessment path" in payload["next_action_command"]
+
+
+def test_qa_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
+    task_id = "TASK__qa-blocked-receipt"
+    repo = _fake_repo(tmp_path, active_contents=task_id + "\n")
+    _write_completed_lenses(repo, task_id, [
+        ("review-code", "PASS"),
+        ("qa-cli", "BLOCKED_ENV"),
+    ])
+
+    result = _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0"})
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "task_blocked" in payload["reason"]
+    assert "standard blocker path" in payload["next_action_command"]

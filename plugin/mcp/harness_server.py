@@ -232,8 +232,8 @@ def _diagnostics_for_this_session(control_root: str = "") -> dict:
     # load-bearing rather than an oversight: on a runtime with no hint and no
     # thread id, this is the only way the server reads back the
     # `last_watcher_error` it recorded itself. A record planted here can set
-    # `receipts_recordable: False` and withhold the spawn instruction, which is
-    # obstruction, never a forged PASS, and the expiry bounds it.
+    # `receipts_recordable: False` and alter advisory watcher status, but it
+    # cannot suppress substantive review/QA or forge PASS; expiry bounds it.
     # An absent stamp is rejected by the parse below, not by a separate guard:
     # `fromisoformat("")` raises and lands in the same `return {}`. A dedicated
     # branch here looked like it was doing the work and was never exercised.
@@ -543,11 +543,11 @@ def _watcher_status(
     # watcher never registered — which is exactly how a session can spend three
     # review agents and a full QA suite and end with no receipts. The Codex
     # signals below are what catch that case.
-    # Two strings, deliberately. `summary` is harness-authored and names which
-    # signal fired; it is the only one allowed into `next_action`. `reason`
-    # carries the underlying detail, which originates in an unprotected file and
-    # is therefore untrusted text — it stays in this diagnostic dict, where it
-    # is data the caller may read, not an instruction the caller must follow.
+    # Two advisory strings, deliberately. `summary` is harness-authored and
+    # names which signal fired; `reason` carries the underlying detail, which
+    # originates in an unprotected file and is therefore untrusted text. Both
+    # stay in this diagnostic dict as data; neither enters authoritative
+    # `next_action` instructions.
     unrecordable_summary = ""
     unrecordable_reason = ""
     recordable: bool | None = True
