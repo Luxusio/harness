@@ -27,9 +27,10 @@ session loaded its hooks from does not contain the Claude machinery, then:
 When that is true, the harness must **say so**, naming the offending tree while
 keeping task actions separate from out-of-band maintenance. Specifically:
 
-- `task_start` returns a `RECEIPT_HOOKS_UNAVAILABLE` warning that names the
-  resolved hook root and states that receipts cannot be recorded and close is
-  therefore unreachable. Its task action is to continue substantive review and
+- `task_start` returns a `RECEIPT_HOOKS_UNAVAILABLE` warning that names every
+  incapable registered tree and states that receipts *may* not be recordable,
+  so close may be unreachable. When a capable registration exists alongside
+  them, the warning says so and notes that the run's first receipt settles it. Its task action is to continue substantive review and
   QA, then verify once and park on missing attestation; plugin repair and session
   restart are out-of-band maintainer choices, not the current task's remedy.
 - The warning is advisory. `task_start` still creates the task: planning and
@@ -63,9 +64,33 @@ was read as evidence of receipt health. The fix supplies the missing signal.
 MCP and hooks can resolve to **different plugin trees**, and this is what makes
 the failure both possible and diagnosable:
 
-- Hooks come from the tree registered in `installed_plugins.json` for
-  `harness@harness`.
+- Hooks come from one of the trees registered for `harness@harness`: the
+  `installPath` in `installed_plugins.json`, or the harness marketplace's
+  `installLocation` in `known_marketplaces.json`.
 - The MCP server can simultaneously run from a different, current tree.
+
+**Neither registry records which tree was loaded, so neither may be ranked.**
+Both registrations can exist at once and disagree. On 2026-08-26 the marketplace
+already pointed at a current `~/.claude/harness-dev` (repointed 2026-08-25) while
+Claude loaded hooks from the stale `installed_plugins.json` cache entry at
+`~/.claude/plugins/cache/harness/harness/2.3.0`, and four implemented tasks
+became unclosable. On 2026-09-02 the same host carried the same two
+registrations and Claude loaded the current one, so the warning naming the cache
+was noise across three consecutive tasks.
+
+The inputs to this check are identical in both cases. Preferring the
+marketplace would have silenced the founding incident outright; preferring the
+cache produces the 2026-09-02 noise. So the check inspects **every** registered
+tree that exists on disk and warns unless all of them could record, accusing
+only the incapable ones. When a capable candidate remains it names that
+sibling in a hedge, states plainly that the ambiguity exists and that the
+run's first receipt settles it, and says that removing a registration nothing
+loads ends the warning. A hedged warning is bounded advisory text; a
+missed one is a regression.
+
+Registry inspection cannot do better than this, and the durable remedy is
+environmental: a registration that no longer points at a loaded tree should be
+removed, after which the check is both silent and correct.
 
 On 2026-08-26 the registered hook tree was
 `~/.claude/plugins/cache/harness/harness/2.3.0` (installed 2026-05-21, never
@@ -84,11 +109,16 @@ enough to contain it.
 
 ## Detection rules
 
-`hook_tree_health.receipt_capability_warning()` reports "cannot record" when the
-registered tree lacks `background_hook.py`/`subagent_lifecycle.py`, or when its
-`hooks.json` does not register both `SubagentStart` and `SubagentStop`. It
-accepts either directory layout (`scripts/` at tree root, or nested under
-`plugin/`), so a healthy tree of any vintage is never falsely indicted.
+`hook_tree_health.candidate_hook_roots()` collects every registered tree that
+exists on disk, unranked. `receipt_capability_warning()` reports "may not be
+able to record" for each candidate that lacks
+`background_hook.py`/`subagent_lifecycle.py`, or whose `hooks.json` does not
+register both `SubagentStart` and `SubagentStop`; it is silent only when no
+candidate is incapable. It accepts either directory layout (`scripts/` at tree
+root, or nested under `plugin/`), so a healthy tree of any vintage is never
+falsely indicted, and it does not inspect marketplace source type — exempting
+git-sourced marketplaces would go permanently silent for the ordinary packaged
+install.
 
 With no explicit config directory, the helper first identifies the active
 runtime. Under Codex (`HARNESS_RUNTIME=codex` or a valid `CODEX_THREAD_ID`) it
@@ -96,7 +126,7 @@ does not inspect `~/.claude/plugins/installed_plugins.json`; Codex readiness is
 clean only when the current root thread has a live, validated lifecycle-watcher
 registration. Missing, failed, or indeterminate registration is non-clean and
 must warn without preventing review/QA lens launch. Under Claude, or when a Claude config
-directory is explicitly supplied, the original registered-tree inspection
+directory is explicitly supplied, the all-candidates registered-tree inspection
 applies.
 
 The Codex MCP host may not receive `CODEX_THREAD_ID`. In that process the helper

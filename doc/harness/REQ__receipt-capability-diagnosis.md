@@ -46,15 +46,28 @@ confirmation that no rejection occurred — see
 
 ## hook_tree_health.py answers a narrower question than it appears to
 
-It reads one thing: the `installPath` recorded for `harness@harness` in
-`~/.claude/plugins/installed_plugins.json`. That is the *registered* path, which
-can differ from the tree the session actually loaded hooks from — and from the
-tree `${CLAUDE_PLUGIN_ROOT}` resolves to.
+It reads two things: the `installPath` recorded for `harness@harness` in
+`~/.claude/plugins/installed_plugins.json`, and the harness marketplace's
+`installLocation` in `~/.claude/plugins/known_marketplaces.json`. Both are
+*registered* paths, and either can differ from the tree the session actually
+loaded hooks from — and from the tree `${CLAUDE_PLUGIN_ROOT}` resolves to. This
+is a registration answer, never an observation that receipts are being written.
 
-On 2026-08-26 it indicted `~/.claude/plugins/cache/harness/harness/2.3.0` while
-the live tree was `~/.claude/harness-dev/plugin`. Its prescribed fix
+Because neither file records which tree was loaded, the check treats both as
+candidates and warns unless every one of them could record. Ranking them is not
+available: on 2026-08-26 it indicted
+`~/.claude/plugins/cache/harness/harness/2.3.0` while the live tree was
+`~/.claude/harness-dev/plugin` — its prescribed fix
 (`/plugin update harness@harness` + restart) would not have helped, because the
-receipt subsystem was present and correctly registered the whole time.
+receipt subsystem was present and correctly registered the whole time — and on
+2026-09-02 the identical two registrations produced three tasks' worth of noise
+because that time the current tree was the one loaded.
+
+The warning therefore accuses only the incapable trees. When a capable
+registration remains it adds a hedge naming that sibling, saying the ambiguity
+exists, and pointing at the remedy — dropping a registration nothing loads. Removing a registration that no longer points at a loaded tree is what
+makes it both silent and correct; no amount of registry reading substitutes for
+that.
 
 Treat its output as "the registered path is stale", never as "the receipt
 subsystem is missing".

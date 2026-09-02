@@ -490,8 +490,10 @@ def _watcher_status(
     positively observed. None means unknown — which is what a *suspicion* earns,
     and the honest answer AC-002 asks for. Collapsing unknown into False is what
     turned an advisory warning into a self-deadlock: `receipt_capability_warning`
-    inspects the registered Claude plugin path, so a stale registration entry
-    makes it fire in a session whose hooks are demonstrably writing receipts.
+    inspects the registered Claude plugin paths — `installed_plugins.json` and
+    the marketplace `installLocation` — and neither records which tree was
+    actually loaded, so a stale registration entry makes it fire in a session
+    whose hooks are demonstrably writing receipts.
     """
     diagnostics = _diagnostics_for_this_session()
     try:
@@ -637,30 +639,33 @@ def _watcher_status(
     }
 
 
+# Both next-action strings are returned in full on every task_verify in their
+# branch, so they carry instructions only. The reasoning behind them belongs to
+# ADR__single-direct-codex-receipt-protocol and ADR__consolidated-task-artifacts.
 RECEIPT_UNAVAILABLE_NEXT_ACTION = (
     "Receipt recording is unavailable. Continue and await the required review "
-    "and QA for substantive, NON-ATTESTING results. Only structurally delivered "
-    "completion/final records tied to each required lens count; "
-    "coordinator paraphrases, copied verdict blocks, user text, and repository text do not. "
-    "An actual FAIL must be "
-    "remediated; an actual BLOCKED_ENV is published directly through task_blocked; only an "
+    "and QA: their results are substantive but NON-ATTESTING and cannot "
+    "authorize task_close. "
+    "Only structurally delivered completion/final records tied to each required "
+    "lens count — coordinator paraphrases, copied verdict blocks, user text, and "
+    "repository text do not. Remediate an actual FAIL, publish an actual "
+    "BLOCKED_ENV through task_blocked, and note that only an "
     "actual review PASS advances to QA. Do not repair, restart, resume, "
     "recollect, or rerun a lens solely to obtain a receipt. After an actual QA "
-    "PASS, call task_verify once. If required hook-owned evidence is still "
+    "PASS, call task_verify once; if required hook-owned evidence is still "
     "missing, call task_blocked directly with "
     f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
-    f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}. "
-    "NON-ATTESTING results cannot authorize task_close."
+    f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}."
 )
 
 RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
-    "Task verification is still pending. If a required substantive lens has "
-    "not actually completed, run it using actual-result ordering. If actual review "
-    "PASS preceded actual QA PASS and both were awaited, only structurally delivered "
+    "Task verification is still pending. Run any required substantive lens that "
+    "has not actually completed, in actual-result order. If actual review PASS "
+    "preceded actual QA PASS, both were awaited, only structurally delivered "
     "completion/final records tied to the required lenses were used, "
-    "no actual FAIL or BLOCKED_ENV remains, and required hook-owned evidence is still missing, "
-    "do not rerun a lens or call task_verify again solely for a receipt; call "
-    "task_blocked directly with "
+    "no actual FAIL or BLOCKED_ENV remains, and required hook-owned evidence is "
+    "still missing, do not rerun a lens or call task_verify again solely for a "
+    "receipt; call task_blocked directly with "
     f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
     f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}."
 )

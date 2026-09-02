@@ -165,10 +165,12 @@ saw the stop, and refused to bind it. Declined is the only one that leaves a
 `binding-miss` breadcrumb, and it is invisible if you only compare receipt
 counts to expectations.
 
-Do not diagnose from `hook_tree_health.py` alone: it reads the registered
-`installPath` from `installed_plugins.json`, which can point at a cache tree
-(`plugins/cache/harness/harness/<version>`) while the live hooks run from a
-different directory. It reported `RECEIPT_HOOKS_UNAVAILABLE` throughout this
+Do not diagnose from `hook_tree_health.py` alone: it reads the registered paths
+— the `installPath` in `installed_plugins.json` and the harness marketplace's
+`installLocation` in `known_marketplaces.json` — and either can point at a cache
+tree (`plugins/cache/harness/harness/<version>`) while the live hooks run from a
+different directory. Neither file records which tree was loaded, which is why
+the check reports every incapable candidate rather than picking one. It reported `RECEIPT_HOOKS_UNAVAILABLE` throughout this
 outage while receipts were in fact being written and then declined.
 
 ## Never

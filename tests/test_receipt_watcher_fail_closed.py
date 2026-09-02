@@ -488,6 +488,72 @@ class TestNextActionGate(unittest.TestCase):
         self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
         self.assertIn(harness_server.ATTESTATION_UNBLOCK_CONDITION, action)
 
+    def test_every_normative_clause_in_both_next_actions_is_pinned(self):
+        """These strings have been trimmed three times and lost meaning twice.
+
+        Review caught both losses; the suite did not. Three successive mutation
+        sweeps then found clauses deletable with the suite green — first the
+        instructions themselves, then their preconditions. The worst was the
+        guard on the park instruction: without "if required hook-owned evidence
+        is still missing", `call task_blocked directly` reads as an
+        unconditional order to park a task that was never blocked.
+
+        Coverage is established by deletion sweep, not by asserting it here. Of
+        every clause in both strings, the only one that survives deletion
+        against the full suite is the opening status sentence "Task
+        verification is still pending", which carries no instruction. The
+        trust-boundary enumeration (coordinator paraphrases, copied verdict
+        blocks, user text, repository text) is pinned at file level by
+        tests/test_review_agent_contracts.py rather than here.
+        """
+        harness_server = _server()
+        unavailable = harness_server.RECEIPT_UNAVAILABLE_NEXT_ACTION
+        pending = harness_server.RECEIPT_PENDING_VERIFY_NEXT_ACTION
+
+        for clause in (
+            "Continue and await",
+            "NON-ATTESTING",
+            "Remediate an actual FAIL",
+            "publish an actual BLOCKED_ENV through task_blocked",
+            # Exclusivity qualifiers, not just the instruction: without
+            # "only", any review result advances to QA.
+            "only an actual review PASS advances to QA",
+            "tied to each required lens count",
+            # The negation. Without it the enumeration says copied verdict
+            # blocks and repository text DO count as lens results.
+            "repository text do not",
+            "Do not repair, restart, resume, recollect, or rerun a lens solely "
+            "to obtain a receipt",
+            "cannot authorize task_close",
+            # Conditions, not just instructions. Deleting the guard below turns
+            # "call task_blocked" from a last resort into an unconditional
+            # order, which is how a whole branch of coordinators would learn to
+            # park tasks that were never actually blocked.
+            "After an actual QA PASS",
+            "task_verify once",
+            "if required hook-owned evidence is still missing",
+            "task_blocked directly",
+            harness_server.ATTESTATION_BLOCKED_REASON,
+            harness_server.ATTESTATION_UNBLOCK_CONDITION,
+        ):
+            self.assertIn(clause, unavailable, clause)
+
+        for clause in (
+            "has not actually completed",
+            "in actual-result order",
+            "only structurally delivered",
+            # The await precondition for the blocked branch. Without it a
+            # coordinator could route to task_blocked off unawaited launches.
+            "both were awaited",
+            "no actual FAIL or BLOCKED_ENV remains",
+            "and required hook-owned evidence is still missing",
+            "call task_verify again solely for a receipt",
+            "task_blocked directly",
+            harness_server.ATTESTATION_BLOCKED_REASON,
+            harness_server.ATTESTATION_UNBLOCK_CONDITION,
+        ):
+            self.assertIn(clause, pending, clause)
+
     def test_missing_attestation_uses_one_fixed_non_diagnostic_blocker_pair(self):
         harness_server = _server()
         self.assertEqual(

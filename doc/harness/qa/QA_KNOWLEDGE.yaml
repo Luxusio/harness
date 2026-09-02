@@ -156,9 +156,11 @@ qa_notes:
   stale_hook_tree_detection:
     discovered: 2026-08-26
     notes: >
-      hook_tree_health.receipt_capability_warning() reads the harness@harness
-      installPath from <CLAUDE_CONFIG_DIR>/plugins/installed_plugins.json and
-      reports when that tree cannot record receipts. To exercise it, point
+      hook_tree_health.receipt_capability_warning() reads BOTH the
+      harness@harness installPath from
+      <CLAUDE_CONFIG_DIR>/plugins/installed_plugins.json and the harness
+      marketplace installLocation from known_marketplaces.json, and reports
+      every registered tree that cannot record receipts. To exercise it, point
       CLAUDE_CONFIG_DIR at a fixture config; the helper accepts both the
       current nested layout (plugin/scripts, plugin/hooks) and the legacy
       layout (scripts, hooks at tree root), so a fixture in either shape with
@@ -278,3 +280,18 @@ qa_notes:
       `--plugin-root` also exits 0 silently. Never treat exit 0 from
       --check-weight as proof the budget was scanned; assert on the
       "[SOFT] C-13 weight" string instead.
+  hook_tree_health_candidate_roots:
+    discovered: 2026-09-02
+    notes:
+      - "CLAUDE_CONFIG_DIR drives hook_tree_health.py's __main__ end-to-end; build a fixture config dir with plugins/known_marketplaces.json ({\"harness\": {\"installLocation\": \"...\"}}) and plugins/installed_plugins.json ({\"version\":2,\"plugins\":{\"harness@harness\":[{\"installPath\":\"...\"}]}}) to exercise every branch without touching ~/.claude."
+      - "Also unset HARNESS_RUNTIME and CODEX_THREAD_ID; _runtime() infers codex from CODEX_THREAD_ID and short-circuits the Claude registration branch."
+      - "This host is permanently in the split-tree state: installed_plugins.json -> ~/.claude/plugins/cache/harness/harness/2.3.0 (genuinely lacks background_hook.py/subagent_lifecycle.py) beside marketplace installLocation ~/.claude/harness-dev (capable). RECEIPT_HOOKS_UNAVAILABLE firing at task_start is EXPECTED and is not a defect; RECEIPTS.jsonl for the run is the settling evidence."
+      - "contract_lint.py --check-weight takes --plugin-root; the roots worth checking on this host are ./plugin and /home/ccc/.claude/harness-dev/plugin."
+      - "Exit codes are masked when piping to tail/grep; use `cmd >/dev/null 2>&1; echo $?` for real exit codes. contract_lint.py exits 2 on an unrecognized flag."
+  next_action_mutation_sweep:
+    discovered: 2026-09-02
+    notes:
+      - "To mutate RECEIPT_UNAVAILABLE_NEXT_ACTION / RECEIPT_PENDING_VERIFY_NEXT_ACTION, render the constant, split at 'blocked_reason=', rewrite the assignment as repr(mutated_prefix) followed by the two unchanged f-string ATTESTATION lines. Verified with an identical-restructure control: the full suite stays green, so every RED is a real deletion catch, not a restructure artifact."
+      - "Clause-level sweep (split on comma/semicolon/period/em-dash) against the full suite: 29 clauses, exactly 1 survivor - the opening 'Task verification is still pending.' This reproduces the claim in test_every_normative_clause_in_both_next_actions_is_pinned's docstring."
+      - "Word-level sweep is weaker than clause-level because the pins are assertIn substrings: 47 of 173 single-word deletions keep the pinning-test subset green (e.g. deleting 'If', 'Run', or a bare 'call'). None inverts meaning; 'not' in 'repository text do not' is RED, so the trust-boundary token is genuinely pinned."
+      - "Full suite takes ~15s (1013 tests, 228 subtests, xdist); a 29-case clause sweep against it is ~8 min, a 173-case word sweep against the 6 pinning files (~2s each) is ~6 min."

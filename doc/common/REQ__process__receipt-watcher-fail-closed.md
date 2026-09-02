@@ -131,8 +131,9 @@ in it can authorize a PASS; the close gate still reads only hook-owned
 
 ### Readiness must be evaluated per runtime
 
-`receipt_capability_warning()` resolves the plugin registration from
-`~/.claude/plugins/installed_plugins.json`. That is a **Claude-only** signal: on a
+`receipt_capability_warning()` resolves the registered plugin paths — the
+`installPath` in `~/.claude/plugins/installed_plugins.json` and the harness
+marketplace `installLocation` in `~/.claude/plugins/known_marketplaces.json`. That is a **Claude-only** signal: on a
 Codex session it finds nothing to indict and returns `""`. The originating
 incident was on Codex, so readiness keyed on that warning alone would have stayed
 silent through three review agents and a 1,559-test QA pass — the exact failure
@@ -151,8 +152,8 @@ this REQ exists to prevent.
 
 ### Unknown is not the same as unrecordable
 
-`receipt_capability_warning` inspects the plugin path registered in
-`~/.claude/plugins/installed_plugins.json`. That is a claim about *registration*,
+`receipt_capability_warning` inspects the registered plugin paths
+(`installed_plugins.json` `installPath` and the marketplace `installLocation`). That is a claim about *registration*,
 not about whether receipts are being written, and the two come apart: a session
 whose loaded hooks demonstrably write receipts still trips the warning when the
 registry entry points at a stale cached tree.

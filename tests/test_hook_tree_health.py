@@ -55,6 +55,142 @@ def _tree(root: Path, *, nested=True, scripts=mod.RECEIPT_MODULES,
     return root
 
 
+def _marketplace(cfg: Path, install_location, *, name="harness", source="directory") -> Path:
+    """Register a marketplace at `install_location`."""
+    plugins = cfg / "plugins"
+    plugins.mkdir(parents=True, exist_ok=True)
+    entry = {"source": {"source": source, "path": str(install_location)}}
+    if install_location is not None:
+        entry["installLocation"] = str(install_location)
+    (plugins / "known_marketplaces.json").write_text(
+        json.dumps({name: entry}), encoding="utf-8"
+    )
+    return cfg
+
+
+def test_a_stale_cache_entry_is_indicted_even_beside_a_live_marketplace(tmp_path):
+    """Neither registry records which tree the session loaded, so both count.
+
+    This is the 2026-08-26 incident shape: the marketplace already pointed at a
+    current tree while Claude loaded hooks from the stale cache entry, and four
+    implemented tasks became unclosable. It is also the 2026-09-02 shape, where
+    the current tree was the one loaded and the warning was noise. Identical
+    inputs, opposite truths — so ranking either registry first would silence one
+    of them outright, and a missed warning is the regression this module refuses.
+    """
+    live = _tree(tmp_path / "live")
+    stale = tmp_path / "stale"
+    (stale / "plugin" / "scripts").mkdir(parents=True)
+
+    cfg = _config(tmp_path / "cfg", stale)
+    _marketplace(cfg, live)
+
+    assert set(mod.candidate_hook_roots(str(cfg))) == {str(live), str(stale)}
+    warning = mod.receipt_capability_warning(str(cfg))
+
+    # Only the incapable tree is accused. The capable sibling appears solely
+    # inside the hedge, where it is context for "this may be noise" rather than
+    # an accusation — and where it tells the operator which registration to drop.
+    accusation, _, hedge = warning.partition("Another registered tree")
+    assert str(stale) in accusation, warning
+    assert str(live) not in accusation, warning
+    assert str(live) in hedge, warning
+    assert "may be noise" in warning, warning
+    assert "removing its registration ends this warning" in warning, warning
+
+
+def test_an_incapable_marketplace_tree_is_also_indicted(tmp_path):
+    """The marketplace is a candidate, not an exemption."""
+    broken = tmp_path / "broken"
+    (broken / "plugin" / "scripts").mkdir(parents=True)
+    healthy_cache = _tree(tmp_path / "cache")
+
+    cfg = _config(tmp_path / "cfg", healthy_cache)
+    _marketplace(cfg, broken)
+
+    warning = mod.receipt_capability_warning(str(cfg))
+    assert str(broken) in warning, warning
+    assert "may be noise" in warning, warning
+
+
+def test_no_false_reassurance_when_every_candidate_is_incapable(tmp_path):
+    """The ambiguity clause must appear only when a capable sibling exists.
+
+    Appending it unconditionally would read as "one tree is fine" in the
+    2026-08-26 shape, where no registered tree could record anything.
+    """
+    first, second = tmp_path / "a", tmp_path / "b"
+    for root in (first, second):
+        (root / "plugin" / "scripts").mkdir(parents=True)
+    cfg = _config(tmp_path / "cfg", first)
+    _marketplace(cfg, second)
+
+    warning = mod.receipt_capability_warning(str(cfg))
+    assert str(first) in warning and str(second) in warning, warning
+    assert "may be noise" not in warning, warning
+    # Plural agreement over the comma-joined list. This is the founding-incident
+    # message, so it is the one most worth reading cleanly.
+    assert "harness hook trees may not be able" in warning, warning
+    assert "are missing the SubagentStart" in warning, warning
+
+
+def test_one_tree_registered_twice_is_named_once(tmp_path):
+    """Both registries can point at the same tree by different paths."""
+    tree = _tree(tmp_path / "tree")
+    (tree / "plugin" / "scripts" / "background_hook.py").unlink()
+
+    link = tmp_path / "linked"
+    link.symlink_to(tree, target_is_directory=True)
+
+    cfg = _config(tmp_path / "cfg", str(tree) + "/")
+    _marketplace(cfg, link)
+
+    assert len(mod.candidate_hook_roots(str(cfg))) == 1
+    warning = mod.receipt_capability_warning(str(cfg))
+    assert "harness hook tree may not be able" in warning, warning
+    assert "may be noise" not in warning, warning
+
+
+def test_every_candidate_capable_is_silent(tmp_path):
+    """Silence requires that no registered tree could fail, not that one could."""
+    live = _tree(tmp_path / "live")
+    cached = _tree(tmp_path / "cache")
+    cfg = _config(tmp_path / "cfg", cached)
+    _marketplace(cfg, live)
+    assert mod.receipt_capability_warning(str(cfg)) == ""
+
+
+def test_a_git_source_marketplace_is_a_candidate_too(tmp_path):
+    """Source type is not inspected; an incapable tree is incapable either way.
+
+    Every marketplace entry carries an installLocation, git-sourced ones
+    included. Exempting them by source type would go permanently silent for the
+    ordinary packaged install.
+    """
+    broken = tmp_path / "broken"
+    (broken / "plugin" / "scripts").mkdir(parents=True)
+    cfg = _config(tmp_path / "cfg", _tree(tmp_path / "cache"))
+    _marketplace(cfg, broken, source="github")
+    assert str(broken) in mod.receipt_capability_warning(str(cfg))
+
+
+def test_missing_marketplace_uses_the_cache_entry_alone(tmp_path):
+    """No marketplace registration is the ordinary packaged install."""
+    cached = _tree(tmp_path / "cache")
+    cfg = _config(tmp_path / "cfg", cached)
+    assert mod.candidate_hook_roots(str(cfg)) == (str(cached),)
+    assert mod.receipt_capability_warning(str(cfg)) == ""
+
+
+def test_marketplace_pointing_at_a_vanished_directory_is_dropped(tmp_path):
+    """A path we cannot see is not evidence of anything."""
+    cached = _tree(tmp_path / "cache")
+    cfg = _config(tmp_path / "cfg", cached)
+    _marketplace(cfg, tmp_path / "gone")
+    assert mod.candidate_hook_roots(str(cfg)) == (str(cached),)
+    assert mod.receipt_capability_warning(str(cfg)) == ""
+
+
 def test_healthy_tree_produces_no_warning(tmp_path):
     root = _tree(tmp_path / "tree")
     cfg = _config(tmp_path / "cfg", root)
