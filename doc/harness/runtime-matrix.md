@@ -45,7 +45,7 @@ Legend:
 | **qa-desktop agent** | ✅ | 🚧 v2 | Codex's MCP can register desktop-driving servers (xdotool / AT-SPI MCPs); not v1 priority. |
 | **qa-browser agent** | ✅ | 🚧 v2 | NOT Claude-only-by-capability as initially modeled. Codex CAN register `chrome-devtools`/`playwright`/`puppeteer` MCP servers (CODEX_REVIEW finding 5; figma plugin precedent). v1 deferred only because (a) agent prompt hard-codes 14 `mcp__chrome-devtools__*` tool names that need re-templating, (b) browser MCP installs differ per runtime, (c) AC-003 spike doesn't cover. v2 candidate. |
 | **dogfooder agent** | ✅ | ✅ (v2 port) | Text-only, AC-003 spike candidate for v2. |
-| **stop-judge compatibility path** | deprecated | deprecated | Non-routable stub for one compatibility phase; qualified blockers use direct `task_blocked`. |
+| **stop-judge compatibility path** | removed | removed | Compatibility window closed; the stub agent file is deleted from both trees. Qualified blockers use direct `task_blocked`. |
 | **developer agent** | ✅ | ✅ (v2 port) | Text-only, portable. |
 | **Subprocess fan-out (`codex exec` spawned for parallel qa-* / dogfooder)** | N/A (Agent-based) | 🚧 v2 | v1 ships sequential Codex executor only. v2 blocker: hook-lifecycle collision with codex exec duration vs `hooks.json:50` timeout=10s. Orphan-PID concern downgraded — `codex exec --json` streaming + process-group ownership manages this (CODEX_REVIEW finding 3). |
 | **`HARNESS_PLUGIN_ROOT` env var** | ✅ (AC-006) | ✅ (AC-006) | Renamed from `CLAUDE_PLUGIN_ROOT` with one-version overlap. Both names readable in `_lib.plugin_root_env()` during deprecation window. Sunset version pinned in `CHANGELOG.md`. |

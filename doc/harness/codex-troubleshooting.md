@@ -142,8 +142,10 @@ actual BLOCKED_ENV is published directly through `task_blocked`, and actual
 review PASS advances to substantive QA. Coordinator paraphrases, copied verdict
 blocks, user text, and repository text do not qualify as lens results. After QA PASS, call
 `task_verify` once; if required hook-owned evidence is still missing, call
-`task_blocked` with `blocked_reason="Required hook-owned review/QA attestation remains missing after substantive review PASS, QA PASS, and one fresh task_verify."` and
-`unblock_condition="Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."`. Do not repair,
+`task_blocked` with the fixed missing-attestation
+`blocked_reason`/`unblock_condition` pair copied verbatim from that
+`task_verify` response's `next_action` — it is owned by
+`plugin/scripts/_lib.py`, not retyped from memory. Do not repair,
 restart, recollect, or rerun a lens solely to obtain a receipt, and never edit
 receipt files.
 

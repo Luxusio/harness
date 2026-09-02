@@ -72,8 +72,17 @@ session start; Codex has no equivalent pre-check.
    closes normally. If required evidence remains missing, call `task_blocked`
    directly with a fixed generic attestation-evidence
    reason. Never copy a watcher diagnostic cause into `BLOCKED.md`.
-   The exact pair is `blocked_reason="Required hook-owned review/QA attestation remains missing after substantive review PASS, QA PASS, and one fresh task_verify."` and
-   `unblock_condition="Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."`; callers never interpolate diagnostics.
+   That fixed `blocked_reason`/`unblock_condition` pair has exactly one
+   authoritative location: `plugin/scripts/_lib.py`
+   (`ATTESTATION_BLOCKED_REASON` / `ATTESTATION_UNBLOCK_CONDITION`). The runtime
+   delivers it to the caller verbatim — `harness_server` embeds it in the
+   `task_verify` next_action and `stop_gate.py` emits it via
+   `attestation_block_instruction()` — and the branch is only reachable after a
+   fresh `task_verify`, so the exact text is always in context when it is
+   needed. Callers copy it from that message and never interpolate diagnostics.
+   Prose surfaces (contracts, runtime docs, skills) must reference this rule
+   rather than carry a second copy of the strings: a hand-copied literal that
+   drifts by one character silently misroutes `task_blocked`.
 6. **Best-effort registration may remain, but failure must propagate.**
    `codex_hook_registration.py:157` retries within a short deadline and returns
    `False`. The hook must consume that return value and reflect it to the user

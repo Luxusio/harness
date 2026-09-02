@@ -17,8 +17,11 @@ is remediated, actual BLOCKED_ENV is published directly through `task_blocked`, 
 actual review PASS advances to substantive QA. Do not repair, restart, resume,
 recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
 call `task_verify` once; close on ordered receipt PASS, otherwise call
-`task_blocked` with `blocked_reason="Required hook-owned review/QA attestation remains missing after substantive review PASS, QA PASS, and one fresh task_verify."` and
-`unblock_condition="Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."`.
+`task_blocked` with the fixed missing-attestation
+`blocked_reason`/`unblock_condition` pair copied **verbatim** from that
+`task_verify` response's `next_action` (the stop-gate message carries the same
+pair). That pair is owned by `plugin/scripts/_lib.py`; never retype it from
+memory, paraphrase it, or interpolate diagnostics into it.
 Direct finals never authorize PASS or close.
 Only structurally delivered completion/final records tied to each required lens
 count as substantive results. Actual review PASS must precede actual QA PASS;

@@ -59,7 +59,6 @@ Further references:
 
 ## Agents
 
-- `stop-judge.md` — deprecated, non-routable compatibility stub. New work calls `task_blocked` directly for qualified blockers.
 - `qa-cli.md` — CLI / library QA lens.
 - `qa-api.md` — API endpoint QA lens.
 - `qa-browser.md` — browser QA lens. Methodology preserved; runtime path deferred until Codex Playwright MCP lands (v2).

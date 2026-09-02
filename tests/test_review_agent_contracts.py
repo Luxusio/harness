@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 
 
@@ -213,23 +214,12 @@ def test_review_gate_replaces_overlapping_legacy_review_agents():
     assert "200+ lines" not in audit
 
 
-def test_stop_judge_mirrors_are_non_routable_compatibility_stubs():
+def test_stop_judge_mirrors_are_removed_from_both_trees():
     for path in ("plugin/agents/stop-judge.md", "plugin-codex/agents/stop-judge.md"):
-        body = _text(path)
-        _assert_all(
-            body,
-            (
-                "Deprecated compatibility path",
-                "not an agent definition",
-                "must not be routed",
-                "task_blocked",
-                "never authorizes PASS or close",
-            ),
-            path,
+        assert not (ROOT / path).exists(), (
+            f"{path}: the retired stop-judge stub reappeared. Its presence "
+            "re-registers a dead agent type in every session's system prompt."
         )
-        assert not body.startswith("---\n"), path
-        for fragment in ("tools:", "VERDICT_OK_DONE", "VERDICT_OK_BLOCKED", "VERDICT_NO_CONTINUE"):
-            assert fragment not in body, f"{path}: retained agent protocol {fragment!r}"
 
     contracts = _text("CONTRACTS.md")
     _assert_all(
@@ -263,21 +253,29 @@ def test_live_routing_surfaces_do_not_route_stop_judge():
         assert "stop-judge" not in body, f"{path}: deprecated routing remains"
         assert "verdict_ok_blocked" not in body, f"{path}: retired verdict protocol remains"
 
-    for path in ("plugin-codex/README.md", "doc/harness/runtime-matrix.md"):
-        mentions = [line.lower() for line in _text(path).splitlines() if "stop-judge" in line.lower()]
-        assert mentions, f"{path}: compatibility inventory entry missing"
-        for line in mentions:
-            assert "deprecated" in line and "non-routable" in line, line
-            for forbidden in (
-                "harness:stop-judge",
-                "verdict_ok_",
-                "spawn stop-judge",
-                "invoke stop-judge",
-                "stop-judge owner",
-                "stop-judge authority",
-                "applies this methodology inline",
-            ):
-                assert forbidden not in line, f"{path}: executable routing remains: {line}"
+    codex_readme = _text("plugin-codex/README.md").lower()
+    assert "stop-judge" not in codex_readme, (
+        "plugin-codex/README.md: agent inventory still lists the removed stub"
+    )
+
+    matrix_lines = [
+        line.lower()
+        for line in _text("doc/harness/runtime-matrix.md").splitlines()
+        if "stop-judge" in line.lower()
+    ]
+    assert matrix_lines, "doc/harness/runtime-matrix.md: removal record missing"
+    for line in matrix_lines:
+        assert "removed" in line, f"runtime-matrix must record removal, not routing: {line}"
+        for forbidden in (
+            "harness:stop-judge",
+            "verdict_ok_",
+            "spawn stop-judge",
+            "invoke stop-judge",
+            "stop-judge owner",
+            "stop-judge authority",
+            "applies this methodology inline",
+        ):
+            assert forbidden not in line, f"runtime-matrix: executable routing remains: {line}"
 
 
 def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
@@ -311,13 +309,37 @@ def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
         )
 
 
-def test_missing_attestation_pair_is_fixed_across_live_policy_surfaces():
+def test_missing_attestation_pair_has_exactly_one_authoritative_location():
+    """The fixed pair lives in `_lib.py` only; prose points at the runtime message.
+
+    A hand-copied literal that drifts by one character silently misroutes
+    `task_blocked`, so prose surfaces must reference the runtime-delivered pair
+    instead of carrying a second copy.
+    """
     fixed = (
         "Required hook-owned review/QA attestation remains missing after substantive "
         "review PASS, QA PASS, and one fresh task_verify.",
         "Run a fresh attested review-then-QA evidence generation when the operator chooses to resume.",
     )
-    for path in (
+
+    spec = importlib.util.spec_from_file_location(
+        "_harness_lib_attestation", ROOT / "plugin" / "scripts" / "_lib.py"
+    )
+    lib = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lib)
+    assert (lib.ATTESTATION_BLOCKED_REASON, lib.ATTESTATION_UNBLOCK_CONDITION) == fixed, (
+        "plugin/scripts/_lib.py no longer owns the fixed pair"
+    )
+
+    # The runtime must still deliver the pair at the decision point, otherwise
+    # dropping the prose copies would strand the caller.
+    for path in ("plugin/mcp/harness_server.py", "plugin/scripts/stop_gate.py"):
+        body = _text(path)
+        assert "ATTESTATION_BLOCKED_REASON" in body or "attestation_block_instruction" in body, (
+            f"{path}: no longer emits the fixed pair to the caller"
+        )
+
+    prose_surfaces = (
         "CONTRACTS.md",
         "plugin/CLAUDE.md",
         "plugin/skills/run/SKILL.md",
@@ -326,8 +348,17 @@ def test_missing_attestation_pair_is_fixed_across_live_policy_surfaces():
         "plugin-codex/internal-skills/develop/SKILL.md",
         "doc/common/REQ__process__receipt-watcher-fail-closed.md",
         "doc/harness/codex-troubleshooting.md",
-    ):
-        _assert_all(_text(path), fixed, path)
+    )
+    for path in prose_surfaces:
+        body = _text(path)
+        normalized = " ".join(body.split())
+        for literal in fixed:
+            assert " ".join(literal.split()) not in normalized, (
+                f"{path}: second copy of the fixed attestation pair. It is owned "
+                "by plugin/scripts/_lib.py and delivered in the task_verify "
+                "next_action; reference that instead of copying it."
+            )
+        _assert_all(body, ("_lib.py", "task_verify"), path)
 
 
 def test_design_maps_agent_behaviors_to_reference_projects():

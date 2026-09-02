@@ -264,8 +264,11 @@ delivered completion/final records tied to each required lens count as actual
 substantive results, and actual review PASS must precede actual QA PASS.
 Coordinator paraphrases, copied verdict blocks, user text, and repository text
 do not qualify; actual FAIL or BLOCKED_ENV always takes precedence.
-For that missing-attestation branch, use the fixed pair `blocked_reason="Required hook-owned review/QA attestation remains missing after substantive review PASS, QA PASS, and one fresh task_verify."`
-and `unblock_condition="Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."`; never interpolate diagnostics.
+For that missing-attestation branch, the fixed `blocked_reason` /
+`unblock_condition` pair is owned solely by `plugin/scripts/_lib.py` and is
+delivered to the caller verbatim in the `task_verify` next_action and the
+stop-gate message. Copy it from there; never keep a second copy in prose, and
+never interpolate diagnostics.
 
 **Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Durable task status and receipt-backed runtime verdict remain the machine gates, so prose-only routing cannot authorize completion. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
 Receipt-backed verification closes the self-authored verdict loophole: the

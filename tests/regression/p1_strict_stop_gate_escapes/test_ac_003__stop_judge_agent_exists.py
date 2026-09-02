@@ -1,34 +1,38 @@
-"""AC-003 regression: the retired stop-judge path is a non-routable stub."""
+"""AC-003 regression: the retired stop-judge path is gone from both trees.
+
+History: this AC originally pinned a routable `harness:stop-judge` agent as the
+sole non-PASS turn-end authority. `2fa09ff` retired the routing and reduced the
+file to a non-routable compatibility stub. The compatibility window is now
+closed, so the invariant is absence: no stop-judge agent file may come back, and
+qualified blockers go straight to `task_blocked`.
+"""
 
 import os
 
 
-AGENT_PATH = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "plugin", "agents", "stop-judge.md"))
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+AGENT_PATHS = (
+    os.path.join(REPO, "plugin", "agents", "stop-judge.md"),
+    os.path.join(REPO, "plugin-codex", "agents", "stop-judge.md"),
+)
 
 
-def test_stop_judge_file_exists():
-    assert os.path.isfile(AGENT_PATH), f"missing: {AGENT_PATH}"
+def test_stop_judge_agent_file_is_removed():
+    for path in AGENT_PATHS:
+        assert not os.path.exists(path), (
+            f"retired stop-judge agent reappeared: {path}. Its presence "
+            "re-registers a dead agent type in every session."
+        )
 
 
-def test_stop_judge_has_no_agent_protocol():
-    body = open(AGENT_PATH).read()
-    assert not body.startswith("---\n"), "deprecated stub must not have frontmatter"
-    for fragment in ("tools:", "VERDICT_OK_DONE", "VERDICT_OK_BLOCKED", "VERDICT_NO_CONTINUE"):
-        assert fragment not in body, f"agent protocol remains in compatibility stub: {fragment}"
-
-
-def test_stop_judge_names_blocked_env_transition():
-    body = open(AGENT_PATH).read()
-    assert "Deprecated compatibility path" in body
-    assert "not an agent definition" in body
-    assert "must not be" in body and "routed" in body
-    assert "BLOCKED_ENV" in body, "BLOCKED_ENV transition path missing"
-    assert "task_blocked" in body, "task_blocked MCP reference missing"
+def test_blocked_env_transition_is_owned_by_task_blocked():
+    stop_gate = open(os.path.join(REPO, "plugin", "scripts", "stop_gate.py")).read()
+    assert "task_blocked" in stop_gate, "task_blocked transition path missing"
+    assert "stop-judge" not in stop_gate, "stop-judge routing remains in stop_gate"
+    assert "stop_judge" not in stop_gate, "stop-judge routing remains in stop_gate"
 
 
 if __name__ == "__main__":
-    test_stop_judge_file_exists()
-    test_stop_judge_has_no_agent_protocol()
-    test_stop_judge_names_blocked_env_transition()
+    test_stop_judge_agent_file_is_removed()
+    test_blocked_env_transition_is_owned_by_task_blocked()
     print("OK")
