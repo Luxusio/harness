@@ -69,6 +69,26 @@ def test_codex_subagent_waiting_avoids_rapid_polling_noise():
     assert "and `list_agents` do not author receipts" in develop
 
 
+def test_spawn_prompts_must_not_restate_the_verdict_contract():
+    """The agent definition owns the verdict shape; a prompt that repeats it loses lenses.
+
+    Twice observed: a coordinator prompt relocated `VERDICT:` off the first line
+    and a finished review bound as PENDING and was discarded. See
+    doc/harness/REQ__lens-verdict-contract-ownership.md.
+    """
+    for rel in (
+        "plugin/skills/develop/SKILL.md",
+        "plugin/skills/run/SKILL.md",
+        "plugin-codex/internal-skills/develop/SKILL.md",
+        "plugin-codex/internal-skills/run/SKILL.md",
+    ):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "verdict contract" in body, rel
+        assert "first line" in body, rel
+        for phrase in ("restate", "spawn prompt"):
+            assert phrase in body, f"{rel}: missing {phrase!r}"
+
+
 def test_qa_agents_surface_self_healing_candidates():
     for rel in (
         "plugin/agents/qa-cli.md",

@@ -272,6 +272,9 @@ Read the required review lenses from `TASK.json`. Discover deferred
 `spawn_agent` in `ALL_TOOLS`. Spawn each review lens declared by TASK.json
 `security_review` when declared, in one message; each reads its matching
 `${HARNESS_PLUGIN_ROOT}/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
+The agent definition owns that verdict contract: never restate, relocate, or paraphrase it in a
+spawn prompt. A prompt that moves VERDICT off the first line binds the completion as
+PENDING/INVALID and discards a finished review.
 Await all reviewers. Use `wait_agent` only to coordinate completion; its output
 and `list_agents` do not author receipts. Watcher-owned
 review entries in `RECEIPTS.jsonl` must show PASS for the
@@ -285,10 +288,9 @@ policy, actual reviewer PASS finals permit one substantive QA run, but review
 and QA remain NON-ATTESTING and can only lead to the generic blocked path unless
 ordered receipts arrive.
 
-Apply the parent run skill's subagent wait UX rule: finish useful local work,
-then wait in one interval of up to 60 seconds; never use rapid short polling or
-agent-status tools as a progress poll. After a timeout, emit one compact user
-status before waiting again.
+Apply the parent run skill's subagent wait UX rule: finish useful local work, then wait in one
+interval of up to 60 seconds; never use rapid short polling or agent-status tools as a poll.
+After a timeout, emit one compact user status before waiting again.
 
 Use a valid structured `task_name` containing `code_review` or
 `security_review`; a matching first message line is readable context only. Do
@@ -313,11 +315,9 @@ close even though the QA final is still useful under the Missing receipt policy.
 
 **On Codex:** run the required QA lenses declared in `TASK.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
 
-For user-facing surfaces, also route the matching UX lens (`ux-cli`,
-`ux-api`, `ux-browser`, or `ux-desktop`) when the plan declares it. Pass
-the user flow, pages, commands, endpoints,
-windows, states, and expected intent in the subagent prompt so the UX lens can
-judge shippability without reverse-engineering the change.
+For user-facing surfaces, also route the matching UX lens (`ux-cli`, `ux-api`, `ux-browser`, or
+`ux-desktop`) when the plan declares it. Pass the user flow, pages, commands, endpoints, windows,
+states, and expected intent so the UX lens can judge shippability without reverse-engineering.
 
 ```text
 spawn_agent {

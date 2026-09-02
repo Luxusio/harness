@@ -301,7 +301,13 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 Read `quality-audit-pipeline.md` § Phase 6.6. Call `task_context`, spawn every
 required read-only review lens in parallel, await explicit verdicts, and require
 review PASS entries in `RECEIPTS.jsonl` correlated to starts in the current task
-run. Send only `FIX_NOW` findings to the original minimum-sufficient
+run. **The agent definition owns the verdict contract — never restate, relocate,
+or paraphrase it in a spawn prompt.** A prompt that moves `VERDICT:` off the
+first line makes the hook bind the completion as `PENDING`/`FINDING_COUNTS:
+INVALID`, discarding a finished review. Describe what to review, never how to
+format the verdict.
+
+Send only `FIX_NOW` findings to the original minimum-sufficient
 implementer. Any edit loops through focused tests/checkpoint and all required
 reviewers again. Normally do not start Phase 7 QA until receipt-backed review
 PASS. Under the Missing receipt policy, actual reviewer PASS finals permit one

@@ -99,6 +99,7 @@ from _lib import (  # type: ignore
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
     LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
     ATTESTATION_BLOCKED_REASON, ATTESTATION_UNBLOCK_CONDITION,
+    nonparsing_completion_lenses, nonparsing_completion_note,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -527,9 +528,20 @@ def _watcher_status(
                 # exact identity retained after successful task registration.
                 # The env fallback supports older direct hosts, but ordinary
                 # Codex MCP processes have no CODEX_THREAD_ID of their own.
+                #
+                # `root_thread_id` is a last-resort lookup key, never an
+                # authority: it is read only when neither authoritative source
+                # resolved. Precedence keeps the trust boundary intact — a
+                # planted value cannot displace a real identity, so it can only
+                # surface an additional worker error, never hide one. Without
+                # this fallback a host that never populated `watcher_thread_id`
+                # never asks the worker at all, and reports a confident
+                # `receipts_recordable: True` from a path structurally unable to
+                # observe the failure.
                 current_thread_id = str(
                     getattr(_SERVER, "watcher_thread_id", "")
                     or os.environ.get("CODEX_THREAD_ID")
+                    or diagnostics.get("root_thread_id")
                     or ""
                 )
                 if current_thread_id:
@@ -1156,7 +1168,13 @@ def handle_task_verify(args: dict) -> dict:
     ctx = _gate_next_action(ctx, status)
     if rv == "PENDING" and status.get("receipts_recordable") is not False:
         ctx = dict(ctx)
-        ctx["next_action"] = RECEIPT_PENDING_VERIFY_NEXT_ACTION
+        # A lens that completed with a rejected verdict shape is neither an
+        # unrun lens nor a missing receipt, and the generic pending guidance
+        # sends the caller down both wrong paths. Name it first, then keep the
+        # unchanged attestation instruction — this only relabels a PENDING.
+        ctx["next_action"] = nonparsing_completion_note(
+            nonparsing_completion_lenses(td, st, snapshot)
+        ) + RECEIPT_PENDING_VERIFY_NEXT_ACTION
     payload = {
         "task_dir": td, "runtime_verdict": rv,
         "next_action": ctx.get("next_action", ""),

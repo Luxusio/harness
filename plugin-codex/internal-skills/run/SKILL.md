@@ -191,7 +191,10 @@ interrupted or older develop flow, not a second QA pass. First call
 exist, call `task_verify` only; spawn QA below only for an actually unrun,
 failed, or stale required lens. A missing receipt after an awaited substantive
 final is not an unrun lens and never justifies a receipt-only rerun; apply the
-Missing receipt policy instead.
+Missing receipt policy instead. Never restate or relocate the verdict contract
+in a spawn prompt: the agent definition owns it, and a prompt that moves
+`VERDICT:` off the first line binds the completion as `PENDING` and throws the
+lens result away.
 
 Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by watcher-recorded QA completions in `RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
 

@@ -275,6 +275,20 @@ identity. `rollout_offset` remains nullable because the control plane does not
 publish that watcher-internal cursor; an unknown field stays `null` rather than
 being guessed.
 
+**Worker-error lookup identity has a fixed precedence.** `_watcher_status`
+resolves the key it hands `watcher_manager.worker_error(...)` in this order:
+in-memory `_SERVER.watcher_thread_id`, then `$CODEX_THREAD_ID`, then
+`root_thread_id` as a last-resort fallback. The fallback is a lookup key, never
+an authority — it is consulted only when neither authoritative source resolved,
+so a planted `root_thread_id` can never displace a real identity or hide a live
+error. It can only surface an additional error, which is the fail-closed
+direction. Skipping the fallback is not the safe default it looks like: a host
+that never populated `watcher_thread_id` then never asks the worker at all and
+reports a confident `receipts_recordable: True` from a code path structurally
+unable to observe the failure. That gap shipped in `a095c76` together with the
+test that forbids it, and the test was red from the commit that introduced it
+until this rule was implemented.
+
 ## Settled decisions
 
 **Missing receipts lead to substantive QA, then a generic blocked task.**

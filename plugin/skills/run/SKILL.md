@@ -137,7 +137,10 @@ For a lens that must be re-run, follow `develop/SKILL.md` Phase 7 and
 `develop/quality-audit-pipeline.md` — do not restate routing here. Use the
 native subagent types (`harness:qa-cli`, `harness:qa-api`, `harness:qa-browser`,
 `harness:qa-desktop`, and the matching `harness:ux-*`), and issue multiple
-lenses in a single assistant message so every start is hook-recorded.
+lenses in a single assistant message so every start is hook-recorded. Never
+restate or relocate the verdict contract in a spawn prompt: the agent
+definition owns it, and a prompt that moves `VERDICT:` off the first line binds
+the completion as `PENDING` and throws the lens result away.
 
 Two selection rules are gates rather than routing detail, so they are stated
 here and not delegated:

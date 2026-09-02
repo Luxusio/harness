@@ -94,6 +94,187 @@ def _task_with_receipt():
             os.chdir(prior_cwd)
 
 
+class TestVerdictAuthorityIsPositional(unittest.TestCase):
+    """A mention is not a verdict; only a conflicting bare line is ambiguous.
+
+    The old rule voided a completion if `VERDICT:`/`FINDING_COUNTS:` occurred
+    more than once anywhere in the message. A reviewer discussing the verdict
+    contract — which reviewing this subsystem requires — therefore destroyed its
+    own verdict. Observed live: a correctly shaped review PASS bound as PENDING
+    because the report mentioned `FINDING_COUNTS:` a second time in prose.
+    """
+
+    def _lib(self):
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+        return _lib
+
+    def test_prose_mentioning_the_contract_keeps_its_verdict(self):
+        _lib = self._lib()
+        body = (
+            "VERDICT: PASS\n"
+            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=2\n"
+            "\n"
+            "The parser requires FINDING_COUNTS: on the second line, and a\n"
+            "report that quotes `VERDICT: PASS` inline must still bind.\n"
+        )
+        verdict, compact = _lib.normalize_receipt_completion("review-code", body)
+        self.assertEqual(verdict, "PASS")
+        self.assertIn("FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=2", compact)
+
+    def test_repeated_identical_verdict_line_is_harmless(self):
+        _lib = self._lib()
+        verdict, _ = _lib.normalize_receipt_completion(
+            "qa-cli", "VERDICT: PASS\nsummary\nVERDICT: PASS\n",
+        )
+        self.assertEqual(verdict, "PASS")
+
+    def test_conflicting_verdict_lines_still_void_the_result(self):
+        _lib = self._lib()
+        verdict, _ = _lib.normalize_receipt_completion(
+            "qa-cli", "VERDICT: PASS\nsummary\nVERDICT: FAIL\n",
+        )
+        self.assertEqual(verdict, "PENDING")
+
+    def test_conflicting_counts_lines_still_void_the_counts(self):
+        _lib = self._lib()
+        verdict, compact = _lib.normalize_receipt_completion(
+            "review-code",
+            "VERDICT: PASS\n"
+            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=2\n"
+            "FINDING_COUNTS: FIX_NOW=3 INVESTIGATE=0 OPTIONAL=0\n",
+        )
+        self.assertEqual(verdict, "PENDING")
+        self.assertIn("FINDING_COUNTS: INVALID", compact)
+
+    def test_trailing_verdict_still_binds_pending(self):
+        """Positional authority is unchanged — AC-2a's original failure stays caught.
+
+        The review-lens case alone does not pin this: it binds PENDING through
+        the counts rule (line 2 is blank) whether or not line-1 verdict binding
+        is positional. The qa-cli case has no counts rule, so it is the only one
+        that fails if `extract_qa_verdict` ever starts scanning for the first
+        matching line anywhere — which would let narrative prose containing
+        `VERDICT: PASS` bind an attesting PASS.
+        """
+        _lib = self._lib()
+        verdict, _ = _lib.normalize_receipt_completion(
+            "review-code",
+            "Everything checks out.\n\nVERDICT: PASS\n"
+            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n",
+        )
+        self.assertEqual(verdict, "PENDING")
+
+        verdict, _ = _lib.normalize_receipt_completion(
+            "qa-cli", "Everything checks out.\n\nVERDICT: PASS\n",
+        )
+        self.assertEqual(verdict, "PENDING")
+        self.assertEqual(_lib.extract_qa_verdict("prose\nVERDICT: PASS\n"), "")
+
+
+class TestNonParsingCompletionIsNamed(unittest.TestCase):
+    """A rejected verdict shape must not read like an unrun lens.
+
+    `normalize_receipt_completion` binds PENDING when the final message does not
+    put `VERDICT:` on the first line. Reporting only a bare PENDING sent a
+    coordinator hunting for a missing receipt while a finished review sat in the
+    file, so the pending guidance names the lens and the real remedy.
+    """
+
+    def _complete(self, task_dir, run_id, summary):
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        verdict, compact = _lib.normalize_receipt_completion("review-code", summary)
+        entry = {
+            "ts": _lib._receipt_now_iso(),
+            "event": "completed",
+            "source": "claude_hook",
+            "task_run_id": run_id,
+            "runtime_id": "claude:session-disproof:agent-disproof",
+            "agent_id": "agent-disproof",
+            "agent_type": "harness:code-reviewer",
+            "lens": "review-code",
+            "verdict": verdict,
+            "summary": compact,
+        }
+        assert _lib._receipt_entry_semantics_valid(entry)
+        with (Path(task_dir) / "RECEIPTS.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+        return verdict
+
+    def test_trailing_verdict_completion_is_reported_as_a_format_failure(self):
+        harness_server = _server()
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        with _task_with_receipt() as (task_dir, run_id):
+            # The exact shape that cost a full review cycle: a complete report
+            # whose verdict block sits at the end instead of the first line.
+            verdict = self._complete(
+                task_dir, run_id,
+                "Reviewed the diff and everything checks out.\n\n"
+                "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n",
+            )
+            self.assertEqual(verdict, "PENDING")
+
+            self.assertEqual(
+                _lib.nonparsing_completion_lenses(task_dir),
+                {"review-code": "shape"},
+            )
+            result = json.loads(
+                harness_server.handle_task_verify({"task_id": Path(task_dir).name})[
+                    "content"
+                ][0]["text"]
+            )
+
+        # Diagnostic only — the gate outcome is untouched.
+        self.assertEqual(result["runtime_verdict"], "PENDING")
+        action = result["next_action"]
+        self.assertIn("review-code", action)
+        self.assertIn("not in the position the agent definition requires", action)
+        self.assertIn("not an unrun lens", action)
+        self.assertIn("do not restate", action)
+        # The unchanged attestation instruction still follows the new label.
+        self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
+
+    def test_inconsistent_verdict_is_not_reported_as_a_format_problem(self):
+        """PASS beside FIX_NOW=1 is well-formed and still PENDING.
+
+        Telling that coordinator the format was wrong sends it to rerun the lens
+        instead of routing the finding it was just handed.
+        """
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        with _task_with_receipt() as (task_dir, run_id):
+            verdict = self._complete(
+                task_dir, run_id,
+                "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0\nx\n",
+            )
+            self.assertEqual(verdict, "PENDING")
+            kinds = _lib.nonparsing_completion_lenses(task_dir)
+            self.assertEqual(kinds, {"review-code": "inconsistent"})
+
+        note = _lib.nonparsing_completion_note(kinds)
+        self.assertIn("contradict", note)
+        self.assertIn("Position and format are not the problem", note)
+        self.assertNotIn("not in the position", note)
+
+    def test_a_well_formed_completion_adds_no_note(self):
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        with _task_with_receipt() as (task_dir, run_id):
+            verdict = self._complete(
+                task_dir, run_id,
+                "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nfine\n",
+            )
+            self.assertEqual(verdict, "PASS")
+            self.assertEqual(_lib.nonparsing_completion_lenses(task_dir), {})
+            self.assertEqual(_lib.nonparsing_completion_note({}), "")
+
+
 class TestWatcherErrorIsRecorded(unittest.TestCase):
     """Requirement 2 — the cause must not be swallowed."""
 
@@ -894,6 +1075,64 @@ class TestReadinessIsTriState(unittest.TestCase):
             )
 
         self.assertEqual(Manager.queried, [current])
+        self.assertIs(status["receipts_recordable"], False)
+        self.assertIn("receipt lock unavailable", status["last_watcher_error"])
+
+    def test_worker_error_lookup_prefers_the_authoritative_identity(self):
+        """`root_thread_id` is a last-resort key, never an authority.
+
+        With an authoritative identity present it must be the only key queried,
+        so a planted diagnostics value cannot displace it. With no authoritative
+        identity it is the only key available, and skipping the lookup entirely
+        would report a confident `receipts_recordable: True` from a path that
+        cannot observe worker failures at all.
+        """
+        harness_server = _server()
+        authoritative = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+        planted = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+
+        def _status(watcher_thread_id):
+            class Manager:
+                queried = []
+
+                @classmethod
+                def worker_error(cls, thread_id):
+                    cls.queried.append(thread_id)
+                    return "RuntimeError: receipt lock unavailable"
+
+            class Server:
+                watcher_manager = Manager()
+                last_watcher_error = ""
+
+            if watcher_thread_id:
+                Server.watcher_thread_id = watcher_thread_id
+
+            with mock.patch.object(harness_server, "_SERVER", Server()), \
+                 mock.patch.dict(
+                     os.environ, {"CODEX_THREAD_ID": ""}, clear=False,
+                 ), \
+                 mock.patch.object(
+                     harness_server, "_server_runtime", lambda: "codex",
+                 ), mock.patch.object(
+                     harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+                 ), mock.patch.object(
+                     harness_server, "_run_has_receipts", lambda *_a, **_k: True,
+                 ), mock.patch.object(
+                     harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {
+                         "root_thread_id": planted,
+                     },
+                 ):
+                status = harness_server._watcher_status(
+                    task_dir="task", task_id="t", run_id="r",
+                )
+            return Manager.queried, status
+
+        queried, status = _status(authoritative)
+        self.assertEqual(queried, [authoritative])
+        self.assertIs(status["receipts_recordable"], False)
+
+        queried, status = _status("")
+        self.assertEqual(queried, [planted])
         self.assertIs(status["receipts_recordable"], False)
         self.assertIn("receipt lock unavailable", status["last_watcher_error"])
 

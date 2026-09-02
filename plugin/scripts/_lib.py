@@ -2631,13 +2631,33 @@ _FINDING_COUNTS_RE = re.compile(
 
 
 def extract_qa_verdict(value):
-    """Accept only the exact, unique first-line verdict contract."""
+    """Accept the exact first-line verdict; only a conflicting verdict line voids it.
+
+    Authority is positional: line 1 or nothing. A later line voids the result
+    only when it is itself a bare verdict line naming a *different* verdict —
+    genuine ambiguity about which one binds. A repeated identical verdict line
+    is harmless, and prose that merely mentions the token is not a verdict at
+    all. Rejecting on any second occurrence made a report that quotes or
+    discusses the verdict contract destroy its own verdict, which is precisely
+    what a review of this subsystem must be free to do.
+    """
     lines = str(value or "").splitlines()
     if not lines:
         return ""
-    matches = [_QA_VERDICT_RE.fullmatch(line.strip()) for line in lines]
-    verdicts = [match.group(1) for match in matches if match]
-    return verdicts[0] if matches[0] and len(verdicts) == 1 else ""
+    first = _QA_VERDICT_RE.fullmatch(lines[0].strip())
+    if not first:
+        return ""
+    for line in lines[1:]:
+        other = _QA_VERDICT_RE.fullmatch(line.strip())
+        if other and other.group(1) != first.group(1):
+            return ""
+    return first.group(1)
+
+
+def _counts_conflict(line, counts_match):
+    """Is `line` a bare counts line disagreeing with the authoritative one?"""
+    other = _FINDING_COUNTS_RE.fullmatch(line.strip())
+    return bool(other) and other.groups() != counts_match.groups()
 
 
 def normalize_receipt_completion(lens, value, supplied_verdict=""):
@@ -2655,9 +2675,12 @@ def normalize_receipt_completion(lens, value, supplied_verdict=""):
     is_review = str(lens or "").startswith("review-")
     summary_lines = raw_summary.splitlines()
     counts_match = _FINDING_COUNTS_RE.fullmatch(summary_lines[1]) if len(summary_lines) > 1 else None
-    counts_reported = bool(counts_match) and sum(
-        "FINDING_COUNTS:" in line for line in summary_lines
-    ) == 1
+    # Same positional rule as the verdict line: only a second bare counts line
+    # with *different* numbers is ambiguous. A prose mention of the token is not
+    # a counts line, and treating it as one voided reviews of this very code.
+    counts_reported = bool(counts_match) and not any(
+        _counts_conflict(line, counts_match) for line in summary_lines[2:]
+    )
     if is_review:
         if not counts_reported:
             verdict = "PENDING"
@@ -3191,6 +3214,81 @@ def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
     return "PENDING"
 
 
+def nonparsing_completion_lenses(task_dir, state=None, snapshot=None):
+    """Lenses that completed for this run but whose final failed the verdict contract.
+
+    `normalize_receipt_completion` records `PENDING` when the final message does
+    not carry `VERDICT: PASS|FAIL|BLOCKED_ENV` on its first line (and, for review
+    lenses, `FINDING_COUNTS:` on the second). The lens did run and did report —
+    the shape was rejected — but a bare `PENDING` reads exactly like "never ran",
+    so a coordinator re-derives the whole cycle before noticing. Naming it is
+    diagnostic only: a non-parsing completion stays non-attesting either way.
+    """
+    st = state or read_task_control(task_dir)
+    current_run_id = str(st.get("run_id") or "")
+    if not current_run_id:
+        return {}
+    # Any supported lens, not only the declared ones: a lens whose declaration
+    # is still missing can burn the same cycle, and the note is advisory.
+    latest = {}
+    # `entries`, not `subagents`: the latter is the non-review view, and a
+    # review lens is the one this most often fires for. Advisory only, so a
+    # snapshot carrying no records yields no note rather than an error on a
+    # path whose whole purpose is explaining a PENDING.
+    for item in getattr(snapshot or receipt_snapshot(task_dir), "entries", None) or []:
+        lens = str(item.get("lens") or "").lower()
+        if lens in SUPPORTED_LENSES and item.get("task_run_id") == current_run_id:
+            latest[lens] = item
+    pending = {
+        lens: item for lens, item in latest.items()
+        if item.get("event") == "completed"
+        and str(item.get("verdict") or "").upper() == "PENDING"
+    }
+    # Two different failures land on the same PENDING. A rejected *shape* is
+    # marked INVALID in the stored counts line; a well-shaped review whose
+    # verdict and counts disagree (PASS beside FIX_NOW=1) is not a format
+    # problem at all, and telling its coordinator to fix the format sends it to
+    # rerun the lens instead of routing the finding.
+    return {
+        lens: (
+            "shape"
+            if "FINDING_COUNTS: INVALID" in str(item.get("summary") or "")
+            or not lens.startswith("review-")
+            else "inconsistent"
+        )
+        for lens, item in sorted(pending.items())
+    }
+
+
+def nonparsing_completion_note(lenses):
+    """Advisory sentence naming lenses whose completion could not bind a verdict."""
+    if not lenses:
+        return ""
+    kinds = lenses if isinstance(lenses, dict) else {lens: "shape" for lens in lenses}
+    parts = []
+    shape = [lens for lens, kind in kinds.items() if kind == "shape"]
+    inconsistent = [lens for lens, kind in kinds.items() if kind != "shape"]
+    if shape:
+        parts.append(
+            f"Recorded but unusable: {', '.join(shape)} completed for this run but no "
+            "verdict could be bound — its verdict block was not in the position the "
+            "agent definition requires, or the report carried conflicting verdict "
+            "lines. This is not an unrun lens and not a missing receipt. Rerun that "
+            "lens so it emits one verdict block in the required position, and do not "
+            "restate, relocate, or paraphrase the verdict format in the spawn prompt "
+            "— the agent definition owns it."
+        )
+    if inconsistent:
+        parts.append(
+            f"Recorded but unusable: {', '.join(inconsistent)} completed with a "
+            "well-formed verdict block, but no verdict could be bound — its verdict "
+            "and its finding counts contradict each other, or more than one "
+            "conflicting verdict line was present. Position and format are not the "
+            "problem: obtain one consistent verdict, or resolve the reported findings."
+        )
+    return " ".join(parts) + " "
+
+
 # ── Task context ─────────────────────────────────────────────────────────
 
 
@@ -3218,6 +3316,9 @@ def emit_compact_context(task_dir, snapshot=None):
         missing_for_close.append("PLAN.md")
     required_reviews = required_review_lenses(task_dir, st)
     review_verdict = receipt_review_verdict(task_dir, st, snapshot)
+    nonparsing_note = nonparsing_completion_note(
+        nonparsing_completion_lenses(task_dir, st, snapshot)
+    )
     completed_reviews = _completed_review_by_lens(task_dir, snapshot)
     missing_reviews = [lens for lens in required_reviews if lens not in completed_reviews]
     if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
@@ -3248,7 +3349,7 @@ def emit_compact_context(task_dir, snapshot=None):
             "condition; do not start QA."
         )
     elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
-        next_action = (
+        next_action = nonparsing_note + (
             "Run and await the required read-only review subagent(s) if a required "
             "review has not actually completed. "
             "If its actual PASS final already arrived without a receipt, label it "
@@ -3272,7 +3373,7 @@ def emit_compact_context(task_dir, snapshot=None):
             "with the concrete blocker and an actionable unblock condition."
         )
     elif runtime_verdict != "PASS":
-        next_action = (
+        next_action = nonparsing_note + (
             "Run and await the required QA subagent(s) if required QA has not "
             "actually completed. If its "
             "actual PASS final already arrived without a receipt, label it "

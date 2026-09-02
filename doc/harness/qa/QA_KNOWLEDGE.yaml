@@ -221,3 +221,23 @@ qa_notes:
       string, not the resolved target path. Workaround for sandboxed
       mutation testing: perform file restores in Python
       (pathlib.write_text) rather than shell cp/mv.
+  verdict_parser_probe_harness:
+    discovered: 2026-09-02
+    notes: >
+      To exercise the receipt verdict parser directly without spawning a lens:
+      sys.path.insert(0, "plugin/scripts") then call
+      _lib.normalize_receipt_completion(lens, body) and _lib.extract_qa_verdict(text).
+      For an end-to-end task_verify/task_context probe, import
+      tests/test_receipt_watcher_fail_closed.py and reuse its module-level
+      _server() and _task_with_receipt() context manager; write a PLAN.md into
+      the temp task dir or emit_compact_context short-circuits on the
+      "Create PLAN.md" branch before reaching the review/QA next_action text.
+  counts_line_is_not_stripped:
+    discovered: 2026-09-02
+    notes: >
+      _lib.normalize_receipt_completion fullmatches summary_lines[1] WITHOUT
+      strip(), while extract_qa_verdict strips line 0 and _counts_conflict
+      strips later lines. A review final whose FINDING_COUNTS line carries a
+      trailing space or leading indent binds PENDING / FINDING_COUNTS: INVALID.
+      Pre-existing as of 2026-09-02; verify exact whitespace when a
+      well-looking review final binds PENDING.
