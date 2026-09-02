@@ -2674,7 +2674,13 @@ def normalize_receipt_completion(lens, value, supplied_verdict=""):
 
     is_review = str(lens or "").startswith("review-")
     summary_lines = raw_summary.splitlines()
-    counts_match = _FINDING_COUNTS_RE.fullmatch(summary_lines[1]) if len(summary_lines) > 1 else None
+    # `.strip()` like line 0 and lines 3+. Without it this one line was
+    # whitespace-strict, so a trailing space or an indent on an otherwise
+    # perfect counts line discarded the whole review.
+    counts_match = (
+        _FINDING_COUNTS_RE.fullmatch(summary_lines[1].strip())
+        if len(summary_lines) > 1 else None
+    )
     # Same positional rule as the verdict line: only a second bare counts line
     # with *different* numbers is ambiguous. A prose mention of the token is not
     # a counts line, and treating it as one voided reviews of this very code.
@@ -3271,20 +3277,26 @@ def nonparsing_completion_note(lenses):
     if shape:
         parts.append(
             f"Recorded but unusable: {', '.join(shape)} completed for this run but no "
-            "verdict could be bound — its verdict block was not in the position the "
-            "agent definition requires, or the report carried conflicting verdict "
-            "lines. This is not an unrun lens and not a missing receipt. Rerun that "
-            "lens so it emits one verdict block in the required position, and do not "
-            "restate, relocate, or paraphrase the verdict format in the spawn prompt "
-            "— the agent definition owns it."
+            "verdict could be bound — its verdict block was not in the position and "
+            "shape the agent definition requires, or the report carried conflicting "
+            "verdict or counts lines. This is not an unrun lens and not a missing "
+            "receipt. Rerun that lens so it emits one verdict block in the required "
+            "position, and do not restate, relocate, or paraphrase the verdict format "
+            "in the spawn prompt — the agent definition owns it."
         )
     if inconsistent:
+        # Deliberately enumerated rather than diagnosed. The stored receipt keeps
+        # the normalized verdict, the counts line, and a digest — nothing about
+        # the original message — so a valid counts line does not prove the
+        # verdict line was well formed. Claiming "position is not the problem"
+        # was wrong for a line-1 shape failure such as a trailing period.
         parts.append(
-            f"Recorded but unusable: {', '.join(inconsistent)} completed with a "
-            "well-formed verdict block, but no verdict could be bound — its verdict "
-            "and its finding counts contradict each other, or more than one "
-            "conflicting verdict line was present. Position and format are not the "
-            "problem: obtain one consistent verdict, or resolve the reported findings."
+            f"Recorded but unusable: {', '.join(inconsistent)} completed with a valid "
+            "counts line but no verdict could be bound — its verdict and finding "
+            "counts contradict each other, more than one conflicting verdict line was "
+            "present, or the line-1 verdict was not in the exact required shape. "
+            "Rerun that lens so it emits one verdict block in the required shape whose "
+            "verdict and counts agree, or resolve the reported findings."
         )
     return " ".join(parts) + " "
 

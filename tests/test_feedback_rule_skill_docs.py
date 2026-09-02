@@ -89,6 +89,38 @@ def test_spawn_prompts_must_not_restate_the_verdict_contract():
             assert phrase in body, f"{rel}: missing {phrase!r}"
 
 
+def test_lens_definitions_warn_about_the_residual_voiding_rule():
+    """The lens definition is the only text the lens actually reads.
+
+    A differing bare verdict or counts line elsewhere in the message still
+    voids the verdict, and fences and indentation give no exemption. Five
+    reviews died to the pre-fix version of this rule while it was documented
+    only in doc/harness/REQ__lens-verdict-contract-ownership.md.
+    """
+    for rel in (
+        "plugin/agents/code-reviewer.md",
+        "plugin/agents/security-reviewer.md",
+        "plugin/agents/qa-cli.md",
+        "plugin/agents/qa-api.md",
+        "plugin/agents/qa-browser.md",
+        "plugin/agents/qa-desktop.md",
+        "plugin-codex/agents/code-reviewer.md",
+        "plugin-codex/agents/security-reviewer.md",
+        "plugin-codex/agents/qa-cli.md",
+        "plugin-codex/agents/qa-api.md",
+        "plugin-codex/agents/qa-browser.md",
+        "plugin-codex/agents/qa-desktop.md",
+    ):
+        # Normalized: the sentences are hard-wrapped differently per file.
+        body = " ".join((REPO / rel).read_text(encoding="utf-8").split())
+        for phrase in (
+            "voids your verdict entirely",
+            "fenced or indented example line is not exempt",
+            "Quote differing examples inline",
+        ):
+            assert phrase in body, f"{rel}: missing {phrase!r}"
+
+
 def test_qa_agents_surface_self_healing_candidates():
     for rel in (
         "plugin/agents/qa-cli.md",

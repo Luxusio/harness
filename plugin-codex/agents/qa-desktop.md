@@ -16,6 +16,12 @@ The first line of the final response must be exactly `VERDICT: PASS`,
 `VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. The lifecycle watcher parses this line;
 without it verification remains pending.
 
+Elsewhere in the response, a line that is *itself* a bare `VERDICT:` line naming
+a different verdict voids your verdict entirely. Stripping happens before
+matching, so a fenced or indented example line is not exempt. Quote differing
+examples inline inside a sentence. Mentioning the token in ordinary prose is
+always safe.
+
 The x11 tool prefix is runtime-specific. If the first call returns
 `tool_not_found`, emit `BLOCKED_ENV` with a `.mcp.json` fix block instead of continuing.
 

@@ -183,7 +183,8 @@ hook. The harness must degrade gracefully.
 **Title:** Weight budget — skills bounded, agent fanout batched.
 **When:** Adding or editing a SKILL.md; spawning parallel agents in a phase.
 **Enforced by:** `plugin/scripts/contract_lint.py --check-weight` —
-scans `plugin/skills/*/SKILL.md`, soft-warns any file >500 lines.
+scans `<plugin-root>/skills/*/SKILL.md` and `<plugin-root>/internal-skills/*/SKILL.md`,
+soft-warns any file >500 lines.
 Limits: SKILL.md ≤ 500 lines; sub-files read once per phase. Develop fanout is
 parallel-first: Phase 3 independent ACs, Phase 4.5-4.8 quality agents, Phase 7
 QA lenses, and Phase 7.7 dogfooder follow `plugin/skills/develop/parallel-fanout.md`.

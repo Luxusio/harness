@@ -188,23 +188,29 @@ qa_notes:
     fixture_helper: tests/test_review_agent_contracts.py::test_missing_attestation_pair_has_exactly_one_authoritative_location
   contract_lint_weight_scope:
     discovered: 2026-09-02
+    superseded: 2026-09-02
     notes: >
-      `contract_lint.py --check-weight` scans only <plugin-root>/skills/*/SKILL.md.
-      plugin-codex/internal-skills/*/SKILL.md is NEVER scanned, even with
-      --plugin-root plugin-codex, because the codex develop/run skills live
-      under internal-skills/ rather than skills/. Verified by mutation: adding
-      37 lines to plugin/skills/develop/SKILL.md emits
-      "[SOFT] C-13 weight ... 537 lines (>500)", while pushing
-      plugin-codex/internal-skills/develop/SKILL.md to 502 lines emits nothing
-      and exits 0. Confirm codex-tree SKILL.md budgets with an independent
-      `find plugin plugin-codex -name SKILL.md -exec wc -l {} +`.
+      SUPERSEDED — `contract_lint.py --check-weight` now scans BOTH
+      <plugin-root>/skills/*/SKILL.md and <plugin-root>/internal-skills/*/SKILL.md,
+      so a codex-tree SKILL.md over 500 lines is reported and
+      "[SOFT] C-13 weight" against plugin-codex/internal-skills/develop/SKILL.md
+      is expected output, not impossible output. Historical record: the scan
+      previously covered only skills/, which left every codex twin unguarded —
+      pushing plugin-codex/internal-skills/develop/SKILL.md to 502 lines emitted
+      nothing and exited 0, while adding 37 lines to plugin/skills/develop/SKILL.md
+      emitted the warning. Pinned by
+      tests/test_skill_weight_contract.py::test_weight_lint_sees_the_codex_internal_skills_layout.
   pre_existing_test_failure:
     discovered: 2026-09-02
+    superseded: 2026-09-02
     notes: >
+      SUPERSEDED — do NOT deselect anything on the strength of this entry.
       tests/test_receipt_watcher_fail_closed.py::TestReadinessIsTriState::test_earlier_receipt_does_not_mask_live_worker_error
-      fails on a clean HEAD 3e4585b tree (git archive into a scratchpad
-      reproduces it). Baseline is "1 failed, 984 passed". Deselect it when
-      judging a diff. Do not attribute it to a working-tree change.
+      now passes; commit 5a33299 implemented the identity precedence the test
+      always required. The suite has no standing red, so a full run must be
+      green with no deselects. Historical record: the test shipped red in
+      a095c76 (the commit that introduced it) and stayed red through 3e4585b,
+      where the baseline was "1 failed, 984 passed".
   sandbox_suite_pollution:
     discovered: 2026-09-02
     notes: >
@@ -234,10 +240,41 @@ qa_notes:
       "Create PLAN.md" branch before reaching the review/QA next_action text.
   counts_line_is_not_stripped:
     discovered: 2026-09-02
+    superseded: 2026-09-02
     notes: >
-      _lib.normalize_receipt_completion fullmatches summary_lines[1] WITHOUT
-      strip(), while extract_qa_verdict strips line 0 and _counts_conflict
-      strips later lines. A review final whose FINDING_COUNTS line carries a
-      trailing space or leading indent binds PENDING / FINDING_COUNTS: INVALID.
-      Pre-existing as of 2026-09-02; verify exact whitespace when a
-      well-looking review final binds PENDING.
+      SUPERSEDED — _lib.normalize_receipt_completion now strips summary_lines[1]
+      before matching, like line 0 and later lines. A trailing space, a leading
+      indent, or a tab on an otherwise valid counts line binds normally, and the
+      stored compact records the normalized text. Historical record: it was the
+      one whitespace-strict line in the parser, so such a final bound
+      PENDING / FINDING_COUNTS: INVALID. Surrounding whitespace is no longer a
+      reason a well-looking review final binds PENDING; look for a differing
+      bare verdict/counts line, a line-1 shape defect, or interior whitespace
+      instead. Pinned by
+      tests/test_receipt_watcher_fail_closed.py::TestVerdictAuthorityIsPositional::test_counts_line_whitespace_does_not_discard_the_review.
+  qa_venv_has_no_pip_or_pyyaml:
+    discovered: 2026-09-02
+    notes: >
+      .venv/bin/python has no pip module and no PyYAML; system python3 has no
+      PyYAML either. To parse doc/harness/qa/QA_KNOWLEDGE.yaml in a QA run use
+      `uv pip install pyyaml` (uv is on PATH and targets .venv), not
+      `.venv/bin/python -m pip`.
+  suite_is_green_and_xdist_stable:
+    discovered: 2026-09-02
+    notes: >
+      At HEAD 5a33299 + the verdict-parser-residual-defects diff,
+      `.venv/bin/python -m pytest tests/ -q` is 1001 passed / 228 subtests,
+      0 deselected, 0 skipped, ~15s, xdist-3.8.0 with `-n auto --dist worksteal`
+      from pyproject addopts. 16 consecutive full-suite runs were green;
+      test_harness_mcp_server.py::HarnessMcpServerPR2CloseGate::
+      test_legacy_conversation_file_has_no_close_authority did not fail in
+      16/16 full-suite runs nor 12/12 isolated runs. Treat the earlier
+      1-in-5 report as unreproduced on this host.
+  contract_lint_weight_is_soft_and_quiet_hides_it:
+    discovered: 2026-09-02
+    notes: >
+      `contract_lint.py --check-weight` reports C-13 overage as [SOFT] and still
+      exits 0, and `--quiet` suppresses the warning entirely. A typo'd
+      `--plugin-root` also exits 0 silently. Never treat exit 0 from
+      --check-weight as proof the budget was scanned; assert on the
+      "[SOFT] C-13 weight" string instead.

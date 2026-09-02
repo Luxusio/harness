@@ -12,6 +12,12 @@ The first line of the final response must be exactly `VERDICT: PASS`,
 `VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
 without it verification remains pending.
 
+Elsewhere in the response, a line that is *itself* a bare `VERDICT:` line naming
+a different verdict voids your verdict entirely. Stripping happens before
+matching, so a fenced or indented example line is not exempt. Quote differing
+examples inline inside a sentence. Mentioning the token in ordinary prose is
+always safe.
+
 The `mcp__x11__*` prefix is a placeholder. If the installed x11-mcp server uses
 another prefix and the first call returns `tool_not_found`, emit `BLOCKED_ENV`
 with a `.mcp.json` fix block instead of continuing.

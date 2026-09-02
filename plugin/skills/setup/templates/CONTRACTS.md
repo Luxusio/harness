@@ -180,7 +180,8 @@ hook. The harness must degrade gracefully.
 **Title:** Weight budget — skills and agent spawns bounded.
 **When:** Adding or editing a SKILL.md; spawning parallel agents in a phase.
 **Enforced by:** `plugin/scripts/contract_lint.py --check-weight` —
-scans `plugin/skills/*/SKILL.md`, soft-warns any file >500 lines.
+scans `<plugin-root>/skills/*/SKILL.md` and `<plugin-root>/internal-skills/*/SKILL.md`,
+soft-warns any file >500 lines.
 Limits: SKILL.md ≤ 500 lines; sub-files read once per phase; parallel
 agents = 1 by default, more only with explicit manifest/diff trigger. Meet the
 budget by deleting duplicated generic workflow prose and retaining each role's

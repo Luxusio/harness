@@ -43,7 +43,10 @@ invalidated_by_paths:
    indented example line is **not** exempt. Quote differing examples inline
    within a sentence. Reviewing this subsystem requires discussing these
    tokens; a rule that punishes that makes the lens unable to review its own
-   contract.
+   contract. Every authoritative line is stripped before matching, including
+   line 2 — surrounding whitespace on an otherwise valid counts line must never
+   discard a review. This rule is stated in each lens definition as well as
+   here, because the definition is the only text the lens actually reads.
 
 4. **The label changes nothing at the gate.** A non-parsing completion stays
    non-attesting: `runtime_verdict` remains `PENDING`, `task_close` still

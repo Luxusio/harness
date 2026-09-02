@@ -18,6 +18,43 @@ def test_heavy_review_and_develop_skills_stay_under_weight_budget():
     assert sum(counts.values()) <= int(9379 * 0.60), counts
 
 
+def test_weight_lint_sees_the_codex_internal_skills_layout(tmp_path):
+    """The Codex tree keeps skills under `internal-skills/`, not `skills/`.
+
+    Scanning only `skills/` left every Codex twin unguarded — including the one
+    that sits exactly at the cap, where a single added line would slip through.
+    """
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "_contract_lint_weight", ROOT / "plugin" / "scripts" / "contract_lint.py"
+    )
+    lint = importlib.util.module_from_spec(spec)
+    # Register before exec: the module defines dataclasses, whose type
+    # resolution reads back through sys.modules.
+    sys.modules["_contract_lint_weight"] = lint
+    spec.loader.exec_module(lint)
+
+    over_budget = "x\n" * (lint.SKILL_WEIGHT_LIMIT + 1)
+    for parent in ("skills", "internal-skills"):
+        skill = tmp_path / parent / "develop" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(over_budget, encoding="utf-8")
+
+    reported = {
+        str(path).split("/")[-3] for path, _n in lint.check_skill_weights(str(tmp_path))
+    }
+    assert reported == {"skills", "internal-skills"}, reported
+
+    within = tmp_path / "ok"
+    (within / "internal-skills" / "develop").mkdir(parents=True)
+    (within / "internal-skills" / "develop" / "SKILL.md").write_text(
+        "x\n" * lint.SKILL_WEIGHT_LIMIT, encoding="utf-8"
+    )
+    assert lint.check_skill_weights(str(within)) == []
+
+
 def test_compaction_does_not_add_prompt_reference_indirection():
     allowed = {
         "plugin/skills/plan-devex-review/dx-hall-of-fame.md",

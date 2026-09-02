@@ -249,22 +249,29 @@ SKILL_WEIGHT_LIMIT = 500  # C-13: SKILL.md hot path line budget
 
 
 def check_skill_weights(plugin_root: str) -> list[tuple[str, int]]:
-    """Return [(path, line_count), ...] for SKILL.md files over C-13 budget."""
-    skills_dir = os.path.join(plugin_root, "skills")
-    if not os.path.isdir(skills_dir):
-        return []
+    """Return [(path, line_count), ...] for SKILL.md files over C-13 budget.
+
+    Both layouts are scanned: the Claude tree keeps skills under `skills/` and
+    the Codex tree under `internal-skills/`. Scanning only the former left the
+    Codex twins — including the one file sitting exactly at the cap — with no
+    machine guard at all.
+    """
     over = []
-    for entry in sorted(os.listdir(skills_dir)):
-        skill_md = os.path.join(skills_dir, entry, "SKILL.md")
-        if not os.path.isfile(skill_md):
+    for parent in ("skills", "internal-skills"):
+        skills_dir = os.path.join(plugin_root, parent)
+        if not os.path.isdir(skills_dir):
             continue
-        try:
-            with open(skill_md, "r", encoding="utf-8") as f:
-                n = sum(1 for _ in f)
-        except OSError:
-            continue
-        if n > SKILL_WEIGHT_LIMIT:
-            over.append((skill_md, n))
+        for entry in sorted(os.listdir(skills_dir)):
+            skill_md = os.path.join(skills_dir, entry, "SKILL.md")
+            if not os.path.isfile(skill_md):
+                continue
+            try:
+                with open(skill_md, "r", encoding="utf-8") as f:
+                    n = sum(1 for _ in f)
+            except OSError:
+                continue
+            if n > SKILL_WEIGHT_LIMIT:
+                over.append((skill_md, n))
     return over
 
 

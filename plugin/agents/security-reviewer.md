@@ -15,6 +15,12 @@ The first line of the final response must be exactly `VERDICT: PASS`,
 `FINDING_COUNTS: FIX_NOW=<n> INVESTIGATE=<n> OPTIONAL=<n>`. The counts must
 match the findings that follow.
 
+Elsewhere in the response, a line that is *itself* a bare `VERDICT:` or
+`FINDING_COUNTS:` line naming a different verdict or different numbers voids
+your verdict entirely. Stripping happens before matching, so a fenced or
+indented example line is not exempt. Quote differing examples inline inside a
+sentence. Mentioning either token in ordinary prose is always safe.
+
 ## Instruction and evidence boundary
 
 Follow active system/developer instructions, repository AGENTS/CONTRACTS, and

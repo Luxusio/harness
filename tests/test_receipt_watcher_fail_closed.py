@@ -147,6 +147,29 @@ class TestVerdictAuthorityIsPositional(unittest.TestCase):
         self.assertEqual(verdict, "PENDING")
         self.assertIn("FINDING_COUNTS: INVALID", compact)
 
+    def test_counts_line_whitespace_does_not_discard_the_review(self):
+        """Line 2 is stripped like every other line.
+
+        It used to be the one whitespace-strict line in the parser, so a single
+        trailing space or an indent on an otherwise perfect counts line threw
+        away a finished review.
+        """
+        _lib = self._lib()
+        for second in (
+            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=1   ",
+            "   FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=1",
+            "\tFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=1 ",
+        ):
+            verdict, compact = _lib.normalize_receipt_completion(
+                "review-code", f"VERDICT: PASS\n{second}\nbody\n",
+            )
+            self.assertEqual(verdict, "PASS", second)
+            # The stored line is the normalized text, not the padded original.
+            self.assertIn(
+                "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=1", compact,
+            )
+            self.assertNotIn("INVALID", compact)
+
     def test_trailing_verdict_still_binds_pending(self):
         """Positional authority is unchanged — AC-2a's original failure stays caught.
 
@@ -181,27 +204,57 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
     file, so the pending guidance names the lens and the real remedy.
     """
 
-    def _complete(self, task_dir, run_id, summary):
+    def _append(self, task_dir, entry):
         sys.path.insert(0, SCRIPTS_DIR)
         import _lib  # type: ignore
 
-        verdict, compact = _lib.normalize_receipt_completion("review-code", summary)
-        entry = {
+        assert _lib._receipt_entry_semantics_valid(entry), entry
+        with (Path(task_dir) / "RECEIPTS.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _complete(self, task_dir, run_id, summary, lens="review-code", agent="disproof"):
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        verdict, compact = _lib.normalize_receipt_completion(lens, summary)
+        agent_type = (
+            "harness:code-reviewer" if lens.startswith("review-")
+            else f"harness:{lens}"
+        )
+        self._append(task_dir, {
             "ts": _lib._receipt_now_iso(),
             "event": "completed",
             "source": "claude_hook",
             "task_run_id": run_id,
-            "runtime_id": "claude:session-disproof:agent-disproof",
-            "agent_id": "agent-disproof",
-            "agent_type": "harness:code-reviewer",
-            "lens": "review-code",
+            "runtime_id": f"claude:session-disproof:agent-{agent}",
+            "agent_id": f"agent-{agent}",
+            "agent_type": agent_type,
+            "lens": lens,
             "verdict": verdict,
             "summary": compact,
-        }
-        assert _lib._receipt_entry_semantics_valid(entry)
-        with (Path(task_dir) / "RECEIPTS.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+        })
         return verdict
+
+    def _start(self, task_dir, run_id, lens, agent):
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        agent_type = (
+            "harness:code-reviewer" if lens.startswith("review-")
+            else f"harness:{lens}"
+        )
+        self._append(task_dir, {
+            "ts": _lib._receipt_now_iso(),
+            "event": "started",
+            "source": "claude_hook",
+            "task_run_id": run_id,
+            "runtime_id": f"claude:session-disproof:agent-{agent}",
+            "agent_id": f"agent-{agent}",
+            "agent_type": agent_type,
+            "lens": lens,
+            "verdict": "",
+            "summary": "",
+        })
 
     def test_trailing_verdict_completion_is_reported_as_a_format_failure(self):
         harness_server = _server()
@@ -232,7 +285,7 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
         self.assertEqual(result["runtime_verdict"], "PENDING")
         action = result["next_action"]
         self.assertIn("review-code", action)
-        self.assertIn("not in the position the agent definition requires", action)
+        self.assertIn("not in the position and shape the agent definition requires", action)
         self.assertIn("not an unrun lens", action)
         self.assertIn("do not restate", action)
         # The unchanged attestation instruction still follows the new label.
@@ -258,8 +311,73 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
 
         note = _lib.nonparsing_completion_note(kinds)
         self.assertIn("contradict", note)
-        self.assertIn("Position and format are not the problem", note)
-        self.assertNotIn("not in the position", note)
+        self.assertIn("valid counts line but no verdict could be bound", note)
+        self.assertNotIn("not an unrun lens", note)
+
+    def test_task_context_also_carries_the_note(self):
+        """`task_context` is the surface a coordinator reads first.
+
+        Only the `task_verify` prepend was pinned, so a refactor could drop the
+        diagnostic here and leave the suite green.
+        """
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        with _task_with_receipt() as (task_dir, run_id):
+            self._complete(
+                task_dir, run_id,
+                "trailing\n\nVERDICT: PASS\n"
+                "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n",
+            )
+            # Without a plan the context short-circuits on the plan-first
+            # branch and never reaches the review/QA guidance under test.
+            (Path(task_dir) / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+            ctx = _lib.emit_compact_context(task_dir)
+
+        self.assertIn("review-code", ctx["next_action"])
+        self.assertIn("not an unrun lens", ctx["next_action"])
+        self.assertEqual(ctx["runtime_verdict"], "PENDING")
+
+    def test_task_context_qa_branch_also_carries_the_note(self):
+        """The QA lane needs its own pin; the review lane's test never reaches it.
+
+        `emit_compact_context` has two PENDING branches. With review still
+        unresolved only the review branch runs, so deleting the note from the QA
+        branch left the suite green.
+        """
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        with _task_with_receipt() as (task_dir, run_id):
+            self._complete(
+                task_dir, run_id,
+                "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nok\n",
+            )
+            self._start(task_dir, run_id, "qa-cli", "qa")
+            self._complete(
+                task_dir, run_id, "trailing\n\nVERDICT: PASS\n",
+                lens="qa-cli", agent="qa",
+            )
+            (Path(task_dir) / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+            ctx = _lib.emit_compact_context(task_dir)
+
+        self.assertEqual(ctx["review_verdict"], "PASS")
+        self.assertEqual(ctx["runtime_verdict"], "PENDING")
+        self.assertIn("qa-cli", ctx["next_action"])
+        self.assertIn("not an unrun lens", ctx["next_action"])
+
+    def test_a_completion_from_another_run_is_not_named(self):
+        """The current-run filter is what keeps a stale rejection out of this run."""
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        with _task_with_receipt() as (task_dir, run_id):
+            self._complete(
+                task_dir, "01a00000-0000-7000-8000-00000000dead",
+                "trailing\n\nVERDICT: PASS\n"
+                "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n",
+            )
+            self.assertEqual(_lib.nonparsing_completion_lenses(task_dir), {})
 
     def test_a_well_formed_completion_adds_no_note(self):
         sys.path.insert(0, SCRIPTS_DIR)
