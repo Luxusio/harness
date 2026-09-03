@@ -11,15 +11,22 @@ Checks (in order of severity):
   5. No duplicate C-## ids. [hard]
 
 Modes:
-  --quick   Only checks 1, 3, 5 (fast — SessionStart hook).
+  --quick   Only checks 1, 3, 5 (fast — for a caller on a latency budget).
   (default) Runs all checks.
+
+Callers: `plugin/skills/setup/bootstrap.md` runs this at setup, and
+`tests/test_contract_lint_real_tree.py` runs it against this repository's own
+CONTRACTS.md and skill trees on every suite invocation. It is deliberately
+registered in no `hooks.json` event — an earlier docstring claimed a SessionStart
+hook that never existed, which is the same false-enforcement defect the lint is
+meant to catch.
 
 Exit code:
   0   OK or soft-warn only
   1   Hard drift (markers broken, fields missing, duplicate ids)
 
-Stdlib only. Never blocks a session when invoked via the hook (wrap in
-`|| true`) — the exit code is advisory.
+Stdlib only. The exit code is advisory; should this ever be wired to a hook,
+C-12 requires the command to end in `|| true`.
 """
 from __future__ import annotations
 
@@ -307,8 +314,8 @@ def main() -> int:
                 args.path = c
                 break
         else:
-            # Missing is not hard when running as SessionStart hook —
-            # project may not have installed CONTRACTS.md yet.
+            # Missing is not hard for a --quick caller — the project may not
+            # have installed CONTRACTS.md yet.
             if args.quick:
                 if not args.quiet:
                     print("contract_lint: no CONTRACTS.md (run setup to install)")

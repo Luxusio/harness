@@ -17,7 +17,15 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
         import _lib
         import promote_learnings
 
-        importlib.reload(_lib)
+        # `promote_learnings` alone. Reloading `_lib` re-executes it in the same
+        # module dict, which resets the `bindings` closure built by
+        # `_make_control_writer_authority()`. `harness_server` binds itself into
+        # that closure once at import and keeps resolving through the shared
+        # dict, so after a reload every `write_task_control` / `write_goal_state`
+        # in this process raises `PermissionError: TASK.json mutation requires
+        # the task-control MCP`. Under xdist that hit whichever tests shared the
+        # worker — reproducible as
+        # `pytest -n0 tests/test_promote_learnings_current_run.py tests/test_harness_mcp_server.py`.
         importlib.reload(promote_learnings)
         self.harness_lib = _lib
         self.module = promote_learnings

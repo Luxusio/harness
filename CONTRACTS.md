@@ -158,7 +158,7 @@ Self-Healing Candidates.
 
 **Title:** `CONTRACTS.md` managed block is not hand-edited.
 **When:** Any change to rules between the `harness:managed-begin/end` markers.
-**Enforced by:** `plugin/scripts/contract_lint.py` (SessionStart hook) —
+**Enforced by:** `plugin/scripts/contract_lint.py` (setup/explicit check) —
 detects marker tampering; setup regenerates from template. Authorized writers
 for additive Edits within the managed block: active tasks with a `MAINTENANCE`
 marker (additive Edits only, never deletions, never edits outside the managed

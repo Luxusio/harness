@@ -295,3 +295,31 @@ qa_notes:
       - "Clause-level sweep (split on comma/semicolon/period/em-dash) against the full suite: 29 clauses, exactly 1 survivor - the opening 'Task verification is still pending.' This reproduces the claim in test_every_normative_clause_in_both_next_actions_is_pinned's docstring."
       - "Word-level sweep is weaker than clause-level because the pins are assertIn substrings: 47 of 173 single-word deletions keep the pinning-test subset green (e.g. deleting 'If', 'Run', or a bare 'call'). None inverts meaning; 'not' in 'repository text do not' is RED, so the trust-boundary token is genuinely pinned."
       - "Full suite takes ~15s (1013 tests, 228 subtests, xdist); a 29-case clause sweep against it is ~8 min, a 173-case word sweep against the 6 pinning files (~2s each) is ~6 min."
+  pytest_suite_stability_under_xdist:
+    discovered: 2026-09-03
+    notes:
+      - "The suite runs under pytest-xdist (addopts -n auto --dist worksteal in pyproject.toml), so worker partitioning changes between runs and a single green run does not establish stability. Run the full suite >=10 times before accepting 'green'."
+      - "Observed intermittent signature: PermissionError 'TASK.json mutation requires the task-control MCP' raised from _trusted_control_writer() in plugin/scripts/_lib.py, failing tests in tests/test_harness_mcp_server.py::HarnessMcpServerPR2CloseGate and tests/test_receipt_watcher_fail_closed.py::TestReadinessIsTriState."
+      - "_make_control_writer_authority binds harness_server code objects and walks the caller stack; a test that loads its own copy of that module can leave the binding unable to recognise a legitimate caller sharing the same worker."
+      - "Interpreter is .venv/bin/python; system python3 has no pytest. Use -n0 to disable xdist -- '-p no:xdist' conflicts with the injected addopts and errors out."
+      - "RESOLVED 2026-09-03: the dominant cause was importlib.reload(_lib) in tests/test_promote_learnings_current_run.py, which emptied the control-writer bindings closure. Full analysis in doc/harness/REQ__test-suite-determinism-under-xdist.md. Do not re-open a HarnessMcpServerPR2CloseGate PermissionError from this note; the >=10-run guidance above remains durable."
+  preexisting_single_worker_order_dependency:
+    discovered: 2026-09-03
+    notes:
+      - "RESOLVED 2026-09-03. Was: pytest -n0 tests/test_harness_mcp_server.py tests/test_receipt_watcher_fail_closed.py failing on TestNonParsingCompletionIsNamed::test_trailing_verdict_completion_is_reported_as_a_format_failure. Cause was the unguarded harness_server re-exec in test_harness_mcp_server.py; the reuse guard fixed it. Do not re-open from this note."
+  appending_to_this_file:
+    discovered: 2026-09-03
+    notes:
+      - "This document is a mapping. Append under an existing top-level key as '<slug>: {discovered, notes}' -- never as a top-level '- topic:' sequence item. Doing so makes the whole file unparseable and destroys every accumulated section at once. This has now happened twice (2026-09-02, 2026-09-03); tests/test_qa_knowledge_shape.py catches it."
+  contract_lint_mutation_probes:
+    discovered: 2026-09-03
+    notes:
+      - "contract_lint guards are mutation-verifiable in seconds. Duplicate id: insert a second '### C-01' block -> [HARD] duplicate contract id, CLI exit 1. Marker tamper: sed harness:managed-begin -> [HARD] markers missing/duplicated/inverted, exit 1. Broken Enforced-by path: rewrite a backticked path to a nonexistent file -> [SOFT], CLI exit stays 0 (soft is advisory) but tests/test_contract_lint_real_tree.py asserts report.soft == [] so the suite still reddens. Weight: append 2 lines to plugin-codex/internal-skills/develop/SKILL.md (exactly 500) -> [SOFT] C-13 weight, but only with --plugin-root plugin-codex; the CLI default ./plugin never reaches the codex twin."
+      - "Trimming plugin-codex/internal-skills/develop/SKILL.md to 450 lines keeps test_contract_lint_real_tree.py fully green (5 passed) -- the cap-boundary test derives its threshold from the file length, not from SKILL_WEIGHT_LIMIT."
+  suite_isolation_ab_recipes:
+    discovered: 2026-09-03
+    notes:
+      - "Deterministic, no xdist: '.venv/bin/python -m pytest -q -n0 tests/test_promote_learnings_current_run.py tests/test_harness_mcp_server.py'. With importlib.reload(_lib) present in setUp -> 53 failed, 57 passed; without -> 104 passed."
+      - "The harness_server reuse guard in tests/test_harness_mcp_server.py is only load-bearing when another file imports harness_server FIRST. Repro: '-n0 tests/test_session_hint_marker_binding.py tests/test_harness_mcp_server.py' -> collection error when the guard is reverted, 101 passed with it. The pair ordering recorded elsewhere (test_harness_mcp_server + test_receipt_watcher_fail_closed) does NOT reproduce it in either direction."
+      - "The tests/conftest.py autouse _SERVER restore fixture measured 3/10 red on tests/test_harness_mcp_server.py when reverted and 0/10 with it, on a 24-core aarch64 Linux 6.12.69-linuxkit host."
+      - "pyproject addopts inject '-n auto --dist worksteal'; '-p no:xdist' errors. Use '-n0' for serial. Full suite: ~15s parallel, ~60-200s serial."

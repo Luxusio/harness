@@ -18,11 +18,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVER_PATH = REPO_ROOT / "plugin" / "mcp" / "harness_server.py"
 
 
-spec = importlib.util.spec_from_file_location("harness_server", SERVER_PATH)
-assert spec and spec.loader
-harness_server = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = harness_server
-spec.loader.exec_module(harness_server)
+# Reuse an existing instance. `_lib`'s control-writer authority binds the
+# `harness_server` code objects it first observes, so a second module object for
+# the same file is not recognised as a legitimate caller and every TASK.json
+# mutation raises `PermissionError: TASK.json mutation requires the task-control
+# MCP`. `tests/test_session_hint_marker_binding.py` already guarded this and its
+# comment claims to match this file; it did not. Under xdist `--dist worksteal`
+# the two files land in one worker only sometimes, which made the resulting
+# failure look like a 25%-per-run flake in `HarnessMcpServerPR2CloseGate`.
+if "harness_server" in sys.modules:
+    harness_server = sys.modules["harness_server"]
+else:
+    spec = importlib.util.spec_from_file_location("harness_server", SERVER_PATH)
+    assert spec and spec.loader
+    harness_server = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness_server
+    spec.loader.exec_module(harness_server)
 import _lib as harness_lib  # type: ignore
 
 

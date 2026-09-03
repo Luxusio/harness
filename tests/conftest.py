@@ -18,9 +18,41 @@ import subprocess
 import sys
 import uuid
 
+import pytest
+
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
+
+
+@pytest.fixture(autouse=True)
+def restore_harness_server_global():
+    """Undo `McpServer.__init__`'s assignment to the module global `_SERVER`.
+
+    Production runs one server per process, so owning that global is correct
+    there. `tests/test_harness_mcp_server.py` constructs a dozen servers and
+    nothing restored the previous value, so a server built by one test stayed
+    installed for every later test sharing its xdist worker. `_watcher_status`
+    reads `_SERVER.runtime` and `_SERVER.watcher_manager`; a leaked
+    codex-runtime server with no manager yields `manager_running is False`,
+    hence `receipts_recordable is False`, and `_gate_next_action` then replaces
+    `next_action` wholesale. Whether the leak reached a given test depended on
+    which siblings shared its worker, so it presented as a ~20% flake rather
+    than a deterministic failure.
+
+    Lives here rather than in the test module because `test_*.py` files may not
+    import pytest at the top level (`test_no_toplevel_third_party_imports`).
+    A no-op for every test that never loads the MCP server: when the module is
+    absent at setup the pre-test state is "no server", which is what teardown
+    restores if a test loaded it.
+    """
+    saved = getattr(sys.modules.get("harness_server"), "_SERVER", None)
+    try:
+        yield
+    finally:
+        module = sys.modules.get("harness_server")
+        if module is not None:
+            module._SERVER = saved
 
 
 @contextlib.contextmanager
