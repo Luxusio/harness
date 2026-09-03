@@ -208,6 +208,55 @@ class TestLogGateBypass(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
+    """`emit_compact_context` must state the C-14 boundary wherever a lens is
+    still pending.
+
+    Callers read `task_verify`'s `next_action` directly, so the boundary has to
+    be in that string on its own account. Asserting it only through the stop
+    gate hides a real loss: the gate appends its own copy when the next_action
+    lacks one, so dropping the boundary here leaves the gate's message intact
+    while the MCP response silently loses it. That compensation is why the
+    2026-09-03 defect — a QA-pending branch that stated the boundary partially —
+    survived a suite that already exercised the gate.
+    """
+
+    def _context(self, *, review_done: bool):
+        """Build a real task dir; receipts come from the proven test helper.
+
+        Hand-rolled receipt rows do not satisfy `_receipt_entry_semantics_valid`,
+        and a fixture that silently fails validation would test the error path
+        instead of the branch.
+        """
+        from test_stop_gate import _write_completed_lenses  # local: shared fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "doc", "harness", "tasks"))
+            task_id = "TASK__pending"
+            task_dir = os.path.join(tmp, "doc", "harness", "tasks", task_id)
+            if review_done:
+                _write_completed_lenses(tmp, task_id, [("review-code", "PASS")])
+            else:
+                os.makedirs(task_dir)
+                with open(os.path.join(task_dir, "TASK.json"), "w", encoding="utf-8") as handle:
+                    json.dump({
+                        "run_id": _lib.new_uuid7(),
+                        "execution_mode": "standard",
+                        "required_lenses": ["review-code", "qa-cli"],
+                        "close_receipt_fingerprint": None,
+                    }, handle)
+                with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as handle:
+                    handle.write("# Plan\n")
+            return _lib.emit_compact_context(task_dir) or {}
+
+    def test_review_pending_next_action_states_the_boundary(self):
+        action = self._context(review_done=False).get("next_action", "")
+        self.assertIn(_lib.TRUST_BOUNDARY, action, action)
+
+    def test_qa_pending_next_action_states_the_boundary(self):
+        action = self._context(review_done=True).get("next_action", "")
+        self.assertIn(_lib.TRUST_BOUNDARY, action, action)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -539,3 +539,19 @@ def test_trust_boundary_survives_the_qa_pending_branch(tmp_path):
     assert "structurally delivered" in reason, reason
     assert "coordinator paraphrases" in reason.lower(), reason
     assert reason.count("BLOCKED_ENV takes precedence") == 1, reason
+
+
+def test_emitted_trust_boundary_equals_the_canonical_constant(tmp_path):
+    """The gate spells the boundary out; `_lib` owns the canonical text.
+
+    Both are required. `tests/test_review_agent_contracts.py` pins the boundary
+    by scanning the raw source of every surface that can influence a
+    stop-or-close decision, so a bare reference to the constant would be
+    invisible to it — hence the literal. What that scan cannot catch is the two
+    copies drifting apart, which is the failure that actually matters: on
+    2026-09-03 a dedup guard compared a partial phrase against a branch that
+    used it while omitting two elements, and the gate suppressed the only
+    complete statement. This asserts the emitted text is the constant.
+    """
+    reason = _reason(_task_with(tmp_path / "eq", "TASK__boundary-equality", plan=False))
+    assert _lib.TRUST_BOUNDARY in reason, reason

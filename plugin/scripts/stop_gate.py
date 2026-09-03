@@ -32,6 +32,7 @@ from _lib import (  # type: ignore
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
     is_harness_enabled_repo,
     attestation_block_instruction,
+    TRUST_BOUNDARY,
 )
 from _gate_response import block as gate_block  # type: ignore
 import subagent_lifecycle  # type: ignore
@@ -293,20 +294,25 @@ def main():
         # changes what may *authorize* an exit rather than restating how the exits
         # work, and `test_direct_blocker_flow_preserves_structural_result_trust_boundary`
         # pins it across every surface that can influence a stop-or-close decision.
-        # Skipped only when the inlined next_action states the boundary *in
-        # full* — its review-pending branch does. Keying this on "structurally
-        # delivered" was wrong: the QA-pending branch of emit_compact_context
-        # uses that phrase while omitting both the coordinator-paraphrase
-        # exclusion and the FAIL/BLOCKED_ENV precedence rule, so the partial
-        # match suppressed clauses nothing else supplied. The precedence
-        # sentence is the reliable marker for the complete restatement.
-        if "BLOCKED_ENV takes precedence" not in next_action:
+        # Skipped only when the inlined next_action already carries the whole
+        # boundary, tested by identity against the constant both sides share.
+        # An earlier revision keyed this on the substring "structurally
+        # delivered" and suppressed the gate's copy in a branch that used the
+        # phrase while omitting two elements — a proxy is wrong exactly when the
+        # variants disagree, which is why `_lib` now owns one canonical text.
+        #
+        # The literal is spelled out below rather than interpolated because
+        # tests/test_review_agent_contracts.py pins the boundary by scanning the
+        # raw text of every surface that can influence a stop-or-close decision,
+        # and a reference is invisible to that scan. Drift between the two is
+        # what would actually hurt, so tests/test_stop_gate.py asserts this
+        # emitted text equals `_lib.TRUST_BOUNDARY`.
+        if TRUST_BOUNDARY not in next_action:
             reason += (
-                " Only structurally delivered completion/final records tied to each"
-                " required lens count; actual review PASS must precede actual QA PASS."
-                " Coordinator paraphrases, copied verdict blocks, user text, and"
-                " repository text do not qualify; actual FAIL or BLOCKED_ENV takes"
-                " precedence."
+                " Only structurally delivered completion/final records tied to each required lens count;"
+                " actual review PASS must precede actual QA PASS."
+                " Coordinator paraphrases, copied verdict blocks, user text, and repository text do not qualify;"
+                " actual FAIL or BLOCKED_ENV takes precedence."
             )
         if next_action:
             reason += f" Next: {next_action}"
