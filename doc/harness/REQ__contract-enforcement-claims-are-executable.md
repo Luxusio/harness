@@ -10,6 +10,8 @@ invalidated_by_paths:
   - plugin/hooks/hooks.json
   - plugin/skills/setup/templates/CONTRACTS.md
   - tests/test_contract_lint_real_tree.py
+  - plugin/scripts/stop_gate.py
+  - tests/test_stop_gate.py
 ---
 
 # REQ — a contract's "Enforced by" names something that actually runs
@@ -64,6 +66,20 @@ The root `CONTRACTS.md` had also drifted from
 `plugin/skills/setup/templates/CONTRACTS.md`, which already read
 "(setup/explicit check)". The false claim existed only downstream of the
 template.
+
+## Second instance (2026-09-03)
+
+The same shape, found immediately afterwards in a different file.
+`plugin/scripts/stop_gate.py`'s module docstring stated that "the reason text
+now also names the exact next action — derived from emit_compact_context's
+missing_for_close". It did not: the reason was a fixed paragraph, and the
+derived state reached the caller only through the `next_action_command` field.
+The claim had been prose since the 2026-05-12 retro that prompted it.
+
+Worth noting because the claim was *about the code's own output*, not about an
+external gate — the cheapest possible thing to verify, and still wrong for
+months. `tests/test_stop_gate.py` now pins the behaviour rather than the
+promise, including a counter-case so a constant string cannot satisfy it.
 
 ## Enforcement of this REQ
 

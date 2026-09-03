@@ -411,3 +411,131 @@ def test_qa_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
     assert "task_blocked" in payload["reason"]
     assert "Call task_blocked directly" in payload["next_action_command"]
     assert "actionable unblock condition" in payload["next_action_command"]
+
+
+# ── State-aware reason (TASK__state-aware-stop-gate-message) ─────────────
+
+
+def _task_with(tmp_path, task_id: str, *, plan: bool):
+    """Fake repo whose .active points at a task dir, optionally with a PLAN."""
+    tmp_path = Path(tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    repo = Path(_fake_repo(tmp_path, active_contents=task_id + "\n"))
+    task_dir = repo / "doc" / "harness" / "tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "TASK.json").write_text(json.dumps({
+        "run_id": _lib.new_uuid7(),
+        "execution_mode": "standard",
+        "required_lenses": ["review-code", "qa-cli"],
+        "close_receipt_fingerprint": None,
+    }, indent=2) + "\n", encoding="utf-8")
+    if plan:
+        (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+    return repo
+
+
+def _bare_repo(tmp_path, task_id: str) -> Path:
+    """Active marker pointing at a task dir that does not exist."""
+    tmp_path = Path(tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    return Path(_fake_repo(tmp_path, active_contents=task_id + "\n"))
+
+
+def _reason(repo) -> str:
+    result = _run(
+        str(repo),
+        stdin=json.dumps({"session_id": "sess-state", "hook_event_name": "Stop"}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    )
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block", payload
+    return payload["reason"]
+
+
+def test_reason_names_the_actual_missing_items(tmp_path):
+    """The module docstring has promised this since the 2026-05-12 retro.
+
+    Until 2026-09-03 the reason was a fixed paragraph and the derived state
+    reached the caller only through `next_action_command`, so the promise was
+    prose. Pin the behaviour, not the promise.
+    """
+    reason = _reason(_task_with(tmp_path, "TASK__needs-plan", plan=False))
+    assert "missing:" in reason, reason
+    assert "PLAN.md" in reason, reason
+
+
+def test_reason_reflects_a_different_gap_differently(tmp_path):
+    """Guards the guard: a constant string would satisfy the test above."""
+    without_plan = _reason(_task_with(tmp_path / "a", "TASK__needs-plan", plan=False))
+    with_plan = _reason(_task_with(tmp_path / "b", "TASK__needs-lenses", plan=True))
+
+    assert "PLAN.md" in without_plan, without_plan
+    assert "PLAN.md" not in with_plan, with_plan
+    assert "review-code" in with_plan, with_plan
+
+
+def test_attestation_pair_is_absent_when_that_branch_does_not_apply(tmp_path):
+    """C-17 scopes verbatim delivery of the fixed pair to the missing-attestation
+    branch. It used to be pinned onto every block, including ones where no lens
+    had run yet and no attestation could be missing.
+    """
+    pair = "Required hook-owned review/QA attestation remains missing"
+    assert pair not in _reason(_task_with(tmp_path / "np", "TASK__needs-plan", plan=False))
+    # No task dir at all: no derived state, so nothing attestation-related.
+    assert pair not in _reason(_bare_repo(tmp_path / "bare", "TASK__bare"))
+
+    # ...and positively delivered where it does apply. Without this half, the
+    # reason could stop carrying the pair entirely and the suite would stay
+    # green — which is how the docstring claim this task repaired survived from
+    # 2026-05-12 to 2026-09-03.
+    pending = _reason(_task_with(tmp_path / "lp", "TASK__needs-lenses", plan=True))
+    assert pair in pending, pending
+
+
+def test_reason_stays_far_below_the_old_fixed_paragraph(tmp_path):
+    """The cost this change exists to remove.
+
+    The previous reason was ~250 words on every turn-end, and the payload
+    reaches the model twice (hook feedback and blocking error). Bound the
+    no-derived-state case, which carries no next_action to justify length.
+    """
+    reason = _reason(_bare_repo(tmp_path, "TASK__bare"))
+    assert len(reason.split()) < 100, (len(reason.split()), reason)
+
+
+def test_trust_boundary_is_stated_once_per_block(tmp_path):
+    """It must be present — and only once.
+
+    In the lenses-pending state `emit_compact_context`'s next_action already
+    carries the clause, so emitting the gate's own copy as well duplicated ~40
+    words in the state that fires most often, on a payload the client surfaces
+    twice.
+    """
+    for name, plan in (("TASK__needs-plan", False), ("TASK__needs-lenses", True)):
+        reason = _reason(_task_with(tmp_path / name, name, plan=plan))
+        # Count the precedence sentence: it marks a *complete* restatement of
+        # the boundary, which is what the dedup guard keys on. "structurally
+        # delivered" also appears inside unrelated next_action prose.
+        assert reason.count("BLOCKED_ENV takes precedence") == 1, (name, reason)
+
+
+def test_trust_boundary_survives_the_qa_pending_branch(tmp_path):
+    """The QA-pending next_action states the boundary only partially.
+
+    `emit_compact_context`'s QA-pending branch says "structurally delivered"
+    but omits both the coordinator-paraphrase exclusion and the
+    FAIL/BLOCKED_ENV precedence rule. A dedup guard keyed on the shared phrase
+    therefore suppressed the gate's own copy and dropped two clauses that every
+    block used to carry — invisibly, because no test built this state.
+    """
+    task_id = "TASK__qa-pending"
+    repo = _fake_repo(tmp_path, active_contents=task_id + "\n")
+    _write_completed_lenses(repo, task_id, [("review-code", "PASS")])
+
+    reason = json.loads(
+        _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0"}).stdout
+    )["reason"]
+
+    assert "structurally delivered" in reason, reason
+    assert "coordinator paraphrases" in reason.lower(), reason
+    assert reason.count("BLOCKED_ENV takes precedence") == 1, reason
