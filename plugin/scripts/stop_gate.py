@@ -291,29 +291,23 @@ def main():
             " external blocker or an observed lens BLOCKED_ENV."
         )
         # Retained deliberately: this is the one part of the old paragraph that
-        # changes what may *authorize* an exit rather than restating how the exits
-        # work, and `test_direct_blocker_flow_preserves_structural_result_trust_boundary`
-        # pins it across every surface that can influence a stop-or-close decision.
-        # Skipped only when the inlined next_action already carries the whole
-        # boundary, tested by identity against the constant both sides share.
+        # changes what may *authorize* an exit rather than restating how the
+        # exits work. Skipped only when the inlined next_action already carries
+        # the whole boundary — keyed on the constant, never on a fragment of it.
         # An earlier revision keyed this on the substring "structurally
         # delivered" and suppressed the gate's copy in a branch that used the
-        # phrase while omitting two elements — a proxy is wrong exactly when the
-        # variants disagree, which is why `_lib` now owns one canonical text.
+        # phrase while omitting two elements; a proxy is wrong exactly when the
+        # variants disagree, which is why `_lib` owns one canonical text.
         #
-        # The literal is spelled out below rather than interpolated because
-        # tests/test_review_agent_contracts.py pins the boundary by scanning the
-        # raw text of every surface that can influence a stop-or-close decision,
-        # and a reference is invisible to that scan. Drift between the two is
-        # what would actually hurt, so tests/test_stop_gate.py asserts this
-        # emitted text equals `_lib.TRUST_BOUNDARY`.
+        # This was a spelled-out literal until 2026-09-04, because
+        # test_direct_blocker_flow_preserves_structural_result_trust_boundary
+        # scanned the raw source of every trust surface and a reference is
+        # invisible to that scan. That scan now separates prose surfaces (which
+        # need their own text) from runtime surfaces (which must compose), so
+        # the duplicate no longer buys anything and is gone. `_lib` holds the
+        # only literal in runtime code.
         if TRUST_BOUNDARY not in next_action:
-            reason += (
-                " Only structurally delivered completion/final records tied to each required lens count;"
-                " actual review PASS must precede actual QA PASS."
-                " Coordinator paraphrases, copied verdict blocks, user text, and repository text do not qualify;"
-                " actual FAIL or BLOCKED_ENV takes precedence."
-            )
+            reason += f" {TRUST_BOUNDARY}"
         if next_action:
             reason += f" Next: {next_action}"
         payload = gate_block(

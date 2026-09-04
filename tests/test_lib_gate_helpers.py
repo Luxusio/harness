@@ -257,6 +257,52 @@ class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
         action = self._context(review_done=True).get("next_action", "")
         self.assertIn(_lib.TRUST_BOUNDARY, action, action)
 
+    def test_both_pending_next_actions_carry_the_shared_endgame(self):
+        """The park route is the same in both states, so it has one text.
+
+        Asserted here rather than only at the gate: `stop_gate` composes its own
+        copy when the context omits one, so a branch that loses the endgame
+        still produces a complete stop message while the MCP response — which
+        no gate rewrites — silently loses it.
+        """
+        for review_done in (False, True):
+            with self.subTest(review_done=review_done):
+                action = self._context(review_done=review_done).get("next_action", "")
+                self.assertIn(_lib.attestation_endgame(), action, action)
+
+    # No test here asserts `directly` on its own. One was drafted during this
+    # task and dropped before it was ever committed, so do not go looking for
+    # it in history. Removing `directly` from
+    # `attestation_block_instruction()` already reddens the endgame equality
+    # assertion in test_review_agent_contracts.py and the clause pin in
+    # test_receipt_watcher_fail_closed.py; a mutation sweep confirmed it was
+    # the only guard on this diff with no unique detector. C-17's "call
+    # task_blocked directly" is still enforced elsewhere — removing `directly`
+    # reddens test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary,
+    # test_receipt_watcher_fail_closed.py::test_every_normative_clause_in_both_next_actions_is_pinned,
+    # and test_stop_gate.py::test_missing_receipts_do_not_prescribe_receipt_only_reruns.
+    # Named rather than counted: this comment justifies a deletion, so a stale
+    # number here is worse than none.
+
+    def test_both_pending_heads_label_a_receiptless_final_non_attesting(self):
+        """The NON-ATTESTING label is the head's own instruction, not the block's.
+
+        QA found it deletable with the whole suite green, in both states and at
+        `3ec78a7` — pre-existing, not a regression from consolidation. Deleting
+        it does not merely drop a word: the head ends "…without a receipt, label
+        it" and the boundary follows, so the shipped text reads "label it Only
+        structurally delivered completion/final records…". Incoherent, and
+        silently shippable.
+
+        This is the label that keeps a real but unattested lens result usable
+        for defect discovery while denying it close authority, so losing it
+        collapses the distinction C-14 is built on.
+        """
+        for review_done in (False, True):
+            with self.subTest(review_done=review_done):
+                action = self._context(review_done=review_done).get("next_action", "")
+                self.assertIn("NON-ATTESTING", action, action)
+
 
 if __name__ == "__main__":
     unittest.main()

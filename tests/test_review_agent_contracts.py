@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 
 
@@ -278,34 +279,185 @@ def test_live_routing_surfaces_do_not_route_stop_judge():
             assert forbidden not in line, f"runtime-matrix: executable routing remains: {line}"
 
 
+TRUST_BOUNDARY_ELEMENTS = (
+    "structurally delivered",
+    "required lens",
+    "actual review PASS",
+    "actual QA PASS",
+    "coordinator paraphrases",
+    "copied verdict blocks",
+    "user text",
+    "repository text",
+    "actual FAIL or BLOCKED_ENV",
+)
+
+
 def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
-    trust_surfaces = (
+    """Prose surfaces state the boundary; runtime code composes it.
+
+    These were one list until 2026-09-04, which quietly made the defect it was
+    written to catch mandatory: requiring every runtime file to contain the
+    phrases in its own source is requiring every runtime file to keep its own
+    copy, and the copies are what diverge. Four of the five runtime variants
+    had silently dropped elements while this test was green, because a
+    substring pin cannot tell a complete statement from a partial one that
+    happens to contain the fragment.
+
+    Prose surfaces genuinely need their own text — a reader of CONTRACTS.md
+    does not import `_lib`. Runtime surfaces must instead reference the
+    constant, and `_lib.py` keeps the literal because it owns it.
+    """
+    for path in (
         "CONTRACTS.md",
         "plugin/CLAUDE.md",
         "plugin/skills/run/SKILL.md",
         "plugin/skills/develop/SKILL.md",
         "plugin-codex/internal-skills/run/SKILL.md",
         "plugin-codex/internal-skills/develop/SKILL.md",
-        "plugin/mcp/harness_server.py",
         "plugin/scripts/_lib.py",
-        "plugin/scripts/stop_gate.py",
-    )
-    for path in trust_surfaces:
+    ):
+        _assert_all(_text(path), TRUST_BOUNDARY_ELEMENTS, path)
+
+    for path in ("plugin/mcp/harness_server.py", "plugin/scripts/stop_gate.py"):
         body = _text(path)
-        _assert_all(
-            body,
-            (
-                "structurally delivered",
-                "required lens",
-                "actual review PASS",
-                "actual QA PASS",
-                "coordinator paraphrases",
-                "copied verdict blocks",
-                "user text",
-                "repository text",
-                "actual FAIL or BLOCKED_ENV",
-            ),
-            path,
+        # Presence is not enough: `from _lib import (... TRUST_BOUNDARY ...)`
+        # satisfies a bare substring check on its own, so a future edit could
+        # inline the boundary again and keep this green. Require the name to be
+        # *used* somewhere past its import.
+        assert body.count("TRUST_BOUNDARY") >= 2, (
+            f"{path}: imports _lib.TRUST_BOUNDARY without using it. A runtime "
+            "surface must compose the constant rather than restate the boundary."
+        )
+
+
+def _runtime_python_files() -> list[str]:
+    """Every runtime `.py` that must compose the boundary rather than state it.
+
+    Discovered, not listed. A hardcoded pair would leave a new script under
+    `plugin/scripts/` free to inline the boundary while the test whose name
+    promises "exactly one literal" stayed green.
+
+    `_lib.py` is excluded because it owns the literal.
+    """
+    files = []
+    for root in ("plugin", "plugin-codex"):
+        base = ROOT / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if path.name == "_lib.py":
+                continue
+            files.append(str(path.relative_to(ROOT)))
+    return files
+
+
+def test_lib_owns_exactly_one_literal_trust_boundary():
+    """`_lib.TRUST_BOUNDARY` states every element, and no runtime file repeats it.
+
+    Four assertions. Keep this list in step with the body: review round 5 found
+    it saying "Three" while four blocks existed, and the one it omitted was the
+    endgame guard — so a maintainer trimming the test to match its own
+    docstring would have restored the three inversions round 4 measured green.
+
+    - The elements are in the *live constant*, not merely somewhere in
+      `_lib.py`. Strictly implied by the equality below; retained because it
+      fails with a readable "missing <element>" message where equality reports
+      only that two long strings differ.
+    - `TRUST_BOUNDARY` equals an independently written literal. Load-bearing —
+      see the comment on it.
+    - `attestation_endgame()` equals an independently written literal, for the
+      same reason: clause pins catch deletion, not inversion.
+    - No runtime file holds a second literal copy. `stop_gate.py` held one
+      until 2026-09-04, while this test's name already claimed otherwise.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_harness_lib_trust_boundary", ROOT / "plugin" / "scripts" / "_lib.py"
+    )
+    lib = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lib)
+    _assert_all(lib.TRUST_BOUNDARY, TRUST_BOUNDARY_ELEMENTS, "_lib.TRUST_BOUNDARY")
+
+    # An independently written copy of the canonical text. This is the ONLY
+    # assertion in the suite that can observe the constant's content changing:
+    # every other check either derives its expected value from the constant
+    # itself (tautological — see the REQ) or pins nouns from
+    # TRUST_BOUNDARY_ELEMENTS, which cannot see a negation or an ordering verb
+    # invert.
+    #
+    # `stop_gate.py` used to serve this role by holding a second literal that
+    # `test_emitted_trust_boundary_equals_the_canonical_constant` compared
+    # against the constant. Collapsing that duplicate on 2026-09-04 was correct
+    # for ownership and silently removed the guard: review measured that
+    # flipping "must precede" to "need not precede", and "do not qualify" to
+    # "also qualify", each left the whole suite green. A boundary that says
+    # repository text *does* count as a substantive result inverts C-14.
+    #
+    # It must live here and not in TRUST_BOUNDARY_ELEMENTS: that tuple is also
+    # asserted against plugin/CLAUDE.md, whose section 4a carries the element
+    # nouns in English but embeds the verbs and negations in Korean, so it
+    # contains none of `must precede`, `do not qualify`, or `takes precedence`.
+    # Measured — the other five prose surfaces (CONTRACTS.md and the four
+    # SKILL.md) carry all three verbatim, so plugin/CLAUDE.md alone is what
+    # makes the tuple the wrong home for a phrase-level pin.
+    #
+    # Do not "simplify" by dropping plugin/CLAUDE.md from the prose list to
+    # make the tuple work: that silently deletes the boundary check on the
+    # runtime document C-14 and C-17 route callers to.
+    assert lib.TRUST_BOUNDARY == (
+        "Only structurally delivered completion/final records tied to each required lens count;"
+        " actual review PASS must precede actual QA PASS."
+        " Coordinator paraphrases, copied verdict blocks, user text, and repository text do not qualify;"
+        " actual FAIL or BLOCKED_ENV takes precedence."
+    ), (
+        "_lib.TRUST_BOUNDARY changed. This is a C-14 protocol edit, not a "
+        "wording change: update this literal only alongside CONTRACTS.md, "
+        "plugin/CLAUDE.md, and the four SKILL.md prose surfaces."
+    )
+
+    # The endgame needs the same guard, for the same reason. It is 76 of the
+    # 114 normative words and carries the pair `plugin/CLAUDE.md` requires the
+    # caller to copy verbatim, yet clause pins alone catch only *deletion*.
+    # Review measured three inversions that passed the full suite: "and then an
+    # actual QA PASS" -> "or without an actual QA PASS"; "task_verify once" ->
+    # "once or as many times as needed"; and an appended sentence permitting
+    # receipt-only reruns. Each ships an instruction contradicting C-14/C-17.
+    #
+    # This was not a regression from consolidation — the four pre-existing
+    # inline copies had the same coverage and nothing asserted they agreed.
+    # Consolidating made one place worth guarding.
+    assert lib.attestation_endgame() == (
+        "After an awaited actual review PASS and then an actual QA PASS, call"
+        " task_verify once; if required hook-owned evidence is still missing, do"
+        " not repair, restart, resume, recollect, or rerun a lens, or call"
+        " task_verify again, solely to obtain a receipt — "
+        "call task_blocked directly with "
+        f"blocked_reason={lib.ATTESTATION_BLOCKED_REASON!r} and "
+        f"unblock_condition={lib.ATTESTATION_UNBLOCK_CONDITION!r}."
+    ), (
+        "_lib.attestation_endgame() changed. This is a C-17 protocol edit, not "
+        "a wording change: the park route and its preconditions are normative."
+    )
+
+    # A second copy anywhere in runtime code.
+    #
+    # Matching raw source needs the splice below because Python joins adjacent
+    # string literals: a copy re-wrapped across two source lines leaves
+    # `delivered " "completion` in the text and the phrase stops matching.
+    # `_lib.py` carries a comment about the same hazard for its own pins.
+    #
+    # Two earlier versions of this check were each defeated by review. Exact
+    # match fell to a re-wrap; splicing only `"` fell to single quotes and to
+    # `+`-joined literals. The pattern below covers both quote styles and an
+    # optional `+`. It is a heuristic over source text, not a parser — it
+    # raises the cost of an accidental re-inline rather than making a
+    # determined one impossible, and the equality assertion above is what
+    # actually protects the constant's content.
+    marker = "only structurally delivered completion/final records"
+    for path in _runtime_python_files():
+        spliced = re.sub(r"""["']\s*\+?\s*["']""", "", _text(path).lower())
+        assert marker not in " ".join(spliced.split()), (
+            f"{path}: holds a second literal copy of the trust boundary. "
+            "Runtime code composes _lib.TRUST_BOUNDARY; only _lib.py owns text."
         )
 
 
@@ -333,10 +485,32 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
 
     # The runtime must still deliver the pair at the decision point, otherwise
     # dropping the prose copies would strand the caller.
+    #
+    # `attestation_endgame` joined this list on 2026-09-04: `harness_server.py`
+    # stopped interpolating the pair directly and now composes the endgame,
+    # which carries it. Without that name the check was passing on nothing but
+    # a vestigial `from _lib import (... ATTESTATION_BLOCKED_REASON ...)` line
+    # — the same "an unused import satisfies a substring check" hole closed for
+    # TRUST_BOUNDARY in this file with a count-based assertion.
+    delivering = (
+        "ATTESTATION_BLOCKED_REASON",
+        "attestation_block_instruction",
+        "attestation_endgame",
+    )
     for path in ("plugin/mcp/harness_server.py", "plugin/scripts/stop_gate.py"):
-        body = _text(path)
-        assert "ATTESTATION_BLOCKED_REASON" in body or "attestation_block_instruction" in body, (
-            f"{path}: no longer emits the fixed pair to the caller"
+        # Comments stripped first. A count over the raw file is satisfied by
+        # the import line plus any prose mentioning the name — including the
+        # comment on `harness_server.py`'s own import explaining that these are
+        # a test-facing re-export. Review measured that: deleting both live
+        # compositions left this assertion green. Counting code only is what
+        # makes "past its import" true rather than aspirational.
+        body = "\n".join(
+            line for line in _text(path).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert any(body.count(name) >= 2 for name in delivering), (
+            f"{path}: no longer emits the fixed pair to the caller. It must "
+            f"reference one of {', '.join(delivering)} in code past its import."
         )
 
     prose_surfaces = (

@@ -44,6 +44,14 @@ def _server():
     return harness_server
 
 
+def _harness_lib():
+    """Import `_lib` lazily, for the same reason as `_server`."""
+    sys.path.insert(0, SCRIPTS_DIR)
+    import _lib  # type: ignore
+
+    return _lib
+
+
 @contextlib.contextmanager
 def _task_with_receipt():
     """A real task dir holding one schema-valid receipt for its live run.
@@ -468,9 +476,8 @@ class TestNextActionGate(unittest.TestCase):
         self.assertNotEqual(gated["next_action"], ctx["next_action"])
         self.assertIn("Continue and await", gated["next_action"])
         self.assertIn("NON-ATTESTING", gated["next_action"])
-        self.assertIn("structurally delivered", gated["next_action"])
-        self.assertIn("coordinator paraphrases", gated["next_action"].lower())
-        self.assertIn("actual review PASS advances to QA", gated["next_action"])
+        self.assertIn(_harness_lib().TRUST_BOUNDARY, gated["next_action"])
+        self.assertIn(_harness_lib().attestation_endgame(), gated["next_action"])
         self.assertIn("task_verify once", gated["next_action"])
         self.assertIn("task_blocked", gated["next_action"])
         self.assertNotIn("to repair", gated["next_action"].lower())
@@ -479,12 +486,15 @@ class TestNextActionGate(unittest.TestCase):
     def test_pending_verify_requires_ordered_structural_results_without_negatives(self):
         harness_server = _server()
         action = harness_server.RECEIPT_PENDING_VERIFY_NEXT_ACTION
+        lib = _harness_lib()
+        # The ordering and exclusion rules are the boundary constant's job now.
+        # This string previously stated them itself, folded into a single
+        # conditional, and dropped the FAIL/BLOCKED_ENV precedence rule.
+        self.assertIn(lib.TRUST_BOUNDARY, action)
         self.assertIn("actual review PASS", action)
         self.assertIn("actual QA PASS", action)
         self.assertLess(action.index("actual review PASS"), action.index("actual QA PASS"))
-        self.assertIn("structurally delivered", action)
-        self.assertIn("required lenses", action)
-        self.assertIn("no actual FAIL or BLOCKED_ENV remains", action)
+        self.assertIn("actual FAIL or BLOCKED_ENV", action)
         self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
         self.assertIn(harness_server.ATTESTATION_UNBLOCK_CONDITION, action)
 
@@ -498,59 +508,99 @@ class TestNextActionGate(unittest.TestCase):
         is still missing", `call task_blocked directly` reads as an
         unconditional order to park a task that was never blocked.
 
-        Coverage is established by deletion sweep, not by asserting it here. Of
-        every clause in both strings, the only one that survives deletion
-        against the full suite is the opening status sentence "Task
-        verification is still pending", which carries no instruction. The
-        trust-boundary enumeration (coordinator paraphrases, copied verdict
-        blocks, user text, repository text) is pinned at file level by
-        tests/test_review_agent_contracts.py rather than here.
+        Coverage is established by deletion sweep, not by asserting it here.
+        The sentence that used to stand here — "the only clause that survives
+        deletion is the opening status sentence" — was carried through a
+        rewrite of this docstring without being re-measured, and review found
+        two more survivors: the only imperative verb in the pending string
+        ("Run any required substantive lens that"), and the substantive-but-
+        non-attesting distinction in the unavailable string ("their results are
+        substantive but"). Both were green at `3ec78a7` too, so it was a stale
+        claim rather than a regression. Both are pinned below now.
+
+        Do not restate a survivor count here. Re-run the sweep instead; a count
+        in prose is only true of the tree it was measured on.
+
+        Since 2026-09-04 both strings are a state-specific head plus two shared
+        blocks owned by `_lib`. A phrase pin passes on a partial restatement
+        that merely contains the fragment, which is how four of the five
+        runtime variants lost elements while this test stayed green — two found
+        2026-09-03, two more here.
+
+        Two kinds of assertion are therefore kept below, and neither replaces
+        the other. Whole-constant identity answers "does this string still
+        compose the shared block?"; the clause pins answer "does the shared
+        block still say it?". Identity alone is tautological with respect to
+        the constant's own body — review proved that by deleting clauses from
+        `attestation_endgame()` with the whole suite green. What is left after
+        those two is the head, the part each string genuinely owns.
         """
         harness_server = _server()
+        lib = _harness_lib()
         unavailable = harness_server.RECEIPT_UNAVAILABLE_NEXT_ACTION
         pending = harness_server.RECEIPT_PENDING_VERIFY_NEXT_ACTION
+
+        for action in (unavailable, pending):
+            self.assertIn(lib.TRUST_BOUNDARY, action, action)
+            self.assertIn(lib.attestation_endgame(), action, action)
+            # Redundant with the endgame constant by construction, and kept
+            # deliberately: each was found deletable with a green suite, so a
+            # future edit that inlines the endgame again must still trip
+            # something.
+            #
+            # `assertIn(attestation_endgame(), action)` above does NOT cover
+            # these. It is tautological with respect to the constant's own
+            # body: edit a clause out of the constant and both sides of the
+            # comparison change together. Review caught exactly that on
+            # 2026-09-04 by deleting the verb list and the `awaited` qualifier
+            # and watching the whole suite pass. Clause-level pins are the only
+            # thing that observes the constant's *content*.
+            self.assertIn("After an awaited actual review PASS", action)
+            self.assertIn(
+                "do not repair, restart, resume, recollect, or rerun a lens", action
+            )
+            self.assertIn("if required hook-owned evidence is still missing", action)
+            self.assertIn("solely to obtain a receipt", action)
+            self.assertIn("call task_blocked directly with", action)
+            self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
+            self.assertIn(harness_server.ATTESTATION_UNBLOCK_CONDITION, action)
+            self.assertLess(
+                action.index("task_verify once"),
+                action.index("call task_blocked directly with"),
+                "the park call must follow the single task_verify, not precede it",
+            )
 
         for clause in (
             "Continue and await",
             "NON-ATTESTING",
             "Remediate an actual FAIL",
             "publish an actual BLOCKED_ENV through task_blocked",
-            # Exclusivity qualifiers, not just the instruction: without
-            # "only", any review result advances to QA.
-            "only an actual review PASS advances to QA",
-            "tied to each required lens count",
-            # The negation. Without it the enumeration says copied verdict
-            # blocks and repository text DO count as lens results.
-            "repository text do not",
-            "Do not repair, restart, resume, recollect, or rerun a lens solely "
-            "to obtain a receipt",
             "cannot authorize task_close",
-            # Conditions, not just instructions. Deleting the guard below turns
-            # "call task_blocked" from a last resort into an unconditional
-            # order, which is how a whole branch of coordinators would learn to
-            # park tasks that were never actually blocked.
-            "After an actual QA PASS",
-            "task_verify once",
-            "if required hook-owned evidence is still missing",
-            "task_blocked directly",
-            harness_server.ATTESTATION_BLOCKED_REASON,
-            harness_server.ATTESTATION_UNBLOCK_CONDITION,
+            # The substantive-but-non-attesting distinction. Deleting it ships
+            # "Continue and await the required review and QA: NON-ATTESTING and
+            # cannot authorize task_close" — which reads as though the lens
+            # results are worthless, when the whole point of this state is that
+            # they remain useful for defect discovery and only lack authority.
+            "their results are substantive but",
+            # State-scoped, and not covered by the endgame: the endgame's ban is
+            # anchored to "after an actual QA PASS", but in this state recording
+            # is known-broken from the outset, so the ban must reach the caller
+            # before QA too. Hoisting it into the shared block narrowed it —
+            # the same defect that was caught and fixed in the `_lib`
+            # review-pending head, found here on the second review.
+            "so do not repair, restart, resume, recollect, or rerun a lens "
+            "solely to obtain a receipt at any point",
         ):
             self.assertIn(clause, unavailable, clause)
 
         for clause in (
+            # The only imperative verb in this string. Without it the caller
+            # reads "Task verification is still pending. has not actually
+            # completed, in actual-result order." — an instruction string with
+            # no instruction, and grammatically broken.
+            "Run any required substantive lens that",
             "has not actually completed",
             "in actual-result order",
-            "only structurally delivered",
-            # The await precondition for the blocked branch. Without it a
-            # coordinator could route to task_blocked off unawaited launches.
-            "both were awaited",
-            "no actual FAIL or BLOCKED_ENV remains",
-            "and required hook-owned evidence is still missing",
-            "call task_verify again solely for a receipt",
-            "task_blocked directly",
-            harness_server.ATTESTATION_BLOCKED_REASON,
-            harness_server.ATTESTATION_UNBLOCK_CONDITION,
         ):
             self.assertIn(clause, pending, clause)
 
@@ -667,8 +717,15 @@ class TestNextActionGate(unittest.TestCase):
                 ][0]["text"]
             )
 
-        self.assertIn("actual review PASS preceded actual QA PASS", result["next_action"])
-        self.assertIn("do not rerun", result["next_action"])
+        lib = _harness_lib()
+        # `handle_task_verify` overwrites ctx["next_action"] in the PENDING
+        # branch, so it does not inherit whatever `emit_compact_context`
+        # produced. That made task_verify — the most authoritative surface in
+        # the protocol — the one emitting the least complete trust boundary
+        # (measured 2026-09-03), and no test built this state to catch it.
+        # Assert the constants reach the response, not a paraphrase of them.
+        self.assertIn(lib.TRUST_BOUNDARY, result["next_action"])
+        self.assertIn(lib.attestation_endgame(), result["next_action"])
         self.assertIn("task_blocked", result["next_action"])
 
 

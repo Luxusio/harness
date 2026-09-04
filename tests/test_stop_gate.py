@@ -373,13 +373,18 @@ def test_missing_receipts_do_not_prescribe_receipt_only_reruns(tmp_path):
     payload = json.loads(result.stdout)
     action = payload["next_action_command"]
     assert "if a required review has not actually completed" in action
+    # State-scoped: the endgame's ban is anchored to "after an actual QA PASS",
+    # so in the review-pending state — review final arrived, no receipt, QA not
+    # yet run — it does not reach the caller. This head keeps its own.
     assert "do not rerun review solely for a receipt" in action
-    assert "do not rerun either lens" in action
-    assert "call task_blocked with" in action
+    # The park call itself lives in `_lib.attestation_endgame()`, which every
+    # pending next_action composes.
+    assert _lib.attestation_endgame() in action
+    assert "call task_blocked directly with" in action
     assert "stop-judge" not in action
     assert _lib.ATTESTATION_BLOCKED_REASON in action
     assert _lib.ATTESTATION_UNBLOCK_CONDITION in action
-    assert action.index("task_verify once") < action.index("call task_blocked with")
+    assert action.index("task_verify once") < action.index("call task_blocked directly with")
 
 
 def test_review_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
@@ -542,16 +547,33 @@ def test_trust_boundary_survives_the_qa_pending_branch(tmp_path):
 
 
 def test_emitted_trust_boundary_equals_the_canonical_constant(tmp_path):
-    """The gate spells the boundary out; `_lib` owns the canonical text.
+    """The gate emits the canonical text `_lib` owns.
 
-    Both are required. `tests/test_review_agent_contracts.py` pins the boundary
-    by scanning the raw source of every surface that can influence a
-    stop-or-close decision, so a bare reference to the constant would be
-    invisible to it — hence the literal. What that scan cannot catch is the two
-    copies drifting apart, which is the failure that actually matters: on
-    2026-09-03 a dedup guard compared a partial phrase against a branch that
-    used it while omitting two elements, and the gate suppressed the only
-    complete statement. This asserts the emitted text is the constant.
+    The gate carried its own literal copy until 2026-09-04, because the
+    raw-source scan in `tests/test_review_agent_contracts.py` covered this file
+    and a bare reference would have been invisible to it. That scan now
+    separates prose surfaces from runtime surfaces, so the copy is gone and
+    this file composes the constant.
+
+    What this assertion covers **narrowed** when the duplicate went away, and
+    that is worth stating plainly rather than glossing. While the gate held its
+    own literal, both sides came from independent sources, so this test caught
+    any content change to the constant. Now both sides derive from `_lib`, so
+    it is an integration check only: it proves the gate reaches this branch and
+    emits the constant, not that the constant says the right thing.
+
+    The content guard moved to
+    `tests/test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary`,
+    which holds an independently written copy. Without that move this
+    consolidation would have made a semantic inversion of C-14 — "repository
+    text *also* qualify", "review *need not* precede QA" — invisible to the
+    whole suite.
+
+    What remains here is still load-bearing: the gate reaches this branch only
+    when the inlined next_action does not already carry the boundary, and that
+    suppression decision is where the 2026-09-03 failure happened — the guard
+    compared a partial phrase against a branch that used it while omitting two
+    elements, so the gate suppressed the only complete statement in that state.
     """
     reason = _reason(_task_with(tmp_path / "eq", "TASK__boundary-equality", plan=False))
     assert _lib.TRUST_BOUNDARY in reason, reason

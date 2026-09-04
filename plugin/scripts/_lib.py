@@ -74,12 +74,49 @@ TRUST_BOUNDARY = (
 
 
 def attestation_block_instruction() -> str:
-    """Return the fixed, non-diagnostic missing-attestation parking call."""
+    """Return the fixed, non-diagnostic missing-attestation parking call.
+
+    `directly` is part of the instruction, not decoration: C-17 and
+    `plugin/CLAUDE.md` both route this case to a *direct* `task_blocked` call,
+    as opposed to the routed/judged parking that used to exist. Callers embed
+    this verbatim, so the qualifier belongs here rather than in each caller's
+    surrounding sentence.
+    """
     return (
-        "call task_blocked with "
+        "call task_blocked directly with "
         f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
         f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}"
     )
+
+
+def attestation_endgame() -> str:
+    """Return the shared post-QA verification-and-park tail.
+
+    Every state that can still reach a missing-attestation park ends with the
+    same four moves. Before this function each of the four `next_action`
+    strings spelled them out in its own order and wording, which is the same
+    divergence `TRUST_BOUNDARY` was created to end one layer above.
+
+    The clauses are load-bearing. An earlier mutation sweep found each of these
+    deletable with the suite green (see the pinning docstring in
+    tests/test_receipt_watcher_fail_closed.py):
+
+    - "an awaited actual review PASS" — without the qualifier, unawaited
+      launches route to park.
+    - "if required hook-owned evidence is still missing" — without it,
+      `call task_blocked` reads as an unconditional order to park a task that
+      was never blocked.
+    - "solely to obtain a receipt" — without it, the do-not-rerun rule reads as
+      a ban on rerunning a lens at all, including after a real FAIL.
+    """
+    return (
+        "After an awaited actual review PASS and then an actual QA PASS, call"
+        " task_verify once; if required hook-owned evidence is still missing, do"
+        " not repair, restart, resume, recollect, or rerun a lens, or call"
+        " task_verify again, solely to obtain a receipt — "
+        f"{attestation_block_instruction()}."
+    )
+
 
 def plugin_root_env(default: str | None = None) -> str | None:
     """Return the configured runtime plugin root."""
@@ -3394,12 +3431,9 @@ def emit_compact_context(task_dir, snapshot=None):
             "Run and await the required read-only review subagent(s) if a required "
             "review has not actually completed. "
             "If its actual PASS final already arrived without a receipt, label it "
-            "NON-ATTESTING and proceed to substantive QA once; do not rerun review "
-            f"solely for a receipt. {TRUST_BOUNDARY} If actual "
-            "review PASS and then actual QA PASS were both already awaited without "
-            "the required receipts, do not rerun either lens; call task_verify once, "
-            "then, only if required evidence remains missing, "
-            f"{attestation_block_instruction()}."
+            "NON-ATTESTING and proceed to substantive QA once; do not rerun "
+            "review solely for a receipt. "
+            f"{TRUST_BOUNDARY} {attestation_endgame()}"
         )
     elif runtime_verdict == "FAIL":
         next_action = (
@@ -3423,10 +3457,7 @@ def emit_compact_context(task_dir, snapshot=None):
             # arriving two clauses late — the failure shape
             # test_every_normative_clause_in_both_next_actions_is_pinned records
             # for the park guard.
-            f"NON-ATTESTING. {TRUST_BOUNDARY} Call "
-            "task_verify once, then, if required evidence remains missing, "
-            f"{attestation_block_instruction()}; do not rerun QA solely for a "
-            "receipt."
+            f"NON-ATTESTING. {TRUST_BOUNDARY} {attestation_endgame()}"
         )
     else:
         next_action = "Completed QA verdicts present — run task_close."

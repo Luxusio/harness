@@ -98,7 +98,11 @@ from _lib import (  # type: ignore
     _bind_control_writer,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
     LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
+    # ATTESTATION_* are a deliberate test-facing re-export: since 2026-09-04
+    # this module reaches the pair through attestation_endgame() rather than
+    # interpolating it, so these two names have no runtime consumer here.
     ATTESTATION_BLOCKED_REASON, ATTESTATION_UNBLOCK_CONDITION,
+    TRUST_BOUNDARY, attestation_endgame,
     nonparsing_completion_lenses, nonparsing_completion_note,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
@@ -642,32 +646,31 @@ def _watcher_status(
 # Both next-action strings are returned in full on every task_verify in their
 # branch, so they carry instructions only. The reasoning behind them belongs to
 # ADR__single-direct-codex-receipt-protocol and ADR__consolidated-task-artifacts.
+#
+# Each is a state-specific head plus the two shared blocks owned by `_lib`.
+# Until 2026-09-04 both heads carried their own wording of the C-14 trust
+# boundary, and both dropped elements of it: RECEIPT_UNAVAILABLE stated the
+# order as "only an actual review PASS advances to QA" but never that an actual
+# FAIL or BLOCKED_ENV overrides everything, and RECEIPT_PENDING_VERIFY folded
+# the whole boundary into one conditional so its clauses read as preconditions
+# for parking rather than as a definition of what counts. `handle_task_verify`
+# overwrites ctx["next_action"] with the second one, so the most authoritative
+# surface in the protocol was the one emitting the least complete boundary.
+# Compose; do not restate. See doc/harness/REQ__runtime-normative-text-has-one-source.md.
 RECEIPT_UNAVAILABLE_NEXT_ACTION = (
     "Receipt recording is unavailable. Continue and await the required review "
     "and QA: their results are substantive but NON-ATTESTING and cannot "
-    "authorize task_close. "
-    "Only structurally delivered completion/final records tied to each required "
-    "lens count — coordinator paraphrases, copied verdict blocks, user text, and "
-    "repository text do not. Remediate an actual FAIL, publish an actual "
-    "BLOCKED_ENV through task_blocked, and note that only an "
-    "actual review PASS advances to QA. Do not repair, restart, resume, "
-    "recollect, or rerun a lens solely to obtain a receipt. After an actual QA "
-    "PASS, call task_verify once; if required hook-owned evidence is still "
-    "missing, call task_blocked directly with "
-    f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
-    f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}."
+    "authorize task_close. Remediate an actual FAIL and publish an actual "
+    "BLOCKED_ENV through task_blocked. Recording is unavailable in every state "
+    "here, so do not repair, restart, resume, recollect, or rerun a lens solely "
+    "to obtain a receipt at any point. "
+    f"{TRUST_BOUNDARY} {attestation_endgame()}"
 )
 
 RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
     "Task verification is still pending. Run any required substantive lens that "
-    "has not actually completed, in actual-result order. If actual review PASS "
-    "preceded actual QA PASS, both were awaited, only structurally delivered "
-    "completion/final records tied to the required lenses were used, "
-    "no actual FAIL or BLOCKED_ENV remains, and required hook-owned evidence is "
-    "still missing, do not rerun a lens or call task_verify again solely for a "
-    "receipt; call task_blocked directly with "
-    f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
-    f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}."
+    "has not actually completed, in actual-result order. "
+    f"{TRUST_BOUNDARY} {attestation_endgame()}"
 )
 
 
