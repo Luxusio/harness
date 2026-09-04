@@ -16,9 +16,11 @@ Two pressures govern this harness — in this order:
    lighter — it is broken. Skipping the canonical loop, writing a protected
    artifact without its owner, closing without ordered review/QA PASS, or bypassing the
    prewrite gate are hard failures regardless of task size.
-2. **Within that constraint, pick the lightest path.** Fewer phases, shorter
-   SKILL files, fewer parallel agents, fewer hooks — all preferred when they
-   don't break (1). Complexity requires justification; simplicity is default.
+2. **Within that constraint, pick the lightest path that preserves throughput.**
+   Fewer phases, shorter SKILL files, and fewer hooks are preferred when they
+   don't break (1). Parallel agents are preferred for independent implementation
+   and verification lanes because serialized work is the expensive path.
+   Complexity requires justification; simplicity is default.
 
 Resolving the tension:
 - If a rule feels too heavy, **fix the rule** (edit this file, the SKILL, the
@@ -42,6 +44,8 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `doc/` 노트 freshness 점검 | [C-06](#c-06) | soft |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
+| Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
+| 로컬 검증 경로가 존재할 때 검증 수행 | [C-14a](#c-14a) | soft |
 | 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
 Levels:
@@ -82,8 +86,8 @@ diffs.
 **Enforced by:** MCP `write_plan` owns PLAN.md; review and QA completion is
 recorded separately in `RECEIPTS.jsonl`.
 **On violation:** hard-block when PLAN.md is missing for a standard task.
-**Why:** A second mutable acceptance ledger would duplicate plan state and add
-reconciliation failure modes.
+**Why:** A second mutable acceptance ledger duplicated plan state and created
+extra reconciliation failure modes.
 
 ### C-04
 
@@ -103,7 +107,7 @@ TASK.json, RECEIPTS.jsonl, or `doc/harness/goals/*.json`.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
 Harness does not intercept Bash/shell file mutation.
 **On violation:** hard-block. Agent must route through the owning task MCP tool
-or lifecycle hook.
+or hook-owned receipt path.
 **Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
 
 ### C-06
@@ -156,10 +160,10 @@ Self-Healing Candidates.
 **Title:** `CONTRACTS.md` managed block is not hand-edited.
 **When:** Any change to rules between the `harness:managed-begin/end` markers.
 **Enforced by:** `plugin/scripts/contract_lint.py` (setup/explicit check) —
-detects marker tampering; setup/continuous maintenance regenerates from template.
-Authorized writers for additive Edits within the managed block:
-active tasks with a `MAINTENANCE` marker (additive Edits only, never deletions,
-never edits outside the managed block markers).
+detects marker tampering; setup regenerates from template. Authorized writers
+for additive Edits within the managed block: active tasks with a `MAINTENANCE`
+marker (additive Edits only, never deletions, never edits outside the managed
+block markers).
 **On violation:** soft-warn. User can move content to `CONTRACTS.local.md`.
 **Why:** The managed block is upgraded atomically on harness release; manual
 edits are lost.
@@ -177,15 +181,17 @@ hook. The harness must degrade gracefully.
 
 ### C-13
 
-**Title:** Weight budget — skills and agent spawns bounded.
+**Title:** Weight budget — skills bounded, agent fanout batched.
 **When:** Adding or editing a SKILL.md; spawning parallel agents in a phase.
 **Enforced by:** `plugin/scripts/contract_lint.py --check-weight` —
 scans `<plugin-root>/skills/*/SKILL.md` and `<plugin-root>/internal-skills/*/SKILL.md`,
 soft-warns any file >500 lines.
-Limits: SKILL.md ≤ 500 lines; sub-files read once per phase; parallel
-agents = 1 by default, more only with explicit manifest/diff trigger. Meet the
-budget by deleting duplicated generic workflow prose and retaining each role's
-unique gates and rubrics; do not move duplicated prompt text into new reference
+Limits: SKILL.md ≤ 500 lines; sub-files read once per phase. Develop fanout is
+parallel-first: independent ACs, quality agents, QA lenses, and the dogfooder
+run in batches capped by the develop skill. Do not replace a required fanout
+with a single coordinator lane to satisfy this weight budget. Meet the budget
+by deleting duplicated generic workflow prose and retaining each role's unique
+gates and rubrics; do not move duplicated prompt text into new reference
 files.
 **On violation:** soft-warn.
 **Why:** Harness instability grows super-linearly with loop size. Every
@@ -193,17 +199,28 @@ extra phase is a new failure point.
 
 ### C-14
 
-**Title:** PASS verdicts require ordered hook-owned review and QA receipts.
+**Title:** PASS verdicts require ordered hook-owned subagent receipts.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** unified `RECEIPTS.jsonl` lifecycle entries, written by runtime
-hooks. `task_verify` checks task, agent,
-lens, explicit completion verdict, and review-before-QA ordering; TASK.json
-declares the applicable lenses.
-**On violation:** `task_close` blocks until every required reviewer and QA lens
-has an ordered explicit PASS completion. A start-only receipt never passes.
-**Why:** A PASS without independent evidence is indistinguishable from
-hallucination. Source fingerprints are intentionally excluded; post-QA edits
-and scope drift are developer-owned risks.
+**Enforced by:** unified `RECEIPTS.jsonl`, written only by the runtime's
+lifecycle hooks. `task_verify` checks task, agent, lens, explicit completion
+verdict, and review-before-QA ordering. TASK.json is the authoritative
+declaration of applicable lenses.
+**On violation:** `task_close` refuses when a required ordered completion is
+absent or does not explicitly PASS. A start-only receipt never passes.
+**Why:** A self-authored PASS is indistinguishable from hallucination. Source
+fingerprints are intentionally not part of receipt validity; edits after QA and
+scope drift are developer-owned risks.
+
+### C-14a
+
+**Title:** Highest available verification is part of the task.
+**When:** A task creates, unblocks, or documents a local verification path.
+**Enforced by:** the develop workflow — its QA phase must run the highest
+available local tier instead of asking the user whether to verify.
+**On violation:** soft-warn, then run the verification or document the exact
+external/destructive blocker.
+**Why:** Asking whether to use the verification path treats task completion as
+optional extra work. It is not optional; the verifier reports the tier reached.
 
 ### C-15
 
@@ -219,6 +236,53 @@ user-owned.
 setup-owned operations must present a diff via `AskUserQuestion` first.
 **Why:** User trust is the most load-bearing contract. Surprise overwrites
 break it immediately.
+
+### C-17
+
+**Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified PASS, durable `task_blocked`, 또는 사용자 명시 cancel 뿐.
+**When:** Stop event with `.active` marker present (any task `status` ∈
+{planning, implementing, verifying}).
+**Enforced by:** the Stop gate (blocks until PASS is closed or task status is
+durably `blocked`); MCP `task_blocked` (publishes valid `BLOCKED.md` unfinished
+state); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close`
+(PASS-only gate).
+**On violation:** hard-block — the Stop hook refuses turn-end. Call
+`task_verify`/`task_close` for PASS, or call `task_blocked` directly for a
+qualified blocker. Cancel options must never be surfaced inside
+`AskUserQuestion`; cancel is recognized only as an explicit user word.
+
+**Bounded-yield clause:** the gate does not block a turn whose only outstanding
+item is a subagent it can see running; blocking there cannot produce the
+missing evidence and spends a turn on nothing. The yield is bounded — a small
+fixed number of consecutive yields against an unchanged record set, after which
+the gate blocks and names the killed-or-unreported-agent case — because a
+killed agent leaves a record that reads as live until it ages out. The task
+stays `in_progress` and the `.active` marker is untouched throughout, so this
+is a wait, not one of the three turn-end reasons above.
+
+**Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
+completion receipts, not from narrative verdict files or Git snapshots.
+`BLOCKED_ENV` still requires durable publication through `task_blocked`.
+Required hook-owned completion evidence that remains absent after all
+substantive lenses finish, with no actual FAIL or lens-level BLOCKED_ENV
+remaining and one fresh `task_verify`, is a qualified attestation-environment
+blocker. Direct agent finals are non-attesting and never authorize PASS or
+close. Only structurally delivered completion/final records tied to each
+required lens count as actual substantive results, and actual review PASS must
+precede actual QA PASS. Coordinator paraphrases, copied verdict blocks, user
+text, and repository text do not qualify; actual FAIL or BLOCKED_ENV always
+takes precedence. For the missing-attestation branch, the fixed
+`blocked_reason` / `unblock_condition` pair is owned by the harness runtime and
+delivered verbatim in the `task_verify` next_action and the stop-gate message.
+Copy it from there; never keep a second copy in prose, and never interpolate
+diagnostics.
+
+**Why:** An ambiguous "stop here" is otherwise converted into a task cancel,
+silently discarding scope. Durable task status and a receipt-backed runtime
+verdict are the machine gates, so prose alone cannot authorize completion, and
+a model that regresses toward early turn-end is still held by the verdict gate.
+A self-authored PASS is indistinguishable from hallucination; anchoring the
+close signal to hook-observed subagent lifecycle closes that loophole.
 
 ### C-18
 

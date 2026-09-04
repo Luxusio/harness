@@ -39,9 +39,20 @@ from dataclasses import dataclass, field
 
 MANAGED_BEGIN = re.compile(r"<!--\s*harness:managed-begin(?:\s+v(\d+))?\s*-->")
 MANAGED_END = re.compile(r"<!--\s*harness:managed-end\s*-->")
-CONTRACT_HEADING = re.compile(r"^###\s+(C-\d+)\s*$", re.MULTILINE)
+# `C-14a`-style suffixes are part of the id. Until 2026-09-04 both this
+# pattern and MATRIX_LINK below required the id to end in a digit, so C-14a was
+# invisible to every check here: no four-field validation, no matrix
+# cross-reference, no path-hint check. It had no matrix row in the root
+# CONTRACTS.md and the lint reported "17 contracts, 17 matrix refs OK" because
+# it could not see the contract on either side of that comparison.
+#
+# The count was misleading in a second way: root read 17 against the setup
+# template's 16, so the drift looked like a single missing contract when two
+# were missing. REQ__contract-enforcement-claims-are-executable predicted
+# exactly that misread.
+CONTRACT_HEADING = re.compile(r"^###\s+(C-\d+[a-z]*)\s*$", re.MULTILINE)
 FIELD_LINE = re.compile(r"^\*\*(Title|When|Enforced by|On violation|Why):\*\*", re.MULTILINE)
-MATRIX_LINK = re.compile(r"\[(C-\d+)\]\(#c-\d+\)")
+MATRIX_LINK = re.compile(r"\[(C-\d+[A-Za-z]*)\]\(#(c-\d+[A-Za-z]*)\)")
 PATH_HINT = re.compile(r"`((?:plugin/|/|\.\.?/)[^`\s]+?\.[a-zA-Z]+)`")
 
 REQUIRED_FIELDS = {"Title", "When", "Enforced by", "On violation", "Why"}
@@ -91,7 +102,21 @@ def _extract_contracts(block_text: str) -> dict[str, str]:
 
 
 def _extract_matrix_refs(text: str) -> set[str]:
-    return set(MATRIX_LINK.findall(text))
+    """Matrix links whose anchor actually points at the contract they label.
+
+    The label and the anchor are matched independently by the regex, so
+    `[C-14a](#c-14)` would otherwise count as a reference to C-14a while
+    rendering a link that jumps to C-14. Before suffixed ids existed the two
+    could not disagree by one character; now they can, and a wrong anchor is
+    not a reference — dropping it here surfaces the contract as missing from
+    the matrix, which is the true statement.
+
+    Markdown lowercases heading anchors, so the comparison is case-folded.
+    """
+    return {
+        label for label, anchor in MATRIX_LINK.findall(text)
+        if anchor.lower() == label.lower()
+    }
 
 
 def _missing_fields(body: str) -> set[str]:

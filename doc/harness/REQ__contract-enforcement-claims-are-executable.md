@@ -1,7 +1,7 @@
 ---
 tags: [harness, contracts, enforcement, lint]
 summary: 계약의 Enforced by 필드는 실행되는 메커니즘을 지명해야 한다. 명시적 관례 선언은 예외지만, 존재하지 않는 훅을 지명하는 것은 결함이다.
-updated: 2026-09-03
+updated: 2026-09-04
 freshness: current
 invalidated_by_paths:
   - CONTRACTS.md
@@ -97,25 +97,33 @@ that still runs on every change; a SessionStart hook would charge every session
 for a check that the suite already performs, which C-13's own weight budget
 argues against.
 
-## Known remaining gap
+## The gap this REQ tracked — RESOLVED 2026-09-04
 
-The root `CONTRACTS.md` and the setup template have diverged beyond the line
-fixed here — § 0 wording, C-03's **Why**, substantive text drift in the C-13 and
-C-14 bodies, and most consequentially **two whole contracts absent from the
-template**: `C-17` (turn-end rule) and `C-14a` (highest-available verification).
-Neither the § 1 matrix row nor the § 2 section exists for either. A fresh
-`setup` in a new project therefore installs a `CONTRACTS.md` that never states
-the turn-end rule, even though `stop_gate.py` enforces it in that project from
-the first session.
+Recorded here as history because the prediction below turned out to be the
+useful part; the current rule lives in
+`doc/harness/REQ__setup-template-installs-the-current-contract.md`.
 
-The lint's own count understates this: it reports "16 contracts" for the
-template against 17 for the root, a difference of one, because its
-`^### (C-\d+)$` heading regex does not match the `C-14a` suffix form. Anyone
-scoping the follow-up from the count alone will fix C-17 and re-ship a template
-still missing C-14a.
+**What it was.** The root `CONTRACTS.md` and the setup template had diverged
+beyond the line fixed by this REQ's own task — § 0 wording, C-03's **Why**,
+substantive drift in C-13 and C-14, and most consequentially **two whole
+contracts absent from the template**: `C-17` (turn-end rule) and `C-14a`
+(highest-available verification), matrix row and § 2 section alike. A fresh
+`setup` therefore installed a `CONTRACTS.md` that never stated the turn-end
+rule, while `stop_gate.py` enforced it from the first session.
 
-Linting cannot surface this. Both files lint clean in isolation — the matrix
-check compares a file against itself, so template-vs-root divergence is
-invisible to it by construction. Detecting it needs a comparison the lint does
-not perform. Out of scope for the task that wrote this REQ; tracked as follow-up
-work.
+**The prediction, which held.** This note warned that the lint's count
+understated the gap — "16 contracts" for the template against 17 for the root,
+a difference of one, because `^### (C-\d+)$` does not match the `C-14a` suffix
+form — and that *"anyone scoping the follow-up from the count alone will fix
+C-17 and re-ship a template still missing C-14a."*
+
+The follow-up task confirmed something worse than the note assumed: because the
+regex was blind on **both** sides of the comparison, `C-14a` had never been
+four-field validated or matrix-cross-checked in the *root* either, and the root
+§ 1 matrix had no C-14a row at all. Fixing the regex surfaced that immediately.
+
+**Why it needed a comparison the lint could not do.** Both files linted clean in
+isolation: the matrix check compares a file against itself, so template-vs-root
+divergence was invisible by construction. That comparison now exists as
+`tests/test_contract_lint_real_tree.py::SetupTemplateShipsTheSameContracts`,
+which asserts the two files declare the same contract id set.

@@ -45,6 +45,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
 | Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
+| 로컬 검증 경로가 존재할 때 검증 수행 | [C-14a](#c-14a) | soft |
 | 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
 Levels:
