@@ -651,7 +651,7 @@ def read_current_goal(repo_root: str | None = None) -> dict:
 
 def write_goal_state(repo_root: str, state: dict) -> dict:
     if not _trusted_control_writer():
-        raise PermissionError("Goal mutation requires the native Goal MCP")
+        raise _control_writer_error("Goal mutation requires the native Goal MCP")
     with goal_transaction(repo_root):
         raw_goal_id = str(state.get("goal_id") or "")
         goal_id = _goal_id(raw_goal_id, str(state.get("objective") or ""))
@@ -1401,11 +1401,57 @@ def _make_control_writer_authority():
             del caller
             del frame
 
-    return authorized, bind
+    def refusal_category(marker=False):
+        """Name which *kind* of refusal happened. Never why, in detail.
+
+        `authorized()` returns a single False for at least four distinct
+        situations, and two of them have opposite remedies:
+
+        - nothing is bound at all — `harness_server` was never imported, or
+          `_lib` was reloaded in-process, which re-executes this factory in the
+          same module dict and empties `bindings`. Nothing the caller does at
+          the call site can fix it.
+        - something is bound but this caller is not it — an ordinary
+          wrong-writer refusal, and the caller should route through the MCP.
+
+        Diagnosing the first from the message alone was impossible, and in one
+        2026-09-03 session that cost hours: `importlib.reload(_lib)` in a test
+        setUp emptied the closure and every subsequent write in that process
+        raised the wrong-writer text.
+
+        This deliberately reports the *category* only. It reads no frame and
+        compares no value, so it cannot leak inode, uid, path, or which
+        identity check failed — telling an attacker which of the checks they
+        tripped is exactly how a guard becomes a puzzle to be solved. It is
+        also computed after the decision, never as part of it.
+        """
+        # `marker` selects the same binding subset `authorized()` consults, so
+        # the category answers the question the caller actually asked. Without
+        # it, a process that bound only the Codex hook registration reported
+        # "not the bound writer" for a task-control write when in truth no
+        # task-control writer was bound at all — the exact confusion AC-3 names.
+        if not any(marker or role == "harness_server" for role, _ in bindings):
+            return (
+                "no task-control writer is bound in this process — "
+                "import the canonical MCP module, and note that reloading _lib "
+                "empties the binding"
+            )
+        return "the calling frame is not the bound task-control writer"
+
+    return authorized, bind, refusal_category
 
 
-_trusted_control_writer, _bind_control_writer = _make_control_writer_authority()
+(
+    _trusted_control_writer,
+    _bind_control_writer,
+    _control_writer_refusal,
+) = _make_control_writer_authority()
 del _make_control_writer_authority
+
+
+def _control_writer_error(action: str, *, marker: bool = False) -> PermissionError:
+    """Build a refusal that names the action *and* the category of failure."""
+    return PermissionError(f"{action}: {_control_writer_refusal(marker=marker)}")
 
 
 def write_task_control(task_dir, control):
@@ -1415,7 +1461,7 @@ def write_task_control(task_dir, control):
         raise ValueError("invalid exact TASK.json control value")
     path = task_control_file(task_dir)
     if not _trusted_control_writer():
-        raise PermissionError("TASK.json mutation requires the task-control MCP")
+        raise _control_writer_error("TASK.json mutation requires the task-control MCP")
     os.makedirs(task_dir, exist_ok=True)
     _revalidate_receipt_transaction(task_dir)
     if os.path.lexists(path) and not read_task_control(task_dir):
@@ -1442,7 +1488,7 @@ def _new_task_control(*, execution_mode="standard"):
 def begin_task_run(task_dir):
     """Rotate TASK.json run identity and clear terminal authority."""
     if not _trusted_control_writer():
-        raise PermissionError("task run rotation requires the task-control MCP")
+        raise _control_writer_error("task run rotation requires the task-control MCP")
     path = task_control_file(task_dir)
     snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
     current = read_task_control(task_dir)
@@ -1459,7 +1505,7 @@ def begin_task_run(task_dir):
 
 def restore_task_control(snapshot):
     if not _trusted_control_writer():
-        raise PermissionError("TASK.json restoration requires the task-control MCP")
+        raise _control_writer_error("TASK.json restoration requires the task-control MCP")
     _restore_text_snapshots(snapshot)
 
 
@@ -1855,7 +1901,7 @@ def write_active_marker(repo_root, task_dir, session_id=None):
     installs.
     """
     if not _trusted_control_writer(marker=True):
-        raise PermissionError("active task binding requires the task-control runtime")
+        raise _control_writer_error("active task binding requires the task-control runtime", marker=True)
     tasks_dir = os.path.join(repo_root, TASK_DIR)
     os.makedirs(tasks_dir, exist_ok=True)
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
@@ -1915,7 +1961,7 @@ def active_marker_snapshot(repo_root, session_id=None):
 def restore_active_marker_snapshot(snapshot):
     """Restore an exact marker snapshot captured by active_marker_snapshot."""
     if not _trusted_control_writer(marker=True):
-        raise PermissionError("active task restoration requires the task-control runtime")
+        raise _control_writer_error("active task restoration requires the task-control runtime", marker=True)
     _restore_text_snapshots(snapshot)
 
 
@@ -2041,7 +2087,7 @@ def iter_active_task_dirs(repo_root=None):
 def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=False):
     """Clear this session's active marker and matching legacy marker."""
     if not _trusted_control_writer(marker=True):
-        raise PermissionError("active task cleanup requires the task-control runtime")
+        raise _control_writer_error("active task cleanup requires the task-control runtime", marker=True)
     try:
         os.unlink(_session_active_path(repo_root, session_id))
     except FileNotFoundError:
@@ -2828,7 +2874,7 @@ def task_control_status(task_dir, control=None, snapshot=None):
 def publish_task_close(task_dir, control, *, receipt_fingerprint):
     """Atomically publish current receipt bytes as the sole close authority."""
     if not _trusted_control_writer():
-        raise PermissionError("task close publication requires the task-control MCP")
+        raise _control_writer_error("task close publication requires the task-control MCP")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt_fingerprint or "")):
         raise ValueError("invalid task close receipt fingerprint")
     updated = dict(control)

@@ -72,6 +72,12 @@ Task in_progress (`.active` marker exists) 동안:
 - AskUserQuestion 옵션 라벨에 "중단/취소/일시정지/나중에/cancel/stop/pause/defer/skip" 류 제시 금지.
 - Cancel 은 사용자가 명시 단어("취소", "cancel", "/cancel") 로 표명할 때만.
 - 자가 판단으로 turn 종결 금지.
+- 예외 아님 — 대기: 미결 항목이 오직 게이트가 실행 중으로 확인한 서브에이전트
+  뿐이면 stop_gate 는 막지 않고 턴을 양보한다. 태스크는 `in_progress` 로
+  남고 `.active` 마커도 그대로다. 변하지 않은 레코드 집합에 대한 양보는
+  횟수 제한이 있고, 소진되면 다시 막으면서 죽은/미보고 에이전트 경우를
+  지목한다. 자세한 근거는
+  `doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
 
 Turn 종결 정당 사유 (runtime_verdict 기반):
 

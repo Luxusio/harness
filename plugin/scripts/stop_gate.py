@@ -20,6 +20,8 @@ turn-end, twice, since the payload surfaces as both hook feedback and a
 blocking error.
 """
 
+import contextlib
+import hashlib
 import json
 import os
 import sys
@@ -34,7 +36,7 @@ from _lib import (  # type: ignore
     attestation_block_instruction,
     TRUST_BOUNDARY,
 )
-from _gate_response import block as gate_block  # type: ignore
+from _gate_response import block as gate_block, proceed as gate_proceed  # type: ignore
 import subagent_lifecycle  # type: ignore
 
 
@@ -52,11 +54,16 @@ def _background_stale_secs() -> float:
         return 1800.0
 
 
-def _background_reason(task_id: str, active: list[dict]) -> str:
-    lines = [
-        f"Active harness task {task_id} has background subagent work still running.",
-        "Stop hook already waited automatically; do not stop until lifecycle hooks mark it complete.",
-    ]
+_MAX_CONSECUTIVE_YIELDS = 3
+
+
+def _active_record_lines(active: list[dict]) -> list[str]:
+    """One line per waited-on agent. Shared by the yield report and the block.
+
+    Kept separate from either message: a block that embedded the yield text
+    would tell the reader the turn is being yielded while refusing to yield it.
+    """
+    lines = []
     for record in active[:5]:
         agent_type = record.get("agent_type") or "subagent"
         agent_id = record.get("id") or "(unknown)"
@@ -68,7 +75,118 @@ def _background_reason(task_id: str, active: list[dict]) -> str:
         lines.append(f"- {agent_type} {agent_id} active for ~{age}s")
     if len(active) > 5:
         lines.append(f"- ... {len(active) - 5} more active records")
-    return "\n".join(lines)
+    return lines
+
+
+def _yield_fingerprint(active: list[dict]) -> str:
+    """Identify a record *set* by agent identity alone.
+
+    Deliberately excludes any timestamp. `updated_ts` is derived — for a row
+    whose `ts` will not parse, `subagent_lifecycle` substitutes *now*, so
+    hashing it produced a fingerprint that changed on every Stop and a budget
+    that never advanced. That turns the bounded window this counter exists to
+    create back into an unbounded one, which is worse than the 1800s it
+    replaced. Identity is what "the same agents are still outstanding" means.
+    """
+    parts = sorted(
+        f"{record.get('agent_id') or ''}|{record.get('agent_type') or ''}"
+        for record in active
+    )
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+def _yield_ledger_path(task_dir: str, session_id: str) -> str:
+    """Per-session, because the record set it counts is per-session.
+
+    `active_records` filters on the `claude:<sid>:` runtime prefix, so two
+    sessions bound to the same task dir observe disjoint record sets. A single
+    shared ledger would let one session's healthy churn reset the other's
+    counter forever — reinstating, for that session, the unbounded silence this
+    counter exists to bound.
+    """
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in session_id)[:64]
+    return os.path.join(task_dir, f".stop_yield.{safe or 'nosession'}.json")
+
+
+def _consecutive_yields(task_dir: str, session_id: str, fingerprint: str) -> int:
+    """Count consecutive yields against an unchanged record set.
+
+    Returns 0 when the ledger cannot be maintained, which callers must treat as
+    "cannot vouch for liveness" and block. Failing the other way would restore
+    the silent-abandonment window this counter exists to close.
+
+    Why a counter and not an age bound: `subagent_lifecycle` stamps
+    `updated_ts` from the `started` receipt and never refreshes it — there is no
+    heartbeat — so a 25-minute-old row is indistinguishable by age from a lens
+    that has genuinely been running 25 minutes. Review lenses in this repo
+    routinely run for many minutes against a 1800s stale window, so any age
+    bound tight enough to catch an orphan also kills legitimate work. The
+    argument does not rest on a particular duration: it rests on the two cases
+    being the same observation.
+
+    Repetition does distinguish them. A live agent yields once and its
+    completion notification resumes the run; the same record set yielding again
+    and again means no completion is coming.
+    """
+    path = _yield_ledger_path(task_dir, session_id)
+    try:
+        previous = {}
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                previous = loaded
+        count = 1
+        if previous.get("fingerprint") == fingerprint:
+            count = int(previous.get("count") or 0) + 1
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump({"fingerprint": fingerprint, "count": count}, handle)
+            os.replace(tmp, path)
+        finally:
+            # `os.replace` consumed it on success. On failure it must not
+            # survive: this runs once per turn-end, so a leak accumulates one
+            # file per turn for as long as the failure lasts.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        return count
+    except Exception:
+        return 0
+
+
+def _exhausted_yield_reason(task_id: str, active: list[dict]) -> str:
+    """Block text for a record set that has stopped making progress."""
+    return "\n".join([
+        f"Active harness task {task_id} has yielded {_MAX_CONSECUTIVE_YIELDS} turns to the "
+        "same background record set with no completion.",
+        "Either the lens is still running — in which case its completion "
+        "notification will still arrive — or it was killed, or its SubagentStop "
+        "was rejected, and no completion will ever arrive.",
+        "In the latter case the record ages out only after "
+        "HARNESS_BACKGROUND_STALE_SECS (default 1800s). Do not wait it out: "
+        "spawn a fresh lens, because a resumed agent writes no receipt.",
+        *_active_record_lines(active),
+    ])
+
+
+def _background_reason(task_id: str, active: list[dict]) -> str:
+    """Report what the turn is yielding to. Not a directive.
+
+    This wording used to end "do not stop until lifecycle hooks mark it
+    complete", which was the instruction that came with a block. The gate now
+    allows the stop in this state, so an order not to stop would contradict
+    the decision it accompanies.
+    """
+    return "\n".join([
+        f"Active harness task {task_id} has background subagent work still running; "
+        "yielding the turn to it.",
+        "The task stays open. If the agent is alive its completion notification "
+        "resumes the run. If it was killed, or its SubagentStop was rejected, "
+        "the record lingers and no notification will come — the gate blocks "
+        f"again after {_MAX_CONSECUTIVE_YIELDS} yields on an unchanged record set.",
+        *_active_record_lines(active),
+    ])
 
 
 def _active_task_id(active_path):
@@ -179,33 +297,41 @@ def main():
             return 0
         task_id = os.path.basename(td.rstrip("/"))[:120]
 
-        # Official Stop input includes stop_hook_active=true when Claude is
-        # already continuing due to a Stop hook. If background work is still
-        # active in that recursive path, return success silently: the first
-        # Stop hook already forced the continuation, and re-blocking here loops
-        # until Claude Code's consecutive hook cap fires.
-        if bool(hook_input.get("stop_hook_active")):
-            try:
+        # A running lens subagent is a wait, not an unfinished turn.
+        #
+        # `stop_hook_active=true` marks a Stop that is itself a continuation
+        # forced by a previous Stop hook. That path has always allowed the stop
+        # while background work runs, because re-blocking there loops until
+        # Claude Code's consecutive-hook cap fires.
+        #
+        # The same reasoning applies to a *fresh* Stop, and until 2026-09-04
+        # this branch did not follow it. Any substantive turn resets
+        # stop_hook_active, so a coordinator awaiting a lens hit the blocking
+        # branch on every turn: measured ~20 times in one session, each
+        # producing a turn whose entire content was "the review is still
+        # running". Blocking cannot create the missing evidence — only the
+        # subagent can — and its completion notification re-invokes the
+        # coordinator anyway.
+        #
+        # Non-recursive Stops still spend the wait budget first: a lens that
+        # finishes inside it lets this turn continue to close, which is
+        # strictly better than yielding.
+        #
+        # This is not a C-17 exemption. The task stays `in_progress`, the
+        # `.active` marker is untouched, and the very next Stop with no live
+        # subagent blocks exactly as before. C-17 exists to stop a task being
+        # *abandoned* mid-flight; yielding the turn to work that is provably
+        # running is not abandonment.
+        recursive_stop = bool(hook_input.get("stop_hook_active"))
+        try:
+            if recursive_stop:
                 active_background = subagent_lifecycle.active_records(
                     repo_root,
                     task_id=task_id,
                     session_id=current_session_id(),
                     stale_secs=_background_stale_secs(),
                 )
-            except Exception:
-                json.dump(gate_block(
-                    reason=(
-                        f"Harness lifecycle evidence for {task_id} is malformed or unsafe; "
-                        "Stop is blocked. Start a fresh task run to reset RECEIPTS.jsonl."
-                    ),
-                    owner_skill="harness:run",
-                    docs="doc/harness/patterns/ADR__consolidated-task-artifacts.md",
-                ), sys.stdout)
-                return 0
-            if active_background:
-                return 0
-        else:
-            try:
+            else:
                 wait_result = subagent_lifecycle.wait_for_clear(
                     repo_root,
                     task_id=task_id,
@@ -213,24 +339,45 @@ def main():
                     timeout_secs=_background_wait_budget(),
                     stale_secs=_background_stale_secs(),
                 )
-            except Exception:
-                json.dump(gate_block(
-                    reason=(
-                        f"Harness lifecycle evidence for {task_id} is malformed or unsafe; "
-                        "Stop is blocked. Start a fresh task run to reset RECEIPTS.jsonl."
-                    ),
-                    owner_skill="harness:run",
-                    docs="doc/harness/patterns/ADR__consolidated-task-artifacts.md",
-                ), sys.stdout)
-                return 0
-            if not wait_result.get("cleared"):
-                payload = gate_block(
-                    reason=_background_reason(task_id, wait_result.get("active") or []),
-                    owner_skill="Claude SubagentStart/SubagentStop hooks",
-                    docs="plugin/scripts/subagent_lifecycle.py",
+                active_background = (
+                    [] if wait_result.get("cleared") else (wait_result.get("active") or [])
                 )
-                json.dump(payload, sys.stdout)
+        except Exception:
+            json.dump(gate_block(
+                reason=(
+                    f"Harness lifecycle evidence for {task_id} is malformed or unsafe; "
+                    "Stop is blocked. Start a fresh task run to reset RECEIPTS.jsonl."
+                ),
+                owner_skill="harness:run",
+                docs="doc/harness/patterns/ADR__consolidated-task-artifacts.md",
+            ), sys.stdout)
+            return 0
+        if active_background:
+            # Bounded. A `started` row with no completion counts as active
+            # until HARNESS_BACKGROUND_STALE_SECS (default 1800s), and this
+            # repo's own REQ__subagent-lifecycle-receipt-boundaries records
+            # that killing an agent — or having its SubagentStop rejected —
+            # leaves exactly such an orphan. Yielding on that record alone
+            # would silence the only machine enforcement of C-17 for half an
+            # hour on a task where nothing is running and no completion can
+            # arrive: the abandonment C-17 exists to prevent.
+            yields = _consecutive_yields(
+                td, current_session_id(), _yield_fingerprint(active_background),
+            )
+            if 0 < yields <= _MAX_CONSECUTIVE_YIELDS:
+                # Allowed, but never silently: an unexplained stop mid-task is
+                # the thing an operator would have to go digging to understand.
+                json.dump(
+                    gate_proceed(_background_reason(task_id, active_background)),
+                    sys.stdout,
+                )
                 return 0
+            json.dump(gate_block(
+                reason=_exhausted_yield_reason(task_id, active_background),
+                owner_skill="Claude SubagentStart/SubagentStop hooks",
+                docs="doc/harness/REQ__subagent-lifecycle-receipt-boundaries.md",
+            ), sys.stdout)
+            return 0
 
         # Only the durable task_blocked publication permits a paused-with-blocker
         # stop. A lens-level BLOCKED_ENV receipt still requires task_blocked;

@@ -49,7 +49,16 @@ def _run(cwd: str, stdin: str = "{}", env: dict[str, str] | None = None) -> subp
     )
 
 
-def _write_claude_start(repo: str, task_id: str, session_id: str, *, ts: str = "") -> None:
+def _write_claude_start(
+    repo: str, task_id: str, session_id: str, *, ts: str = "",
+    agent_id: str = "agent-bg", append: bool = False,
+) -> None:
+    """Write one `started` row with no completion — an agent the gate sees as live.
+
+    `agent_id` / `append` exist for the consecutive-yield tests, which need a
+    *second, different* record to appear without erasing the first. Defaults
+    reproduce the original single-row, truncating behaviour exactly.
+    """
     task_dir = os.path.join(repo, "doc", "harness", "tasks", task_id)
     os.makedirs(task_dir, exist_ok=True)
     control_path = Path(task_dir) / "TASK.json"
@@ -74,14 +83,15 @@ def _write_claude_start(repo: str, task_id: str, session_id: str, *, ts: str = "
         "event": "started",
         "source": "claude_hook",
         "task_run_id": run_id,
-        "runtime_id": f"claude:{session_id}:agent-bg",
-        "agent_id": "agent-bg",
+        "runtime_id": f"claude:{session_id}:{agent_id}",
+        "agent_id": agent_id,
         "agent_type": "harness:qa-cli",
         "lens": "qa-cli",
         "verdict": "",
         "summary": "",
     }
-    with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
+    mode = "a" if append else "w"
+    with open(os.path.join(task_dir, "RECEIPTS.jsonl"), mode, encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
@@ -245,8 +255,17 @@ def test_safe_on_error(tmp_path):
         assert payload["decision"] == "block"
 
 
-def test_blocks_for_active_background_subagent_without_manual_command(tmp_path):
-    """Unmatched receipts cause Stop to auto-wait, then block."""
+def test_yields_the_turn_to_an_active_background_subagent(tmp_path):
+    """A fresh Stop while a lens runs auto-waits, then allows — and says so.
+
+    This blocked until 2026-09-04. Blocking here cannot produce the missing
+    evidence: only the subagent can, and its completion notification re-invokes
+    the coordinator. What blocking did produce was a turn whose entire content
+    was "the review is still running" — measured ~20 times in one session.
+
+    Allowing is not silence. The payload names the task and the agents being
+    waited on, so an operator seeing the run pause can tell why.
+    """
     repo = _fake_repo(tmp_path, active_contents="TASK__with-bg\n")
     _write_claude_start(repo, "TASK__with-bg", "sess-bg")
 
@@ -257,12 +276,211 @@ def test_blocks_for_active_background_subagent_without_manual_command(tmp_path):
     )
 
     payload = json.loads(result.stdout)
-    assert payload["decision"] == "block"
-    reason = payload["reason"]
-    assert "background subagent work still running" in reason
+    assert payload.get("decision") != "block"
+    assert payload["continue"] is True
+    message = payload["systemMessage"]
+    assert "background subagent work still running" in message
+    assert "agent-bg" in message
+    assert "wait_background.py" not in message
+    # The report must not carry the directive that used to accompany a block;
+    # ordering the model not to stop while allowing the stop is incoherent.
+    assert "do not stop" not in message.lower()
+
+
+def test_yielding_to_a_lens_does_not_survive_the_record_clearing(tmp_path):
+    """AC-1b — the yield lasts as long as the *receipt record* does.
+
+    Not as long as the agent does. There is no heartbeat: `subagent_lifecycle`
+    stamps `updated_ts` from the `started` receipt and never refreshes it, so
+    the gate cannot see an agent die. A killed agent — or one whose
+    SubagentStop was rejected — leaves an orphan `started` row that reads as
+    active until HARNESS_BACKGROUND_STALE_SECS. That gap is bounded separately,
+    by the consecutive-yield counter; see
+    test_repeated_yields_on_an_unchanged_record_set_block.
+
+    What this pins is the scoping half: the allowance is conditioned on a
+    record for this task and session, and disappears with it.
+    """
+    repo = _fake_repo(tmp_path, active_contents="TASK__yield-ends\n")
+    stdin = json.dumps({"session_id": "sess-ends", "hook_event_name": "Stop"})
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0"}
+
+    _write_claude_start(repo, "TASK__yield-ends", "sess-ends")
+    while_running = json.loads(_run(repo, stdin=stdin, env=env).stdout)
+    assert while_running.get("decision") != "block"
+
+    # Clear the live record the way a SubagentStop would.
+    receipts = Path(repo) / "doc/harness/tasks/TASK__yield-ends/RECEIPTS.jsonl"
+    receipts.write_text("", encoding="utf-8")
+
+    after_finishing = json.loads(_run(repo, stdin=stdin, env=env).stdout)
+    assert after_finishing["decision"] == "block"
+    assert "TASK__yield-ends" in after_finishing["reason"]
+
+
+def test_repeated_yields_on_an_unchanged_record_set_block(tmp_path):
+    """An orphan `started` row must not silence C-17 for half an hour.
+
+    Killing a lens, or having its SubagentStop rejected, leaves a `started` row
+    with no completion (REQ__subagent-lifecycle-receipt-boundaries). It reads as
+    active until HARNESS_BACKGROUND_STALE_SECS — 1800s by default. Yielding on
+    that alone would mean: nothing running, no completion possible, PASS
+    unreachable, and the gate quiet for 30 minutes. That is precisely the
+    abandonment C-17 exists to prevent, and review reproduced it against the
+    first version of this change.
+
+    Age cannot separate the two cases — there is no heartbeat, and real review
+    lenses here routinely run for many minutes against the 1800s window, so no
+    age threshold separates them. Repetition can: a live
+    agent yields once and its completion notification resumes the run.
+    """
+    # Aged 25 minutes: inside the 1800s stale window, so `active_records` still
+    # reports it, and old enough to be the killed-agent case rather than a lens
+    # that just started. Using a fresh row here would exercise the counter but
+    # never reach the scenario the counter exists for.
+    aged = (
+        datetime.now(timezone.utc) - timedelta(minutes=25)
+    ).isoformat().replace("+00:00", "Z")
+    repo = _fake_repo(tmp_path, active_contents="TASK__orphan\n")
+    _write_claude_start(repo, "TASK__orphan", "sess-orphan", ts=aged)
+    stdin = json.dumps({"session_id": "sess-orphan", "hook_event_name": "Stop"})
+    # The stale window is pinned, not inherited: the 25-minute row is only the
+    # aged-but-active case while it stays under this bound, and `_run` passes
+    # the ambient environment through. A shell exporting a smaller value would
+    # otherwise make the row stale and fail this test pointing at the yield
+    # counter instead of at the window. 1500s against 1800s is the margin.
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0", "HARNESS_BACKGROUND_STALE_SECS": "1800"}
+
+    decisions = []
+    for _ in range(5):
+        decisions.append(json.loads(_run(repo, stdin=stdin, env=env).stdout))
+
+    yielded = [d for d in decisions if d.get("decision") != "block"]
+    blocked = [d for d in decisions if d.get("decision") == "block"]
+    assert len(yielded) == 3, [d.get("decision") for d in decisions]
+    assert blocked, "an unchanged record set must eventually stop being yielded to"
+    # The block has to name the case a coordinator cannot otherwise diagnose,
+    # and the remedy — a resumed agent writes no receipt, so waiting is wrong.
+    reason = blocked[0]["reason"]
+    assert "no completion will ever arrive" in reason
+    assert "spawn a fresh lens" in reason
+    assert "HARNESS_BACKGROUND_STALE_SECS" in reason
+    # A refusal to yield must not also announce that it is yielding.
+    assert "yielding the turn" not in reason
+    # It still names what is being waited on.
     assert "agent-bg" in reason
-    assert "wait_background.py" not in reason
-    assert payload.get("next_action_command", "") == ""
+
+
+def test_an_unparseable_receipt_timestamp_still_exhausts_the_budget(tmp_path):
+    """The counter must not be defeated by a record that churns its own clock.
+
+    `subagent_lifecycle` keeps a row with an unparseable `ts` active forever —
+    the stale window only applies to a timestamp it could read — and reports
+    `updated_ts` as *now*. Fingerprinting that derived value made the record
+    look different on every Stop, so the budget never advanced and the silence
+    became unbounded, which is worse than the 1800s window this replaced.
+
+    Only an out-of-band write to RECEIPTS.jsonl produces such a row, so this is
+    defence in depth, not a live path. The fingerprint keys on agent identity.
+    """
+    repo = _fake_repo(tmp_path, active_contents="TASK__badts\n")
+    _write_claude_start(repo, "TASK__badts", "sess-badts", ts="not-a-timestamp")
+    stdin = json.dumps({"session_id": "sess-badts", "hook_event_name": "Stop"})
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0"}
+
+    decisions = [
+        json.loads(_run(repo, stdin=stdin, env=env).stdout).get("decision")
+        for _ in range(5)
+    ]
+    assert decisions.count("block") >= 1, decisions
+
+
+def test_a_failed_ledger_write_leaves_no_temp_files(tmp_path):
+    """One leaked file per turn-end is a slow leak, not a harmless one."""
+    repo = _fake_repo(tmp_path, active_contents="TASK__tmpleak\n")
+    _write_claude_start(repo, "TASK__tmpleak", "sess-tmpleak")
+    task_dir = Path(repo) / "doc/harness/tasks/TASK__tmpleak"
+    (task_dir / ".stop_yield.sess-tmpleak.json").mkdir(parents=True, exist_ok=True)
+
+    for _ in range(3):
+        _run(
+            repo,
+            stdin=json.dumps({"session_id": "sess-tmpleak", "hook_event_name": "Stop"}),
+            env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+        )
+
+    assert not list(task_dir.glob(".stop_yield.*.tmp"))
+
+
+def test_one_sessions_progress_cannot_reset_anothers_yield_budget(tmp_path):
+    """The ledger is per-session because the record set it counts is per-session.
+
+    `active_records` filters on the `claude:<sid>:` runtime prefix, so two
+    sessions bound to one task dir observe disjoint records. With a single
+    shared ledger, session A's healthy churn would reset session B's counter on
+    every Stop and B's orphan would never exhaust its budget — reinstating,
+    for B, exactly the unbounded silence this counter exists to bound.
+    """
+    repo = _fake_repo(tmp_path, active_contents="TASK__twosess\n")
+    _write_claude_start(repo, "TASK__twosess", "sess-b", agent_id="agent-b")
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0"}
+    b_stdin = json.dumps({"session_id": "sess-b", "hook_event_name": "Stop"})
+
+    # B yields twice, then A churns a different record set in between.
+    for _ in range(2):
+        assert json.loads(_run(repo, stdin=b_stdin, env=env).stdout).get("decision") != "block"
+    _write_claude_start(repo, "TASK__twosess", "sess-a", agent_id="agent-a", append=True)
+    _run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-a", "hook_event_name": "Stop"}),
+        env=env,
+    )
+
+    # B's third yield is still its third: the next one must block.
+    assert json.loads(_run(repo, stdin=b_stdin, env=env).stdout).get("decision") != "block"
+    assert json.loads(_run(repo, stdin=b_stdin, env=env).stdout)["decision"] == "block"
+
+
+def test_an_unmaintainable_yield_ledger_blocks(tmp_path):
+    """Fail toward the gate, not away from it.
+
+    The counter is what bounds the orphan window. If it cannot be persisted the
+    gate cannot tell a first yield from a hundredth, so allowing would restore
+    the unbounded silence. Degrading to the pre-2026-09-04 block is noisy and
+    safe; degrading to a permanent yield is quiet and wrong.
+    """
+    repo = _fake_repo(tmp_path, active_contents="TASK__noledger\n")
+    _write_claude_start(repo, "TASK__noledger", "sess-noledger")
+    # A directory where the ledger file must go: os.replace onto it fails.
+    ledger = Path(repo) / "doc/harness/tasks/TASK__noledger/.stop_yield.sess-noledger.json"
+    ledger.mkdir(parents=True, exist_ok=True)
+
+    payload = json.loads(_run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-noledger", "hook_event_name": "Stop"}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    ).stdout)
+
+    assert payload["decision"] == "block"
+
+
+def test_a_changed_record_set_restarts_the_yield_budget(tmp_path):
+    """Progress resets the counter, so a real second lens is not penalised."""
+    repo = _fake_repo(tmp_path, active_contents="TASK__progress\n")
+    _write_claude_start(repo, "TASK__progress", "sess-progress")
+    stdin = json.dumps({"session_id": "sess-progress", "hook_event_name": "Stop"})
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0"}
+
+    for _ in range(3):
+        _run(repo, stdin=stdin, env=env)
+    assert json.loads(_run(repo, stdin=stdin, env=env).stdout)["decision"] == "block"
+
+    # A different agent starts: new record set, new budget.
+    _write_claude_start(
+        repo, "TASK__progress", "sess-progress",
+        agent_id="agent-second", append=True,
+    )
+    assert json.loads(_run(repo, stdin=stdin, env=env).stdout).get("decision") != "block"
 
 
 def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
@@ -322,8 +540,13 @@ def test_malformed_receipt_stream_blocks_recursive_stop(tmp_path):
     assert "malformed or unsafe" in payload["reason"]
 
 
-def test_stop_hook_active_with_active_background_silently_allows(tmp_path):
-    """Recursive Stop hook continuation should not re-block while background work runs."""
+def test_stop_hook_active_with_active_background_allows_and_reports(tmp_path):
+    """Recursive Stop hook continuation should not re-block while background work runs.
+
+    Allowing is unchanged. What changed on 2026-09-04 is that this path used to
+    emit nothing at all, leaving an operator with an unexplained stop; the
+    fresh-Stop path now takes the same decision, so both report it the same way.
+    """
     repo = _fake_repo(tmp_path, active_contents="TASK__recursive-bg\n")
     _write_claude_start(repo, "TASK__recursive-bg", "sess-1")
 
@@ -334,7 +557,10 @@ def test_stop_hook_active_with_active_background_silently_allows(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
+    payload = json.loads(result.stdout)
+    assert payload.get("decision") != "block"
+    assert payload["continue"] is True
+    assert "TASK__recursive-bg" in payload["systemMessage"]
 
 
 def test_stop_hook_active_without_active_background_still_blocks_open_task(tmp_path):

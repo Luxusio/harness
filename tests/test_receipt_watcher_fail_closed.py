@@ -466,6 +466,60 @@ class TestWatcherStatusShape(unittest.TestCase):
             self.assertEqual(status["active_task_id"], "TASK__x")
 
 
+class TestTaskVerifyKeepsThePrerequisiteBlocker(unittest.TestCase):
+    """task_verify must name the obstacle that is actually in the way.
+
+    Its PENDING branch discards whatever `emit_compact_context` computed and
+    substitutes the attestation instruction. Before 2026-09-04 a task with no
+    PLAN.md was therefore told to chase review/QA receipts, while the real
+    blocker survived only inside `missing_for_close` — on the surface the
+    protocol treats as most authoritative.
+
+    Driven through the real handler on a real task dir; the bug is in how the
+    handler composes its response, so a mocked ctx would test the mock.
+    """
+
+    def _verify_without_plan(self):
+        harness_server = _server()
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "doc", "harness"), exist_ok=True)
+            subprocess.run(["git", "init", "-q", root], check=True)
+            with open(os.path.join(root, "doc", "harness", "manifest.yaml"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("browser_qa_supported: false\n")
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                harness_server.TOOLS["task_start"]["handler"]({"slug": "noplan"})
+                return json.loads(
+                    harness_server.TOOLS["task_verify"]["handler"](
+                        {"task_id": "TASK__noplan"}
+                    )["content"][0]["text"]
+                )
+            finally:
+                os.chdir(cwd)
+
+    def test_missing_plan_is_named_in_next_action_not_only_in_missing_for_close(self):
+        result = self._verify_without_plan()
+        action = result["next_action"]
+        self.assertEqual(result["runtime_verdict"], "PENDING")
+        self.assertIn("PLAN.md", result["missing_for_close"])
+        self.assertIn("PLAN.md", action)
+        # Ordered: the prerequisite is what to do next, so it leads.
+        self.assertLess(action.index("PLAN.md"), action.index("Task verification"))
+
+    def test_the_attestation_instruction_is_kept_intact(self):
+        """Prepending must not become a replacement.
+
+        The failure this guards against is fixing the omission by swapping one
+        truncated message for another.
+        """
+        lib = _harness_lib()
+        action = self._verify_without_plan()["next_action"]
+        self.assertIn(lib.TRUST_BOUNDARY, action)
+        self.assertIn(lib.attestation_endgame(), action)
+
+
 class TestNextActionGate(unittest.TestCase):
     """Requirements 1 and 3 — continue useful work, then block attestation."""
 

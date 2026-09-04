@@ -47,6 +47,15 @@ migration, or compatibility period. Planning decisions live in `PLAN.md`, and
 environment facts are recomputed when needed. A fresh task run is required for
 an unsupported task pack.
 
+One transient exception, named here so the sentence above does not read it as
+debris: `.stop_yield.<session>.json` is stop-gate scratch. `stop_gate.py`
+writes one per session to count consecutive turn-yields against an unchanged
+background record set, and nothing else reads it. It carries no lifecycle
+authority, is not evidence, and is never migrated. Deleting it resets that
+session's counter, so it costs at most `_MAX_CONSECUTIVE_YIELDS` further
+yields before the gate blocks again — not one. See
+`doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
+
 New and resumed runs use one append-only `RECEIPTS.jsonl`. It is the only
 supported receipt stream and the only input to verdicts, provenance,
 fingerprints, installation authority, and close authority.

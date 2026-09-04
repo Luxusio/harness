@@ -1180,7 +1180,26 @@ def handle_task_verify(args: dict) -> dict:
         # unrun lens nor a missing receipt, and the generic pending guidance
         # sends the caller down both wrong paths. Name it first, then keep the
         # unchanged attestation instruction — this only relabels a PENDING.
-        ctx["next_action"] = nonparsing_completion_note(
+        #
+        # The prerequisite comes first and is preserved verbatim. This branch
+        # discards whatever `emit_compact_context` computed, so before
+        # 2026-09-04 a task with no PLAN.md was told to chase review/QA
+        # attestation while the actual blocker — "Create PLAN.md via plan skill
+        # before source writes." — survived only inside `missing_for_close`.
+        # task_verify is the most authoritative surface in the protocol and it
+        # was naming the wrong obstacle.
+        #
+        # Keyed on the structured field, not on the sentence: `emit_compact_context`
+        # sets `why_source_write_blocked` exactly when a plan-first precondition
+        # is unmet, so a reworded instruction cannot silently detach this.
+        prerequisite = ""
+        if str(ctx.get("why_source_write_blocked") or "").strip():
+            prerequisite = str(ctx.get("next_action") or "").strip()
+            if prerequisite and not prerequisite.endswith((".", "!", "?")):
+                prerequisite += "."
+            if prerequisite:
+                prerequisite += " "
+        ctx["next_action"] = prerequisite + nonparsing_completion_note(
             nonparsing_completion_lenses(td, st, snapshot)
         ) + RECEIPT_PENDING_VERIFY_NEXT_ACTION
     payload = {

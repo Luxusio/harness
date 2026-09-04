@@ -252,6 +252,16 @@ break it immediately.
 **Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified PASS, durable `task_blocked`, 또는 사용자 명시 cancel 뿐.
 **When:** Stop event with `.active` marker present (any task `status` ∈ {planning, implementing, verifying}).
 **Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks until PASS is closed or task status is durably `blocked`); MCP `task_blocked` (publishes valid `BLOCKED.md` unfinished state); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
+
+**Bounded-yield clause:** the gate does not block a turn whose only outstanding
+item is a subagent it can see running; blocking there cannot produce the
+missing evidence and spends a turn on nothing. The yield is bounded — at most
+`_MAX_CONSECUTIVE_YIELDS` against an unchanged record set, after which the gate
+blocks and names the killed-or-unreported-agent case — because a killed agent
+leaves a record that reads as live for up to `HARNESS_BACKGROUND_STALE_SECS`.
+The task stays `in_progress` and the `.active` marker is untouched throughout,
+so this is a wait, not one of the three turn-end reasons above. See
+`doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
 **On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or call `task_blocked` directly for a qualified blocker. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA

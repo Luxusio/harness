@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -207,6 +208,129 @@ class TestLogGateBypass(unittest.TestCase):
                 self.assertFalse(os.path.exists(os.path.join(td, "doc", "harness")))
             finally:
                 os.chdir(cwd)
+
+class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
+    """A refusal that covers four situations must say which one it is.
+
+    `authorized()` returns one False for, among others, "nothing is bound in
+    this process" and "something is bound but you are not it". Those have
+    opposite remedies — the first cannot be fixed at the call site at all — and
+    a single shared message made them indistinguishable. On 2026-09-03 that
+    cost hours: `importlib.reload(_lib)` in a test setUp re-executes the
+    authority factory in the same module dict, emptying the bindings, and every
+    later write in that process reported the wrong-writer text.
+    """
+
+    def _control(self):
+        return {
+            "run_id": _lib.new_uuid7(),
+            "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }
+
+    def _both_refusals(self):
+        """Return (unbound, wrong_frame) refusal messages.
+
+        A subprocess, because the binding is process-global: importing
+        `harness_server` here would leak into every other test in this worker.
+        Both categories must come from one run, since reaching the second
+        requires the first to have already happened.
+        """
+        # Run in a subprocess: binding is process-global, so an import here
+        # would leak into every other test in this worker.
+        script = (
+            "import sys;"
+            f"sys.path.insert(0, {os.path.join(REPO_ROOT, 'plugin', 'scripts')!r});"
+            f"sys.path.insert(0, {os.path.join(REPO_ROOT, 'plugin', 'mcp')!r});"
+            "import _lib;"
+            "ctl={'run_id':_lib.new_uuid7(),'execution_mode':'standard',"
+            "'required_lenses':['review-code','qa-cli'],'close_receipt_fingerprint':None};"
+            "\ndef attempt():\n"
+            "    try:\n"
+            "        _lib.write_task_control('/tmp/harness-refusal-probe', ctl)\n"
+            "        return 'NONE'\n"
+            "    except PermissionError as exc:\n"
+            "        return str(exc)\n"
+            "\nprint(attempt())\n"
+            "import harness_server\n"
+            "print(attempt())\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        return out[0], out[1]
+
+    def test_unbound_and_wrong_frame_are_distinguishable(self):
+        unbound, wrong_frame = self._both_refusals()
+
+        self.assertIn("no task-control writer is bound", unbound)
+        self.assertIn("reloading _lib empties the binding", unbound)
+        self.assertIn("not the bound task-control writer", wrong_frame)
+        self.assertNotEqual(unbound, wrong_frame)
+        # Both still name the attempted action, so the message did not lose
+        # what it already carried.
+        for message in (unbound, wrong_frame):
+            self.assertIn("TASK.json mutation requires the task-control MCP", message)
+
+    def test_the_refusal_leaks_no_identity_values(self):
+        """AC-3a — the category is safe to print; the comparisons are not.
+
+        Naming which of the ~18 identity checks failed would turn the guard
+        into a puzzle. The category is coarse by construction, so assert it
+        stays that way.
+
+        Both categories, from a subprocess. An in-process call only ever
+        reaches the unbound branch — this test's first version did exactly
+        that and a mutation adding `uid {os.getuid()}` to the *other* branch
+        passed it.
+        """
+        for label, reason in zip(("unbound", "wrong_frame"), self._both_refusals()):
+            with self.subTest(category=label):
+                lowered = reason.lower()
+                for leak in ("inode", "uid", "st_", "0o", "/home/", "/project/", "0x"):
+                    self.assertNotIn(leak, lowered, reason)
+
+    def test_a_foreign_binding_is_not_mistaken_for_a_task_control_writer(self):
+        """`marker` must select the same subset `authorized()` consults.
+
+        `codex_hook_registration` binds a writer under its own role, not
+        `harness_server`. `authorized(marker=False)` ignores it, so a
+        task-control write in such a process is refused for want of any bound
+        writer — but a category keyed on `bool(bindings)` alone sees a
+        non-empty dict and reports the wrong-frame case instead. That is
+        exactly the "harness_server was never imported" situation the caller
+        needs told apart, and it is undetectable from the message.
+
+        Reverting `marker` to dead passes every other test in this suite, so
+        without this one the parameter silently rots back.
+        """
+        script = (
+            "import sys;"
+            f"sys.path.insert(0, {SCRIPTS!r});"
+            "import _lib, codex_hook_registration;"
+            "ctl={'run_id':_lib.new_uuid7(),'execution_mode':'standard',"
+            "'required_lenses':['review-code','qa-cli'],'close_receipt_fingerprint':None};"
+            "\ntry:\n"
+            "    _lib.write_task_control('/tmp/harness-refusal-probe', ctl)\n"
+            "    print('NONE')\n"
+            "except PermissionError as exc:\n"
+            "    print(exc)\n"
+        )
+        message = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        self.assertIn("no task-control writer is bound", message, message)
+        self.assertNotIn("not the bound task-control writer", message, message)
+
+    def test_the_decision_bit_is_unchanged_by_diagnosis(self):
+        """The category is computed after the verdict, never as part of it."""
+        self.assertFalse(_lib._trusted_control_writer())
+        self.assertFalse(_lib._trusted_control_writer(marker=True))
+        with self.assertRaises(PermissionError):
+            _lib.write_task_control("/tmp/harness-refusal-probe", self._control())
+
 
 class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
     """`emit_compact_context` must state the C-14 boundary wherever a lens is
