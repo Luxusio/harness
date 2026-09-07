@@ -17,11 +17,14 @@ is remediated, actual BLOCKED_ENV is published directly through `task_blocked`, 
 actual review PASS advances to substantive QA. Do not repair, restart, resume,
 recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
 call `task_verify` once; close on ordered receipt PASS, otherwise call
-`task_blocked` with the fixed missing-attestation
+`task_blocked` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`task_verify` response's `next_action` (the stop-gate message carries the same
-pair). That pair is owned by `plugin/scripts/_lib.py`; never retype it from
-memory, paraphrase it, or interpolate diagnostics into it.
+`task_verify` response's `next_action`. There are two pairs and the receipt
+stream picks which one: use the empty-stream pair when no receipt of any kind
+was recorded for the run, and the missing-attestation pair when receipts exist
+but a required completion is absent. Both are owned by
+`plugin/scripts/_lib.py`; never retype one from memory, paraphrase it, or
+interpolate diagnostics into it.
 Direct finals never authorize PASS or close.
 Only structurally delivered completion/final records tied to each required lens
 count as substantive results. Actual review PASS must precede actual QA PASS;
@@ -288,7 +291,7 @@ For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
 already-running MCP/hook process still reports missing required lifecycle
 evidence after substantive QA and one fresh `task_verify`, call `task_blocked`
-directly with the fixed missing-attestation pair above; do not request a new thread or rerun
+directly with the applicable fixed park pair above; do not request a new thread or rerun
 a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
 retries, but receipt absence is not a reason to invoke it again.

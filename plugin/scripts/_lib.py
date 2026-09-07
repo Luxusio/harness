@@ -73,6 +73,43 @@ TRUST_BOUNDARY = (
 )
 
 
+NO_RECEIPTS_BLOCKED_REASON = (
+    "The required lenses ran and returned results, and no review/QA receipt of "
+    "any kind was recorded for this task run."
+)
+NO_RECEIPTS_UNBLOCK_CONDITION = (
+    "Resume when spawning one lens is confirmed to add a started row to "
+    "RECEIPTS.jsonl."
+)
+
+
+def no_receipts_block_instruction() -> str:
+    """The park call for a run whose receipt stream stayed empty.
+
+    Its `blocked_reason` conjoins two facts of different kinds, deliberately:
+    one machine-observable (no receipt of any kind exists for this run) and one
+    the coordinator observed (the lenses ran and returned results). Dropping the
+    second would leave a durable record indistinguishable from a task where
+    nothing was ever spawned, which is the state that must NOT park — so the
+    record would no longer say why stopping was legitimate.
+
+    That is not the same as the attestation pair's problem. That one asserts a
+    review PASS and a QA PASS, which are exactly the things receipts exist to
+    establish, so claiming them while the stream is empty asserts the evidence
+    whose absence is the blocker. This pair claims only that work happened, and
+    a coordinator asserting a blocker it observed is what `task_blocked` is.
+
+    It must not claim the runtime is incapable of recording. Nothing here
+    observes capability, only absence — the conflation that made the first
+    attempt at this task turn the C-17 gate off for ordinary tasks.
+    """
+    return (
+        "call task_blocked directly with "
+        f"blocked_reason={NO_RECEIPTS_BLOCKED_REASON!r} and "
+        f"unblock_condition={NO_RECEIPTS_UNBLOCK_CONDITION!r}"
+    )
+
+
 def attestation_block_instruction() -> str:
     """Return the fixed, non-diagnostic missing-attestation parking call.
 
@@ -113,8 +150,13 @@ def attestation_endgame() -> str:
         "After an awaited actual review PASS and then an actual QA PASS, call"
         " task_verify once; if required hook-owned evidence is still missing, do"
         " not repair, restart, resume, recollect, or rerun a lens, or call"
-        " task_verify again, solely to obtain a receipt — "
+        " task_verify again, solely to obtain a receipt; park instead, and"
+        " choose the reason by what the receipt stream shows. If no receipt of"
+        " any kind was recorded for this run, "
+        f"{no_receipts_block_instruction()}. If receipts exist but a required"
+        " completion is absent, "
         f"{attestation_block_instruction()}."
+        " Neither applies before a lens has actually run and returned results."
     )
 
 

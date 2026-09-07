@@ -39,11 +39,14 @@ final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV is
 published directly through `task_blocked`, and only actual review PASS advances to substantive QA.
 Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
 receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
-PASS, otherwise call `task_blocked` with the fixed missing-attestation
+PASS, otherwise call `task_blocked` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`task_verify` response's `next_action` (the stop-gate message carries the same
-pair). That pair is owned by `plugin/scripts/_lib.py`; never retype it from
-memory, paraphrase it, or interpolate diagnostics into it.
+`task_verify` response's `next_action`. There are two pairs and the receipt
+stream picks which one: use the empty-stream pair when no receipt of any kind
+was recorded for the run, and the missing-attestation pair when receipts exist
+but a required completion is absent. Both are owned by
+`plugin/scripts/_lib.py`; never retype one from memory, paraphrase it, or
+interpolate diagnostics into it.
 Direct finals never authorize PASS or close.
 Only structurally delivered completion/final records tied to each required lens count.
 Actual review PASS must precede actual QA PASS; coordinator paraphrases, copied verdict

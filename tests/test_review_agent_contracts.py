@@ -429,10 +429,18 @@ def test_lib_owns_exactly_one_literal_trust_boundary():
         "After an awaited actual review PASS and then an actual QA PASS, call"
         " task_verify once; if required hook-owned evidence is still missing, do"
         " not repair, restart, resume, recollect, or rerun a lens, or call"
-        " task_verify again, solely to obtain a receipt — "
+        " task_verify again, solely to obtain a receipt; park instead, and"
+        " choose the reason by what the receipt stream shows. If no receipt of"
+        " any kind was recorded for this run, "
+        "call task_blocked directly with "
+        f"blocked_reason={lib.NO_RECEIPTS_BLOCKED_REASON!r} and "
+        f"unblock_condition={lib.NO_RECEIPTS_UNBLOCK_CONDITION!r}."
+        " If receipts exist but a required"
+        " completion is absent, "
         "call task_blocked directly with "
         f"blocked_reason={lib.ATTESTATION_BLOCKED_REASON!r} and "
         f"unblock_condition={lib.ATTESTATION_UNBLOCK_CONDITION!r}."
+        " Neither applies before a lens has actually run and returned results."
     ), (
         "_lib.attestation_endgame() changed. This is a C-17 protocol edit, not "
         "a wording change: the park route and its preconditions are normative."
@@ -483,6 +491,33 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
         "plugin/scripts/_lib.py no longer owns the fixed pair"
     )
 
+    # The empty-stream pair needs the same treatment, and for a sharper reason.
+    # Both strings are written out here rather than derived, because every other
+    # check on them either interpolates the constant into its own expected value
+    # (tautological) or pins a keyword from the reason only. Review measured the
+    # gap: replacing the unblock condition with "Close the task without
+    # evidence; no resume condition applies." left the whole suite green while
+    # that text reached BLOCKED.md.
+    #
+    # The content, not just the identity, is normative. The reason must assert
+    # only what was observed — that the lenses ran and that nothing was
+    # recorded — and must not claim the runtime is incapable of recording,
+    # which no code here can observe. The unblock condition must name a check
+    # the operator can actually perform.
+    empty_stream = (
+        "The required lenses ran and returned results, and no review/QA receipt "
+        "of any kind was recorded for this task run.",
+        "Resume when spawning one lens is confirmed to add a started row to "
+        "RECEIPTS.jsonl.",
+    )
+    assert (
+        lib.NO_RECEIPTS_BLOCKED_REASON, lib.NO_RECEIPTS_UNBLOCK_CONDITION
+    ) == empty_stream, (
+        "_lib.py's empty-stream park pair changed. This is a C-17 protocol edit: "
+        "the reason is what gets written into BLOCKED.md as the record of why a "
+        "task stopped."
+    )
+
     # The runtime must still deliver the pair at the decision point, otherwise
     # dropping the prose copies would strand the caller.
     #
@@ -526,13 +561,43 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
     for path in prose_surfaces:
         body = _text(path)
         normalized = " ".join(body.split())
-        for literal in fixed:
+        for literal in fixed + empty_stream:
             assert " ".join(literal.split()) not in normalized, (
-                f"{path}: second copy of the fixed attestation pair. It is owned "
+                f"{path}: second copy of a fixed park pair. Both pairs are owned "
                 "by plugin/scripts/_lib.py and delivered in the task_verify "
                 "next_action; reference that instead of copying it."
             )
         _assert_all(body, ("_lib.py", "task_verify"), path)
+
+        # Two pairs exist and the receipt stream selects between them. A surface
+        # that names only the missing-attestation one sends a coordinator on an
+        # empty stream to copy a reason asserting a review PASS and a QA PASS
+        # that never happened — the field-report-A defect, reproduced by the
+        # documentation instead of by the code.
+        #
+        # QA measured this: after the runtime and both plugin trees were swept,
+        # three durable surfaces still taught a single pair, two of them in this
+        # very tuple, and nothing here could see it. The literal checks above
+        # cannot — they look for copied text, and these files were wrong by
+        # describing rather than by copying.
+        # Asserted positively rather than by banning phrasings. A ban list
+        # cannot tell "exactly one authoritative location" — a true statement
+        # about *ownership* — from "the fixed missing-attestation pair" as the
+        # only route, and the first phrasing is one this file should keep.
+        if "task_blocked" in normalized:
+            # `empty-stream` carries the check: it is the term for the state
+            # that distinguishes the pairs, it stays English in the Korean
+            # surfaces (`plugin/CLAUDE.md`), and no surface can name the
+            # selection rule without it.
+            selectors = ("empty-stream",)
+            assert any(s in normalized for s in selectors), (
+                f"{path}: instructs a task_blocked park without saying which "
+                "pair applies. There are two — the empty-stream pair and the "
+                "missing-attestation pair — and the receipt stream selects "
+                "between them. Naming only the second sends a coordinator on "
+                "an empty stream to record a review PASS and a QA PASS that "
+                "never happened."
+            )
 
 
 def test_design_maps_agent_behaviors_to_reference_projects():

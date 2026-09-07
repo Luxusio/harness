@@ -70,16 +70,22 @@ session start; Codex has no equivalent pre-check.
 5. **Block after substantive QA, not before it.** After an actual QA PASS, call
    `task_verify` once against a fresh receipt snapshot. Ordered receipt PASS
    closes normally. If required evidence remains missing, call `task_blocked`
-   directly with a fixed generic attestation-evidence
-   reason. Never copy a watcher diagnostic cause into `BLOCKED.md`.
-   That fixed `blocked_reason`/`unblock_condition` pair has exactly one
-   authoritative location: `plugin/scripts/_lib.py`
-   (`ATTESTATION_BLOCKED_REASON` / `ATTESTATION_UNBLOCK_CONDITION`). The runtime
-   delivers it to the caller verbatim — `harness_server` embeds it in the
-   `task_verify` next_action and `stop_gate.py` emits it via
-   `attestation_block_instruction()` — and the branch is only reachable after a
+   directly with a fixed generic evidence reason. Never copy a watcher
+   diagnostic cause into `BLOCKED.md`.
+   There are two such `blocked_reason`/`unblock_condition` pairs and the receipt
+   stream selects between them: the empty-stream pair when no receipt of any
+   kind was recorded for the run, the missing-attestation pair when receipts
+   exist but a required completion is absent. Forcing the second onto an empty
+   stream writes a false statement, since it asserts a review PASS and a QA PASS
+   that the stream cannot show. Both have exactly one authoritative location:
+   `plugin/scripts/_lib.py` (`ATTESTATION_BLOCKED_REASON` /
+   `ATTESTATION_UNBLOCK_CONDITION`, `NO_RECEIPTS_BLOCKED_REASON` /
+   `NO_RECEIPTS_UNBLOCK_CONDITION`). The runtime
+   delivers both to the caller verbatim — `harness_server` embeds them in the
+   `task_verify` next_action and `stop_gate.py` emits them via
+   `attestation_endgame()` — and the branch is only reachable after a
    fresh `task_verify`, so the exact text is always in context when it is
-   needed. Callers copy it from that message and never interpolate diagnostics.
+   needed. Callers copy the applicable pair and never interpolate diagnostics.
    Prose surfaces (contracts, runtime docs, skills) must reference this rule
    rather than carry a second copy of the strings: a hand-copied literal that
    drifts by one character silently misroutes `task_blocked`.

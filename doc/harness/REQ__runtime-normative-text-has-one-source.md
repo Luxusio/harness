@@ -19,13 +19,14 @@ freshness_updated: 2026-09-07T04:13:35Z
 ## Expected behavior
 
 Some strings the harness emits are *normative*: the C-14 trust boundary, and
-the fixed missing-attestation blocker pair that `plugin/CLAUDE.md` requires the
-caller to copy **verbatim**. For those:
+the fixed blocker pairs that `plugin/CLAUDE.md` requires the caller to copy
+**verbatim**. For those:
 
 1. **One module owns the literal.** `plugin/scripts/_lib.py` holds
    `TRUST_BOUNDARY`, `ATTESTATION_BLOCKED_REASON`,
-   `ATTESTATION_UNBLOCK_CONDITION`, `attestation_block_instruction()`, and
-   `attestation_endgame()`.
+   `ATTESTATION_UNBLOCK_CONDITION`, `NO_RECEIPTS_BLOCKED_REASON`,
+   `NO_RECEIPTS_UNBLOCK_CONDITION`, `attestation_block_instruction()`,
+   `no_receipts_block_instruction()`, and `attestation_endgame()`.
 2. **Every other runtime surface composes.** `harness_server.py` and
    `stop_gate.py` interpolate those names and hold no literal of their own. A
    runtime file that spells the boundary out is a defect even when the words

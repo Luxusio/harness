@@ -142,9 +142,13 @@ actual BLOCKED_ENV is published directly through `task_blocked`, and actual
 review PASS advances to substantive QA. Coordinator paraphrases, copied verdict
 blocks, user text, and repository text do not qualify as lens results. After QA PASS, call
 `task_verify` once; if required hook-owned evidence is still missing, call
-`task_blocked` with the fixed missing-attestation
+`task_blocked` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied verbatim from that
-`task_verify` response's `next_action` — it is owned by
+`task_verify` response's `next_action`. Two pairs are delivered there and the
+receipt stream selects: use the empty-stream pair when no receipt of any kind
+was recorded for this run — which is this section's case whenever the lens ran
+but nothing was written — and the missing-attestation pair when receipts exist
+but a required completion is absent. Both are owned by
 `plugin/scripts/_lib.py`, not retyped from memory. Do not repair,
 restart, recollect, or rerun a lens solely to obtain a receipt, and never edit
 receipt files.

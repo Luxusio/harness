@@ -33,7 +33,7 @@ from _lib import (  # type: ignore
     read_hook_input, emit_compact_context,
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
     is_harness_enabled_repo,
-    attestation_block_instruction,
+    attestation_block_instruction, no_receipts_block_instruction,
     TRUST_BOUNDARY,
 )
 from _gate_response import block as gate_block, proceed as gate_proceed  # type: ignore
@@ -225,7 +225,10 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
                 "once after substantive QA; close on PASS, use a concrete direct "
                 "task_blocked call for a genuine external blocker or observed lens "
-                f"BLOCKED_ENV, or for qualified missing attestation {attestation_block_instruction()}",
+                f"BLOCKED_ENV, or, when the lenses ran and returned results but required "
+                f"evidence is absent, the park pair matching what the receipt stream "
+                f"shows: {no_receipts_block_instruction()} when nothing at all was "
+                f"recorded, otherwise {attestation_block_instruction()}",
                 "harness:qa-* or harness-goal")
     return "", ""
 

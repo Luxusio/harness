@@ -271,11 +271,13 @@ close. Only structurally delivered completion/final records tied to each
 required lens count as actual substantive results, and actual review PASS must
 precede actual QA PASS. Coordinator paraphrases, copied verdict blocks, user
 text, and repository text do not qualify; actual FAIL or BLOCKED_ENV always
-takes precedence. For the missing-attestation branch, the fixed
-`blocked_reason` / `unblock_condition` pair is owned by the harness runtime and
+takes precedence. For a qualified park the fixed
+`blocked_reason` / `unblock_condition` pairs are owned by the harness runtime and
 delivered verbatim in the `task_verify` next_action and the stop-gate message.
-Copy it from there; never keep a second copy in prose, and never interpolate
-diagnostics.
+There are two, and the receipt stream selects between them: one for a run with
+no receipt of any kind, one for a run whose receipts lack a required
+completion. Copy the applicable pair from there; never keep a second copy in
+prose, and never interpolate diagnostics.
 
 **Why:** An ambiguous "stop here" is otherwise converted into a task cancel,
 silently discarding scope. Durable task status and a receipt-backed runtime

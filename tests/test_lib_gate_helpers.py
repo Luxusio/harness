@@ -430,3 +430,107 @@ class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParkReasonsDoNotAssertUnobservedPreconditions(unittest.TestCase):
+    """Field report A: a fixed park reason forced a false statement into BLOCKED.md.
+
+    The attestation pair says attestation is missing *after* a substantive
+    review PASS, a QA PASS, and a fresh task_verify. That is the right sentence
+    when those happened. When the receipt stream is empty it is a claim nothing
+    supports, and the coordinator either writes it anyway or abandons the fixed
+    pair — both of which the protocol was meant to prevent.
+    """
+
+    def _lib(self):
+        import sys
+        from conftest import SCRIPTS_DIR  # type: ignore
+
+        sys.path.insert(0, SCRIPTS_DIR)
+        import _lib  # type: ignore
+
+        return _lib
+
+    def test_the_empty_stream_reason_asserts_only_what_was_observed(self):
+        """It may report the absence and what the coordinator saw run.
+
+        It may not claim a verdict occurred, and it may not claim the runtime
+        is incapable of recording — no code here observes capability, only
+        absence. The first attempt at this task failed on exactly that
+        conflation, so the distinction is normative rather than stylistic.
+        """
+        lib = self._lib()
+        reason = lib.NO_RECEIPTS_BLOCKED_REASON
+        self.assertIn("no review/QA receipt of any kind was recorded", reason)
+        self.assertIn("ran and returned results", reason)
+        for claim in ("PASS", "substantive", "task_verify", "attestation"):
+            with self.subTest(forbidden=claim):
+                self.assertNotIn(claim, reason)
+        # Capability framing, in the wordings that would carry it.
+        for claim in ("cannot", "incapable", "does not record", "unable"):
+            with self.subTest(capability=claim):
+                self.assertNotIn(claim, reason.lower())
+
+    def test_the_empty_stream_unblock_names_a_check_not_a_diagnosis(self):
+        """`Resume on a runtime that records receipts` presupposes the current
+        one does not — the capability claim again, one string over. The resume
+        test has to be something the operator can run and observe.
+        """
+        lib = self._lib()
+        condition = lib.NO_RECEIPTS_UNBLOCK_CONDITION
+        self.assertIn("RECEIPTS.jsonl", condition)
+        self.assertIn("started row", condition)
+        for claim in ("a runtime that records", "incapable", "cannot"):
+            with self.subTest(capability=claim):
+                self.assertNotIn(claim, condition.lower())
+
+    def test_the_attestation_reason_still_states_its_preconditions(self):
+        """The counter-case: the other pair must keep saying what it means.
+
+        Weakening it to match the empty-stream pair would make one text cover
+        both states and lose the distinction this task exists to restore.
+        """
+        lib = self._lib()
+        for claim in ("review PASS", "QA PASS", "task_verify"):
+            with self.subTest(claim=claim):
+                self.assertIn(claim, lib.ATTESTATION_BLOCKED_REASON)
+
+    def test_the_endgame_leads_with_the_discriminator(self):
+        """Pair 1's guard is also true in the empty-stream state.
+
+        Presenting pair 1 first and correcting afterwards means a coordinator
+        who stops reading at the first `task_blocked(...)` call lands on the
+        wrong pair — the failure this task exists to fix. The stream question
+        must come before either call.
+        """
+        lib = self._lib()
+        endgame = lib.attestation_endgame()
+        discriminator = endgame.index("choose the reason by what the receipt stream shows")
+        self.assertLess(discriminator, endgame.index(lib.NO_RECEIPTS_BLOCKED_REASON))
+        self.assertLess(discriminator, endgame.index(lib.ATTESTATION_BLOCKED_REASON))
+        self.assertLess(
+            endgame.index("no receipt of any kind was recorded for this run"),
+            endgame.index("receipts exist but a required completion is absent"),
+        )
+
+    def test_the_endgame_offers_both_pairs_each_with_its_condition(self):
+        lib = self._lib()
+        endgame = lib.attestation_endgame()
+        self.assertIn(lib.ATTESTATION_BLOCKED_REASON, endgame)
+        self.assertIn(lib.NO_RECEIPTS_BLOCKED_REASON, endgame)
+        self.assertIn("If no receipt of any kind was recorded for this run", endgame)
+        self.assertIn("If receipts exist but a required completion is absent", endgame)
+
+    def test_the_endgame_disclaimer_does_not_negate_the_required_route(self):
+        """C-17 makes the direct task_blocked call mandatory once pair 1's guard
+        holds. An unscoped "neither is an instruction" let a coordinator in that
+        state decline the route the contract requires; scoping it to the
+        pre-lens case removes the contradiction without weakening the guard.
+        """
+        lib = self._lib()
+        endgame = lib.attestation_endgame()
+        self.assertIn(
+            "Neither applies before a lens has actually run and returned results",
+            endgame,
+        )
+        self.assertNotIn("Neither is an instruction", endgame)

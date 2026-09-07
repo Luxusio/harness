@@ -282,6 +282,17 @@ delivered to the caller verbatim in the `task_verify` next_action and the
 stop-gate message. Copy it from there; never keep a second copy in prose, and
 never interpolate diagnostics.
 
+**Two pairs, selected by the receipt stream.** The pair above states that
+attestation is missing *after* a substantive review PASS, a QA PASS, and a
+fresh `task_verify`. That is false when no receipt of any kind was recorded for
+the run, and forcing it there writes a false statement into `BLOCKED.md` — the
+failure this clause exists to prevent, observed in the field. A second fixed
+pair, the empty-stream pair, covers that state and asserts only the absence
+plus the work the coordinator observed. Both are owned by `plugin/scripts/_lib.py`; the caller
+picks by what the stream shows and copies verbatim. Neither pair applies before
+a lens has actually run and returned results: an unrun lens is not a blocker.
+See `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`.
+
 **Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Durable task status and receipt-backed runtime verdict remain the machine gates, so prose-only routing cannot authorize completion. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
 Receipt-backed verification closes the self-authored verdict loophole: the
 close signal is anchored to a hook-observed subagent start for the current task,
