@@ -2485,17 +2485,13 @@ def _receipt_entry_semantics_valid(item):
     if len(lines) != expected_lines or lines[0] != f"VERDICT: {item['verdict']}":
         return False
     if item["lens"].startswith("review-") and not (
-        lines[1] == "FINDING_COUNTS: INVALID" or _FINDING_COUNTS_RE.fullmatch(lines[1])
+        _COUNTS_UNBOUND_RE.fullmatch(lines[1]) or _FINDING_COUNTS_RE.fullmatch(lines[1])
     ):
         return False
-    if item["lens"].startswith("review-") and lines[1] != "FINDING_COUNTS: INVALID":
+    if item["lens"].startswith("review-") and not _COUNTS_UNBOUND_RE.fullmatch(lines[1]):
         counts = _FINDING_COUNTS_RE.fullmatch(lines[1])
         fix_now, investigate, _optional = (int(value) for value in counts.groups())
-        if item["verdict"] == "PASS" and (fix_now or investigate):
-            return False
-        if item["verdict"] == "FAIL" and not fix_now:
-            return False
-        if item["verdict"] == "BLOCKED_ENV" and not investigate:
+        if _counts_contradict_verdict(item["verdict"], fix_now, investigate):
             return False
     return bool(_RECEIPT_DIGEST_RE.fullmatch(lines[-1]))
 
@@ -2737,26 +2733,56 @@ def _receipt_now_iso():
 
 
 _QA_VERDICT_RE = re.compile(r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)$")
+# Line 1 only. The bare form above stays the contract every agent definition
+# states, but a lens that has already filed one good report and is then invoked
+# again answers with a restatement — `VERDICT: PASS — report complete.` was
+# measured in the field. Under a fullmatch that binds nothing, and a PENDING
+# receipt reads exactly like a lens that never ran. The trailing text is
+# commentary on a verdict the line has already named, so it binds.
+#
+# The tail must be empty or start with punctuation. That keeps the token whole —
+# `VERDICT: PASSING`, `VERDICT: PASSable now`, `VERDICT: PASS_LATER` name
+# something this contract does not define — and it also refuses a hedge that
+# continues the sentence: `VERDICT: PASS if you accept the failures below`.
+# A case-insensitive letter test alone would bind all four. The distinction
+# matters most on `qa-*` lenses, which store no counts line to contradict a
+# wrongly bound PASS and whose verdict is the last gate before close.
+#
+# Deliberately NOT used for the later-line conflict scan below. That scan asks
+# "does another line claim a different verdict", and relaxing it would let
+# `VERDICT: FAIL was last round's result` void a report — reintroducing the
+# exact self-destroying-review failure the bare-only rule was written to end.
+# One relaxation, one position.
+_QA_VERDICT_HEAD_RE = re.compile(
+    r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)[ \t]*($|[—–\-:.!?()\[\]])"
+)
+# Deliberately looser than the head pattern: this one answers "did line 1 try to
+# name a verdict", not "does line 1 bind". `_offposition_negative` uses it to
+# stop scanning a report that already said PASS in the authoritative position,
+# however badly punctuated.
+_VERDICT_SELFDESCRIBE_RE = re.compile(r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)(?![A-Za-z_])")
 _FINDING_COUNTS_RE = re.compile(
     r"^FINDING_COUNTS: FIX_NOW=(\d+) INVESTIGATE=(\d+) OPTIONAL=(\d+)$"
 )
 
 
 def extract_qa_verdict(value):
-    """Accept the exact first-line verdict; only a conflicting verdict line voids it.
+    """Accept the first-line verdict; only a conflicting bare verdict line voids it.
 
-    Authority is positional: line 1 or nothing. A later line voids the result
-    only when it is itself a bare verdict line naming a *different* verdict —
-    genuine ambiguity about which one binds. A repeated identical verdict line
-    is harmless, and prose that merely mentions the token is not a verdict at
-    all. Rejecting on any second occurrence made a report that quotes or
-    discusses the verdict contract destroy its own verdict, which is precisely
-    what a review of this subsystem must be free to do.
+    Authority is positional: line 1 or nothing. Line 1 may carry trailing
+    commentary after the verdict token (see `_QA_VERDICT_HEAD_RE`); later lines
+    are read strictly, and one voids the result only when it is itself a bare
+    verdict line naming a *different* verdict — genuine ambiguity about which
+    one binds. A repeated identical verdict line is harmless, and prose that
+    merely mentions the token is not a verdict at all. Rejecting on any second
+    occurrence made a report that quotes or discusses the verdict contract
+    destroy its own verdict, which is precisely what a review of this subsystem
+    must be free to do.
     """
     lines = str(value or "").splitlines()
     if not lines:
         return ""
-    first = _QA_VERDICT_RE.fullmatch(lines[0].strip())
+    first = _QA_VERDICT_HEAD_RE.match(lines[0].strip())
     if not first:
         return ""
     for line in lines[1:]:
@@ -2770,6 +2796,95 @@ def _counts_conflict(line, counts_match):
     """Is `line` a bare counts line disagreeing with the authoritative one?"""
     other = _FINDING_COUNTS_RE.fullmatch(line.strip())
     return bool(other) and other.groups() != counts_match.groups()
+
+
+# Counts-slot values for a review completion that bound no verdict.
+# `INVALID` — nothing was readable, not even the line-1 verdict token.
+# `UNREADABLE <TOKEN>` — the verdict token WAS readable and was <TOKEN>; the
+#   counts line was not. The token is retained, not merely its presence: the
+#   selector must know *what* the lens said, because a restatement of an
+#   already-bound PASS and a fresh `FAIL` are both "readable" and only one of
+#   them may displace an earlier verdict. Recording presence alone made
+#   `VERDICT: PASS — report complete.` — the field observation that motivated
+#   this whole module — evict the verdict it was restating.
+# Owned by doc/harness/patterns/ADR__consolidated-task-artifacts.md.
+_COUNTS_INVALID = "FINDING_COUNTS: INVALID"
+_COUNTS_UNREADABLE = "FINDING_COUNTS: UNREADABLE"
+_COUNTS_UNBOUND_RE = re.compile(
+    r"^FINDING_COUNTS: (?:INVALID|UNREADABLE (?:PASS|FAIL|BLOCKED_ENV))$"
+)
+
+
+def _offposition_negative(summary_lines):
+    """Find a negative anywhere in a report that bound nothing positionally.
+
+    Returns ``(verdict_token, counts_line)``. Both are advisory: they never bind
+    a verdict, they only stop an older PASS from masking a report that said the
+    work is not done. Ambiguity yields nothing — disagreeing bare verdict lines
+    or disagreeing bare counts lines are exactly the case positional authority
+    exists to settle, so this scan declines rather than guessing.
+
+    Only `FAIL`/`BLOCKED_ENV` and `FIX_NOW > 0` count. A stray `VERDICT: PASS`
+    further down a report cannot displace anything, which keeps this from
+    becoming a second, weaker way to claim success.
+    """
+    # A line 1 that names a non-negative verdict without binding — `VERDICT:
+    # PASS, no blockers found` misses the tail class by a comma — has already
+    # self-described, and the scan's entire justification is that nothing
+    # positional was available. Scanning on regardless let a fenced `VERDICT:
+    # FAIL` *quoted as an example* revoke a genuine PASS, and every review of
+    # this subsystem quotes exactly that. Fail-closed, but the coordinator is
+    # then told to route findings that do not exist, and the receipt keeps only
+    # a digest so it cannot discover otherwise.
+    head = summary_lines[0].strip() if summary_lines else ""
+    self_described = _VERDICT_SELFDESCRIBE_RE.match(head)
+    if self_described and self_described.group(1) not in {"FAIL", "BLOCKED_ENV"}:
+        return "", ""
+    verdicts, counts = set(), set()
+    for line in summary_lines:
+        stripped = line.strip()
+        match = _QA_VERDICT_RE.fullmatch(stripped)
+        if match:
+            verdicts.add(match.group(1))
+        counts_match = _FINDING_COUNTS_RE.fullmatch(stripped)
+        if counts_match:
+            counts.add(counts_match.group(0))
+    token = ""
+    if len(verdicts) == 1:
+        only = verdicts.pop()
+        token = only if only in {"FAIL", "BLOCKED_ENV"} else ""
+    counts_line = ""
+    if len(counts) == 1:
+        only = counts.pop()
+        match = _FINDING_COUNTS_RE.fullmatch(only)
+        if match and int(match.group(1)):
+            counts_line = only
+    return token, counts_line
+
+
+def _counts_contradict_verdict(verdict, fix_now, investigate):
+    """The single place a verdict is judged against its own finding counts.
+
+    This rule existed in two copies — here and in the persisted-schema
+    validator — and they drifted the moment one was corrected. The binder began
+    binding `PASS` beside `INVESTIGATE>0` while the validator still rejected it,
+    so a compliant review's receipt failed schema validation and was never
+    written at all: strictly worse than the PENDING it replaced, because a lens
+    with no record reads as a lens that never ran. One caller may relax the rule
+    only by relaxing it for both.
+
+    Only `FIX_NOW` contradicts `PASS`. `INVESTIGATE` is by definition a finding
+    that does not block, and the reviewer definitions say so; whether an
+    unresolved INVESTIGATE should block is the reviewer's call, expressed as
+    `BLOCKED_ENV`.
+    """
+    if verdict == "PASS":
+        return bool(fix_now)
+    if verdict == "FAIL":
+        return not fix_now
+    if verdict == "BLOCKED_ENV":
+        return not investigate
+    return False
 
 
 def normalize_receipt_completion(lens, value, supplied_verdict=""):
@@ -2799,21 +2914,68 @@ def normalize_receipt_completion(lens, value, supplied_verdict=""):
     counts_reported = bool(counts_match) and not any(
         _counts_conflict(line, counts_match) for line in summary_lines[2:]
     )
+    # Bound below rather than only inside the branch: the counts-slot decision
+    # further down reads it, and a conditionally-assigned name there would be a
+    # NameError waiting for the next edit to the surrounding condition.
+    fix_now = 0
     if is_review:
         if not counts_reported:
             verdict = "PENDING"
         else:
             fix_now, investigate, _optional = (int(value) for value in counts_match.groups())
-            if verdict == "PASS" and (fix_now or investigate):
-                verdict = "PENDING"
-            if verdict == "FAIL" and not fix_now:
-                verdict = "PENDING"
-            if verdict == "BLOCKED_ENV" and not investigate:
+            if _counts_contradict_verdict(verdict, fix_now, investigate):
                 verdict = "PENDING"
 
     compact = [f"VERDICT: {verdict}"]
     if is_review:
-        compact.append(counts_match.group(0) if counts_reported else "FINDING_COUNTS: INVALID")
+        # Three distinct counts-slot values, because the downstream selector has
+        # to tell "nothing was readable" from "the verdict was readable and
+        # negative, the counts were not". Collapsing the latter into INVALID let
+        # a rerun reporting `VERDICT: FAIL — three blockers found.` be discarded
+        # as an unreadable restatement, so the previous round's PASS survived and
+        # the task closed over a live objection.
+        #
+        # A surviving counts line therefore means exactly one thing downstream:
+        # the report carries a contradiction or a blocker. Both are substantive,
+        # so both may displace an earlier bound verdict.
+        #
+        # A report whose line 1 was unreadable keeps its counts only when
+        # `FIX_NOW > 0` — that is what says the findings block, and dropping
+        # those counts masked a reviewer who listed three blockers without a
+        # parseable verdict line. `INVESTIGATE`-only is non-blocking by the same
+        # rule and correctly stays a shape failure.
+        #
+        # When nothing bound positionally, the report is scanned for a negative
+        # anywhere in it. Positional authority decides what *binds* and is not
+        # relaxed — a verdict on line 5 still binds nothing. It must not also
+        # decide whether an unbound report was negative: a block pushed off
+        # position by one line (an observed field failure, recorded in
+        # REQ__lens-verdict-contract-ownership.md) loses its verdict token AND
+        # its counts, so a review reporting FIX_NOW=3 blockers read as an
+        # unreadable restatement and could not displace the previous round's
+        # PASS. The scan can only refuse to mask a negative; it can never grant
+        # one, so widening it here is safe in the only direction that matters.
+        off_verdict, off_counts = _offposition_negative(summary_lines)
+        # `fix_now` is back, and it is not redundant with the scan below. Line 2
+        # is where the contract puts the counts and `counts_reported` has
+        # already validated it, so this is the *authoritative* position — it
+        # must never depend on the off-position scan, which carries a veto for
+        # self-described reports that this position has no business obeying.
+        # Routing it through the scan inverted the discriminator: a report
+        # naming PASS beside FIX_NOW=3 was masked while one naming nothing was
+        # not. Two paths to one outcome disarmed a mutation; one path with a
+        # veto attached masked a blocker. The fix is separate paths for separate
+        # positions, not a single shared one.
+        if counts_reported and (summary_verdict or fix_now):
+            compact.append(counts_match.group(0))
+        elif summary_verdict:
+            compact.append(f"{_COUNTS_UNREADABLE} {summary_verdict}")
+        elif off_verdict:
+            compact.append(f"{_COUNTS_UNREADABLE} {off_verdict}")
+        elif off_counts:
+            compact.append(off_counts)
+        else:
+            compact.append(_COUNTS_INVALID)
     compact.append("DETAIL_SHA256:" + hashlib.sha256(raw_summary.encode("utf-8")).hexdigest())
     return verdict, "\n".join(compact)
 
@@ -3155,40 +3317,163 @@ record_subagent_receipt, _bind_runtime_receipt_adapter = _make_runtime_receipt_w
 del _make_runtime_receipt_writer
 
 
+def _lens_events_by_lens(receipts, prefix, current_run_id):
+    """Group this run's receipts for `prefix` lenses, preserving stream order."""
+    grouped = {}
+    for item in receipts:
+        lens = str(item.get("lens") or "").lower()
+        if lens.startswith(prefix) and item.get("task_run_id") == current_run_id:
+            grouped.setdefault(lens, []).append(item)
+    return grouped
+
+
+def _rerun_in_flight(events):
+    """True when the lens's newest receipt is a start, i.e. it is running again.
+
+    An in-flight rerun still suppresses any earlier completion. That is not the
+    overwrite this module had to fix: a lens currently re-reviewing has not
+    reported yet, and treating its previous PASS as current could close a task
+    mid-review. Only completion-versus-completion selection changed.
+    """
+    return bool(events) and events[-1].get("event") == "started"
+
+
 def _completed_review_by_lens(task_dir, snapshot=None):
     snapshot = snapshot or receipt_snapshot(task_dir)
     receipts = snapshot.entries
     current_run_id = str(read_task_control(task_dir).get("run_id") or "")
     if not current_run_id:
         return {}
-    latest_events = {}
-    for item in receipts:
-        lens = str(item.get("lens") or "").lower()
-        if lens.startswith("review-") and item.get("task_run_id") == current_run_id:
-            latest_events[lens] = item
     completed = {}
-    for lens, item in latest_events.items():
-        if item.get("event") != "completed":
+    for lens, events in _lens_events_by_lens(receipts, "review-", current_run_id).items():
+        if _rerun_in_flight(events):
             continue
-        if str(item.get("verdict") or "").upper() not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
-            continue
-        if sum(
-            prior.get("event") == "completed"
-            and _receipt_runtime_identity_matches(prior, item)
-            for prior in receipts
-        ) != 1:
-            continue
-        completion_index = receipts.index(item)
-        matching_starts = [
-            prior for prior in receipts[:completion_index]
-            if prior is not item
-            and prior.get("event") == "started"
-            and _receipt_runtime_identity_matches(prior, item)
-        ]
-        if not matching_starts:
-            continue
-        completed[lens] = item
+        item = _effective_completion(lens, events, receipts)
+        if item is not None:
+            completed[lens] = item
     return completed
+
+
+def _pending_completion_kind(lens, item):
+    """Why did this completion bind no verdict — unreadable, or contradictory?
+
+    The kinds land on the same `PENDING` but mean opposite things, and the
+    difference is stored in the counts slot.
+
+    `shape` — nothing actionable can be read out of this report, so it must not
+    displace a verdict that was readable. Three cases reach it: a QA lens, which
+    stores no counts line at all; `INVALID`, where not even the verdict token
+    parsed; and `UNREADABLE PASS`, which is a lens restating a non-negative
+    verdict without its counts line. That last one is the field-measured
+    restatement (`VERDICT: PASS — report complete.`), and reading it as
+    substantive is how this module once evicted the verdict being restated.
+
+    `inconsistent` — the lens reported something that contradicts completion:
+    a counts line that disagrees with its own verdict, or a readable `FAIL` /
+    `BLOCKED_ENV` whose counts line could not be read. A human said "not done",
+    and that must outlive an earlier PASS even though it binds nothing.
+    """
+    if not str(lens or "").startswith("review-"):
+        return "shape"
+    slot = _unbound_counts_slot(item)
+    if slot is None:
+        # A real counts line survives only when the report was substantive:
+        # either line 1 was readable and disagreed with the counts, or the
+        # counts themselves report a blocker (`FIX_NOW > 0`) with no readable
+        # verdict line. Both are `inconsistent`. That invariant is established
+        # by the writer, not inferred here — see `normalize_receipt_completion`,
+        # which drops counts it cannot attach to either signal and stores
+        # INVALID instead.
+        return "inconsistent"
+    if slot == _COUNTS_INVALID:
+        return "shape"
+    return "shape" if _retained_verdict_token(item) == "PASS" else "inconsistent"
+
+
+def _unbound_counts_slot(item):
+    """The counts-slot line when it records a reason instead of counts.
+
+    Scanning is equivalent to indexing line 2 only because
+    `_receipt_entry_semantics_valid` pins a review summary to exactly three
+    lines and `receipt_snapshot` raises on anything that violates it, so at most
+    one line here can match. If a future schema adds a summary line, this scan
+    becomes permissive with nothing failing — index deliberately, then.
+    """
+    for line in str(item.get("summary") or "").splitlines():
+        if _COUNTS_UNBOUND_RE.fullmatch(line):
+            return line
+    return None
+
+
+def _retained_verdict_token(item):
+    """The line-1 verdict this completion reported, when the pair bound nothing.
+
+    Empty when the report yielded no readable verdict token. Presence alone was
+    not enough to decide eviction — see `_pending_completion_kind`.
+    """
+    slot = _unbound_counts_slot(item) or ""
+    prefix = _COUNTS_UNREADABLE + " "
+    return slot[len(prefix):].strip() if slot.startswith(prefix) else ""
+
+
+def _effective_completion(lens, events, receipts):
+    """The completion a lens should be judged by. Last *readable* one wins.
+
+    Selecting the newest record and validating it afterwards meant a lens that
+    had already bound a verdict lost it the moment it was invoked again and
+    answered with a restatement the binder could not read. A rerun that does
+    bind still supersedes — remediation genuinely produces a newer result.
+
+    Only a `shape`-class PENDING fails to displace an earlier bound verdict,
+    because only that one carries no information: the report could not be read.
+    An `inconsistent`-class PENDING *was* read and reported something negative —
+    a reviewer writing `VERDICT: FAIL`, whether beside a counts line that
+    disagrees or beside none at all, is still telling us the work is not done.
+    Letting the previous round's PASS outlive it would close a task over a live
+    objection, and no surface would mention it. That is strictly worse than the
+    deadlock this function fixes, so a record that reported something negative
+    wins even when the pair as a whole binds nothing.
+
+    What decides is the verdict the lens named, not whether it named one. A
+    readable `PASS` with no counts line is a restatement of a verdict already
+    bound and must not win — those are the field strings this module exists
+    because of. A readable `FAIL` or `BLOCKED_ENV` must. Using readability alone
+    made every restatement evict the verdict it was restating; using the counts
+    line alone made `VERDICT: FAIL — three blockers found.` look like one.
+    `_pending_completion_kind` owns that rule.
+    """
+    fallback = None
+    for item in reversed(events):
+        if not _valid_completion(item, receipts):
+            continue
+        if str(item.get("verdict") or "").upper() != "PENDING":
+            return item
+        if _pending_completion_kind(lens, item) == "inconsistent":
+            return item
+        if fallback is None:
+            fallback = item
+    return fallback
+
+
+def _valid_completion(item, receipts):
+    """Is `item` a completion this run may rely on? Identity rules unchanged."""
+    if item.get("event") != "completed":
+        return False
+    if str(item.get("verdict") or "").upper() not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
+        return False
+    if sum(
+        prior.get("event") == "completed"
+        and _receipt_runtime_identity_matches(prior, item)
+        for prior in receipts
+    ) != 1:
+        return False
+    completion_index = receipts.index(item)
+    return any(
+        prior is not item
+        and prior.get("event") == "started"
+        and _receipt_runtime_identity_matches(prior, item)
+        for prior in receipts[:completion_index]
+    )
 
 
 def _receipt_runtime_identity_matches(start, completion):
@@ -3264,33 +3549,15 @@ def _completed_qa_by_lens(task_dir, snapshot=None):
     current_run_id = str(read_task_control(task_dir).get("run_id") or "")
     if not current_run_id:
         return {}
-    latest_events = {}
-    for item in snapshot.subagents:
-        lens = str(item.get("lens") or "").lower()
-        if not lens.startswith("qa-") or item.get("task_run_id") != current_run_id:
-            continue
-        latest_events[lens] = item
+    receipts = snapshot.subagents
     latest = {}
-    for lens, item in latest_events.items():
-        verdict = str(item.get("verdict") or "").upper()
-        if item.get("event") != "completed":
+    for lens, events in _lens_events_by_lens(receipts, "qa-", current_run_id).items():
+        if _rerun_in_flight(events):
             continue
-        if verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
-            continue
-        if sum(
-            prior.get("event") == "completed"
-            and _receipt_runtime_identity_matches(prior, item)
-            for prior in snapshot.subagents
-        ) != 1:
-            continue
-        completion_index = snapshot.subagents.index(item)
-        if not any(
-            prior.get("event") == "started"
-            and _receipt_runtime_identity_matches(prior, item)
-            for prior in snapshot.subagents[:completion_index]
-        ):
-            continue
-        latest[lens] = item
+        # Same "last binding wins" rule as the review selector above.
+        item = _effective_completion(lens, events, receipts)
+        if item is not None:
+            latest[lens] = item
     return latest
 
 
@@ -3348,34 +3615,68 @@ def nonparsing_completion_lenses(task_dir, state=None, snapshot=None):
         return {}
     # Any supported lens, not only the declared ones: a lens whose declaration
     # is still missing can burn the same cycle, and the note is advisory.
-    latest = {}
     # `entries`, not `subagents`: the latter is the non-review view, and a
     # review lens is the one this most often fires for. Advisory only, so a
     # snapshot carrying no records yields no note rather than an error on a
     # path whose whole purpose is explaining a PENDING.
-    for item in getattr(snapshot or receipt_snapshot(task_dir), "entries", None) or []:
-        lens = str(item.get("lens") or "").lower()
-        if lens in SUPPORTED_LENSES and item.get("task_run_id") == current_run_id:
-            latest[lens] = item
-    pending = {
-        lens: item for lens, item in latest.items()
-        if item.get("event") == "completed"
-        and str(item.get("verdict") or "").upper() == "PENDING"
+    receipts = getattr(snapshot or receipt_snapshot(task_dir), "entries", None) or []
+    grouped = {
+        lens: events
+        for lens, events in _lens_events_by_lens(receipts, "", current_run_id).items()
+        if lens in SUPPORTED_LENSES
     }
-    # Two different failures land on the same PENDING. A rejected *shape* is
-    # marked INVALID in the stored counts line; a well-shaped review whose
-    # verdict and counts disagree (PASS beside FIX_NOW=1) is not a format
-    # problem at all, and telling its coordinator to fix the format sends it to
-    # rerun the lens instead of routing the finding.
-    return {
-        lens: (
-            "shape"
-            if "FINDING_COUNTS: INVALID" in str(item.get("summary") or "")
-            or not lens.startswith("review-")
-            else "inconsistent"
+    # When nothing bound, report the newest completion record whether or not it
+    # passed identity validation. An untrusted completion is still a lens that
+    # ran and reported, and dropping it here would restore the bare PENDING this
+    # whole diagnostic exists to explain — but it gets its own kind, because its
+    # cause is a receipt-pairing failure and every word of the format advice
+    # would be false for it.
+    kinds = {}
+    for lens, events in grouped.items():
+        if _rerun_in_flight(events):
+            continue
+        bound = _effective_completion(lens, events, receipts)
+        if bound is not None and str(bound.get("verdict") or "").upper() != "PENDING":
+            # The bound verdict stands and the coordinator has nothing to fix.
+            # But if an unreadable follow-up arrived after it, staying silent
+            # means a report nobody can read is also a report nobody is told
+            # about. For a `qa-*` lens there is no datum separating a harmless
+            # restatement from a new finding, so eviction would reinstate the
+            # deadlock — naming it does not, because this kind is advisory and
+            # asks for a confirmation rather than a rerun.
+            completions = [i for i in events if i.get("event") == "completed"]
+            if completions and completions[-1] is not bound:
+                # A follow-up that also failed identity validation is a pairing
+                # failure first. Calling it `stale_followup` lands on advice that
+                # happens to be harmless, but never names the receipt problem —
+                # the same wrong-diagnosis-costs-a-loop failure one level down.
+                kinds[lens] = (
+                    "stale_followup"
+                    if _valid_completion(completions[-1], receipts)
+                    else "unpaired"
+                )
+            continue
+        newest_completion = next(
+            (item for item in reversed(events) if item.get("event") == "completed"),
+            None,
         )
-        for lens, item in sorted(pending.items())
-    }
+        if newest_completion is None:
+            continue
+        # Three different failures land on the same absence of a verdict, and
+        # each sends its coordinator somewhere different. Diagnosing the wrong
+        # one is what turned this diagnostic into a loop.
+        # An untrusted newest record is a pairing failure regardless of which
+        # branch reaches it. Asking `_pending_completion_kind` first would read
+        # its report shape and send the coordinator to route findings and
+        # respawn, when the actual fault is that no `SubagentStart` was
+        # recorded — a rerun loop that cannot terminate. The sibling branch
+        # above already checks this; checking it in only one place fixed the
+        # misdiagnosis for a bound lens and left it for a pending one.
+        if bound is None or not _valid_completion(newest_completion, receipts):
+            kinds[lens] = "unpaired"
+        else:
+            kinds[lens] = _pending_completion_kind(lens, newest_completion)
+    return dict(sorted(kinds.items()))
 
 
 def nonparsing_completion_note(lenses):
@@ -3385,30 +3686,66 @@ def nonparsing_completion_note(lenses):
     kinds = lenses if isinstance(lenses, dict) else {lens: "shape" for lens in lenses}
     parts = []
     shape = [lens for lens, kind in kinds.items() if kind == "shape"]
-    inconsistent = [lens for lens, kind in kinds.items() if kind != "shape"]
+    inconsistent = [lens for lens, kind in kinds.items() if kind == "inconsistent"]
+    unpaired = [lens for lens, kind in kinds.items() if kind == "unpaired"]
+    stale_followup = [lens for lens, kind in kinds.items() if kind == "stale_followup"]
     if shape:
         parts.append(
             f"Recorded but unusable: {', '.join(shape)} completed for this run but no "
             "verdict could be bound — its verdict block was not in the position and "
             "shape the agent definition requires, or the report carried conflicting "
             "verdict or counts lines. This is not an unrun lens and not a missing "
-            "receipt. Rerun that lens so it emits one verdict block in the required "
-            "position, and do not restate, relocate, or paraphrase the verdict format "
-            "in the spawn prompt — the agent definition owns it."
+            "receipt. Spawn that lens fresh rather than sending another message to "
+            "the one that already reported: a follow-up turn answers with a "
+            "restatement, and a restatement is what failed to bind. Do not restate, "
+            "relocate, or paraphrase the verdict format in the spawn prompt — the "
+            "agent definition owns it. If a fresh spawn also fails to bind, that is "
+            "the missing-attestation case, not a lens to run a third time."
         )
     if inconsistent:
         # Deliberately enumerated rather than diagnosed. The stored receipt keeps
-        # the normalized verdict, the counts line, and a digest — nothing about
-        # the original message — so a valid counts line does not prove the
-        # verdict line was well formed. Claiming "position is not the problem"
-        # was wrong for a line-1 shape failure such as a trailing period.
+        # the normalized verdict, the counts slot, and a digest — nothing about
+        # the original message — so this branch knows the verdict line was
+        # readable but not what it said, nor whether the counts line existed at
+        # all. Naming a single cause would be a guess; the sentence lists the
+        # reachable ones and leads with the common one.
         parts.append(
-            f"Recorded but unusable: {', '.join(inconsistent)} completed with a valid "
-            "counts line but no verdict could be bound — its verdict and finding "
-            "counts contradict each other, more than one conflicting verdict line was "
-            "present, or the line-1 verdict was not in the exact required shape. "
-            "Rerun that lens so it emits one verdict block in the required shape whose "
-            "verdict and counts agree, or resolve the reported findings."
+            f"Recorded but unusable: {', '.join(inconsistent)} reported something "
+            "substantive but no verdict could be bound — its verdict and finding "
+            "counts contradict each other, its counts line was missing or ambiguous, "
+            "more than one conflicting verdict line was present, or its counts line "
+            "reported a blocker with no readable verdict line. This lens said "
+            "something; it is not a restatement. "
+            "The usual cause is a PASS reported beside FIX_NOW>0. Route the reported "
+            "findings first — resolving them is the coordinator's move here — then "
+            "spawn that lens fresh so it reports on the remediated state. Note that "
+            "INVESTIGATE and OPTIONAL counts do not contradict PASS; only FIX_NOW does."
+        )
+    if unpaired:
+        # Neither of the sentences above is true here, and saying either one
+        # sends the reader to re-read a report whose text was never the problem.
+        parts.append(
+            f"Recorded but unusable: {', '.join(unpaired)} completed for this run but "
+            "the completion could not be bound to exactly one start/stop pair for the "
+            "same agent identity — either no matching start receipt exists, or more "
+            "than one completion was recorded for that identity — so nothing about it "
+            "can be trusted, including its verdict. This is a receipt-pairing failure, "
+            "not a report the lens wrote badly: re-reading or reformatting the report "
+            "cannot fix it. Check both — whether the loaded hook tree records "
+            "SubagentStart as well as SubagentStop, and whether a completion was "
+            "replayed for an identity that already had one."
+        )
+    if stale_followup:
+        # The only kind here that reports a *usable* verdict. It exists so that
+        # "a report arrived and nobody could read it" is never silent, even when
+        # the right thing to do with it is nothing.
+        parts.append(
+            f"Bound verdict stands for {', '.join(stale_followup)}, but a later "
+            "completion for the same lens could not be read. That follow-up changes "
+            "nothing — whatever the bound verdict requires still applies, and no "
+            "rerun is needed to restore it. Confirm the follow-up was a restatement "
+            "of the verdict already bound and not a new finding; if it was a new "
+            "finding, spawn the lens fresh so it can report in the required shape."
         )
     return " ".join(parts) + " "
 
@@ -3440,9 +3777,8 @@ def emit_compact_context(task_dir, snapshot=None):
         missing_for_close.append("PLAN.md")
     required_reviews = required_review_lenses(task_dir, st)
     review_verdict = receipt_review_verdict(task_dir, st, snapshot)
-    nonparsing_note = nonparsing_completion_note(
-        nonparsing_completion_lenses(task_dir, st, snapshot)
-    )
+    nonparsing_kinds = nonparsing_completion_lenses(task_dir, st, snapshot)
+    nonparsing_note = nonparsing_completion_note(nonparsing_kinds)
     completed_reviews = _completed_review_by_lens(task_dir, snapshot)
     missing_reviews = [lens for lens in required_reviews if lens not in completed_reviews]
     if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
@@ -3506,7 +3842,27 @@ def emit_compact_context(task_dir, snapshot=None):
             f"NON-ATTESTING. {TRUST_BOUNDARY} {attestation_endgame()}"
         )
     else:
-        next_action = "Completed QA verdicts present — run task_close."
+        # `stale_followup` only — not the whole note. It is the one kind whose
+        # sentence is advisory ("that follow-up changes nothing, no rerun is
+        # needed"), and the one kind that can coexist with a closable task,
+        # because it requires a lens that already bound a non-PENDING verdict.
+        #
+        # The other three are work orders. An undeclared lens can reach this
+        # branch — `nonparsing_completion_lenses` deliberately covers every
+        # supported lens, not only the declared ones, and `review-security`
+        # routinely runs undeclared — so prefixing the whole note printed
+        # "route the findings and respawn" immediately before "run task_close",
+        # with nothing marking which governs. A coordinator either burns a
+        # remediation round on a lens that gates nothing, or learns the prefix
+        # is noise, which destroys the signal this branch was restoring.
+        followup = {
+            lens: kind for lens, kind in nonparsing_kinds.items()
+            if kind == "stale_followup"
+        }
+        next_action = (
+            nonparsing_completion_note(followup)
+            + "Completed QA verdicts present — run task_close."
+        )
     return {
         "task_id": os.path.basename(task_dir),
         "status": task_control_status(task_dir, st, snapshot),

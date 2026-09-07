@@ -153,7 +153,11 @@ class TestVerdictAuthorityIsPositional(unittest.TestCase):
             "FINDING_COUNTS: FIX_NOW=3 INVESTIGATE=0 OPTIONAL=0\n",
         )
         self.assertEqual(verdict, "PENDING")
-        self.assertIn("FINDING_COUNTS: INVALID", compact)
+        # UNREADABLE, not INVALID: line 1 *was* readable, so this is a real
+        # report with an ambiguous counts line, not an unreadable restatement.
+        # The selector uses that difference to decide whether this may displace
+        # an earlier bound verdict — it may, because a human wrote a verdict here.
+        self.assertIn("FINDING_COUNTS: UNREADABLE", compact)
 
     def test_counts_line_whitespace_does_not_discard_the_review(self):
         """Line 2 is stripped like every other line.
@@ -295,7 +299,11 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
         self.assertIn("review-code", action)
         self.assertIn("not in the position and shape the agent definition requires", action)
         self.assertIn("not an unrun lens", action)
-        self.assertIn("do not restate", action)
+        self.assertIn("restate, relocate, or paraphrase the verdict format", action)
+        # The coordinator cannot change the verdict format, so the advice must
+        # name a move it can actually make: a fresh spawn, not another message
+        # to the agent whose restatement is what failed to bind.
+        self.assertIn("Spawn that lens fresh", action)
         # The unchanged attestation instruction still follows the new label.
         self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
 
@@ -319,7 +327,12 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
 
         note = _lib.nonparsing_completion_note(kinds)
         self.assertIn("contradict", note)
-        self.assertIn("valid counts line but no verdict could be bound", note)
+        # The branch knows the report was substantive; it does not know which
+        # way. A readable verdict with an unusable counts line lands here, and
+        # so does a counts line reporting a blocker with no readable verdict —
+        # so both "valid counts line" and "readable line-1 verdict" were false
+        # for some case that reaches this sentence.
+        self.assertIn("reported something substantive", note)
         self.assertNotIn("not an unrun lens", note)
 
     def test_task_context_also_carries_the_note(self):

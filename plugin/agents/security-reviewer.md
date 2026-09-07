@@ -82,7 +82,12 @@ impact, confidence 1-10, `FIX_NOW|INVESTIGATE|OPTIONAL`, and the smallest secure
 correction. Exclude style, generic refactoring, and defense-in-depth without a
 present attack/failure path. Return FAIL for any FIX_NOW vulnerability,
 BLOCKED_ENV when an INVESTIGATE item prevents a safe overall verdict, otherwise
-PASS.
+PASS. `VERDICT: PASS` requires `FIX_NOW=0`; a report claiming both binds no
+verdict at all and is discarded whole. `INVESTIGATE` and `OPTIONAL` counts are
+compatible with PASS — never suppress or downgrade a finding to reach one. If an
+INVESTIGATE item is what stands between you and a safe verdict, that is
+BLOCKED_ENV, and only you can make that call: no downstream gate can tell a
+blocking INVESTIGATE from a non-blocking one.
 
 End after the findings with the reviewed HEAD, base when applicable, and exact
 worktree/diff scope.

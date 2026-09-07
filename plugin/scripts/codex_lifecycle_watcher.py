@@ -980,7 +980,12 @@ class Watcher:
         lens = _infer_receipt_lens(item.get("task_name", ""))
         summary = "VERDICT: PENDING"
         if lens.startswith("review-"):
-            summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=1 OPTIONAL=0"
+            # FIX_NOW, not INVESTIGATE. An invalidated run is void and must be
+            # redone, which is blocking; INVESTIGATE is non-blocking by the rule
+            # `_lib._counts_contradict_verdict` enforces and both reviewer
+            # definitions state. Coded as non-blocking, this invalidation could
+            # not displace the stale PASS it exists to invalidate.
+            summary += "\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0"
         summary += f"\nRuntime watcher invalidated: {reason}"
         pending_exists = any(
             receipt.get("runtime_id") == item.get("runtime_id")

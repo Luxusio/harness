@@ -2,7 +2,7 @@
 tags: [harness, contracts, next-action, trust-boundary, receipts]
 summary: 런타임 파이썬은 규범 텍스트를 소유 상수에서 조합한다. 산문 표면만 자기 사본을 갖는다. 부분 재진술은 substring 핀을 통과하므로 조합 여부를 직접 단언한다.
 updated: 2026-09-04
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/mcp/harness_server.py
@@ -11,7 +11,7 @@ invalidated_by_paths:
   - tests/test_receipt_watcher_fail_closed.py
   - tests/test_lib_gate_helpers.py
   - tests/test_stop_gate.py
-freshness_updated: 2026-09-04T01:38:27Z
+freshness_updated: 2026-09-07T04:13:35Z
 ---
 
 # REQ — normative runtime text is composed, not restated

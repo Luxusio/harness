@@ -1,8 +1,7 @@
-# REQ — the lens verdict contract belongs to the agent definition
-
+---
 tags: [harness, receipts, review, qa]
 summary: 스폰 프롬프트는 판정 포맷을 재진술하지 않는다. 포맷 불일치로 바인딩된 완료는 미실행이 아니라 포맷 실패로 보고된다.
-updated: 2026-09-02
+updated: 2026-09-07
 freshness: current
 invalidated_by_paths:
   - plugin/agents/code-reviewer.md
@@ -11,6 +10,10 @@ invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/skills/develop/SKILL.md
   - plugin/skills/run/SKILL.md
+freshness_updated: 2026-09-07T04:13:35Z
+---
+
+# REQ — the lens verdict contract belongs to the agent definition
 
 ## Expected normal behavior
 
@@ -18,7 +21,18 @@ invalidated_by_paths:
    review and QA lens definition states that the final response begins with
    `VERDICT: PASS|FAIL|BLOCKED_ENV`, and for review lenses that
    `FINDING_COUNTS: FIX_NOW=<n> INVESTIGATE=<n> OPTIONAL=<n>` is the second
-   line. `_lib.normalize_receipt_completion` enforces exactly that shape.
+   line. `_lib.normalize_receipt_completion` is what reads it.
+
+   It does not require *exactly* that shape, and a reader who assumes it does
+   will draw the wrong conclusion from a `PENDING`. Line 1 may carry trailing
+   commentary after the verdict token (`VERDICT: PASS — report complete.`
+   binds), because a lens invoked a second time answers with a restatement and
+   discarding those cost two field sessions every verdict they produced. The
+   bare form above is still what the definitions state and what a lens should
+   emit; the reader is deliberately more forgiving than the writer's contract.
+   See `doc/harness/REQ__lens-verdicts-bind-when-the-lens-complied.md` for what
+   is and is not accepted.
+
    A coordinator spawning a lens describes **what to review**, never **how to
    format the verdict**. It must not restate, relocate, paraphrase, or
    "helpfully" repeat the contract in the spawn prompt.
@@ -28,8 +42,16 @@ invalidated_by_paths:
    `VERDICT: PENDING` / `FINDING_COUNTS: INVALID`, the pending guidance from
    `task_verify` and task context names the lens, says the final did not satisfy
    the verdict contract, and states that this is neither an unrun lens nor a
-   missing receipt. The remedy it gives is rerunning that lens without
-   restating the format.
+   missing receipt. The remedy it gives is spawning that lens **fresh** —
+   without restating the format — rather than sending another message to the
+   agent that already reported, because a follow-up turn answers with a
+   restatement and a restatement is what failed to bind.
+
+   `FINDING_COUNTS: INVALID` is only one of the reachable unbound states; see
+   `doc/harness/REQ__lens-verdicts-bind-when-the-lens-complied.md` for the
+   others (`UNREADABLE`, plus the identity and follow-up cases) and for why
+   each one needs a different remedy. Naming the wrong one costs a full review
+   cycle.
 
 3. **Verdict authority is positional, and a mention is not a verdict.** Line 1
    binds, or nothing does. A later line voids the result only when it is itself

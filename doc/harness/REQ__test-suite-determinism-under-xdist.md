@@ -2,13 +2,14 @@
 tags: [harness, testing, xdist, isolation]
 summary: 테스트는 프로세스 전역·실제 레포 상태를 형제 테스트에 누출하지 않는다. 단일 green 실행은 안정성의 증거가 아니다.
 updated: 2026-09-03
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - tests/conftest.py
   - tests/test_harness_mcp_server.py
   - plugin/mcp/harness_server.py
   - plugin/scripts/_lib.py
   - pyproject.toml
+freshness_updated: 2026-09-07T04:13:35Z
 ---
 
 # REQ — the test suite is deterministic under pytest-xdist

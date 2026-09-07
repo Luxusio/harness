@@ -73,6 +73,37 @@ lifecycle state is derived from `event`; timestamp role is derived from
 `summary`. A start carries an empty summary and no passing verdict. A
 completion summary retains only its normalized verdict, review finding counts
 when applicable, and a `DETAIL_SHA256` of the validated full final response.
+When a review completion binds no verdict, its counts slot carries the reason
+rather than counts: `FINDING_COUNTS: INVALID` when no line-1 verdict token could
+be read at all, or `FINDING_COUNTS: UNREADABLE <TOKEN>` when one was read — and
+`<TOKEN>` is retained — but the counts line was missing or ambiguous.
+
+That slot is load-bearing, not descriptive. A completion reporting a readable
+`FAIL` or `BLOCKED_ENV` supersedes an earlier bound verdict even though it binds
+nothing, because a reviewer saying "not done" must outlive an earlier PASS. A
+completion reporting a readable `PASS` without counts is a restatement and must
+not: those are the field-measured strings (`VERDICT: PASS — report complete.`)
+that a lens emits when invoked a second time. Recording only that *some* token
+was readable, rather than which, makes restatements evict the verdicts they
+restate — the deadlock this schema exists to prevent, in a narrower form.
+
+A real counts line survives on an unbound completion only when the report was
+read well enough to be substantive: line 1 parsed, or `FIX_NOW > 0`. An
+`INVESTIGATE`-only count with no readable verdict is non-blocking and stores
+`INVALID` instead. Readers may therefore treat a surviving counts line as
+"contradiction or blocker" without re-deriving it.
+
+**That last rule is writer-owned.** `normalize_receipt_completion` is its only
+enforcement point: the receipt keeps the *normalized* verdict, so the entry
+validator cannot tell whether line 1 was readable and will accept a violating
+summary. Any future writer that assembles a completion summary without going
+through the normalizer breaks the invariant silently.
+
+Streams written before these slot rules record `INVALID` for every unbound case,
+or a bare counts line where the current writer would store `INVALID`. Both
+residues resolve fail-closed — the first under-evicts, the second over-evicts —
+and receipt selection is scoped to `task_run_id`, so either can affect at most a
+task run that straddles the upgrade.
 The detailed response remains in the runtime transcript and is not duplicated
 in the receipt stream.
 

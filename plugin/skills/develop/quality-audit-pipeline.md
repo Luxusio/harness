@@ -79,7 +79,10 @@ safe correction.
 
 - `FIX_NOW`: return only the required finding to the original minimum-sufficient
   implementer. Add/update the focused regression test, fix, and run it.
-- `INVESTIGATE`: obtain the missing evidence. It cannot silently become PASS.
+- `INVESTIGATE`: obtain the missing evidence. Whether an unresolved INVESTIGATE
+  blocks is the reviewer's call, expressed as `BLOCKED_ENV` — no gate downstream
+  can tell a blocking INVESTIGATE from a non-blocking one, so nothing will catch
+  it if the reviewer passes instead. Route the item; do not let it lapse.
 - `OPTIONAL`: report as advisory. Never send it into an automatic code-growth
   loop.
 

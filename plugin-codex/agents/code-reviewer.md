@@ -110,7 +110,13 @@ trivial declarative change.
 
 OPTIONAL is non-blocking and must never trigger automatic code growth. Return
 FAIL when any FIX_NOW finding exists, BLOCKED_ENV when an INVESTIGATE item
-prevents a safe overall verdict, otherwise PASS. Do not report compliments,
+prevents a safe overall verdict, otherwise PASS. `VERDICT: PASS` requires
+`FIX_NOW=0`; a report claiming both binds no verdict at all and is discarded
+whole. `INVESTIGATE` and `OPTIONAL` counts are compatible with PASS — never
+suppress or downgrade a finding to reach one. If an INVESTIGATE item is what
+stands between you and a safe verdict, that is BLOCKED_ENV, and only you can
+make that call: no downstream gate can tell a blocking INVESTIGATE from a
+non-blocking one. Do not report compliments,
 style nitpicks, harmless readability redundancy, or theoretical cleanup.
 
 Every finding must include severity, confidence 1-10, disposition
