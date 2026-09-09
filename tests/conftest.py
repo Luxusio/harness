@@ -55,6 +55,33 @@ def restore_harness_server_global():
             module._SERVER = saved
 
 
+@pytest.fixture(autouse=True)
+def isolate_claude_install_root(tmp_path_factory):
+    """Point the installer's default Claude root at a tmp path for every test.
+
+    `install.py` resolves its Claude target from `HARNESS_DEST`, defaulting to
+    the real `~/.claude/harness-dev`. Any test calling `install_claude`,
+    `sync_claude_payload`, or `_claude_payload_state` without naming a root
+    therefore operated on the live runtime. This fixture removes the default
+    exposure suite-wide; `install._reject_real_install_root_under_test` is the
+    backstop for roots that carry no env indirection (`CODEX_INSTALL_ROOT`).
+
+    A test that sets `HARNESS_DEST` itself (via `monkeypatch.setenv` or a
+    subprocess env) still wins: the fixture only supplies the default.
+    """
+    original = os.environ.get("HARNESS_DEST")
+    os.environ["HARNESS_DEST"] = str(
+        tmp_path_factory.mktemp("harness-dest") / "harness-dev"
+    )
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("HARNESS_DEST", None)
+        else:
+            os.environ["HARNESS_DEST"] = original
+
+
 @contextlib.contextmanager
 def active_marker_lock(repo_root: str | None = None):
     """Serialize real-repo `.active` mutations across pytest-xdist workers."""

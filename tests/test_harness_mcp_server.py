@@ -1186,7 +1186,10 @@ class HarnessMcpServerTests(unittest.TestCase):
             original_ctd = harness_server.canonical_task_dir
             harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
             try:
-                result = harness_server.call_tool("task_context", {"task_id": "TASK__mcp"})
+                # Through `_call_in_repo`: `task_context` binds the calling
+                # session's active marker, so a handler left pointed at the real
+                # repository writes this fixture's tmp task into it.
+                result = self._call_in_repo(tmp, "task_context", {"task_id": "TASK__mcp"})
             finally:
                 harness_server.canonical_task_dir = original_ctd
             self.assertNotIn("isError", result)

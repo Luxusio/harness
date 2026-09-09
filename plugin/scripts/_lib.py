@@ -1276,9 +1276,9 @@ def read_task_control(task_dir):
 def _make_control_writer_authority():
     allowed = {
         "harness_server": {
-            "handle_task_start", "handle_task_close", "handle_task_blocked",
-            "handle_write_plan", "handle_goal_start", "handle_goal_add_task",
-            "handle_goal_finish",
+            "handle_task_start", "handle_task_context", "handle_task_close",
+            "handle_task_blocked", "handle_write_plan", "handle_goal_start",
+            "handle_goal_add_task", "handle_goal_finish",
         },
         "codex_hook_registration": {"restore_watcher_registration"},
     }

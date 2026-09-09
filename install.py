@@ -586,6 +586,77 @@ def emit_and_install_codex_config(
     }
 
 
+def _reject_real_install_root_under_test(path: Path) -> None:
+    """Refuse to mutate the invoking user's real runtime trees from a test run.
+
+    The installer resolves its targets from `HARNESS_DEST` / `CODEX_INSTALL_ROOT`,
+    which default to the real `~/.claude` and `~/.codex`. A test that calls a
+    mutating installer entry point without naming its own root therefore edits
+    the live runtime, and the damage is normally invisible: on 2026-09-09 a
+    review round widened `_prune_bytecode_caches` to `rmtree(cache.parent)` and
+    the suite deleted the installed `plugin/scripts` and `plugin/mcp`, silently
+    killing receipt recording for the session that ran it.
+
+    The user's home comes from the password database, not `Path.home()`: a test
+    that points `HOME` at `tmp_path` is exactly the isolated case this guard
+    must allow, and `Path.home()` would report that tmp home as the real one.
+    `PYTEST_CURRENT_TEST` is inherited by `install.py` subprocesses spawned from
+    a test, so the guard covers those too, and is inert outside pytest.
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    try:
+        import pwd
+
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except Exception:  # no password database: nothing to protect against
+        return
+    target = Path(path).expanduser().resolve()
+    for root in (home / ".claude", home / ".codex"):
+        if target == root or root in target.parents or target in root.parents:
+            raise RuntimeError(
+                f"refusing to mutate the real install tree {target} from a test; "
+                "pass an explicit tmp install root (HARNESS_DEST / "
+                "CODEX_INSTALL_ROOT / install_root=)"
+            )
+
+
+def _prune_bytecode_caches(root: Path) -> list[str]:
+    """Delete `__pycache__` directories inside an installer-owned tree.
+
+    A `.pyc` that no longer matches its source disables the entire receipt
+    subsystem: `subagent_lifecycle` binds its receipt adapter at import time and
+    `_lib` rejects a module whose code object does not match a fresh compile of
+    the file, so `background_hook` dies before `main()` and no receipt is ever
+    written. Payload comparison lists `__pycache__` in `_VOLATILE_DIR_NAMES`, so
+    such a tree still reports SYNCHRONIZED and `--if-stale` — the harness's own
+    delivery path — skips the install that would have replaced it. The bad cache
+    then survives every subsequent run. Pruning here is what breaks that loop.
+
+    Scope is deliberately narrow (the plan's stated risk): only `__pycache__`
+    directories, only under a tree the installer already writes, and only real
+    directories — `os.walk` does not follow symlinks and `shutil.rmtree` refuses
+    one, so nothing outside the tree can be reached. Removal is always safe:
+    Python regenerates bytecode on the next import.
+    """
+    steps: list[str] = []
+    _reject_real_install_root_under_test(root)
+    if not root.is_dir():
+        return steps
+    for parent, dirnames, _files in os.walk(root):
+        if "__pycache__" not in dirnames:
+            continue
+        dirnames.remove("__pycache__")
+        cache = Path(parent) / "__pycache__"
+        try:
+            shutil.rmtree(cache)
+        except OSError as exc:
+            steps.append(f"could not remove bytecode cache {cache}: {exc}")
+            continue
+        steps.append(f"removed bytecode cache {cache}")
+    return steps
+
+
 def _copytree_clean(src: Path, dst: Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
@@ -977,6 +1048,7 @@ def _codex_mcp_config(shared_plugin_root: Path) -> dict:
 def sync_claude_payload(install_root: Path | None = None) -> Path:
     """Copy the Claude plugin payload under ~/.claude and return plugin/ root."""
     target = install_root or Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
+    _reject_real_install_root_under_test(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".harness-claude-staging-"))
     try:
@@ -993,6 +1065,7 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
     """Copy the Codex plugin source under ~/.codex and return its plugin root."""
     if install_root is None:
         install_root = CODEX_INSTALL_ROOT
+    _reject_real_install_root_under_test(install_root)
     install_root.mkdir(parents=True, exist_ok=True)
     legacy_paths = (
         install_root / "plugin-codex",
@@ -1043,6 +1116,7 @@ def _codex_plugin_version(source_root: Path) -> str:
 
 
 def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
+    _reject_real_install_root_under_test(codex_home)
     version = _codex_plugin_version(source_root)
     target = (
         codex_home
@@ -1168,6 +1242,15 @@ def install_codex(*, dry_run: bool, force: bool,
                                  f"codex {version} < pin {pin} (see {CODEX_VERSION_PIN_FILE})",
                                  steps)
         steps.append(f"codex {version} >= pin {pin or 'unset'}")
+    # Same reason as install_claude: prune before the staleness decision.
+    if not dry_run:
+        steps.extend(_prune_bytecode_caches(
+            CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
+        ))
+        steps.extend(_prune_bytecode_caches(
+            _codex_home_for_config(config_path)
+            / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME
+        ))
     if if_stale:
         payload_state, payload_reason = _codex_payload_state(config_path)
         if payload_state == PAYLOAD_ERROR:
@@ -1282,6 +1365,13 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
         if rc != 0:
             return InstallResult("claude", False, f"claude --version failed: {err}", steps)
         steps.append(f"claude {out.strip()}")
+    claude_install_root = Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
+    installed_plugin_root = claude_install_root / "plugin"
+    # Before the staleness decision, not after: payload comparison treats
+    # __pycache__ as volatile, so a tree whose bytecode cache has disabled the
+    # receipt subsystem still answers SYNCHRONIZED and skips the sync.
+    if not dry_run:
+        steps.extend(_prune_bytecode_caches(claude_install_root))
     if if_stale:
         payload_state, payload_reason = _claude_payload_state()
         if payload_state == PAYLOAD_ERROR:
@@ -1300,8 +1390,6 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
         steps.append(f"payload comparison: STALE ({payload_reason})")
 
     # Step 2: mirror the checkout into Claude's runtime install path.
-    claude_install_root = Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
-    installed_plugin_root = claude_install_root / "plugin"
     if dry_run:
         steps.append(f"would sync plugin payload to {claude_install_root} (.git excluded)")
     else:

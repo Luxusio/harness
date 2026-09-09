@@ -84,6 +84,7 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
     write_active_marker, clear_active_marker, read_session_hint,
+    current_session_id,
     active_task_binding_matches,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
     receipt_runtime_verdict,
@@ -1123,11 +1124,86 @@ def handle_goal_finish(args: dict) -> dict:
     return _ok({"goal": state})
 
 
+def _session_resumes(repo_root: str, task_dir: str, session_id: str) -> bool:
+    """True when writing this session's marker for `task_dir` steals nothing.
+
+    `session_id` must be the exact id `write_active_marker` will key on,
+    `default` included. Asking about a different identity than the write uses
+    is how the first version failed: it resolved the binding for
+    `read_session_hint(...)` while the write fell back to
+    `current_session_id()`. Only the Claude `UserPromptSubmit` hook writes that
+    hint, so on Codex it is permanently empty, and both an empty id and
+    `default` resolve to no binding at all — the guard read "unbound" for every
+    session forever, and a `task_context` peek moved write focus to the peeked
+    task (Codex then promotes the `default` marker onto the real thread id in
+    `codex_hook_registration`, so the next subagent receipt landed there).
+
+    Many tasks are open at once — C-09 queues a second mutating request, it
+    does not close the first — so "the task being read is open" says nothing
+    about the caller's focus; that conjunct guards parked tasks, this one
+    guards other open ones.
+
+    `resolve_active_task_dir` reads exactly the two markers this write
+    overwrites, in the order readers consult them: this session's own marker
+    first, then the shared legacy `.active`. A marker naming a task that is no
+    longer open holds no focus to steal, so it must not block a real resume.
+    Parking and closing cannot strand such a pointer — `clear_active_marker`
+    unlinks the legacy file whenever it names the task leaving `open`, with no
+    session condition — so what actually reaches that branch is a pointer whose
+    task no longer *validates*: `task_control_status` answers `invalid` for a
+    removed task directory or an unreadable `TASK.json`, and no transition was
+    announced for anything to clean up after.
+
+    Re-writing a marker that already names `task_dir` is deliberate focus
+    re-assertion, and it is not a no-op: it refreshes a `run_id` that another
+    session's `task_start` rotated away, which is the one marker field
+    `resolve_session_task_binding` will otherwise refuse a receipt for.
+
+    Known residuals, both recorded in
+    `doc/harness/REQ__receipt-subsystem-failures-are-observable.md` section 3:
+    a legitimate resume still rewrites the legacy `.active` another session may
+    rely on (only markerless readers observe it, since the per-session marker
+    wins), and a markerless session resuming an open task *other* than the one
+    `.active` names is refused binding — this surface cannot tell that resume
+    from a peek, so it refuses on the safe side and the caller must use
+    `task_start`.
+    """
+    held = resolve_active_task_dir(repo_root, session_id=session_id)
+    if not held or task_control_status(held, read_task_control(held)) != "open":
+        return True
+    return os.path.realpath(held) == os.path.realpath(task_dir)
+
+
 def handle_task_context(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti, repo_root=_control_root())
-    if not _validated_task_control(td):
+    repo_root = _control_root()
+    td = canonical_task_dir(task_id=ti, repo_root=repo_root)
+    control = _validated_task_control(td)
+    if not control:
         return _invalid_task_control_error("task_context", td)
+    # One identity, resolved once, for both the guard and the write.
+    session_id = read_session_hint(repo_root) or current_session_id()
+    if task_control_status(td, control) == "open" and _session_resumes(
+        repo_root, td, session_id,
+    ):
+        # A session that resumes an open task arrives here, and until it owns a
+        # marker every subagent stop it produces fails with
+        # `session-task-binding-unresolved` — no receipt, so no close path.
+        # task_start would bind it too, but it also rotates run_id and calls
+        # reset_receipt_streams_for_new_run, destroying the very evidence a
+        # resume exists to keep. task_context is the non-destructive surface.
+        #
+        # The write is additive across sessions: write_active_marker creates
+        # only this session's own marker file, so markers other sessions hold
+        # keep resolving and their receipts stay valid. It does also rewrite
+        # the shared single-valued legacy `.active`, which is why
+        # `_session_resumes` gates the call — see its docstring.
+        #
+        # A refusal here is not swallowed. write_active_marker raises when the
+        # task-control runtime is not bound, and that is a real defect in the
+        # receipt subsystem, not a degraded-context nicety — handle_task_start
+        # lets the same call raise for the same reason.
+        write_active_marker(repo_root, td, session_id=session_id)
     snapshot = receipt_snapshot(td)
     ctx = emit_compact_context(td, snapshot)
     if "error" in ctx:
@@ -1489,7 +1565,8 @@ def _publish_write_plan(args, td, control, preflight):
 
 
 for _control_writer in (
-    handle_task_start, handle_task_close, handle_task_blocked, handle_write_plan,
+    handle_task_start, handle_task_context, handle_task_close,
+    handle_task_blocked, handle_write_plan,
     handle_goal_start, handle_goal_add_task, handle_goal_finish,
 ):
     _bind_control_writer(_control_writer)

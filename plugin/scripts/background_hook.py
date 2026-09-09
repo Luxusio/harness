@@ -9,6 +9,40 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _harness_root_above(start: str) -> str:
+    """First ancestor of ``start`` (inclusive) that holds ``doc/harness``."""
+    root = start
+    while root:
+        if os.path.isdir(os.path.join(root, "doc", "harness")):
+            return root
+        parent = os.path.dirname(root)
+        if parent == root:
+            return ""
+        root = parent
+    return ""
+
+
+def _payload_harness_root() -> str:
+    """Resolve the repo from the hook payload's ``cwd``, or '' when unavailable.
+
+    Only reachable from the import-failure path, which exits immediately after,
+    so consuming stdin here cannot starve ``read_hook_input`` on the healthy
+    path. ``isatty`` keeps an interactive invocation from blocking on a read
+    that will never return.
+    """
+    try:
+        import json
+
+        stdin = sys.stdin
+        if stdin is None or stdin.isatty():
+            return ""
+        payload = json.loads(stdin.read() or "{}")
+        cwd = str((payload or {}).get("cwd") or "").strip()
+    except Exception:
+        return ""
+    return _harness_root_above(os.path.abspath(cwd)) if cwd else ""
+
+
 def _report_import_failure(exc: BaseException) -> None:
     """Leave a breadcrumb when this hook cannot import its own dependencies.
 
@@ -19,6 +53,14 @@ def _report_import_failure(exc: BaseException) -> None:
     receipt-adapter binding, disabling receipts entirely. Three sessions
     diagnosed it as three different causes because there was no signal at all.
 
+    The repository is resolved from the hook **payload**, not from this file:
+    hooks execute from the installed tree (`~/.claude/.../plugin/scripts`),
+    which has no `doc/harness` above it, so the script-relative walk found
+    nothing and the guard added in response to 2026-08-26 stayed silent through
+    a month-long recurrence. The walk is kept only as a fallback for callers
+    that pass no payload. See
+    `doc/harness/REQ__receipt-subsystem-failures-are-observable.md`.
+
     Stdlib only, and deliberately not `_lib`: the point is to work when `_lib`
     is exactly what is broken. Never raises into the hook.
     """
@@ -27,14 +69,11 @@ def _report_import_failure(exc: BaseException) -> None:
         import traceback
         from datetime import datetime, timezone
 
-        root = os.path.dirname(os.path.abspath(__file__))
-        while True:
-            if os.path.isdir(os.path.join(root, "doc", "harness")):
-                break
-            parent = os.path.dirname(root)
-            if parent == root:
-                return
-            root = parent
+        root = _payload_harness_root() or _harness_root_above(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+        if not root:
+            return
         entry = {
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "type": "gate-crash",

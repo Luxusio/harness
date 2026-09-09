@@ -395,6 +395,10 @@ def test_claude_payload_state_compares_full_generated_mirror(tmp_path, monkeypat
 def test_conditional_runtime_skips_payload_mutation_when_current(tmp_path):
     module = _load_install_module()
     with (
+        # `install_codex` prunes bytecode caches under CODEX_INSTALL_ROOT before
+        # the staleness decision, so "no payload mutation" only holds for a root
+        # this test owns.
+        mock.patch.object(module, "CODEX_INSTALL_ROOT", tmp_path / "codex-harness"),
         mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
@@ -415,7 +419,9 @@ def test_conditional_runtime_skips_payload_mutation_when_current(tmp_path):
 def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(tmp_path):
     module = _load_install_module()
     config_path = tmp_path / "config.toml"
+    codex_root = tmp_path / "codex-harness"
     with (
+        mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
@@ -444,6 +450,7 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
     cache.assert_called_once()
 
     with (
+        mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
@@ -460,8 +467,12 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
     sync_on_error.assert_not_called()
 
 
-def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path):
+def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path, monkeypatch):
     module = _load_install_module()
+    # `install_claude` prunes bytecode caches under the resolved install root
+    # before the staleness decision; name the root instead of inheriting the
+    # real `~/.claude/harness-dev`.
+    monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "harness-dev"))
     common = (
         mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
@@ -501,6 +512,211 @@ def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path):
     assert not failed.ok
     assert "comparison failed" in failed.summary
     sync_on_error.assert_not_called()
+
+
+def test_installer_clears_stale_bytecode_cache_even_when_synchronized(
+    tmp_path, monkeypatch,
+):
+    """A bad `.pyc` must not outlive an install run.
+
+    `_VOLATILE_DIR_NAMES` excludes `__pycache__` from payload comparison, so a
+    tree whose bytecode cache breaks `subagent_lifecycle`'s import-time receipt
+    adapter binding still reports SYNCHRONIZED and `--if-stale` skips the sync
+    that would have replaced it. That is how one stale `.pyc` kept receipts dead
+    for a month. Pruning must therefore happen on the skip path too.
+
+    The tree carries a cache under two sibling directories, as the real
+    `~/.claude/harness-dev` does (`plugin/scripts` and `plugin/mcp`): the prune
+    walks the whole tree, and stopping at the first hit would leave a live
+    stale `.pyc` beside the module that imports it.
+    """
+    module = _load_install_module()
+    install_root = tmp_path / "harness-dev"
+    monkeypatch.setenv("HARNESS_DEST", str(install_root))
+
+    plugin_root = module.sync_claude_payload(install_root)
+    assert module._claude_payload_state(install_root) == (
+        module.PAYLOAD_SYNCHRONIZED, "",
+    )
+    caches = [plugin_root / "scripts" / "__pycache__",
+              plugin_root / "mcp" / "__pycache__"]
+    stale = []
+    for cache in caches:
+        cache.mkdir(parents=True, exist_ok=True)
+        pyc = cache / "subagent_lifecycle.cpython-312.pyc"
+        pyc.write_bytes(b"stale-bytecode")
+        stale.append(pyc)
+    # Precondition: comparison is blind to it, so the skip path is taken.
+    assert module._claude_payload_state(install_root) == (
+        module.PAYLOAD_SYNCHRONIZED, "",
+    )
+
+    with (
+        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
+        mock.patch.object(module, "sync_claude_payload") as sync,
+    ):
+        result = module.install_claude(dry_run=False, force=False, if_stale=True)
+
+    assert result.ok
+    assert "SYNCHRONIZED" in result.summary
+    sync.assert_not_called()
+    for pyc in stale:
+        assert not pyc.exists(), f"stale bytecode survived the install run: {pyc}"
+        assert not pyc.parent.exists()
+    # Only __pycache__ is removed; the payload it sat beside is untouched.
+    assert (plugin_root / "scripts" / "subagent_lifecycle.py").is_file()
+    assert module._claude_payload_state(install_root) == (
+        module.PAYLOAD_SYNCHRONIZED, "",
+    )
+
+
+def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_path):
+    """The Codex half of the same guarantee, on the same skip path.
+
+    Both runtimes execute the same `plugin/scripts` payload, so one stale
+    `.pyc` disables receipts identically. Codex owns two trees — the marketplace
+    mirror and the resolved plugin cache — and the prune has to reach both
+    before `_codex_payload_state` answers SYNCHRONIZED and returns early.
+    """
+    module = _load_install_module()
+    codex_root = tmp_path / "codex-harness"
+    config_path = tmp_path / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    codex_home = config_path.expanduser().resolve().parent
+
+    mirror = codex_root / "plugins" / module.CODEX_PLUGIN_NAME / "scripts"
+    cached = (
+        codex_home / "plugins" / "cache" / module.CODEX_PLUGIN_MARKETPLACE
+        / module.CODEX_PLUGIN_NAME / "0.1.0" / "scripts"
+    )
+    stale = []
+    for scripts in (mirror, cached):
+        (scripts / "__pycache__").mkdir(parents=True)
+        pyc = scripts / "__pycache__" / "subagent_lifecycle.cpython-312.pyc"
+        pyc.write_bytes(b"stale-bytecode")
+        (scripts / "subagent_lifecycle.py").write_text("ok\n")
+        stale.append(pyc)
+
+    with (
+        mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
+        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(
+            module, "_codex_payload_state",
+            return_value=(module.PAYLOAD_SYNCHRONIZED, ""),
+        ),
+        mock.patch.object(module, "sync_codex_payload") as sync,
+    ):
+        result = module.install_codex(
+            dry_run=False, force=False, config_path=str(config_path), if_stale=True,
+        )
+
+    assert result.ok
+    assert "install skipped" in result.summary
+    sync.assert_not_called()
+    for pyc in stale:
+        assert not pyc.exists(), f"stale bytecode survived the install run: {pyc}"
+        assert not pyc.parent.exists()
+        assert (pyc.parent.parent / "subagent_lifecycle.py").is_file()
+
+
+def test_prune_bytecode_caches_stays_inside_the_installer_owned_tree(tmp_path):
+    """The plan's stated risk: never delete anything but `__pycache__`."""
+    module = _load_install_module()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep\n")
+    # A cache of the exact shape the prune deletes, so following the symlink
+    # below is detectable: without it the walk could traverse and find nothing.
+    (outside / "__pycache__").mkdir()
+    (outside / "__pycache__" / "m.pyc").write_bytes(b"x")
+
+    root = tmp_path / "owned"
+    (root / "pkg" / "__pycache__").mkdir(parents=True)
+    (root / "pkg" / "__pycache__" / "m.pyc").write_bytes(b"x")
+    (root / "pkg" / "keep.py").write_text("ok\n")
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+
+    steps = module._prune_bytecode_caches(root)
+
+    assert any("removed bytecode cache" in step for step in steps)
+    assert not (root / "pkg" / "__pycache__").exists()
+    assert (root / "pkg" / "keep.py").is_file()
+    assert (outside / "keep.txt").is_file()
+    assert (outside / "__pycache__" / "m.pyc").is_file(), (
+        "the walk followed a symlink out of the installer-owned tree"
+    )
+    assert (root / "escape").is_symlink()
+    # A missing tree is not an error: dry-runs and first installs have none.
+    assert module._prune_bytecode_caches(tmp_path / "absent") == []
+
+
+def _real_home() -> Path:
+    import pwd
+
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def test_suite_run_cannot_reach_the_real_install_roots(tmp_path):
+    """The suite must be structurally incapable of writing the live runtime.
+
+    AC-2 moved `_prune_bytecode_caches` above the staleness decision, which is
+    correct — but it also put an `rmtree` ahead of every other guard on roots
+    that default to the real `~/.claude/harness-dev` and `~/.codex/harness`.
+    A review round then trialled `rmtree(cache.parent)` and a full suite run
+    deleted the installed `plugin/scripts` and `plugin/mcp`, killing receipt
+    recording exactly as the stale `.pyc` had. Two layers close it: the
+    conftest default and the installer-side refusal.
+
+    Each mutating entry point is probed in a form that touches nothing
+    pre-existing if the guard is deleted — an absent subdirectory, a bogus
+    payload source, a payload build that raises before any tree is activated —
+    so proving the guard never risks the tree it protects.
+
+    Not "inert": measured with the guard neutered, the last two probes let
+    `sync_*_payload` create one staging directory under the real home before
+    `_build_*_payload` raises, and the `except BaseException` handler removes
+    it. Nothing pre-existing is read or written and `_activate_staged_tree` is
+    never reached. The distinction matters because the `_build_*_payload` mocks
+    below look redundant next to the guard: drop them and a neutered guard
+    would let a payload be *activated* over the live runtime.
+    """
+    module = _load_install_module()
+    home = _real_home()
+
+    # Layer 1: no test inherits the real Claude root as its default.
+    harness_dest = Path(os.environ["HARNESS_DEST"])
+    assert home / ".claude" not in harness_dest.parents
+
+    # Layer 2: the installer refuses the real roots outright.
+    with pytest.raises(RuntimeError, match="refusing to mutate"):
+        module._prune_bytecode_caches(home / ".claude" / "harness-dev" / "absent")
+    # `/ "absent"` is load-bearing, not tidiness: CODEX_INSTALL_ROOT itself
+    # holds a real `__pycache__`, so passing it bare made this one probe the
+    # only non-inert member of the set — review measured it resolving to
+    # `['~/.codex/harness/plugins/harness/scripts/__pycache__']` with the guard
+    # neutered. It stayed harmless only because probe 1 aborts the test first,
+    # which is ordering, not design: narrowing the guard's tuple or reordering
+    # these lines would have deleted from the live Codex runtime while proving
+    # the guard that exists to prevent exactly that.
+    with pytest.raises(RuntimeError, match="refusing to mutate"):
+        module._prune_bytecode_caches(module.CODEX_INSTALL_ROOT / "absent")
+    with pytest.raises(RuntimeError, match="refusing to mutate"):
+        module.install_codex_plugin_cache(tmp_path / "absent-source", home / ".codex")
+    with mock.patch.object(
+        module, "_build_claude_payload", side_effect=AssertionError("reached"),
+    ):
+        with pytest.raises(RuntimeError, match="refusing to mutate"):
+            module.sync_claude_payload(module.DEFAULT_CLAUDE_INSTALL_ROOT)
+    with mock.patch.object(
+        module, "_build_codex_payload", side_effect=AssertionError("reached"),
+    ):
+        with pytest.raises(RuntimeError, match="refusing to mutate"):
+            module.sync_codex_payload()
+
+    # A tmp root of the same shape is untouched by the guard.
+    assert module._prune_bytecode_caches(tmp_path / "absent") == []
 
 
 def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
@@ -1258,12 +1474,18 @@ def test_dry_run_mentions_codex_install_root_when_codex_available(tmp_path):
 def test_dry_run_mentions_claude_install_root_when_claude_available(tmp_path):
     if not shutil.which("claude"):
         return
-    r = _run(["--dry-run", "--claude-only"])
+    # Name the install root instead of reading the default out of the real
+    # `~/.claude`: the assertion is that the plan reports the root it will
+    # write, which a tmp root proves without the suite depending on the live one.
+    install_root = tmp_path / "claude" / "harness-dev"
+    r = _run_with_env(
+        ["--dry-run", "--claude-only"], {"HARNESS_DEST": str(install_root)},
+    )
     assert r.returncode == 0, r.stderr
     assert "would sync plugin payload to" in r.stdout
     assert "claude plugin marketplace add" in r.stdout
     assert "claude plugin marketplace update harness" in r.stdout
-    assert ".claude/harness-dev" in r.stdout
+    assert str(install_root) in r.stdout
 
 
 def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
