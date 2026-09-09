@@ -548,6 +548,28 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
             f"reference one of {', '.join(delivering)} in code past its import."
         )
 
+    # `delivering` above is an `any()` over names that all resolve to the
+    # attestation pair, so it stays green when turn-end regresses to teaching
+    # only that pair. Review measured exactly that on 2026-09-08: reverting the
+    # whole `_next_action_for_missing` message to its pre-change single-pair
+    # text left the suite green. Turn-end is where the field-report-A
+    # coordinator was standing when it wrote the false reason into BLOCKED.md,
+    # so the empty-stream branch has to be pinned at that surface by name.
+    # `harness_server.py` is deliberately not held to this: it reaches both
+    # pairs through `attestation_endgame()` and never names this function.
+    stop_gate_body = "\n".join(
+        line for line in _text("plugin/scripts/stop_gate.py").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert stop_gate_body.count("no_receipts_block_instruction") >= 2, (
+        "plugin/scripts/stop_gate.py: turn-end no longer offers the "
+        "empty-stream park pair. A coordinator blocked here with an empty "
+        "receipt stream would be handed the attestation pair, whose stated "
+        "preconditions (review PASS, QA PASS, one fresh task_verify) are false "
+        "in that state — the exact BLOCKED.md falsehood this task closed. It "
+        "must call no_receipts_block_instruction() in code past its import."
+    )
+
     prose_surfaces = (
         "CONTRACTS.md",
         "plugin/CLAUDE.md",

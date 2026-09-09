@@ -422,11 +422,14 @@ def main():
         # the model twice (hook feedback and blocking error), while
         # `_gate_response.block` specifies `reason` as one sentence why.
         #
-        # The fixed attestation pair is likewise not pinned on unconditionally:
-        # C-17 scopes verbatim delivery to the missing-attestation branch, and
-        # `_next_action_for_missing` already embeds it in exactly that branch,
-        # so it still arrives — via `next_action` below and via the
-        # `next_action_command` field — whenever it actually applies.
+        # The two fixed park pairs are likewise not pinned on unconditionally:
+        # C-17 scopes verbatim delivery to the missing-evidence branch, and
+        # `_next_action_for_missing` already embeds both in exactly that branch,
+        # together with the receipt-stream condition that selects between them
+        # (nothing recorded at all → the empty-stream pair; receipts present but
+        # a required completion absent → the attestation pair). They still
+        # arrive — via `next_action` below and via the `next_action_command`
+        # field — whenever they actually apply.
         missing_summary = ", ".join(str(item) for item in missing[:3])
         if missing and len(missing) > 3:
             missing_summary += f", +{len(missing) - 3} more"
