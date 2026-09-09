@@ -657,6 +657,38 @@ def _prune_bytecode_caches(root: Path) -> list[str]:
     return steps
 
 
+def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple[bool, list[str]]:
+    """Drive the tree that was just installed and report what it produced.
+
+    The suite exercises the source tree; hooks run from this one. When the two
+    diverge — one stale `.pyc` is enough — the suite stays green while every
+    receipt silently disappears, which is the state that survived a month twice
+    over. `plugin/scripts/install_smoke.py` imports each installed hook module
+    and drives `background_hook.py` against a throwaway repository until a
+    receipt row appears; see
+    `doc/harness/REQ__guards-are-verified-where-they-run.md`.
+
+    Run in a subprocess so a smoke crash is reported as a failed install rather
+    than an installer traceback, and so the probe cannot inherit this process's
+    already-imported modules.
+    """
+    script = PLUGIN_ROOT / "scripts" / "install_smoke.py"
+    if not script.is_file():
+        return False, [f"runtime smoke: {script} is missing"]
+    try:
+        proc = subprocess.run(
+            [_python_cmd(), str(script), "--plugin-root", str(plugin_root)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, [f"runtime smoke: could not run {script}: {exc}"]
+    lines = [
+        f"runtime smoke: {line}"
+        for line in (proc.stdout + proc.stderr).strip().splitlines()
+    ]
+    return proc.returncode == 0, lines or ["runtime smoke: no output"]
+
+
 def _copytree_clean(src: Path, dst: Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
@@ -1100,6 +1132,18 @@ def _codex_home_for_config(config_path: str | Path | None) -> Path:
     return DEFAULT_CODEX_CONFIG_PATH.parent
 
 
+def _codex_cached_plugin_root(codex_home: Path, source_plugin_root: Path) -> Path:
+    """The versioned cache entry Codex actually loads for the harness plugin."""
+    return (
+        codex_home
+        / "plugins"
+        / "cache"
+        / CODEX_PLUGIN_MARKETPLACE
+        / CODEX_PLUGIN_NAME
+        / _codex_plugin_version(source_plugin_root)
+    )
+
+
 def _codex_plugin_version(source_root: Path) -> str:
     manifest_path = source_root / ".codex-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text())
@@ -1260,6 +1304,33 @@ def install_codex(*, dry_run: bool, force: bool,
             )
         if payload_state == PAYLOAD_SYNCHRONIZED:
             steps.append("payload comparison: SYNCHRONIZED")
+            # Same reason as install_claude: `--if-stale` is the harness's own
+            # delivery path, so the probe belongs on the skip branch as well.
+            # The cache entry is the tree Codex loads; when it is absent there
+            # is nothing to probe and that is reported rather than assumed.
+            try:
+                cached = _codex_cached_plugin_root(
+                    _codex_home_for_config(config_path),
+                    CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME,
+                )
+            except (OSError, ValueError) as exc:
+                cached = None
+                steps.append(f"runtime smoke: skipped — no cache entry ({exc})")
+            if cached is not None:
+                if not (cached / "scripts").is_dir():
+                    steps.append(
+                        f"runtime smoke: skipped — no Codex plugin cache entry at {cached}"
+                    )
+                else:
+                    smoke_ok, smoke_steps = _smoke_installed_runtime(cached)
+                    steps.extend(smoke_steps)
+                    if not smoke_ok:
+                        return InstallResult(
+                            "codex", False,
+                            "installed Codex runtime failed its smoke test — "
+                            "hooks cannot record receipts from this tree",
+                            steps,
+                        )
             return InstallResult(
                 "codex", True,
                 "Codex payload SYNCHRONIZED — install skipped "
@@ -1278,13 +1349,8 @@ def install_codex(*, dry_run: bool, force: bool,
 
     codex_home = _codex_home_for_config(config_path)
     codex_plugin_source_root = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
-    cached_plugin_root = (
-        codex_home
-        / "plugins"
-        / "cache"
-        / CODEX_PLUGIN_MARKETPLACE
-        / CODEX_PLUGIN_NAME
-        / _codex_plugin_version(source_plugin_root if not dry_run else PLUGIN_CODEX_ROOT)
+    cached_plugin_root = _codex_cached_plugin_root(
+        codex_home, source_plugin_root if not dry_run else PLUGIN_CODEX_ROOT,
     )
     if dry_run:
         steps.append(f"would install Codex plugin cache entry {CODEX_PLUGIN_ID}")
@@ -1294,6 +1360,17 @@ def install_codex(*, dry_run: bool, force: bool,
         cached_plugin_root = install_codex_plugin_cache(codex_plugin_source_root, codex_home)
         steps.append(f"installed Codex plugin cache entry {CODEX_PLUGIN_ID} at {cached_plugin_root}")
         steps.append("installed Codex plugin-local hooks.json")
+        # The cache entry is the tree Codex actually loads: its hooks are
+        # registered with absolute commands into this directory.
+        smoke_ok, smoke_steps = _smoke_installed_runtime(cached_plugin_root)
+        steps.extend(smoke_steps)
+        if not smoke_ok:
+            return InstallResult(
+                "codex", False,
+                "installed Codex runtime failed its smoke test — hooks cannot "
+                "record receipts from this tree",
+                steps,
+            )
 
     # Step 4: marketplace add. Dry-run reports it here; real install performs
     # it after the TOML merge so force-merge block replacement cannot trim the
@@ -1381,6 +1458,19 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
             )
         if payload_state == PAYLOAD_SYNCHRONIZED:
             steps.append("payload comparison: SYNCHRONIZED")
+            # The smoke runs here too. `install_verified.py` delivers with
+            # `--if-stale`, so this early return is the harness's own common
+            # path; skipping the probe here would mean the one check that
+            # inspects what actually runs almost never runs.
+            smoke_ok, smoke_steps = _smoke_installed_runtime(installed_plugin_root)
+            steps.extend(smoke_steps)
+            if not smoke_ok:
+                return InstallResult(
+                    "claude", False,
+                    "installed Claude runtime failed its smoke test — hooks "
+                    "cannot record receipts from this tree",
+                    steps,
+                )
             return InstallResult(
                 "claude", True,
                 "Claude payload SYNCHRONIZED — install skipped "
@@ -1395,6 +1485,15 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
     else:
         installed_plugin_root = sync_claude_payload(claude_install_root)
         steps.append(f"synced plugin payload to {claude_install_root} (.git excluded)")
+        smoke_ok, smoke_steps = _smoke_installed_runtime(installed_plugin_root)
+        steps.extend(smoke_steps)
+        if not smoke_ok:
+            return InstallResult(
+                "claude", False,
+                "installed Claude runtime failed its smoke test — hooks cannot "
+                "record receipts from this tree",
+                steps,
+            )
 
     # Step 3: register marketplace + install plugin on first install, refresh on update.
     # Register the installed mirror root. Its .claude-plugin/marketplace.json

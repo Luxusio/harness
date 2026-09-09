@@ -41,6 +41,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "CONTRACTS.md"
@@ -211,6 +212,42 @@ class SetupTemplateShipsTheSameContracts(unittest.TestCase):
         report = self.lint.lint(str(TEMPLATE_CONTRACTS), repo_root=str(ROOT))
         self.assertEqual(report.hard, [], f"template hard issues: {report.hard}")
         self.assertEqual(report.soft, [], f"template soft issues: {report.soft}")
+
+
+class DurableDocsOnlyReferenceRealTests(unittest.TestCase):
+    """C-102, extended: a doc's coverage claim must still resolve.
+
+    A mutation table or a "pinned by" sentence is the only record that a guard
+    branch was ever exercised. R5 of `TASK__session-rebinds-receipt-marker`
+    found a row naming a test that had been renamed, which made the row — the
+    sole coverage record for that branch — unreproducible. Verified by hand
+    then; machine-checked here.
+    """
+
+    def setUp(self):
+        self.lint = _load_contract_lint()
+
+    def test_every_referenced_test_id_resolves(self):
+        issues = self.lint.check_doc_test_references(str(ROOT))
+        self.assertEqual(issues, [], "\n".join(issues))
+
+    def test_the_scan_actually_reads_this_repository_s_docs(self):
+        """Mutation: empty the definition set and the same scan must speak up.
+
+        Without this, "no issues" is indistinguishable from "scanned nothing" —
+        the failure shape this whole task exists to remove. The scan is left
+        untouched; only what it resolves against is removed.
+        """
+        with mock.patch.object(
+            self.lint, "_test_identifiers", return_value=(set(), set()),
+        ):
+            blind = self.lint.check_doc_test_references(str(ROOT))
+        self.assertGreater(len(blind), 20, blind)
+        self.assertTrue(
+            any("REQ__receipt-subsystem-failures-are-observable.md" in item
+                for item in blind),
+            "the durable REQ docs were not among the files scanned",
+        )
 
 
 class RealSkillTreesAreWithinBudget(unittest.TestCase):

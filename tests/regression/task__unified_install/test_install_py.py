@@ -440,6 +440,13 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
             module, "install_codex_hook_trust_state",
             return_value={"ok": True, "message": "trusted"},
         ),
+        # The cache root above is a stand-in, not a payload tree, so the
+        # post-install runtime smoke has nothing real to drive. Its own
+        # coverage is `tests/test_install_smoke.py` plus the unmocked
+        # `test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache`.
+        mock.patch.object(
+            module, "_smoke_installed_runtime", return_value=(True, ["runtime smoke: stubbed"]),
+        ),
     ):
         result = module.install_codex(
             dry_run=False, force=False, config_path=str(config_path), if_stale=True,
@@ -477,9 +484,14 @@ def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path, mo
         mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
     )
+    # The SYNCHRONIZED skip path now smokes the installed tree; this case
+    # fabricates the state without a tree, so the probe is stubbed. Its own
+    # coverage is `test_the_synchronized_skip_path_still_drives_the_smoke`.
     with common[0], common[1], mock.patch.object(
         module, "_claude_payload_state",
         return_value=(module.PAYLOAD_SYNCHRONIZED, ""),
+    ), mock.patch.object(
+        module, "_smoke_installed_runtime", return_value=(True, ["runtime smoke: ok"]),
     ), mock.patch.object(module, "sync_claude_payload") as sync:
         current = module.install_claude(dry_run=False, force=False, if_stale=True)
     assert current.ok

@@ -21,6 +21,41 @@ If the working tree has **uncommitted changes**:
 
 This ensures test results accurately reflect the code state that will be merged.
 
+## Step 0.5: Install-tree removals (repos whose tests can reach a runtime)
+
+The repository is not the whole blast radius. Hooks execute from the installed
+trees — `~/.claude/harness-dev`, `~/.codex/harness`, and the Codex plugin cache
+entry `~/.codex/plugins/cache/harness/harness` that Codex actually loads — and a
+test, script, or mutation experiment that reaches one can delete the runtime
+that records receipts. When that happens every later symptom is an absence, so
+review and QA check all three roots, not only task artifacts.
+
+```bash
+snapshot() { for r in "$HOME/.claude/harness-dev" "$HOME/.codex/harness" \
+                     "$HOME/.codex/plugins/cache/harness/harness"; do
+  [ -d "$r" ] && find "$r" -type f -not -path '*/__pycache__/*' -printf '%p\n'
+done | LC_ALL=C sort; }
+snapshot > /tmp/install-before.txt
+<verification commands>
+snapshot > /tmp/install-after.txt
+comm -23 /tmp/install-before.txt /tmp/install-after.txt   # must be empty
+```
+
+Only **removals** matter, and the snapshot records **paths only, excluding
+`__pycache__`**, for the same two reasons `tests/conftest.py` does: hooks
+legitimately regenerate bytecode during a run and `python3 install.py --force`
+prunes those directories outright, so including them reports losses right after
+the repair this paragraph prescribes; and a rewritten file is not a removal, so
+recording sizes or checksums cries wolf on every normal run. If anything
+disappeared, repair with `python3 install.py --force` before continuing, and
+bind the responsible test to a tmp install root.
+
+In this repository the pytest suite carries the same check automatically
+(`tests/conftest.py::install_trees_lose_no_files`), and
+`test_the_documented_snapshot_matches_the_fixture` pins this snippet to that
+fixture's semantics; the manual snapshot covers work that runs outside pytest.
+See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
+
 ## Step 1: Run test commands from PLAN.md
 
 Run the highest available verification tier without asking the user to opt in.

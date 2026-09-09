@@ -9,6 +9,7 @@ Checks (in order of severity):
   3. § 1 matrix references exactly match the § 2 contract id set. [soft]
   4. `Enforced by:` paths that look like repo files actually exist. [soft]
   5. No duplicate C-## ids. [hard]
+  6. `test_...` ids referenced by durable docs resolve to real tests. [soft]
 
 Modes:
   --quick   Only checks 1, 3, 5 (fast — for a caller on a latency budget).
@@ -34,6 +35,7 @@ import argparse
 import fnmatch
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 
@@ -277,6 +279,131 @@ def lint(path: str, quick: bool = False, repo_root: str = ".") -> LintReport:
     return report
 
 
+# A backticked `test_...` identifier in a durable doc. Both lookarounds are
+# load-bearing: `tests/test_stop_gate.py` is a file reference, not a claim that
+# a test function by that name exists, and a trailing `.py` must reject the
+# whole token — a bare negative lookahead lets the engine backtrack and match
+# `test_promote_learnings_current_ru` out of `..._run.py`.
+DOC_TEST_REFERENCE = re.compile(
+    r"(?<![A-Za-z0-9_/.])(test_[A-Za-z0-9_]+)(?![A-Za-z0-9_.])"
+)
+INLINE_CODE = re.compile(r"`([^`\n]+)`")
+TEST_DEFINITION = re.compile(r"^\s*def (test_[A-Za-z0-9_]+)", re.MULTILINE)
+PYTHON_IDENTIFIER = re.compile(r"\btest_[A-Za-z0-9_]+")
+# Dated release notes describe the tree as it stood on that date. A later
+# rename does not make the record false, so they are not held to it.
+DOC_HISTORY_PREFIXES = ("doc/changes/",)
+SKIPPED_SOURCE_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
+
+
+def _python_sources(repo_root: str) -> list[str]:
+    paths = []
+    for parent, dirnames, filenames in os.walk(repo_root, onerror=lambda _e: None):
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in SKIPPED_SOURCE_DIRS and not name.startswith(".")
+        ]
+        paths.extend(
+            os.path.join(parent, name)
+            for name in filenames if name.endswith(".py")
+        )
+    return paths
+
+
+def _test_identifiers(repo_root: str) -> tuple[set[str], set[str]]:
+    """Return (test ids defined, other `test_*` names the sources use).
+
+    The second set is not decoration: `test_command` and `test_paths` are
+    manifest keys documented in `doc/harness/patterns/`, and a check that
+    cannot tell a config key from a coverage claim would either need an
+    allowlist that rots or would warn forever on correct prose.
+    """
+    defined: set[str] = set()
+    used: set[str] = set()
+    for path in _python_sources(repo_root):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        defined.update(TEST_DEFINITION.findall(text))
+        used.update(PYTHON_IDENTIFIER.findall(text))
+        name = os.path.basename(path)
+        if name.startswith("test_"):
+            defined.add(name[: -len(".py")])
+    return defined, used
+
+
+def _durable_docs(repo_root: str) -> list[str]:
+    """Repo-relative durable markdown under `doc/`.
+
+    Git-tracked files are the durable set: task directories, retros and other
+    generated trees under `doc/harness/` are gitignored working state whose
+    references are historical the moment the task closes. Falls back to a plain
+    walk where Git is unavailable, which over-reports rather than under-reports.
+    """
+    try:
+        listed = subprocess.run(
+            ["git", "-C", repo_root, "ls-files", "-z", "--", "doc"],
+            capture_output=True, timeout=10,
+        )
+        if listed.returncode == 0:
+            names = [
+                entry for entry in listed.stdout.decode("utf-8", "replace").split("\0")
+                if entry.endswith(".md")
+            ]
+            if names:
+                return names
+    except (OSError, subprocess.SubprocessError):
+        pass
+    names = []
+    for parent, dirnames, filenames in os.walk(os.path.join(repo_root, "doc")):
+        dirnames[:] = [name for name in dirnames if name not in SKIPPED_SOURCE_DIRS]
+        names.extend(
+            os.path.relpath(os.path.join(parent, name), repo_root)
+            for name in filenames if name.endswith(".md")
+        )
+    return sorted(names)
+
+
+def check_doc_test_references(repo_root: str = ".") -> list[str]:
+    """Return one message per durable doc reference to a test that is gone.
+
+    A doc's mutation table or coverage note is the only record that a guard
+    branch was ever exercised. When the test it names is renamed the record
+    becomes unreproducible, and nothing said so: R5 of
+    `TASK__session-rebinds-receipt-marker` found exactly that by hand. See
+    `doc/harness/REQ__guards-are-verified-where-they-run.md`.
+
+    Reported as soft. The enforcement that fails a build is
+    `tests/test_contract_lint_real_tree.py`, which asserts this list is empty
+    for this repository — the same arrangement C-102 already uses for the
+    managed block and the weight budget.
+    """
+    defined, used = _test_identifiers(repo_root)
+    issues = []
+    for relative in _durable_docs(repo_root):
+        if relative.startswith(DOC_HISTORY_PREFIXES):
+            continue
+        try:
+            with open(os.path.join(repo_root, relative), "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except OSError:
+            continue
+        seen: set[str] = set()
+        for number, line in enumerate(lines, 1):
+            for span in INLINE_CODE.findall(line):
+                for name in DOC_TEST_REFERENCE.findall(span):
+                    if name in defined or name in used or name in seen:
+                        continue
+                    seen.add(name)
+                    issues.append(
+                        f"{relative}:{number} references `{name}`, which is not a "
+                        "test in this repository (renamed or deleted?)"
+                    )
+    return issues
+
+
 SKILL_WEIGHT_LIMIT = 500  # C-13: SKILL.md hot path line budget
 
 
@@ -347,6 +474,15 @@ def main() -> int:
                 return 0
 
     report = lint(args.path, quick=args.quick, repo_root=args.repo_root)
+
+    # Check 6 is a repo-wide scan (Git query + every tracked doc + every test
+    # and source file). `--quick` exists for callers on a latency budget —
+    # `setup_finalize.py` and the setup bootstrap — so it stays out of that
+    # path, as the module docstring says. Measured here: 0.027s -> 0.159s on
+    # this repository, and unbounded in a larger tree.
+    if not args.quick:
+        for issue in check_doc_test_references(args.repo_root):
+            report.soft.append(f"doc test reference: {issue}")
 
     if args.check_weight:
         for skill_md, n in check_skill_weights(args.plugin_root):

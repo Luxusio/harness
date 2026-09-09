@@ -6,6 +6,8 @@ Exports:
   invoke_hook(...)     — subprocess runner for a hook script with stdin JSON
   scratch_task_in_real_repo(...) — context manager creating a scratch task dir
                          with clean finally removal (no leaks on exception)
+  install_trees_lose_no_files — session-wide guard: a run may add to an
+                         installed harness runtime, never remove from one
 """
 from __future__ import annotations
 
@@ -23,6 +25,111 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
+
+
+def _default_install_tree_roots() -> list[str]:
+    """The installed runtime trees a suite run must never remove files from.
+
+    The home directory comes from the password database rather than
+    `Path.home()` for the same reason `install._reject_real_install_root_under_test`
+    does: a test that repoints `HOME` at `tmp_path` is the isolated case, and
+    `Path.home()` would then report that tmp home as the real one.
+
+    Three roots, not two. `~/.codex/plugins/cache/harness/harness` is the tree
+    Codex actually loads — `install.py` registers its hooks with absolute
+    commands into that directory and prunes bytecode inside it — so the
+    `rmtree(cache.parent)` class of mutation that started this guard would
+    destroy it while the other two roots stayed intact. Only the harness
+    marketplace/plugin subtree is watched; sibling marketplaces under
+    `~/.codex/plugins/cache` are other tools' trees, and walking them costs more
+    than it protects. Measured 2026-09-09: 521 files, ~0.1s per snapshot.
+    """
+    try:
+        import pwd
+
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:  # no password database — nothing to protect
+        return []
+    return [
+        os.path.join(home, ".claude", "harness-dev"),
+        os.path.join(home, ".codex", "harness"),
+        os.path.join(home, ".codex", "plugins", "cache", "harness", "harness"),
+    ]
+
+
+# Read at fixture time, so the guard's own test can point it at a stand-in tree
+# (tests/test_install_tree_removal_guard.py).
+_INSTALL_TREE_ROOTS = _default_install_tree_roots()
+
+
+def _install_tree_inventory(root: str) -> dict[str, int]:
+    """Map file path -> size for one install tree; empty when it is absent.
+
+    `__pycache__` is skipped on purpose. Live session hooks regenerate bytecode
+    during a run and the installer prunes those directories outright, so
+    including them would make the guard fire on normal, harmless activity — and
+    a guard that cries wolf gets disabled. Every file that constitutes the
+    runtime is still covered, including the `plugin/scripts` and `plugin/mcp`
+    sources a `rmtree(cache.parent)` mutation actually deleted on 2026-09-09.
+
+    Sizes are recorded so the failure message can name what was lost; only the
+    *set of paths* is compared. Content and mtime deliberately are not: a hook
+    rewriting a file it owns is not a removal, and comparing those produced a
+    false alarm on every run when it was tried by hand.
+    """
+    inventory: dict[str, int] = {}
+    for parent, dirnames, filenames in os.walk(root, onerror=lambda _e: None):
+        dirnames[:] = [name for name in dirnames if name != "__pycache__"]
+        for name in filenames:
+            path = os.path.join(parent, name)
+            try:
+                inventory[path] = os.lstat(path).st_size
+            except OSError:
+                continue  # vanished mid-walk: never recorded, never reported
+    return inventory
+
+
+def _install_tree_removals(before: dict[str, dict[str, int]]) -> list[str]:
+    """Paths present in `before` that no longer exist. Additions are ignored."""
+    removals = []
+    for root, snapshot in sorted(before.items()):
+        after = _install_tree_inventory(root)
+        removals.extend(
+            f"{path} ({size} bytes)"
+            for path, size in sorted(snapshot.items())
+            if path not in after
+        )
+    return removals
+
+
+@pytest.fixture(scope="session", autouse=True)
+def install_trees_lose_no_files():
+    """Fail the run if it removed a file from an installed harness runtime.
+
+    `install._reject_real_install_root_under_test` and the `HARNESS_DEST`
+    fixture below are the prevention layers; this is the detection layer behind
+    them, and it must catch a removal even when both are bypassed — a test can
+    reach `~/.claude/harness-dev` through any path, not only the installer.
+
+    On 2026-09-09 a whole-suite mutation run deleted the installed
+    `plugin/scripts` and `plugin/mcp` and killed receipt recording for the
+    session that ran it. Six review rounds had invariant checks in place, but
+    every one of them watched `doc/harness/tasks/.active_sessions/` — task
+    artifacts — and none watched the tree the hooks actually execute from.
+    See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
+
+    Absent trees (fresh machine, CI) inventory as empty and never fail.
+    """
+    before = {root: _install_tree_inventory(root) for root in _INSTALL_TREE_ROOTS}
+    yield
+    removed = _install_tree_removals(before)
+    assert not removed, (
+        "this test run removed "
+        f"{len(removed)} file(s) from an installed harness runtime tree:\n  "
+        + "\n  ".join(removed)
+        + "\nRe-install with `python3 install.py` to repair, then bind the "
+        "responsible test to a tmp install root."
+    )
 
 
 @pytest.fixture(autouse=True)
