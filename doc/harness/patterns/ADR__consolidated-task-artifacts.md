@@ -72,7 +72,32 @@ lifecycle state is derived from `event`; timestamp role is derived from
 `event + ts`; finding counts are parsed from the canonical completion
 `summary`. A start carries an empty summary and no passing verdict. A
 completion summary retains only its normalized verdict, review finding counts
-when applicable, and a `DETAIL_SHA256` of the validated full final response.
+when applicable, a `FIRST_LINE:` slot on `PENDING` completions only, and a
+`DETAIL_SHA256` of the validated full final response.
+
+The `FIRST_LINE:` slot carries the bounded text that occupied the verdict
+position when nothing bound there. It is written always on `PENDING` and never
+on a bound verdict, sits immediately before the digest so the counts slot stays
+line 2 and the digest stays last, and is **optional on read** — rows written
+before it exist must keep parsing. Making it required would fail every
+`PENDING` receipt already on disk, and `receipt_snapshot` raises on a single
+bad row, so that would poison the stream of every in-flight task. Without the
+slot a completion that failed to bind records that it failed but not what it
+was, which is the state that made the 2026-09-09 incident undiagnosable from
+the receipt alone. See
+`doc/harness/REQ__verdict-binding-survives-output-framing.md` for what binds;
+this ADR remains the authority for how the row is stored.
+
+Read compatibility is not replay compatibility. A duplicate stop is recognized
+by recomputing the summary from the stop message and comparing it for equality
+against the stored row, so a `PENDING` row written before the slot existed no
+longer matches its own replay: it differs by exactly the retained line. During
+that upgrade window a second delivery of the same stop is reported as
+retryable (`receipt_pending`) instead of as a duplicate. The row stays on disk
+and still validates, so no verification evidence is lost, and the window closes
+as soon as the row is rewritten. Tightening the comparison would cost more
+machinery than the window warrants.
+
 When a review completion binds no verdict, its counts slot carries the reason
 rather than counts: `FINDING_COUNTS: INVALID` when no line-1 verdict token could
 be read at all, or `FINDING_COUNTS: UNREADABLE <TOKEN>` when one was read — and

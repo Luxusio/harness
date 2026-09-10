@@ -900,14 +900,19 @@ def _escape_hint(gate_name):
     return f"escape: {key}=1 <retry>"
 
 
-def _log_gate_error(exc, source):
+def _log_gate_error(exc, source, repo_root=None):
     """Append a gate-exception entry to doc/harness/learnings.jsonl.
 
     Best-effort; any failure is swallowed. Used by gate scripts' outer
     try/except so silent fail-open doesn't decay into an invisible dead gate.
+
+    `repo_root` is for a caller that already knows which repo the record
+    belongs to. Resolving from the process cwd is right for a gate, which runs
+    in the project, and wrong for a caller reached from a hook whose cwd may be
+    elsewhere while it holds the task directory.
     """
     try:
-        repo_root = find_repo_root()
+        repo_root = repo_root or find_repo_root()
         if not is_harness_enabled_repo(repo_root):
             return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
@@ -968,6 +973,96 @@ def log_gate_crash(exc, script, hook_input=None):
             f.write(_json.dumps(record) + "\n")
     except Exception:
         pass
+
+
+# Keyed by `_unbound_completion_cause`; each value is (what the row shows, what
+# to do about it). Split by cause because one unconditional sentence was false
+# on two of the three: a review reporting `VERDICT: PASS` beside `FIX_NOW=2`
+# bound its verdict fine and was told to move that verdict to line 1, where it
+# already was. This repo does not write false statements into diagnostics — see
+# `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`, which exists
+# because a fixed park reason asserted something untrue — and the read-side
+# `nonparsing_completion_note` already separates these, so a write side that
+# asserts one cause makes the two complementary paths disagree.
+_UNBOUND_COMPLETION_CAUSES = {
+    "verdict": (
+        "its verdict did not bind",
+        "Re-deliver that lens final with exactly one verdict block on line 1.",
+    ),
+    "counts": (
+        "only its verdict line bound — its FINDING_COUNTS line did not",
+        "Re-deliver that lens final with FINDING_COUNTS on the line directly "
+        "below the verdict.",
+    ),
+    "contradiction": (
+        "its verdict line and its own FINDING_COUNTS line disagree",
+        "Re-deliver that lens final with a verdict its counts support.",
+    ),
+}
+
+
+def log_unbound_completion(task_dir, lens, entry):
+    """Announce a recorded completion whose verdict did not bind.
+
+    The 2026-09-09 incident cost nothing unrecoverable — the lens could be
+    rerun — except silence: a `qa-cli` PASS was stored as `PENDING` and the
+    first surface to mention it was an unrelated installer refusing two steps
+    later. `nonparsing_completion_note` diagnoses this on the read side, but
+    only for a coordinator that calls `task_verify`/`task_context`, so the
+    write side leaves a breadcrumb in the same ledger and with the same shape
+    as `background_hook:binding-miss`.
+
+    Not noisy by construction: a completion that binds PASS, FAIL or
+    BLOCKED_ENV never reaches here. Best-effort; never raises into the writer.
+
+    Takes the entry, not just the lens name, because the corrective action
+    differs by cause and a wrong one is worse than none — see
+    `_unbound_completion_cause`.
+
+    The failed line itself is deliberately NOT copied here. It is
+    agent-authored text, and `background_hook.py`'s `_log_binding_miss` states
+    the ledger rule this file shares: record which fields were present, never
+    transcripts or assistant text. The line is retained on the receipt row
+    (`FIRST_LINE:`), which is where a diagnosis should read it from, so keeping
+    it out of the ledger costs no information and leaves that rule with one
+    statement instead of an unmarked exception.
+
+    The task id *is* included. This ledger is repo-scoped while receipts are
+    per-task, so a lens name alone makes "the receipt row" a search across every
+    task directory rather than a pointer. An id is an identifier, not
+    agent-authored text, so it does not reopen the rule above.
+    """
+    # The whole body is guarded, not just the append. `_log_gate_error` swallows
+    # its own failures, but classification, the message, and the root lookup ran
+    # ahead of it — outside any guard — and this function is called from inside
+    # `receipt_stream_savepoint`, so a raise here does not merely lose the
+    # announcement: it rolls the completion row back and the stop returns
+    # `receipt_pending`. An announcement must never be able to destroy the
+    # record it announces. No natural raise is reachable today (the entry is
+    # schema-validated before the call and `harness_root_resolution` guards its
+    # own filesystem reads); this makes the docstring's promise true by
+    # construction rather than by audit.
+    #
+    # The append is inside the guard too, so the promise does not rest on
+    # `_log_gate_error`'s own blanket handler staying blanket. That handler is
+    # a different function's contract, and this one is load-bearing enough to
+    # own its failure mode outright.
+    try:
+        shows, action = _UNBOUND_COMPLETION_CAUSES[
+            _unbound_completion_cause(lens, entry)
+        ]
+        message = (
+            f"lens {lens or 'unknown'} completed but {shows}; "
+            f"{os.path.basename(os.path.normpath(str(task_dir or ''))) or 'unknown task'}"
+            " recorded PENDING and retains the line that occupied the verdict "
+            f"position in its RECEIPTS.jsonl. {action}"
+        )
+        repo_root = find_harness_root(task_dir) or None
+        _log_gate_error(
+            RuntimeError(message), "receipts:verdict-unbound", repo_root=repo_root,
+        )
+    except Exception:
+        return
 
 
 def log_gate_bypass(gate_name, path=""):
@@ -2524,7 +2619,16 @@ def _receipt_entry_semantics_valid(item):
         return False
     lines = item["summary"].splitlines()
     expected_lines = 3 if item["lens"].startswith("review-") else 2
-    if len(lines) != expected_lines or lines[0] != f"VERDICT: {item['verdict']}":
+    # One optional extra line, only on `PENDING`: the retained verdict-position
+    # line (see `_unbound_first_line_slot`). Optional rather than required so
+    # receipts written before it existed still read; second-to-last so the
+    # counts slot stays `lines[1]` and the digest stays `lines[-1]`.
+    if len(lines) == expected_lines + 1:
+        if item["verdict"] != "PENDING" or not _FIRST_LINE_RE.fullmatch(lines[-2]):
+            return False
+    elif len(lines) != expected_lines:
+        return False
+    if lines[0] != f"VERDICT: {item['verdict']}":
         return False
     if item["lens"].startswith("review-") and not (
         _COUNTS_UNBOUND_RE.fullmatch(lines[1]) or _FINDING_COUNTS_RE.fullmatch(lines[1])
@@ -2807,12 +2911,60 @@ _FINDING_COUNTS_RE = re.compile(
     r"^FINDING_COUNTS: FIX_NOW=(\d+) INVESTIGATE=(\d+) OPTIONAL=(\d+)$"
 )
 
+# The Claude Code binary prepends this notice to a subagent final when its own
+# output scanner flags instruction-shaped text. Measured, not inferred: the
+# literal lives in `~/.local/bin/claude` and nowhere under `plugin/`, and the
+# sanitized final is assembled there as `f"{notice}\n\n{original}"` — one
+# notice line, one blank line, then the agent's text verbatim. The harness
+# cannot suppress or reorder it, so only the binder can tolerate it.
+#
+# "harness" in that notice is the runtime's own name for that scanner and is
+# unrelated to this plugin; the collision is why the 2026-09-09 incident was
+# first misdiagnosed as harness code.
+#
+# A literal prefix, deliberately not a "looks like a notice" pattern. Skipping
+# arbitrary preamble would let any agent bury a verdict under prose and still
+# bind it, which is the forgery surface C-14 rests on.
+_RUNTIME_OUTPUT_NOTICE_PREFIX = "[harness: subagent output matched instruction-shaped pattern(s): "
+
+
+def _verdict_aligned_lines(value):
+    """The final's lines, with the verdict position at index 0.
+
+    Every positional reader in this module addresses the same origin through
+    this one accessor. That is not tidiness: the first version of this change
+    advanced only `extract_qa_verdict` and left
+    `normalize_receipt_completion` reading `summary_lines[1]` for the counts,
+    so a wrapped *review* final read the runtime's own blank separator as its
+    counts line and demoted an already-bound PASS to PENDING — with a receipt
+    row that recorded `FIRST_LINE: VERDICT: PASS` while telling the lens to
+    move its verdict to line 1, which it already was. A compliant re-delivery
+    reproduced the same row. Two origins made that miss reviewable-in-principle
+    and missed twice in practice; one origin makes it impossible.
+
+    Only the blank line(s) the runtime itself inserts between its notice and
+    the original text travel with the notice. A horizontal rule or a sentence
+    of agent prose is agent-authored content and still voids the verdict; that
+    is why tolerating the notice alone did not fix the observed incident, whose
+    final also carried a preamble.
+    """
+    lines = str(value or "").splitlines()
+    if not lines or not lines[0].strip().startswith(_RUNTIME_OUTPUT_NOTICE_PREFIX):
+        return lines
+    index = 1
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return lines[index:]
+
 
 def extract_qa_verdict(value):
     """Accept the first-line verdict; only a conflicting bare verdict line voids it.
 
-    Authority is positional: line 1 or nothing. Line 1 may carry trailing
-    commentary after the verdict token (see `_QA_VERDICT_HEAD_RE`); later lines
+    Authority is positional: line 1 or nothing, where line 1 is located by
+    `_verdict_aligned_lines` so the runtime's own output-scanner notice —
+    framing this plugin cannot remove — does not destroy a compliant verdict.
+    Line 1 may carry trailing commentary after the verdict token (see
+    `_QA_VERDICT_HEAD_RE`); later lines
     are read strictly, and one voids the result only when it is itself a bare
     verdict line naming a *different* verdict — genuine ambiguity about which
     one binds. A repeated identical verdict line is harmless, and prose that
@@ -2821,7 +2973,7 @@ def extract_qa_verdict(value):
     destroy its own verdict, which is precisely what a review of this subsystem
     must be free to do.
     """
-    lines = str(value or "").splitlines()
+    lines = _verdict_aligned_lines(value)
     if not lines:
         return ""
     first = _QA_VERDICT_HEAD_RE.match(lines[0].strip())
@@ -2855,6 +3007,37 @@ _COUNTS_UNREADABLE = "FINDING_COUNTS: UNREADABLE"
 _COUNTS_UNBOUND_RE = re.compile(
     r"^FINDING_COUNTS: (?:INVALID|UNREADABLE (?:PASS|FAIL|BLOCKED_ENV))$"
 )
+
+# Additive retention for a completion that bound no verdict. Compaction keeps
+# only the verdict, the counts slot and a digest, so when a bind failed the
+# text that failed was unrecoverable — the 2026-09-09 incident could only be
+# diagnosed from a notification the user happened to still have. One bounded
+# line, the one the binder actually read, tells a wrapped final from a preamble
+# from a misspelled token without storing a report body.
+#
+# Written only for `PENDING`, and optional in the persisted-schema validator:
+# receipts already on disk predate it, and demanding it on read would poison
+# every in-flight task's stream.
+_RECEIPT_FIRST_LINE_MAX = 120
+_FIRST_LINE_PREFIX = "FIRST_LINE:"
+_FIRST_LINE_RE = re.compile(r"^FIRST_LINE:(?: \S.{0,%d})?$" % (_RECEIPT_FIRST_LINE_MAX - 1))
+
+
+def _unbound_first_line_slot(value):
+    """The verdict-position line of a completion that bound nothing, bounded.
+
+    Deliberately the line the binder read, not the first non-blank line of the
+    final: a verdict buried under a preamble and a misspelled verdict token
+    need different fixes, and the first non-blank line cannot tell them apart.
+    `splitlines` guarantees the retained text carries no line break, so the
+    slot stays exactly one line.
+
+    An empty verdict position is itself the diagnosis and renders as the bare
+    prefix rather than as a fabricated quotation.
+    """
+    lines = _verdict_aligned_lines(value)
+    text = lines[0].strip()[:_RECEIPT_FIRST_LINE_MAX].strip() if lines else ""
+    return f"{_FIRST_LINE_PREFIX} {text}" if text else _FIRST_LINE_PREFIX
 
 
 def _offposition_negative(summary_lines):
@@ -2942,7 +3125,11 @@ def normalize_receipt_completion(lens, value, supplied_verdict=""):
         verdict = summary_verdict
 
     is_review = str(lens or "").startswith("review-")
-    summary_lines = raw_summary.splitlines()
+    # Aligned, not `raw_summary.splitlines()`. The counts slot, the conflict
+    # scan that starts below it and `_offposition_negative`'s line-1 check are
+    # all positional, and all three read the runtime's notice and its blank
+    # separator as content when they address the raw list.
+    summary_lines = _verdict_aligned_lines(raw_summary)
     # `.strip()` like line 0 and lines 3+. Without it this one line was
     # whitespace-strict, so a trailing space or an indent on an otherwise
     # perfect counts line discarded the whole review.
@@ -3018,6 +3205,8 @@ def normalize_receipt_completion(lens, value, supplied_verdict=""):
             compact.append(off_counts)
         else:
             compact.append(_COUNTS_INVALID)
+    if verdict == "PENDING":
+        compact.append(_unbound_first_line_slot(raw_summary))
     compact.append("DETAIL_SHA256:" + hashlib.sha256(raw_summary.encode("utf-8")).hexdigest())
     return verdict, "\n".join(compact)
 
@@ -3350,6 +3539,12 @@ def _make_runtime_receipt_writer():
                 _revalidate_receipt_transaction(task_dir)
             finally:
                 os.close(fd)
+        if entry["verdict"] == "PENDING":
+            # Announced after the durable append, so the breadcrumb only ever
+            # describes a completion that really was recorded, and announced
+            # here because every runtime path — the Claude stop hook, the Codex
+            # watcher — converges on this writer.
+            log_unbound_completion(task_dir, lens, entry)
         return entry
 
     return record, bind
@@ -3435,16 +3630,67 @@ def _pending_completion_kind(lens, item):
 def _unbound_counts_slot(item):
     """The counts-slot line when it records a reason instead of counts.
 
-    Scanning is equivalent to indexing line 2 only because
+    Scanning is equivalent to indexing line 2 because
     `_receipt_entry_semantics_valid` pins a review summary to exactly three
-    lines and `receipt_snapshot` raises on anything that violates it, so at most
-    one line here can match. If a future schema adds a summary line, this scan
+    lines plus, on `PENDING`, the retained verdict-position line, and
+    `receipt_snapshot` raises on anything else. That retained line carries the
+    `FIRST_LINE:` prefix, so it cannot match this pattern whatever the agent
+    wrote. If a future schema adds an unprefixed summary line, this scan
     becomes permissive with nothing failing — index deliberately, then.
     """
     for line in str(item.get("summary") or "").splitlines():
         if _COUNTS_UNBOUND_RE.fullmatch(line):
             return line
     return None
+
+
+def _retained_first_line(item):
+    """The verdict-position line a `PENDING` row retained, or "" if absent.
+
+    Absent on rows written before that slot existed, which is why every reader
+    of it must tolerate "".
+    """
+    for line in str(item.get("summary") or "").splitlines():
+        if line.startswith(_FIRST_LINE_PREFIX):
+            return line[len(_FIRST_LINE_PREFIX):].strip()
+    return ""
+
+
+def _unbound_completion_cause(lens, entry):
+    """Which slot of a just-recorded `PENDING` failed. Three causes.
+
+    Read off the stored row rather than recomputed, so it can only describe
+    what a later reader will also see.
+
+    Deliberately not `_pending_completion_kind`, which answers a different
+    question — may this row evict an earlier verdict — and folds
+    `UNREADABLE PASS`, where the verdict line *did* read, into the same bucket
+    as a row where nothing read at all.
+
+    The retained line is the discriminator rather than the counts slot alone,
+    because the counts slot is ambiguous in both directions: a surviving counts
+    line means either a bound verdict contradicting it or an unreadable verdict
+    line beside `FIX_NOW > 0`, and an `UNREADABLE <token>` slot carries a token
+    that may have come from the off-position scan rather than from the verdict
+    position. When the retained line is absent (a row from before the slot
+    existed) the unreadable case is the safe answer: its action — deliver one
+    verdict block on line 1 — is correct for any row, merely redundant for the
+    two where more is wrong.
+    """
+    if not _QA_VERDICT_HEAD_RE.match(_retained_first_line(entry)):
+        return "verdict"
+    if not str(lens or "").startswith("review-"):
+        # A QA lens stores no counts slot, so nothing else can be named. Reached
+        # only when a supplied verdict disagreed with a readable one.
+        return "verdict"
+    slot = _unbound_counts_slot(entry)
+    if slot == _COUNTS_INVALID:
+        # Nothing was usable: not the verdict, not the counts, not the
+        # off-position scan. Reached with a readable retained line when two bare
+        # verdict lines named different verdicts and voided each other — which
+        # is why the action for this cause says *exactly one* verdict block.
+        return "verdict"
+    return "counts" if slot else "contradiction"
 
 
 def _retained_verdict_token(item):
@@ -3645,8 +3891,10 @@ def nonparsing_completion_lenses(task_dir, state=None, snapshot=None):
     """Lenses that completed for this run but whose final failed the verdict contract.
 
     `normalize_receipt_completion` records `PENDING` when the final message does
-    not carry `VERDICT: PASS|FAIL|BLOCKED_ENV` on its first line (and, for review
-    lenses, `FINDING_COUNTS:` on the second). The lens did run and did report —
+    not carry `VERDICT: PASS|FAIL|BLOCKED_ENV` at the verdict position — line 1,
+    or the line after the runtime's own output-scanner notice, see
+    `_verdict_aligned_lines` — (and, for review lenses, `FINDING_COUNTS:` on the
+    line below it). The lens did run and did report —
     the shape was rejected — but a bare `PENDING` reads exactly like "never ran",
     so a coordinator re-derives the whole cycle before noticing. Naming it is
     diagnostic only: a non-parsing completion stays non-attesting either way.
@@ -3745,12 +3993,19 @@ def nonparsing_completion_note(lenses):
             "the missing-attestation case, not a lens to run a third time."
         )
     if inconsistent:
-        # Deliberately enumerated rather than diagnosed. The stored receipt keeps
-        # the normalized verdict, the counts slot, and a digest — nothing about
-        # the original message — so this branch knows the verdict line was
-        # readable but not what it said, nor whether the counts line existed at
-        # all. Naming a single cause would be a guess; the sentence lists the
-        # reachable ones and leads with the common one.
+        # Deliberately enumerated rather than diagnosed. This branch knows the
+        # verdict line was readable but not what it said, nor whether the counts
+        # line existed at all. Naming a single cause would be a guess; the
+        # sentence lists the reachable ones and leads with the common one.
+        #
+        # An `inconsistent` row does carry the bounded `FIRST_LINE:` slot — it
+        # is written for every `PENDING` — and this branch still does not read
+        # it. Not because it is missing (an earlier version of this comment said
+        # so and was wrong), but because it is bounded and normalized while this
+        # sentence is coordinator-facing prose: naming what the line was would
+        # still not say which of the enumerated causes applied. The write-side
+        # breadcrumb has the whole entry and does discriminate; see
+        # `_unbound_completion_cause`.
         parts.append(
             f"Recorded but unusable: {', '.join(inconsistent)} reported something "
             "substantive but no verdict could be bound — its verdict and finding "
