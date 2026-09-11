@@ -371,6 +371,18 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("discard", fresh_run["description"].lower())
         self.assertIn("preserv", task_start["description"].lower())
 
+        task_blocked = next(
+            tool for tool in harness_server.list_tools() if tool["name"] == "task_blocked"
+        )
+        properties = task_blocked["inputSchema"]["properties"]
+        self.assertIn("bare safe ID", properties["task_id"]["description"])
+        self.assertIn(
+            "paths are not accepted", properties["task_id"]["description"].lower(),
+        )
+        for field in ("blocked_reason", "unblock_condition"):
+            self.assertIn("stored verbatim", properties[field]["description"])
+            self.assertIn("122880 UTF-8 bytes", properties[field]["description"])
+
     def test_start_only_receipt_does_not_produce_runtime_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__start-only")
@@ -1369,6 +1381,264 @@ class HarnessMcpServerTests(unittest.TestCase):
                     task_dir, harness_server.read_task_control(task_dir)
                 ), "blocked",
             )
+
+    def test_task_blocked_argument_errors_name_the_actual_field_without_echoing_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__blocked-arguments"))
+            state_before = (task_dir / "TASK.json").read_bytes()
+            cases = (
+                ({"unblock_condition": "resume"}, "blocked_reason", "missing", "<missing>"),
+                (
+                    {"blocked_reason": " \n\t ", "unblock_condition": "resume"},
+                    "blocked_reason", "blank", "<blank string>",
+                ),
+                (
+                    {"blocked_reason": ["SECRET_REASON_TEXT"], "unblock_condition": "resume"},
+                    "blocked_reason", "wrong_type", "<non-string: list>",
+                ),
+                ({"blocked_reason": "reason"}, "unblock_condition", "missing", "<missing>"),
+                (
+                    {"blocked_reason": "reason", "unblock_condition": " \n\t "},
+                    "unblock_condition", "blank", "<blank string>",
+                ),
+                (
+                    {"blocked_reason": "reason", "unblock_condition": ["SECRET_CONDITION_TEXT"]},
+                    "unblock_condition", "wrong_type", "<non-string: list>",
+                ),
+            )
+            for extra, field, reason, rejected in cases:
+                with self.subTest(field=field, reason=reason):
+                    result = self._call_in_repo(
+                        tmp,
+                        "task_blocked",
+                        {"task_id": task_dir.name, **extra},
+                    )
+                    payload = result["structuredContent"]
+                    self.assertTrue(result.get("isError"))
+                    self.assertEqual(payload["error_code"], "INVALID_ARGUMENT")
+                    self.assertEqual(payload["field"], field)
+                    self.assertEqual(payload["reason"], reason)
+                    self.assertEqual(payload["rejected_value"], rejected)
+                    self.assertIn(field, payload["next_action"])
+                    self.assertNotIn("SECRET_REASON_TEXT", json.dumps(result))
+                    self.assertNotIn("SECRET_CONDITION_TEXT", json.dumps(result))
+                    self.assertFalse((task_dir / "BLOCKED.md").exists())
+                    self.assertEqual((task_dir / "TASK.json").read_bytes(), state_before)
+
+    def test_task_blocked_preserves_long_unicode_fields_through_public_transports(self):
+        reason = "  REASON_START\r\n" + ("막힌 이유🙂 {\"reason\": true}\r둘째 줄 'quote'\\slash\n" * 320) + "REASON_END\t "
+        unblock = "\rUNBLOCK_START\n" + ("해제 조건🚦 [unblock]\r\n다른 줄 \"double\"\\path\r" * 340) + "UNBLOCK_END  "
+        self.assertGreater(len(reason.encode("utf-8")), 12 * 1024)
+        self.assertGreater(len(unblock.encode("utf-8")), 12 * 1024)
+
+        for mode in ("direct", "newline", "framed"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                task_dir = Path(self._make_task(tmp, f"TASK__long-{mode}"))
+                args = {
+                    "task_id": task_dir.name,
+                    "blocked_reason": reason,
+                    "unblock_condition": unblock,
+                }
+                if mode == "direct":
+                    result = self._call_in_repo(tmp, "task_blocked", args)
+                else:
+                    request = {
+                        "jsonrpc": "2.0",
+                        "id": 41,
+                        "method": "tools/call",
+                        "params": {"name": "task_blocked", "arguments": args},
+                    }
+                    following = {
+                        "jsonrpc": "2.0", "id": 42, "method": "ping", "params": {},
+                    }
+
+                    def encoded(payload):
+                        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+                    if mode == "framed":
+                        def frame(payload):
+                            body = encoded(payload)
+                            return (
+                                b"Content-Length: " + str(len(body)).encode("ascii")
+                                + b"\r\n\r\n" + body
+                            )
+                        raw_input = frame(request) + frame(following)
+                    else:
+                        raw_input = encoded(request) + b"\n" + encoded(following) + b"\n"
+
+                    stdin = io.TextIOWrapper(io.BytesIO(raw_input), encoding="utf-8")
+                    stdout_bytes = io.BytesIO()
+                    stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+                    server = harness_server.McpServer()
+                    with (
+                        mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                        mock.patch.object(harness_server.sys, "stdin", stdin),
+                        mock.patch.object(harness_server.sys, "stdout", stdout),
+                    ):
+                        server.handle_request(server._read())
+                        server.handle_request(server._read())
+                        stdout.flush()
+                        server.close()
+
+                    raw_output = stdout_bytes.getvalue()
+                    if mode == "framed":
+                        parts = raw_output.split(b"Content-Length: ")[1:]
+                        responses = [
+                            json.loads(part.split(b"\r\n\r\n", 1)[1].decode("utf-8"))
+                            for part in parts
+                        ]
+                    else:
+                        responses = [json.loads(line) for line in raw_output.splitlines()]
+                    self.assertEqual([item["id"] for item in responses], [41, 42])
+                    result = responses[0]["result"]
+
+                self.assertNotIn("isError", result)
+                body = (task_dir / "BLOCKED.md").read_bytes()
+                expected = (
+                    f"## Blocked Reason\n{reason}\n\n"
+                    f"## Unblock Condition\n{unblock}\n\n## Resume\n"
+                ).encode("utf-8")
+                self.assertIn(expected, body)
+                self.assertEqual(body.count(reason.encode("utf-8")), 1)
+                self.assertEqual(body.count(unblock.encode("utf-8")), 1)
+
+    def test_task_blocked_enforces_utf8_byte_limit_before_mutation(self):
+        exact = "가" * (122_880 // len("가".encode("utf-8")))
+        self.assertEqual(len(exact.encode("utf-8")), 122_880)
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__limit-both-exact"))
+            result = self._call_in_repo(tmp, "task_blocked", {
+                "task_id": task_dir.name,
+                "blocked_reason": exact,
+                "unblock_condition": exact,
+            })
+            self.assertNotIn("isError", result)
+            self.assertLess((task_dir / "BLOCKED.md").stat().st_size, 256 * 1024)
+
+        for field in ("blocked_reason", "unblock_condition"):
+            with self.subTest(field=field, boundary="exact"), tempfile.TemporaryDirectory() as tmp:
+                task_dir = Path(self._make_task(tmp, f"TASK__limit-exact-{field}"))
+                args = {
+                    "task_id": task_dir.name,
+                    "blocked_reason": "reason",
+                    "unblock_condition": "resume",
+                }
+                args[field] = exact
+                result = self._call_in_repo(tmp, "task_blocked", args)
+                self.assertNotIn("isError", result)
+                body = (task_dir / "BLOCKED.md").read_text(encoding="utf-8")
+                self.assertIn(exact, body)
+
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                task_dir = Path(self._make_task(tmp, f"TASK__limit-{field}"))
+                self._write_marker_fixture(tmp, str(task_dir))
+                task_before = (task_dir / "TASK.json").read_bytes()
+                marker = Path(tmp) / "doc/harness/tasks/.active"
+                marker_before = marker.read_bytes()
+                args = {
+                    "task_id": task_dir.name,
+                    "blocked_reason": "reason",
+                    "unblock_condition": "resume",
+                }
+                args[field] = exact + "x"
+
+                result = self._call_in_repo(tmp, "task_blocked", args)
+
+                payload = result["structuredContent"]
+                self.assertTrue(result.get("isError"))
+                self.assertEqual(payload["error_code"], "ARGUMENT_TOO_LARGE")
+                self.assertEqual(payload["field"], field)
+                self.assertEqual(payload["reason"], "utf8_byte_limit_exceeded")
+                self.assertEqual(payload["actual_bytes"], 122_881)
+                self.assertEqual(payload["max_bytes"], 122_880)
+                self.assertEqual(
+                    payload["rejected_value"], "<string: 122881 UTF-8 bytes>",
+                )
+                self.assertFalse((task_dir / "BLOCKED.md").exists())
+                self.assertEqual((task_dir / "TASK.json").read_bytes(), task_before)
+                self.assertEqual(marker.read_bytes(), marker_before)
+
+    def test_task_selector_errors_report_only_forms_the_field_accepts(self):
+        for task_id, canonical in (
+            ("bare-safe", "TASK__bare-safe"),
+            ("TASK__canonical-safe", "TASK__canonical-safe"),
+        ):
+            with self.subTest(task_id=task_id), tempfile.TemporaryDirectory() as tmp:
+                self._make_task(tmp, canonical)
+                accepted = self._call_in_repo(tmp, "task_blocked", {
+                    "task_id": task_id,
+                    "blocked_reason": "reason",
+                    "unblock_condition": "resume",
+                })
+                self.assertNotIn("isError", accepted)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._call_in_repo(
+                tmp,
+                "task_blocked",
+                {
+                    "task_id": "doc/harness/tasks/TASK__not-an-id",
+                    "blocked_reason": "reason",
+                    "unblock_condition": "resume",
+                },
+            )
+        payload = result["structuredContent"]
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(payload["field"], "task_id")
+        self.assertIn("TASK__<safe-id> or <safe-id>", payload["expected"])
+        self.assertIn("1-180 ASCII", payload["expected"])
+        self.assertNotIn("doc/harness/tasks", payload["expected"])
+
+    def test_local_argument_errors_do_not_fall_back_to_task_id(self):
+        cases = (
+            (
+                {"task_id": "TASK__bad-fresh", "fresh_run": "true"},
+                "fresh_run", "wrong_type", "'true'",
+            ),
+            (
+                {"task_id": "TASK__bad-mode", "execution_mode": "large"},
+                "execution_mode", "invalid_choice", "'large'",
+            ),
+            (
+                {"task_id": "TASK__bad-mode-type", "execution_mode": []},
+                "execution_mode", "wrong_type", "<non-string: list>",
+            ),
+        )
+        for args, field, reason, rejected in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                result = self._call_in_repo(tmp, "task_start", args)
+                payload = result["structuredContent"]
+                self.assertTrue(result.get("isError"))
+                self.assertEqual(payload["error_code"], "INVALID_ARGUMENT")
+                self.assertEqual(payload["field"], field)
+                self.assertEqual(payload["reason"], reason)
+                self.assertEqual(payload["rejected_value"], rejected)
+                self.assertEqual(payload["expected"], harness_server._FIELD_EXPECTED[field])
+                self.assertIn(field, payload["next_action"])
+
+    def test_selector_expected_text_is_field_specific(self):
+        cases = (
+            (
+                "task_start",
+                {"task_dir": "outside/TASK__safe"},
+                "task_dir",
+                "doc/harness/tasks/TASK__<safe-id>",
+            ),
+            ("task_start", {"slug": "bad/path"}, "slug", "1-180 ASCII"),
+            (
+                "goal_start",
+                {"objective": "goal", "goal_id": "GOAL__/bad"},
+                "goal_id",
+                "free-form goal text",
+            ),
+        )
+        for tool, args, field, expected_fragment in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                result = self._call_in_repo(tmp, tool, args)
+                payload = result["structuredContent"]
+                self.assertTrue(result.get("isError"))
+                self.assertEqual(payload["field"], field)
+                self.assertIn(expected_fragment, payload["expected"])
 
     def test_task_blocked_rolls_back_when_marker_cleanup_is_not_confirmed(self):
         with tempfile.TemporaryDirectory() as tmp:

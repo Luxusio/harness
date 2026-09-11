@@ -108,9 +108,11 @@ promoted directly into `PLAN.md` or durable project documentation.
 
 Task selectors accepted by MCP tools resolve to one immediate
 `doc/harness/tasks/TASK__<safe-id>` child. Bare IDs are normalized for
-compatibility; canonical repository-relative and absolute task paths are
-accepted. Traversal, control characters, selector mismatches, outside paths,
-and symlink aliases are rejected before task artifacts are created or changed.
+compatibility through `task_id` and `slug`; canonical repository-relative and
+absolute task paths are accepted only through `task_dir`. A tool such as
+`task_blocked` that exposes only `task_id` therefore does not accept a path.
+Traversal, control characters, selector mismatches, outside paths, and symlink
+aliases are rejected before task artifacts are created or changed.
 Goal IDs use the same safe-name boundary, and Goal child entries persist the
 canonical repository-relative task path.
 

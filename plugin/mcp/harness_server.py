@@ -724,11 +724,109 @@ def _err(m: str, data: dict | None = None) -> dict:
             "structuredContent": p, "isError": True}
 
 
+BLOCKER_FIELD_MAX_UTF8_BYTES = 120 * 1024
+_BLOCKER_FIELDS = {"blocked_reason", "unblock_condition"}
+_FIELD_EXPECTED = {
+    "task_id": (
+        "TASK__<safe-id> or <safe-id>, where safe-id is 1-180 ASCII letters, "
+        "digits, dots, underscores, or hyphens"
+    ),
+    "task_dir": (
+        "the exact canonical doc/harness/tasks/TASK__<safe-id> path or its "
+        "absolute path inside the repository"
+    ),
+    "slug": (
+        "TASK__<safe-id> or <safe-id>, where safe-id is 1-180 ASCII letters, "
+        "digits, dots, underscores, or hyphens"
+    ),
+    "goal_id": "GOAL__<safe-id>, free-form goal text, or omit goal_id",
+    "objective": "a nonblank string describing the goal",
+    "blocked_reason": (
+        f"a nonblank string no larger than {BLOCKER_FIELD_MAX_UTF8_BYTES} UTF-8 bytes"
+    ),
+    "unblock_condition": (
+        f"a nonblank string no larger than {BLOCKER_FIELD_MAX_UTF8_BYTES} UTF-8 bytes"
+    ),
+    "fresh_run": "a boolean",
+    "execution_mode": "standard or micro",
+}
+
+
+class _ToolArgumentError(ValueError):
+    """Public argument failure with provenance that survives MCP serialization."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        field: str,
+        reason: str,
+        rejected_value: str,
+        expected: str | None = None,
+        next_action: str | None = None,
+        error_code: str = "INVALID_ARGUMENT",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.data = {
+            "error_code": error_code,
+            "field": field,
+            "reason": reason,
+            "rejected_value": rejected_value,
+            "expected": expected or _FIELD_EXPECTED.get(field, "a valid value"),
+            "next_action": next_action or f"Correct {field} and retry.",
+        }
+        self.data.update(details or {})
+
+
+def _argument_rejected_value(args: dict, field: str) -> tuple[str, str]:
+    if field not in args:
+        return "missing", "<missing>"
+    value = args[field]
+    if not isinstance(value, str):
+        return "wrong_type", f"<non-string: {type(value).__name__}>"
+    if not value.strip():
+        return "blank", "<blank string>"
+    if field in _BLOCKER_FIELDS:
+        size = len(value.encode("utf-8"))
+        return "invalid", f"<string: {size} UTF-8 bytes>"
+    rejected = repr(value)
+    if len(rejected) > 160:
+        rejected = rejected[:157] + "..."
+    return "invalid", rejected
+
+
 def _req(args: dict, k: str) -> str:
     v = args.get(k)
     if not isinstance(v, str) or not v.strip():
-        raise ValueError(f"{k} required")
+        reason, rejected = _argument_rejected_value(args, k)
+        raise _ToolArgumentError(
+            f"{k} required",
+            field=k,
+            reason=reason,
+            rejected_value=rejected,
+            next_action=f"Provide {k} as {_FIELD_EXPECTED.get(k, 'a nonblank string')} and retry.",
+        )
     return v
+
+
+def _blocked_text(args: dict, field: str) -> str:
+    value = _req(args, field)
+    actual_bytes = len(value.encode("utf-8"))
+    if actual_bytes > BLOCKER_FIELD_MAX_UTF8_BYTES:
+        raise _ToolArgumentError(
+            f"{field} exceeds the UTF-8 byte limit",
+            field=field,
+            reason="utf8_byte_limit_exceeded",
+            rejected_value=f"<string: {actual_bytes} UTF-8 bytes>",
+            next_action=f"Shorten {field} to the documented UTF-8 byte limit and retry.",
+            error_code="ARGUMENT_TOO_LARGE",
+            details={
+                "actual_bytes": actual_bytes,
+                "max_bytes": BLOCKER_FIELD_MAX_UTF8_BYTES,
+            },
+        )
+    return value
 
 
 def _opt(args: dict, k: str) -> str | None:
@@ -869,15 +967,38 @@ def handle_task_start(args: dict) -> dict:
     if not td and not ti and not sl:
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
+    if "execution_mode" in args and not isinstance(args["execution_mode"], str):
+        _, rejected = _argument_rejected_value(args, "execution_mode")
+        raise _ToolArgumentError(
+            "execution_mode must be standard or micro",
+            field="execution_mode",
+            reason="wrong_type",
+            rejected_value=rejected,
+            next_action="Pass execution_mode as standard or micro, or omit it.",
+        )
     execution_mode = _opt(args, "execution_mode")
     if execution_mode:
         execution_mode = execution_mode.strip().lower()
         if execution_mode not in {"standard", "micro"}:
-            raise ValueError("execution_mode must be standard or micro")
+            _, rejected = _argument_rejected_value(args, "execution_mode")
+            raise _ToolArgumentError(
+                "execution_mode must be standard or micro",
+                field="execution_mode",
+                reason="invalid_choice",
+                rejected_value=rejected,
+                next_action="Pass execution_mode as standard or micro, or omit it.",
+            )
 
     fresh_run_raw = args.get("fresh_run", False)
     if not isinstance(fresh_run_raw, bool):
-        raise ValueError("fresh_run must be a boolean")
+        _, rejected = _argument_rejected_value(args, "fresh_run")
+        raise _ToolArgumentError(
+            "fresh_run must be a boolean",
+            field="fresh_run",
+            reason="wrong_type",
+            rejected_value=rejected,
+            next_action="Pass fresh_run as a boolean, or omit it to preserve the current run.",
+        )
     fresh_run = fresh_run_raw
 
     repo_root = _control_root()
@@ -1559,13 +1680,13 @@ def handle_task_blocked(args: dict) -> dict:
             data={"task_dir": td, "status": status,
                   "next_action": _task_resume_next_action(status)},
         )
+    reason = _blocked_text(args, "blocked_reason")
+    unblock = _blocked_text(args, "unblock_condition")
     with receipt_stream_transaction(td):
-        return _handle_task_blocked_locked(args, td)
+        return _handle_task_blocked_locked(td, reason=reason, unblock=unblock)
 
 
-def _handle_task_blocked_locked(args: dict, td: str) -> dict:
-    reason = _req(args, "blocked_reason")
-    unblock = _req(args, "unblock_condition")
+def _handle_task_blocked_locked(td: str, *, reason: str, unblock: str) -> dict:
     st = _validated_task_control(td)
     if not st:
         return _invalid_task_control_error("task_blocked", td)
@@ -1824,11 +1945,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
     {"name": "task_blocked", "title": "Park a task on a real environment or attestation blocker",
-     "description": "Record BLOCKED_ENV in BLOCKED.md and clear this session's active marker. This is not completion.",
+     "description": "Record BLOCKED_ENV in BLOCKED.md and clear this session's active marker. Valid blocker text is stored verbatim; each field must be nonblank and no larger than 122880 UTF-8 bytes. This is not completion.",
      "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "blocked_reason": {"type": "string"},
-         "unblock_condition": {"type": "string"}},
+         "task_id": {"type": "string", "description": "A bare safe ID or TASK__<safe-id>; safe-id is 1-180 ASCII letters, digits, dots, underscores, or hyphens. Paths are not accepted in task_id."},
+         "blocked_reason": {"type": "string", "description": "Nonblank text stored verbatim, up to and including 122880 UTF-8 bytes."},
+         "unblock_condition": {"type": "string", "description": "Nonblank text stored verbatim, up to and including 122880 UTF-8 bytes."}},
          "required": ["task_id", "blocked_reason", "unblock_condition"],
          "additionalProperties": False},
      "handler": handle_task_blocked},
@@ -1855,6 +1976,8 @@ def call_tool(name: str, args: dict | None) -> dict:
         return _err(f"Unknown tool: {name}")
     try:
         return TOOLS[name]["handler"](args or {})
+    except _ToolArgumentError as e:
+        return _err(str(e), data=e.data)
     except ValueError as e:
         message = str(e)
         supplied = args or {}
@@ -1874,11 +1997,7 @@ def call_tool(name: str, args: dict | None) -> dict:
                 next((key for key in ("goal_id", "task_dir", "task_id", "slug") if key in supplied), "selector"),
             )
             raw = supplied.get(field) if field != "selector" else None
-            expected = (
-                "GOAL__<safe-id>, or omit goal_id"
-                if field == "goal_id"
-                else "TASK__<safe-id> or doc/harness/tasks/TASK__<safe-id>"
-            )
+            expected = _FIELD_EXPECTED.get(field, "a valid selector")
             next_action = "Correct the named selector to the canonical form and retry without changing repository state."
         rejected = repr(raw)
         if len(rejected) > 160:

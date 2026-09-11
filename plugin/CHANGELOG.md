@@ -6,6 +6,11 @@ All notable changes to the harness Claude Code plugin.
 
 ### Changed
 
+- `task_blocked` preserves each valid blocker field verbatim through an
+  inclusive 120 KiB UTF-8 limit, rejects oversized content before mutation,
+  and reports the argument that actually failed without echoing blocker prose.
+  Selector guidance now matches the forms accepted by each named field. An
+  already-running MCP host must be restarted after upgrade to load this fix.
 - Claude subagent lifecycle state now lives only in the task's unified
   `RECEIPTS.jsonl`. The separate background registry, lock, RMW/prune state
   machine, and diagnostic records were removed; Stop-hook active-work waiting

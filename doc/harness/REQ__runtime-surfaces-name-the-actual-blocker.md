@@ -348,6 +348,44 @@ id 모양에 기대므로, 이름 붙은 lens-less 레인(예: `harness:ac-worke
 source: C-100 (`CONTRACTS.local.md`) — 파킹 뒤 재개가 review/QA 증거를
 조용히 삭제한다는 2026-09-11 사용자 결함 보고의 expected normal behavior.
 
+## 규칙 5의 근거 — `task_blocked`가 실제 실패 필드를 잃었다
+
+2026-09-11 관측: 긴 `blocked_reason`과 `unblock_condition`을 전달하던 호출에서
+`unblock_condition`이 누락되자, 최상위 오류 문자열은
+`unblock_condition required`라고 했지만 구조화 payload는 `field=task_id`,
+거부값은 정상 task ID, `expected`와 `next_action`은 selector 교정이라고
+응답했다. 호출자는 실제 누락 필드를 아홉 번 찾지 못했고 두 본문을 짧게 바꾼
+뒤에야 성공했다. 직접 호출, newline JSON-RPC, Content-Length framing에서는
+서로 다른 12 KiB 이상의 Unicode·여러 줄 문자열이 그대로 보존되어, 확인된
+서버 결함은 장문 절단이 아니라 입력 오류의 출처를 selector로 다시 추측하는
+공통 `ValueError` adapter였다.
+
+**기대 동작:** `task_blocked`의 각 필드는 독립적으로 검증된다.
+
+- `blocked_reason`과 `unblock_condition`은 공백이 아닌 문자열이어야 하고,
+  각각 UTF-8 122,880 bytes 이하이면 trim, 정규화, 줄바꿈 변환, 교환, 절단 없이
+  자신의 `BLOCKED.md` section에 원문 그대로 기록된다.
+- 각 필드가 122,880 bytes를 넘으면 artifact 작성이나 active-marker 정리 전에
+  그 필드, 실제 byte 수, 허용 byte 수를 지목해 거부한다. 저장 가능한 값을
+  조용히 줄이지 않는다. 두 필드 제한은 고정 template를 포함한 artifact가 기존
+  256 KiB trusted snapshot 경계 안에 남도록 한다.
+- 누락, 비문자열, 공백 문자열, 초과 입력은 실제 실패 필드와 고정 reason,
+  정확한 `expected`와 필드별 복구 동작을 반환한다. blocker 본문은 오류 문자열,
+  `rejected_value`, 로그에 반사하지 않고 `<missing>`, `<blank string>`,
+  `<non-string: TYPE>`, `<string: N UTF-8 bytes>`처럼 내용 없는 메타데이터만 쓴다.
+- `task_id`의 안내는 구현이 실제로 받는 bare safe ID 또는
+  `TASK__<safe-id>`만 말한다. safe ID는 ASCII 문자·숫자·점·밑줄·하이픈
+  1–180자다. canonical task path는 `task_dir`의 형식이며 `task_id`의
+  `expected`에 섞지 않는다.
+- 같은 module의 명시적인 입력 검증 오류는 메시지 substring으로 selector를
+  추측하지 않는다. 최소한 `fresh_run`과 `execution_mode`도 자신의 필드를
+  지목한다. 기존 MCP `error` / `structuredContent` / `isError` envelope와
+  성공 payload는 유지한다.
+
+source: C-100 (`CONTRACTS.local.md`) — 실제 blocker를 지목하지 못해 정상
+task ID 수정과 본문 축약을 유도한 2026-09-11 사용자 결함 보고의 expected
+normal behavior.
+
 ## Enforcement
 
 - `test_yields_the_turn_to_an_active_background_subagent` — 새 Stop이 lens
@@ -402,6 +440,16 @@ source: C-100 (`CONTRACTS.local.md`) — 파킹 뒤 재개가 review/QA 증거�
   기본 호출은 무변경 거부하고 명시적 fresh 선택을 지목한다.
 - `test_task_blocked_records_pause_state_and_artifact` — payload와
   `BLOCKED.md`가 보존 재개와 폐기 재개의 두 선택을 모두 설명한다.
+- `test_task_blocked_preserves_long_unicode_fields_through_public_transports` —
+  direct/newline/framed 호출이 서로 다른 장문 본문을 원문 그대로 보존한다.
+- `test_task_blocked_argument_errors_name_the_actual_field_without_echoing_content` —
+  누락·비문자열·공백 오류가 실제 필드와 안전한 거부 메타데이터를 반환한다.
+- `test_task_blocked_enforces_utf8_byte_limit_before_mutation` — 정확한 byte
+  경계는 통과하고 한 byte 초과는 artifact와 marker를 바꾸기 전에 거부한다.
+- `test_task_selector_errors_report_only_forms_the_field_accepts` — bare/canonical
+  ID 수용과 path형 `task_id` 거부 안내가 같은 문법을 말한다.
+- `test_local_argument_errors_do_not_fall_back_to_task_id` — `fresh_run`과
+  `execution_mode`을 포함한 명시적 로컬 오류가 자신의 필드를 유지한다.
 
 mutation 전부 지명 테스트를 붉게 만든다: 다시 블록하기, 살아 있는
 서브에이전트 없이 양보하기, 옛 지시문 복원, 양보 횟수 제한 제거, 원장 실패 시
