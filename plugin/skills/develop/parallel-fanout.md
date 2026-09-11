@@ -47,14 +47,54 @@ Concretely:
 **Inline spawn template** (copyable):
 
 ```
-# Issue these N Agent calls in ONE assistant message
-Agent(name="<task_id>:AC-001", subagent_type="harness:ac-worker",
-      prompt="Implement AC-001 per PLAN.md ...")
-Agent(name="<task_id>:AC-002", subagent_type="harness:ac-worker",
-      prompt="Implement AC-002 per PLAN.md ...")
-Agent(name="<task_id>:AC-NNN", subagent_type="harness:ac-worker",
-      prompt="Implement AC-NNN per PLAN.md ...")
+# Issue these N Agent calls in ONE assistant message.
+# Lane identity goes in the prompt, never in name= — see below.
+Agent(subagent_type="harness:ac-worker",
+      prompt="Lane <task_id>:AC-001. Implement AC-001 per PLAN.md ...")
+Agent(subagent_type="harness:ac-worker",
+      prompt="Lane <task_id>:AC-002. Implement AC-002 per PLAN.md ...")
+Agent(subagent_type="harness:ac-worker",
+      prompt="Lane <task_id>:AC-NNN. Implement AC-NNN per PLAN.md ...")
 ```
+
+### Never pass `name=` to a spawned agent
+
+Not just to lens agents. `name=` is **forbidden** for any agent whose receipt a
+lens depends on — `harness:code-reviewer`, `harness:security-reviewer`, every
+`qa-*` — because it loses the receipt outright. But it is also wrong for
+lens-less lanes like `harness:ac-worker`, for a second reason: the lifecycle
+cannot distinguish "named lane that legitimately owes nothing" from "named lens
+agent whose type was destroyed", so a named AC worker writes a false
+`named-spawn-shadows-agent-type` breadcrumb on every spawn. A 4-worker batch
+writes four, which buries the signal the breadcrumb exists to carry.
+
+The CLI puts the display name in the `agentType` position and drops the resolved
+type from the payload entirely, so the lifecycle hook cannot infer the lens and
+writes no receipt. Measured 2026-09-10, same session and same agent type: three
+named spawns produced 0 receipt rows, one unnamed spawn produced its receipt
+immediately. The review runs correctly and `task_close` still refuses, because
+there is no evidence it ran.
+
+Names that happen to encode the lens (`qa-cli-1` → `qa-cli`) survive, which is
+why this failed intermittently rather than obviously. Do not rely on it.
+
+```
+# WRONG — the receipt is lost, PASS becomes unreachable
+Agent(name="review-scoring", subagent_type="harness:code-reviewer", prompt=...)
+
+# RIGHT — distinguish lanes in the prompt, not the name
+Agent(subagent_type="harness:code-reviewer", prompt="Lane: scoring. ...")
+```
+
+An unnamed lens-less spawn is silent by design. A *named* lens-less spawn leaves
+a `background_hook:binding-miss` entry in `doc/harness/learnings.jsonl` with
+reason `named-spawn-shadows-agent-type` — up to one per lifecycle event, so
+start and stop can each contribute. Grep for it when a lens ran but its receipt
+never appeared; if the breadcrumb names a lane rather than a lens agent, the
+spawn site is passing `name=` and should stop. See
+`doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
+
+---
 
 Cap parallel fanout at N=4 in a single batch. Past N=4, orchestrator-side PROGRESS.md merge cost dominates the spawn-time savings. **The cap applies per batch, not per task** — broader trigger thresholds produce more batches, each still capped at 4.
 For N>4, spawn batches of up to 4 in successive assistant turns; do not
@@ -76,6 +116,50 @@ The orchestrator MUST fanout when any row matches. PLAN.md AC dependency matrix 
 | Multi-lens QA / dogfooder | Phase 7 has 2 or more applicable QA lenses (from manifest + diff scope) OR dogfooder is queued for the Phase 7 final-PASS cycle | All QA calls in one assistant message with `lens="<lens>"`; dogfooder batched alongside on the final-PASS pass. FAIL cycles skip dogfooder |
 | Quality audit fanout (Phase 4.5) | Quality audit pipeline runs: coverage trace + visual smoke (browser-only) | One assistant message; conditional specialists (security / perf / migration / LLM-trust) added when diff scope matches, per `quality-audit-pipeline.md` § Phase 4.5. Advisory inputs, not verdicts |
 | Independent review fanout (Phase 6.6) | `task_context` reports 2 or more `required_review_lenses` | All lens calls in one assistant message; every required lens must PASS before Phase 7 QA starts |
+
+### Extra review breadth under a single declared lens (advisory)
+
+Advisory, not a fanout trigger. The MUST rows above stay keyed to declared
+lenses, because a second agent of a review type is not free: it writes a receipt.
+
+When one review lens is declared but the diff has independent concern areas —
+probe logic versus filesystem isolation versus measured doc claims are three
+different jobs — extra breadth is worth buying, and running the areas as
+successive rounds costs wall-clock without adding coverage. Diversity is the
+real gain: in the round that produced this section, the agent that found a false
+prose claim was not the one assigned to look for one, and the one assigned to
+look for it reported it had searched and found nothing.
+
+**Buy that breadth with agent types that produce no lens.** Any agent type whose
+name tokenises to a {code, review} or {security, review} pair — `code-reviewer`
+in every namespace — is assigned `review-code` or `review-security` by
+`_infer_receipt_lens` and writes a receipt for it. Spawning several is not a
+coordinator preference the runtime honors; it is several verdicts on one lens,
+and the receipt layer keeps one:
+
+- `_completed_review_by_lens` keys by lens, and `_effective_completion` returns
+  the last readable completion. It was written for *reruns*, where newer
+  genuinely supersedes older, and has no concept of concurrent siblings — so a
+  sibling's `FAIL` is superseded by a later sibling's `PASS`, decided by
+  wall-clock order.
+- `_rerun_in_flight` tests only whether the *newest* event is a `started`, so a
+  lens can be judged on the first completion while its siblings still run.
+
+The lens vocabulary is closed (`review-code`, `review-security`) and
+`_task_control_lenses` rejects duplicates, so declaring one lens per concern
+area is not a workaround either. Exactly one receipt-producing review agent per
+declared lens; give the additional concern areas to types that yield no lens
+(`critic-document`, a general-purpose agent, `harness:documentation-review`),
+read their findings yourself, and treat any FAIL they report as blocking
+regardless of what the scoring lens said. A `PASS` that could be an artifact of
+completion order is not a PASS.
+
+### Re-review after remediation
+
+Re-run only the lanes whose findings you fixed, in parallel, in one message. Do
+not collapse a multi-lane round into one serial generalist round — that is the
+shape this section exists to prevent, and it drops the lanes that were already
+clean back to unreviewed.
 
 ### Component-independent definition
 

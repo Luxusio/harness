@@ -147,8 +147,11 @@ editing:
 
 `Route` must be one of: `Agent(...)`, `sequential-prelude`, `sequential-dependent`.
 Fill the table before editing files; two or more independent `Agent(...)` rows
-run in one batch. For example, use `Agent(name="<task_id>:AC-001"` and
-`Agent(name="<task_id>:AC-002"`, each with `subagent_type="harness:ac-worker"`.
+run in one batch. For example,
+`Agent(subagent_type="harness:ac-worker", prompt="Lane <task_id>:AC-001. ...")`
+and the same for AC-002. **Never pass `name=` to a spawned agent** — the runtime
+puts the display name in the `agentType` position, which loses a lens agent's
+receipt outright and makes every named lane look like a lost one.
 Use one Agent per independent AC. Do not assign multiple independent ACs to one
 executor. Disjoint ACs use one worker per lane when Agent is available.
 Sequential routes require a declared dependency, unavailable Agent, or a tiny

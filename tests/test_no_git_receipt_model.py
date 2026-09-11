@@ -884,7 +884,7 @@ def test_review_and_qa_share_one_receipt_stream(tmp_path):
     assert {entry["event"] for entry in entries} == {"started", "completed"}
 
 
-def test_old_unified_schema_requires_a_fresh_task_run(tmp_path):
+def test_old_unified_schema_fails_closed_without_advising_a_reset(tmp_path):
     task = _task(tmp_path)
     legacy = {
         "receipt_id": "legacy-1", "task_id": "TASK__no-git",
@@ -906,9 +906,22 @@ def test_old_unified_schema_requires_a_fresh_task_run(tmp_path):
     try:
         lib.receipt_snapshot(task)
     except RuntimeError as exc:
-        assert "start a fresh task run" in str(exc)
+        message = str(exc)
     else:
         raise AssertionError("old receipt schema must fail closed")
+
+    # Which line and why, so the rejection is diagnosable.
+    assert "line 1" in message
+    assert "unknown-field-set" in message
+    # Never the entry's content: summaries carry assistant text and this string
+    # reaches hook feedback and MCP error payloads.
+    assert "VERDICT: PASS" not in message
+    assert "legacy-1" not in message
+    # And never an instruction to reset. On 2026-09-10 this message was emitted
+    # for a file that was entirely valid — the reader was a stale MCP server —
+    # and following it would have destroyed a real review-then-QA PASS pair.
+    assert "start a fresh task run to reset" not in message
+    assert "stale" in message
 
 
 def test_compact_receipts_reduce_representative_verbose_pair_by_at_least_40_percent(tmp_path):
@@ -999,7 +1012,7 @@ def test_exact_schema_rejects_semantically_malformed_rows(tmp_path):
     )
     for item in cases:
         (task / lib.RECEIPTS_NAME).write_text(json.dumps(item) + "\n", encoding="utf-8")
-        with pytest.raises(RuntimeError, match="start a fresh task run"):
+        with pytest.raises(RuntimeError, match=r"line 1 rejected by this runtime \(entry-semantics\)"):
             lib.receipt_snapshot(task)
 
 
@@ -1030,7 +1043,7 @@ def test_exact_schema_rejects_non_string_values(tmp_path):
     try:
         lib.receipt_snapshot(task)
     except RuntimeError as exc:
-        assert "start a fresh task run" in str(exc)
+        assert "line 1 rejected by this runtime (non-string-value)" in str(exc)
     else:
         raise AssertionError("mutable receipt values must fail closed")
 
@@ -1051,6 +1064,32 @@ def test_exact_schema_rejects_invalid_persisted_runtime_id(tmp_path):
     try:
         lib.receipt_snapshot(task)
     except RuntimeError as exc:
-        assert "start a fresh task run" in str(exc)
+        assert "line 1 rejected by this runtime (entry-semantics)" in str(exc)
     else:
         raise AssertionError("invalid stored runtime identity must fail closed")
+
+
+def test_exact_schema_rejects_an_unknown_event(tmp_path):
+    """The fourth reason code needs its own reachable case.
+
+    `unknown-field-set`, `non-string-value` and `entry-semantics` are each
+    pinned elsewhere. Without this, a reordering that made the event check dead
+    — it sits between two branches that would both still fire on most malformed
+    rows — would not redden anything. This REQ's own methodology section records
+    two past failures of exactly that shape: a test that names a branch it never
+    reaches.
+    """
+    task = _task(tmp_path)
+    entry = {field: "" for field in lib.RECEIPT_FIELDS}
+    entry.update(
+        event="aborted",
+        task_run_id=lib.read_task_control(task)["run_id"],
+    )
+    (task / lib.RECEIPTS_NAME).write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    try:
+        lib.receipt_snapshot(task)
+    except RuntimeError as exc:
+        assert "line 1 rejected by this runtime (unknown-event)" in str(exc)
+    else:
+        raise AssertionError("an unknown lifecycle event must fail closed")

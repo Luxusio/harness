@@ -21,9 +21,11 @@ blocking error.
 """
 
 import contextlib
+import glob
 import hashlib
 import json
 import os
+import stat
 import sys
 import time
 
@@ -57,11 +59,101 @@ def _background_stale_secs() -> float:
 _MAX_CONSECUTIVE_YIELDS = 3
 
 
-def _active_record_lines(active: list[dict]) -> list[str]:
+def _heartbeat_fresh_secs() -> float:
+    try:
+        return max(1.0, float(os.environ.get("HARNESS_SUBAGENT_HEARTBEAT_SECS", "300")))
+    except ValueError:
+        return 300.0
+
+
+def _heartbeat_age(session_id: str, agent_id: str) -> float | None:
+    """Seconds since this subagent's transcript was last appended, or None.
+
+    Claude Code writes a running subagent's transcript to
+
+        <CLAUDE_CONFIG_DIR>/projects/<project>/<session>/subagents/agent-<id>.jsonl
+
+    and appends to it for the agent's whole runtime. `_trusted_stop_provenance`
+    already pins that exact layout — it validates a stop's transcript path
+    against ``[sid, "subagents", f"agent-{aid}.jsonl"]`` — so this reads the
+    same convention rather than inventing one.
+
+    The project directory component is globbed instead of derived from the repo
+    path: the session id is already unique, and the slug is a CLI encoding of
+    the cwd that the harness does not own.
+
+    Only `st_mtime` is read. Nothing here trusts the file's *content*, so none
+    of the provenance hardening in `subagent_lifecycle` applies; a hostile
+    transcript can at worst make a dead agent look alive. What bounds *that* is
+    `HARNESS_BACKGROUND_STALE_SECS` expiring the record in
+    `subagent_lifecycle._active_from_snapshot` — not the yield counter below,
+    which a permanently-fresh transcript never reaches. Returns None on anything
+    unexpected, and every caller treats None as "no heartbeat" — the
+    conservative direction.
+    """
+    if not session_id or not agent_id:
+        return None
+    if any(ch in session_id or ch in agent_id for ch in ("/", "\\", "\x00")):
+        return None
+    claude_root = os.path.abspath(
+        os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    )
+    # The single `*` is ours; every interpolated value is escaped, the root
+    # included. An `agent_id` of `*` would otherwise match any sibling
+    # transcript and report a live heartbeat for a dead agent, extending the
+    # silence to the full stale window. Receipts are CLI-written so that is not
+    # reachable today; the guard is one call. A config root containing pattern
+    # syntax is the benign case — unescaped it would simply miss and fall back
+    # to the counter — but escaping it keeps the rule "only our `*` is a
+    # pattern" true without exception.
+    pattern = os.path.join(
+        glob.escape(claude_root), "projects", "*",
+        glob.escape(session_id), "subagents", f"agent-{glob.escape(agent_id)}.jsonl",
+    )
+    newest = None
+    try:
+        for candidate in glob.iglob(pattern):
+            try:
+                info = os.stat(candidate, follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if newest is None or info.st_mtime > newest:
+                newest = info.st_mtime
+    except Exception:
+        return None
+    if newest is None:
+        return None
+    return max(0.0, time.time() - newest)
+
+
+def _has_live_heartbeat(session_id: str, active: list[dict]) -> bool:
+    """True when at least one waited-on record shows recent transcript activity.
+
+    `any`, not `all`: the gate yields to the record *set*, and one demonstrably
+    live lens makes the turn a legitimate wait regardless of what the others are
+    doing.
+    """
+    fresh = _heartbeat_fresh_secs()
+    for record in active:
+        age = _heartbeat_age(session_id, str(record.get("agent_id") or record.get("id") or ""))
+        if age is not None and age <= fresh:
+            return True
+    return False
+
+
+def _active_record_lines(active: list[dict], *, state: str = "active") -> list[str]:
     """One line per waited-on agent. Shared by the yield report and the block.
 
     Kept separate from either message: a block that embedded the yield text
     would tell the reader the turn is being yielded while refusing to yield it.
+
+    `state` exists for the same reason one level down. The block is only reached
+    when no record has a live heartbeat, so describing those records as "active"
+    there made the message contradict its own decision — the exact
+    self-contradiction observed on 2026-09-10, where eight consecutive blocks
+    each reported the agent they were refusing to wait for as active.
     """
     lines = []
     for record in active[:5]:
@@ -72,9 +164,9 @@ def _active_record_lines(active: list[dict]) -> list[str]:
             age = int(max(0, time.time() - float(record.get("updated_ts") or time.time())))
         except Exception:
             pass
-        lines.append(f"- {agent_type} {agent_id} active for ~{age}s")
+        lines.append(f"- {agent_type} {agent_id} {state}, started ~{age}s ago")
     if len(active) > 5:
-        lines.append(f"- ... {len(active) - 5} more active records")
+        lines.append(f"- ... {len(active) - 5} more records")
     return lines
 
 
@@ -115,18 +207,27 @@ def _consecutive_yields(task_dir: str, session_id: str, fingerprint: str) -> int
     "cannot vouch for liveness" and block. Failing the other way would restore
     the silent-abandonment window this counter exists to close.
 
-    Why a counter and not an age bound: `subagent_lifecycle` stamps
-    `updated_ts` from the `started` receipt and never refreshes it — there is no
-    heartbeat — so a 25-minute-old row is indistinguishable by age from a lens
-    that has genuinely been running 25 minutes. Review lenses in this repo
-    routinely run for many minutes against a 1800s stale window, so any age
-    bound tight enough to catch an orphan also kills legitimate work. The
-    argument does not rest on a particular duration: it rests on the two cases
-    being the same observation.
+    Why not an age bound on `updated_ts`: `subagent_lifecycle` stamps it from
+    the `started` receipt and never refreshes it, so a 25-minute-old row is
+    indistinguishable by age from a lens that has genuinely been running 25
+    minutes. That argument still holds, and it is why `_heartbeat_age` reads the
+    transcript's mtime instead — a signal that does advance while the agent
+    works.
 
-    Repetition does distinguish them. A live agent yields once and its
-    completion notification resumes the run; the same record set yielding again
-    and again means no completion is coming.
+    This counter is now the *fallback*, reached only when no record shows a live
+    heartbeat. It is deliberately not the primary discriminator, because
+    repetition does not mean what it was once documented to mean here. The old
+    premise — "a live agent yields once and its completion notification resumes
+    the run" — is false: a live agent's record set is unchanged for its whole
+    runtime while the coordinator is re-invoked many times for unrelated reasons
+    (background Bash completions, other agents' notifications, its own tool
+    calls). The count therefore measures coordinator turns, not agent death.
+    Observed 2026-09-10: eight consecutive blocks whose own message reported the
+    waited-on reviewer as active for ~194s, then 218s, 235s, 240s, 245s, 250s.
+
+    With a heartbeat in front of it the count only accrues across turns where
+    nothing was observably running, which is the state it was always meant to
+    bound.
     """
     path = _yield_ledger_path(task_dir, session_id)
     try:
@@ -159,14 +260,14 @@ def _exhausted_yield_reason(task_id: str, active: list[dict]) -> str:
     """Block text for a record set that has stopped making progress."""
     return "\n".join([
         f"Active harness task {task_id} has yielded {_MAX_CONSECUTIVE_YIELDS} turns to the "
-        "same background record set with no completion.",
-        "Either the lens is still running — in which case its completion "
-        "notification will still arrive — or it was killed, or its SubagentStop "
-        "was rejected, and no completion will ever arrive.",
-        "In the latter case the record ages out only after "
-        "HARNESS_BACKGROUND_STALE_SECS (default 1800s). Do not wait it out: "
-        "spawn a fresh lens, because a resumed agent writes no receipt.",
-        *_active_record_lines(active),
+        "same background record set, and none of those records has written to "
+        "its subagent transcript recently.",
+        "That is the killed-agent signature: the agent was killed, or its "
+        "SubagentStop was rejected, so no completion will ever arrive.",
+        "The record ages out only after HARNESS_BACKGROUND_STALE_SECS "
+        "(default 1800s). Do not wait it out: spawn a fresh lens, because a "
+        "resumed agent writes no receipt.",
+        *_active_record_lines(active, state="no recent transcript activity"),
     ])
 
 
@@ -184,7 +285,8 @@ def _background_reason(task_id: str, active: list[dict]) -> str:
         "The task stays open. If the agent is alive its completion notification "
         "resumes the run. If it was killed, or its SubagentStop was rejected, "
         "the record lingers and no notification will come — the gate blocks "
-        f"again after {_MAX_CONSECUTIVE_YIELDS} yields on an unchanged record set.",
+        f"after {_MAX_CONSECUTIVE_YIELDS} yields on an unchanged record set "
+        "whose transcripts have all stopped advancing.",
         *_active_record_lines(active),
     ])
 
@@ -348,8 +450,11 @@ def main():
         except Exception:
             json.dump(gate_block(
                 reason=(
-                    f"Harness lifecycle evidence for {task_id} is malformed or unsafe; "
-                    "Stop is blocked. Start a fresh task run to reset RECEIPTS.jsonl."
+                    f"Harness lifecycle evidence for {task_id} could not be read; "
+                    "Stop is blocked. Check whether the reader is older than the "
+                    "writer — a runtime that predates the build which wrote these "
+                    "receipts rejects valid entries — before considering a fresh "
+                    "task run, which discards them."
                 ),
                 owner_skill="harness:run",
                 docs="doc/harness/patterns/ADR__consolidated-task-artifacts.md",
@@ -364,8 +469,21 @@ def main():
             # would silence the only machine enforcement of C-17 for half an
             # hour on a task where nothing is running and no completion can
             # arrive: the abandonment C-17 exists to prevent.
+            #
+            # A live heartbeat short-circuits the budget entirely and, crucially,
+            # does not spend it: the ledger is only touched on turns where
+            # nothing was observably running. Spending it on every coordinator
+            # turn is what exhausted three yields in under a minute while a
+            # review lens legitimately ran for many more.
+            session_id = current_session_id()
+            if _has_live_heartbeat(session_id, active_background):
+                json.dump(
+                    gate_proceed(_background_reason(task_id, active_background)),
+                    sys.stdout,
+                )
+                return 0
             yields = _consecutive_yields(
-                td, current_session_id(), _yield_fingerprint(active_background),
+                td, session_id, _yield_fingerprint(active_background),
             )
             if 0 < yields <= _MAX_CONSECUTIVE_YIELDS:
                 # Allowed, but never silently: an unexplained stop mid-task is

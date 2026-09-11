@@ -76,7 +76,9 @@ Task in_progress (`.active` marker exists) 동안:
   뿐이면 stop_gate 는 막지 않고 턴을 양보한다. 태스크는 `in_progress` 로
   남고 `.active` 마커도 그대로다. 변하지 않은 레코드 집합에 대한 양보는
   횟수 제한이 있고, 소진되면 다시 막으면서 죽은/미보고 에이전트 경우를
-  지목한다. 자세한 근거는
+  지목한다. 단 그 횟수는 **아무것도 돌지 않는 것으로 관측된 턴**에만
+  누적된다 — 기다리는 서브에이전트의 트랜스크립트가 계속 쓰이고 있으면
+  예산을 소비하지 않는다. 자세한 근거는
   `doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
 
 Turn 종결 정당 사유 (runtime_verdict 기반):

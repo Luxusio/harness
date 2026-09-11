@@ -1029,3 +1029,257 @@ def test_background_hook_publishes_stop_only_pair_without_registry(tmp_path, mon
     ]
     assert not (Path(task_dir) / "CONVERSATION.md").exists()
     assert not (Path(repo) / "doc/harness/runtime").exists()
+
+
+def test_a_lens_less_agent_writes_no_receipt_and_no_crash(tmp_path):
+    """`harness:developer` and friends owe nothing. Saying so must be silent.
+
+    Until 2026-09-11 their receipt was refused deep inside
+    `_receipt_entry_semantics_valid` on the `lens not in SUPPORTED_LENSES`
+    clause; the ValueError escaped `register_subagent_start` into
+    `background_hook`'s `except`, and every spawn wrote a `gate-crash` row.
+    37 rows since 2026-08-25, 19 on 2026-09-10 alone. Logging an expected
+    absence as a crash is a false signal, and at that volume it buries the real
+    failures that commit 6689dd7 was landed to surface.
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-lensless")
+    diagnostics: dict = {}
+
+    for agent_type in (
+        "harness:developer", "oh-my-claudecode:critic", "harness:documentation-review",
+    ):
+        result = subagent_lifecycle.register_subagent_start(
+            repo,
+            {
+                "session_id": "sess-lensless",
+                # The unnamed id shape: `a` + 16 hex, as this CLI emits it.
+                "agent_id": "a0123456789abcdef",
+                "agent_type": agent_type,
+            },
+            diagnostics=diagnostics,
+        )
+        assert result == {}, agent_type
+        assert diagnostics["provenance_reason"] == "no-lens-for-agent-type"
+        assert diagnostics["receipt_not_owed"] is True
+
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_a_name_shadowed_lens_spawn_stays_observable(tmp_path):
+    """Passing `name=` loses the agent type, so the lens cannot be recovered.
+
+    The CLI puts the display name in the `agentType` position. Its own subagent
+    metadata shows the loss directly — a named spawn records
+    `{"agentType": "qa-cli-1", "name": "qa-cli-1", ...}` where an unnamed one
+    records `{"agentType": "harness:code-reviewer", "toolUseId": ...}`. The
+    resolved type is simply absent.
+
+    Measured 2026-09-10, same session and same agent type: three named spawns
+    wrote 0 receipts and 3 gate-crashes; one unnamed spawn wrote its receipt
+    immediately. A coordinator that names its lanes for legibility cannot
+    produce a PASS no matter how correctly the review runs.
+
+    Making this silent alongside the genuinely lens-less case would be strictly
+    worse than the crash it replaces, so it keeps a breadcrumb.
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-named")
+    diagnostics: dict = {}
+
+    result = subagent_lifecycle.register_subagent_start(
+        repo,
+        {
+            "session_id": "sess-named",
+            # A named spawn's id embeds the name, as in the observed
+            # `aqa-cli-1-ee8c583a936c4ed3` / `adiscover-adversarial-...`.
+            "agent_id": "areview-scoring-b96cb3d1a3b38065",
+            "agent_type": "review-scoring",
+        },
+        diagnostics=diagnostics,
+    )
+
+    assert result == {}
+    assert diagnostics["provenance_reason"] == "named-spawn-shadows-agent-type"
+    # Not owed-nothing: this one must reach the binding-miss breadcrumb.
+    assert diagnostics["receipt_not_owed"] is False
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_a_named_spawn_whose_name_still_encodes_a_lens_is_unaffected(tmp_path):
+    """Not every named spawn is broken — only ones whose name loses the lens.
+
+    `qa-cli-1` happens to tokenise to `qa-cli`, which is why the defect was
+    intermittent rather than total and took a month to isolate. The guard must
+    not widen into "named spawns never get receipts".
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-named-ok")
+    diagnostics: dict = {}
+
+    result = subagent_lifecycle.register_subagent_start(
+        repo,
+        {
+            "session_id": "sess-named-ok",
+            "agent_id": "aqa-cli-1-ee8c583a936c4ed3",
+            "agent_type": "qa-cli-1",
+        },
+        diagnostics=diagnostics,
+    )
+
+    assert result["status"] == "active"
+    assert [item["lens"] for item in _receipts(task_dir)] == ["qa-cli"]
+    assert "receipt_not_owed" not in diagnostics
+
+
+def test_lens_less_spawn_through_the_hook_logs_neither_crash_nor_miss(tmp_path):
+    """End to end: the two noise channels both stay quiet for an owed-nothing spawn.
+
+    `_receipt_was_expected` falls back to "the payload names an agent type", and
+    a lens-less agent does name one — so without `receipt_not_owed` this change
+    would simply trade `gate-crash` rows for binding-miss rows.
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-hook-lensless")
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "start"],
+        cwd=repo,
+        input=json.dumps({
+            "hook_event_name": "SubagentStart",
+            "session_id": "sess-hook-lensless",
+            "agent_id": "a0123456789abcdef",
+            "agent_type": "harness:developer",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+    assert _learnings(repo) == []
+
+
+def test_named_lens_spawn_through_the_hook_leaves_a_breadcrumb(tmp_path):
+    """The shadowed case is the one an operator has to be able to find."""
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-hook-named")
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "start"],
+        cwd=repo,
+        input=json.dumps({
+            "hook_event_name": "SubagentStart",
+            "session_id": "sess-hook-named",
+            "agent_id": "areview-scoring-b96cb3d1a3b38065",
+            "agent_type": "review-scoring",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    misses = [
+        item for item in _learnings(repo)
+        if item.get("source") == "background_hook:binding-miss"
+    ]
+    assert len(misses) == 1
+    assert "named-spawn-shadows-agent-type" in json.dumps(misses[0])
+    # Reason codes only — never the display name's surrounding payload values.
+    assert "gate-crash" not in json.dumps(_learnings(repo))
+
+
+def test_a_stop_that_is_owed_a_completion_is_never_silenced(tmp_path, monkeypatch):
+    """`receipt_not_owed` must not fire when a `started` receipt already exists.
+
+    The stop path computes `expected_receipt` before consulting `_lens_absent`.
+    If the start payload's type carried a lens but the transcript-derived type
+    loses it, the spawn is genuinely owed a completion and its PASS is
+    unreachable without one — silencing that is strictly worse than the
+    `gate-crash` row it used to leave.
+    """
+    repo, task_dir = _repo(tmp_path)
+    session_id, agent_id = "sess-owed", "a0123456789abcdef"
+    _bind(repo, task_dir, session_id)
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": session_id, "agent_id": agent_id, "agent_type": "harness:qa-cli",
+    })
+    assert [item["lens"] for item in _receipts(task_dir)] == ["qa-cli"]
+
+    diagnostics: dict = {}
+    final_message = "VERDICT: PASS"
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, session_id, agent_id, final_message,
+        # The transcript reports a type with no lens: the shape that reaches
+        # `_lens_absent` with `expected_receipt` already True.
+        agent_type="harness:developer",
+    )
+    subagent_lifecycle.mark_subagent_stop(
+        repo,
+        _stop_payload(session_id, agent_id, "harness:developer", transcript, final_message),
+        diagnostics,
+    )
+
+    assert diagnostics.get("expected_receipt") is True
+    assert diagnostics.get("receipt_not_owed") is False
+
+
+def test_a_ux_lens_agent_owes_nothing_and_says_so_silently(tmp_path):
+    """`harness:ux-*` infers a lens string that the schema does not accept.
+
+    `_infer_receipt_lens` has an explicit `ux` branch, so `harness:ux-cli`
+    yields `"ux-cli"` — but `SUPPORTED_LENSES` is the six `review-*`/`qa-*`
+    values only, so `_receipt_entry_semantics_valid` rejects it. A guard that
+    tested truthiness rather than membership let these spawns through to that
+    exact clause, and the develop and run skills both prescribe UX lenses for
+    user-facing changes, so every one of them kept writing the `gate-crash` row
+    AC-2 exists to remove.
+
+    A `ux-*` lens can never be required — `required_lenses` is validated against
+    the same set — so it owes nothing and belongs on the silent path.
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-ux")
+    diagnostics: dict = {}
+
+    for agent_type in ("harness:ux-cli", "harness:ux-api", "harness:ux-browser"):
+        result = subagent_lifecycle.register_subagent_start(
+            repo,
+            {
+                "session_id": "sess-ux",
+                "agent_id": "a0123456789abcdef",
+                "agent_type": agent_type,
+            },
+            diagnostics=diagnostics,
+        )
+        assert result == {}, agent_type
+        assert diagnostics["provenance_reason"] == "no-lens-for-agent-type"
+        assert diagnostics["receipt_not_owed"] is True
+
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_a_ux_lens_spawn_through_the_hook_logs_neither_crash_nor_miss(tmp_path):
+    """End to end: the UX lens must be quiet on both noise channels."""
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-ux-hook")
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "start"],
+        cwd=repo,
+        input=json.dumps({
+            "hook_event_name": "SubagentStart",
+            "session_id": "sess-ux-hook",
+            "agent_id": "a0123456789abcdef",
+            "agent_type": "harness:ux-cli",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+    assert _learnings(repo) == []

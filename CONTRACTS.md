@@ -263,6 +263,13 @@ leaves a record that reads as live for up to `HARNESS_BACKGROUND_STALE_SECS`.
 The task stays `in_progress` and the `.active` marker is untouched throughout,
 so this is a wait, not one of the three turn-end reasons above. See
 `doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
+
+That bound applies only to turns where nothing was observably running. A turn
+yielded while a waited-on subagent's transcript is still being appended does not
+spend the budget, because the count would otherwise measure how many turns the
+coordinator took rather than whether the agent died — observed 2026-09-10 as
+eight consecutive blocks against a reviewer the same messages reported as
+active.
 **On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or call `task_blocked` directly for a qualified blocker. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA

@@ -2815,6 +2815,40 @@ def _make_receipt_rollback_api():
 del _make_receipt_rollback_api
 
 
+_RECEIPT_SCHEMA_REASONS = frozenset({
+    "unknown-field-set", "non-string-value", "unknown-event", "entry-semantics",
+})
+
+
+def _receipt_schema_error(lineno, reason):
+    """Build the rejection for one unreadable receipt line.
+
+    Two properties are load-bearing.
+
+    It names *which* line and *why*, using a fixed reason code from
+    `_RECEIPT_SCHEMA_REASONS`. Never the line's content: receipt summaries carry
+    assistant text, and this string reaches hook feedback and MCP error
+    payloads.
+
+    It does not tell the caller to reset the receipts. The previous text —
+    "start a fresh task run to reset receipts" — was emitted identically for
+    every rejection, including the one observed on 2026-09-10 where the file was
+    entirely valid and the *reader* was stale: an MCP server started at 09:51
+    rejecting entries written after the 12:09 build that taught it a new
+    verdict. Following that advice would have destroyed a legitimate
+    review-then-QA PASS pair. A reader cannot distinguish "the writer is
+    corrupt" from "I am older than the writer", so it must not recommend the
+    destructive branch of that ambiguity.
+    """
+    reason = reason if reason in _RECEIPT_SCHEMA_REASONS else "unknown"
+    return RuntimeError(
+        f"RECEIPTS.jsonl line {int(lineno)} rejected by this runtime ({reason}). "
+        "If these receipts were written by a newer harness build, this reader is "
+        "stale — reload the runtime and retry. Resetting the task run discards "
+        "the receipts and is not the first thing to try."
+    )
+
+
 def _receipt_snapshot_unlocked(task_dir):
     path = _receipts_path(task_dir)
     raw = _read_receipt_bytes_unlocked(path)
@@ -2832,6 +2866,7 @@ def _receipt_snapshot_unlocked(task_dir):
         except UnicodeError as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
     entries = []
+
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
@@ -2839,7 +2874,7 @@ def _receipt_snapshot_unlocked(task_dir):
                 raise ValueError(f"duplicate receipt key: {key}")
             result[key] = value
         return result
-    for line in text.splitlines():
+    for lineno, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -2848,18 +2883,14 @@ def _receipt_snapshot_unlocked(task_dir):
             raise RuntimeError("receipt storage integrity unavailable") from exc
         if not isinstance(item, dict):
             raise RuntimeError("receipt storage integrity unavailable")
-        if (
-            set(item) != RECEIPT_FIELDS
-            or any(not isinstance(value, str) for value in item.values())
-            or item.get("event") not in RECEIPT_EVENTS
-        ):
-            raise RuntimeError(
-                "unsupported RECEIPTS.jsonl schema; start a fresh task run to reset receipts"
-            )
+        if set(item) != RECEIPT_FIELDS:
+            raise _receipt_schema_error(lineno, "unknown-field-set")
+        if any(not isinstance(value, str) for value in item.values()):
+            raise _receipt_schema_error(lineno, "non-string-value")
+        if item.get("event") not in RECEIPT_EVENTS:
+            raise _receipt_schema_error(lineno, "unknown-event")
         if not _receipt_entry_semantics_valid(item):
-            raise RuntimeError(
-                "unsupported RECEIPTS.jsonl schema; start a fresh task run to reset receipts"
-            )
+            raise _receipt_schema_error(lineno, "entry-semantics")
         entries.append(MappingProxyType(item))
     return ReceiptSnapshot(tuple(entries), "sha256:" + h.hexdigest())
 

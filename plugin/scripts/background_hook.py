@@ -125,7 +125,17 @@ def _receipt_was_expected(diagnostics: dict, payload: dict) -> bool:
     when the payload names an agent type (a lens agent whose start should have
     been recorded). Absent both, silence is correct. Errs toward logging: an
     unknown shape is reported, not swallowed.
+
+    `receipt_not_owed` is the one signal that overrides even a present agent
+    type. The lifecycle sets it for a spawn that carries no lens and whose id
+    has the unnamed shape — a `harness:developer` or `oh-my-claudecode:critic`
+    that legitimately owes nothing. Those have an agent type, so the fallback
+    below would log every one of them and simply trade `gate-crash` noise for
+    binding-miss noise. A *named* lens-less spawn deliberately does not set it:
+    that case is the shadowed-agent-type defect and must stay visible.
     """
+    if diagnostics.get("receipt_not_owed"):
+        return False
     if diagnostics.get("expected_receipt"):
         return True
     # Use the lifecycle's alias-normalizing accessor, not the raw key: the

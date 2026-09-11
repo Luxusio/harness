@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -290,13 +291,18 @@ def test_yields_the_turn_to_an_active_background_subagent(tmp_path):
 def test_yielding_to_a_lens_does_not_survive_the_record_clearing(tmp_path):
     """AC-1b — the yield lasts as long as the *receipt record* does.
 
-    Not as long as the agent does. There is no heartbeat: `subagent_lifecycle`
-    stamps `updated_ts` from the `started` receipt and never refreshes it, so
-    the gate cannot see an agent die. A killed agent — or one whose
-    SubagentStop was rejected — leaves an orphan `started` row that reads as
-    active until HARNESS_BACKGROUND_STALE_SECS. That gap is bounded separately,
-    by the consecutive-yield counter; see
+    Not as long as the agent does. `subagent_lifecycle` stamps `updated_ts` from
+    the `started` receipt and never refreshes it, so the record itself cannot
+    show an agent dying. A killed agent — or one whose SubagentStop was rejected
+    — leaves an orphan `started` row that reads as active until
+    HARNESS_BACKGROUND_STALE_SECS. That gap is bounded separately: first by the
+    transcript heartbeat (`_heartbeat_age`), which does advance while an agent
+    works, and behind it by the consecutive-yield counter; see
+    test_a_stale_transcript_falls_back_to_the_turn_budget and
     test_repeated_yields_on_an_unchanged_record_set_block.
+
+    No transcript exists under this tmp config dir, so the heartbeat is absent
+    here and the fallback path is what runs.
 
     What this pins is the scoping half: the allowance is conditioned on a
     record for this task and session, and disappears with it.
@@ -329,10 +335,12 @@ def test_repeated_yields_on_an_unchanged_record_set_block(tmp_path):
     abandonment C-17 exists to prevent, and review reproduced it against the
     first version of this change.
 
-    Age cannot separate the two cases — there is no heartbeat, and real review
-    lenses here routinely run for many minutes against the 1800s window, so no
-    age threshold separates them. Repetition can: a live
-    agent yields once and its completion notification resumes the run.
+    The record's own age cannot separate the two cases: `updated_ts` is stamped
+    once from the `started` receipt, and real review lenses here routinely run
+    for many minutes against the 1800s window, so no threshold on it separates
+    them. Transcript recency can, and is checked first — but only when a
+    transcript is reachable. This test writes none, which is exactly the state
+    this counter has to cover.
     """
     # Aged 25 minutes: inside the 1800s stale window, so `active_records` still
     # reports it, and old enough to be the killed-agent case rather than a lens
@@ -368,6 +376,102 @@ def test_repeated_yields_on_an_unchanged_record_set_block(tmp_path):
     # A refusal to yield must not also announce that it is yielding.
     assert "yielding the turn" not in reason
     # It still names what is being waited on.
+    assert "agent-bg" in reason
+
+
+def _write_heartbeat(
+    tmp_path, session_id: str, agent_id: str, *, age_secs: float = 0.0,
+) -> dict[str, str]:
+    """Create the subagent transcript the running CLI appends to, and age it.
+
+    Layout copied from `_trusted_stop_provenance`, which validates a stop's
+    transcript path against ``[sid, "subagents", f"agent-{aid}.jsonl"]`` under
+    `<CLAUDE_CONFIG_DIR>/projects/<project>/`. Returns the env that points the
+    gate at this fake config dir.
+    """
+    cfg = tmp_path / "claude-config"
+    subagents = cfg / "projects" / "-fake-project" / session_id / "subagents"
+    subagents.mkdir(parents=True, exist_ok=True)
+    transcript = subagents / f"agent-{agent_id}.jsonl"
+    transcript.write_text('{"type":"assistant"}\n', encoding="utf-8")
+    if age_secs:
+        stamp = time.time() - age_secs
+        os.utime(transcript, (stamp, stamp))
+    return {"CLAUDE_CONFIG_DIR": str(cfg)}
+
+
+def test_a_live_transcript_heartbeat_yields_past_the_turn_budget(tmp_path):
+    """A running lens must not be killed by the coordinator's own turn count.
+
+    The yield counter was the only discriminator until 2026-09-11, and its
+    premise — "a live agent yields once and its completion notification resumes
+    the run" — is false. A live agent's record set is unchanged for its whole
+    runtime while the coordinator is re-invoked many times for unrelated reasons:
+    background Bash completions, other agents' notifications, its own tool calls.
+    So the count measured coordinator turns, not agent death, and any coordinator
+    doing concurrent work burned three yields in under a minute against a review
+    lens that legitimately runs 8-20 minutes.
+
+    Observed 2026-09-10: eight consecutive blocks whose own text reported the
+    waited-on reviewer as active for ~194s, then 218s, 235s, 240s, 245s, 250s.
+
+    Six turns here is twice `_MAX_CONSECUTIVE_YIELDS`. Every one must yield,
+    because every one has a heartbeat.
+    """
+    repo = _fake_repo(tmp_path, active_contents="TASK__alive\n")
+    _write_claude_start(repo, "TASK__alive", "sess-alive")
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0", "HARNESS_BACKGROUND_STALE_SECS": "1800"}
+    env.update(_write_heartbeat(tmp_path, "sess-alive", "agent-bg"))
+    stdin = json.dumps({"session_id": "sess-alive", "hook_event_name": "Stop"})
+
+    decisions = [json.loads(_run(repo, stdin=stdin, env=env).stdout) for _ in range(6)]
+
+    assert all(d.get("decision") != "block" for d in decisions), [
+        d.get("decision") for d in decisions
+    ]
+    # And the budget was never spent, so a heartbeat that stops now still gets
+    # the full fallback allowance rather than an already-exhausted one.
+    ledger = list(
+        (Path(repo) / "doc/harness/tasks/TASK__alive").glob(".stop_yield.*.json")
+    )
+    assert ledger == [], "a heartbeat turn must not touch the yield ledger"
+
+
+def test_a_stale_transcript_falls_back_to_the_turn_budget(tmp_path):
+    """No recent transcript writes is the killed-agent signature.
+
+    The heartbeat is an *escape* from the counter, not a replacement for it.
+    A killed agent — or one whose SubagentStop was rejected — leaves an orphan
+    `started` row that reads as active until HARNESS_BACKGROUND_STALE_SECS, and
+    its transcript stops advancing at the moment of death. Once the transcript
+    is stale the old bound must still apply, or the abandonment C-17 exists to
+    prevent comes back with a heartbeat-shaped excuse.
+    """
+    aged = (
+        datetime.now(timezone.utc) - timedelta(minutes=25)
+    ).isoformat().replace("+00:00", "Z")
+    repo = _fake_repo(tmp_path, active_contents="TASK__dead\n")
+    _write_claude_start(repo, "TASK__dead", "sess-dead", ts=aged)
+    env = {"HARNESS_BACKGROUND_WAIT_SECS": "0", "HARNESS_BACKGROUND_STALE_SECS": "1800"}
+    # Present but not advancing: the discriminator is recency, not existence.
+    env.update(_write_heartbeat(tmp_path, "sess-dead", "agent-bg", age_secs=900))
+    env["HARNESS_SUBAGENT_HEARTBEAT_SECS"] = "300"
+    stdin = json.dumps({"session_id": "sess-dead", "hook_event_name": "Stop"})
+
+    decisions = [json.loads(_run(repo, stdin=stdin, env=env).stdout) for _ in range(5)]
+
+    yielded = [d for d in decisions if d.get("decision") != "block"]
+    blocked = [d for d in decisions if d.get("decision") == "block"]
+    assert len(yielded) == 3, [d.get("decision") for d in decisions]
+    assert blocked, "a stale transcript must not buy unlimited yields"
+    reason = blocked[0]["reason"]
+    assert "killed" in reason
+    assert "spawn a fresh lens" in reason
+    # The block must not simultaneously report the agent as active. That
+    # self-contradiction is what made the 2026-09-10 messages unreadable: they
+    # refused to wait for an agent while describing it as running.
+    assert "active for" not in reason
+    assert "no recent transcript activity" in reason
     assert "agent-bg" in reason
 
 
@@ -518,8 +622,12 @@ def test_malformed_receipt_stream_blocks_normal_stop(tmp_path):
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
-    assert "malformed or unsafe" in payload["reason"]
-    assert "fresh task run" in payload["reason"]
+    assert "could not be read" in payload["reason"]
+    # The gate still blocks, but it must not lead with the destructive remedy:
+    # an unreadable stream is equally explained by a reader older than the
+    # writer, which is what actually happened on 2026-09-10.
+    assert "reader is older than the writer" in payload["reason"]
+    assert "which discards them" in payload["reason"]
 
 
 def test_malformed_receipt_stream_blocks_recursive_stop(tmp_path):
@@ -537,7 +645,8 @@ def test_malformed_receipt_stream_blocks_recursive_stop(tmp_path):
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
-    assert "malformed or unsafe" in payload["reason"]
+    assert "could not be read" in payload["reason"]
+    assert "reader is older than the writer" in payload["reason"]
 
 
 def test_stop_hook_active_with_active_background_allows_and_reports(tmp_path):
@@ -803,3 +912,56 @@ def test_emitted_trust_boundary_equals_the_canonical_constant(tmp_path):
     """
     reason = _reason(_task_with(tmp_path / "eq", "TASK__boundary-equality", plan=False))
     assert _lib.TRUST_BOUNDARY in reason, reason
+
+
+def test_a_glob_metacharacter_in_an_agent_id_cannot_forge_a_heartbeat(
+    tmp_path, monkeypatch,
+):
+    """The `*` in the transcript pattern is ours; the interpolated values are not.
+
+    An unescaped id carrying pattern syntax would match a *sibling* agent's
+    transcript and report a live heartbeat for a dead agent, turning the bounded
+    fallback back into the full 1800s silence the counter exists to prevent.
+    `[a]gent-bg` matches the literal `agent-bg` transcript under glob rules and
+    nothing at all under literal ones.
+
+    Asserted against `_heartbeat_age` directly, and deliberately not end-to-end:
+    such an id never survives `_receipt_entry_semantics_valid`, so the record
+    never becomes active and a full-gate fixture blocks on turn 1 for an
+    unrelated reason. A test shaped that way would pass with the escaping
+    removed — this file's own REQ records two past bugs of exactly that kind, so
+    it gets checked rather than assumed. Pinning the function is the highest
+    level at which the branch is actually reachable.
+    """
+    sys.path.insert(0, SCRIPTS_DIR)
+    import stop_gate  # noqa: PLC0415
+
+    env = _write_heartbeat(tmp_path, "sess-globby", "agent-bg")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
+
+    # Control: the literal id does resolve, so a None below means escaping,
+    # not a broken fixture.
+    assert stop_gate._heartbeat_age("sess-globby", "agent-bg") is not None
+    assert stop_gate._heartbeat_age("sess-globby", "[a]gent-bg") is None
+    assert stop_gate._heartbeat_age("sess-globby", "*") is None
+    assert stop_gate._heartbeat_age("*", "agent-bg") is None
+
+
+def test_a_config_root_containing_pattern_syntax_still_resolves(tmp_path, monkeypatch):
+    """The root is escaped too, so only our own `*` is ever a pattern.
+
+    Unescaped, a config root like `~/conf[1]` would simply miss and fall back to
+    the turn counter — the safe direction, not a forgery. Escaping it costs one
+    call and removes the exception from the rule, which is what makes the rule
+    checkable.
+    """
+    sys.path.insert(0, SCRIPTS_DIR)
+    import stop_gate  # noqa: PLC0415
+
+    rooted = tmp_path / "conf[1]"
+    rooted.mkdir()
+    env = _write_heartbeat(rooted, "sess-bracket", "agent-bg")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
+
+    assert "[" in env["CLAUDE_CONFIG_DIR"]
+    assert stop_gate._heartbeat_age("sess-bracket", "agent-bg") is not None

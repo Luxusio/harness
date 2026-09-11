@@ -25,9 +25,15 @@ def test_claude_develop_requires_lane_table_before_implementation():
 def test_claude_develop_forbids_collapsing_independent_acs_into_one_executor():
     body = _text(CLAUDE_DEVELOP)
 
-    assert 'Agent(name="<task_id>:AC-001"' in body
-    assert 'Agent(name="<task_id>:AC-002"' in body
+    # The lane label lives in the prompt, never in `name=`. Passing a display
+    # name puts it in the `agentType` position, which loses a lens agent's
+    # receipt outright and makes every named lane indistinguishable from a lost
+    # one — so the example this file pins must not teach it. See
+    # doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md.
+    assert 'Lane <task_id>:AC-001' in body
     assert 'subagent_type="harness:ac-worker"' in body
+    assert "Never pass `name=` to a spawned agent" in body
+    assert 'Agent(name=' not in body
     assert "Use one Agent per independent AC" in body
     assert "Do not assign multiple independent ACs to one" in body
     assert "Do not edit PROGRESS.md" in body

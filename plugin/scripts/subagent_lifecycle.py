@@ -13,6 +13,8 @@ from typing import Any
 try:
     from _lib import (  # type: ignore
         _bind_runtime_receipt_adapter,
+        _infer_receipt_lens,
+        SUPPORTED_LENSES,
         current_session_id,
         normalize_receipt_completion,
         record_subagent_receipt,
@@ -65,6 +67,11 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
     def _bind_runtime_receipt_adapter(source: str, function: Any) -> None:
         return None
 
+    def _infer_receipt_lens(agent_type: str, explicit_lens: str = "") -> str:
+        return ""
+
+    SUPPORTED_LENSES: frozenset[str] = frozenset()
+
 
 DEFAULT_STALE_SECS = 30 * 60
 DEFAULT_WAIT_SECS = 6.0
@@ -91,6 +98,72 @@ def _agent_type(payload: dict[str, Any]) -> str:
     if isinstance(nested, dict):
         return _payload_value(nested, "type", "agent_type", "agentType")
     return ""
+
+
+_UNNAMED_AGENT_ID = re.compile(r"^a[0-9a-f]{16}$")
+
+
+def _lens_absent(diagnostics: dict[str, Any] | None, agent_type: str, agent_id: str) -> bool:
+    """True when this spawn carries no lens, so no receipt is owed.
+
+    Two very different situations reach here, and conflating them is the defect
+    this function exists to split.
+
+    **A known lens-less agent.** `harness:developer`, `oh-my-claudecode:critic`
+    and `harness:documentation-review` tokenise to no lens and *should* have no
+    receipt. Until now their receipt was refused deep inside
+    `_receipt_entry_semantics_valid`, the ValueError escaped into
+    `background_hook`'s `except`, and every spawn wrote a `gate-crash` row — 37
+    since 2026-08-25, 19 on 2026-09-10 alone. Logging an expected absence as a
+    crash is a false signal, and at that volume it buries the real failures that
+    commit `6689dd7` was landed to surface. These are now silent: no receipt, no
+    error, no breadcrumb.
+
+    **A lens agent whose type was shadowed by a display name.** Passing `name=`
+    to the Agent tool puts the name in the `agentType` position; the resolved
+    type is absent from the payload and the lens is unrecoverable. Measured same
+    session, same agent type: three named spawns wrote 0 receipts and 3
+    gate-crashes, one unnamed spawn wrote its receipt immediately. A coordinator
+    that names its lanes for legibility cannot produce a PASS no matter how
+    correctly the review runs. Making *this* case silent too would be strictly
+    worse than the crash, so it keeps a breadcrumb.
+
+    The discriminator is the id shape, verified against this CLI's own
+    transcript filenames: an unnamed spawn's id is `a` + 16 hex
+    (`a6b82fbc186344eb9`), a named spawn's embeds the name
+    (`aqa-cli-1-ee8c583a936c4ed3`, `adiscover-adversarial-b96cb3d1a3b38065`).
+    It is a CLI encoding the harness does not own, so it is used only to choose
+    between silence and a breadcrumb — never to admit or refuse a receipt. If
+    the encoding changes, the failure is extra breadcrumbs, not a lost PASS.
+    """
+    # Membership, not truthiness. `_infer_receipt_lens` has a `ux` branch, so
+    # `harness:ux-cli` yields `"ux-cli"` — a non-empty string that
+    # `_receipt_entry_semantics_valid` then rejects, because `SUPPORTED_LENSES`
+    # is the six `review-*`/`qa-*` values only. A truthiness test let those
+    # spawns through to the very clause this function exists to keep them away
+    # from, so every workflow-prescribed UX lens kept writing a `gate-crash`
+    # row. A `ux-*` lens can never be required — `required_lenses` is validated
+    # against the same set — so it owes nothing and belongs on the silent path.
+    if _infer_receipt_lens(agent_type) in SUPPORTED_LENSES:
+        return False
+    named = not _UNNAMED_AGENT_ID.match(agent_id or "")
+    if diagnostics is not None:
+        diagnostics["provenance_reason"] = (
+            "named-spawn-shadows-agent-type" if named else "no-lens-for-agent-type"
+        )
+        # Only the shadowed case is worth a breadcrumb; see above.
+        #
+        # `expected_receipt` overrides it either way. The stop path computes
+        # that flag before calling here, and it is True only when a `started`
+        # receipt for this runtime already exists — i.e. the start payload's
+        # type did carry a lens and the transcript-derived type lost it. That
+        # combination used to raise `conflicting Claude lifecycle identity` and
+        # leave a `gate-crash` row; silencing it would drop a spawn that is
+        # genuinely owed a completion and whose PASS is unreachable without one.
+        diagnostics["receipt_not_owed"] = (
+            not named and not diagnostics.get("expected_receipt")
+        )
+    return True
 
 
 def _official_stop_identity(payload: dict[str, Any]) -> tuple[str, str]:
@@ -423,10 +496,14 @@ def register_subagent_start(
     payload: dict[str, Any],
     *,
     task_dir: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append one trusted Claude start directly to the task receipt stream."""
     sid, aid = _official_stop_identity(payload)
     if not sid or not aid:
+        return {}
+    agent_type = _agent_type(payload)
+    if _lens_absent(diagnostics, agent_type, aid):
         return {}
     bound_task_dir, run_id = _binding(repo_root, sid)
     if not bound_task_dir or (task_dir and os.path.realpath(task_dir) != os.path.realpath(bound_task_dir)):
@@ -438,7 +515,7 @@ def register_subagent_start(
         "task_run_id": run_id,
         "runtime_id": runtime_id,
         "agent_id": aid,
-        "agent_type": _agent_type(payload),
+        "agent_type": agent_type,
     }
     duplicate = False
     with receipt_stream_transaction(task_dir):
@@ -511,6 +588,10 @@ def mark_subagent_stop(
         if task_dir else ("", "")
     )
     if not trusted_transcript or not transcript_agent_type:
+        return {}
+    # Same split as the start path. A stop-only runtime records the pair here,
+    # so without this the lens-less crash simply moves to the stop event.
+    if _lens_absent(diagnostics, transcript_agent_type, aid):
         return {}
     runtime_id = _runtime_id(sid, aid)
     identity = {
@@ -598,7 +679,7 @@ def handle_subagent_hook(
 ) -> dict[str, Any]:
     event = (forced_event or _event_name(payload)).lower()
     if event in ("start", "subagentstart", "subagent_start"):
-        return register_subagent_start(repo_root, payload)
+        return register_subagent_start(repo_root, payload, diagnostics=diagnostics)
     if event in ("stop", "subagentstop", "subagent_stop"):
         return mark_subagent_stop(repo_root, payload, diagnostics)
     return {}
