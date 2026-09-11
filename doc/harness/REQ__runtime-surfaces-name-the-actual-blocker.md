@@ -1,6 +1,6 @@
 ---
 tags: [harness, stop-gate, task-verify, diagnostics, turn-end]
-summary: 런타임 표면은 호출자가 다음 행동을 정하는 데 필요한 정보를 가리지 않는다. 일반 안내로 선행 blocker를 덮어쓰지 않고, 거부는 실패 범주를 지목하며, 게이트는 작업을 만들지 못하는 블록을 하지 않고, 파킹은 재개의 증거 비용을 미리 밝힌다.
+summary: 런타임 표면은 호출자가 다음 행동을 정하는 데 필요한 정보를 가리지 않는다. 일반 안내로 선행 blocker를 덮어쓰지 않고, 거부는 실제 실패 범주와 입력 필드를 지목하며, 게이트는 작업을 만들지 못하는 블록을 하지 않고, 파킹은 재개의 증거 비용을 미리 밝힌다.
 updated: 2026-09-11
 freshness: current
 invalidated_by_paths:
@@ -18,6 +18,7 @@ invalidated_by_paths:
   - tests/test_lib_gate_helpers.py
   - tests/test_no_git_receipt_model.py
   - tests/test_receipt_watcher_fail_closed.py
+  - tests/test_harness_mcp_server.py
 freshness_updated: 2026-09-11T00:00:00Z
 ---
 
@@ -27,7 +28,7 @@ freshness_updated: 2026-09-11T00:00:00Z
 
 하네스가 코디네이터에게 내보내는 모든 런타임 응답 — 게이트 결정, MCP
 `next_action`, 거부 예외 — 은 **호출자가 다음 행동을 정하는 데 필요한 정보를
-가리지 않는다.** 구체적으로 네 규칙:
+가리지 않는다.** 구체적으로 다섯 규칙:
 
 1. **일반 안내가 선행 blocker를 덮어쓰지 않는다.** 어떤 상태에 더 앞선
    미충족 조건이 있으면, 그 조건이 먼저 오고 일반 안내가 뒤따른다. 구조화된
@@ -41,6 +42,9 @@ freshness_updated: 2026-09-11T00:00:00Z
    review/QA 영수증을 보존하고, 새 generation을 명시적으로 선택한 경우에만
    그것을 폐기한다. `task_blocked` 응답과 `BLOCKED.md`는 두 선택과 결과를
    blocker 본문과 분리해 함께 보여준다.
+5. **입력 오류는 실제 필드를 보존한다.** 런타임은 일반 예외에서 selector를
+   추측하지 않고 실패한 인자를 직접 지목한다. 유효한 증거 본문은 명시된
+   경계 안에서 원문 보존하며, 거부 진단에는 본문 내용을 반사하지 않는다.
 
 ## 규칙 3의 근거 — 측정된 것
 
