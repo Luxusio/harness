@@ -2143,7 +2143,9 @@ class TestEvidenceRunSupersededWarning(unittest.TestCase):
                     harness_server.handle_task_start({"task_id": "TASK__run-warn"})
                 )
                 second = unwrap(
-                    harness_server.handle_task_start({"task_id": "TASK__run-warn"})
+                    harness_server.handle_task_start({
+                        "task_id": "TASK__run-warn", "fresh_run": True,
+                    })
                 )
             finally:
                 os.chdir(prior_cwd)

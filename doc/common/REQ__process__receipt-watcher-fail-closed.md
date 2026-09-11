@@ -93,9 +93,10 @@ session start; Codex has no equivalent pre-check.
    `codex_hook_registration.py:157` retries within a short deadline and returns
    `False`. The hook must consume that return value and reflect it to the user
    and to harness task state.
-7. **Do not silently change `run_id` on an ordinary resume.** A repeat
-   `task_start` changed the run id in this incident. A new run invalidates
-   existing receipts, so it must warn: "새 evidence run이 생성되었습니다. 이전
+7. **Do not change `run_id` on an ordinary resume.** A repeat `task_start`
+   changed the run id in this incident. The default call now preserves the same
+   run and receipts. Only explicit `fresh_run: true` may create a new run; that
+   destructive choice must warn: "새 evidence run이 생성되었습니다. 이전
    review/QA 결과는 사용할 수 없으며 모두 다시 실행해야 합니다."
 
 ## Explicit non-goals
@@ -127,7 +128,7 @@ operator choice, not an automatic receipt-recovery step.
 | 4 — actual review before substantive QA | done | canonical run/develop guidance branches on the awaited reviewer final and labels unreceipted results non-attesting. |
 | 5 — one verify then generic block | done | canonical routing performs one fresh `task_verify`, then calls `task_blocked` directly if required evidence remains absent. |
 | 6 — propagate registration failure | done | `hook_pre_tool_use.py` consumes the registration result and reports it while still exiting 0 per C-12. |
-| 7 — run_id change warning | done | `task_start` emits `EVIDENCE_RUN_SUPERSEDED` naming both run ids. |
+| 7 — safe resume and explicit run_id change warning | done | Plain `task_start` preserves the current generation; explicit `fresh_run: true` emits `EVIDENCE_RUN_SUPERSEDED` naming both run ids. |
 | 8 — no retroactive receipts | held | enforced by `tests/test_receipt_watcher_fail_closed.py::TestNoReceiptSynthesis`. |
 
 `watcher_status` reports fields it cannot determine as `null` rather than
@@ -340,9 +341,9 @@ lead to a generic blocked task only after substantive QA and one fresh verify.
   live run overrides the warning; a planted symlink at the diagnostics path is
   refused and its target left untouched; a nested project writes nothing into a
   parent repo; a record from another session is ignored; untrusted reason text
-  cannot impersonate an instruction; and a resume with a rotated run id emits
-  `EVIDENCE_RUN_SUPERSEDED` naming both ids (AC-005, which AC-006 required and
-  which had no test).
+  cannot impersonate an instruction; plain resume preserves the run; and an
+  explicit fresh run emits `EVIDENCE_RUN_SUPERSEDED` naming both ids (AC-005,
+  which AC-006 required and which had no test).
 - `_is_spawn_instruction` recognises the instruction by wording produced in
   `_lib`. That cross-module coupling is pinned by a test that feeds every spawn
   instruction `_lib` can render through the predicate, so a reword there fails

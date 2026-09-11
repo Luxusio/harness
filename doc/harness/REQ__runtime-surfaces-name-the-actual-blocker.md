@@ -1,6 +1,6 @@
 ---
 tags: [harness, stop-gate, task-verify, diagnostics, turn-end]
-summary: 런타임 표면은 호출자가 다음 행동을 정하는 데 필요한 정보를 가리지 않는다. 일반 안내로 선행 blocker를 덮어쓰지 않고, 거부는 실패 범주를 지목하며, 게이트는 작업을 만들지 못하는 블록을 하지 않는다.
+summary: 런타임 표면은 호출자가 다음 행동을 정하는 데 필요한 정보를 가리지 않는다. 일반 안내로 선행 blocker를 덮어쓰지 않고, 거부는 실패 범주를 지목하며, 게이트는 작업을 만들지 못하는 블록을 하지 않고, 파킹은 재개의 증거 비용을 미리 밝힌다.
 updated: 2026-09-11
 freshness: current
 invalidated_by_paths:
@@ -27,7 +27,7 @@ freshness_updated: 2026-09-11T00:00:00Z
 
 하네스가 코디네이터에게 내보내는 모든 런타임 응답 — 게이트 결정, MCP
 `next_action`, 거부 예외 — 은 **호출자가 다음 행동을 정하는 데 필요한 정보를
-가리지 않는다.** 구체적으로 세 규칙:
+가리지 않는다.** 구체적으로 네 규칙:
 
 1. **일반 안내가 선행 blocker를 덮어쓰지 않는다.** 어떤 상태에 더 앞선
    미충족 조건이 있으면, 그 조건이 먼저 오고 일반 안내가 뒤따른다. 구조화된
@@ -37,6 +37,10 @@ freshness_updated: 2026-09-11T00:00:00Z
    값은 절대 아니다.
 3. **작업을 만들지 못하는 블록은 하지 않는다.** 게이트가 막았을 때 호출자가
    할 수 있는 일이 없으면 그 블록은 턴만 소비한다. 막지 말고 보고하라.
+4. **파킹은 재개의 증거 비용을 미리 밝힌다.** 기본 재개는 같은 run과
+   review/QA 영수증을 보존하고, 새 generation을 명시적으로 선택한 경우에만
+   그것을 폐기한다. `task_blocked` 응답과 `BLOCKED.md`는 두 선택과 결과를
+   blocker 본문과 분리해 함께 보여준다.
 
 ## 규칙 3의 근거 — 측정된 것
 
@@ -314,6 +318,36 @@ id 모양에 기대므로, 이름 붙은 lens-less 레인(예: `harness:ac-worke
 문자열뿐이다 — 영수증 내용은 절대 나가지 않는다(summary 에 어시스턴트 텍스트가
 실리고, 이 문자열은 훅 피드백과 MCP 오류 payload 로 나간다).
 
+## 규칙 4의 근거 — 파킹 뒤 기본 재개가 증거를 삭제했다
+
+2026-09-11 관측: `task_blocked`로 파킹한 두 태스크를 `task_start`로 다시
+열자 `run_id`가 회전하고 `RECEIPTS.jsonl`이 파일째 삭제됐다. 각각 49행과
+10행에 있던 review PASS → QA PASS 쌍을 잃어 이미 끝난 lens를 다시 돌려야
+했다. 그러나 파킹 응답은 `status: blocked`만 돌려줬고 `BLOCKED.md`에도 그
+비용이 없었다. 호출자에게는 평범한 재개처럼 보이는데 실제 동작은 증거를
+폐기하는 새 generation 시작이었다.
+
+**기대 동작:** 별도 `task_resume` API는 두지 않는다. 유효한 기존 task에
+`task_start`를 호출할 때 상태별 계약은 다음과 같다.
+
+| 기존 상태 | `fresh_run` 생략/`false` | `fresh_run: true` |
+|---|---|---|
+| 없음 | 새 run 생성 | 새 run 생성 |
+| open | 같은 `run_id`와 영수증을 byte-exact 보존하고 현재 session/watcher만 다시 연결 | 새 `run_id`로 회전하고 영수증 초기화 |
+| blocked | 같은 run/영수증을 보존해 marker를 게시한 뒤 blocker를 해제 | 새 run으로 회전·초기화하고 blocker 해제 |
+| closed | 무변경 거부, 새 generation이 필요하면 `fresh_run: true`를 지목 | 새 run으로 회전·초기화해 reopen |
+| invalid/unsafe | 무변경 거부 | 무변경 거부 — flag는 repair 권한이 아니다 |
+
+회전·초기화는 오직 실제 불리언 `fresh_run: true`가 명시된 경우에만 허용한다.
+성공한 `task_blocked` payload와 생성된 `BLOCKED.md`는 plain `task_start`가
+같은 run과 review/QA 증거를 보존한다는 선택, 그리고
+`task_start(..., fresh_run=true)`가 새 generation을 만들며 현재 증거를
+폐기한다는 선택을 둘 다 적는다. 이 안내는 caller가 제공한
+`blocked_reason`/`unblock_condition`을 바꾸거나 그 안에 섞지 않는다.
+
+source: C-100 (`CONTRACTS.local.md`) — 파킹 뒤 재개가 review/QA 증거를
+조용히 삭제한다는 2026-09-11 사용자 결함 보고의 expected normal behavior.
+
 ## Enforcement
 
 - `test_yields_the_turn_to_an_active_background_subagent` — 새 Stop이 lens
@@ -358,6 +392,16 @@ id 모양에 기대므로, 이름 붙은 lens-less 레인(예: `harness:ac-worke
 - `TestTaskVerifyKeepsThePrerequisiteBlocker` — 실제 핸들러를 구동해 PLAN.md가
   `next_action`에 먼저 오고, attestation 안내가 온전히 남는지.
 - `ControlWriterRefusalNamesTheCategory` — 두 범주 구분, 값 미노출, 판정 불변.
+- `test_task_start_open_resume_preserves_generation_and_evidence` — 기본 open
+  재개가 같은 run과 영수증을 보존한다.
+- `test_task_start_explicitly_resumes_blocked_task` — 기본 blocked 재개가
+  task/receipt bytes를 보존한 뒤 blocker를 해제한다.
+- `test_task_start_fresh_run_rotates_generation_and_discards_old_evidence` —
+  명시적 `fresh_run: true`만 회전·초기화하고 superseded 경고를 낸다.
+- `test_task_start_reopens_closed_task_and_clears_close_attestation` — closed
+  기본 호출은 무변경 거부하고 명시적 fresh 선택을 지목한다.
+- `test_task_blocked_records_pause_state_and_artifact` — payload와
+  `BLOCKED.md`가 보존 재개와 폐기 재개의 두 선택을 모두 설명한다.
 
 mutation 전부 지명 테스트를 붉게 만든다: 다시 블록하기, 살아 있는
 서브에이전트 없이 양보하기, 옛 지시문 복원, 양보 횟수 제한 제거, 원장 실패 시

@@ -21,11 +21,16 @@ step is skipped. Smallest coherent diff per step.
 ## 2. MCP tools
 
 **Core (task driver — main session or run skill):**
-- `task_start` — create/resume task, return task context
+- `task_start` — create/resume task, return task context; an existing open or
+  blocked task preserves its run and receipts by default, while only explicit
+  `fresh_run: true` starts a new generation and discards current evidence
 - `task_context` — refresh task state (only when needed)
 - `task_verify` — compute verification from ordered review completions followed by QA completions
 - `task_close` — gate: runtime verdict PASS → close
-- `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
+- `task_blocked` — park unfinished work on a real environment blocker; writes
+  BLOCKED.md, clears this session's active marker, and reports both the
+  evidence-preserving plain `task_start` resume and destructive
+  `task_start(..., fresh_run=true)` choice
 
 **Artifact writes (role-owned):**
 - `write_plan` → PLAN.md + TASK.json required-lens declaration (plan-skill)
@@ -88,6 +93,11 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
 BLOCKED_ENV로 멈출 때는 `task_blocked`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `task_verify` 1회 후에도 남은 필수 attestation 누락이다. 렌즈가 실제로 돌아 결과를 냈는데 필수 증거가 없는 경우에는 고정 쌍만 쓴다. 쌍은 **둘**이고 어느 쪽인지는 영수증 스트림이 정한다 — 이 run 에 아무 영수증도 기록되지 않았으면 empty-stream 쌍, 영수증은 있는데 필수 completion 이 없으면 missing-attestation 쌍. 두 `blocked_reason`/`unblock_condition` 문자열 모두 `plugin/scripts/_lib.py`가 소유하며, 방금 돌린 `task_verify` 응답의 `next_action`(또는 같은 두 쌍을 싣는 stop-gate 메시지)에서 **그대로 복사**한다. 기억에 의존해 다시 타이핑하거나, 바꿔 쓰거나, 진단 문구를 끼워 넣지 않는다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 기존 task_verify+task_close.
+
+파킹 뒤에는 별도 resume 도구가 없다. plain `task_start`가 같은 run과
+review/QA 영수증을 보존해 재개한다. 이미 끝난 증거를 의도적으로 버리고 새
+generation을 시작할 때만 `fresh_run: true`를 쓴다. closed task의 plain
+`task_start`는 거부되며 같은 명시적 선택을 안내한다.
 
 ## 5. Artifact ownership
 

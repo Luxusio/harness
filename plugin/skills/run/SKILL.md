@@ -94,6 +94,11 @@ If only a Goal is active, call `goal_next_task`; if none and unproven, attach a 
 
 ### Phase 1: Start task
 
+`task_start` is also the only resume operation. On an existing valid open or
+blocked task, omit `fresh_run` to preserve the same run and review/QA receipts.
+Use `fresh_run: true` only when deliberately starting a new generation and
+discarding that evidence; a closed task refuses the default call.
+
 ```
 mcp__plugin_harness_harness__task_start { slug: "<ARGUMENTS>" }
 ```

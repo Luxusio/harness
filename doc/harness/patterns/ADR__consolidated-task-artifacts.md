@@ -44,8 +44,9 @@ continue to match the exact receipt bytes when Goal completion is evaluated.
 
 Unsupported task-control and auxiliary artifacts have no readers, writers,
 migration, or compatibility period. Planning decisions live in `PLAN.md`, and
-environment facts are recomputed when needed. A fresh task run is required for
-an unsupported task pack.
+environment facts are recomputed when needed. An unsupported task pack is
+refused in place; `fresh_run: true` is not repair authority for it. Recovery
+uses a distinct valid task rather than deleting unreadable evidence.
 
 One transient exception, named here so the sentence above does not read it as
 debris: `.stop_yield.<session>.json` is stop-gate scratch. `stop_gate.py`
@@ -56,7 +57,7 @@ session's counter, so it costs at most `_MAX_CONSECUTIVE_YIELDS` further
 yields before the gate blocks again — not one. See
 `doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
 
-New and resumed runs use one append-only `RECEIPTS.jsonl`. It is the only
+Every task generation uses one append-only `RECEIPTS.jsonl`. It is the only
 supported receipt stream and the only input to verdicts, provenance,
 fingerprints, installation authority, and close authority.
 
@@ -250,7 +251,9 @@ verbose/prose copies remain best-effort readable.
 
 The runtime has one stream, one schema, one read per operation, and one
 fingerprint input. There is no compatibility period or converter. In-flight
-unsupported evidence must be discarded by rotating to a fresh task run.
+unsupported evidence is refused without mutation; it is not discarded as
+recovery. For a valid task, only explicit `fresh_run: true` starts a replacement
+generation and clears the current stream.
 
 Owner/no-follow checks, append locking, bounded reads, terminal protection,
 review-before-QA ordering, explicit verdicts, current-run binding, stateless

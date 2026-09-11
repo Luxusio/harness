@@ -8,11 +8,10 @@ Field symptom: session `d1866f9e` resumed an already-open task, never called
 No receipt was written, so neither `task_close` (needs PASS) nor the
 attestation park path was reachable.
 
-`task_start` would bind the session, but it also rotates `run_id` and calls
-`reset_receipt_streams_for_new_run` — it destroys exactly the evidence a resume
-exists to preserve. `task_context` is the non-destructive resume surface, so
-the binding belongs there. These tests pin both halves: the binding happens,
-and nothing else about the run moves.
+`task_start` also preserves and binds the session. `task_context` remains the
+narrower read/rebind surface when callers do not need lifecycle transition or
+watcher registration. These tests pin both halves: the binding happens, and
+nothing else about the run moves.
 """
 from __future__ import annotations
 
@@ -342,13 +341,13 @@ def test_a_peek_without_a_session_hint_does_not_steal_write_focus(
 def test_resuming_the_same_task_refreshes_a_rotated_run_id(tmp_path):
     """Why the same-task branch is kept rather than dropped.
 
-    `task_start` from a second session rotates `run_id`, which leaves the first
-    session's marker naming the right task with the wrong run.
+    An explicit fresh `task_start` from a second session rotates `run_id`, which
+    leaves the first session's marker naming the right task with the wrong run.
     `resolve_session_task_binding` rejects exactly that mismatch, so the first
     session is unbound for receipt purposes while looking bound to every other
     reader. Re-writing its own marker here is what repairs it; without the
     branch the session stays receipt-dead until it calls `task_start` and
-    destroys the run's evidence.
+    resets the run's evidence.
     """
     server = _server()
     repo, task_dir = _open_task(tmp_path, SESSION_A)
@@ -356,7 +355,9 @@ def test_resuming_the_same_task_refreshes_a_rotated_run_id(tmp_path):
 
     _lib.write_session_hint(repo, SESSION_B)
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_start", {"task_id": TASK_ID})
+        assert "isError" not in server.call_tool(
+            "task_start", {"task_id": TASK_ID, "fresh_run": True},
+        )
     second_run = _lib.read_task_control(task_dir)["run_id"]
     assert second_run != first_run
     _lib.write_session_hint(repo, SESSION_A)

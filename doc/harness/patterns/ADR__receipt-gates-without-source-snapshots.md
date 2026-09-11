@@ -44,13 +44,15 @@ developer-owned post-QA mutation risk, including for `install.py` itself.
 
 Receipt streams remain a transaction boundary. Each lifecycle generation gets
 a random identity in `TASK.json`, copied into the session marker and receipts;
-events from an earlier generation cannot authorize a resumed task, including
-when a watcher replays its rollout. Terminal resume rotates receipt streams
-under the hardened no-follow receipt lock, and close holds the same lock from
-verdict evaluation through attestation/state publication. Late watcher events
-cannot append after the task becomes terminal. Crossing an ignored nested Git
-boundary likewise requires a session-specific ancestor task binding; the
-legacy repository-wide marker is insufficient.
+events from an earlier generation cannot authorize an explicitly fresh run,
+including when a watcher replays its rollout. Ordinary open/blocked resume
+preserves the current generation and receipt stream. A closed task refuses
+ordinary resume; explicit `fresh_run: true` rotates its receipt stream under the
+hardened no-follow receipt lock. Close holds the same lock from verdict
+evaluation through attestation/state publication. Late watcher events cannot
+append after the task becomes terminal. Crossing an ignored nested Git boundary
+likewise requires a session-specific ancestor task binding; the legacy
+repository-wide marker is insufficient.
 
 ## Consequences
 

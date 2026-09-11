@@ -10,6 +10,7 @@ Covers the four ACs in TASK__stop-hook-when-task-active:
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -21,6 +22,17 @@ from conftest import SCRIPTS_DIR
 
 sys.path.insert(0, SCRIPTS_DIR)
 import _lib  # noqa: E402
+
+MCP_SERVER_PATH = Path(SCRIPTS_DIR).parent / "mcp" / "harness_server.py"
+if "harness_server" in sys.modules:
+    harness_server = sys.modules["harness_server"]
+else:
+    _server_spec = importlib.util.spec_from_file_location("harness_server", MCP_SERVER_PATH)
+    assert _server_spec and _server_spec.loader
+    harness_server = importlib.util.module_from_spec(_server_spec)
+    sys.modules[_server_spec.name] = harness_server
+    _server_spec.loader.exec_module(harness_server)
+import subagent_lifecycle  # noqa: E402
 
 STOP_GATE = os.path.join(SCRIPTS_DIR, "stop_gate.py")
 
@@ -94,6 +106,25 @@ def _write_claude_start(
     mode = "a" if append else "w"
     with open(os.path.join(task_dir, "RECEIPTS.jsonl"), mode, encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _append_started_row(
+    task_dir: Path, *, run_id: str, session_id: str, agent_id: str,
+) -> None:
+    row = {
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "event": "started",
+        "source": "claude_hook",
+        "task_run_id": run_id,
+        "runtime_id": f"claude:{session_id}:{agent_id}",
+        "agent_id": agent_id,
+        "agent_type": "harness:qa-cli",
+        "lens": "qa-cli",
+        "verdict": "",
+        "summary": "",
+    }
+    with (task_dir / "RECEIPTS.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def _write_completed_lenses(repo: str, task_id: str, lenses: list[tuple[str, str]]) -> None:
@@ -670,6 +701,61 @@ def test_stop_hook_active_with_active_background_allows_and_reports(tmp_path):
     assert payload.get("decision") != "block"
     assert payload["continue"] is True
     assert "TASK__recursive-bg" in payload["systemMessage"]
+
+
+def test_preserved_task_start_flows_same_run_session_start_into_first_stop(tmp_path, monkeypatch):
+    """A parked run resumes without the rotation gap that hid active lenses."""
+    repo = _fake_repo(tmp_path)
+    task_id = "TASK__preserved-stop"
+    session_id = "sess-preserved"
+    task_dir = Path(repo) / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True)
+    original_run = _lib.new_uuid7()
+    (task_dir / "TASK.json").write_text(json.dumps({
+        "run_id": original_run,
+        "execution_mode": "standard",
+        "required_lenses": ["review-code", "qa-cli"],
+        "close_receipt_fingerprint": None,
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (task_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
+
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("HARNESS_SESSION_ID", session_id)
+    monkeypatch.setattr(harness_server, "find_repo_root", lambda *args, **kwargs: repo)
+    monkeypatch.setattr(harness_server, "_register_task_start_watcher", lambda *args: None)
+    resumed = harness_server.handle_task_start({"task_id": task_id})
+
+    assert resumed["structuredContent"]["run_action"] == "preserved"
+    assert resumed["structuredContent"]["run_id"] == original_run
+    _append_started_row(
+        task_dir, run_id=original_run, session_id=session_id, agent_id="current",
+    )
+    _append_started_row(
+        task_dir, run_id=_lib.new_uuid7(), session_id=session_id, agent_id="prior-run",
+    )
+    _append_started_row(
+        task_dir, run_id=original_run, session_id="foreign-session", agent_id="foreign",
+    )
+
+    active = subagent_lifecycle.active_records(
+        repo, task_id=task_id, session_id=session_id,
+    )
+    assert [record["agent_id"] for record in active] == ["current"]
+
+    result = _run(
+        repo,
+        stdin=json.dumps({
+            "session_id": session_id,
+            "hook_event_name": "Stop",
+            "stop_hook_active": True,
+        }),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    )
+    payload = json.loads(result.stdout)
+    assert payload.get("decision") != "block"
+    assert payload["continue"] is True
+    assert task_id in payload["systemMessage"]
 
 
 def test_stop_hook_active_without_active_background_still_blocks_open_task(tmp_path):

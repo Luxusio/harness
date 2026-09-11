@@ -130,10 +130,10 @@ directory` — 영수증 기록이 또 한 번, 같은 무증상으로 죽었다
 (`TASK__lightweight-workflow-orchestration` 은 run_id 를 공유하는 마커 두 개를
 가진다).
 
-바인딩 표면은 **`task_context`** 다. `task_start` 는 대체재가 아니다: 다시
-부르면 `run_id` 가 회전하고 `reset_receipt_streams_for_new_run` 이 돌아,
-resume 이 지키려던 증거를 바로 그 자리에서 파괴한다. 그러므로 resume 은
-`run_id` 를 회전시키지 않고 영수증 스트림도 건드리지 않는다.
+바인딩 표면은 `task_context`와 기본 `task_start`다. `task_context`는 상태를
+읽으면서 안전 조건이 맞을 때 바인딩하고, 기존 open/blocked task를 명시적으로
+재개하는 plain `task_start`도 같은 `run_id`와 영수증을 보존해 바인딩한다.
+`fresh_run: true`만 새 generation을 의도적으로 만들고 기존 증거를 폐기한다.
 
 바인딩은 그 호출이 **실제 resume 일 때에만** 일어난다. 조건은 두 개이고 둘
 다 필요하다: 대상 태스크가 `open` 이어야 하고, **이 세션이 지금 붙잡고 있는
@@ -170,11 +170,13 @@ legacy `.active` 가 떠나는 태스크를 가리키기만 하면 세션 조건
 이 잘리거나 읽을 수 없으면 `task_control_status` 가 `invalid` 을 돌려준다.
 태스크 트리는 gitignore 된 임시 산출물이고 `.active` 는 그 형제 파일이라
 어느 쪽도 서로를 정리해 주지 않는다. 이때 완화가 없으면 그 포인터 하나가
-이후 모든 마커 없는 세션의 resume 을 영구히 막고, 빠져나갈 길은 run 의
-영수증을 파괴하는 `task_start` 뿐이다 — 이 문서가 고치려는 바로 그 고장이다.
+이후 모든 마커 없는 세션의 resume 을 영구히 막는다. 2026-09-09 당시
+빠져나갈 길은 run의 영수증을 파괴하는 `task_start`뿐이었지만, 현재 plain
+`task_start`는 같은 run을 보존하는 명시적 재개 경로다.
 
 같은 태스크로 이미 resolve 되는 경우에도 마커를 다시 쓴다. 이것은 no-op 이
-아니다: 다른 세션의 `task_start` 가 `run_id` 를 회전시키면 이 세션의 마커는
+아니다: 다른 세션의 명시적 `task_start(..., fresh_run=true)`가 `run_id`를
+회전시키면 이 세션의 마커는
 태스크는 맞지만 run 이 틀린 상태로 남고, `resolve_session_task_binding` 은
 정확히 그 불일치를 거부한다. 재기록이 그것을 복구한다. (`updated` 필드가
 읽히지 않는다는 것은 맞지만, `run_id` 는 읽힌다.)
@@ -207,14 +209,15 @@ resume 과 위의 focus 재확인 — 에서 legacy `.active` 는 함께 다시 
 바인딩이 거절된다. 가드는 legacy 포인터를 "이 세션이 붙잡고 있는 것" 으로
 읽고, 그 태스크가 열려 있으므로 훔치기로 판정한다. 그 세션은 Defect B 상태로
 남는다 — subagent stop 마다 `session-task-binding-unresolved` 이고, 증상은
-또다시 아무 신호도 없는 부재다. 우회는 `task_start`(run_id 회전과 스트림
-초기화를 감수) 또는 다른 태스크를 먼저 닫거나 park 하는 것이다.
+또다시 아무 신호도 없는 부재다. 우회는 다른 태스크를 먼저 닫거나 park 한 뒤
+plain `task_start`로 같은 run을 보존해 재개하는 것이다.
 
 **경고를 띄우지 않기로 한 이유.** 이 표면은 resume 의도와 peek 의도를 구분할
 수 없다 — 구분할 수 없다는 사실이 가드가 안전한 쪽으로 거절하는 이유 자체다.
 같은 상태에서 훨씬 흔한 쪽은 peek 이고, 거기에 "이 세션은 바인딩되지 않았다"
-는 경고를 붙이면 사용자를 파괴적 처방(`task_start` → run_id 회전 + 스트림
-초기화)으로 밀어붙인다. 없는 신호보다 나쁜 것은 틀린 신호다. 이것은 회귀가
+는 경고를 붙이면 사용자를 불필요한 처방으로 밀어붙인다. 특히 파괴적인
+`fresh_run: true`를 일반 복구로 권해서는 안 된다. 없는 신호보다 나쁜 것은
+틀린 신호다. 이것은 회귀가
 아니라 좁힘이기도 하다: 이 diff 이전의 `task_context` 는 어떤 세션도
 바인딩하지 않았다. resume 의도를 표면에 실어 보낼 수 있는 명시적 인자나,
 markerless 세션의 실제 피해 관측이 나오면 그때 다시 연다.
@@ -229,12 +232,12 @@ markerless 세션의 실제 피해 관측이 나오면 그때 다시 연다.
 - 설치된 scripts 디렉터리의 `__pycache__` 를 지우자 import 가 복구되었고,
   곧바로 실제 subagent 가 이 태스크의 `RECEIPTS.jsonl` 에 `started` +
   `completed` 쌍을 썼다.
-- `handle_task_start` 는 신규 생성과 resume **양쪽 모두**에서
+- 2026-09-09 당시 `handle_task_start` 는 신규 생성과 resume **양쪽 모두**에서
   `write_active_marker` 를 호출한다. PLAN 이 적은 "신규 생성일 때만" 은
-  사실이 아니었다. 실제 공백은 다른 곳에 있다: **resume 표면은 `task_start`
-  가 아니라 `task_context`** 이고 (`task_start` 를 다시 부르면 run id 가
-  교체되고 영수증 스트림이 초기화된다), `handle_task_context` 는 마커를
-  쓰지 않는다. 따라서 이어받은 세션의 모든 subagent 는
+  사실이 아니었다. 당시 실제 공백은 다른 곳에 있었다: 안전한 resume 표면은
+  `task_context`뿐이었고 (`task_start`를 다시 부르면 run id가 교체되고
+  영수증 스트림이 초기화됐다), `handle_task_context`는 마커를 쓰지 않았다.
+  따라서 이어받은 세션의 모든 subagent 는
   `session-task-binding-unresolved` 로 거부되고 영수증을 남기지 못한다.
 - 세션 `d1866f9e-1d00-4179-91f8-dc676f461d3e` 는 `.session-hint` 에 기록되어
   있으나 마커 파일이 없다. 원래 태스크를 만든 세션의 마커는 `task_start`
@@ -321,7 +324,7 @@ resume 없이 같은 재생이 아무것도 남기지 않는 반대 사례, 마�
 |---|---|
 | 허용 목록에서 `handle_task_context` 제거 | 이 파일 전부 |
 | 마커 쓰기 삭제 | `..._receipts_flow_again` 외 4 |
-| 쓰기를 `handle_task_start` 위임으로 교체 (run_id 회전 + 스트림 초기화) | `..._receipts_flow_again`, `..._refreshes_a_rotated_run_id` |
+| 쓰기를 `handle_task_start` 위임으로 교체 (읽기 표면에 task-start 상태 전이를 혼입) | `..._receipts_flow_again`, `..._refreshes_a_rotated_run_id` |
 | 호출부 상태 conjunct 삭제 | `..._parked_task_does_not_steal_write_focus` |
 | 세션 가드 전체 삭제 | `..._another_open_task...`, `..._without_a_session_hint...` |
 | 가드에서 legacy fallback 삭제 (자기 마커만 조회) | `..._another_open_task_does_not_steal_write_focus` |

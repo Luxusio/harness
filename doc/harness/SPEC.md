@@ -58,6 +58,16 @@ public stages. No verification is skipped. If an internal gate finds a gap, the
 task returns to develop or creates a follow-up child task when the gap is
 separable.
 
+`task_start` is both the creation and resume entry point; there is no separate
+`task_resume` operation. For an existing valid open or blocked task, the default
+call preserves the same `run_id`, `TASK.json`, and `RECEIPTS.jsonl` and only
+rebinds the current session and lifecycle watcher. A blocked resume publishes
+that unchanged-run binding before removing `BLOCKED.md`. Generation replacement
+is destructive and therefore explicit: only `fresh_run: true` rotates the run
+and resets review/QA receipts. A closed task refuses the default call and names
+that explicit fresh-run choice; invalid or unsafe control artifacts refuse in
+both modes.
+
 For each Goal child, post-close continuation is ordered as:
 `task_close -> self-improvement/learning promotion -> goal_next_task`. Memory
 and automatic learning are independent of orchestration; runbooks, staged
@@ -184,11 +194,13 @@ review report path.
 
 `TASK.json.run_id` is the non-Git generation identity and a canonical UUIDv7
 whose embedded millisecond timestamp supplies the run-start cutoff.
-`task_start` creates it and every resume rotates it while clearing prior
-receipts. The session marker carries only that run ID to lifecycle watchers;
-start/completion receipts must match it. A replayed rollout event whose
-timestamp predates the UUIDv7 cutoff is ignored. This prevents prior-run
-evidence from satisfying a resumed task.
+`task_start` creates it for a new task. Default resume of an open or blocked task
+retains it and its receipt stream; only explicit `fresh_run: true` rotates it
+while clearing prior receipts. The session marker carries only that run ID to
+lifecycle watchers; start/completion receipts must match it. A replayed rollout
+event whose timestamp predates the UUIDv7 cutoff is ignored. This prevents
+prior-generation evidence from satisfying an explicitly fresh run without
+discarding same-generation evidence during ordinary resume.
 
 Codex SessionStart and spawn-selective PreToolUse establish the bounded root
 registration used by the MCP-hosted watcher. Registration and lifecycle

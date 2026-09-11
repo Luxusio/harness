@@ -46,8 +46,11 @@ def _initialize_instructions(runtime: str) -> str:
         "for native /goal orchestration. A Goal owns a child task queue; create "
         "or attach child tasks as scope expands. "
         "When no native goal context is active, a plain repo-mutating request "
-        "may open or resume a harness task directly with task_start/task_context; "
+        "may create or continue a harness task directly with task_start/task_context; "
         "hooks do not create tasks automatically. "
+        "For an existing open or blocked task, task_start preserves the current "
+        "run and review/QA receipts by default. Pass fresh_run=true only to "
+        "deliberately rotate the run and discard that evidence. "
         "Protocol tool names are bare: goal_start, goal_context, "
         "goal_add_task, goal_next_task, goal_finish, task_start, "
         "task_context, task_verify, task_close, task_blocked, and write_plan. "
@@ -841,6 +844,20 @@ def _minimal_task_start_context(task_dir: str, task_id: str) -> dict:
     }
 
 
+def _task_resume_next_action(status: str) -> str:
+    if status == "blocked":
+        return (
+            "Call task_start with this task_id to resume the same run and preserve "
+            "its review/QA receipts."
+        )
+    if status == "closed":
+        return (
+            "Call task_start with fresh_run=true only to deliberately create a new "
+            "evidence generation and discard the completed run's review/QA receipts."
+        )
+    return "Choose a new task_id and call task_start."
+
+
 # ── Tool handlers ────────────────────────────────────────────────────────
 
 
@@ -858,15 +875,22 @@ def handle_task_start(args: dict) -> dict:
         if execution_mode not in {"standard", "micro"}:
             raise ValueError("execution_mode must be standard or micro")
 
+    fresh_run_raw = args.get("fresh_run", False)
+    if not isinstance(fresh_run_raw, bool):
+        raise ValueError("fresh_run must be a boolean")
+    fresh_run = fresh_run_raw
+
     repo_root = _control_root()
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
-    os.makedirs(task_dir, exist_ok=True)
-    transaction_stack = ExitStack()
-    transaction_stack.enter_context(receipt_stream_transaction(task_dir))
     existing_control_path = task_control_file(task_dir)
     resumed_existing = os.path.lexists(existing_control_path)
-    prior_marker_snapshot = active_marker_snapshot(repo_root)
+    if not resumed_existing:
+        os.makedirs(task_dir, exist_ok=True)
+    transaction_stack = ExitStack()
+    transaction_stack.enter_context(receipt_stream_transaction(task_dir))
+    session_id = read_session_hint(repo_root) or current_session_id()
+    prior_marker_snapshot = active_marker_snapshot(repo_root, session_id=session_id)
     if resumed_existing:
         if not read_task_control(task_dir):
             result = _err(
@@ -892,19 +916,24 @@ def handle_task_start(args: dict) -> dict:
                 pass
 
     warnings = []
-    try:
-        scaffold = ensure_task_scaffold(
-            task_dir, tid, request_text=request_text, repo_root=repo_root,
-            execution_mode=execution_mode or "standard",
-        )
-    except BaseException:
-        transaction_stack.close()
-        raise
+    scaffold = {"created": []}
+    if not resumed_existing:
+        try:
+            scaffold = ensure_task_scaffold(
+                task_dir, tid, request_text=request_text, repo_root=repo_root,
+                execution_mode=execution_mode or "standard",
+            )
+        except BaseException:
+            transaction_stack.close()
+            raise
     original_resumed_control = read_task_control(task_dir) if resumed_existing else {}
     terminal_receipt_snapshot = {}
     task_control_snapshot = {}
     blocked_artifact_snapshot = {}
     superseded_run_id = ""
+    preserved_snapshot = None
+    run_action = "created"
+    validated_existing_receipts = None
 
     def rollback_new_start():
         if resumed_existing:
@@ -927,39 +956,159 @@ def handle_task_start(args: dict) -> dict:
 
     try:
         resumed = read_task_control(task_dir)
-        terminal_resume_status = task_control_status(task_dir, resumed)
-        if terminal_resume_status == "invalid":
-            if resumed.get("close_receipt_fingerprint") and not os.path.lexists(
-                os.path.join(task_dir, "BLOCKED.md")
-            ):
-                terminal_resume_status = "closed"
-            else:
-                raise RuntimeError("task_start refused invalid terminal task artifacts")
-        terminal_resume = terminal_resume_status in {"blocked", "closed"}
         if resumed_existing:
+            try:
+                validated_existing_receipts = receipt_snapshot(task_dir)
+            except (OSError, RuntimeError, ValueError) as exc:
+                transaction_stack.close()
+                return _err(
+                    "task_start refused unsafe or unsupported receipt storage",
+                    data={
+                        "task_dir": task_dir,
+                        "status": "invalid",
+                        "detail": str(exc)[:300],
+                        "next_action": (
+                            "Inspect or update the receipt reader without deleting receipts, "
+                            "or choose a new task_id. fresh_run is not repair authority."
+                        ),
+                    },
+                )
+        terminal_resume_status = task_control_status(
+            task_dir, resumed, validated_existing_receipts,
+        )
+        if terminal_resume_status == "invalid":
+            transaction_stack.close()
+            return _err(
+                "task_start refused invalid terminal task artifacts",
+                data={
+                    "task_dir": task_dir,
+                    "status": "invalid",
+                    "next_action": (
+                        "Inspect and repair the unsafe or inconsistent task artifacts without "
+                        "deleting receipts, or choose a new task_id. fresh_run is not repair authority."
+                    ),
+                },
+            )
+        if resumed_existing and not fresh_run:
+            if terminal_resume_status == "closed":
+                transaction_stack.close()
+                return _err(
+                    "task_start refused: task is closed",
+                    data={
+                        "task_dir": task_dir,
+                        "status": "closed",
+                        "next_action": (
+                            "Call task_start with fresh_run=true only to deliberately "
+                            "create a new evidence generation and discard the current "
+                            "review/QA receipts."
+                        ),
+                    },
+                )
+            if terminal_resume_status not in {"open", "blocked"}:
+                raise RuntimeError("task_start refused invalid terminal task artifacts")
+        if resumed_existing:
+            if rf:
+                transaction_stack.close()
+                return _err(
+                    "task_start refused: request_file cannot replace an existing task request",
+                    data={
+                        "task_dir": task_dir,
+                        "status": terminal_resume_status,
+                        "next_action": (
+                            "Omit request_file, or choose a new task_id for the new request."
+                        ),
+                    },
+                )
+            if not _session_resumes(repo_root, task_dir, session_id):
+                transaction_stack.close()
+                return _err(
+                    "task_start refused: another open task owns the resolvable session focus",
+                    data={
+                        "task_dir": task_dir,
+                        "status": terminal_resume_status,
+                        "next_action": "Finish or park the currently focused task, then retry task_start.",
+                    },
+                )
+        if resumed_existing and not fresh_run:
+            if execution_mode and resumed.get("execution_mode") != execution_mode:
+                transaction_stack.close()
+                return _err(
+                    "task_start refused: execution_mode differs from the preserved run",
+                    data={
+                        "task_dir": task_dir,
+                        "status": terminal_resume_status,
+                        "next_action": (
+                            "Omit execution_mode to preserve this run, or pass fresh_run=true "
+                            "to deliberately create a new evidence generation."
+                        ),
+                    },
+                )
+            preserved_snapshot = validated_existing_receipts
+            if terminal_resume_status == "blocked":
+                blocked_path = os.path.join(task_dir, "BLOCKED.md")
+                blocked_artifact_snapshot[blocked_path] = _strict_regular_text_snapshot(
+                    blocked_path, max_size=256 * 1024,
+                )
+            try:
+                # Publish the unchanged-run marker while BLOCKED.md still makes
+                # the task terminal. Removing BLOCKED.md is the commit point;
+                # a crash before it leaves the task safely parked.
+                write_active_marker(repo_root, task_dir, session_id=session_id)
+                if terminal_resume_status == "blocked":
+                    os.unlink(blocked_path)
+                if not active_task_binding_matches(
+                    repo_root, task_dir, control=resumed, session_id=session_id,
+                ):
+                    raise RuntimeError("task_start could not publish the preserved run binding")
+            except BaseException:
+                restore_errors = []
+                try:
+                    _restore_text_snapshots(blocked_artifact_snapshot)
+                except BaseException as exc:
+                    restore_errors.append(exc)
+                try:
+                    restore_active_marker_snapshot(prior_marker_snapshot)
+                except BaseException as exc:
+                    restore_errors.append(exc)
+                transaction_stack.close()
+                if restore_errors:
+                    raise RuntimeError(
+                        "task_start preserve publication failed and rollback was incomplete"
+                    ) from restore_errors[0]
+                raise
+            run_action = "preserved"
+        elif resumed_existing:
             previous_run_id = str(read_task_control(task_dir).get("run_id") or "")
             _, task_control_snapshot = begin_task_run(task_dir)
             resumed = read_task_control(task_dir)
             new_run_id = str(resumed.get("run_id") or "")
             if previous_run_id and new_run_id and previous_run_id != new_run_id:
                 superseded_run_id = previous_run_id
-        if resumed_existing:
-            # Every task_start resume is a new lifecycle generation and must
+            # An explicitly fresh start is a new lifecycle generation and must
             # not inherit evidence collected for the previous run identity.
+            # This destructive branch is reachable only through fresh_run=true.
             terminal_receipt_snapshot = reset_receipt_streams_for_new_run(task_dir)
-        if execution_mode and resumed.get("execution_mode") != execution_mode:
-            resumed["execution_mode"] = execution_mode
-            write_task_control(task_dir, resumed)
-        if terminal_resume_status == "blocked":
-            blocked_path = os.path.join(task_dir, "BLOCKED.md")
-            blocked_artifact_snapshot[blocked_path] = _strict_regular_text_snapshot(
-                blocked_path, max_size=256 * 1024,
-            )
-            try:
-                os.unlink(blocked_path)
-            except FileNotFoundError:
-                pass
+            run_action = "reset"
+        if run_action != "preserved":
+            if execution_mode and resumed.get("execution_mode") != execution_mode:
+                resumed["execution_mode"] = execution_mode
+                write_task_control(task_dir, resumed)
+            if terminal_resume_status == "blocked":
+                blocked_path = os.path.join(task_dir, "BLOCKED.md")
+                blocked_artifact_snapshot[blocked_path] = _strict_regular_text_snapshot(
+                    blocked_path, max_size=256 * 1024,
+                )
+                # As on the preserving path, publish the marker before the
+                # blocker removal that makes the task open.
+                write_active_marker(repo_root, task_dir, session_id=session_id)
+                try:
+                    os.unlink(blocked_path)
+                except FileNotFoundError:
+                    pass
     except Exception:
+        if resumed_existing and not fresh_run:
+            transaction_stack.close()
+            raise
         try:
             rollback_new_start()
         finally:
@@ -967,7 +1116,7 @@ def handle_task_start(args: dict) -> dict:
         raise
 
     try:
-        ctx = emit_compact_context(task_dir)
+        ctx = emit_compact_context(task_dir, preserved_snapshot)
         if "error" in ctx:
             raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
     except Exception as exc:
@@ -987,12 +1136,17 @@ def handle_task_start(args: dict) -> dict:
         # would resolve to "default" and produce a marker no lifecycle hook
         # reads. Prefer the id recorded by a hook that does receive it; fall
         # back to the legacy default when no usable hint exists.
-        write_active_marker(
-            repo_root, task_dir, session_id=read_session_hint(repo_root) or None,
-        )
+        if not active_task_binding_matches(
+            repo_root, task_dir, control=resumed, session_id=session_id,
+        ):
+            write_active_marker(repo_root, task_dir, session_id=session_id)
     except Exception:
         try:
-            rollback_new_start()
+            if resumed_existing and not fresh_run:
+                _restore_text_snapshots(blocked_artifact_snapshot)
+                restore_active_marker_snapshot(prior_marker_snapshot)
+            else:
+                rollback_new_start()
         finally:
             transaction_stack.close()
         raise
@@ -1048,9 +1202,21 @@ def handle_task_start(args: dict) -> dict:
             ),
             "retry_action": "Re-run every required review lens, then every required QA lens.",
         })
+    elif resumed_existing:
+        warnings.append({
+            "code": "TASK_START_RUN_PRESERVED",
+            "stage": "task_start",
+            "message": (
+                "Existing task resumed without rotating run_id; current review/QA "
+                "receipts were preserved. Pass fresh_run=true only to deliberately "
+                "start a new evidence generation and discard them."
+            ),
+            "retry_action": ctx.get("next_action", ""),
+        })
 
     status = _watcher_status(
         task_dir=task_dir, task_id=tid, run_id=str(resumed.get("run_id") or ""),
+        snapshot=preserved_snapshot,
     )
     status = _apply_task_start_registration_status(
         status, registration, task_dir, str(resumed.get("run_id") or ""),
@@ -1060,6 +1226,9 @@ def handle_task_start(args: dict) -> dict:
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
         "run_id": resumed["run_id"],
+        "previous_run_id": superseded_run_id or None,
+        "run_action": run_action,
+        "evidence_preserved": run_action == "preserved",
         "start_status": "ready_with_warnings" if warnings else "ready",
         "task_created": not resumed_existing,
         "resumed": resumed_existing,
@@ -1189,9 +1358,9 @@ def handle_task_context(args: dict) -> dict:
         # A session that resumes an open task arrives here, and until it owns a
         # marker every subagent stop it produces fails with
         # `session-task-binding-unresolved` — no receipt, so no close path.
-        # task_start would bind it too, but it also rotates run_id and calls
-        # reset_receipt_streams_for_new_run, destroying the very evidence a
-        # resume exists to keep. task_context is the non-destructive surface.
+        # task_start would also preserve and bind this open run. task_context
+        # remains the narrower read/rebind surface when no lifecycle transition
+        # or watcher registration is needed.
         #
         # The write is additive across sessions: write_active_marker creates
         # only this session's own marker file, so markers other sessions hold
@@ -1303,7 +1472,7 @@ def handle_task_close(args: dict) -> dict:
         return _err(
             "task_close blocked: task is not open",
             data={"task_dir": td, "status": initial_status,
-                  "next_action": "Call task_start to begin a fresh task run."},
+                  "next_action": _task_resume_next_action(initial_status)},
         )
     control_root = find_harness_root(td) or find_repo_root(td)
     with goal_transaction(control_root), receipt_stream_transaction(td):
@@ -1379,7 +1548,7 @@ def handle_task_blocked(args: dict) -> dict:
         return _err(
             "task_blocked refused: task is not open",
             data={"task_dir": td, "status": status,
-                  "next_action": "Call task_start to begin a fresh task run."},
+                  "next_action": _task_resume_next_action(status)},
         )
     with receipt_stream_transaction(td):
         return _handle_task_blocked_locked(args, td)
@@ -1396,12 +1565,18 @@ def _handle_task_blocked_locked(args: dict, td: str) -> dict:
         return _err(
             "task_blocked refused: task is not open",
             data={"task_dir": td, "status": status,
-                  "next_action": "Call task_start to begin a fresh task run."},
+                  "next_action": _task_resume_next_action(status)},
         )
+    resume_guidance = (
+        "Call task_start with this task_id to resume the same run and preserve "
+        "its review/QA receipts. Pass fresh_run=true only to deliberately start "
+        "a new evidence generation and discard those receipts."
+    )
     blocked_md = (
         "# BLOCKED\n\n"
         f"## Blocked Reason\n{reason}\n\n"
         f"## Unblock Condition\n{unblock}\n\n"
+        f"## Resume\n{resume_guidance}\n\n"
         f"## Blocked At\n{now_iso()}\n"
     )
     blocked_path = os.path.join(td, "BLOCKED.md")
@@ -1421,6 +1596,7 @@ def _handle_task_blocked_locked(args: dict, td: str) -> dict:
         "status": "blocked",
         "runtime_verdict": "BLOCKED_ENV",
         "blocked_artifact": _task_artifact_rel(td, "BLOCKED.md"),
+        "next_action": resume_guidance,
     })
 
 
@@ -1461,7 +1637,7 @@ def handle_write_plan(args: dict) -> dict:
         return _err(
             "write_plan refused: task is not open",
             data={"task_dir": td, "status": status, "written": [],
-                  "next_action": "Call task_start to begin a fresh task run."},
+                  "next_action": _task_resume_next_action(status)},
         )
     preflight = _prepare_write_plan(args, td, control)
     if isinstance(preflight, dict) and preflight.get("isError"):
@@ -1480,7 +1656,7 @@ def _handle_write_plan_locked(args: dict, td: str, *, preflight=None) -> dict:
         return _err(
             "write_plan refused: task is not open",
             data={"task_dir": td, "status": status, "written": [],
-                  "next_action": "Call task_start to begin a fresh task run."},
+                  "next_action": _task_resume_next_action(status)},
         )
     return _publish_write_plan(args, td, control, preflight)
 
@@ -1608,11 +1784,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "status": {"type": "string", "enum": ["complete", "blocked"]}},
          "additionalProperties": False},
      "handler": handle_goal_finish},
-    {"name": "task_start", "title": "Create or resume a task",
-     "description": "Create exact TASK.json scaffolding and return fresh context. Use directly for plain repo-mutating requests when no native goal context is active. The public lifecycle is task start -> plan -> develop -> QA -> close; review and task_verify are internal close gates. Pass execution_mode='micro' for an explicitly shortened no-plan develop -> QA -> close path; internal verification remains mandatory.",
+    {"name": "task_start", "title": "Create or continue a task",
+     "description": "Create a task or continue an existing open/blocked task while preserving its run and review/QA receipts. Pass fresh_run=true only to deliberately rotate an existing run and discard that evidence. The public lifecycle is task start -> plan -> develop -> QA -> close; review and task_verify are internal close gates. Pass execution_mode='micro' for an explicitly shortened no-plan develop -> QA -> close path; internal verification remains mandatory.",
      "inputSchema": {"type": "object", "properties": {
          "task_dir": {"type": "string"}, "task_id": {"type": "string"},
          "slug": {"type": "string"}, "request_file": {"type": "string"},
+         "fresh_run": {"type": "boolean", "description": "For an existing task, deliberately rotate run_id and discard current review/QA receipts."},
          "execution_mode": {"type": "string", "enum": ["standard", "micro"]}},
          "additionalProperties": False},
      "handler": handle_task_start},
