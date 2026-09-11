@@ -1,7 +1,7 @@
 ---
 tags: [harness, verification, guards, install, contracts, testing]
 summary: 가드는 그것이 실행되는 환경에서 실행되어 검증되기 전까지 가드가 아니다. 그리고 커버리지 주장 자체도 기계로 확인된다 — 설치 트리 삭제 감지, 설치 후 런타임 스모크, 문서가 지목한 테스트 id 검증.
-updated: 2026-09-09
+updated: 2026-09-10
 freshness: current
 invalidated_by_paths:
   - tests/conftest.py
@@ -13,6 +13,7 @@ invalidated_by_paths:
   - tests/test_contract_lint_real_tree.py
   - tests/test_contract_lint.py
   - plugin/skills/develop/verification-gate.md
+  - plugin/scripts/mutation_probe.py
 ---
 
 # REQ — a guard is verified where it runs, and its coverage claim is checked
@@ -160,12 +161,23 @@ real docs rather than nothing.
 automates only the mechanical half: that a referenced test id exists. A
 sentence that names a real test and describes it wrongly still passes.
 
-**Mutation testing is not built here** (failure 2). It is the right tool for
-"the test never reached the branch it names", and it is the only expensive
-item — minutes rather than seconds — needing its own scoping against changed
-files. Deferred so the cheap, high-yield checks land first. Until then, the
-practice stands: prove a guard with a mutation, and record the mutation and the
-test that goes red, as the case-study REQ does.
+**Mutation testing was not built here** (failure 2), until the addendum
+below. It is the right tool for "the test never reached the branch it names",
+and it was the only expensive item — minutes rather than seconds — needing its
+own scoping against changed files, which is why it was deferred so the cheap,
+high-yield checks landed first. The hand-run practice from that deferral
+stands as the residual practice for everything the built tool's operator set
+does not express: prove a guard with a mutation, and record the mutation and
+the test that goes red, as the case-study REQ does.
+
+*2026-09-10: built.* `plugin/scripts/mutation_probe.py` mutates the changed
+lines of a diff and reports what no test noticed;
+`REQ__mutation-scope-follows-the-diff.md` owns why the scope is the diff, why a
+survivor is escalated to the full suite before it is reported, and why it
+reports rather than blocks. It reaches failure 2 — the unreached guard branch —
+and it does not reach a missing *case*, which is recorded there with the
+counts-slot defect that demonstrates the difference. The hand-run practice
+above is what closes that remaining gap.
 
 **The removal guard does not survive a hard kill.** Snapshot state lives in the
 pytest session; a `SIGKILL`ed run leaves no comparison. The manual snapshot in

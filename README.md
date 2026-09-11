@@ -128,6 +128,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
+| `mutation_probe.py` | Mutates the changed lines of a diff and reports the mutations no test noticed; every survivor is re-run against the full suite first | stdout |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
 | `setup_finalize.py` | Canonical setup validation, legacy manifest migration, operational ignores, and success-only version stamping | `.gitignore`, `doc/harness/manifest.yaml`, `doc/harness/.version` |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
