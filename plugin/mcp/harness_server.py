@@ -885,11 +885,20 @@ def handle_task_start(args: dict) -> dict:
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
     existing_control_path = task_control_file(task_dir)
     resumed_existing = os.path.lexists(existing_control_path)
+    session_id = read_session_hint(repo_root) or current_session_id()
+    if not resumed_existing and not _session_resumes(repo_root, task_dir, session_id):
+        return _err(
+            "task_start refused: another open task owns the resolvable session focus",
+            data={
+                "task_dir": task_dir,
+                "status": "absent",
+                "next_action": "Finish or park the currently focused task, then retry task_start.",
+            },
+        )
     if not resumed_existing:
         os.makedirs(task_dir, exist_ok=True)
     transaction_stack = ExitStack()
     transaction_stack.enter_context(receipt_stream_transaction(task_dir))
-    session_id = read_session_hint(repo_root) or current_session_id()
     prior_marker_snapshot = active_marker_snapshot(repo_root, session_id=session_id)
     if resumed_existing:
         if not read_task_control(task_dir):

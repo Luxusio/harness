@@ -16,6 +16,7 @@ nothing else about the run moves.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -58,6 +59,33 @@ def _lifecycle_fixtures():
 def _marker_path(repo: str, session_id: str) -> Path:
     """The session marker file `write_active_marker` would create for `sid`."""
     return Path(_lib._session_active_path(repo, session_id))
+
+
+def _seed_open_task_and_focus(repo: str, task_id: str, session_id: str) -> str:
+    """Create the second-open-task fixture without exercising task_start focus policy."""
+    task_dir = Path(repo) / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True)
+    run_id = _lib.new_uuid7()
+    (task_dir / "TASK.json").write_text(json.dumps({
+        "run_id": run_id,
+        "execution_mode": "standard",
+        "required_lenses": ["review-code", "qa-cli"],
+        "close_receipt_fingerprint": None,
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (task_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    marker = _marker_path(repo, session_id)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({
+        "session_id": session_id,
+        "task_dir": str(task_dir),
+        "task_id": task_id,
+        "run_id": run_id,
+        "updated": _lib.now_iso(),
+    }, sort_keys=True) + "\n", encoding="utf-8")
+    (Path(repo) / "doc/harness/tasks/.active").write_text(
+        str(task_dir) + "\n", encoding="utf-8",
+    )
+    return str(task_dir)
 
 
 def _open_task(tmp_path: Path, session_id: str | None) -> tuple[str, str]:
@@ -261,9 +289,7 @@ def test_reading_another_open_task_does_not_steal_write_focus(tmp_path, monkeypa
     _receipts, _, _ = _lifecycle_fixtures()
     server = _server()
     repo, old_task = _open_task(tmp_path, SESSION_A)
-    with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_start", {"task_id": "TASK__live"})
-    live = str(Path(repo) / "doc/harness/tasks/TASK__live")
+    live = _seed_open_task_and_focus(repo, "TASK__live", SESSION_A)
     active = Path(repo) / "doc/harness/tasks/.active"
     assert active.read_text(encoding="utf-8").strip() == live
     assert _lib.task_control_status(old_task, _lib.read_task_control(old_task)) == "open"
@@ -317,9 +343,7 @@ def test_a_peek_without_a_session_hint_does_not_steal_write_focus(
     _force_hintless_default_session(monkeypatch)
     server = _server()
     repo, peeked = _open_task(tmp_path, None)
-    with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_start", {"task_id": "TASK__live"})
-    live = str(Path(repo) / "doc/harness/tasks/TASK__live")
+    live = _seed_open_task_and_focus(repo, "TASK__live", "default")
     active = Path(repo) / "doc/harness/tasks/.active"
 
     # Two open tasks, no hint, and focus on the one that was started last.
@@ -391,13 +415,11 @@ def test_a_legacy_pointer_to_an_unvalidatable_task_does_not_block_a_resume(tmp_p
     does not validate holds no write focus, so treating its pointer as a
     competing binding would lock every markerless session out of the very
     resume this REQ exists to make work, permanently and with no route back
-    except the `task_start` that destroys the run's receipts.
+    except a safe `task_start`/`task_context` rebind.
     """
     server = _server()
     repo, task_dir = _open_task(tmp_path, SESSION_A)
-    with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_start", {"task_id": "TASK__gone"})
-    stale = Path(repo) / "doc/harness/tasks/TASK__gone"
+    stale = Path(_seed_open_task_and_focus(repo, "TASK__gone", SESSION_A))
     active = Path(repo) / "doc/harness/tasks/.active"
     assert active.read_text(encoding="utf-8").strip() == str(stale)
     shutil.rmtree(stale)  # ephemeral task tree pruned; the pointer survives it

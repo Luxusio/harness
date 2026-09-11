@@ -1662,6 +1662,28 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("must be a boolean", result["structuredContent"]["error"])
             self.assertEqual(Path(task_dir, "TASK.json").read_bytes(), before)
 
+    def test_task_start_absent_task_refuses_competing_open_focus_without_scaffold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            focused = Path(self._make_task(tmp, "TASK__focused-open"))
+            self._write_marker_fixture(tmp, str(focused), session_id="default")
+            marker_paths = [
+                Path(tmp) / "doc/harness/tasks/.active",
+                Path(tmp) / "doc/harness/tasks/.active_sessions/default.json",
+            ]
+            marker_before = {path: path.read_bytes() for path in marker_paths}
+            candidate = Path(tmp) / "doc/harness/tasks/TASK__must-stay-absent"
+
+            result = self._call_in_repo(
+                tmp, "task_start", {"task_id": candidate.name},
+            )
+
+            self.assertTrue(result.get("isError"))
+            self.assertEqual(result["structuredContent"]["status"], "absent")
+            self.assertFalse(candidate.exists())
+            self.assertEqual(
+                {path: path.read_bytes() for path in marker_paths}, marker_before,
+            )
+
     def test_task_start_open_resume_preserves_generation_and_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-open")
@@ -2218,7 +2240,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 task_dir.resolve(),
             )
 
-    def test_failed_new_start_restores_different_preexisting_marker(self):
+    def test_new_start_refuses_different_preexisting_open_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
@@ -2235,24 +2257,19 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "close_receipt_fingerprint": None,
             })
             self._write_marker_fixture(tmp, str(task_a))
-            real_replace = harness_lib.os.replace
-
-            def fail_task_b_marker(src, dst, *args, **kwargs):
-                if str(dst).endswith(".json") and ".active_sessions" in str(dst):
-                    raise OSError("task B marker interrupted")
-                return real_replace(src, dst, *args, **kwargs)
-
             prior_cwd = os.getcwd()
-            with mock.patch.object(harness_lib.os, "replace", side_effect=fail_task_b_marker):
-                os.chdir(tmp)
-                with self.assertRaisesRegex(OSError, "task B marker interrupted"):
-                    harness_server.handle_task_start({"task_id": "TASK__failed-b"})
+            os.chdir(tmp)
+            try:
+                result = harness_server.handle_task_start({"task_id": "TASK__failed-b"})
+            finally:
                 os.chdir(prior_cwd)
+            self.assertTrue(result.get("isError"))
+            self.assertEqual(result["structuredContent"]["status"], "absent")
             self.assertEqual(
                 Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
                 task_a.resolve(),
             )
-            self.assertFalse((task_b / "TASK_STATE.yaml").exists())
+            self.assertFalse(task_b.exists())
 
     def test_active_marker_snapshot_cannot_be_restored_by_arbitrary_caller(self):
         with tempfile.TemporaryDirectory() as tmp:
