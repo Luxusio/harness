@@ -369,7 +369,8 @@ source: C-100 (`CONTRACTS.local.md`) — 파킹 뒤 재개가 review/QA 증거�
   그 필드, 실제 byte 수, 허용 byte 수를 지목해 거부한다. 저장 가능한 값을
   조용히 줄이지 않는다. 두 필드 제한은 고정 template를 포함한 artifact가 기존
   256 KiB trusted snapshot 경계 안에 남도록 한다.
-- 누락, 비문자열, 공백 문자열, 초과 입력은 실제 실패 필드와 고정 reason,
+- 누락, 비문자열, 공백 문자열, UTF-8로 인코딩할 수 없는 Unicode, 초과 입력은
+  실제 실패 필드와 고정 reason,
   정확한 `expected`와 필드별 복구 동작을 반환한다. blocker 본문은 오류 문자열,
   `rejected_value`, 로그에 반사하지 않고 `<missing>`, `<blank string>`,
   `<non-string: TYPE>`, `<string: N UTF-8 bytes>`처럼 내용 없는 메타데이터만 쓴다.
@@ -446,6 +447,8 @@ normal behavior.
   누락·비문자열·공백 오류가 실제 필드와 안전한 거부 메타데이터를 반환한다.
 - `test_task_blocked_enforces_utf8_byte_limit_before_mutation` — 정확한 byte
   경계는 통과하고 한 byte 초과는 artifact와 marker를 바꾸기 전에 거부한다.
+- `test_task_blocked_invalid_unicode_names_the_field_over_direct_and_framed_calls` —
+  escaped lone surrogate도 실제 blocker 필드의 `invalid_utf8`로 무변경 거부한다.
 - `test_task_selector_errors_report_only_forms_the_field_accepts` — bare/canonical
   ID 수용과 path형 `task_id` 거부 안내가 같은 문법을 말한다.
 - `test_local_argument_errors_do_not_fall_back_to_task_id` — `fresh_run`과

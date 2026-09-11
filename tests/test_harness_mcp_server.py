@@ -1558,6 +1558,60 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertEqual((task_dir / "TASK.json").read_bytes(), task_before)
                 self.assertEqual(marker.read_bytes(), marker_before)
 
+    def test_task_blocked_invalid_unicode_names_the_field_over_direct_and_framed_calls(self):
+        for mode in ("direct", "framed"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                task_dir = Path(self._make_task(tmp, f"TASK__invalid-unicode-{mode}"))
+                self._write_marker_fixture(tmp, str(task_dir))
+                task_before = (task_dir / "TASK.json").read_bytes()
+                marker = Path(tmp) / "doc/harness/tasks/.active"
+                marker_before = marker.read_bytes()
+                args = {
+                    "task_id": task_dir.name,
+                    "blocked_reason": "reason",
+                    "unblock_condition": "bad\ud800SECRET_SURROGATE",
+                }
+
+                if mode == "direct":
+                    result = self._call_in_repo(tmp, "task_blocked", args)
+                else:
+                    request = {
+                        "jsonrpc": "2.0",
+                        "id": 73,
+                        "method": "tools/call",
+                        "params": {"name": "task_blocked", "arguments": args},
+                    }
+                    body = json.dumps(request).encode("utf-8")
+                    raw_input = (
+                        b"Content-Length: " + str(len(body)).encode("ascii")
+                        + b"\r\n\r\n" + body
+                    )
+                    stdin = io.TextIOWrapper(io.BytesIO(raw_input), encoding="utf-8")
+                    stdout_bytes = io.BytesIO()
+                    stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+                    server = harness_server.McpServer()
+                    with (
+                        mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                        mock.patch.object(harness_server.sys, "stdin", stdin),
+                        mock.patch.object(harness_server.sys, "stdout", stdout),
+                    ):
+                        server.handle_request(server._read())
+                        stdout.flush()
+                        server.close()
+                    response_body = stdout_bytes.getvalue().split(b"\r\n\r\n", 1)[1]
+                    result = json.loads(response_body.decode("utf-8"))["result"]
+
+                payload = result["structuredContent"]
+                self.assertTrue(result.get("isError"))
+                self.assertEqual(payload["error_code"], "INVALID_ARGUMENT")
+                self.assertEqual(payload["field"], "unblock_condition")
+                self.assertEqual(payload["reason"], "invalid_utf8")
+                self.assertEqual(payload["rejected_value"], "<string: invalid UTF-8>")
+                self.assertNotIn("SECRET_SURROGATE", json.dumps(result))
+                self.assertFalse((task_dir / "BLOCKED.md").exists())
+                self.assertEqual((task_dir / "TASK.json").read_bytes(), task_before)
+                self.assertEqual(marker.read_bytes(), marker_before)
+
     def test_task_selector_errors_report_only_forms_the_field_accepts(self):
         for task_id, canonical in (
             ("bare-safe", "TASK__bare-safe"),

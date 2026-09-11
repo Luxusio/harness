@@ -812,7 +812,16 @@ def _req(args: dict, k: str) -> str:
 
 def _blocked_text(args: dict, field: str) -> str:
     value = _req(args, field)
-    actual_bytes = len(value.encode("utf-8"))
+    try:
+        actual_bytes = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise _ToolArgumentError(
+            f"{field} must be valid UTF-8 text",
+            field=field,
+            reason="invalid_utf8",
+            rejected_value="<string: invalid UTF-8>",
+            next_action=f"Replace invalid Unicode code points in {field} and retry.",
+        ) from None
     if actual_bytes > BLOCKER_FIELD_MAX_UTF8_BYTES:
         raise _ToolArgumentError(
             f"{field} exceeds the UTF-8 byte limit",
