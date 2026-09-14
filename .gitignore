@@ -39,3 +39,4 @@ doc/harness/.hygiene-session-count
 doc/harness/.maintain-last-run
 doc/harness/.maintain-observe.log
 doc/harness/.maintain-pending.json
+.venv/
