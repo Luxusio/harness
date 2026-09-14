@@ -419,7 +419,11 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
             watcher.feed(event)
         assert [(item["event"], item["lens"]) for item in receipts] == [("started", "review-code")]
 
-        final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean."
+        final = (
+            "VERDICT: PASS\n"
+            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n"
+            "Clean.\n  "
+        )
         _write_jsonl(
             child,
             _child_events(
@@ -443,6 +447,109 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
         f"codex:{root_id}:call_runtime_123456:{child_id}"
     )
     assert receipts[0]["runtime_id"] == receipts[1]["runtime_id"]
+    assert receipts[1]["summary"] == final
+
+
+def test_watcher_preserves_exact_verdictless_review_final_for_pending_detail(tmp_path):
+    mod = _load()
+    task_dir = tmp_path / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    watcher = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    malformed_final = "Review completed, but the verdict envelope is missing."
+    item = {
+        "task_name": "code_review_verdictless",
+        "task_dir": str(task_dir),
+        "task_run_id": RUN_ID,
+        "agent_path": "/root/code_review_verdictless",
+        "child_id": "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f",
+        "runtime_id": (
+            "codex:019f825b-f25f-70c3-8ee8-071f79fa1c42:"
+            "call_verdictless_123456:019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+        ),
+        "started": True,
+        "root_final": malformed_final,
+    }
+    receipts = []
+    with mock.patch.object(
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
+    ), mock.patch.object(
+        mod, "_child_status",
+        return_value=("complete", tmp_path / "child.jsonl", malformed_final),
+    ), mock.patch.object(
+        mod, "record_subagent_receipt",
+        side_effect=lambda _task, receipt: receipts.append(dict(receipt)) or receipt,
+    ), mock.patch.object(
+        mod, "receipt_snapshot", side_effect=lambda _task: _snapshot(receipts),
+    ):
+        watcher._maybe_complete(item)
+
+    assert item["invalid"] is True
+    assert len(receipts) == 1
+    assert receipts[0]["verdict"] == "PENDING"
+    assert receipts[0]["summary"] == malformed_final
+
+
+def test_child_status_accepts_a_formal_final_at_the_detail_size_limit(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review_size_limit"
+    prefix = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n"
+    )
+    final = prefix + "x" * (mod._REVIEW_DETAIL_MAX_BYTES - len(prefix))
+    child = _rollout_path(codex_home, child_id)
+    _write_jsonl(
+        child,
+        _child_events(root_id, child_id, agent_path, str(tmp_path), final),
+    )
+
+    status, path, observed = mod._child_status(
+        child_id, root_id, agent_path, str(tmp_path),
+    )
+
+    assert status == "complete"
+    assert path == child
+    assert observed == final
+
+
+def test_deeply_nested_root_record_is_quarantined_without_an_exception():
+    mod = _load()
+    raw = ("[" * 10000 + "]" * 10000 + "\n").encode()
+    assert mod._load_json_line(raw) is None
+
+
+def test_deeply_nested_child_record_is_rejected_without_an_exception(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review_nested_record"
+    child = _rollout_path(codex_home, child_id)
+    _write_jsonl(
+        child,
+        _child_events(root_id, child_id, agent_path, str(tmp_path)),
+    )
+    with child.open("ab") as handle:
+        handle.write(("[" * 10000 + "]" * 10000 + "\n").encode())
+
+    status, path, final = mod._child_status(
+        child_id, root_id, agent_path, str(tmp_path),
+    )
+
+    assert status == "invalid"
+    assert path == child
+    assert final == ""
 
 
 def test_watcher_requires_activity_when_runtime_emits_only_spawn_output(tmp_path, monkeypatch):

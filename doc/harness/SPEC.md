@@ -99,6 +99,7 @@ environment facts are recomputed by the operation that needs them.
 | `PLAN.md` | MCP `write_plan` |
 | `TASK.json` | task lifecycle MCP tools |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
+| `REVIEWS.jsonl` | shared review-detail writer reached only by formal review completion lifecycle hooks or `review-log` |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
 Manual evidence writers are intentionally absent. User corrections must be
@@ -183,8 +184,9 @@ does not relax the receipt-backed close requirements above.
 `PLAN.md` and `TASK.json`. Planning rationale remains in `PLAN.md`; there is no
 audit argument or audit artifact.
 
-`task_context`, `task_verify`, and `task_close` read task artifacts and receipt
-streams only. They do not discover repositories, enumerate changed paths,
+`task_context`, `task_verify`, and `task_close` read task control artifacts and
+the receipt stream only. They never read non-authoritative `REVIEWS.jsonl`.
+They do not discover repositories, enumerate changed paths,
 validate Git metadata, or invalidate PASS because files changed. A developer
 who edits after QA must decide whether to rerun review or QA. Harness deliberately
 accepts that risk instead of imposing a repository-integrity monitor on local
@@ -192,7 +194,9 @@ development. Missing or malformed task artifacts and receipt streams still fail
 closed. Public context and verification responses expose verdicts, required
 lenses, `missing_for_close`, `next_action`, and one report path; they do not
 embed raw receipts, completion summaries, transcript locations, or a duplicate
-review report path.
+authoritative review report path. Exact formal review detail is an optional
+content-addressed appendix selected explicitly by receipt digest; it is never a
+context, verdict, fingerprint, verification, installation, or close input.
 
 `TASK.json.run_id` is the non-Git generation identity and a canonical UUIDv7
 whose embedded millisecond timestamp supplies the run-start cutoff.

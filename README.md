@@ -81,8 +81,12 @@ migrated or read.
 ## Acceptance criteria
 
 Stable AC IDs and their success conditions live directly in `PLAN.md`.
-Independent review and QA completion is recorded in one `RECEIPTS.jsonl`;
-Harness does not create or reconcile a second acceptance ledger.
+Independent review and QA completion is recorded in one compact,
+authoritative `RECEIPTS.jsonl`; Harness does not create or reconcile a second
+acceptance ledger. Current formal-review completions also write their exact
+text to a non-authoritative `REVIEWS.jsonl` appendix, selected one item at a
+time by the receipt's `DETAIL_SHA256`. The appendix may be absent only for
+legacy receipts; operators never need to read it for lifecycle decisions.
 
 ## Agents
 
@@ -91,6 +95,9 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | Agent | Role |
 |-------|------|
 | `developer` | Implements PLAN.md per AC |
+| `defect-hunter` | Runs two fresh, non-attesting evidence-only discovery passes before formal code review |
+| `code-reviewer` | Independently verifies hunter leads and current code; sole `review-code` verdict authority |
+| `security-reviewer` | Conditional trust-boundary and exploitability specialist; sole `review-security` authority |
 | `dogfooder` | Post-QA power-user pass; finds friction + missing workflows |
 | `qa-browser` | Browser-first runtime QA via Chrome DevTools MCP |
 | `qa-api` | API runtime QA via curl / httpie |
@@ -107,6 +114,17 @@ for acquisition/identity/completion and
 for storage/schema/gate semantics.
 QA agents never hold `Edit`/`Write` on source files.
 Dogfooder remains a non-gating backlog pass after QA/UX.
+
+To inspect the exact text behind one review receipt without loading review
+history, pass its lowercase digest explicitly:
+
+```bash
+python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+  --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
+```
+
+Old receipts may have no stored detail; that is reported as not found and does
+not change their validity.
 
 Task lifecycle calls do not run Git change detection, capture HEAD baselines,
 or invalidate receipts after source edits. Nested repositories and submodules
@@ -137,6 +155,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `install_verified.py` | Stateless trusted post-QA delivery wrapper; compares canonical payloads from an isolated verified snapshot and refreshes only stale runtimes | stdout / exit status |
 | `install_smoke.py` | Drives an installed runtime tree once — imports every registered hook module and checks a bound subagent produces a receipt row; run by `install.py` after each sync and on the `--if-stale` skip path | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
+| `review-log` | Append one bounded formal-review final from stdin to the task-local content-addressed detail store | task `REVIEWS.jsonl` |
+| `review-read` | Return exactly one stored formal-review final by lowercase SHA-256 digest | stdout |
 | `subagent_lifecycle.py` | Receipt-backed Claude lifecycle handling, active-work queries, and trusted stop-only inference | task `RECEIPTS.jsonl` |
 | `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
@@ -235,7 +255,7 @@ plugin/
   CLAUDE.md                     # runtime rules
   hooks/hooks.json              # hook config
   mcp/harness_server.py         # 8-tool MCP server
-  agents/                       # developer, dogfooder, critic-document, qa-{api,browser,cli,desktop}
+  agents/                       # developer, defect-hunter, code/security reviewers, dogfooder, QA/UX lenses
   skills/                       # 5 user-facing + 4 review sub-skills
   scripts/                      # _lib.py + 17 stdlib scripts
 ```

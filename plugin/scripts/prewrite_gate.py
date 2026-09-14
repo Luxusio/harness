@@ -65,6 +65,7 @@ PROTECTED_ARTIFACTS = {
     "TASK.json": "task-control-mcp",
     "PLAN.md": "plan-skill",
     "RECEIPTS.jsonl": "receipt-lifecycle-hook",
+    "REVIEWS.jsonl": "review-detail-writer",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
@@ -72,6 +73,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "TASK.json": "task control MCP tools",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
+    "REVIEWS.jsonl": "the shared review-detail writer",
 }
 GOAL_CONTROL_DIR = os.path.join("doc", "harness", "goals")
 
@@ -144,11 +146,36 @@ def _is_goal_control_artifact(path):
     return bool(suffix and os.sep not in suffix and suffix.endswith(".json"))
 
 
-def _is_protected_artifact(path):
+def _is_task_local_review_detail(path, repo_root=None):
+    root = os.path.abspath(repo_root or find_repo_root())
+    normalized = os.path.abspath(
+        str(path) if os.path.isabs(str(path)) else os.path.join(root, str(path))
+    )
+    tasks_root = os.path.join(root, TASK_DIR)
+    try:
+        relative = os.path.relpath(normalized, tasks_root)
+    except ValueError:
+        return False
+    parts = relative.split(os.sep)
+    return (
+        len(parts) == 2
+        and parts[0].startswith("TASK__")
+        and parts[1] == "REVIEWS.jsonl"
+    )
+
+
+def _is_protected_artifact(path, repo_root=None):
     if not path: return False
     normalized = os.path.normpath(str(path))
+    basename = os.path.basename(normalized)
     return (
-        os.path.basename(normalized) in PROTECTED_ARTIFACTS
+        (
+            basename in PROTECTED_ARTIFACTS
+            and (
+                basename != "REVIEWS.jsonl"
+                or _is_task_local_review_detail(normalized, repo_root=repo_root)
+            )
+        )
         or _is_goal_control_artifact(normalized)
         or normalized.endswith(os.path.join(TASK_DIR, ".active"))
         or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
@@ -223,7 +250,7 @@ def _is_source_file(path, repo_root=None):
     for prefix in EXEMPT_PREFIXES:
         if rel == prefix or rel.startswith(prefix + os.sep) or rel.startswith(prefix):
             return False
-    if _is_protected_artifact(path):
+    if _is_protected_artifact(path, repo_root=root):
         return False
     if _is_workflow_control_surface(path, repo_root=root):
         return False
@@ -427,6 +454,8 @@ def _owner_to_next_action(owner: str) -> str:
         return _tool_hint("write_plan", _runtime_name())
     if "receipt-lifecycle-hook" in o:
         return "Spawn and await the required reviewer or QA agent; lifecycle hooks record RECEIPTS.jsonl"
+    if "review-detail-writer" in o:
+        return "Use plugin/scripts/review-log with the exact review final on standard input"
     return ""
 
 
@@ -617,7 +646,7 @@ def _check_path(data: dict, file_path: str) -> None:
     )
 
     basename = os.path.basename(file_path)
-    if _is_protected_artifact(file_path):
+    if _is_protected_artifact(file_path, repo_root=repo_root):
         goal_control = _is_goal_control_artifact(file_path)
         owner = "goal-control-mcp" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
         owner_human = "native Goal MCP tools" if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)

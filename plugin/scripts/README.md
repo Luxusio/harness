@@ -4,7 +4,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 
 ## Files
 
-- `_lib.py` — core library (YAML helpers, scaffold, routing, context, path sync, frontmatter public API)
+- `_lib.py` — core library (YAML helpers, scaffold, routing, context, path sync, receipt publication, and content-addressed review-detail storage)
 - Receipt snapshots accept only the unified exact-field, string-valued schema defined by the consolidated-artifact ADR.
 - `subagent_lifecycle.py` — direct Claude start/stop and stop-only receipt handling; active work is derived from unmatched current-run starts, with no background registry artifact
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
@@ -17,7 +17,8 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `prewrite_gate.py` — PreToolUse hook (artifact ownership + plan-first enforcement)
 - `stop_gate.py` — Stop hook (open task reminder)
 - `golden_replay.py` — regression smoke tests for the scripts above (stdlib only)
-- `review-log` / `review-read` — standalone plan review tools
+- `review-log` — read one bounded formal-review final from stdin and append it to the active or explicitly selected task's `REVIEWS.jsonl`; prints only `DETAIL_SHA256:<hex>`
+- `review-read` — stream and validate one task-local `REVIEWS.jsonl` entry selected by lowercase SHA-256; prints only that exact detail and never dumps the log
 - `runbook_memory.py` — manages `doc/harness/runbooks.yaml` and `doc/harness/runbook_candidates.yaml`; approved runbooks are surfaced by `prompt_memory.py`, candidates are reviewed in the active/next harness task and recorded through close-time Self-Healing Candidates
 # Runtime services
 
@@ -34,3 +35,27 @@ python3 plugin/scripts/runtime_services.py stop
 It stores state in `doc/harness/runtime/services.json`, logs in
 `doc/harness/runtime/logs/`, waits for service healthchecks, and performs bounded
 self-healing commands declared in the manifest.
+
+# Formal review detail
+
+`RECEIPTS.jsonl` remains the only review/QA lifecycle authority. Every current
+formal-review completion stores its exact final in the same task's
+non-authoritative `REVIEWS.jsonl` appendix before publishing the compact
+receipt. Operators may retrieve that one body through its `DETAIL_SHA256`:
+
+```bash
+python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+  [--task-dir doc/harness/tasks/TASK__slug] <64-lowercase-hex>
+```
+
+For diagnostics or adapter tests, append one exact final through the shared
+writer instead of writing the protected file directly:
+
+```bash
+python3 "$HARNESS_PLUGIN_ROOT/scripts/review-log" \
+  [--task-dir doc/harness/tasks/TASK__slug] < review-final.txt
+```
+
+The appendix may be absent for receipts written by older runtimes and does not
+invalidate them. Current publication fails closed if detail storage fails.
+There is no list/latest/all command and no migration or backfill requirement.

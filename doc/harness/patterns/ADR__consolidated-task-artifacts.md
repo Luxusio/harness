@@ -43,7 +43,9 @@ successful close, `close_receipt_fingerprint` becomes `sha256:<64hex>`. It must
 continue to match the exact receipt bytes when Goal completion is evaluated.
 
 Unsupported task-control and auxiliary artifacts have no readers, writers,
-migration, or compatibility period. Planning decisions live in `PLAN.md`, and
+migration, or compatibility period. The one supported non-control appendix is
+`REVIEWS.jsonl`, defined below; it is content-addressed diagnostic evidence and
+never lifecycle authority. Planning decisions live in `PLAN.md`, and
 environment facts are recomputed when needed. An unsupported task pack is
 refused in place; `fresh_run: true` is not repair authority for it. Recovery
 uses a distinct valid task rather than deleting unreadable evidence.
@@ -130,8 +132,50 @@ or a bare counts line where the current writer would store `INVALID`. Both
 residues resolve fail-closed — the first under-evicts, the second over-evicts —
 and receipt selection is scoped to `task_run_id`, so either can affect at most a
 task run that straddles the upgrade.
-The detailed response remains in the runtime transcript and is not duplicated
-in the receipt stream.
+The detailed response is not duplicated in the receipt stream. For every
+formal `review-*` completion, including a completion that normalizes to
+`PENDING`, the runtime-owned writer stores the exact final text in task-local
+`REVIEWS.jsonl` as one JSON object containing exactly two string fields:
+
+```json
+{"detail_sha256":"<64 lowercase hex>","detail":"<exact final text>"}
+```
+
+The digest is SHA-256 over the exact UTF-8 detail bytes and is the same digest
+named by the compact completion summary's `DETAIL_SHA256`. The appendix is
+content-addressed: an existing valid row with the same digest and body is
+reused, while the same digest with a different body is an integrity failure.
+It is append-only across fresh task runs and has no migration or backfill.
+
+`REVIEWS.jsonl` is deliberately non-authoritative. Receipt snapshots,
+verdicts, context, fingerprints, installation, verification, and close never
+read it. A missing appendix or digest for an older receipt is ordinary
+not-found and cannot invalidate that receipt. New publication does preserve
+referential integrity: while holding the existing task receipt transaction,
+the lifecycle writer revalidates the current run and nonterminal task, appends
+and fsyncs the detail, then appends the compact receipt. Detail failure
+publishes no receipt. A later receipt failure rolls the receipt stream back to
+its exact pre-append bytes and may leave only an orphan detail; retry reuses it
+idempotently.
+
+The appendix is bounded to 2 MiB per UTF-8 detail and 16 MiB per task. Readers
+and writers use descriptor-relative, no-follow access; require a regular,
+current-owner, single-link, owner-only file; validate file identity around
+I/O; and stream rows within the bound. Malformed rows, hash mismatches, unsafe
+metadata, or replacement fail closed for detail access without affecting
+already valid receipt authority. `review-read` selects exactly one digest and
+never offers list, latest, search, or whole-log output.
+
+The current code-reviewer prompt requires a structured third line. When that
+line is present, the normalizer strictly validates its exact schema and checks
+its blocker/finding-derived verdict and counts against the two-line envelope.
+When it is absent, the pre-existing two-line semantics remain valid so an old
+runtime can finish a task after an upgrade. This is a deliberate mixed-version
+ceiling: enforcing presence would require a new generation/version authority,
+which this decision rejects as state growth. As with receipt hooks, hostile
+same-user shell execution of the shared writer is outside the direct-write
+enforcement boundary. It can consume appendix capacity but cannot authorize a
+verdict because no lifecycle reader consumes the appendix.
 
 Entries correlate by exact `source`, `task_run_id`, `runtime_id`, `agent_id`,
 `agent_type`, and `lens`. Runtime identity is namespaced and parseable:
@@ -249,11 +293,13 @@ verbose/prose copies remain best-effort readable.
 
 ## Consequences
 
-The runtime has one stream, one schema, one read per operation, and one
-fingerprint input. There is no compatibility period or converter. In-flight
-unsupported evidence is refused without mutation; it is not discarded as
-recovery. For a valid task, only explicit `fresh_run: true` starts a replacement
-generation and clears the current stream.
+The runtime has one authoritative stream, one receipt schema, one read per
+lifecycle operation, and one fingerprint input. The optional detail appendix
+does not add a gate input or state transition. There is no converter or
+backfill. In-flight unsupported evidence is refused without mutation; it is
+not discarded as recovery. For a valid task, only explicit `fresh_run: true`
+starts a replacement generation and clears the current receipt stream; stored
+review detail is retained.
 
 Owner/no-follow checks, append locking, bounded reads, terminal protection,
 review-before-QA ordering, explicit verdicts, current-run binding, stateless
@@ -263,7 +309,11 @@ verified installation, and close fingerprint validation remain mandatory.
 
 - Writers emit exactly the listed fields and only `started|completed` events.
 - New tasks emit only the four-field `TASK.json` control and unified receipt
-  stream; unsupported auxiliary leaves are never read or written.
+  stream as lifecycle authority; the supported non-authoritative review-detail
+  appendix is written and selected only under the contract above.
+- A new formal review receipt is published only after its exact detail is
+  durably addressable by the receipt digest; legacy receipts without stored
+  detail remain valid.
 - Unsupported streams have no effect; invalid unified-schema entries fail with fresh-run
   guidance.
 - Each MCP operation reads one immutable snapshot, and every consumer uses its

@@ -35,7 +35,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 상황 | 적용 규약 | 수준 |
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
-| 보호 아티팩트 쓰기 (TASK/PLAN/RECEIPTS) | [C-03](#c-03), [C-05](#c-05) | hard |
+| 보호 아티팩트 쓰기 (TASK/PLAN/RECEIPTS/REVIEWS) | [C-03](#c-03), [C-05](#c-05) | hard |
 | `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
@@ -103,12 +103,15 @@ edits and source-scope discipline remain the developer's responsibility.
 
 **Title:** Protected artifact ownership.
 **When:** Any direct `Write`/`Edit`/`MultiEdit`/`apply_patch` to PLAN.md,
-TASK.json, RECEIPTS.jsonl, or `doc/harness/goals/*.json`.
+TASK.json, RECEIPTS.jsonl, task-local REVIEWS.jsonl, or
+`doc/harness/goals/*.json`.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
 Harness does not intercept Bash/shell file mutation.
 **On violation:** hard-block. Agent must route through the owning task MCP tool
-or hook-owned receipt path.
-**Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
+or hook-owned receipt path; review detail routes through the shared
+review-detail writer.
+**Why:** Wrong-writer mutation breaks task authority, lifecycle provenance, or
+append-only review evidence integrity.
 
 ### C-06
 

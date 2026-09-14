@@ -208,11 +208,18 @@ class PassCoexistsWithNonBlockingFindings(unittest.TestCase):
                 # redden this on a reflow that changes no rule.
                 flat = " ".join(text.split())
                 with self.subTest(tree=tree, agent=name):
-                    self.assertIn("`VERDICT: PASS` requires `FIX_NOW=0`", flat)
-                    self.assertIn(
-                        "`INVESTIGATE` and `OPTIONAL` counts are compatible with PASS",
-                        flat,
-                    )
+                    if name == "code-reviewer":
+                        self.assertIn("`FIX_NOW` equals the number of `findings`", flat)
+                        self.assertIn("`OPTIONAL=0` always", flat)
+                        self.assertIn(
+                            "A non-null `blocker` means `BLOCKED_ENV`", flat,
+                        )
+                    else:
+                        self.assertIn("`VERDICT: PASS` requires `FIX_NOW=0`", flat)
+                        self.assertIn(
+                            "`INVESTIGATE` and `OPTIONAL` counts are compatible with PASS",
+                            flat,
+                        )
 
 
 class TrailingCommentaryDoesNotDiscardTheVerdict(unittest.TestCase):

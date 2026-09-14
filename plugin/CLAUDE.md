@@ -36,8 +36,10 @@ step is skipped. Smallest coherent diff per step.
 - `write_plan` → PLAN.md + TASK.json required-lens declaration (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
-Static review and runtime QA provenance share `RECEIPTS.jsonl`.
-Codex/Claude lifecycle hooks own it. Applicable lenses come from
+Static review and runtime QA provenance share compact `RECEIPTS.jsonl`.
+Codex/Claude lifecycle hooks own it. Exact formal review finals are stored in
+the non-authoritative task-local `REVIEWS.jsonl` appendix and can be selected
+only by `DETAIL_SHA256`; no lifecycle gate reads that appendix. Applicable lenses come from
 `TASK.json`; receipts do not bind Git state. The normative contracts are
 `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
 acquisition/identity/completion and
@@ -107,6 +109,7 @@ generation을 시작할 때만 `fresh_run: true`를 쓴다. closed task의 plain
 | TASK.json | task lifecycle MCP tools (`write_plan` may update lens declarations) |
 | source + durable docs | developer |
 | RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |
+| REVIEWS.jsonl | shared formal-review detail writer used by lifecycle hooks or `review-log` |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 

@@ -268,21 +268,23 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 ### Phase 6.6: Independent Code Review Gate
 
-Read the required review lenses from `TASK.json`. Discover deferred
-`spawn_agent` in `ALL_TOOLS`. Spawn each review lens declared by TASK.json
-`security_review` when declared, in one message; each reads its matching
-`${HARNESS_PLUGIN_ROOT}/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
-The agent definition owns that verdict contract: never restate, relocate, or paraphrase it in a
-spawn prompt. A prompt that moves VERDICT off the first line binds the completion as
-PENDING/INVALID and discards a finished review.
-Await all reviewers. Use `wait_agent` only to coordinate completion; its output
-and `list_agents` do not author receipts. Watcher-owned
-review entries in `RECEIPTS.jsonl` must show PASS for the
-current task receipt run and declared lens. Send only FIX_NOW to the implementer; after an
-edit that affects a finding, rerun focused tests and the applicable review.
-Harness does not infer this need from Git. Inline
-self-review is not a strict-compliance fallback.
-
+Read the required review lenses from `TASK.json` and discover deferred `spawn_agent` in `ALL_TOOLS`.
+For `review-code`, spawn two read-only hunters in one batch with `fork_turns:"none"`:
+`defect_hunter_correctness_<unique>` reads `${HARNESS_PLUGIN_ROOT}/agents/defect-hunter.md`
+with the correctness/data-flow/concurrency/resource focus; `defect_hunter_contract_tests_<unique>`
+reads it with the contract/boundary/error-path/test-adequacy focus. When routed, start
+`security_review_<unique>` in that batch; security receives no hunter data.
+Await both hunter finals. Validate each as `[]` or at most 20 objects with exactly nonempty-string
+`anchor`, `issue`, and `evidence`; cap each string at 2,000 and compact JSON at 65,536 UTF-8 bytes.
+Mark missing/oversized/malformed output unavailable without repairing it or inventing `[]`. Then
+spawn one fresh `code_review_<unique>` with `fork_turns:"none"`. Before passing results, compactly
+reserialize them and escape literal `<`, `>`, `&` as `\u003c`, `\u003e`, `\u0026`. Only this formal reviewer
+owns `review-code`; hunters never emit verdicts or receipts. Every retry uses new task names.
+The formal agent definition owns its verdict contract and the hunter definition owns its output
+contract: never restate, relocate, or paraphrase either in spawn prompts. Await every required
+formal reviewer. `wait_agent` coordinates only, and `list_agents` do not author receipts; neither is evidence. Watcher-owned `RECEIPTS.jsonl` entries must show PASS for
+each declared lens in the current task receipt run. Send only FIX_NOW to the implementer; after an affecting edit,
+rerun focused tests and the full discovery plus formal review. Inline self-review is no fallback.
 Normally receipt-backed review PASS precedes Phase 7. Under the Missing receipt
 policy, actual reviewer PASS finals permit one substantive QA run, but review
 and QA remain NON-ATTESTING and can only lead to the generic blocked path unless
@@ -292,12 +294,10 @@ Apply the parent run skill's subagent wait UX rule: finish useful local work, th
 interval of up to 60 seconds; never use rapid short polling or agent-status tools as a poll.
 After a timeout, emit one compact user status before waiting again.
 
-Use a valid structured `task_name` containing `code_review` or
-`security_review`; a matching first message line is readable context only. Do
-not depend on word order for receipt safety: the runtime also accepts
-`review_code` and `review_security`, and preflight rejects review-looking names
-that cannot bind before spawning. Prefer the canonical examples above. Do not
-use a generic worker name for a required reviewer. The MCP-hosted watcher
+Use a valid formal-review `task_name` containing `code_review`/`review_code` or `security_review`/`review_security`;
+the agent-owned verdict contract stays on the first line; a first message line is readable context only.
+Preflight rejects unbindable review-looking names. Hunter names must contain neither formal-review
+identity. Do not use a generic worker name for a required reviewer. The MCP-hosted watcher
 solely owns lifecycle evidence. Follow
 `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
 acquisition/identity/completion and

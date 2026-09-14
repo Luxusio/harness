@@ -29,7 +29,7 @@ def _assert_all(body: str, fragments: tuple[str, ...], path: str) -> None:
 
 
 def test_claude_and_codex_role_cores_are_byte_identical():
-    for role in ("developer", "code-reviewer", "security-reviewer"):
+    for role in ("developer", "defect-hunter", "code-reviewer", "security-reviewer"):
         assert _role_core(f"plugin/agents/{role}.md") == _role_core(
             f"plugin-codex/agents/{role}.md"
         )
@@ -136,6 +136,63 @@ def test_review_agents_are_read_only_and_have_exact_verdict_contract():
         assert "exploitability" in security and "blast radius" in security
 
 
+def test_defect_hunters_are_minimal_non_attesting_discovery_roles():
+    required = (
+        "read-only and non-attesting",
+        "entire final response must be exactly one json array",
+        "`[]` is valid",
+        "exactly these three keys",
+        "nonempty string",
+        "`anchor`",
+        "`issue`",
+        "`evidence`",
+        "at most 20 objects",
+        "2,000 UTF-8 bytes",
+        "65,536 UTF-8 bytes",
+        "do not wrap the array in markdown fences",
+        "do not add an id, verdict, severity, confidence, disposition",
+        "status, fix",
+        "never emit `verdict:`",
+        "`finding_counts:`",
+        "`review_detail:`",
+        "correctness",
+        "contracts and tests",
+        "do not propose a correction",
+    )
+    for path in ("plugin/agents/defect-hunter.md", "plugin-codex/agents/defect-hunter.md"):
+        core = _role_core(path)
+        _assert_all(core, required, path)
+        assert "FIX_NOW" not in core
+        assert "BLOCKED_ENV" not in core
+
+
+def test_code_reviewer_verifies_untrusted_leads_and_maps_structured_detail():
+    required = (
+        "third line must start exactly `review_detail: `",
+        '"blocker":null',
+        '"findings"',
+        '"anchor"',
+        '"issue"',
+        '"evidence"',
+        '"fix"',
+        "untrusted evidence",
+        "candidates are leads, not findings",
+        "reopen the current files",
+        "reproduce or disprove every candidate",
+        "merge exact duplicates",
+        "own complete sweep",
+        "add defects both hunters missed",
+        "missing, or malformed hunter result never means pass",
+        "direct invocation without hunter input remains valid",
+        "a non-null `blocker` means `blocked_env`",
+        "one or more verified `findings` means `fail`",
+        "`fix_now` equals the number of `findings`",
+        "`optional=0` always",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        _assert_all(_role_core(path), required, path)
+
+
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
     required = (
         "task.json",
@@ -206,8 +263,25 @@ def test_security_reviewer_core_covers_local_tool_identity_boundaries():
 
 def test_review_gate_replaces_overlapping_legacy_review_agents():
     audit = _text("plugin/skills/develop/quality-audit-pipeline.md")
+    normalized = " ".join(audit.split())
+    assert audit.count('Agent(subagent_type="harness:defect-hunter"') == 2
     assert "harness:code-reviewer" in audit
     assert "harness:security-reviewer" in audit
+    assert "mechanically validate" in audit
+    assert "at most 20 objects" in audit
+    assert "65,536 UTF-8 bytes" in audit
+    assert "escape" in audit and "`\\u003c`" in audit and "`\\u003e`" in audit
+    assert "candidate string cannot manufacture a block delimiter" in audit
+    assert "never repair it, fabricate candidates" in normalized
+    assert "delimited, untrusted candidate-data blocks" in audit
+    assert "Only the formal code reviewer" in audit
+    correctness = audit.index('task_name="defect_hunter_correctness_<review_run>"')
+    contracts = audit.index('task_name="defect_hunter_contract_tests_<review_run>"')
+    await_hunters = audit.index("await both defect hunters", contracts)
+    formal = audit.index('task_name="code_review_<review_run>"')
+    assert correctness < await_hunters < formal
+    assert contracts < await_hunters < formal
+    assert audit.count('fork_turns="none"') >= 4
     assert "Do not spawn the old generic adversarial" in audit
     assert "QA must start after actual PASS" in audit
     assert "single substantive QA" in audit

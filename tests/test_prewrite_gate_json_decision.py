@@ -45,6 +45,23 @@ class TestAllowSilent(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
+    def test_unrelated_review_detail_basename_is_not_harness_owned(self):
+        with scratch_task_in_real_repo("pr1-unrelated-review-detail"):
+            target = os.path.join(REPO_ROOT, "app/data/REVIEWS.jsonl")
+            r = invoke_hook(GATE, "Write", {"file_path": target})
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+
+    def test_nested_task_looking_review_detail_path_is_not_harness_owned(self):
+        with scratch_task_in_real_repo("pr1-nested-review-detail"):
+            target = os.path.join(
+                REPO_ROOT,
+                "fixtures/doc/harness/tasks/TASK__sample/REVIEWS.jsonl",
+            )
+            r = invoke_hook(GATE, "Write", {"file_path": target})
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+
 
 class TestDenyProtectedArtifact(unittest.TestCase):
     def test_write_native_goal_control_denies(self):
@@ -106,6 +123,28 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertRegex(reason, TAIL_RE)
             self.assertIn("C-05-protected-artifact", reason)
             self.assertIn("HARNESS_SKIP_PREWRITE", reason)
+
+    def test_write_review_detail_inside_task_denies_with_shared_writer_owner(self):
+        with scratch_task_in_real_repo("pr1-review-detail") as task_dir:
+            target = os.path.join(task_dir, "REVIEWS.jsonl")
+            r = invoke_hook(GATE, "Write", {"file_path": target})
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("C-05-protected-artifact", reason)
+            self.assertIn("owner=review-detail-writer", reason)
+            self.assertIn("shared review-detail writer", reason)
+
+    def test_symlink_alias_to_task_review_detail_is_still_protected(self):
+        with scratch_task_in_real_repo("pr1-review-detail-alias") as task_dir, \
+             tempfile.TemporaryDirectory(dir=REPO_ROOT) as alias_parent:
+            alias = os.path.join(alias_parent, "task-alias")
+            os.symlink(task_dir, alias, target_is_directory=True)
+            target = os.path.join(alias, "REVIEWS.jsonl")
+            r = invoke_hook(GATE, "Write", {"file_path": target})
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("C-05-protected-artifact", reason)
+        self.assertIn("owner=review-detail-writer", reason)
 
 class TestMultiEdit(unittest.TestCase):
     def test_apply_patch_native_goal_control_denies(self):
@@ -230,7 +269,7 @@ class TestFailSafe(unittest.TestCase):
 class TestReasonFormat(unittest.TestCase):
     def test_every_deny_has_structured_tail(self):
         with scratch_task_in_real_repo("pr1-tail") as task_dir:
-            for basename in ("PLAN.md", "RECEIPTS.jsonl"):
+            for basename in ("PLAN.md", "RECEIPTS.jsonl", "REVIEWS.jsonl"):
                 target = os.path.join(task_dir, basename)
                 r = invoke_hook(GATE, "Write", {"file_path": target})
                 decision, reason = parse_decision(r.stdout)

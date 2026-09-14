@@ -23,6 +23,7 @@ from types import CodeType, MappingProxyType
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 RECEIPTS_NAME = "RECEIPTS.jsonl"
+REVIEW_DETAILS_NAME = "REVIEWS.jsonl"
 TASK_CONTROL_NAME = "TASK.json"
 
 TASK_CONTROL_FIELDS = frozenset({
@@ -212,11 +213,13 @@ def _validate_goal_dir_binding(repo_root: str):
         raise RuntimeError("goal storage identity changed")
 
 
-def read_hook_input():
+def read_hook_input(max_chars=_STDIN_CAP_BYTES):
     """Read and cache a bounded hook JSON object, returning {} on failure."""
     global _LAST_HOOK_INPUT
+    if not isinstance(max_chars, int) or max_chars <= 0:
+        max_chars = _STDIN_CAP_BYTES
     try:
-        raw = _sys.stdin.read(_STDIN_CAP_BYTES)
+        raw = _sys.stdin.read(max_chars)
     except Exception:
         _LAST_HOOK_INPUT = {}
         return {}
@@ -2352,6 +2355,8 @@ def _receipts_path(task_dir):
 
 
 _RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
+_REVIEW_DETAIL_MAX_BYTES = 2 * 1024 * 1024
+_REVIEW_DETAIL_STREAM_MAX_BYTES = 16 * 1024 * 1024
 _RECEIPT_LOCK_HELD = ContextVar("harness_receipt_lock_held", default=())
 
 
@@ -2550,6 +2555,299 @@ def receipt_stream_transaction_fd(task_fd):
         os.close(locked_fd)
 
 
+_REVIEW_DETAIL_FIELDS = frozenset({"detail_sha256", "detail"})
+_REVIEW_DETAIL_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _review_detail_integrity_error(exc=None):
+    error = RuntimeError("review detail storage integrity unavailable")
+    if exc is not None:
+        error.__cause__ = exc
+    return error
+
+
+def _review_detail_bytes(detail):
+    if not isinstance(detail, str):
+        raise ValueError("review detail must be text")
+    try:
+        raw = detail.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("review detail must be valid UTF-8 text") from exc
+    if not raw:
+        raise ValueError("review detail must not be empty")
+    if len(raw) > _REVIEW_DETAIL_MAX_BYTES:
+        raise ValueError("review detail exceeds the 2 MiB limit")
+    return raw
+
+
+def _review_detail_payload(detail):
+    raw = _review_detail_bytes(detail)
+    digest = hashlib.sha256(raw).hexdigest()
+    row = {"detail_sha256": digest, "detail": detail}
+    payload = (
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    return digest, payload
+
+
+def _review_detail_stream_info(task_dir):
+    dir_fd = _receipt_dir_fd(task_dir)
+    try:
+        info = os.stat(REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise _review_detail_integrity_error(exc)
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_size > _REVIEW_DETAIL_STREAM_MAX_BYTES
+    ):
+        raise _review_detail_integrity_error()
+    return info
+
+
+def _parse_review_detail_row(raw_line):
+    if not raw_line or not raw_line.endswith(b"\n"):
+        raise _review_detail_integrity_error()
+    try:
+        text = raw_line[:-1].decode("utf-8")
+
+        def unique_object(pairs):
+            row = {}
+            for key, value in pairs:
+                if key in row:
+                    raise ValueError("duplicate review detail field")
+                row[key] = value
+            return row
+
+        row = json.loads(text, object_pairs_hook=unique_object)
+    except (RecursionError, TypeError, UnicodeError, ValueError) as exc:
+        raise _review_detail_integrity_error(exc)
+    if (
+        not isinstance(row, dict)
+        or set(row) != _REVIEW_DETAIL_FIELDS
+        or not all(isinstance(row[field], str) for field in _REVIEW_DETAIL_FIELDS)
+        or not _REVIEW_DETAIL_DIGEST_RE.fullmatch(row["detail_sha256"])
+    ):
+        raise _review_detail_integrity_error()
+    try:
+        detail_raw = _review_detail_bytes(row["detail"])
+    except ValueError as exc:
+        raise _review_detail_integrity_error(exc)
+    if hashlib.sha256(detail_raw).hexdigest() != row["detail_sha256"]:
+        raise _review_detail_integrity_error()
+    return row
+
+
+def _scan_review_details_unlocked(task_dir, wanted_digest=""):
+    """Validate the full JSONL stream while retaining at most one selected row."""
+    dir_fd = _receipt_dir_fd(task_dir)
+    prior = _review_detail_stream_info(task_dir)
+    if prior is None:
+        return None, None
+    flags = os.O_RDONLY
+    flags |= (
+        getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        fd = os.open(REVIEW_DETAILS_NAME, flags, dir_fd=dir_fd)
+    except OSError as exc:
+        raise _review_detail_integrity_error(exc)
+    found = None
+    seen = set()
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.getuid()
+            or opened.st_nlink != 1
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_size > _REVIEW_DETAIL_STREAM_MAX_BYTES
+            or (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
+            or opened.st_size != prior.st_size
+            or opened.st_mtime_ns != prior.st_mtime_ns
+            or opened.st_ctime_ns != prior.st_ctime_ns
+        ):
+            raise _review_detail_integrity_error()
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            while True:
+                raw_line = handle.readline(_REVIEW_DETAIL_STREAM_MAX_BYTES + 1)
+                if not raw_line:
+                    break
+                if len(raw_line) > _REVIEW_DETAIL_STREAM_MAX_BYTES:
+                    raise _review_detail_integrity_error()
+                row = _parse_review_detail_row(raw_line)
+                digest = row["detail_sha256"]
+                if digest in seen:
+                    raise _review_detail_integrity_error()
+                seen.add(digest)
+                if digest == wanted_digest:
+                    found = row["detail"]
+            final = os.fstat(handle.fileno())
+        try:
+            final_path = os.stat(
+                REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise _review_detail_integrity_error(exc)
+        if (
+            (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
+            or final.st_size != opened.st_size
+            or final.st_mtime_ns != opened.st_mtime_ns
+            or final.st_ctime_ns != opened.st_ctime_ns
+            or final.st_uid != os.getuid()
+            or final.st_nlink != 1
+            or stat.S_IMODE(final.st_mode) != 0o600
+            or not stat.S_ISREG(final_path.st_mode)
+            or final_path.st_uid != os.getuid()
+            or final_path.st_nlink != 1
+            or stat.S_IMODE(final_path.st_mode) != 0o600
+            or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise _review_detail_integrity_error()
+    except OSError as exc:
+        raise _review_detail_integrity_error(exc)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return found, final
+
+
+def _append_review_detail_unlocked(task_dir, detail):
+    """Append one exact review final while an enclosing receipt lock is held."""
+    digest, payload = _review_detail_payload(detail)
+    found, prior = _scan_review_details_unlocked(task_dir, digest)
+    if found is not None:
+        if found != detail:
+            raise _review_detail_integrity_error()
+        return digest
+    if prior is not None and prior.st_size + len(payload) > _REVIEW_DETAIL_STREAM_MAX_BYTES:
+        raise RuntimeError("review detail store exceeds the 16 MiB limit")
+
+    dir_fd = _receipt_dir_fd(task_dir)
+    created = prior is None
+    flags = os.O_APPEND | os.O_WRONLY
+    flags |= (
+        getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    if created:
+        flags |= os.O_CREAT | os.O_EXCL
+    try:
+        fd = os.open(REVIEW_DETAILS_NAME, flags, 0o600, dir_fd=dir_fd)
+    except OSError as exc:
+        raise _review_detail_integrity_error(exc)
+    appended = False
+    try:
+        opened = os.fstat(fd)
+        start_size = opened.st_size
+        try:
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_uid != os.getuid()
+                or opened.st_nlink != 1
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_size + len(payload) > _REVIEW_DETAIL_STREAM_MAX_BYTES
+                or (
+                    prior is not None
+                    and (
+                        (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
+                        or opened.st_size != prior.st_size
+                        or opened.st_mtime_ns != prior.st_mtime_ns
+                        or opened.st_ctime_ns != prior.st_ctime_ns
+                    )
+                )
+                or (prior is None and opened.st_size != 0)
+            ):
+                raise _review_detail_integrity_error()
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise _review_detail_integrity_error()
+                appended = True
+                view = view[written:]
+            os.fsync(fd)
+            final = os.fstat(fd)
+            final_path = os.stat(
+                REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(final.st_mode)
+                or final.st_uid != os.getuid()
+                or final.st_nlink != 1
+                or stat.S_IMODE(final.st_mode) != 0o600
+                or final.st_size != start_size + len(payload)
+                or not stat.S_ISREG(final_path.st_mode)
+                or final_path.st_uid != os.getuid()
+                or final_path.st_nlink != 1
+                or stat.S_IMODE(final_path.st_mode) != 0o600
+                or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
+                or final_path.st_size != final.st_size
+            ):
+                raise _review_detail_integrity_error()
+            if created:
+                os.fsync(dir_fd)
+            _revalidate_receipt_transaction(task_dir)
+        except BaseException:
+            try:
+                if appended:
+                    os.ftruncate(fd, start_size)
+                    os.fsync(fd)
+                if created:
+                    current = os.stat(
+                        REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False,
+                    )
+                    if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                        raise _review_detail_integrity_error()
+                    os.unlink(REVIEW_DETAILS_NAME, dir_fd=dir_fd)
+                    os.fsync(dir_fd)
+            except FileNotFoundError:
+                if not created:
+                    raise _review_detail_integrity_error()
+            except BaseException as rollback_exc:
+                raise _review_detail_integrity_error(rollback_exc)
+            raise
+    except OSError as exc:
+        raise _review_detail_integrity_error(exc)
+    finally:
+        os.close(fd)
+    return digest
+
+
+def append_review_detail(task_dir, detail):
+    """Store exact review text by digest without changing lifecycle authority."""
+    task_dir = _validated_receipt_task_dir(task_dir)
+    with receipt_stream_transaction(task_dir):
+        control = read_task_control(task_dir)
+        if not control:
+            raise RuntimeError("review detail storage requires a valid TASK.json")
+        if task_control_status(task_dir, control) != "open":
+            raise RuntimeError("review detail storage is terminal")
+        return _append_review_detail_unlocked(task_dir, detail)
+
+
+def read_review_detail(task_dir, digest):
+    """Return one exact review final; never expose unrelated detail rows."""
+    digest = str(digest or "")
+    if not _REVIEW_DETAIL_DIGEST_RE.fullmatch(digest):
+        raise ValueError("review detail digest must be 64 lowercase hexadecimal characters")
+    task_dir = _validated_receipt_task_dir(task_dir)
+    with receipt_stream_transaction(task_dir):
+        found, _ = _scan_review_details_unlocked(task_dir, digest)
+    if found is None:
+        raise FileNotFoundError("review detail not found")
+    return found
+
+
 RECEIPT_FIELDS = frozenset({
     "ts", "event", "source", "task_run_id", "runtime_id", "agent_id",
     "agent_type", "lens", "verdict", "summary",
@@ -2606,7 +2904,7 @@ def _receipt_entry_semantics_valid(item):
     try:
         uuid7_timestamp_ms(item["task_run_id"])
         _validate_receipt_runtime_id(item["source"], item["runtime_id"])
-    except (TypeError, ValueError):
+    except (RecursionError, TypeError, ValueError):
         return False
     if (
         not item["ts"] or not item["source"] or not item["agent_id"] or not item["agent_type"]
@@ -2636,7 +2934,10 @@ def _receipt_entry_semantics_valid(item):
         return False
     if item["lens"].startswith("review-") and not _COUNTS_UNBOUND_RE.fullmatch(lines[1]):
         counts = _FINDING_COUNTS_RE.fullmatch(lines[1])
-        fix_now, investigate, _optional = (int(value) for value in counts.groups())
+        parsed_counts = _parse_finding_counts(counts)
+        if parsed_counts is None:
+            return False
+        fix_now, investigate, _optional = parsed_counts
         if _counts_contradict_verdict(item["verdict"], fix_now, investigate):
             return False
     return bool(_RECEIPT_DIGEST_RE.fullmatch(lines[-1]))
@@ -2941,6 +3242,80 @@ _VERDICT_SELFDESCRIBE_RE = re.compile(r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)(?![A-Z
 _FINDING_COUNTS_RE = re.compile(
     r"^FINDING_COUNTS: FIX_NOW=(\d+) INVESTIGATE=(\d+) OPTIONAL=(\d+)$"
 )
+_REVIEW_DETAIL_PREFIX = "REVIEW_DETAIL: "
+_FORMAL_REVIEW_DETAIL_FIELDS = frozenset({"blocker", "findings"})
+_FORMAL_REVIEW_FINDING_FIELDS = frozenset({"anchor", "issue", "evidence", "fix"})
+
+
+def _parse_finding_counts(match):
+    """Parse a matched count line without inheriting Python's digit-limit error."""
+    if match is None:
+        return None
+    try:
+        return tuple(int(value) for value in match.groups())
+    except ValueError:
+        return None
+
+
+def _formal_code_review_detail(summary_lines):
+    """Return structured code-review detail, or a validity sentinel.
+
+    ``None`` means the optional third-line extension is absent, preserving
+    completions emitted before this contract. ``False`` means a third-line
+    ``REVIEW_DETAIL:`` marker was attempted but is malformed. A valid mapping
+    is returned unchanged so the normalizer can cross-check its mechanically
+    implied verdict and counts against the two authoritative envelope lines.
+    """
+    if len(summary_lines) < 3:
+        return None
+    line = summary_lines[2]
+    attempted = re.match(r"^\s*REVIEW_DETAIL\s*:", line, re.IGNORECASE)
+    if attempted is None:
+        return False if any(
+            re.match(r"^\s*REVIEW_DETAIL\s*:", later, re.IGNORECASE)
+            for later in summary_lines[3:]
+        ) else None
+    if not line.startswith(_REVIEW_DETAIL_PREFIX):
+        return False
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate formal review detail field")
+            result[key] = value
+        return result
+
+    try:
+        detail = json.loads(
+            line[len(_REVIEW_DETAIL_PREFIX):], object_pairs_hook=unique_object,
+        )
+    except (RecursionError, TypeError, ValueError):
+        return False
+    if not isinstance(detail, dict) or set(detail) != _FORMAL_REVIEW_DETAIL_FIELDS:
+        return False
+    blocker = detail["blocker"]
+    if blocker is not None and (not isinstance(blocker, str) or not blocker.strip()):
+        return False
+    findings = detail["findings"]
+    if not isinstance(findings, list):
+        return False
+    for finding in findings:
+        if (
+            not isinstance(finding, dict)
+            or set(finding) != _FORMAL_REVIEW_FINDING_FIELDS
+            or any(
+                not isinstance(finding[field], str) or not finding[field].strip()
+                for field in _FORMAL_REVIEW_FINDING_FIELDS
+            )
+        ):
+            return False
+    if any(
+        re.match(r"^\s*REVIEW_DETAIL\s*:", later, re.IGNORECASE)
+        for later in summary_lines[3:]
+    ):
+        return False
+    return detail
 
 # The Claude Code binary prepends this notice to a subagent final when its own
 # output scanner flags instruction-shaped text. Measured, not inferred: the
@@ -3113,7 +3488,8 @@ def _offposition_negative(summary_lines):
     if len(counts) == 1:
         only = counts.pop()
         match = _FINDING_COUNTS_RE.fullmatch(only)
-        if match and int(match.group(1)):
+        parsed_counts = _parse_finding_counts(match)
+        if parsed_counts is not None and parsed_counts[0]:
             counts_line = only
     return token, counts_line
 
@@ -3177,14 +3553,35 @@ def normalize_receipt_completion(lens, value, supplied_verdict=""):
     # Bound below rather than only inside the branch: the counts-slot decision
     # further down reads it, and a conditionally-assigned name there would be a
     # NameError waiting for the next edit to the surrounding condition.
-    fix_now = 0
+    fix_now = investigate = optional = 0
     if is_review:
         if not counts_reported:
             verdict = "PENDING"
         else:
-            fix_now, investigate, _optional = (int(value) for value in counts_match.groups())
-            if _counts_contradict_verdict(verdict, fix_now, investigate):
+            parsed_counts = _parse_finding_counts(counts_match)
+            if parsed_counts is None:
+                counts_reported = False
                 verdict = "PENDING"
+            else:
+                fix_now, investigate, optional = parsed_counts
+                if _counts_contradict_verdict(verdict, fix_now, investigate):
+                    verdict = "PENDING"
+        if str(lens or "") == "review-code":
+            structured = _formal_code_review_detail(summary_lines)
+            if structured is False:
+                verdict = "PENDING"
+            elif structured is not None:
+                finding_count = len(structured["findings"])
+                blocker = structured["blocker"] is not None
+                expected_verdict = (
+                    "BLOCKED_ENV" if blocker else "FAIL" if finding_count else "PASS"
+                )
+                expected_counts = (finding_count, 1 if blocker else 0, 0)
+                if (
+                    summary_verdict != expected_verdict
+                    or (fix_now, investigate, optional) != expected_counts
+                ):
+                    verdict = "PENDING"
 
     compact = [f"VERDICT: {verdict}"]
     if is_review:
@@ -3541,14 +3938,26 @@ def _make_runtime_receipt_writer():
                 raise RuntimeError("receipt task run changed before append")
             if task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
                 raise RuntimeError("receipt stream is terminal")
+            if event == "completed" and lens.startswith("review-"):
+                detail_digest = _append_review_detail_unlocked(task_dir, raw_summary)
+                if summary.splitlines()[-1] != f"DETAIL_SHA256:{detail_digest}":
+                    raise RuntimeError("review detail digest does not match compact receipt")
             dir_fd = _receipt_dir_fd(task_dir)
             prior = _receipt_stream_info(path)
-            flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
-            flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            created = prior is None
+            flags = os.O_APPEND | os.O_WRONLY
+            flags |= (
+                getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            if created:
+                flags |= os.O_CREAT | os.O_EXCL
             try:
                 fd = os.open(RECEIPTS_NAME, flags, 0o644, dir_fd=dir_fd)
             except OSError as exc:
                 raise RuntimeError("receipt storage integrity unavailable") from exc
+            appended = False
             try:
                 opened = os.fstat(fd)
                 if (
@@ -3558,16 +3967,69 @@ def _make_runtime_receipt_writer():
                     or opened.st_mode & 0o022
                     or opened.st_size + len(payload) > _RECEIPT_STREAM_MAX_BYTES
                     or (prior is not None and (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino))
+                    or (prior is None and opened.st_size != 0)
                 ):
                     raise RuntimeError("receipt storage integrity unavailable")
-                view = memoryview(payload)
-                while view:
-                    written = os.write(fd, view)
-                    if written <= 0:
+                start_size = opened.st_size
+                try:
+                    view = memoryview(payload)
+                    while view:
+                        written = os.write(fd, view)
+                        if written <= 0:
+                            raise RuntimeError("receipt storage integrity unavailable")
+                        appended = True
+                        view = view[written:]
+                    os.fsync(fd)
+                    final = os.fstat(fd)
+                    final_path = os.stat(
+                        RECEIPTS_NAME, dir_fd=dir_fd, follow_symlinks=False,
+                    )
+                    if (
+                        not stat.S_ISREG(final.st_mode)
+                        or final.st_uid != os.getuid()
+                        or final.st_nlink != 1
+                        or final.st_mode & 0o022
+                        or final.st_size != start_size + len(payload)
+                        or not stat.S_ISREG(final_path.st_mode)
+                        or final_path.st_uid != os.getuid()
+                        or final_path.st_nlink != 1
+                        or final_path.st_mode & 0o022
+                        or (final_path.st_dev, final_path.st_ino)
+                        != (opened.st_dev, opened.st_ino)
+                        or final_path.st_size != final.st_size
+                    ):
                         raise RuntimeError("receipt storage integrity unavailable")
-                    view = view[written:]
-                os.fsync(fd)
-                _revalidate_receipt_transaction(task_dir)
+                    if created:
+                        os.fsync(dir_fd)
+                    _revalidate_receipt_transaction(task_dir)
+                except BaseException:
+                    try:
+                        if appended:
+                            os.ftruncate(fd, start_size)
+                            os.fsync(fd)
+                        if created:
+                            current = os.stat(
+                                RECEIPTS_NAME, dir_fd=dir_fd,
+                                follow_symlinks=False,
+                            )
+                            if (current.st_dev, current.st_ino) != (
+                                opened.st_dev, opened.st_ino,
+                            ):
+                                raise RuntimeError(
+                                    "receipt storage integrity unavailable"
+                                )
+                            os.unlink(RECEIPTS_NAME, dir_fd=dir_fd)
+                            os.fsync(dir_fd)
+                    except FileNotFoundError:
+                        if not created:
+                            raise RuntimeError(
+                                "receipt storage integrity unavailable"
+                            )
+                    except BaseException as rollback_exc:
+                        raise RuntimeError(
+                            "receipt storage integrity unavailable"
+                        ) from rollback_exc
+                    raise
             finally:
                 os.close(fd)
         if entry["verdict"] == "PENDING":

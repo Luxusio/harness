@@ -125,6 +125,30 @@ def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
     assert "`dependency-conflict`, or `small-task`" in body
 
 
+def test_codex_review_gate_sequences_fresh_hunters_before_formal_verifier():
+    body = _text(CODEX_DEVELOP)
+
+    correctness = body.index("defect_hunter_correctness_<unique>")
+    contracts = body.index("defect_hunter_contract_tests_<unique>")
+    await_hunters = body.index("Await both hunter finals")
+    formal = body.index("code_review_<unique>")
+    assert correctness < await_hunters < formal
+    assert contracts < await_hunters < formal
+    assert body.count('fork_turns:"none"') >= 2
+    normalized = " ".join(body.split())
+    assert "exactly nonempty-string `anchor`, `issue`, and `evidence`" in normalized
+    assert "at most 20 objects" in body
+    assert "65,536 UTF-8 bytes" in body
+    assert "missing/oversized/malformed output unavailable" in body
+    assert "without repairing it or inventing `[]`" in body
+    assert "escape literal `<`, `>`, `&`" in body
+    assert "`\\u003c`, `\\u003e`, `\\u0026`" in body
+    assert "Only this formal reviewer" in body
+    assert "hunters never emit verdicts or receipts" in body
+    assert "Every retry uses new task names" in body
+    assert "security receives no hunter data" in body
+
+
 def test_coordinator_review_precedes_generic_parallel_failure_retry():
     required = (
         "needs-coordinator-review",

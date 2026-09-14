@@ -97,6 +97,7 @@ def _report_import_failure(exc: BaseException) -> None:
 
 try:
     from _lib import (  # type: ignore
+        _REVIEW_DETAIL_MAX_BYTES,
         find_repo_root,
         find_harness_root,
         harness_root_resolution,
@@ -202,7 +203,10 @@ def main() -> int:
     parser.add_argument("--event", choices=["start", "stop"], default="")
     args = parser.parse_args()
     try:
-        payload = read_hook_input()
+        # A maximum-size UTF-8 review final may expand sixfold as a JSON string.
+        # Other hooks retain the small default; only the lifecycle stop adapter
+        # needs enough framing room to deliver the shared 2 MiB detail bound.
+        payload = read_hook_input(8 * _REVIEW_DETAIL_MAX_BYTES)
         payload_cwd = str(payload.get("cwd") or "").strip()
         hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
         if payload_cwd:

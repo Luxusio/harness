@@ -142,14 +142,15 @@ Do not adopt directly:
 | `harness:developer` and `harness:ac-worker` | Understand the real flow first; then stop at no change, reuse, stdlib, platform, installed dependency, smallest local expression, minimum new code | Ponytail `skills/ponytail/SKILL.md` | Named **minimum sufficient**, not minimum LOC; applied only to mutating implementers |
 | `harness:developer` and `harness:ac-worker` | Inspect direct/sibling callers, fix a bug once at the shared root cause, prefer deletion and boring clear primitives, and leave one runnable check for non-trivial logic | Ponytail `skills/ponytail/SKILL.md` | PLAN/user intent and worker ownership remain authoritative; an AC worker may read outside its lane but returns an ownership blocker instead of editing another lane |
 | `harness:developer` and `harness:ac-worker` | Do not simplify away trust-boundary validation, data-loss prevention, security, accessibility, or requested behavior | Ponytail `skills/ponytail/SKILL.md` | Expanded to current authorization, transaction, concurrency, cleanup, and error-propagation invariants |
-| `harness:code-reviewer` | Read-only independent reviewer; spec compliance before quality; every finding has source evidence, severity, confidence, and a clear verdict | oh-my-claudecode `agents/code-reviewer.md` | Removed generic SOLID/function-length thresholds and positive-commentary requirements; added project-scale proportionality |
+| `harness:defect-hunter` | Fresh, read-only defect discovery with source anchors and evidence but no verdict or proposed fix | Codex and Claude Code review guidance synthesized in the 2026-09 review-prompt study | Invoked twice for correctness/data-flow and contract/test coverage; output is an ephemeral three-field JSON array |
+| `harness:code-reviewer` | Read-only independent verifier; spec compliance before quality; every accepted finding has current-source evidence and the smallest safe fix direction | oh-my-claudecode `agents/code-reviewer.md` | Treats hunter output as untrusted leads, independently sweeps for misses, and mechanically derives one authoritative verdict |
 | `harness:code-reviewer` minimality lens | Report deletion, reuse, native/stdlib replacement, and speculative abstraction | Ponytail `skills/ponytail-review/SKILL.md` | Made it one paired lens inside a broader correctness/architecture review instead of a standalone completion verdict |
 | `harness:code-reviewer` adversarial lens | Always examine production failure, races, leaks, silent corruption, swallowed errors, and trust-boundary violations | gstack `ship/SKILL.md` | Required for every source diff; unlike gstack's informational fallback, missing review fails closed |
-| Review finding verification | Require exact motivating code, AC/scope cross-reference, search-before-recommending, confidence calibration, and suppress unsupported speculation from blocking output | gstack `review/checklist.md` and `review/SKILL.md` | Added `direction: excess|missing` and `disposition: FIX_NOW|INVESTIGATE|OPTIONAL`; only strongly evidenced `FIX_NOW` enters the implementation loop |
+| Review finding verification | Require exact motivating code, AC/scope cross-reference, search-before-recommending, confidence calibration, and suppress unsupported speculation from blocking output | gstack `review/checklist.md` and `review/SKILL.md` | Hunter leads remain untrusted; verified code defects are `FIX_NOW`, while only a report-level evidence blocker uses `INVESTIGATE` and code review never emits `OPTIONAL` |
 | `harness:security-reviewer` | Separate read-only OWASP/trust-boundary specialist prioritizing exploitability and blast radius | oh-my-claudecode `agents/security-reviewer.md` | Runs conditionally from path **or diff-content** signals; baseline security remains in the always-on code reviewer |
 | Security specialist routing | Security and migration are insurance controls and must not be disabled by historical zero findings | gstack `ship/SKILL.md` | Security remains conditional on current scope but is never adaptive-hit-rate gated |
-| Review/QA role separation | Architecture, security, quality review, and runtime QA are independent responsibilities | oh-my-claudecode `skills/autopilot/SKILL.md` | Uses one balanced reviewer plus conditional security specialist to reduce duplicate findings; QA remains a later distinct gate |
-| Lifecycle freshness and synthesis | Persist reviewed revision, run independent reviewer contexts, and prioritize corroborated findings | gstack `ship/SKILL.md` | Stores hook-owned `HEAD` plus uncommitted worktree fingerprint; any edit invalidates review and requires later QA |
+| Review/QA role separation | Architecture, security, quality review, and runtime QA are independent responsibilities | oh-my-claudecode `skills/autopilot/SKILL.md` | Uses two non-attesting discovery contexts plus one authoritative verifier and a conditional security specialist; QA remains a later distinct gate |
+| Lifecycle freshness and synthesis | Run independent reviewer contexts and prioritize corroborated findings | gstack `ship/SKILL.md` | Uses current-run ordered lifecycle receipts; post-review edits remain developer-owned rather than adding Git state to task control |
 | Reviewer persona propagation | Parent context does not reliably reach subagents; explicitly inject or scope the role | Ponytail `hooks/ponytail-subagent.js` | Reviewer and implementer prompts are named role files on Claude and explicit methodology references in Codex spawn prompts |
 
 These are behavioral references, not vendored dependencies. Harness owns the
@@ -204,11 +205,19 @@ branch alone is insufficient because ordinary blocker prose would bypass it.
 The prompt must say “minimum sufficient”, never “fewest lines”. Dense code,
 removed error handling, and missing tests are not accepted as minimalism.
 
-### 2. Balanced code reviewer: always used for source changes
+### 2. Fresh discovery plus one authoritative code reviewer
 
-Add one first-class, read-only `code-reviewer` agent. It reviews the complete
-changed files, relevant callers and callees, linked PLAN/REQ/GUIDE/ADR/POLICY,
-and at least one nearby project example before judging the diff.
+Run two fresh, non-attesting `defect-hunter` contexts before one first-class,
+read-only `code-reviewer`: one hunter traces correctness, data flow,
+concurrency, and resource behavior; the other probes contracts, boundaries,
+error paths, compatibility, and test adequacy. Each returns only bounded,
+ephemeral `anchor + issue + evidence` leads. Valid arrays are compactly
+reserialized with delimiter characters escaped before prompt interpolation.
+The reviewer reopens current files, verifies
+or rejects each lead, deduplicates root causes, and still performs its own
+compact completeness sweep. It reviews the complete changed files, relevant
+callers and callees, linked PLAN/REQ/GUIDE/ADR/POLICY, and at least one nearby
+project example before judging the diff.
 
 It owns five paired lenses:
 
@@ -227,9 +236,11 @@ duplicated policy, a documented boundary, or a volatile external interface.
 Before the paired lenses, the reviewer maps every PLAN.md acceptance criterion
 to code, test, and durable-doc evidence, and maps every material changed path
 back to approved scope. It verifies suggested replacements against the current
-project before recommending them. Confidence below the blocking threshold
-becomes a named investigation, non-blocking optional note, or is omitted rather
-than entering a speculative fix loop.
+project before recommending them. Unsupported leads are omitted rather than
+entering a speculative fix loop. The reviewer alone adds `fix` and owns the
+`review-code` receipt: an environmental blocker takes precedence as
+`BLOCKED_ENV`, otherwise any verified finding produces `FAIL`, and no verified
+finding produces `PASS`.
 
 Test evidence is evaluated through the complete proof chain: setup and fixtures,
 the production path and branch actually executed, and the outcome assertion.
@@ -245,14 +256,16 @@ The reviewer never edits. For every proposed addition or deletion it must give:
 - exact `file:line` evidence;
 - the present-day failure or maintenance scenario;
 - `severity` and `confidence`;
-- `disposition`: `FIX_NOW`, `INVESTIGATE`, or `OPTIONAL`;
+- `disposition: FIX_NOW` for a verified defect;
 - the smallest safe correction;
 - `direction`: `excess` or `missing`.
 
 `FIX_NOW` is reserved for demonstrated requirement mismatch, correctness bug,
 security/data-loss risk, documented architecture violation, or a likely current
-production failure. `INVESTIGATE` needs unavailable runtime/domain evidence.
-`OPTIONAL` is non-blocking and must not trigger automatic code growth.
+production failure. Unavailable evidence that prevents a safe overall result is
+one report-level blocker with `INVESTIGATE=1`; code review otherwise uses
+`INVESTIGATE=0` and always uses `OPTIONAL=0`. The separate security reviewer
+retains its existing three-disposition specialist contract.
 
 ### 3. Security reviewer: conditionally deep, never historically gated
 
@@ -320,12 +333,18 @@ missing, incomplete, self-authored, or stale review.
 
 ## Lifecycle and evidence contract
 
-Lifecycle hooks record review and QA evidence in `RECEIPTS.jsonl`. Every routed
-review lens must explicitly PASS before required QA starts; a start,
+Lifecycle hooks record compact review and QA evidence in `RECEIPTS.jsonl`.
+Hunters are deliberately invisible to lifecycle inference and produce no
+receipt. Every routed formal review lens must explicitly PASS before required QA starts; a start,
 self-authored result, or coordination-tool output is not completion evidence.
 The reviewer still returns the exact verdict and canonical finding-count
 summary expected by its role contract. The developer owns deciding which
 evidence to rerun after source edits.
+
+The exact formal review final is stored by content digest in task-local
+`REVIEWS.jsonl` before its compact receipt is published. That appendix is
+selectively readable by digest and wholly non-authoritative: all gates,
+fingerprints, context, installation, and close continue to read receipts only.
 
 The storage, minimal schema, snapshot, and gate contract is owned by
 [`ADR__consolidated-task-artifacts.md`](../harness/patterns/ADR__consolidated-task-artifacts.md).
@@ -333,8 +352,8 @@ Codex acquisition, identity, and completion matching is owned by
 [`ADR__single-direct-codex-receipt-protocol.md`](../harness/patterns/ADR__single-direct-codex-receipt-protocol.md).
 
 `BLOCKED_ENV` remains a real non-PASS state. If the runtime cannot expose an
-independent reviewer, the task stays pending unless repository policy explicitly
-allows an inline fallback. Strict compliance should not silently self-review.
+independent reviewer, the task stays pending. Strict compliance does not use
+inline self-review as a substitute.
 
 ## Integrating with the current harness
 
@@ -346,15 +365,17 @@ duplicate findings and cost.
 Refactor it as follows:
 
 - retain test-coverage and domain specialist inputs;
-- replace the generic adversarial and quality-synthesis pair with the balanced
-  code-reviewer contract;
+- replace the generic adversarial and quality-synthesis pair with two fresh
+  defect-discovery passes followed by the authoritative code-reviewer contract;
 - retain deep security as the conditional specialist defined above;
 - keep migration/LLM specialists when their scopes match;
 - make performance advisory unless a demonstrated regression or requirement is
   at risk;
 - remove line-count-only red-team routing; use security, architecture,
   migration, concurrency, external contract, or broad blast-radius signals;
-- require one authoritative review verdict per routed lens before QA begins.
+- require one authoritative review verdict per routed lens before QA begins;
+- keep candidate arrays ephemeral and store only the exact formal review final
+  in the content-addressed, non-authoritative detail appendix.
 
 ## Delivery plan
 

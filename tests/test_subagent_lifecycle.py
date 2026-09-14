@@ -234,9 +234,13 @@ def test_matcher_qualified_start_attachment_still_completes(tmp_path, monkeypatc
     task_verify could never reach PASS.
     """
     agent_type = "harness:code-reviewer"
+    final_message = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean"
+    )
     stopped, task_dir = _run_stop(
         tmp_path, monkeypatch, "sess-q", "agent-q", agent_type,
-        final_message="VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean",
+        final_message=final_message,
         qualified_hook_name=f"SubagentStart:{agent_type}",
     )
     assert stopped["status"] == "done"
@@ -244,6 +248,177 @@ def test_matcher_qualified_start_attachment_still_completes(tmp_path, monkeypatc
     assert [(item["event"], item["verdict"]) for item in _receipts(task_dir)] == [
         ("started", ""), ("completed", "PASS"),
     ]
+    digest = _receipts(task_dir)[-1]["summary"].splitlines()[-1].removeprefix(
+        "DETAIL_SHA256:"
+    )
+    assert _lib.read_review_detail(task_dir, digest) == final_message
+
+
+def test_review_detail_failure_publishes_no_completion_receipt(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id, agent_id = "sess-detail-fail", "agent-detail-fail"
+    agent_type = "harness:code-reviewer"
+    final_message = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean"
+    )
+    _bind(repo, task_dir, session_id)
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": session_id, "agent_id": agent_id, "agent_type": agent_type,
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, session_id, agent_id, final_message,
+        agent_type=agent_type,
+    )
+    external = tmp_path / "external-reviews.jsonl"
+    external.write_text("untouched\n", encoding="utf-8")
+    Path(task_dir, _lib.REVIEW_DETAILS_NAME).symlink_to(external)
+
+    stopped = subagent_lifecycle.mark_subagent_stop(
+        repo, _stop_payload(session_id, agent_id, agent_type, transcript, final_message),
+    )
+
+    assert stopped["status"] == "receipt_pending"
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
+    assert external.read_text(encoding="utf-8") == "untouched\n"
+
+
+def test_receipt_failure_leaves_idempotently_reusable_detail_orphan(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id, agent_id = "sess-receipt-fail", "agent-receipt-fail"
+    agent_type = "harness:code-reviewer"
+    final_message = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean"
+    )
+    _bind(repo, task_dir, session_id)
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": session_id, "agent_id": agent_id, "agent_type": agent_type,
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, session_id, agent_id, final_message,
+        agent_type=agent_type,
+    )
+    payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
+    real_open = _lib.os.open
+
+    def fail_receipt_append(path, flags, *args, **kwargs):
+        if path == _lib.RECEIPTS_NAME and flags & (os.O_WRONLY | os.O_RDWR):
+            raise OSError("simulated receipt append failure")
+        return real_open(path, flags, *args, **kwargs)
+
+    with mock.patch.object(_lib.os, "open", side_effect=fail_receipt_append):
+        stopped = subagent_lifecycle.mark_subagent_stop(repo, payload)
+
+    assert stopped["status"] == "receipt_pending"
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
+    orphan = Path(task_dir, _lib.REVIEW_DETAILS_NAME).read_bytes()
+    assert len(orphan.splitlines()) == 1
+
+    assert subagent_lifecycle.mark_subagent_stop(repo, payload)["status"] == "done"
+    assert Path(task_dir, _lib.REVIEW_DETAILS_NAME).read_bytes() == orphan
+    assert [item["event"] for item in _receipts(task_dir)] == ["started", "completed"]
+
+
+def test_partial_receipt_failure_rolls_back_to_detail_only_orphan(
+    tmp_path, monkeypatch,
+):
+    repo, task_dir = _repo(tmp_path)
+    session_id, agent_id = "sess-receipt-partial", "agent-receipt-partial"
+    agent_type = "harness:code-reviewer"
+    final_message = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean"
+    )
+    _bind(repo, task_dir, session_id)
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": session_id, "agent_id": agent_id, "agent_type": agent_type,
+    })
+    receipt_path = Path(task_dir, _lib.RECEIPTS_NAME)
+    receipt_before = receipt_path.read_bytes()
+    receipt_inode = receipt_path.stat().st_ino
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, session_id, agent_id, final_message,
+        agent_type=agent_type,
+    )
+    payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
+    real_write = _lib.os.write
+    receipt_writes = 0
+
+    def fail_after_receipt_prefix(fd, data):
+        nonlocal receipt_writes
+        if os.fstat(fd).st_ino == receipt_inode:
+            receipt_writes += 1
+            if receipt_writes == 1:
+                return real_write(fd, data[:9])
+            raise OSError("simulated partial receipt append failure")
+        return real_write(fd, data)
+
+    with mock.patch.object(_lib.os, "write", side_effect=fail_after_receipt_prefix):
+        stopped = subagent_lifecycle.mark_subagent_stop(repo, payload)
+
+    assert stopped["status"] == "receipt_pending"
+    assert receipt_path.read_bytes() == receipt_before
+    detail_store = Path(task_dir, _lib.REVIEW_DETAILS_NAME)
+    assert len(detail_store.read_text(encoding="utf-8").splitlines()) == 1
+
+    assert subagent_lifecycle.mark_subagent_stop(repo, payload)["status"] == "done"
+    assert [item["event"] for item in _receipts(task_dir)] == ["started", "completed"]
+    assert len(detail_store.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_all_formal_review_completions_store_detail_including_pending(
+    tmp_path, monkeypatch,
+):
+    cases = (
+        (
+            "security", "harness:security-reviewer",
+            "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nsecure",
+            "PASS",
+        ),
+        (
+            "pending", "harness:code-reviewer",
+            "VERDICT: PASS, malformed envelope\n"
+            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\ndiagnostic",
+            "PENDING",
+        ),
+    )
+    for name, agent_type, final_message, expected_verdict in cases:
+        stopped, task_dir = _run_stop(
+            tmp_path / name,
+            monkeypatch,
+            f"sess-{name}",
+            f"agent-{name}",
+            agent_type,
+            final_message=final_message,
+        )
+        assert stopped["status"] == "done"
+        completion = _receipts(task_dir)[-1]
+        assert completion["verdict"] == expected_verdict
+        digest = completion["summary"].splitlines()[-1].removeprefix("DETAIL_SHA256:")
+        assert _lib.read_review_detail(task_dir, digest) == final_message
+
+
+def test_claude_formal_review_detail_preserves_trailing_whitespace(
+    tmp_path, monkeypatch,
+):
+    final_message = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n"
+        "exact body with trailing whitespace\n  "
+    )
+    stopped, task_dir = _run_stop(
+        tmp_path,
+        monkeypatch,
+        "sess-exact-whitespace",
+        "agent-exact-whitespace",
+        "harness:security-reviewer",
+        final_message=final_message,
+    )
+    assert stopped["status"] == "done"
+    completion = _receipts(task_dir)[-1]
+    digest = completion["summary"].splitlines()[-1].removeprefix("DETAIL_SHA256:")
+    assert _lib.read_review_detail(task_dir, digest) == final_message
 
 
 def test_qualified_start_attachment_bound_to_another_agent_is_rejected(tmp_path, monkeypatch):
@@ -594,6 +769,53 @@ def test_start_rechecks_run_after_receipt_lock_acquisition(tmp_path):
         else:
             raise AssertionError("old-run receipt crossed a run rotation")
     assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_review_completion_rechecks_run_before_detail_and_receipt_append(
+    tmp_path, monkeypatch,
+):
+    repo, task_dir = _repo(tmp_path)
+    session_id, agent_id = "sess-review-race", "agent-review-race"
+    agent_type = "harness:code-reviewer"
+    final_message = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean"
+    )
+    _bind(repo, task_dir, session_id)
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": session_id, "agent_id": agent_id, "agent_type": agent_type,
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, session_id, agent_id, final_message,
+        agent_type=agent_type,
+    )
+    payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
+    real_read = _lib.read_task_control
+    writer_calls = 0
+
+    def rotate_on_locked_writer_recheck(path):
+        nonlocal writer_calls
+        control = real_read(path)
+        if any(frame.function == "record" for frame in inspect.stack()):
+            writer_calls += 1
+            if writer_calls == 2:
+                rotated = dict(control)
+                rotated["run_id"] = _lib.new_uuid7()
+                Path(path, "TASK.json").write_text(
+                    json.dumps(rotated, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                return rotated
+        return control
+
+    with mock.patch.object(
+        _lib, "read_task_control", side_effect=rotate_on_locked_writer_recheck,
+    ):
+        stopped = subagent_lifecycle.mark_subagent_stop(repo, payload)
+
+    assert stopped["status"] == "receipt_pending"
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
+    assert not Path(task_dir, _lib.REVIEW_DETAILS_NAME).exists()
 
 
 def test_invalid_events_create_no_diagnostic_authority(tmp_path):
@@ -1029,6 +1251,43 @@ def test_background_hook_publishes_stop_only_pair_without_registry(tmp_path, mon
     ]
     assert not (Path(task_dir) / "CONVERSATION.md").exists()
     assert not (Path(repo) / "doc/harness/runtime").exists()
+
+
+def test_background_hook_accepts_formal_review_at_the_detail_size_limit(
+    tmp_path, monkeypatch,
+):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-stop-size-limit"
+    agent_id = "agent-stop-size-limit"
+    agent_type = "harness:security-reviewer"
+    prefix = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n"
+    )
+    final_message = prefix + "x" * (
+        _lib._REVIEW_DETAIL_MAX_BYTES - len(prefix)
+    )
+    _bind(repo, task_dir, session_id)
+    transcript = _transcript(
+        tmp_path,
+        monkeypatch,
+        task_dir,
+        session_id,
+        agent_id,
+        final_message,
+        agent_type=agent_type,
+    )
+
+    result = _run_background_hook(repo, "stop", _stop_payload(
+        session_id, agent_id, agent_type, transcript, final_message,
+    ))
+
+    assert result.returncode == 0, result.stderr
+    completion = _receipts(task_dir)[-1]
+    assert completion["event"] == "completed"
+    assert completion["verdict"] == "PASS"
+    digest = completion["summary"].splitlines()[-1].removeprefix("DETAIL_SHA256:")
+    assert _lib.read_review_detail(task_dir, digest) == final_message
 
 
 def test_a_lens_less_agent_writes_no_receipt_and_no_crash(tmp_path):

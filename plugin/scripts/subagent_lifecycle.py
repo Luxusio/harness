@@ -90,6 +90,12 @@ def _payload_value(payload: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _payload_text(payload: dict[str, Any], key: str) -> str:
+    """Return message text verbatim; identifiers alone use stripped values."""
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else ""
+
+
 def _agent_type(payload: dict[str, Any]) -> str:
     direct = _payload_value(payload, "agent_type", "agentType", "subagent_type", "subagentType")
     if direct:
@@ -563,7 +569,7 @@ def mark_subagent_stop(
     refused; see :func:`_reject`.
     """
     sid, aid = _official_stop_identity(payload)
-    stop_message = _payload_value(payload, "last_assistant_message")
+    stop_message = _payload_text(payload, "last_assistant_message")
     task_dir, run_id = _binding(repo_root, sid) if sid and aid and stop_message else ("", "")
     if not task_dir and diagnostics is not None:
         diagnostics["provenance_reason"] = (

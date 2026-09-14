@@ -851,8 +851,11 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     ):
         assert not (codex_plugin / "scripts" / removed).exists()
     assert (codex_plugin / "mcp" / "harness_server.py").is_file()
+    assert (codex_plugin / "agents" / "defect-hunter.md").is_file()
     assert (codex_plugin / "agents" / "code-reviewer.md").is_file()
     assert (codex_plugin / "agents" / "security-reviewer.md").is_file()
+    assert (codex_plugin / "scripts" / "review-log").is_file()
+    assert (codex_plugin / "scripts" / "review-read").is_file()
     assert not list((codex_plugin / "scripts").glob("hook_*.sh"))
 
 
@@ -982,8 +985,11 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert (cached / "scripts" / "review-log").is_file()
+    assert (cached / "scripts" / "review-read").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
     assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
+    assert (cached / "agents" / "defect-hunter.md").is_file()
     assert not (cached / "scripts" / "background_registry.py").exists()
     shared_rels = (
         "internal-skills/develop/fix-first-pattern.md",
@@ -1154,6 +1160,9 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
     assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert (cached / "scripts" / "review-log").is_file()
+    assert (cached / "scripts" / "review-read").is_file()
+    assert (cached / "agents" / "defect-hunter.md").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
     parsed = tomllib.loads(config_path.read_text())
     assert parsed["plugins"]["harness@harness"]["enabled"] is True
@@ -1394,6 +1403,9 @@ def test_sync_claude_payload_copies_runtime_under_claude_root_without_git(tmp_pa
     assert plugin_root == tmp_path / "claude" / "harness-dev" / "plugin"
     assert (plugin_root / ".claude-plugin" / "plugin.json").is_file()
     assert (plugin_root / "mcp" / "harness_server.py").is_file()
+    assert (plugin_root / "agents" / "defect-hunter.md").is_file()
+    assert (plugin_root / "scripts" / "review-log").is_file()
+    assert (plugin_root / "scripts" / "review-read").is_file()
     assert not stale_guard.exists()
     assert not (tmp_path / "claude" / "harness-dev" / ".git").exists()
     marketplace = tmp_path / "claude" / "harness-dev" / ".claude-plugin" / "marketplace.json"

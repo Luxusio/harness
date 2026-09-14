@@ -771,6 +771,9 @@ def test_receipt_reset_removes_only_unified_stream(tmp_path):
     _pass_review(task)
     unified = task / lib.RECEIPTS_NAME
     unified_fingerprint = lib.receipt_stream_fingerprint(task)
+    detail_digest = lib.append_review_detail(task, "retained review detail")
+    detail_store = task / lib.REVIEW_DETAILS_NAME
+    detail_bytes = detail_store.read_bytes()
     legacy_review = task / "REVIEW_RECEIPTS.jsonl"
     legacy_qa = task / "SUBAGENT_RECEIPTS.jsonl"
     legacy_review.write_text('{"kind":"review"}\n', encoding="utf-8")
@@ -780,6 +783,8 @@ def test_receipt_reset_removes_only_unified_stream(tmp_path):
     snapshot = lib.reset_receipt_streams_for_new_run(task)
 
     assert not unified.exists()
+    assert detail_store.read_bytes() == detail_bytes
+    assert lib.read_review_detail(task, detail_digest) == "retained review detail"
     assert legacy_review.read_text(encoding="utf-8") == '{"kind":"review"}\n'
     assert legacy_qa.read_text(encoding="utf-8") == '{"kind":"subagent"}\n'
     assert not isinstance(snapshot, (dict, str, bytes))
@@ -797,6 +802,12 @@ def test_snapshot_fingerprint_stays_bound_to_the_same_bytes(tmp_path):
     _pass_review(task)
     snapshot = lib.receipt_snapshot(task)
     original = lib.receipt_stream_fingerprint(task, snapshot)
+
+    lib.append_review_detail(task, "non-authoritative review detail")
+    assert lib.receipt_stream_fingerprint(task) == original
+    (task / lib.REVIEW_DETAILS_NAME).write_text("{}\n", encoding="utf-8")
+    (task / lib.REVIEW_DETAILS_NAME).chmod(0o600)
+    assert lib.receipt_stream_fingerprint(task) == original
 
     _receipt(task, "qa-cli", "qa-1", "started")
 
@@ -882,6 +893,23 @@ def test_review_and_qa_share_one_receipt_stream(tmp_path):
     assert entries
     assert all(set(entry) == lib.RECEIPT_FIELDS for entry in entries)
     assert {entry["event"] for entry in entries} == {"started", "completed"}
+
+
+def test_corrupt_review_detail_cannot_change_context_or_runtime_verdict(tmp_path):
+    task = _task(tmp_path)
+    _pass_review(task)
+    _receipt(task, "qa-cli", "qa-1", "started")
+    _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
+    before_context = lib.emit_compact_context(task)
+    before_fingerprint = lib.receipt_stream_fingerprint(task)
+
+    (task / lib.REVIEW_DETAILS_NAME).write_text("{}\n", encoding="utf-8")
+    (task / lib.REVIEW_DETAILS_NAME).chmod(0o600)
+
+    assert lib.receipt_review_verdict(task) == "PASS"
+    assert lib.receipt_runtime_verdict(task) == "PASS"
+    assert lib.emit_compact_context(task) == before_context
+    assert lib.receipt_stream_fingerprint(task) == before_fingerprint
 
 
 def test_old_unified_schema_fails_closed_without_advising_a_reset(tmp_path):

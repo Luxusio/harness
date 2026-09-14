@@ -32,6 +32,7 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 from _lib import (  # type: ignore
+    _REVIEW_DETAIL_MAX_BYTES,
     _infer_receipt_lens,
     extract_qa_verdict,
     find_harness_root,
@@ -50,7 +51,10 @@ THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 CALL_RE = re.compile(r"^[A-Za-z0-9_.-]{6,160}$")
 AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
 TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
-MAX_LINE_BYTES = 2 * 1024 * 1024
+# A 2 MiB UTF-8 final can expand sixfold when control characters are escaped
+# inside one JSONL string. Keep transport framing above the shared detail cap
+# while the existing whole-rollout bound remains the outer memory limit.
+MAX_LINE_BYTES = 8 * _REVIEW_DETAIL_MAX_BYTES
 MAX_CHILD_BYTES = 64 * 1024 * 1024
 POLL_SECONDS = 0.20
 IDLE_SECONDS = 8 * 60 * 60
@@ -71,7 +75,10 @@ def _strict_json_loads(raw: str) -> Any:
             result[key] = value
         return result
 
-    return json.loads(raw, object_pairs_hook=unique_object)
+    try:
+        return json.loads(raw, object_pairs_hook=unique_object)
+    except RecursionError as exc:
+        raise ValueError("JSON nesting exceeds the watcher parser limit") from exc
 
 
 def _authorized_control_root(session_cwd: str) -> str:
@@ -829,7 +836,7 @@ def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
         return None
     marker = "Payload:\n"
     final = text.split(marker, 1)[1] if marker in text else text
-    return author, final.strip()
+    return author, final
 
 
 def _child_status(
@@ -891,9 +898,9 @@ def _child_status(
                         completes.clear()
                         continue
             if child_turn and event.get("type") == "event_msg" and payload.get("type") == "agent_message" and payload.get("phase") == "final_answer":
-                finals.append(str(payload.get("message") or "").strip())
+                finals.append(str(payload.get("message") or ""))
             if child_turn and event.get("type") == "event_msg" and payload.get("type") == "task_complete":
-                completes.append(str(payload.get("last_agent_message") or "").strip())
+                completes.append(str(payload.get("last_agent_message") or ""))
     except OSError:
         return "pending", path, ""
     finally:
@@ -977,22 +984,35 @@ class Watcher:
     def _receipt_source(_item: dict[str, Any]) -> str:
         return "codex_session_watcher:collaboration"
 
-    def _invalidate(self, item: dict[str, Any], reason: str) -> None:
+    def _invalidate(
+        self,
+        item: dict[str, Any],
+        reason: str,
+        *,
+        completion_summary: str | None = None,
+        completion_confirmed: bool = False,
+    ) -> None:
         if item.get("invalid"):
             return
-        if not item.get("completed") or not item.get("task_dir"):
+        if (
+            not item.get("completed")
+            and not completion_confirmed
+        ) or not item.get("task_dir"):
             item["invalid"] = True
             return
         lens = _infer_receipt_lens(item.get("task_name", ""))
-        summary = "VERDICT: PENDING"
-        if lens.startswith("review-"):
+        summary = completion_summary
+        if summary is None:
+            summary = "VERDICT: PENDING"
+        if completion_summary is None and lens.startswith("review-"):
             # FIX_NOW, not INVESTIGATE. An invalidated run is void and must be
             # redone, which is blocking; INVESTIGATE is non-blocking by the rule
             # `_lib._counts_contradict_verdict` enforces and both reviewer
             # definitions state. Coded as non-blocking, this invalidation could
             # not displace the stale PASS it exists to invalidate.
             summary += "\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0"
-        summary += f"\nRuntime watcher invalidated: {reason}"
+        if completion_summary is None:
+            summary += f"\nRuntime watcher invalidated: {reason}"
         pending_exists = any(
             receipt.get("runtime_id") == item.get("runtime_id")
             and receipt.get("event") == "completed"
@@ -1121,7 +1141,15 @@ class Watcher:
             return
         verdict = extract_qa_verdict(child_final)
         if not verdict:
-            self._invalidate(item, "child final did not contain one exact verdict")
+            # The child final is complete and independently matched here. Keep
+            # that exact malformed/PENDING evidence addressable instead of
+            # replacing it with the watcher's diagnostic text.
+            self._invalidate(
+                item,
+                "child final did not contain one exact verdict",
+                completion_summary=child_final,
+                completion_confirmed=True,
+            )
             return
         lens = _infer_receipt_lens(item["task_name"])
         exact_existing = _exact_receipt(

@@ -31,9 +31,7 @@ If step 2 fails, re-run with `python3 install.py --codex-only --force`. The inst
 
 This is partial parity. **What's NOT in v1 on Codex:**
 
-- Dual-voice plan-* review skills (Claude-only by structural necessity)
 - `qa-browser` (browser MCP integration deferred to v2)
-- Subprocess fan-out for parallel agents (sequential executor in v1)
 - `AskUserQuestion` — Codex has no native equivalent in v1
 
 See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the full row-by-row support table.
@@ -42,7 +40,7 @@ See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the ful
 - Public loop: `task_start → plan → develop → QA → close` (independent review and `task_verify` are internal close gates)
 - Shared MCP server (same `harness_server.py` as Claude)
 - Shared Python scripts via `HARNESS_PLUGIN_ROOT` env
-- `setup`, plain repo-mutating request routing, native `/goal` orchestration, Goal child-task queues, `plan` (degraded), `develop` (sequential), `qa-cli`, `qa-api` (after AC-003 ports land in your install)
+- `setup`, plain repo-mutating request routing, native `/goal` orchestration, Goal child-task queues, capability-routed `plan` and `develop`, `qa-cli`, and `qa-api`
 - Hooks (prompt/context/safety only; Codex does not use Stop hooks for loop control)
 
 ## First-run walkthrough
@@ -61,7 +59,23 @@ codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 codex exec 'show the active harness goal and next child task' < /dev/null
 ```
 
+Formal code review first runs two fresh, non-attesting defect-discovery passes,
+then one authoritative verifier. Receipts stay compact. To retrieve only the
+exact formal review named by a receipt's `DETAIL_SHA256`:
+
+```bash
+python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+  --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
+```
+
+An old receipt can legitimately return not found because prior runtimes did not
+persist the detail appendix; no fresh task run or migration is required.
+
 If a skill returns "tool not found", check that the MCP server registered: `codex mcp test harness`. If hooks don't fire (e.g. `prewrite_gate.py` doesn't intercept a write to `PLAN.md`), refresh the plugin-local hook install with `python3 install.py --codex-only --force`.
+
+After updating Harness, start a new Codex session before relying on review
+storage or lifecycle changes. The already-running MCP process does not
+hot-reload replaced plugin files.
 
 ## Where to look when things break
 
