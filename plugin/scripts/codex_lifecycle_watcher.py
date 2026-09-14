@@ -1524,6 +1524,8 @@ class WatcherManager:
                 if active >= self.max_workers:
                     break
                 thread_id = str(item.get("thread_id") or "")
+                if thread_id in self.workers:
+                    continue
                 generation = _registration_generation(item)
                 if self.seen.get(thread_id) == generation:
                     continue

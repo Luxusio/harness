@@ -1519,33 +1519,70 @@ def test_manager_waits_for_old_generation_before_starting_refreshed_registration
         "offset": 100,
         "registered_at": 1.0,
     }]
-    entered = mod.threading.Event()
-    release = mod.threading.Event()
+    lease_released = mod.threading.Event()
+    allow_old_worker_to_finish = mod.threading.Event()
     calls = []
+
+    class BlockingCloseLease:
+        def close(self):
+            lease_released.set()
+            allow_old_worker_to_finish.wait(1)
 
     def fake_watch(_repo, _thread, _rollout, offset, **_kwargs):
         calls.append(offset)
-        entered.set()
-        if offset == 100:
-            release.wait(1)
         return 0
 
     manager = mod.WatcherManager(str(repo))
     with mock.patch.object(mod, "registrations", side_effect=lambda _repo: current), \
+         mock.patch.object(
+             mod, "_acquire_registration_lease",
+             side_effect=[BlockingCloseLease(), mock.Mock()],
+         ) as acquire_lease, \
          mock.patch.object(mod, "watch", side_effect=fake_watch):
         assert manager.scan_once() == 1
-        assert entered.wait(1)
+        assert lease_released.wait(1)
         first_worker = manager.workers[thread_id]
         current[0] = {**current[0], "offset": 900, "registered_at": 2.0}
         assert manager.scan_once() == 0
         assert manager.workers[thread_id] is first_worker
+        assert acquire_lease.call_count == 1
 
-        release.set()
+        allow_old_worker_to_finish.set()
         first_worker.join()
         assert manager.scan_once() == 1
         manager.workers[thread_id].join()
 
     assert calls == [100, 900]
+
+
+def test_manager_failed_cleanup_does_not_clear_newer_generation(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    old_registration = {
+        "thread_id": thread_id,
+        "rollout": "/root-rollout",
+        "offset": 100,
+        "registered_at": 1.0,
+    }
+    new_registration = {
+        **old_registration,
+        "offset": 900,
+        "registered_at": 2.0,
+    }
+    old_generation = mod._registration_generation(old_registration)
+    new_generation = mod._registration_generation(new_registration)
+    manager = mod.WatcherManager(str(repo))
+    manager.workers[thread_id] = mod.threading.Thread()
+    manager.worker_generations[thread_id] = old_generation
+    manager.worker_results[thread_id] = 3
+    manager.seen[thread_id] = new_generation
+
+    with mock.patch.object(mod, "registrations", return_value=[new_registration]):
+        assert manager.scan_once() == 0
+
+    assert manager.seen[thread_id] == new_generation
 
 
 def test_watch_inherits_rollout_idle_age_instead_of_resetting_lifetime(tmp_path, monkeypatch):
