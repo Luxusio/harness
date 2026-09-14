@@ -58,7 +58,11 @@ by Codex session storage. Spawn-selective
 PreToolUse may restore a missing registration immediately before a supported
 spawn, beginning at the current rollout offset. UserPromptSubmit, PostToolUse,
 and Stop do not recover registration. A stale registration is recreated, not
-migrated.
+migrated. Within one manager process, a successful worker suppresses only the
+same exact validated registration identity; a recreated or refreshed identity
+is eligible for one new worker, while a failed identity remains retryable. This
+manager-local scheduling identity does not grant receipt authority or change
+the registration's future-only offset.
 
 Alternate activity spellings, indirect tool adapters, status output,
 prompt-marker identity, synthetic events, diagnostics, and synchronous
