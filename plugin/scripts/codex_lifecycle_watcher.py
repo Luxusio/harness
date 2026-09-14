@@ -1416,6 +1416,18 @@ def watch(
     return 0
 
 
+RegistrationGeneration = tuple[str, int, int | float]
+
+
+def _registration_generation(registration: dict[str, Any]) -> RegistrationGeneration:
+    """Return the immutable manager-local identity for a validated registration."""
+    return (
+        str(registration["rollout"]),
+        int(registration["offset"]),
+        registration["registered_at"],
+    )
+
+
 class WatcherManager:
     """Host registered Codex rollout watchers inside the MCP server process."""
 
@@ -1434,7 +1446,8 @@ class WatcherManager:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.workers: dict[str, threading.Thread] = {}
-        self.seen: set[str] = set()
+        self.seen: dict[str, RegistrationGeneration] = {}
+        self.worker_generations: dict[str, RegistrationGeneration] = {}
         self.worker_results: dict[str, int] = {}
         self.worker_errors: dict[str, str] = {}
         self._lock = threading.Lock()
@@ -1492,28 +1505,33 @@ class WatcherManager:
             return 0
         with self._lock:
             # Failed workers must be restartable from the registration's
-            # immutable offset.  In particular, a late receipt for a task that
-            # has already closed is rejected by the receipt writer; that must
-            # not permanently disable observation for later tasks in the same
-            # root session.  Successful workers remain in ``seen`` so an idle
-            # registration is not replayed continuously.
+            # immutable offset. Successful workers retain their exact
+            # generation so the same registration is not replayed
+            # continuously, while a refreshed registration remains eligible.
             for thread_id, worker in list(self.workers.items()):
                 if worker.is_alive():
                     continue
                 self.workers.pop(thread_id, None)
-                if self.worker_results.get(thread_id, 0) != 0:
-                    self.seen.discard(thread_id)
+                generation = self.worker_generations.pop(thread_id, None)
+                if (
+                    self.worker_results.get(thread_id, 0) != 0
+                    and generation is not None
+                    and self.seen.get(thread_id) == generation
+                ):
+                    self.seen.pop(thread_id, None)
             for item in items:
                 active = sum(1 for worker in self.workers.values() if worker.is_alive())
                 if active >= self.max_workers:
                     break
                 thread_id = str(item.get("thread_id") or "")
-                if thread_id in self.seen:
+                generation = _registration_generation(item)
+                if self.seen.get(thread_id) == generation:
                     continue
                 lease = _acquire_registration_lease(self.repo_root, thread_id)
                 if lease is None:
                     continue
-                self.seen.add(thread_id)
+                self.seen[thread_id] = generation
+                self.worker_generations[thread_id] = generation
                 worker = threading.Thread(
                     target=self._worker,
                     args=(item, lease),

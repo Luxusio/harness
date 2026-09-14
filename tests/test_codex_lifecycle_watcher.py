@@ -1261,8 +1261,14 @@ def test_manager_starts_one_daemon_worker_per_registration_and_stops(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     registrations = [
-        {"thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42", "rollout": "/one", "offset": 11},
-        {"thread_id": "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "rollout": "/two", "offset": 22},
+        {
+            "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+            "rollout": "/one", "offset": 11, "registered_at": 1.0,
+        },
+        {
+            "thread_id": "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f",
+            "rollout": "/two", "offset": 22, "registered_at": 1.0,
+        },
     ]
     calls = []
 
@@ -1286,7 +1292,10 @@ def test_manager_caps_simultaneous_workers(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     items = [
-        {"thread_id": f"019f825b-f25f-70c3-8ee8-071f79fa1c4{i}", "rollout": f"/{i}", "offset": i}
+        {
+            "thread_id": f"019f825b-f25f-70c3-8ee8-071f79fa1c4{i}",
+            "rollout": f"/{i}", "offset": i, "registered_at": 1.0,
+        }
         for i in range(3)
     ]
 
@@ -1308,7 +1317,7 @@ def test_manager_restart_replays_immutable_registration_offset(tmp_path):
     (repo / ".git").mkdir(parents=True)
     registration = {
         "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
-        "rollout": "/root-rollout", "offset": 777,
+        "rollout": "/root-rollout", "offset": 777, "registered_at": 1.0,
     }
     calls = []
 
@@ -1335,6 +1344,7 @@ def test_manager_restarts_failed_worker_in_same_manager(tmp_path):
         "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
         "rollout": "/root-rollout",
         "offset": 777,
+        "registered_at": 1.0,
     }
     calls = []
 
@@ -1363,7 +1373,7 @@ def test_manager_retains_bounded_worker_error_diagnostic(tmp_path):
     (repo / ".git").mkdir(parents=True)
     registration = {
         "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
-        "rollout": "/root-rollout", "offset": 777,
+        "rollout": "/root-rollout", "offset": 777, "registered_at": 1.0,
     }
 
     def fake_watch(*_args, on_error, **_kwargs):
@@ -1386,6 +1396,7 @@ def test_manager_records_nonzero_exit_and_clears_only_after_recovery(tmp_path):
     thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     registration = {
         "thread_id": thread_id, "rollout": "/root-rollout", "offset": 777,
+        "registered_at": 1.0,
     }
     calls = 0
     error_seen_at_retry = []
@@ -1433,7 +1444,7 @@ def test_managers_use_cross_process_lease_for_same_registration(tmp_path):
     (repo / ".git").mkdir(parents=True)
     registration = {
         "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
-        "rollout": "/root-rollout", "offset": 777,
+        "rollout": "/root-rollout", "offset": 777, "registered_at": 1.0,
     }
     entered = mod.threading.Event()
 
@@ -1452,6 +1463,89 @@ def test_managers_use_cross_process_lease_for_same_registration(tmp_path):
         first.stop()
         assert second.scan_once() == 1
         second.stop()
+
+
+def test_manager_restarts_successful_worker_for_refreshed_registration_generation(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    current = [{
+        "thread_id": thread_id,
+        "rollout": "/root-rollout-a",
+        "offset": 100,
+        "registered_at": 1.0,
+    }]
+    calls = []
+
+    def fake_watch(_repo, _thread, rollout, offset, **_kwargs):
+        calls.append((rollout, offset))
+        return 0
+
+    manager = mod.WatcherManager(str(repo))
+    with mock.patch.object(mod, "registrations", side_effect=lambda _repo: current), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 1
+        manager.workers[thread_id].join()
+        assert manager.scan_once() == 0
+
+        for field, value in (
+            ("rollout", "/root-rollout-b"),
+            ("offset", 900),
+            ("registered_at", 2.0),
+        ):
+            current[0] = {**current[0], field: value}
+            assert manager.scan_once() == 1
+            manager.workers[thread_id].join()
+            assert manager.scan_once() == 0
+
+    assert calls == [
+        ("/root-rollout-a", 100),
+        ("/root-rollout-b", 100),
+        ("/root-rollout-b", 900),
+        ("/root-rollout-b", 900),
+    ]
+    assert len(manager.seen) == 1
+
+
+def test_manager_waits_for_old_generation_before_starting_refreshed_registration(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    current = [{
+        "thread_id": thread_id,
+        "rollout": "/root-rollout",
+        "offset": 100,
+        "registered_at": 1.0,
+    }]
+    entered = mod.threading.Event()
+    release = mod.threading.Event()
+    calls = []
+
+    def fake_watch(_repo, _thread, _rollout, offset, **_kwargs):
+        calls.append(offset)
+        entered.set()
+        if offset == 100:
+            release.wait(1)
+        return 0
+
+    manager = mod.WatcherManager(str(repo))
+    with mock.patch.object(mod, "registrations", side_effect=lambda _repo: current), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 1
+        assert entered.wait(1)
+        first_worker = manager.workers[thread_id]
+        current[0] = {**current[0], "offset": 900, "registered_at": 2.0}
+        assert manager.scan_once() == 0
+        assert manager.workers[thread_id] is first_worker
+
+        release.set()
+        first_worker.join()
+        assert manager.scan_once() == 1
+        manager.workers[thread_id].join()
+
+    assert calls == [100, 900]
 
 
 def test_watch_inherits_rollout_idle_age_instead_of_resetting_lifetime(tmp_path, monkeypatch):
