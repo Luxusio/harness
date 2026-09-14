@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import math
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Codex currently ships POSIX hooks
@@ -87,6 +88,14 @@ def _authorized_control_root(session_cwd: str) -> str:
 
 def _deadline_expired(deadline: float | None) -> bool:
     return deadline is not None and time.monotonic() >= deadline
+
+
+def _finite_timestamp(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and (not isinstance(value, float) or math.isfinite(value))
+    )
 
 
 def _codex_home() -> Path:
@@ -426,8 +435,7 @@ def _valid_current_registration(repo_root: str, thread_id: str) -> bool:
         and isinstance(offset, int)
         and not isinstance(offset, bool)
         and offset >= 0
-        and isinstance(registered_at, (int, float))
-        and not isinstance(registered_at, bool)
+        and _finite_timestamp(registered_at)
     ):
         return False
     rollout_value = state.get("rollout")
@@ -525,8 +533,7 @@ def ensure(
             and isinstance(state_offset, int)
             and not isinstance(state_offset, bool)
             and 0 <= state_offset <= rollout_info.st_size
-            and isinstance(registered_at, (int, float))
-            and not isinstance(registered_at, bool)
+            and _finite_timestamp(registered_at)
         )
         if tuple_valid and (
             state.get("version") == REGISTRATION_VERSION
@@ -580,8 +587,7 @@ def registrations(repo_root: str) -> list[dict[str, Any]]:
             or not isinstance(offset, int)
             or isinstance(offset, bool)
             or offset < 0
-            or not isinstance(registered_at, (int, float))
-            or isinstance(registered_at, bool)
+            or not _finite_timestamp(registered_at)
         ):
             continue
         trust_root = _sessions_root()

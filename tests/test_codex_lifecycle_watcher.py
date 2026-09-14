@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -1254,6 +1255,33 @@ def test_registrations_prunes_expired_root_state(tmp_path, monkeypatch):
     with mock.patch.object(mod.time, "time", return_value=mod.REGISTRATION_TTL_SECONDS + 10):
         assert mod.registrations(str(repo)) == []
     assert not state_path.exists()
+
+
+def test_nonfinite_registration_timestamp_is_rejected_and_replaced(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}])
+
+    for invalid in (float("nan"), float("inf"), float("-inf")):
+        assert mod.ensure(str(repo), root_id)
+        state_path = mod._state_path(str(repo), root_id)
+        state = json.loads(state_path.read_text())
+        state["registered_at"] = invalid
+        state_path.write_text(json.dumps(state))
+
+        assert mod.registrations(str(repo)) == []
+        assert mod.ensure(str(repo), root_id)
+        replacement = json.loads(state_path.read_text())
+        assert math.isfinite(replacement["registered_at"])
+        assert len(mod.registrations(str(repo))) == 1
 
 
 def test_manager_starts_one_daemon_worker_per_registration_and_stops(tmp_path):
