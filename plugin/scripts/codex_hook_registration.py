@@ -16,6 +16,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 from codex_lifecycle_watcher import ensure
 from _lib import (
     active_session_transaction,
+    clear_active_marker,
     find_harness_root,
     read_task_control,
     receipt_stream_transaction,
@@ -225,10 +226,16 @@ def register_task_result(
         with active_session_transaction(control_root):
             existing = resolve_session_task_binding(control_root, thread_id)
             if existing and os.path.realpath(existing["task_dir"]) != canonical_task:
+                clear_active_marker(
+                    control_root,
+                    task_dir=existing["task_dir"],
+                    session_id=thread_id,
+                    strict=True,
+                )
                 if status_out is not None:
                     status_out.update({
                         "status": NOT_APPLICABLE,
-                        "reason": "exact session is already bound to another open task",
+                        "reason": "conflicting open tasks invalidated exact session binding",
                     })
                 return False
             with receipt_stream_transaction(canonical_task):
