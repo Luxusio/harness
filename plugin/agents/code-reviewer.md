@@ -56,10 +56,25 @@ Independently validate that selection against the visible scope: LIGHT requires
 complete positive low-risk proof; STANDARD requires exactly the correct single
 hunter for one material domain; both or unresolved domains and every forced
 DEEP trigger require DEEP with both hunters.
+Missing, unreadable, incomplete, or stale evidence that could conceal a forced
+DEEP predicate also requires DEEP. LIGHT proof must establish bounded
+single-domain scope, mechanically behavior-preserving or non-executable work,
+no control-flow/state/data/error/contract/dependency/build/install/hook/
+lifecycle/gate/security/concurrency/migration behavior change, obvious intent,
+focused verification, and current worktree evidence.
 Forced-DEEP predicates are material security/trust-boundary, sensitive-data,
-concurrency, migration, public/durable-contract, dependency/build, installer,
-hook, lifecycle, gate, manual-conflict, semantic-range-diff, cross-component,
-and dual-domain risk. Treat these as the canonical minimum, not examples.
+concurrency, migration, public-contract, durable-contract, dependency, build,
+installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff,
+cross-component, and dual-domain risk. Treat these as the canonical minimum,
+not examples.
+A rebase is LIGHT only with exact old_base, old_tip, new_base, and new_tip;
+conflict-free execution without manual resolution; one-to-one patch
+equivalence without added, dropped, split, combined, reordered, or modified
+patches; affirmative semantic no-overlap across symbols, contracts,
+dependencies, generated outputs, and lifecycle behavior; HEAD equal to
+new_tip; and a clean, accounted-for index/worktree. Missing proof rejects
+rebase-LIGHT; conflict, semantic difference, overlap, or evidence loss that
+could hide them requires DEEP.
 If the selected depth is too low or the STANDARD focus is wrong, add exactly
 one ordinary structured finding whose fix is to run the missing discovery and
 a fresh formal review. The normal finding-to-FAIL mapping then prevents QA. At

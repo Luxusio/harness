@@ -44,7 +44,7 @@ depth, hunter set, concrete reason, and that full formal review remains
 mandatory. Use this precedence:
 
 1. Explicit DEEP or any material security/trust-boundary, sensitive-data,
-   concurrency, migration, public/durable-contract, dependency/build,
+   concurrency, migration, public-contract, durable-contract, dependency, build,
    installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff,
    cross-component, or dual-domain risk selects **DEEP**.
 2. Missing, unreadable, incomplete, or stale evidence that could conceal a

@@ -31,7 +31,10 @@ The **spawn-all-in-one-message** rule (borrowed from `oh-my-claudecode/skills/te
 
 - Phase 3.0 AC parallel batches (per the Parallelization Triggers table below)
 - Phase 4.5 pre-review audit inputs (coverage trace, visual smoke when browser-enabled, plus any conditional specialist matched in `quality-audit-pipeline.md` § Phase 4.5 — all in one message)
-- Phase 6.6 independent review (every lens in `required_review_lenses` in one message; must PASS before Phase 7)
+- Phase 6.6 independent review: batch only dependency-free calls. Selected
+  defect hunters and `review-security` form the initial batch; `review-code`
+  depends on attempted hunter finals at STANDARD/DEEP and starts afterward.
+  At LIGHT, `review-code` and `review-security` may start together.
 - Phase 7 multi-lens QA (`qa-browser` + `qa-api` + `qa-cli` + `qa-desktop` as applicable, each with `lens="<lens>"`)
 - Phase 7.7 dogfooder, batched with the Phase 7 final-PASS-cycle QA spawn
 
@@ -115,7 +118,7 @@ The orchestrator MUST fanout when any row matches. PLAN.md AC dependency matrix 
 | Helper-extract-first | PLAN explicitly contains a helper-extraction AC; consumer ACs depend on the extracted helper | Run the extract AC sequentially first, then parallel-fanout the consumers. Guard: extract must be a declared AC in PLAN.md; mid-task extraction is scope creep blocked by Phase 5 |
 | Multi-lens QA / dogfooder | Phase 7 has 2 or more applicable QA lenses (from manifest + diff scope) OR dogfooder is queued for the Phase 7 final-PASS cycle | All QA calls in one assistant message with `lens="<lens>"`; dogfooder batched alongside on the final-PASS pass. FAIL cycles skip dogfooder |
 | Quality audit fanout (Phase 4.5) | Quality audit pipeline runs: coverage trace + visual smoke (browser-only) | One assistant message; conditional specialists (security / perf / migration / LLM-trust) added when diff scope matches, per `quality-audit-pipeline.md` § Phase 4.5. Advisory inputs, not verdicts |
-| Independent review fanout (Phase 6.6) | `task_context` reports 2 or more `required_review_lenses` | All lens calls in one assistant message; every required lens must PASS before Phase 7 QA starts |
+| Independent review fanout (Phase 6.6) | Selected discovery or `task_context` supplies 2 or more dependency-free calls | Initial batch: selected defect hunters plus routed `review-security`. Start dependent `review-code` only after attempted hunter finals; at LIGHT it may batch with security. Every required lens must PASS before Phase 7 QA starts. |
 
 ### Extra review breadth under a single declared lens (advisory)
 
@@ -211,7 +214,7 @@ Harness phases map to specific agent types and model tiers. Models stay AS-DECLA
 | 3 (per-AC implement) | `harness:ac-worker` | inherit (sonnet) | One Agent per AC for parallel batches; one inline call for sequential ACs only when dependency-bound |
 | 4 (plan-completion audit) | `oh-my-claudecode:executor` | haiku | Mechanical AC vs `git diff --stat` cross-reference |
 | 4.5 (pre-review audit inputs) | `oh-my-claudecode:executor` | haiku | Coverage trace, visual smoke, and the conditional migration/contract, LLM-trust, and performance specialists listed in `quality-audit-pipeline.md` § Phase 4.5. Advisory inputs, not verdicts |
-| 6.6 (independent review) | `harness:code-reviewer` / `harness:security-reviewer` | per agent frontmatter | Routed from `task_context` `required_review_lenses`; spawn every required lens in one message. Must PASS before Phase 7 QA |
+| 6.6 (independent review) | `harness:code-reviewer` / `harness:security-reviewer` | per agent frontmatter | Routed from `task_context`; selected hunters/security batch first, then dependent code review. At LIGHT code/security may batch. Must PASS before Phase 7 QA. |
 | 7 (verification gate) | `harness:qa-cli` / `qa-api` / `qa-browser` / `qa-desktop` | per agent frontmatter | Spawn every applicable lens in one message with `lens="<lens>"` for lens-aware merge |
 | 7 fix loop (type / build errors) | `oh-my-claudecode:debugger` | sonnet | Compilation + regression isolation |
 | 7.7 (dogfooder, post-PASS) | `harness:dogfooder` | per frontmatter | Routed from PLAN.md-declared user-facing surfaces or explicit `dogfood_required`; never inferred from Git. Batches with Phase 7 QA spawn. |

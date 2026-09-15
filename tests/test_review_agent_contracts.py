@@ -266,8 +266,10 @@ def test_formal_reviewer_role_knows_every_canonical_forced_deep_predicate():
         "sensitive data",
         "concurrency",
         "migration",
-        "public/durable contract",
-        "dependency/build",
+        "public contract",
+        "durable contract",
+        "dependency",
+        "build",
         "installer",
         "hook",
         "lifecycle",
@@ -294,6 +296,96 @@ def test_formal_reviewer_role_knows_every_canonical_forced_deep_predicate():
             assert normalized_predicate in normalized_clause, (
                 f"{path}: {predicate!r} is outside the forced-DEEP validation clause"
             )
+
+
+def test_standalone_reviewer_has_complete_evidence_light_and_rebase_rules():
+    evidence_terms = (
+        "missing",
+        "unreadable",
+        "incomplete",
+        "stale evidence",
+        "conceal a forced DEEP predicate",
+        "requires DEEP",
+    )
+    light_terms = (
+        "bounded single-domain scope",
+        "mechanically behavior-preserving",
+        "non-executable work",
+        "no control-flow",
+        "state",
+        "data",
+        "error",
+        "contract",
+        "dependency",
+        "build",
+        "install",
+        "hook",
+        "lifecycle",
+        "gate",
+        "security",
+        "concurrency",
+        "migration behavior change",
+        "obvious intent",
+        "focused verification",
+        "current worktree evidence",
+    )
+    rebase_terms = (
+        "rebase is LIGHT only",
+        "old_base",
+        "old_tip",
+        "new_base",
+        "new_tip",
+        "conflict-free",
+        "without manual resolution",
+        "one-to-one patch equivalence",
+        "without added",
+        "dropped",
+        "split",
+        "combined",
+        "reordered",
+        "modified patches",
+        "semantic no-overlap",
+        "symbols",
+        "contracts",
+        "dependencies",
+        "generated outputs",
+        "lifecycle behavior",
+        "HEAD equal to new_tip",
+        "clean, accounted-for index/worktree",
+        "Missing proof rejects rebase-LIGHT",
+        "requires DEEP",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        core = _role_core(path)
+        _assert_all(core, evidence_terms, path)
+        _assert_all(core, light_terms, path)
+        _assert_all(core, rebase_terms, path)
+
+
+def test_role_forced_deep_independent_predicates_are_mutation_guarded():
+    independent = ("public-contract", "durable-contract", "dependency", "build")
+
+    def assert_independent(clause: str, path: str) -> None:
+        for predicate in independent:
+            assert clause.count(predicate) == 1, (
+                f"{path}: forced-DEEP must list {predicate!r} independently"
+            )
+
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        core = _role_core(path)
+        normalized = _normalized(core)
+        start = normalized.index("forced-deep predicates")
+        end = normalized.index("treat these as", start)
+        clause = normalized[start:end]
+        assert_independent(clause, path)
+        for predicate in independent:
+            mutated = clause.replace(predicate, "predicate-removed", 1)
+            try:
+                assert_independent(mutated, path)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"{path}: removing {predicate!r} escaped the guard")
 
 
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():

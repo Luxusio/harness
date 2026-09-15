@@ -135,7 +135,7 @@ def _assert_relational_review_policy(body: str, path: Path) -> None:
     assert "standard" not in forced_clause
     for predicate in (
         "security", "trust boundary", "sensitive data", "concurrency",
-        "migration", "public durable contract", "dependency build", "installer",
+        "migration", "public contract", "durable contract", "dependency", "build", "installer",
         "hook", "lifecycle", "gate", "manual conflict", "semantic range diff",
         "cross component", "dual domain",
     ):
@@ -245,6 +245,27 @@ def test_claude_develop_parallelizes_full_suite_verification():
     assert "Phase 7 multi-lens QA" in fanout
     assert "Phase 7.7 dogfooder" in fanout
     assert "Spawn every applicable lens in one message" in fanout
+
+
+def test_phase_66_batches_only_dependency_free_review_calls():
+    body = _normalized(_text(PARALLEL_FANOUT))
+    start = body.index("phase 6.6 independent review: batch only")
+    end = body.index("phase 7 multi-lens qa", start)
+    rule = body[start:end]
+    assert "selected defect hunters and `review-security` form the initial batch" in rule
+    assert "`review-code` depends on attempted hunter finals" in rule
+    assert "standard/deep and starts afterward" in rule
+    assert "at light, `review-code` and `review-security` may start together" in rule
+    assert "both defect hunters" not in rule
+
+    table_row = next(
+        line.lower()
+        for line in _text(PARALLEL_FANOUT).splitlines()
+        if "Independent review fanout (Phase 6.6)" in line
+    )
+    assert "initial batch: selected defect hunters plus routed `review-security`" in table_row
+    assert "dependent `review-code` only after attempted hunter finals" in table_row
+    assert "at light it may batch with security" in table_row
 
 
 def test_contracts_do_not_reintroduce_single_agent_default():
@@ -367,7 +388,7 @@ def test_forced_deep_clause_rejects_each_predicate_removal_and_wrong_mapping():
     )
     predicates = (
         "security", "trust-boundary", "sensitive-data", "concurrency", "migration",
-        "public/durable-contract", "dependency/build", "installer", "hook", "lifecycle",
+        "public-contract", "durable-contract", "dependency", "build", "installer", "hook", "lifecycle",
         "gate", "manual-conflict", "semantic-range-diff", "cross-component", "dual-domain",
     )
     for path in paths:
