@@ -70,6 +70,11 @@ is eligible for one new worker, while a failed identity remains retryable. This
 manager-local scheduling identity does not grant receipt authority or change
 the registration's future-only offset.
 
+Registration identity includes the exact task id and run id. Rebinding the same
+root session to another task generation checkpoints the rollout at the new
+current offset. A worker exits when its bound generation changes, allowing the
+manager to start the refreshed generation without replaying earlier task work.
+
 Alternate activity spellings, indirect tool adapters, status output,
 prompt-marker identity, synthetic events, diagnostics, and synchronous
 PostToolUse receipt writing are not receipt authorities. PostToolUse binds and

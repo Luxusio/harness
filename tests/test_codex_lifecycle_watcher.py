@@ -1138,6 +1138,40 @@ def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, 
     assert "process_start" not in state
 
 
+def test_ensure_refreshes_offset_when_task_generation_changes(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}])
+    first_run = RUN_ID
+    second_run = "019f825b-f25f-70c3-8ee8-071f79fa1c99"
+    assert mod.ensure(
+        str(repo), root_id, task_id="TASK__first", run_id=first_run,
+    )
+    state_path = mod._state_path(str(repo), root_id)
+    first = json.loads(state_path.read_text())
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"type": "event_msg", "payload": {"type": "later"}}) + "\n")
+    assert mod.ensure(
+        str(repo), root_id, task_id="TASK__first", run_id=first_run,
+    )
+    self_same = json.loads(state_path.read_text())
+    assert self_same["offset"] == first["offset"]
+    assert mod.ensure(
+        str(repo), root_id, task_id="TASK__second", run_id=second_run,
+    )
+    second = json.loads(state_path.read_text())
+    assert second["offset"] == rollout.stat().st_size
+    assert (second["task_id"], second["run_id"]) == ("TASK__second", second_run)
+
+
 def test_ensure_stops_recovery_when_deadline_expires_after_discovery(tmp_path, monkeypatch):
     mod = _load()
     repo = tmp_path / "repo"

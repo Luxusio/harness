@@ -62,7 +62,7 @@ REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
 MAX_RECORD_OBSERVATION_ATTEMPTS = 3
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
-REGISTRATION_VERSION = 11
+REGISTRATION_VERSION = 12
 REGISTRATION_OWNER = "codex_root_hook"
 
 
@@ -423,7 +423,9 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         raise
 
 
-def _valid_current_registration(repo_root: str, thread_id: str) -> bool:
+def _valid_current_registration(
+    repo_root: str, thread_id: str, task_id: str = "", run_id: str = "",
+) -> bool:
     """Validate the exact current state without discovery, locking, or rewriting."""
     runtime = _trusted_runtime_dir(repo_root)
     if runtime is None:
@@ -437,6 +439,8 @@ def _valid_current_registration(repo_root: str, thread_id: str) -> bool:
         and state.get("owner") == REGISTRATION_OWNER
         and state.get("thread_id") == thread_id
         and state.get("repo_root") == repo_root
+        and (not task_id or state.get("task_id") == task_id)
+        and (not run_id or state.get("run_id") == run_id)
         and isinstance(session_cwd, str)
         and _authorized_control_root(session_cwd) == repo_root
         and isinstance(offset, int)
@@ -469,6 +473,8 @@ def ensure(
     thread_id: str,
     *,
     session_cwd: str | None = None,
+    task_id: str = "",
+    run_id: str = "",
     deadline: float | None = None,
 ) -> bool:
     """Register a root rollout for the MCP-hosted watcher manager.
@@ -479,11 +485,13 @@ def ensure(
     """
     if not THREAD_RE.fullmatch(thread_id):
         return False
+    if bool(task_id) != bool(run_id) or (task_id and not TASK_NAME_RE.fullmatch(task_id)):
+        return False
     repo_root = os.path.realpath(repo_root)
     session_cwd = os.path.realpath(session_cwd or repo_root)
     if _authorized_control_root(session_cwd) != repo_root:
         return False
-    if _valid_current_registration(repo_root, thread_id):
+    if _valid_current_registration(repo_root, thread_id, task_id, run_id):
         return True
     rollout = _find_rollout(thread_id, deadline=deadline)
     if rollout is None or _deadline_expired(deadline):
@@ -535,6 +543,8 @@ def ensure(
         tuple_valid = (
             state.get("thread_id") == thread_id
             and state.get("repo_root") == repo_root
+            and state.get("task_id") == task_id
+            and state.get("run_id") == run_id
             and state.get("session_cwd") in {None, "", session_cwd}
             and state.get("rollout") == str(rollout)
             and isinstance(state_offset, int)
@@ -554,6 +564,8 @@ def ensure(
             "repo_root": repo_root,
             "session_cwd": session_cwd,
             "thread_id": thread_id,
+            "task_id": task_id,
+            "run_id": run_id,
             "rollout": str(rollout),
             "offset": offset,
             "registered_at": registered_at,
@@ -577,6 +589,9 @@ def registrations(repo_root: str) -> list[dict[str, Any]]:
     for path in candidates:
         state = _read_owned_json(path, runtime)
         thread_id = str(state.get("thread_id") or "")
+        task_id = str(state.get("task_id") or "")
+        run_id = str(state.get("run_id") or "")
+        binding = _active_task_binding_for_session(repo_root, thread_id)
         rollout = _find_rollout(thread_id)
         offset = state.get("offset")
         registered_at = state.get("registered_at")
@@ -585,6 +600,15 @@ def registrations(repo_root: str) -> list[dict[str, Any]]:
             state.get("version") != REGISTRATION_VERSION
             or state.get("owner") != REGISTRATION_OWNER
             or state.get("repo_root") != repo_root
+            or bool(task_id) != bool(run_id)
+            or (task_id and not TASK_NAME_RE.fullmatch(task_id))
+            or (
+                bool(task_id)
+                and (
+                    os.path.basename(str(binding.get("task_dir") or "")) != task_id
+                    or binding.get("run_id") != run_id
+                )
+            )
             or not isinstance(session_cwd, str)
             or _authorized_control_root(session_cwd) != repo_root
             or path.name != f"{thread_id}.json"
@@ -1296,6 +1320,8 @@ def watch(
     offset: int,
     *,
     session_cwd: str | None = None,
+    task_id: str = "",
+    run_id: str = "",
     stop_event: threading.Event | None = None,
     idle_seconds: float = IDLE_SECONDS,
     on_error: Any | None = None,
@@ -1378,6 +1404,13 @@ def watch(
     try:
         handle.seek(max(0, offset))
         while not stop_event.is_set() and time.monotonic() - last_data < idle_seconds:
+            if task_id or run_id:
+                binding = _active_task_binding_for_session(repo_root, thread_id)
+                if (
+                    os.path.basename(str(binding.get("task_dir") or "")) != task_id
+                    or binding.get("run_id") != run_id
+                ):
+                    return 0
             position = handle.tell()
             raw = handle.readline(MAX_LINE_BYTES + 1)
             if not raw:
@@ -1451,7 +1484,7 @@ def watch(
     return 0
 
 
-RegistrationGeneration = tuple[str, int, int | float]
+RegistrationGeneration = tuple[str, int, int | float, str, str]
 
 
 def _registration_generation(registration: dict[str, Any]) -> RegistrationGeneration:
@@ -1460,6 +1493,8 @@ def _registration_generation(registration: dict[str, Any]) -> RegistrationGenera
         str(registration["rollout"]),
         int(registration["offset"]),
         registration["registered_at"],
+        str(registration.get("task_id") or ""),
+        str(registration.get("run_id") or ""),
     )
 
 
@@ -1504,6 +1539,8 @@ class WatcherManager:
                 str(registration["rollout"]),
                 int(registration["offset"]),
                 session_cwd=str(registration.get("session_cwd") or self.repo_root),
+                task_id=str(registration.get("task_id") or ""),
+                run_id=str(registration.get("run_id") or ""),
                 stop_event=self.stop_event,
                 on_error=note_error,
                 recovering=recovering,

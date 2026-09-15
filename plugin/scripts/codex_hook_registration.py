@@ -15,9 +15,9 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from codex_lifecycle_watcher import ensure
 from _lib import (
-    active_task_binding_matches,
     find_harness_root,
     read_task_control,
+    receipt_stream_transaction,
     resolve_session_task_binding,
     task_control_status,
     write_active_marker,
@@ -94,12 +94,16 @@ def _ensure_with_deadline(
     deadline: float,
     *,
     session_cwd: str | None = None,
+    task_id: str = "",
+    run_id: str = "",
 ) -> bool:
     """Interrupt the complete registration attempt at its wall-clock budget."""
     return bool(_call_with_deadline(
         lambda: ensure(
             control_root, thread_id,
             session_cwd=session_cwd or control_root,
+            task_id=task_id,
+            run_id=run_id,
             deadline=deadline,
         ),
         deadline,
@@ -216,19 +220,20 @@ def register_task_result(
         or canonical_task != os.path.abspath(task_dir)
     ):
         return False
-    control = read_task_control(canonical_task)
-    if (
-        task_control_status(canonical_task, control) != "open"
-        or control.get("run_id") != run_id
-    ):
-        return False
     try:
-        write_active_marker(
-            control_root,
-            canonical_task,
-            session_id=thread_id,
-            publish_legacy=False,
-        )
+        with receipt_stream_transaction(canonical_task):
+            control = read_task_control(canonical_task)
+            if (
+                task_control_status(canonical_task, control) != "open"
+                or control.get("run_id") != run_id
+            ):
+                return False
+            write_active_marker(
+                control_root,
+                canonical_task,
+                session_id=thread_id,
+                publish_legacy=False,
+            )
     except Exception:
         if status_out is not None:
             status_out.update({"status": REGISTRATION_FAILED, "reason": "exact task binding failed"})
@@ -236,16 +241,6 @@ def register_task_result(
     return restore_watcher_registration(
         payload,
         budget_seconds=budget_seconds,
-        bind_fn=lambda root, sid: bool(
-            os.path.realpath(root) == os.path.realpath(control_root)
-            and sid == thread_id
-            and active_task_binding_matches(
-                control_root,
-                canonical_task,
-                control=control,
-                session_id=thread_id,
-            )
-        ),
         status_out=status_out,
     )
 
@@ -306,6 +301,7 @@ def restore_watcher_registration(
         )
         _record(NOT_APPLICABLE, missing)
         return False
+    generation_bound = bind_fn is None and ensure_fn is ensure
     if bind_fn is None:
         bind_fn = (
             _bind_active_task_to_root_session
@@ -322,13 +318,24 @@ def restore_watcher_registration(
         # ordinary, not broken, so this is not a registration failure.
         _record(NOT_APPLICABLE, "no open task is bound to this session")
         return False
+    task_id = ""
+    run_id = ""
+    if generation_bound:
+        binding = resolve_session_task_binding(control_root, thread_id)
+        task_dir = str(binding.get("task_dir") or "")
+        task_id = os.path.basename(os.path.normpath(task_dir)) if task_dir else ""
+        run_id = str(binding.get("run_id") or "")
+        if not task_id or not run_id:
+            _record(NOT_APPLICABLE, "no open task is bound to this session")
+            return False
     retry_deadline = started + min(
         max(0.0, float(retry_seconds)), max(0.0, float(budget_seconds))
     )
     while True:
         if ensure_fn is ensure:
             restored = _ensure_with_deadline(
-                control_root, thread_id, deadline, session_cwd=cwd
+                control_root, thread_id, deadline, session_cwd=cwd,
+                task_id=task_id, run_id=run_id,
             )
         else:
             try:

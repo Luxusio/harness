@@ -440,6 +440,48 @@ class TestCodexHookWrappers(unittest.TestCase):
             marker = root / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
             self.assertFalse(marker.exists())
 
+    def test_post_task_result_revalidates_after_concurrent_run_rotation(self):
+        mod = _load("codex_hook_registration")
+        lib = _load("_lib")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+            task = root / "doc/harness/tasks/TASK__rotate-race"
+            task.mkdir(parents=True)
+            old_run = lib.new_uuid7()
+            control = {
+                "run_id": old_run, "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }
+            task_control = task / "TASK.json"
+            task_control.write_text(json.dumps(control) + "\n", encoding="utf-8")
+            payload = json.dumps({
+                "cwd": repo, "session_id": root_id, "tool_name": "task_start",
+                "tool_response": {"structuredContent": {
+                    "task_dir": str(task), "task_id": task.name, "run_id": old_run,
+                }},
+            }).encode()
+
+            exact_bind = mod._bind_active_task_to_root_session
+
+            def rotate_then_check(control_root, thread_id):
+                control["run_id"] = lib.new_uuid7()
+                task_control.write_text(json.dumps(control) + "\n", encoding="utf-8")
+                return exact_bind(control_root, thread_id)
+
+            with mock.patch.dict("os.environ", {}, clear=True), \
+                 mock.patch.object(
+                     mod, "_bind_active_task_to_root_session",
+                     side_effect=rotate_then_check,
+                 ), mock.patch.object(mod, "_ensure_with_deadline", return_value=True):
+                self.assertFalse(mod.register_task_result(payload))
+            self.assertEqual(lib.resolve_session_task_binding(repo, root_id), {})
+
     def test_post_tool_use_routes_task_result_registration_fail_open(self):
         mod = _load("hook_post_tool_use")
         callback = mock.Mock(side_effect=RuntimeError("watcher unavailable"))
