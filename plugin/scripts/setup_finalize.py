@@ -635,6 +635,29 @@ def _without_legacy_local_contract_import(text: str) -> str:
     return pattern.sub(r"\1", text, count=1)
 
 
+def _with_current_managed_contract(text: str, template: str) -> str:
+    """Refresh the setup-owned contract surface without touching user tails."""
+    block = re.compile(
+        r"(?ms)^<!-- harness:managed-begin(?:\s+v\d+)? -->.*?"
+        r"^<!-- harness:managed-end -->[ \t]*$"
+    )
+    current = block.search(text)
+    shipped = block.search(template)
+    if current is not None and shipped is not None:
+        text = text[:current.start()] + shipped.group(0) + text[current.end():]
+
+    legacy_header = (
+        "<!-- harness:managed v1 — do not edit between the begin/end markers.\n"
+        "     Changes inside the managed block will be overwritten on harness upgrade.\n"
+        "     Project-specific contracts (C-100+) belong in CONTRACTS.local.md,\n"
+        "     which is imported below and never touched by the harness. -->"
+    )
+    template_header = template.split("\n\n", 1)[0]
+    if text.startswith(legacy_header) and template_header:
+        text = template_header + text[len(legacy_header):]
+    return _without_legacy_local_contract_import(text)
+
+
 def _with_routing_block(text: str) -> str:
     newline = "\r\n" if "\r\n" in text else "\n"
     legacy = re.compile(
@@ -875,7 +898,6 @@ def main(argv: list[str] | None = None) -> int:
         gitignore_path = safe_path(repo, ".gitignore")
         manifest_path = safe_path(repo, "doc/harness/manifest.yaml")
         version_path = safe_path(repo, "doc/harness/.version")
-        contract_path = safe_path(repo, "CONTRACTS.md")
     except ValueError as exc:
         print(f"SETUP_ERROR: {exc}")
         return 1
@@ -886,11 +908,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode) if manifest_path.exists() else None
     version_original = version_path.read_text(encoding="utf-8") if version_path.is_file() else None
     version_mode = stat.S_IMODE(version_path.stat().st_mode) if version_path.exists() else None
-    contract_original = contract_path.read_text(encoding="utf-8") if contract_path.is_file() else None
-    contract_mode = stat.S_IMODE(contract_path.stat().st_mode) if contract_path.exists() else None
     gitignore_candidate = render_gitignore(gitignore_original or "")
-    contract_candidate = _without_legacy_local_contract_import(contract_original or "")
-    contract_changed = contract_original is not None and contract_candidate != contract_original
 
     if args.gitignore_only:
         atomic_write(gitignore_path, gitignore_candidate)
@@ -903,6 +921,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SETUP_GITIGNORE_OK: updated={str(gitignore_candidate != (gitignore_original or '')).lower()}")
         return 0
 
+    try:
+        contract_path = safe_path(repo, "CONTRACTS.md")
+    except ValueError as exc:
+        print(f"SETUP_ERROR: {exc}")
+        return 1
+    contract_original = contract_path.read_text(encoding="utf-8") if contract_path.is_file() else None
+    contract_mode = stat.S_IMODE(contract_path.stat().st_mode) if contract_path.exists() else None
+    template_path = plugin_root / "skills/setup/templates/CONTRACTS.md"
+    contract_template = template_path.read_text(encoding="utf-8") if template_path.is_file() else ""
+    contract_candidate = _with_current_managed_contract(contract_original or "", contract_template)
+    contract_changed = contract_original is not None and contract_candidate != contract_original
+
     if manifest_original is None:
         manifest_candidate, migration_errors = "", ["doc/harness/manifest.yaml is missing"]
     else:
@@ -910,6 +940,8 @@ def main(argv: list[str] | None = None) -> int:
     errors = migration_errors + validate_structure(
         repo, plugin_root, args.project_doc, manifest_candidate, gitignore_candidate
     ) + operational_symlink_errors(repo)
+    if args.check and contract_changed:
+        errors.append("CONTRACTS.md requires setup migration")
     if not (args.check or args.prepare):
         if not args.qa_verified:
             errors.append("finalization requires --qa-verified after QA infrastructure checks")

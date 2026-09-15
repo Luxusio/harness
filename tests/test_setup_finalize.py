@@ -127,6 +127,26 @@ def test_legacy_local_contract_import_removal_is_position_bounded():
     )
 
 
+def test_managed_contract_refresh_replaces_only_owned_surfaces():
+    setup_finalize = load_setup_finalize("setup_finalize_managed_refresh_test")
+    template = (
+        "<!-- current header -->\n\n# CONTRACTS\n\n"
+        "<!-- harness:managed-begin v1 -->\ncurrent\n<!-- harness:managed-end -->\n"
+    )
+    legacy = (
+        "<!-- harness:managed v1 — do not edit between the begin/end markers.\n"
+        "     Changes inside the managed block will be overwritten on harness upgrade.\n"
+        "     Project-specific contracts (C-100+) belong in CONTRACTS.local.md,\n"
+        "     which is imported below and never touched by the harness. -->\n\n"
+        "# CONTRACTS\n\n<!-- harness:managed-begin v1 -->\nlegacy\n"
+        "<!-- harness:managed-end -->\n\n@CONTRACTS.local.md\n# User tail\n"
+    )
+
+    result = setup_finalize._with_current_managed_contract(legacy, template)
+
+    assert result == template + "# User tail\n"
+
+
 def test_project_doc_helper_rejects_symlink(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -845,6 +865,36 @@ def test_check_is_read_only_and_atomic_write_preserves_modes(tmp_path):
     assert stat.S_IMODE((repo / "doc/harness/.version").stat().st_mode) == 0o644
 
 
+def test_check_rejects_pending_contract_migration_without_writing(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    initial = run(repo, plugin_root)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    contract = repo / "CONTRACTS.md"
+    contract.write_text(
+        contract.read_text(encoding="utf-8") + "\n@CONTRACTS.local.md\n",
+        encoding="utf-8",
+    )
+    before = contract.read_bytes()
+
+    result = run(repo, plugin_root, "--check")
+
+    assert result.returncode == 1
+    assert "CONTRACTS.md requires setup migration" in result.stdout
+    assert contract.read_bytes() == before
+
+
+def test_gitignore_only_does_not_read_contract(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    (repo / "CONTRACTS.md").write_bytes(b"unrelated: \xff\n")
+
+    result = run(repo, plugin_root, "--gitignore-only")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / ".gitignore").is_file()
+
+
 def test_symlinked_managed_directory_is_rejected(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     repo = tmp_path / "repo"
@@ -906,6 +956,38 @@ def test_unexpected_second_write_failure_rolls_back_first_write(tmp_path, monkey
     assert (repo / "doc/harness/manifest.yaml").read_text() == original_manifest
 
 
+def test_finalize_failure_after_contract_refresh_restores_legacy_contract(tmp_path, monkeypatch):
+    module = load_setup_finalize("setup_finalize_contract_rollback_test")
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    contract = repo / "CONTRACTS.md"
+    legacy = contract.read_text(encoding="utf-8").replace(
+        "**Why:** The managed block is upgraded atomically on harness release; manual\n"
+        "edits are lost.",
+        "**Why:** Legacy CONTRACTS.local.md guidance remained active.",
+        1,
+    ) + "\n@CONTRACTS.local.md\n"
+    contract.write_text(legacy, encoding="utf-8")
+    real_write = module.atomic_write
+    failed = False
+
+    def fail_version(path, text, **kwargs):
+        nonlocal failed
+        if path.name == ".version" and not failed:
+            failed = True
+            raise OSError("simulated version replace failure")
+        return real_write(path, text, **kwargs)
+
+    monkeypatch.setattr(module, "atomic_write", fail_version)
+    rc = module.main([
+        "--repo", str(repo), "--plugin-root", str(plugin_root),
+        "--project-doc", "AGENTS.md", "--qa-verified", "--runtime-verified",
+    ])
+
+    assert rc == 1
+    assert contract.read_text(encoding="utf-8") == legacy
+
+
 def test_codex_installed_mirror_prepare_and_finalize_end_to_end(tmp_path):
     install_spec = importlib.util.spec_from_file_location("install_for_setup_e2e", REPO / "install.py")
     assert install_spec and install_spec.loader
@@ -959,8 +1041,22 @@ def test_setup_ignores_existing_contracts_local_file_and_symlink(tmp_path):
     legacy.write_bytes(b"# user owned\ncustom: \xff\n")
     os.chmod(legacy, 0o640)
     contract = regular / "CONTRACTS.md"
+    current_contract = contract.read_text(encoding="utf-8")
+    current_header = current_contract.split("\n\n", 1)[0]
+    legacy_header = (
+        "<!-- harness:managed v1 — do not edit between the begin/end markers.\n"
+        "     Changes inside the managed block will be overwritten on harness upgrade.\n"
+        "     Project-specific contracts (C-100+) belong in CONTRACTS.local.md,\n"
+        "     which is imported below and never touched by the harness. -->"
+    )
+    legacy_contract = current_contract.replace(current_header, legacy_header, 1).replace(
+        "**Why:** The managed block is upgraded atomically on harness release; manual\n"
+        "edits are lost.",
+        "**Why:** Legacy CONTRACTS.local.md guidance remained active.",
+        1,
+    )
     contract.write_text(
-        contract.read_text(encoding="utf-8") + "\n@CONTRACTS.local.md\n",
+        legacy_contract + "\n@CONTRACTS.local.md\n# User tail\n",
         encoding="utf-8",
     )
     before = (legacy.read_bytes(), stat.S_IMODE(legacy.stat().st_mode), legacy.stat().st_ino)
@@ -968,6 +1064,8 @@ def test_setup_ignores_existing_contracts_local_file_and_symlink(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert (legacy.read_bytes(), stat.S_IMODE(legacy.stat().st_mode), legacy.stat().st_ino) == before
     assert "@CONTRACTS.local.md" not in contract.read_text(encoding="utf-8")
+    assert "Legacy CONTRACTS.local.md guidance" not in contract.read_text(encoding="utf-8")
+    assert contract.read_text(encoding="utf-8").endswith("# User tail\n")
 
     linked = make_repo(tmp_path / "linked", manifest=canonical_manifest())
     target = tmp_path / "outside-local"

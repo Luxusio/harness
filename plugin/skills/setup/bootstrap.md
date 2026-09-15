@@ -247,7 +247,7 @@ _TEMPLATE="${_PLUGIN_ROOT}/skills/setup/templates/CONTRACTS.md"
 if [ ! -f CONTRACTS.md ]; then
   cp "$_TEMPLATE" CONTRACTS.md
 elif grep -q "harness:managed-begin" CONTRACTS.md; then
-  echo "CONTRACTS.md already managed — skip (maintain handles upgrades)"
+  echo "CONTRACTS.md already managed — finalizer refreshes the managed block"
 else
   echo "CONTRACTS.md exists without markers — ask user"
 fi
@@ -279,7 +279,9 @@ exists, it prepends the line. It rejects symlinked project documents, preserves
 all existing bytes outside the insertion, and uses an atomic replacement.
 On Repair/Upgrade, the prepare finalizer also removes only the setup-owned
 `@CONTRACTS.local.md` line immediately after the managed contract block. It
-does not open or mutate any existing `CONTRACTS.local.md` file.
+refreshes the bounded managed block from the shipped template while preserving
+user-owned content outside it, and does not open or mutate any existing
+`CONTRACTS.local.md` file.
 
 ### 3.7.3 Verify contract lint
 
