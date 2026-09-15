@@ -282,7 +282,9 @@ the hook cannot prove which conflicting result is fresh, it removes existing
 receipt authority rather than preserving or replacing it; execution remains
 available and attestation remains fail-closed. It also invalidates the old
 watcher registration so a later unambiguous bind starts at the current rollout
-offset rather than replaying the ambiguous interval. The
+offset rather than replaying the ambiguous interval. Recovery requires a fresh
+PreToolUse/PostToolUse pair with the same Codex `tool_use_id`; duplicate stale
+PostToolUse payloads cannot cross the non-authoritative fence. The
 registration includes task/run identity, preserves its
 offset for the same generation, and refreshes at the current offset on a
 generation change. Pre-spawn recovery accepts only that exact marker and never

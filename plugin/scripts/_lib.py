@@ -1394,6 +1394,7 @@ def _make_control_writer_authority():
         },
         "codex_hook_registration": {
             "restore_watcher_registration", "register_task_result",
+            "authorize_binding_recovery",
         },
     }
     canonical_paths = {
@@ -2049,6 +2050,29 @@ def _session_active_path(repo_root, session_id=None):
     return os.path.join(_active_sessions_dir(repo_root), sid + ".json")
 
 
+def read_active_session_marker(repo_root, session_id):
+    """Read one exact marker, including a non-authoritative recovery fence."""
+    sid = sanitize_session_id(session_id)
+    if sid != session_id or sid == "default":
+        return {}
+    return _read_session_marker(_session_active_path(repo_root, sid), sid)
+
+
+def _publish_session_marker(repo_root, sid, payload):
+    fd, tmp = tempfile.mkstemp(dir=_active_sessions_dir(repo_root), prefix=".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, _session_active_path(repo_root, sid))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 @contextmanager
 def active_session_transaction(repo_root):
     """Serialize exact-session marker decisions within one repository.
@@ -2064,6 +2088,7 @@ def active_session_transaction(repo_root):
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     component_fds = []
+    entered = False
     try:
         fd = os.open(root, flags)
         component_fds.append(fd)
@@ -2082,6 +2107,7 @@ def active_session_transaction(repo_root):
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
             raise RuntimeError("active session storage integrity unavailable") from exc
+        entered = True
         yield
         after = os.lstat(sessions)
         if (
@@ -2091,6 +2117,8 @@ def active_session_transaction(repo_root):
         ):
             raise RuntimeError("active session storage identity changed")
     except OSError as exc:
+        if entered:
+            raise
         raise RuntimeError("active session storage integrity unavailable") from exc
     finally:
         for component_fd in reversed(component_fds):
@@ -2118,20 +2146,24 @@ def write_active_marker(repo_root, task_dir, session_id=None, *, publish_legacy=
         "run_id": task_run.get("run_id", ""),
         "updated": now_iso(),
     }
-    fd, tmp = tempfile.mkstemp(dir=_active_sessions_dir(repo_root), prefix=".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, _session_active_path(repo_root, sid))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _publish_session_marker(repo_root, sid, payload)
     if publish_legacy:
         _atomic_text_write(_legacy_active_path(repo_root), task_dir)
+
+
+def write_binding_recovery_fence(repo_root, session_id, recovery_tool_use_id=""):
+    """Replace task authority with a one-invocation recovery fence."""
+    if not _trusted_control_writer(marker=True):
+        raise _control_writer_error("binding recovery requires the task-control runtime", marker=True)
+    sid = sanitize_session_id(session_id)
+    if sid != session_id or sid == "default":
+        raise ValueError("invalid exact session id")
+    os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
+    _publish_session_marker(repo_root, sid, {
+        "session_id": sid,
+        "recovery_tool_use_id": recovery_tool_use_id,
+        "updated": now_iso(),
+    })
 
 
 def active_task_binding_matches(repo_root, task_dir, control=None, session_id=None):

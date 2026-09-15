@@ -21,7 +21,8 @@ All notable changes to the harness Claude Code plugin.
   invalidate receipt authority instead of preserving or replacing an ambiguous
   binding and force a fresh-offset watcher registration on recovery, foreign
   MCP namespaces cannot impersonate task-result authority by
-  suffix, and watcher failure still never blocks the agent.
+  suffix, replayed conflict results cannot cross the fresh `tool_use_id`
+  recovery fence, and watcher failure still never blocks the agent.
 - Plan review no longer turns full-depth analysis into repeated approvals.
   Explicit requests and clarifications authorize matching premises and scope;
   unresolved material decisions are collected into one post-review interaction,

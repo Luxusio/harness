@@ -15,10 +15,12 @@ try:
     from codex_hook_registration import (  # type: ignore
         NOT_APPLICABLE,
         REGISTRATION_FAILED,
+        authorize_binding_recovery,
         restore_watcher_registration,
     )
 except Exception:  # pragma: no cover - registration recovery is best effort
     restore_watcher_registration = None
+    authorize_binding_recovery = None
     NOT_APPLICABLE = "not_applicable"
     REGISTRATION_FAILED = "failed"
 
@@ -32,6 +34,7 @@ try:
         find_harness_root,
         _infer_receipt_lens,
         emit_permission_decision,
+        is_codex_task_binding_tool,
         now_iso,
         read_json_diagnostics,
         write_json_diagnostics,
@@ -43,6 +46,7 @@ except Exception:  # pragma: no cover - diagnostics must never break the hook
     write_json_diagnostics = None
     _infer_receipt_lens = None
     emit_permission_decision = None
+    is_codex_task_binding_tool = None
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -293,6 +297,10 @@ def _run(script: str, payload: bytes) -> bytes:
 def main() -> int:
     payload = sys.stdin.buffer.read()
     tool_name = _tool_name(payload)
+    if is_codex_task_binding_tool is not None and is_codex_task_binding_tool(tool_name):
+        if authorize_binding_recovery is not None:
+            authorize_binding_recovery(payload)
+        return 0
     if _is_subagent_spawn_tool(tool_name):
         invalid_name = _invalid_review_spawn_name(payload)
         if invalid_name and emit_permission_decision is not None:

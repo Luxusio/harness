@@ -20,7 +20,10 @@ def _read_all(root: Path) -> str:
 
 
 def test_claude_plugin_docs_do_not_use_legacy_harness_mcp_prefix():
-    body = _read_all(REPO_ROOT / "plugin")
+    body = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (REPO_ROOT / "plugin").rglob("*.md")
+    )
     assert "mcp__harness__" not in body
 
 

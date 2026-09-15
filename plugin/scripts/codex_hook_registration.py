@@ -19,17 +19,20 @@ from _lib import (
     clear_active_marker,
     find_harness_root,
     is_codex_task_binding_tool,
+    read_active_session_marker,
     read_task_control,
     receipt_stream_transaction,
     resolve_session_task_binding,
     task_control_status,
     write_active_marker,
+    write_binding_recovery_fence,
     _bind_control_writer,
 )
 
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 TASK_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
+TOOL_USE_RE = re.compile(r"^[A-Za-z0-9_.:-]{6,200}$")
 
 
 class _RegistrationTimeout(BaseException):
@@ -122,27 +125,56 @@ def _payload_data(payload: bytes) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _registration_identity(payload: bytes) -> tuple[str, str]:
+def _registration_identity(payload: bytes) -> tuple[str, str, str]:
     data = _payload_data(payload)
     cwd = data.get("cwd")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
-        return "", ""
+        return "", "", ""
     payload_ids = {
         str(data.get(key) or "")
         for key in ("session_id", "thread_id")
         if data.get(key)
     }
     if len(payload_ids) > 1:
-        return "", ""
+        return "", "", ""
     payload_id = next(iter(payload_ids), "")
     env_id = str(os.environ.get("CODEX_THREAD_ID") or "")
     if payload_id:
         if not THREAD_RE.fullmatch(payload_id):
-            return "", ""
+            return "", "", ""
         if env_id and (not THREAD_RE.fullmatch(env_id) or env_id != payload_id):
-            return "", ""
-        return cwd, payload_id
-    return (cwd, env_id) if THREAD_RE.fullmatch(env_id) else ("", "")
+            return "", "", ""
+        thread_id = payload_id
+    else:
+        thread_id = env_id if THREAD_RE.fullmatch(env_id) else ""
+    tool_use_id = str(data.get("tool_use_id") or "")
+    if not thread_id or (tool_use_id and not TOOL_USE_RE.fullmatch(tool_use_id)):
+        return "", "", ""
+    return cwd, thread_id, tool_use_id
+
+
+def authorize_binding_recovery(payload: bytes) -> bool:
+    """Let exactly one fresh task invocation cross an ambiguity fence."""
+    cwd, thread_id, tool_use_id = _registration_identity(payload)
+    data = _payload_data(payload)
+    if (
+        not cwd
+        or not TOOL_USE_RE.fullmatch(tool_use_id)
+        or not is_codex_task_binding_tool(str(data.get("tool_name") or data.get("tool") or ""))
+    ):
+        return False
+    control_root = find_harness_root(cwd) or ""
+    if not control_root:
+        return False
+    try:
+        with active_session_transaction(control_root):
+            marker = read_active_session_marker(control_root, thread_id)
+            if "recovery_tool_use_id" not in marker:
+                return False
+            write_binding_recovery_fence(control_root, thread_id, tool_use_id)
+            return True
+    except Exception:
+        return False
 
 
 REGISTERED = "registered"
@@ -197,13 +229,16 @@ def register_task_result(
     status_out: dict | None = None,
 ) -> bool:
     """Bind a successful Harness task result to this exact Codex session."""
-    cwd, thread_id = _registration_identity(payload)
+    cwd, thread_id, tool_use_id = _registration_identity(payload)
     task_dir, task_id, run_id = _task_result(payload)
     if status_out is not None:
         status_out.update({"status": NOT_APPLICABLE, "reason": "task result was not bindable"})
         if thread_id:
             status_out["thread_id"] = thread_id
-    if not cwd or not thread_id or not task_dir or not task_id or not run_id:
+    if (
+        not cwd or not thread_id or not TOOL_USE_RE.fullmatch(tool_use_id)
+        or not task_dir or not task_id or not run_id
+    ):
         return False
     control_root = find_harness_root(cwd) or ""
     expected_parent = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
@@ -225,14 +260,13 @@ def register_task_result(
                     or control.get("run_id") != run_id
                 ):
                     return False
+                marker = read_active_session_marker(control_root, thread_id)
+                if "recovery_tool_use_id" in marker:
+                    if marker.get("recovery_tool_use_id") != tool_use_id:
+                        return False
                 existing = resolve_session_task_binding(control_root, thread_id)
                 if existing and os.path.realpath(existing["task_dir"]) != canonical_task:
-                    clear_active_marker(
-                        control_root,
-                        task_dir=existing["task_dir"],
-                        session_id=thread_id,
-                        strict=True,
-                    )
+                    write_binding_recovery_fence(control_root, thread_id)
                     invalidate_registration(control_root, thread_id)
                     if status_out is not None:
                         status_out.update({
@@ -289,7 +323,7 @@ def restore_watcher_registration(
     _record(NOT_APPLICABLE, "registration was not attempted")
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))
-    cwd, thread_id = _registration_identity(payload)
+    cwd, thread_id, _ = _registration_identity(payload)
     if status_out is not None and thread_id:
         status_out["thread_id"] = thread_id
     control_root = (
@@ -371,4 +405,5 @@ def restore_watcher_registration(
 
 _bind_control_writer(restore_watcher_registration)
 _bind_control_writer(register_task_result)
+_bind_control_writer(authorize_binding_recovery)
 del _bind_control_writer

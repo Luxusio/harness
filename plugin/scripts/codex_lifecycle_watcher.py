@@ -34,6 +34,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 from _lib import (  # type: ignore
     _REVIEW_DETAIL_MAX_BYTES,
     _infer_receipt_lens,
+    active_session_transaction,
     extract_qa_verdict,
     find_harness_root,
     find_repo_root,
@@ -571,20 +572,6 @@ def ensure(
     if rollout is None or _deadline_expired(deadline):
         return False
     trust_root = _sessions_root()
-    opened = _open_trusted_file(rollout, trust_root)
-    if opened is None:
-        return False
-    rollout_handle, rollout_info = opened
-    try:
-        if not _root_meta_from_handle(rollout_handle, thread_id, session_cwd):
-            return False
-        if not _path_matches_handle(rollout, trust_root, rollout_handle):
-            return False
-        offset = rollout_info.st_size
-    finally:
-        rollout_handle.close()
-    if offset < 0 or _deadline_expired(deadline):
-        return False
     runtime = _trusted_runtime_dir(repo_root)
     if runtime is None:
         return False
@@ -608,8 +595,6 @@ def ensure(
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 return False
-        state_path = _state_path(repo_root, thread_id)
-        state = _read_owned_json(state_path, runtime)
         if (
             _deadline_expired(deadline)
             or not _registration_binding_matches(
@@ -617,40 +602,57 @@ def ensure(
             )
         ):
             return False
-        state_offset = state.get("offset")
-        registered_at = state.get("registered_at")
-        tuple_valid = (
-            state.get("thread_id") == thread_id
-            and state.get("repo_root") == repo_root
-            and state.get("task_id") == task_id
-            and state.get("run_id") == run_id
-            and state.get("session_cwd") in {None, "", session_cwd}
-            and state.get("rollout") == str(rollout)
-            and isinstance(state_offset, int)
-            and not isinstance(state_offset, bool)
-            and 0 <= state_offset <= rollout_info.st_size
-            and _finite_timestamp(registered_at)
-        )
-        if tuple_valid and (
-            state.get("version") == REGISTRATION_VERSION
-            and state.get("owner") == REGISTRATION_OWNER
-            and state.get("session_cwd") == session_cwd
-        ):
+        opened = _open_trusted_file(rollout, trust_root)
+        if opened is None:
+            return False
+        rollout_handle, _ = opened
+        try:
+            if not _root_meta_from_handle(rollout_handle, thread_id, session_cwd):
+                return False
+            if not _path_matches_handle(rollout, trust_root, rollout_handle):
+                return False
+            rollout_info = os.fstat(rollout_handle.fileno())
+            offset = rollout_info.st_size
+            if offset < 0 or _deadline_expired(deadline):
+                return False
+            state_path = _state_path(repo_root, thread_id)
+            state = _read_owned_json(state_path, runtime)
+            state_offset = state.get("offset")
+            registered_at = state.get("registered_at")
+            tuple_valid = (
+                state.get("thread_id") == thread_id
+                and state.get("repo_root") == repo_root
+                and state.get("task_id") == task_id
+                and state.get("run_id") == run_id
+                and state.get("session_cwd") in {None, "", session_cwd}
+                and state.get("rollout") == str(rollout)
+                and isinstance(state_offset, int)
+                and not isinstance(state_offset, bool)
+                and 0 <= state_offset <= rollout_info.st_size
+                and _finite_timestamp(registered_at)
+            )
+            if tuple_valid and (
+                state.get("version") == REGISTRATION_VERSION
+                and state.get("owner") == REGISTRATION_OWNER
+                and state.get("session_cwd") == session_cwd
+            ):
+                return True
+            registered_at = time.time()
+            _atomic_json(state_path, {
+                "version": REGISTRATION_VERSION,
+                "repo_root": repo_root,
+                "session_cwd": session_cwd,
+                "thread_id": thread_id,
+                "task_id": task_id,
+                "run_id": run_id,
+                "rollout": str(rollout),
+                "offset": offset,
+                "registered_at": registered_at,
+                "owner": REGISTRATION_OWNER,
+            })
             return True
-        registered_at = time.time()
-        _atomic_json(state_path, {
-            "version": REGISTRATION_VERSION,
-            "repo_root": repo_root,
-            "session_cwd": session_cwd,
-            "thread_id": thread_id,
-            "task_id": task_id,
-            "run_id": run_id,
-            "rollout": str(rollout),
-            "offset": offset,
-            "registered_at": registered_at,
-            "owner": REGISTRATION_OWNER,
-        })
-        return True
+        finally:
+            rollout_handle.close()
 
 
 def registrations(repo_root: str) -> list[dict[str, Any]]:
@@ -1175,29 +1177,64 @@ class Watcher:
             return
         runtime_id = _codex_runtime_id(self.root_id, call_id, item["child_id"])
         source = self._receipt_source(item)
-        exact_existing = _exact_receipt(
-            task_dir,
-            runtime_id,
-            "started",
-            source=source,
-            agent_path=self._receipt_agent_id(item),
-            lens=lens,
-            task_run_id=item["task_run_id"],
-            agent_type=item["task_name"],
-        )
-        if exact_existing is None:
-            child_status, _, _ = _child_status(
-                item["child_id"], self.root_id, item["agent_path"], self.session_cwd,
+        with active_session_transaction(self.repo_root):
+            binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+            if (
+                binding.get("task_dir") != task_dir
+                or binding.get("run_id") != item.get("task_run_id")
+            ):
+                item["invalid"] = True
+                return
+            exact_existing = _exact_receipt(
+                task_dir,
+                runtime_id,
+                "started",
+                source=source,
+                agent_path=self._receipt_agent_id(item),
+                lens=lens,
+                task_run_id=item["task_run_id"],
+                agent_type=item["task_name"],
             )
-            if child_status == "pending":
+        if exact_existing is not None:
+            self.replay_recovery_progress += 1
+            item.update({
+                "started": True,
+                "task_dir": task_dir,
+                "runtime_id": runtime_id,
+            })
+            self.by_agent[item["agent_path"]] = item
+            return
+        child_status, _, _ = _child_status(
+            item["child_id"], self.root_id, item["agent_path"], self.session_cwd,
+        )
+        if child_status == "pending":
+            return
+        # The registration offset proves this spawn was observed in order.
+        # A delayed manager may reach it after the trusted depth-1 child
+        # already completed; that remains real replay, not history scan.
+        if child_status not in {"running", "complete"}:
+            self._invalidate(item, "child evidence was invalid at start capture")
+            return
+        with active_session_transaction(self.repo_root):
+            binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+            if (
+                binding.get("task_dir") != task_dir
+                or binding.get("run_id") != item.get("task_run_id")
+            ):
+                item["invalid"] = True
                 return
-            # The registration offset proves this spawn was observed in order.
-            # A delayed manager may reach it after the trusted depth-1 child
-            # already completed; that remains real replay, not history scan.
-            if child_status not in {"running", "complete"}:
-                self._invalidate(item, "child evidence was invalid at start capture")
-                return
-            record_subagent_receipt(task_dir, {
+            exact_existing = _exact_receipt(
+                task_dir,
+                runtime_id,
+                "started",
+                source=source,
+                agent_path=self._receipt_agent_id(item),
+                lens=lens,
+                task_run_id=item["task_run_id"],
+                agent_type=item["task_name"],
+            )
+            if exact_existing is None:
+                record_subagent_receipt(task_dir, {
                     "source": source,
                     "event": "started",
                     "agent_id": self._receipt_agent_id(item),
@@ -1207,9 +1244,9 @@ class Watcher:
                     "summary": "Codex runtime spawn observed from the registered rollout checkpoint",
                     "runtime_id": runtime_id,
                 })
-            self.receipt_progress += 1
-        else:
-            self.replay_recovery_progress += 1
+                self.receipt_progress += 1
+            else:
+                self.replay_recovery_progress += 1
         item.update({
             "started": True,
             "task_dir": task_dir,
@@ -1251,31 +1288,39 @@ class Watcher:
             )
             return
         lens = _infer_receipt_lens(item["task_name"])
-        exact_existing = _exact_receipt(
-            item["task_dir"],
-            item["runtime_id"],
-            "completed",
-            source=self._receipt_source(item),
-            agent_path=self._receipt_agent_id(item),
-            lens=lens,
-            task_run_id=item["task_run_id"],
-            agent_type=item["task_name"],
-        )
-        if exact_existing is None:
-            record_subagent_receipt(item["task_dir"], {
-                "source": self._receipt_source(item),
-                "event": "completed",
-                "agent_id": self._receipt_agent_id(item),
-                "agent_type": item["task_name"],
-                "lens": lens,
-                "task_run_id": item.get("task_run_id", ""),
-                "verdict": verdict,
-                "summary": child_final,
-                "runtime_id": item["runtime_id"],
-            })
-            self.receipt_progress += 1
-        else:
-            self.replay_recovery_progress += 1
+        with active_session_transaction(self.repo_root):
+            binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+            if (
+                binding.get("task_dir") != item.get("task_dir")
+                or binding.get("run_id") != item.get("task_run_id")
+            ):
+                self._invalidate(item, "active task changed before completion publication")
+                return
+            exact_existing = _exact_receipt(
+                item["task_dir"],
+                item["runtime_id"],
+                "completed",
+                source=self._receipt_source(item),
+                agent_path=self._receipt_agent_id(item),
+                lens=lens,
+                task_run_id=item["task_run_id"],
+                agent_type=item["task_name"],
+            )
+            if exact_existing is None:
+                record_subagent_receipt(item["task_dir"], {
+                    "source": self._receipt_source(item),
+                    "event": "completed",
+                    "agent_id": self._receipt_agent_id(item),
+                    "agent_type": item["task_name"],
+                    "lens": lens,
+                    "task_run_id": item.get("task_run_id", ""),
+                    "verdict": verdict,
+                    "summary": child_final,
+                    "runtime_id": item["runtime_id"],
+                })
+                self.receipt_progress += 1
+            else:
+                self.replay_recovery_progress += 1
         item["completed"] = True
 
     def retry(self) -> None:

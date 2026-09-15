@@ -366,7 +366,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             }) + "\n", encoding="utf-8")
             payload = json.dumps({
                 "cwd": repo, "session_id": root_id,
-                "tool_name": "mcp__harness__task_start",
+                "tool_name": "mcp__harness__task_start", "tool_use_id": "call_post_bind",
                 "tool_response": {"structuredContent": {
                     "task_dir": str(task), "task_id": task.name, "run_id": run_id,
                 }},
@@ -408,7 +408,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                     }) + "\n", encoding="utf-8")
                     payload = json.dumps({
                         "cwd": repo, "session_id": session_id,
-                        "tool_name": "task_start",
+                        "tool_name": "task_start", "tool_use_id": f"call_session_{index}",
                         "tool_response": {"structuredContent": {
                             "task_dir": str(task), "task_id": task.name,
                             "run_id": run_id,
@@ -443,7 +443,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 }) + "\n", encoding="utf-8")
                 payloads.append(json.dumps({
                     "cwd": repo, "session_id": session_id,
-                    "tool_name": "task_start",
+                    "tool_name": "task_start", "tool_use_id": f"call_conflict_{name}",
                     "tool_response": {"structuredContent": {
                         "task_dir": str(task), "task_id": task.name,
                         "run_id": run_id,
@@ -454,9 +454,10 @@ class TestCodexHookWrappers(unittest.TestCase):
             ) as ensure_mock:
                 self.assertTrue(mod.register_task_result(payloads[1]))
                 self.assertFalse(mod.register_task_result(payloads[0]))
+                self.assertFalse(mod.register_task_result(payloads[0]))
 
             marker = root / "doc/harness/tasks/.active_sessions" / f"{session_id}.json"
-            self.assertFalse(marker.exists())
+            self.assertEqual(json.loads(marker.read_text())["recovery_tool_use_id"], "")
             self.assertEqual(lib.resolve_session_task_binding(repo, session_id), {})
             self.assertEqual(ensure_mock.call_count, 1)
 
@@ -467,6 +468,17 @@ class TestCodexHookWrappers(unittest.TestCase):
             with mock.patch.object(mod, "_ensure_with_deadline") as retry_mock:
                 self.assertFalse(mod.restore_watcher_registration(spawn_payload))
             retry_mock.assert_not_called()
+
+            recovery = json.loads(payloads[1])
+            recovery["tool_use_id"] = "call_fresh_recovery"
+            recovery_payload = json.dumps(recovery).encode()
+            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_ensure_with_deadline", return_value=True,
+            ):
+                self.assertTrue(mod.authorize_binding_recovery(recovery_payload))
+                self.assertTrue(mod.register_task_result(recovery_payload))
+            binding = lib.resolve_session_task_binding(repo, session_id)
+            self.assertEqual(binding["task_dir"], str(root / "doc/harness/tasks/TASK__newer"))
 
     def test_terminal_stale_task_result_preserves_current_session_binding(self):
         mod = _load("codex_hook_registration")
@@ -495,7 +507,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 runs.append(run_id)
                 payloads.append(json.dumps({
                     "cwd": repo, "session_id": session_id,
-                    "tool_name": "task_start",
+                    "tool_name": "task_start", "tool_use_id": f"call_terminal_{name}",
                     "tool_response": {"structuredContent": {
                         "task_dir": str(task), "task_id": task.name,
                         "run_id": run_id,
@@ -524,6 +536,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
             payload = json.dumps({
                 "cwd": repo, "session_id": root_id, "tool_name": "task_start",
+                "tool_use_id": "call_failed_result",
                 "tool_response": {"status": "failed", "structuredContent": {
                     "task_dir": str(root / "doc/harness/tasks/TASK__missing"),
                     "task_id": "TASK__missing", "run_id": "wrong",
@@ -555,6 +568,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             payload = json.dumps({
                 "cwd": repo, "session_id": root_id,
                 "tool_name": "mcp__untrusted_connector__task_context",
+                "tool_use_id": "call_foreign_context",
                 "tool_response": {"structuredContent": {
                     "task_dir": str(task), "task_id": task.name, "run_id": run_id,
                 }},
@@ -591,6 +605,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             task_control.write_text(json.dumps(control) + "\n", encoding="utf-8")
             payload = json.dumps({
                 "cwd": repo, "session_id": root_id, "tool_name": "task_start",
+                "tool_use_id": "call_rotate_result",
                 "tool_response": {"structuredContent": {
                     "task_dir": str(task), "task_id": task.name, "run_id": old_run,
                 }},
@@ -616,7 +631,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         callback = mock.Mock(side_effect=RuntimeError("watcher unavailable"))
         payload = json.dumps({
             "cwd": str(REPO_ROOT), "session_id": "019f834e-1e91-7662-9024-f548103d751e",
-            "tool_name": "mcp__harness__task_context",
+            "tool_name": "mcp__harness__task_context", "tool_use_id": "call_route_context",
             "tool_response": {"structuredContent": {
                 "task_dir": "/ignored", "task_id": "TASK__ignored", "run_id": "run",
             }},
@@ -1013,7 +1028,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         config = install._codex_hooks_config(REPO_ROOT / "installed")
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["matcher"],
-            "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent",
+            "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent|"
+            "task_start|task_context|mcp__harness__task_start|"
+            "mcp__harness__task_context|mcp__plugin_harness_harness__task_start|"
+            "mcp__plugin_harness_harness__task_context",
         )
         self.assertEqual(
             config["hooks"]["PostToolUse"][0]["matcher"],
