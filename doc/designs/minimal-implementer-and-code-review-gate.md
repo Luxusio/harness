@@ -147,7 +147,7 @@ Do not adopt directly:
 | `harness:code-reviewer` minimality lens | Report deletion, reuse, native/stdlib replacement, and speculative abstraction | Ponytail `skills/ponytail-review/SKILL.md` | Made it one paired lens inside a broader correctness/architecture review instead of a standalone completion verdict |
 | `harness:code-reviewer` adversarial lens | Always examine production failure, races, leaks, silent corruption, swallowed errors, and trust-boundary violations | gstack `ship/SKILL.md` | Required for every source diff; unlike gstack's informational fallback, missing review fails closed |
 | Review finding verification | Require exact motivating code, AC/scope cross-reference, search-before-recommending, confidence calibration, and suppress unsupported speculation from blocking output | gstack `review/checklist.md` and `review/SKILL.md` | Hunter leads remain untrusted; verified code defects are `FIX_NOW`, while only a report-level evidence blocker uses `INVESTIGATE` and code review never emits `OPTIONAL` |
-| `harness:security-reviewer` | Separate read-only OWASP/trust-boundary specialist prioritizing exploitability and blast radius | oh-my-claudecode `agents/security-reviewer.md` | Runs conditionally from path **or diff-content** signals; baseline security remains in the always-on code reviewer |
+| `harness:security-reviewer` | Separate read-only OWASP/trust-boundary specialist prioritizing exploitability and blast radius | oh-my-claudecode `agents/security-reviewer.md` | Runs only when protected task/PLAN routing declares `review-security`; baseline security remains in the always-on code reviewer |
 | Security specialist routing | Security and migration are insurance controls and must not be disabled by historical zero findings | gstack `ship/SKILL.md` | Security remains conditional on current scope but is never adaptive-hit-rate gated |
 | Review/QA role separation | Architecture, security, quality review, and runtime QA are independent responsibilities | oh-my-claudecode `skills/autopilot/SKILL.md` | Uses risk-proportional non-attesting discovery plus one mandatory authoritative verifier and a separately conditional security specialist; QA remains a later distinct gate |
 | Lifecycle freshness and synthesis | Run independent reviewer contexts and prioritize corroborated findings | gstack `ship/SKILL.md` | Uses current-run ordered lifecycle receipts; post-review edits remain developer-owned rather than adding Git state to task control |
@@ -245,6 +245,17 @@ leads. Valid arrays are compactly reserialized with delimiter characters
 escaped before prompt interpolation; unusable hunter output is never fabricated
 as an empty success.
 
+Discovery spends at most two ephemeral cycles: LIGHT makes no hunter call,
+STANDARD at most two total, and DEEP at most four total. The first cycle gathers
+the selected leads before formal review and batches verified remediation. The
+final retry is change-class aware: executable behavior recomputes the selected
+set from the live depth floor, test-logic-only changes run contract/test only,
+and narrative/task-artifact corrections use deterministic checks only. Once
+exhausted—or when recovery cannot know the prior count—one fresh formal
+reviewer verifies the final diff and remediation evidence without another
+hunter. Hunter prompts contain only base-to-HEAD diff, PLAN ACs, relevant
+source/tests, and unresolved findings.
+
 Every tier then runs one fresh, first-class, read-only `code-reviewer`. The
 reviewer reopens current files, verifies
 or rejects each lead, deduplicates root causes, and still performs its own
@@ -313,9 +324,11 @@ separate read-only security reviewer when the diff changes any of:
 - concurrency or transaction boundaries whose failure can expose or corrupt
   data.
 
-Routing must inspect changed paths **and diff content**. A filename regex alone
-misses a five-line authorization removal in a generic controller. The security
-reviewer covers applicable trust boundaries, exploitability, and blast radius;
+Planning/task routing must inspect semantic scope rather than relying on a
+filename regex, then declare `review-security` in protected task intent. The
+develop/review phase consumes that declaration and never independently infers
+the lens from Git diff content. The security reviewer covers applicable trust
+boundaries, exploitability, and blast radius;
 it does not report style or general refactoring advice. Security review is an
 insurance control and is never disabled due to a low historical hit rate.
 
@@ -429,7 +442,9 @@ Refactor it as follows:
 
 ### Phase B: routing and lifecycle receipts
 
-- Compute required review lenses from changed paths and diff-content signals.
+- Compute and persist required review lenses during protected planning from
+  semantic scope evidence; develop consumes the declaration without Git-diff
+  inference.
 - Add hook-owned review lifecycle capture through the canonical receipt
   protocol.
 - Validate current-run identity, lens, verdict, and ordering.

@@ -197,11 +197,13 @@ def test_review_depth_is_ephemeral_and_adds_no_artifact_or_lens_state():
         | frozenset(lib.LENS_ORDER)
     )
     assert not any(
-        "depth" in name or "hunter" in name
+        any(token in name for token in ("depth", "hunter", "discovery_cycle", "review_budget"))
         for name in persisted_names
     )
     assert not hasattr(lib, "REVIEW_DEPTH_FIELDS")
     assert not hasattr(lib, "HUNTER_FIELDS")
+    assert not hasattr(lib, "DISCOVERY_CYCLE_FIELDS")
+    assert not hasattr(lib, "REVIEW_BUDGET_FIELDS")
 
 
 def test_uuid7_identity_is_canonical_timestamped_and_rotates(tmp_path):

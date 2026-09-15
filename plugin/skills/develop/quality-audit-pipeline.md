@@ -99,6 +99,38 @@ Fan-out is exact:
 - **DEEP**: both fresh hunters together, then one fresh full-sweep formal code
   reviewer after both attempts finish.
 
+### Bounded discovery retries
+
+Discovery is advisory and has an ephemeral hard ceiling of two cycles per live
+review attempt: LIGHT uses zero hunter calls, STANDARD at most one per cycle
+(two total), and DEEP at most two per cycle (four total). A cycle is one
+selected hunter batch, not a formal-review retry. Collect every finding from a
+cycle and remediate the verified set as one batch when dependencies allow.
+
+After the first formal review, classify the remediation before spending the
+second and final hunter cycle:
+
+- executable product or operational behavior changed: recompute with the prior
+  live depth as a floor and run the hunter set selected by that result;
+- test-logic-only change: run the contract/test-only hunter lane;
+- documentation, reviewed HEAD, expected test count, or test-command text only:
+  run deterministic scripts/tests and no hunter;
+- checkpoint or receipt wording only: use Harness task verification and no
+  hunter;
+- rerun a routed security reviewer only when security-relevant source or
+  evidence changed; it remains independent and receives no hunter payload.
+
+Once cycle two was attempted, spawn no more hunters. One fresh formal reviewer
+must instead inspect the final diff and verify each prior finding against its
+remediation evidence. On resume/recovery, if the previous discovery count is
+unavailable, treat the hunter budget as exhausted and use that formal-only
+path; never reconstruct hunter counts from receipts. Depth and budget stay in
+live orchestration context and add no task, receipt, or review-detail field.
+
+Bound every hunter prompt to the reviewed base..HEAD diff, PLAN acceptance
+criteria, relevant source/tests, and unresolved prior findings. Do not forward
+the full conversation, unrelated transcripts, or already-resolved findings.
+
 Every selected hunter returns the exact three-string JSON candidate array owned
 by its agent definition. Mechanically validate each attempted result as `[]` or
 a JSON array of at most 20 objects with exactly nonempty-string `anchor`,
@@ -186,8 +218,10 @@ environmental blocker and always uses `OPTIONAL=0`. The unchanged security
 reviewer may still classify specialist findings as
 `FIX_NOW|INVESTIGATE|OPTIONAL` under its own contract.
 
-- `FIX_NOW`: return only the required finding to the original minimum-sufficient
-  implementer. Add/update the focused regression test, fix, and run it.
+- `FIX_NOW`: a review-depth reroute is coordinator-owned; run the missing
+  discovery/formal sequence without sending it to the source implementer. Send
+  ordinary source findings to the original minimum-sufficient implementer,
+  add/update the focused regression test, fix, and run it.
 - `INVESTIGATE`: obtain the missing evidence. Whether an unresolved INVESTIGATE
   blocks is the reviewer's call, expressed as `BLOCKED_ENV` — no gate downstream
   can tell a blocking INVESTIGATE from a non-blocking one, so nothing will catch
@@ -195,10 +229,8 @@ reviewer may still classify specialist findings as
 - `OPTIONAL`: report as advisory. Never send it into an automatic code-growth
   loop.
 
-After fixing a reviewer finding, recompute depth, rerun its selected fresh
-discovery, and rerun every routed formal review lens before QA, including a
-fresh `review-security` when declared. Security stays independent and receives
-no hunter payload. Harness
+After fixing a reviewer finding, apply the bounded retry matrix above, then
+rerun every affected formal review lens before QA. Harness
 does not detect later source edits; deciding whether an unrelated or post-QA
 edit needs another review is developer-owned. QA must start after actual PASS
 finals from every required reviewer. Normally those PASS finals also have

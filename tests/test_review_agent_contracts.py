@@ -645,6 +645,21 @@ def test_review_gate_encodes_risk_proportional_decision_table_and_authority():
     assert "200+ lines" not in audit
 
 
+def test_bounded_review_economics_and_security_routing_are_durable():
+    req = _normalized(_text("doc/harness/REQ__selective-review-detail.md"))
+    design = _normalized(_text("doc/designs/minimal-implementer-and-code-review-gate.md"))
+    for body in (req, design):
+        assert "two" in body and "cycle" in body
+        assert "four" in body and "hunter" in body
+        assert "formal reviewer" in body
+        assert "base-to-head diff" in body or "base-to-head" in body
+        assert "unresolved findings" in body
+    assert "protected task/plan routing declares `review-security`" in design
+    assert "never independently infers the lens from git diff content" in design
+    assert "runs conditionally from path **or diff-content** signals" not in design
+    assert "compute required review lenses from changed paths and diff-content signals" not in design
+
+
 def test_both_executable_formal_review_templates_carry_selection_evidence():
     audit = _text("plugin/skills/develop/quality-audit-pipeline.md")
     template_lines = [

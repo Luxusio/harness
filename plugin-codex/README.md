@@ -76,7 +76,9 @@ inside stored non-authoritative formal-review narrative; resume/recovery still
 recomputes it. Conditional security review is routed separately.
 Rebase-LIGHT requires exact endpoints, conflict-free one-to-one patch
 equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and a
-clean, accounted-for index/worktree. Formal review finals are stored separately
+clean, accounted-for index/worktree. Discovery is capped at two cycles (four
+hunter calls maximum at DEEP); an exhausted or unknown recovery budget uses one
+fresh formal reviewer without another hunter. Formal review finals are stored separately
 from compact receipts. Retrieve one
 exact body without dumping history:
 

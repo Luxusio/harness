@@ -555,29 +555,85 @@ def test_coordinator_review_keeps_successful_independent_siblings_promoted():
         assert "keep successful independent siblings promoted" in body
 
 
-def test_review_retry_recomputes_depth_and_reruns_only_fresh_selected_discovery():
+def test_review_retry_recomputes_depth_and_uses_bounded_selected_discovery():
     fanout = _normalized(_text(PARALLEL_FANOUT))
     codex = _normalized(_text(CODEX_DEVELOP))
     for term in (
-        "after an affecting source edit",
-        "recompute review depth with the prior live depth as a floor",
-        "rerun every fresh discovery attempt selected by that result",
-        "then start one fresh formal reviewer",
-        "formal code reviewer remains dependent on attempted hunter finals",
+        "two-cycle ceiling",
+        "executable behavior recomputes from the prior depth floor",
+        "test-logic-only work reruns contract/test only",
+        "one fresh formal reviewer",
+        "formal code reviewer remains dependent on any selected hunter attempts",
     ):
         assert term.lower() in fanout
-    assert "re-run only the lanes whose findings you fixed" not in fanout
 
     for term in (
-        "after an affecting edit",
-        "recompute depth with the prior live depth as a floor",
-        "rerun only fresh discovery selected by the recomputed depth",
-        "then every routed formal lens",
-        "code review remains one fresh formal reviewer",
+        "ephemeral hard ceiling of two cycles",
+        "standard at most 1 per cycle/2 total",
+        "deep at most 2 per cycle/4 total",
+        "test-logic-only reruns contract/test only",
+        "spawn no hunter and use one fresh formal reviewer",
     ):
         assert term.lower() in codex
-    assert "full discovery plus formal review" not in codex
-    assert "only-finding-lanes" not in codex
+
+
+def test_review_discovery_budget_is_bounded_and_change_class_aware():
+    claude = _policy_text(_text(REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md"))
+    codex = _policy_text(_text(CODEX_DEVELOP))
+    for policy, path in ((claude, "quality-audit-pipeline"), (codex, "codex develop")):
+        for term in (
+            "two cycles",
+            "light",
+            "zero hunter" if path == "quality-audit-pipeline" else "light 0 calls",
+            "standard",
+            "two total" if path == "quality-audit-pipeline" else "2 total",
+            "deep",
+            "four total" if path == "quality-audit-pipeline" else "4 total",
+            "test logic only",
+            "contract test only",
+            "deterministic",
+            "no hunter",
+            "cycle two",
+            "formal reviewer",
+            "previous discovery count is unavailable" if path == "quality-audit-pipeline" else "prior count is unavailable",
+        ):
+            assert term in policy, f"{path}: missing bounded retry term {term!r}"
+
+
+def test_hunter_context_is_bounded_and_excludes_transcript_noise():
+    for path in (
+        REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md",
+        CODEX_DEVELOP,
+    ):
+        policy = _policy_text(_text(path))
+        for term in ("base head diff", "plan", "relevant source tests", "unresolved"):
+            assert term in policy, f"{path}: missing bounded hunter input {term!r}"
+        assert "full conversation" in policy
+        assert "unrelated transcript" in policy
+        assert "resolved findings" in policy
+
+
+def test_retry_budget_keeps_security_selective_and_depth_reroutes_coordinator_owned():
+    audit = _policy_text(_text(REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md"))
+    codex = _policy_text(_text(CODEX_DEVELOP))
+    for policy in (audit, codex):
+        assert "security relevant" in policy
+        assert "no hunter payload" in policy
+        assert "coordinator owned" in policy
+        assert "source implementer" in policy or "implementer" in policy
+
+
+def test_parallel_retry_delegates_to_bounded_matrix_not_unlimited_hunters():
+    fanout = _policy_text(_text(PARALLEL_FANOUT))
+    for term in (
+        "two cycle ceiling",
+        "second cycle is the last",
+        "test logic only",
+        "deterministic checks without hunters",
+        "spawn no hunter",
+        "fresh formal reviewer",
+    ):
+        assert term in fanout
 
 
 def test_recovery_status_reports_recomputation_even_when_depth_is_unchanged():
@@ -594,18 +650,17 @@ def test_recovery_status_reports_recomputation_even_when_depth_is_unchanged():
         assert "unchanged" in recovery
 
 
-def test_post_edit_retry_reruns_every_routed_formal_lens_with_security_independent():
+def test_post_edit_retry_keeps_formal_review_and_security_selective():
     fanout = _normalized(_text(PARALLEL_FANOUT))
     codex = _normalized(_text(CODEX_DEVELOP))
     for body, label in ((fanout, "parallel-fanout"), (codex, "Codex develop")):
         for term in (
-            "after an affecting",
-            "every routed formal lens",
+            "formal reviewer",
             "review-security",
             "independent",
             "no hunter",
             "payload",
         ):
             assert term in body, f"{label}: retry contract missing {term!r}"
-    assert "formal code reviewer remains dependent on attempted hunter finals" in fanout
-    assert "security remains independent" in codex
+    assert "formal code reviewer remains dependent on any selected hunter attempts" in fanout
+    assert "independently with no hunter payload" in codex

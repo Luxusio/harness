@@ -73,6 +73,21 @@ freshness_updated: 2026-09-15T00:00:00Z
    After resume or recovery, the status explicitly says the tier was
    recomputed.
 
+   Discovery is capped at two ephemeral cycles per live attempt: LIGHT uses no
+   hunter calls, STANDARD at most two total, and DEEP at most four total. After
+   cycle one, executable behavior changes recompute the selected set with the
+   prior tier as a floor; test-logic-only changes rerun contract/test only;
+   documentation, HEAD/count/command-text, checkpoint, and receipt-wording
+   corrections use deterministic checks without hunters. Cycle two is final.
+   An exhausted or unknown recovery budget runs one fresh formal reviewer on
+   the final diff and prior remediation evidence without another hunter.
+   Security reruns only for security-relevant source/evidence changes.
+
+   Hunter input is limited to the reviewed base-to-HEAD diff, PLAN acceptance
+   criteria, relevant source/tests, and unresolved findings. The full
+   conversation, unrelated transcripts, and resolved findings are excluded.
+   Cycle count is not persisted in any lifecycle or detail field.
+
 2. Exactly one fresh formal code reviewer runs for LIGHT, STANDARD, and DEEP
    and remains the only `review-code` authority. If it discovers that the tier
    was too shallow, that round cannot PASS: Harness escalates, runs missing
@@ -81,6 +96,8 @@ freshness_updated: 2026-09-15T00:00:00Z
    replace formal code review. Hunters
    do not emit verdicts, finding counts, receipt fields, or lifecycle state.
    A verified finding adds only the smallest safe `fix` direction. An
+   under-classification finding is coordinator-owned and triggers routing, not
+   source implementation. An
    environmental inability to inspect takes precedence as `BLOCKED_ENV`;
    otherwise verified findings produce `FAIL`, and their absence produces
    `PASS`.
@@ -123,6 +140,8 @@ freshness_updated: 2026-09-15T00:00:00Z
 
 - Prompt-contract tests pin the decision-to-fan-out relations for deterministic
   zero/one/two hunter routing, every conjunct of the rebase-LIGHT instructions,
+  the two-cycle ceiling and change-class retry matrix, bounded hunter context,
+  coordinator-owned reroutes, formal-only exhaustion path,
   the exact three-field schema, independent full-sweep verifier behavior, and
   the unchanged single formal authority. They do not attest a runtime
   classifier because selection is orchestration instruction, not lifecycle

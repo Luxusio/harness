@@ -159,13 +159,15 @@ completion order is not a PASS.
 
 ### Re-review after remediation
 
-After an affecting source edit, recompute review depth with the prior live
-depth as a floor, rerun every fresh discovery attempt selected by that result,
-then start one fresh formal reviewer. Do not reuse a previously clean hunter:
-its evidence describes pre-edit source. Batch only the newly selected,
-dependency-free discovery/security calls; rerun every routed formal lens,
-including fresh `review-security`, and keep security independent with no hunter
-payload. The formal code reviewer remains dependent on attempted hunter finals.
+Follow `quality-audit-pipeline.md`'s two-cycle ceiling and remediation matrix.
+The second cycle is the last: executable behavior recomputes from the prior
+depth floor, test-logic-only work reruns contract/test only, and narrative or
+task-artifact wording uses deterministic checks without hunters. After the
+ceiling—or when prior cycle count is unavailable on recovery—spawn no hunter
+and let one fresh formal reviewer verify the final diff and prior remediation
+evidence. Rerun security only for security-relevant changes, independently and
+without hunter payload. The formal code reviewer remains dependent on any
+selected hunter attempts.
 
 ### Component-independent definition
 

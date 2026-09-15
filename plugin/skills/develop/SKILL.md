@@ -303,7 +303,6 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
   stats series for per-task scores.
 
 ### Phase 6.6: Independent Code Review Gate
-
 Read `quality-audit-pipeline.md` § Phase 6.6 and call `task_context`. For
 `review-code`, classify the complete current evidence with the canonical
 LIGHT/STANDARD/DEEP decision table there. LIGHT spawns zero hunters, STANDARD
@@ -323,14 +322,17 @@ as `PENDING`/`FINDING_COUNTS: INVALID`; describe scope, focus, and candidate
 data, never re-specify output syntax.
 
 Send only `FIX_NOW` findings to the original minimum-sufficient
-implementer. Any edit loops through focused tests/checkpoint and all required
-reviewers again. Normally do not start Phase 7 QA until receipt-backed review
+implementer, except coordinator-owned review-depth reroutes. Discovery has at
+most two live cycles (LIGHT 0 calls, STANDARD at most 2, DEEP at most 4): after
+the first round follow the canonical change-class retry matrix, then use a
+fresh formal-only pass once the budget is exhausted. Any affecting edit loops
+through focused tests/checkpoint and affected formal reviewers again. Normally
+do not start Phase 7 QA until receipt-backed review
 PASS. Under the Missing receipt policy, actual reviewer PASS finals permit one
 substantive QA run, but both review and QA results remain NON-ATTESTING and can
 only lead to the generic blocked path unless ordered receipts arrive.
 
 ### Phase 7: Verification Gate
-
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
 **Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.

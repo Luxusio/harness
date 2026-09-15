@@ -68,7 +68,9 @@ non-authoritative formal-review narrative. Conditional security review remains
 separate.
 Rebase-LIGHT additionally requires exact endpoints, conflict-free one-to-one
 patch equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and
-a clean, accounted-for index/worktree. Receipts stay compact. To retrieve only
+a clean, accounted-for index/worktree. Discovery is capped at two cycles (four
+hunter calls maximum at DEEP); exhausted recovery proceeds to one fresh formal
+reviewer without another hunter. Receipts stay compact. To retrieve only
 the exact formal review named by a receipt's `DETAIL_SHA256`:
 
 ```bash

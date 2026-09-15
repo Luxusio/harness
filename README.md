@@ -114,6 +114,9 @@ selected depth and evidence may appear in stored non-authoritative formal-review
 narrative. Rebase-LIGHT requires exact old/new endpoints,
 conflict-free one-to-one patch equivalence, affirmative semantic non-overlap,
 `HEAD` at the new tip, and a clean, fully accounted-for index and worktree.
+Discovery is capped at two cycles (DEEP: four hunter calls maximum); test-only
+retries use contract/test only, narrative corrections use deterministic checks,
+and an exhausted budget proceeds to one fresh formal reviewer.
 
 QA/UX agents return findings in their final response. Lifecycle hooks own the
 unified `RECEIPTS.jsonl`; `task_verify` enforces plan-declared lenses and
