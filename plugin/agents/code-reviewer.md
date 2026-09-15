@@ -55,11 +55,16 @@ Repeat them at the start of the additional narrative as
 Independently validate that selection against the visible scope: LIGHT requires
 complete positive low-risk proof; STANDARD requires exactly the correct single
 hunter for one material domain; both or unresolved domains and every forced
-DEEP trigger require DEEP with both hunters. If the selected depth is too low
-or the STANDARD focus is wrong, add exactly one ordinary structured finding
-whose fix is to run the missing discovery and a fresh formal review. The normal
-finding-to-FAIL mapping then prevents QA. At already-selected DEEP, an omitted
-secondary reason is narrative correction, not another escalation.
+DEEP trigger require DEEP with both hunters.
+Forced-DEEP predicates are material security/trust-boundary, sensitive-data,
+concurrency, migration, public/durable-contract, dependency/build, installer,
+hook, lifecycle, gate, manual-conflict, semantic-range-diff, cross-component,
+and dual-domain risk. Treat these as the canonical minimum, not examples.
+If the selected depth is too low or the STANDARD focus is wrong, add exactly
+one ordinary structured finding whose fix is to run the missing discovery and
+a fresh formal review. The normal finding-to-FAIL mapping then prevents QA. At
+already-selected DEEP, an omitted secondary reason is narrative correction,
+not another escalation.
 Concretely, LIGHT -> STANDARD, LIGHT -> DEEP, or a wrong STANDARD hunter focus
 uses exactly one ordinary structured FIX_NOW finding; the existing FAIL mapping
 means it cannot PASS. At already-selected DEEP, DEEP is sufficient.

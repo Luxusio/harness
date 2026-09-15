@@ -259,6 +259,43 @@ def test_formal_reviewer_pins_each_depth_mismatch_and_deep_sufficiency_case():
             assert relation.lower() in core, f"{path}: missing depth relation {relation!r}"
 
 
+def test_formal_reviewer_role_knows_every_canonical_forced_deep_predicate():
+    forced = (
+        "security",
+        "trust-boundary",
+        "sensitive data",
+        "concurrency",
+        "migration",
+        "public/durable contract",
+        "dependency/build",
+        "installer",
+        "hook",
+        "lifecycle",
+        "gate",
+        "manual conflict",
+        "semantic range-diff",
+        "cross-component",
+        "dual-domain",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        core = _role_core(path)
+        _assert_policy_terms(core, {"forced-DEEP role predicates": forced}, path)
+        normalized = _normalized(core)
+        start = normalized.index("forced-deep")
+        end = normalized.index("concretely", start)
+        clause = normalized[start:end]
+        for predicate in forced:
+            normalized_predicate = " ".join(
+                re.sub(r"[-_/*`]+", " ", predicate.lower()).split()
+            )
+            normalized_clause = " ".join(
+                re.sub(r"[-_/*`]+", " ", clause.lower()).split()
+            )
+            assert normalized_predicate in normalized_clause, (
+                f"{path}: {predicate!r} is outside the forced-DEEP validation clause"
+            )
+
+
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
     required = (
         "task.json",
@@ -391,6 +428,26 @@ def test_review_gate_encodes_risk_proportional_decision_table_and_authority():
     assert "single substantive QA" in audit
     assert "NON-ATTESTING" in audit
     assert "200+ lines" not in audit
+
+
+def test_both_executable_formal_review_templates_carry_selection_evidence():
+    audit = _text("plugin/skills/develop/quality-audit-pipeline.md")
+    template_lines = [
+        line
+        for line in audit.splitlines()
+        if 'subagent_type="harness:code-reviewer"' in line
+        or 'task_name="code_review_<review_run>"' in line
+    ]
+    assert len(template_lines) == 2
+    for line in template_lines:
+        normalized = _normalized(line)
+        prefix = normalized[:normalized.index("candidates")]
+        assert "selected depth" in prefix
+        assert "<selected_depth>" in prefix or "<depth>" in prefix
+        assert "attempted hunter set" in prefix
+        assert "<attempted_hunter_set>" in prefix or "<hunter_set>" in prefix
+        assert "concise selection reason" in prefix
+        assert "<selection_reason>" in prefix
 
 
 def test_every_forced_deep_predicate_is_named_independently():
