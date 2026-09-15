@@ -162,9 +162,9 @@ completion order is not a PASS.
 Follow `quality-audit-pipeline.md`'s two-cycle ceiling and remediation matrix.
 The second cycle is the last: executable behavior recomputes from the prior
 depth floor, test-logic-only work reruns contract/test only, and narrative or
-task-artifact wording uses deterministic checks without hunters. After the
-ceiling—or when prior cycle count is unavailable on recovery—select or retain
-DEEP, spawn no hunter,
+task-artifact wording uses deterministic checks without hunters and forfeits
+the remaining discovery budget. After the ceiling, that forfeit, or when prior
+cycle count is unavailable on recovery, select or retain DEEP, spawn no hunter,
 and let one fresh formal reviewer verify the final diff and prior remediation
 evidence, using the canonical exhausted or unknown-budget invocation reason.
 Rerun security only for security-relevant changes, independently and

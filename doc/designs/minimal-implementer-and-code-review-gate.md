@@ -251,6 +251,7 @@ the selected leads before formal review and batches verified remediation. The
 final retry is change-class aware: executable behavior recomputes the selected
 set from the live depth floor, test-logic-only changes run contract/test only,
 and narrative/task-artifact corrections use deterministic checks only. Once
+those no-hunter branches forfeit the remaining discovery budget. Once
 exhausted—or when recovery cannot know the prior count—the coordinator selects
 or retains DEEP and one fresh formal
 reviewer verifies the final diff and remediation evidence without another

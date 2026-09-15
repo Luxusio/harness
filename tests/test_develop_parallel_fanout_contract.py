@@ -608,6 +608,7 @@ def test_exhausted_discovery_uses_a_live_formal_only_exception_without_state():
         assert "discovery budget unknown and treated as exhausted" in policy
         assert "select or retain deep" in policy
         assert "formal reviewer" in policy
+        assert "no hunter" in policy and "forfeit" in policy
     assert "spawn no more hunters" in audit
     assert "spawn no hunter" in codex
     assert "never reconstruct hunter counts from receipts" in audit

@@ -114,13 +114,16 @@ second and final hunter cycle:
   live depth as a floor and run the hunter set selected by that result;
 - test-logic-only change: run the contract/test-only hunter lane;
 - documentation, reviewed HEAD, expected test count, or test-command text only:
-  run deterministic scripts/tests and no hunter;
+  run deterministic scripts/tests and no hunter, then forfeit the remaining
+  discovery budget and take the DEEP formal-only exhausted path below;
 - checkpoint or receipt wording only: use Harness task verification and no
-  hunter;
+  hunter, then forfeit the remaining discovery budget and take that same DEEP
+  formal-only exhausted path;
 - rerun a routed security reviewer only when security-relevant source or
   evidence changed; it remains independent and receives no hunter payload.
 
-Once cycle two was attempted, select or retain DEEP and spawn no more hunters.
+Once cycle two was attempted or a no-hunter remediation branch forfeited the
+remaining budget, select or retain DEEP and spawn no more hunters.
 One fresh formal reviewer must instead inspect the final diff and verify each
 prior finding against its remediation evidence. Put the exact phrase
 `discovery budget exhausted` in its invocation reason so the reviewer accepts

@@ -324,7 +324,8 @@ data, never re-specify output syntax.
 Send only `FIX_NOW` findings to the original minimum-sufficient
 implementer, except coordinator-owned review-depth reroutes. Discovery has at
 most two live cycles (LIGHT 0 calls, STANDARD at most 2, DEEP at most 4): after
-the first round follow the canonical change-class retry matrix, then use a
+the first round follow the canonical change-class retry matrix; its no-hunter
+branches forfeit the remaining budget. Then use a
 fresh DEEP formal-only pass with the canonical exhausted/unknown invocation
 reason once the budget is exhausted. Any affecting edit loops
 through focused tests/checkpoint and affected formal reviewers again. Normally
@@ -482,7 +483,6 @@ committed artifact. Deferred requires an `AskUserQuestion` decision and records
 `doc/harness/runbooks.yaml` or another committed artifact; reject one-off noise.
 
 ### Phase 8.6: durable docs
-
 Mechanical. Read the task's changed paths and `doc/CLAUDE.md` registered roots. For each file, map to doc root. Call `task_verify`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
