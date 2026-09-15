@@ -1394,7 +1394,6 @@ def _make_control_writer_authority():
         },
         "codex_hook_registration": {
             "restore_watcher_registration", "register_task_result",
-            "authorize_binding_recovery",
         },
     }
     canonical_paths = {
@@ -2151,8 +2150,8 @@ def write_active_marker(repo_root, task_dir, session_id=None, *, publish_legacy=
         _atomic_text_write(_legacy_active_path(repo_root), task_dir)
 
 
-def write_binding_recovery_fence(repo_root, session_id, recovery_tool_use_id=""):
-    """Replace task authority with a one-invocation recovery fence."""
+def write_binding_conflict_fence(repo_root, session_id, conflicts):
+    """Replace task authority with two exact conflicting task generations."""
     if not _trusted_control_writer(marker=True):
         raise _control_writer_error("binding recovery requires the task-control runtime", marker=True)
     sid = sanitize_session_id(session_id)
@@ -2161,7 +2160,7 @@ def write_binding_recovery_fence(repo_root, session_id, recovery_tool_use_id="")
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
     _publish_session_marker(repo_root, sid, {
         "session_id": sid,
-        "recovery_tool_use_id": recovery_tool_use_id,
+        "conflicts": conflicts,
         "updated": now_iso(),
     })
 

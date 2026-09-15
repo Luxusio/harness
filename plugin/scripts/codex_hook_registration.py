@@ -16,7 +16,6 @@ sys.path.insert(0, SCRIPTS_DIR)
 from codex_lifecycle_watcher import ensure, invalidate_registration
 from _lib import (
     active_session_transaction,
-    clear_active_marker,
     find_harness_root,
     is_codex_task_binding_tool,
     read_active_session_marker,
@@ -25,14 +24,13 @@ from _lib import (
     resolve_session_task_binding,
     task_control_status,
     write_active_marker,
-    write_binding_recovery_fence,
+    write_binding_conflict_fence,
     _bind_control_writer,
 )
 
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 TASK_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
-TOOL_USE_RE = re.compile(r"^[A-Za-z0-9_.:-]{6,200}$")
 
 
 class _RegistrationTimeout(BaseException):
@@ -125,56 +123,54 @@ def _payload_data(payload: bytes) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _registration_identity(payload: bytes) -> tuple[str, str, str]:
+def _registration_identity(payload: bytes) -> tuple[str, str]:
     data = _payload_data(payload)
     cwd = data.get("cwd")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
-        return "", "", ""
+        return "", ""
     payload_ids = {
         str(data.get(key) or "")
         for key in ("session_id", "thread_id")
         if data.get(key)
     }
     if len(payload_ids) > 1:
-        return "", "", ""
+        return "", ""
     payload_id = next(iter(payload_ids), "")
     env_id = str(os.environ.get("CODEX_THREAD_ID") or "")
     if payload_id:
         if not THREAD_RE.fullmatch(payload_id):
-            return "", "", ""
+            return "", ""
         if env_id and (not THREAD_RE.fullmatch(env_id) or env_id != payload_id):
-            return "", "", ""
+            return "", ""
         thread_id = payload_id
     else:
         thread_id = env_id if THREAD_RE.fullmatch(env_id) else ""
-    tool_use_id = str(data.get("tool_use_id") or "")
-    if not thread_id or (tool_use_id and not TOOL_USE_RE.fullmatch(tool_use_id)):
-        return "", "", ""
-    return cwd, thread_id, tool_use_id
+    return (cwd, thread_id) if thread_id else ("", "")
 
 
-def authorize_binding_recovery(payload: bytes) -> bool:
-    """Let exactly one fresh task invocation cross an ambiguity fence."""
-    cwd, thread_id, tool_use_id = _registration_identity(payload)
-    data = _payload_data(payload)
-    if (
-        not cwd
-        or not TOOL_USE_RE.fullmatch(tool_use_id)
-        or not is_codex_task_binding_tool(str(data.get("tool_name") or data.get("tool") or ""))
-    ):
-        return False
-    control_root = find_harness_root(cwd) or ""
-    if not control_root:
-        return False
-    try:
-        with active_session_transaction(control_root):
-            marker = read_active_session_marker(control_root, thread_id)
-            if "recovery_tool_use_id" not in marker:
-                return False
-            write_binding_recovery_fence(control_root, thread_id, tool_use_id)
-            return True
-    except Exception:
-        return False
+def _live_conflicts(control_root: str, marker: dict) -> list[dict]:
+    """Return canonical still-open generations from a conflict fence."""
+    tasks_root = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
+    found = []
+    raw = marker.get("conflicts")
+    if not isinstance(raw, list) or len(raw) != 2:
+        return found
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        task_dir = os.path.realpath(str(item.get("task_dir") or ""))
+        task_id = str(item.get("task_id") or "")
+        run_id = str(item.get("run_id") or "")
+        if (
+            not TASK_RE.fullmatch(task_id)
+            or os.path.dirname(task_dir) != tasks_root
+            or os.path.basename(task_dir) != task_id
+        ):
+            continue
+        control = read_task_control(task_dir)
+        if task_control_status(task_dir, control) == "open" and control.get("run_id") == run_id:
+            found.append({"task_dir": task_dir, "task_id": task_id, "run_id": run_id})
+    return found
 
 
 REGISTERED = "registered"
@@ -229,15 +225,14 @@ def register_task_result(
     status_out: dict | None = None,
 ) -> bool:
     """Bind a successful Harness task result to this exact Codex session."""
-    cwd, thread_id, tool_use_id = _registration_identity(payload)
+    cwd, thread_id = _registration_identity(payload)
     task_dir, task_id, run_id = _task_result(payload)
     if status_out is not None:
         status_out.update({"status": NOT_APPLICABLE, "reason": "task result was not bindable"})
         if thread_id:
             status_out["thread_id"] = thread_id
     if (
-        not cwd or not thread_id or not TOOL_USE_RE.fullmatch(tool_use_id)
-        or not task_dir or not task_id or not run_id
+        not cwd or not thread_id or not task_dir or not task_id or not run_id
     ):
         return False
     control_root = find_harness_root(cwd) or ""
@@ -261,12 +256,27 @@ def register_task_result(
                 ):
                     return False
                 marker = read_active_session_marker(control_root, thread_id)
-                if "recovery_tool_use_id" in marker:
-                    if marker.get("recovery_tool_use_id") != tool_use_id:
+                live_conflicts = _live_conflicts(control_root, marker)
+                candidate_binding = {
+                    "task_dir": canonical_task, "task_id": task_id, "run_id": run_id,
+                }
+                if len(live_conflicts) >= 2:
+                    return False
+                if len(live_conflicts) == 1:
+                    live = live_conflicts[0]
+                    if live != candidate_binding:
+                        write_binding_conflict_fence(
+                            control_root, thread_id, [live, candidate_binding],
+                        )
+                        invalidate_registration(control_root, thread_id)
                         return False
                 existing = resolve_session_task_binding(control_root, thread_id)
                 if existing and os.path.realpath(existing["task_dir"]) != canonical_task:
-                    write_binding_recovery_fence(control_root, thread_id)
+                    write_binding_conflict_fence(control_root, thread_id, [{
+                        "task_dir": os.path.realpath(existing["task_dir"]),
+                        "task_id": os.path.basename(existing["task_dir"]),
+                        "run_id": existing["run_id"],
+                    }, candidate_binding])
                     invalidate_registration(control_root, thread_id)
                     if status_out is not None:
                         status_out.update({
@@ -323,7 +333,7 @@ def restore_watcher_registration(
     _record(NOT_APPLICABLE, "registration was not attempted")
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))
-    cwd, thread_id, _ = _registration_identity(payload)
+    cwd, thread_id = _registration_identity(payload)
     if status_out is not None and thread_id:
         status_out["thread_id"] = thread_id
     control_root = (
@@ -405,5 +415,4 @@ def restore_watcher_registration(
 
 _bind_control_writer(restore_watcher_registration)
 _bind_control_writer(register_task_result)
-_bind_control_writer(authorize_binding_recovery)
 del _bind_control_writer

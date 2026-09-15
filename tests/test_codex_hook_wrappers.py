@@ -457,7 +457,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 self.assertFalse(mod.register_task_result(payloads[0]))
 
             marker = root / "doc/harness/tasks/.active_sessions" / f"{session_id}.json"
-            self.assertEqual(json.loads(marker.read_text())["recovery_tool_use_id"], "")
+            self.assertEqual(len(json.loads(marker.read_text())["conflicts"]), 2)
             self.assertEqual(lib.resolve_session_task_binding(repo, session_id), {})
             self.assertEqual(ensure_mock.call_count, 1)
 
@@ -469,13 +469,14 @@ class TestCodexHookWrappers(unittest.TestCase):
                 self.assertFalse(mod.restore_watcher_registration(spawn_payload))
             retry_mock.assert_not_called()
 
-            recovery = json.loads(payloads[1])
-            recovery["tool_use_id"] = "call_fresh_recovery"
-            recovery_payload = json.dumps(recovery).encode()
+            recovery_payload = payloads[1]
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ):
-                self.assertTrue(mod.authorize_binding_recovery(recovery_payload))
+                self.assertFalse(mod.register_task_result(recovery_payload))
+                (root / "doc/harness/tasks/TASK__older/BLOCKED.md").write_text(
+                    "blocked\n", encoding="utf-8",
+                )
                 self.assertTrue(mod.register_task_result(recovery_payload))
             binding = lib.resolve_session_task_binding(repo, session_id)
             self.assertEqual(binding["task_dir"], str(root / "doc/harness/tasks/TASK__newer"))
@@ -1028,10 +1029,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         config = install._codex_hooks_config(REPO_ROOT / "installed")
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["matcher"],
-            "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent|"
-            "task_start|task_context|mcp__harness__task_start|"
-            "mcp__harness__task_context|mcp__plugin_harness_harness__task_start|"
-            "mcp__plugin_harness_harness__task_context",
+            "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent",
         )
         self.assertEqual(
             config["hooks"]["PostToolUse"][0]["matcher"],

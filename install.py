@@ -858,12 +858,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PreToolUse": [
                 {
-                    "matcher": (
-                        "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent|"
-                        "task_start|task_context|mcp__harness__task_start|"
-                        "mcp__harness__task_context|mcp__plugin_harness_harness__task_start|"
-                        "mcp__plugin_harness_harness__task_context"
-                    ),
+                    "matcher": "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent",
                     "hooks": [
                         {
                             "type": "command",

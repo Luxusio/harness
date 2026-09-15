@@ -80,10 +80,11 @@ conflict, their freshness is ambiguous, so the current marker is removed and
 the old watcher registration is invalidated; neither result becomes receipt
 authority. A later unambiguous bind creates a new registration at the
 then-current rollout offset instead of reusing events from the ambiguous
-interval. The conflict marker is a non-authoritative one-invocation fence:
-PreToolUse records the fresh Codex `tool_use_id`, and only its matching
-PostToolUse result may recover binding authority. Replayed conflict inputs
-cannot recover it. Work remains fail-open while
+interval. The conflict marker is non-authoritative and retains only the two
+exact task/run generations needed to test whether ambiguity still exists.
+Neither can rebind while both remain open; once task state leaves exactly one
+of them live, a valid result for that sole generation may recover authority.
+Work remains fail-open while
 attestation fails closed until a later unambiguous exact result rebinds the
 session. An eligible new generation checkpoints the rollout at the new current
 offset. A worker exits when its bound generation changes, allowing the manager
