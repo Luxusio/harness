@@ -77,7 +77,10 @@ root session to another task generation is allowed directly only after its
 previous exact task/run is no longer open. Marker comparison, publication, and
 watcher registration are serialized. When two different open task results
 conflict, their freshness is ambiguous, so the current marker is removed and
-neither result becomes receipt authority. Work remains fail-open while
+the old watcher registration is invalidated; neither result becomes receipt
+authority. A later unambiguous bind creates a new registration at the
+then-current rollout offset instead of reusing events from the ambiguous
+interval. Work remains fail-open while
 attestation fails closed until a later unambiguous exact result rebinds the
 session. An eligible new generation checkpoints the rollout at the new current
 offset. A worker exits when its bound generation changes, allowing the manager

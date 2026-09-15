@@ -1192,6 +1192,41 @@ def test_ensure_refreshes_offset_when_task_generation_changes(tmp_path, monkeypa
     assert (second["task_id"], second["run_id"]) == (second_task_id, second_run)
 
 
+def test_invalidated_registration_rebinds_at_fresh_rollout_offset(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}])
+    task_id, run_id = _write_exact_session_binding(repo, root_id)
+
+    assert mod.ensure(str(repo), root_id, task_id=task_id, run_id=run_id)
+    state_path = mod._state_path(str(repo), root_id)
+    first = json.loads(state_path.read_text())
+
+    marker = repo / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
+    marker.unlink()
+    assert mod.invalidate_registration(str(repo), root_id)
+    assert not state_path.exists()
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "event_msg", "payload": {"type": "during-ambiguity"},
+        }) + "\n")
+
+    _write_exact_session_binding(repo, root_id)
+    assert mod.ensure(str(repo), root_id, task_id=task_id, run_id=run_id)
+    rebound = json.loads(state_path.read_text())
+    assert rebound["offset"] == rollout.stat().st_size
+    assert rebound["offset"] > first["offset"]
+    assert mod._registration_generation(rebound) != mod._registration_generation(first)
+
+
 def test_ensure_stops_recovery_when_deadline_expires_after_discovery(tmp_path, monkeypatch):
     mod = _load()
     repo = tmp_path / "repo"

@@ -469,6 +469,65 @@ def _valid_current_registration(
         handle.close()
 
 
+def invalidate_registration(repo_root: str, thread_id: str) -> bool:
+    """Remove one root registration so a later bind starts at a fresh offset."""
+    if not THREAD_RE.fullmatch(thread_id):
+        return False
+    repo_root = os.path.realpath(repo_root)
+    runtime_path = _runtime_dir(repo_root)
+    if not os.path.lexists(runtime_path):
+        return True
+    runtime = _trusted_runtime_dir(repo_root)
+    if runtime is None:
+        return False
+    state_path = _state_path(repo_root, thread_id)
+    if not os.path.lexists(state_path):
+        return True
+    lock_path = _lock_path(repo_root, thread_id)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        lock_fd = os.open(lock_path, flags, 0o600)
+        lock_info = os.fstat(lock_fd)
+        lock_path_info = os.lstat(lock_path)
+        if (
+            not stat.S_ISREG(lock_info.st_mode)
+            or lock_info.st_uid != os.getuid()
+            or lock_info.st_nlink != 1
+            or lock_info.st_mode & 0o022
+            or stat.S_ISLNK(lock_path_info.st_mode)
+            or (lock_path_info.st_dev, lock_path_info.st_ino)
+            != (lock_info.st_dev, lock_info.st_ino)
+        ):
+            os.close(lock_fd)
+            return False
+        os.fchmod(lock_fd, 0o600)
+    except OSError:
+        return False
+    with os.fdopen(lock_fd, "a+", encoding="utf-8") as lock:
+        if fcntl is None:
+            return False
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        if not os.path.lexists(state_path):
+            return True
+        try:
+            state_info = os.lstat(state_path)
+            if (
+                stat.S_ISLNK(state_info.st_mode)
+                or not stat.S_ISREG(state_info.st_mode)
+                or state_info.st_uid != os.getuid()
+                or state_info.st_nlink != 1
+                or state_info.st_mode & 0o022
+            ):
+                return False
+            os.unlink(state_path)
+        except OSError:
+            return False
+        return not os.path.lexists(state_path)
+
+
 def _registration_binding_matches(
     repo_root: str, thread_id: str, task_id: str, run_id: str,
 ) -> bool:

@@ -13,7 +13,7 @@ from typing import Callable
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from codex_lifecycle_watcher import ensure
+from codex_lifecycle_watcher import ensure, invalidate_registration
 from _lib import (
     active_session_transaction,
     clear_active_marker,
@@ -233,11 +233,14 @@ def register_task_result(
                         session_id=thread_id,
                         strict=True,
                     )
+                    invalidate_registration(control_root, thread_id)
                     if status_out is not None:
                         status_out.update({
                             "status": NOT_APPLICABLE,
                             "reason": "conflicting open tasks invalidated exact session binding",
                         })
+                    return False
+                if not existing and not invalidate_registration(control_root, thread_id):
                     return False
                 write_active_marker(
                     control_root,
