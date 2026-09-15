@@ -8,6 +8,7 @@ A lens subagent that runs to completion under an open harness task must always p
 - Spawning any lens subagent (for example `harness:code-reviewer` or `harness:qa-cli`) appends a `started` entry to `RECEIPTS.jsonl` at `SubagentStart`, and a `completed` entry carrying the parsed verdict at `SubagentStop`.
 - `task_context` reports the resulting counts in `subagent_receipts.count` / `review_receipts.count`, and `task_verify` derives review and runtime verdicts from those entries.
 - On Codex, successful `task_start` and `task_context` PostToolUse payloads combine the exact root `session_id` with the returned `task_dir`, `task_id`, and `run_id`. Only after those values match the canonical open `TASK.json` does the hook publish `.active_sessions/<session-id>.json` and register the root rollout.
+- Exact-session publication is serialized. While that session's existing exact task/run remains open, a delayed PostToolUse result for another task cannot replace it; task switching becomes eligible only after the prior binding is no longer live.
 - Codex MCP processes do not treat `.session-hint`, `default.json`, or legacy `.active` as current-session authority. When the MCP host lacks an exact thread environment, watcher readiness is unknown until a session hook can establish or disprove it.
 - A hint value that is empty, literally `default`, or that does not survive `sanitize_session_id` unchanged is rejected and never becomes a marker filename.
 - Harness tooling that runs **outside a hook** may still use the hint as a compatibility fallback for non-lifecycle operations. A genuine id from hook input or `HARNESS_SESSION_ID` wins. This narrower fallback does not grant receipt authority and is deliberately different from the MCP watcher surfaces, which never infer their caller from the repository-global hint.
@@ -19,7 +20,7 @@ A lens subagent that runs to completion under an open harness task must always p
 - No verdict is inferred, forged, or defaulted to compensate for a missing receipt. A binding failure surfaces as a blocked close, never as a synthesized PASS.
 
 ## Verification Cues
-- `tests/test_codex_hook_wrappers.py` covers exact task-result binding, default-marker non-promotion, foreign-session isolation, and fail-open PostToolUse behavior.
+- `tests/test_codex_hook_wrappers.py` covers exact task-result binding, default-marker non-promotion, foreign-session isolation, delayed cross-task rollback rejection, and fail-open PostToolUse behavior.
 - `tests/test_codex_lifecycle_watcher.py` covers delayed replay from a pre-spawn checkpoint, including a child that completed before the watcher attached.
 - `tests/test_install_verified.py` covers out-of-band resolution: a real id wins over the hint, the hint is used when the id is `default`, an unusable hint leaves `default`, and the resolved id reaches `active_task_binding_matches`.
 - Manual: start a fresh session, run `task_start`, confirm `.active_sessions/<real-sid>.json` exists with a `run_id` key, spawn `harness:code-reviewer`, then confirm `RECEIPTS.jsonl` gains `started` followed by `completed`, and that `task_context` reflects the count.

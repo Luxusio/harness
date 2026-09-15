@@ -275,7 +275,10 @@ derive it from `.session-hint`, which is repository-global and last-writer-wins.
 A successful `task_start`/`task_context` PostToolUse hook receives both the exact
 payload session id and the returned task/run. It validates those values against
 the open `TASK.json`, publishes the exact per-session marker, and registers the
-rollout checkpoint. The registration includes task/run identity, preserves its
+rollout checkpoint. That compare-and-publish path is serialized and refuses a
+different task while the session's existing exact task/run remains open, so an
+out-of-order older PostToolUse result cannot roll back receipt ownership. The
+registration includes task/run identity, preserves its
 offset for the same generation, and refreshes at the current offset on a
 generation change. Pre-spawn recovery accepts only that exact marker and never
 promotes `default.json` or legacy `.active`.

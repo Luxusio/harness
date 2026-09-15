@@ -71,9 +71,13 @@ manager-local scheduling identity does not grant receipt authority or change
 the registration's future-only offset.
 
 Registration identity includes the exact task id and run id. Rebinding the same
-root session to another task generation checkpoints the rollout at the new
-current offset. A worker exits when its bound generation changes, allowing the
-manager to start the refreshed generation without replaying earlier task work.
+root session to another task generation is allowed only after its previous
+exact task/run is no longer open. Marker comparison, publication, and watcher
+registration are serialized, so a delayed PostToolUse result cannot roll a live
+session back to an older task. An eligible new generation checkpoints the
+rollout at the new current offset. A worker exits when its bound generation
+changes, allowing the manager to start the refreshed generation without
+replaying earlier task work.
 
 Alternate activity spellings, indirect tool adapters, status output,
 prompt-marker identity, synthetic events, diagnostics, and synchronous

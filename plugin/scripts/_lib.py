@@ -2035,6 +2035,54 @@ def _session_active_path(repo_root, session_id=None):
     return os.path.join(_active_sessions_dir(repo_root), sid + ".json")
 
 
+@contextmanager
+def active_session_transaction(repo_root):
+    """Serialize exact-session marker decisions within one repository.
+
+    PostToolUse callbacks can arrive out of order. Locking the marker directory
+    lets a caller compare the current exact binding and publish its replacement
+    as one decision, so a delayed result cannot race a newer task binding.
+    """
+    root = os.path.abspath(repo_root)
+    sessions = _active_sessions_dir(root)
+    os.makedirs(sessions, mode=0o700, exist_ok=True)
+    relative = os.path.relpath(sessions, root)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    component_fds = []
+    try:
+        fd = os.open(root, flags)
+        component_fds.append(fd)
+        for part in relative.split(os.sep):
+            fd = os.open(part, flags, dir_fd=fd)
+            component_fds.append(fd)
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise RuntimeError("active session storage integrity unavailable")
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except (ImportError, OSError) as exc:
+            raise RuntimeError("active session storage integrity unavailable") from exc
+        yield
+        after = os.lstat(sessions)
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or not stat.S_ISDIR(after.st_mode)
+            or (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino)
+        ):
+            raise RuntimeError("active session storage identity changed")
+    except OSError as exc:
+        raise RuntimeError("active session storage integrity unavailable") from exc
+    finally:
+        for component_fd in reversed(component_fds):
+            os.close(component_fd)
+
+
 def write_active_marker(repo_root, task_dir, session_id=None, *, publish_legacy=True):
     """Write the active task for the current session and optional legacy marker.
 

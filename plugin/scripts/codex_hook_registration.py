@@ -15,6 +15,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from codex_lifecycle_watcher import ensure
 from _lib import (
+    active_session_transaction,
     find_harness_root,
     read_task_control,
     receipt_stream_transaction,
@@ -221,24 +222,33 @@ def register_task_result(
     ):
         return False
     try:
-        with receipt_stream_transaction(canonical_task):
-            control = read_task_control(canonical_task)
-            if (
-                task_control_status(canonical_task, control) != "open"
-                or control.get("run_id") != run_id
-            ):
+        with active_session_transaction(control_root):
+            existing = resolve_session_task_binding(control_root, thread_id)
+            if existing and os.path.realpath(existing["task_dir"]) != canonical_task:
+                if status_out is not None:
+                    status_out.update({
+                        "status": NOT_APPLICABLE,
+                        "reason": "exact session is already bound to another open task",
+                    })
                 return False
-            write_active_marker(
-                control_root,
-                canonical_task,
-                session_id=thread_id,
-                publish_legacy=False,
-            )
-            return restore_watcher_registration(
-                payload,
-                budget_seconds=budget_seconds,
-                status_out=status_out,
-            )
+            with receipt_stream_transaction(canonical_task):
+                control = read_task_control(canonical_task)
+                if (
+                    task_control_status(canonical_task, control) != "open"
+                    or control.get("run_id") != run_id
+                ):
+                    return False
+                write_active_marker(
+                    control_root,
+                    canonical_task,
+                    session_id=thread_id,
+                    publish_legacy=False,
+                )
+                return restore_watcher_registration(
+                    payload,
+                    budget_seconds=budget_seconds,
+                    status_out=status_out,
+                )
     except Exception:
         if status_out is not None:
             status_out.update({"status": REGISTRATION_FAILED, "reason": "exact task binding failed"})

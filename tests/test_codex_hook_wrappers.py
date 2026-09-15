@@ -420,6 +420,50 @@ class TestCodexHookWrappers(unittest.TestCase):
                 data = json.loads(marker.read_text())
                 self.assertEqual((data["task_id"], data["run_id"]), (task_id, run_id))
 
+    def test_delayed_task_result_cannot_replace_newer_open_session_binding(self):
+        mod = _load("codex_hook_registration")
+        lib = _load("_lib")
+        session_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+
+            payloads = []
+            expected = None
+            for name in ("older", "newer"):
+                task = root / f"doc/harness/tasks/TASK__{name}"
+                task.mkdir(parents=True)
+                run_id = lib.new_uuid7()
+                (task / "TASK.json").write_text(json.dumps({
+                    "run_id": run_id, "execution_mode": "standard",
+                    "required_lenses": ["review-code", "qa-cli"],
+                    "close_receipt_fingerprint": None,
+                }) + "\n", encoding="utf-8")
+                payloads.append(json.dumps({
+                    "cwd": repo, "session_id": session_id,
+                    "tool_name": "task_start",
+                    "tool_response": {"structuredContent": {
+                        "task_dir": str(task), "task_id": task.name,
+                        "run_id": run_id,
+                    }},
+                }).encode())
+                if name == "newer":
+                    expected = (task.name, run_id)
+
+            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_ensure_with_deadline", return_value=True,
+            ) as ensure_mock:
+                self.assertTrue(mod.register_task_result(payloads[1]))
+                self.assertFalse(mod.register_task_result(payloads[0]))
+
+            marker = root / "doc/harness/tasks/.active_sessions" / f"{session_id}.json"
+            data = json.loads(marker.read_text())
+            self.assertEqual((data["task_id"], data["run_id"]), expected)
+            self.assertEqual(ensure_mock.call_count, 1)
+
     def test_post_task_result_rejects_failed_or_mismatched_response(self):
         mod = _load("codex_hook_registration")
         root_id = "019f834e-1e91-7662-9024-f548103d751e"
