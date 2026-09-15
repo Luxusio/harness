@@ -16,6 +16,7 @@ try:
     from _lib import (  # type: ignore
         find_harness_root,
         find_repo_root,
+        is_codex_task_binding_tool,
         is_harness_enabled_repo,
         read_current_goal,
         resolve_active_task_dir,
@@ -23,6 +24,7 @@ try:
 except Exception:  # pragma: no cover - hook must fail open
     find_harness_root = None
     find_repo_root = None
+    is_codex_task_binding_tool = None
     is_harness_enabled_repo = None
     read_current_goal = None
     resolve_active_task_dir = None
@@ -90,10 +92,9 @@ def _is_create_goal_tool(tool_name: str) -> bool:
 
 
 def _is_task_binding_tool(tool_name: str) -> bool:
-    name = (tool_name or "").lower().replace("-", "_")
-    return any(
-        name == suffix or name.endswith("." + suffix) or name.endswith("__" + suffix)
-        for suffix in ("task_start", "task_context")
+    return bool(
+        is_codex_task_binding_tool is not None
+        and is_codex_task_binding_tool(tool_name)
     )
 
 

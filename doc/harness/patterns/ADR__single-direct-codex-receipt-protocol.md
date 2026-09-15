@@ -57,7 +57,9 @@ convenient candidate.
 SessionStart may create the versioned root registration. A successful Harness
 `task_start` or `task_context` PostToolUse event is the binding authority because
 it contains both the exact hook session id and returned task/run. It publishes
-only `.active_sessions/<session-id>.json`; `.session-hint`, `default.json`, and
+only `.active_sessions/<session-id>.json`. Eligibility is an explicit allowlist
+of the bare Codex ids and exact Harness MCP-qualified ids; suffix matches from
+other tool namespaces are not authority. `.session-hint`, `default.json`, and
 the legacy `.active` file are never promoted into receipt authority. Root and child rollout
 paths are resolved only in the UUIDv7-derived runtime-local day directory used
 by Codex session storage. Spawn-selective

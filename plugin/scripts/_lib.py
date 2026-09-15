@@ -26,6 +26,20 @@ RECEIPTS_NAME = "RECEIPTS.jsonl"
 REVIEW_DETAILS_NAME = "REVIEWS.jsonl"
 TASK_CONTROL_NAME = "TASK.json"
 
+CODEX_TASK_BINDING_TOOLS = frozenset({
+    "task_start",
+    "task_context",
+    "mcp__harness__task_start",
+    "mcp__harness__task_context",
+    "mcp__plugin_harness_harness__task_start",
+    "mcp__plugin_harness_harness__task_context",
+})
+
+
+def is_codex_task_binding_tool(tool_name):
+    """Accept only the bare and Harness-qualified Codex task tool ids."""
+    return isinstance(tool_name, str) and tool_name.lower() in CODEX_TASK_BINDING_TOOLS
+
 TASK_CONTROL_FIELDS = frozenset({
     "run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint",
 })

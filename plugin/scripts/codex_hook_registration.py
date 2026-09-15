@@ -18,6 +18,7 @@ from _lib import (
     active_session_transaction,
     clear_active_marker,
     find_harness_root,
+    is_codex_task_binding_tool,
     read_task_control,
     receipt_stream_transaction,
     resolve_session_task_binding,
@@ -163,14 +164,7 @@ def _task_result(payload: bytes) -> tuple[str, str, str]:
     """Extract one successful task result from known Codex hook envelopes."""
     data = _payload_data(payload)
     tool_name = str(data.get("tool_name") or data.get("tool") or "")
-    normalized = tool_name.lower().replace("-", "_")
-    if not (
-        normalized in {"task_start", "task_context"}
-        or normalized.endswith(".task_start")
-        or normalized.endswith("__task_start")
-        or normalized.endswith(".task_context")
-        or normalized.endswith("__task_context")
-    ):
+    if not is_codex_task_binding_tool(tool_name):
         return "", "", ""
     response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
     if (

@@ -274,7 +274,8 @@ The MCP host does not receive the Codex root session id and therefore cannot
 derive it from `.session-hint`, which is repository-global and last-writer-wins.
 A successful `task_start`/`task_context` PostToolUse hook receives both the exact
 payload session id and the returned task/run. It validates those values against
-the open `TASK.json`, publishes the exact per-session marker, and registers the
+the open `TASK.json`, accepts only bare or exactly Harness-qualified tool ids,
+publishes the exact per-session marker, and registers the
 rollout checkpoint. That compare-and-publish path is serialized and refuses a
 different task while the session's existing exact task/run remains open. Since
 the hook cannot prove which conflicting result is fresh, it removes existing

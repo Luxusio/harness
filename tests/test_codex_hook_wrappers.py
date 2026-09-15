@@ -533,6 +533,42 @@ class TestCodexHookWrappers(unittest.TestCase):
             marker = root / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
             self.assertFalse(marker.exists())
 
+    def test_foreign_task_suffix_cannot_bind_exact_session(self):
+        registration = _load("codex_hook_registration")
+        wrapper = _load("hook_post_tool_use")
+        lib = _load("_lib")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+            task = root / "doc/harness/tasks/TASK__foreign-tool"
+            task.mkdir(parents=True)
+            run_id = lib.new_uuid7()
+            (task / "TASK.json").write_text(json.dumps({
+                "run_id": run_id, "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }) + "\n", encoding="utf-8")
+            payload = json.dumps({
+                "cwd": repo, "session_id": root_id,
+                "tool_name": "mcp__untrusted_connector__task_context",
+                "tool_response": {"structuredContent": {
+                    "task_dir": str(task), "task_id": task.name, "run_id": run_id,
+                }},
+            }).encode()
+
+            self.assertFalse(wrapper._is_task_binding_tool(
+                "mcp__untrusted_connector__task_context"
+            ))
+            with mock.patch.object(registration, "_ensure_with_deadline") as ensure_mock:
+                self.assertFalse(registration.register_task_result(payload))
+            ensure_mock.assert_not_called()
+            marker = root / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
+            self.assertFalse(marker.exists())
+
     def test_post_task_result_revalidates_after_concurrent_run_rotation(self):
         mod = _load("codex_hook_registration")
         lib = _load("_lib")
@@ -981,7 +1017,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         )
         self.assertEqual(
             config["hooks"]["PostToolUse"][0]["matcher"],
-            "Bash|.*create_goal|.*task_start|.*task_context",
+            "Bash|.*create_goal|task_start|task_context|"
+            "mcp__harness__task_start|mcp__harness__task_context|"
+            "mcp__plugin_harness_harness__task_start|"
+            "mcp__plugin_harness_harness__task_context",
         )
         for event, name in (
             ("PreToolUse", "hook_pre_tool_use"),

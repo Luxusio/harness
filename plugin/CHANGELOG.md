@@ -19,7 +19,8 @@ All notable changes to the harness Claude Code plugin.
   pre-spawn recovery never promotes it, delayed watchers replay complete real
   lifecycles from their pre-spawn checkpoint, conflicting open task results
   invalidate receipt authority instead of preserving or replacing an ambiguous
-  binding, and watcher failure still never blocks the agent.
+  binding, foreign MCP namespaces cannot impersonate task-result authority by
+  suffix, and watcher failure still never blocks the agent.
 - Plan review no longer turns full-depth analysis into repeated approvals.
   Explicit requests and clarifications authorize matching premises and scope;
   unresolved material decisions are collected into one post-review interaction,
