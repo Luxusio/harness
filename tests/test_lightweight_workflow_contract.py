@@ -135,6 +135,8 @@ def test_both_planning_procedures_ask_only_unresolved_material_decisions():
         encoding="utf-8"
     )
     assert "Three mandatory user-gates remain" not in codex
+    assert "if uncertain, classify as Taste" not in codex
+    assert "review confidence never changes decision ownership" in codex
 
 
 def test_thin_request_does_not_force_a_compact_prompt():

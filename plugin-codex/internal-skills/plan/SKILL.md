@@ -235,7 +235,10 @@ the resulting scope. Free text may answer item by item. If an answer is partial,
 ask again only for unanswered items. Re-run only affected review work and ask
 again only if it introduces a new unauthorized material delta.
 
-**Note on single-voice fallback User Challenges:** when no independent route was available, one reviewer is weaker evidence than two agreeing voices and may flag challenges that dual-voice disagreement would resolve. Err on the side of fewer challenges; if uncertain, classify as Taste.
+**Note on single-voice fallback User Challenges:** one reviewer is weaker evidence
+for the recommendation, but review confidence never changes decision ownership.
+Retain every unauthorized material user-owned choice in the bundle; only
+non-material alternatives may be classified as Taste.
 
 ### 5.4 Authorization recheck
 
