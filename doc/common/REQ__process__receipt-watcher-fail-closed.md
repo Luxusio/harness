@@ -268,34 +268,23 @@ reported a false survival because the harness matched the wrong occurrence of a
 string that appears twice in `_lib.py`. Assume a test proves nothing until the
 mutation that should break it does.
 
-### Identities assumed equal on Codex
+### Exact Codex session handoff
 
-`_current_session_identity` resolves the session hint, then `CODEX_THREAD_ID`;
-the hook stamps the payload's `session_id`/`thread_id`, then `CODEX_THREAD_ID`.
-These are assumed to be the same value on Codex, which `_registration_identity`
-supports by rejecting a payload whose `session_id` and `thread_id` disagree.
-If they diverge, bounded task-start registration reports a positive current-run
-failure and switches to non-attesting verification/block guidance; a record
-that cannot be attributed is dropped and never authorizes PASS.
+The MCP host does not receive the Codex root session id and therefore cannot
+derive it from `.session-hint`, which is repository-global and last-writer-wins.
+A successful `task_start`/`task_context` PostToolUse hook receives both the exact
+payload session id and the returned task/run. It validates those values against
+the open `TASK.json`, publishes the exact per-session marker, and registers the
+rollout checkpoint. Pre-spawn recovery accepts only that exact marker and never
+promotes `default.json` or legacy `.active`.
 
-`root_thread_id` is populated from the validated task-start registration
-identity. `rollout_offset` remains nullable because the control plane does not
-publish that watcher-internal cursor; an unknown field stays `null` rather than
-being guessed.
+`rollout_offset` remains nullable because the control plane does not publish
+that watcher-internal cursor; an unknown field stays `null` rather than guessed.
 
-**Worker-error lookup identity has a fixed precedence.** `_watcher_status`
-resolves the key it hands `watcher_manager.worker_error(...)` in this order:
-in-memory `_SERVER.watcher_thread_id`, then `$CODEX_THREAD_ID`, then
-`root_thread_id` as a last-resort fallback. The fallback is a lookup key, never
-an authority — it is consulted only when neither authoritative source resolved,
-so a planted `root_thread_id` can never displace a real identity or hide a live
-error. It can only surface an additional error, which is the fail-closed
-direction. Skipping the fallback is not the safe default it looks like: a host
-that never populated `watcher_thread_id` then never asks the worker at all and
-reports a confident `receipts_recordable: True` from a code path structurally
-unable to observe the failure. That gap shipped in `a095c76` together with the
-test that forbids it, and the test was red from the commit that introduced it
-until this rule was implemented.
+**Worker-error lookup requires an authoritative identity.** `_watcher_status`
+uses only in-memory exact registration identity or `$CODEX_THREAD_ID`. A
+diagnostics `root_thread_id` cannot select a worker. Without an attributable
+identity, Codex readiness is `null`, not a confident healthy result.
 
 ## Settled decisions
 

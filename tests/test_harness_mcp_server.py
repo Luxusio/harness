@@ -1216,7 +1216,9 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
             self.assertEqual(
-                set(structured), {"task_dir", "task_context", "watcher_status"},
+                set(structured), {
+                    "task_dir", "task_id", "run_id", "task_context", "watcher_status",
+                },
             )
             context = structured["task_context"]
             self.assertEqual(context["task_id"], "TASK__mcp")

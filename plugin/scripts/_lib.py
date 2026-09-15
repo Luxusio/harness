@@ -1378,7 +1378,9 @@ def _make_control_writer_authority():
             "handle_task_blocked", "handle_write_plan", "handle_goal_start",
             "handle_goal_add_task", "handle_goal_finish",
         },
-        "codex_hook_registration": {"restore_watcher_registration"},
+        "codex_hook_registration": {
+            "restore_watcher_registration", "register_task_result",
+        },
     }
     canonical_paths = {
         "harness_server": os.path.realpath(os.path.join(
@@ -2033,12 +2035,12 @@ def _session_active_path(repo_root, session_id=None):
     return os.path.join(_active_sessions_dir(repo_root), sid + ".json")
 
 
-def write_active_marker(repo_root, task_dir, session_id=None):
-    """Write the active task for the current session plus a legacy marker.
+def write_active_marker(repo_root, task_dir, session_id=None, *, publish_legacy=True):
+    """Write the active task for the current session and optional legacy marker.
 
     The session marker is authoritative for hooks that receive session_id. The
     legacy ``.active`` file remains for older hooks/tests and single-session
-    installs.
+    installs; exact Codex PostToolUse binding deliberately omits it.
     """
     if not _trusted_control_writer(marker=True):
         raise _control_writer_error("active task binding requires the task-control runtime", marker=True)
@@ -2066,7 +2068,8 @@ def write_active_marker(repo_root, task_dir, session_id=None):
         except OSError:
             pass
         raise
-    _atomic_text_write(_legacy_active_path(repo_root), task_dir)
+    if publish_legacy:
+        _atomic_text_write(_legacy_active_path(repo_root), task_dir)
 
 
 def active_task_binding_matches(repo_root, task_dir, control=None, session_id=None):

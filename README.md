@@ -208,10 +208,10 @@ steps may append signals or save a due retro. The pass completes before
 | UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
-| PostToolUse (Bash/Goal) | `hook_post_tool_use.py` | Route Bash failures and native `create_goal` synchronization |
+| PostToolUse (Bash/Goal/Harness task) | `hook_post_tool_use.py` | Route Bash failures and native `create_goal`; bind successful `task_start`/`task_context` results to the exact Codex session |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
 | Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
-| Codex SessionStart/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Register the root rollout at startup or immediately before spawn, then bind runtime subagent starts and completions from MCP-hosted daemon threads without a detached process |
+| Codex task PostToolUse/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Bind the exact task/run returned to each root session, register or repair its rollout checkpoint before spawn, then replay real subagent starts and completions from MCP-hosted daemon threads without a detached process |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 
 Codex MCP servers are loaded for the lifetime of the Codex session. After a

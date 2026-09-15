@@ -27,6 +27,23 @@ except Exception:  # pragma: no cover - hook must fail open
     read_current_goal = None
     resolve_active_task_dir = None
 
+register_task_result = None
+
+
+def _register_task_result(payload: bytes) -> None:
+    """Lazy import avoids loading protected writer authority for unrelated hooks."""
+    global register_task_result
+    if register_task_result is None:
+        try:
+            from codex_hook_registration import register_task_result as callback  # type: ignore
+        except Exception:
+            return
+        register_task_result = callback
+    try:
+        register_task_result(payload, budget_seconds=0.5)
+    except Exception:
+        pass
+
 HOOK_TIMEOUT_SECONDS = 3.0
 TOTAL_BUDGET_SECONDS = 2.4
 CHILD_TIMEOUT_SECONDS = 1.5
@@ -70,6 +87,14 @@ def _json_payload(payload: bytes) -> dict:
 def _is_create_goal_tool(tool_name: str) -> bool:
     name = (tool_name or "").lower().replace("-", "_")
     return name == "create_goal" or name.endswith(".create_goal") or name.endswith("__create_goal")
+
+
+def _is_task_binding_tool(tool_name: str) -> bool:
+    name = (tool_name or "").lower().replace("-", "_")
+    return any(
+        name == suffix or name.endswith("." + suffix) or name.endswith("__" + suffix)
+        for suffix in ("task_start", "task_context")
+    )
 
 
 def _goal_routing_hint(payload: bytes) -> str:
@@ -124,6 +149,9 @@ def main() -> int:
     deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
     tool_name = _tool_name(payload)
+    if _is_task_binding_tool(tool_name):
+        _register_task_result(payload)
+        return 0
     goal_hint = ""
     if _is_create_goal_tool(tool_name):
         remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS

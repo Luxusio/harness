@@ -15,9 +15,10 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from codex_lifecycle_watcher import ensure
 from _lib import (
+    active_task_binding_matches,
     find_harness_root,
     read_task_control,
-    resolve_active_task_dir,
+    resolve_session_task_binding,
     task_control_status,
     write_active_marker,
     _bind_control_writer,
@@ -25,6 +26,7 @@ from _lib import (
 
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
+TASK_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
 
 
 class _RegistrationTimeout(BaseException):
@@ -142,21 +144,110 @@ REGISTRATION_FAILED = "failed"
 
 
 def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool:
-    """Bind the live default task to the trusted root rollout identity.
+    """Accept only an already exact session binding.
 
-    ``task_start`` can run in an MCP host that does not receive the Codex root
-    thread id, so it writes the conservative ``default`` marker.  The
-    pre-spawn hook does receive that identity.  Promote only a canonical live
-    task; never revive a terminal legacy marker.
+    The shared default/legacy marker is compatibility state, not provenance.
+    Exact binding is published by PostToolUse, where the hook has both the
+    current root-session identity and the successful MCP task result.
     """
-    task_dir = resolve_active_task_dir(control_root, session_id="default")
-    if not task_dir:
+    return bool(resolve_session_task_binding(control_root, thread_id))
+
+
+def _task_result(payload: bytes) -> tuple[str, str, str]:
+    """Extract one successful task result from known Codex hook envelopes."""
+    data = _payload_data(payload)
+    tool_name = str(data.get("tool_name") or data.get("tool") or "")
+    normalized = tool_name.lower().replace("-", "_")
+    if not (
+        normalized in {"task_start", "task_context"}
+        or normalized.endswith(".task_start")
+        or normalized.endswith("__task_start")
+        or normalized.endswith(".task_context")
+        or normalized.endswith("__task_context")
+    ):
+        return "", "", ""
+    response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
+    if (
+        not isinstance(response, dict)
+        or response.get("isError") is True
+        or response.get("success") is False
+        or str(response.get("status") or "").lower() in {"error", "failed"}
+    ):
+        return "", "", ""
+    candidate = response.get("structuredContent", response)
+    if not isinstance(candidate, dict) or candidate.get("error"):
+        return "", "", ""
+    task_dir = candidate.get("task_dir")
+    task_id = candidate.get("task_id")
+    run_id = candidate.get("run_id")
+    if not isinstance(run_id, str):
+        context = candidate.get("task_context")
+        run_id = context.get("active_run_id") if isinstance(context, dict) else ""
+    return (
+        task_dir if isinstance(task_dir, str) else "",
+        task_id if isinstance(task_id, str) else "",
+        run_id if isinstance(run_id, str) else "",
+    )
+
+
+def register_task_result(
+    payload: bytes,
+    *,
+    budget_seconds: float = 0.5,
+    status_out: dict | None = None,
+) -> bool:
+    """Bind a successful Harness task result to this exact Codex session."""
+    cwd, thread_id = _registration_identity(payload)
+    task_dir, task_id, run_id = _task_result(payload)
+    if status_out is not None:
+        status_out.update({"status": NOT_APPLICABLE, "reason": "task result was not bindable"})
+        if thread_id:
+            status_out["thread_id"] = thread_id
+    if not cwd or not thread_id or not task_dir or not task_id or not run_id:
         return False
-    control = read_task_control(task_dir)
-    if task_control_status(task_dir, control) != "open":
+    control_root = find_harness_root(cwd) or ""
+    expected_parent = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
+    canonical_task = os.path.realpath(task_dir)
+    if (
+        not control_root
+        or not TASK_RE.fullmatch(task_id)
+        or os.path.dirname(canonical_task) != expected_parent
+        or os.path.basename(canonical_task) != task_id
+        or canonical_task != os.path.abspath(task_dir)
+    ):
         return False
-    write_active_marker(control_root, task_dir, session_id=thread_id)
-    return True
+    control = read_task_control(canonical_task)
+    if (
+        task_control_status(canonical_task, control) != "open"
+        or control.get("run_id") != run_id
+    ):
+        return False
+    try:
+        write_active_marker(
+            control_root,
+            canonical_task,
+            session_id=thread_id,
+            publish_legacy=False,
+        )
+    except Exception:
+        if status_out is not None:
+            status_out.update({"status": REGISTRATION_FAILED, "reason": "exact task binding failed"})
+        return False
+    return restore_watcher_registration(
+        payload,
+        budget_seconds=budget_seconds,
+        bind_fn=lambda root, sid: bool(
+            os.path.realpath(root) == os.path.realpath(control_root)
+            and sid == thread_id
+            and active_task_binding_matches(
+                control_root,
+                canonical_task,
+                control=control,
+                session_id=thread_id,
+            )
+        ),
+        status_out=status_out,
+    )
 
 
 def restore_watcher_registration(
@@ -260,4 +351,5 @@ def restore_watcher_registration(
 
 
 _bind_control_writer(restore_watcher_registration)
+_bind_control_writer(register_task_result)
 del _bind_control_writer

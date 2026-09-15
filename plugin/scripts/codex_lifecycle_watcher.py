@@ -1093,10 +1093,11 @@ class Watcher:
             )
             if child_status == "pending":
                 return
-            # Without an earlier trusted start receipt, a child that is invalid
-            # or already complete cannot establish a start-time snapshot.
-            if child_status != "running":
-                self._invalidate(item, "child evidence was invalid or already complete at start capture")
+            # The registration offset proves this spawn was observed in order.
+            # A delayed manager may reach it after the trusted depth-1 child
+            # already completed; that remains real replay, not history scan.
+            if child_status not in {"running", "complete"}:
+                self._invalidate(item, "child evidence was invalid at start capture")
                 return
             record_subagent_receipt(task_dir, {
                     "source": source,
@@ -1105,7 +1106,7 @@ class Watcher:
                     "agent_type": item["task_name"],
                     "lens": lens,
                     "task_run_id": item.get("task_run_id", ""),
-                    "summary": "Codex runtime spawn observed before child completion",
+                    "summary": "Codex runtime spawn observed from the registered rollout checkpoint",
                     "runtime_id": runtime_id,
                 })
             self.receipt_progress += 1

@@ -1440,9 +1440,9 @@ class TestReadinessIsTriState(unittest.TestCase):
         self.assertIs(status["receipts_recordable"], False)
 
         queried, status = _status("")
-        self.assertEqual(queried, [planted])
-        self.assertIs(status["receipts_recordable"], False)
-        self.assertIn("receipt lock unavailable", status["last_watcher_error"])
+        self.assertEqual(queried, [])
+        self.assertIs(status["receipts_recordable"], True)
+        self.assertEqual(status["last_watcher_error"], "")
 
     def test_a_receipt_from_this_run_disproves_the_warning(self):
         """The file the close gate reads is better evidence than a heuristic."""
@@ -1914,17 +1914,13 @@ class TestDiagnosticsScoping(unittest.TestCase):
             {},
         )
 
-    def test_the_session_identity_falls_back_to_the_codex_thread_id(self):
-        """A Codex MCP process may have no session hint at all.
-
-        The hint is written from a UserPromptSubmit payload, so a runtime
-        without that hook never has one. Without this fallback the server
-        cannot attribute the records its own pre-spawn hook writes — on
-        precisely the Codex path this REQ exists for.
-        """
+    def test_the_session_identity_ignores_the_repository_global_hint(self):
+        """Only a process-owned thread id can identify the current session."""
         harness_server = _server()
         with mock.patch.object(
             harness_server, "read_session_hint", lambda *_a, **_k: "",
+        ), mock.patch.object(
+            harness_server, "_server_runtime", lambda: "codex",
         ), mock.patch.dict(
             os.environ, {"CODEX_THREAD_ID": "thread-from-env"}, clear=False,
         ):
@@ -1934,12 +1930,14 @@ class TestDiagnosticsScoping(unittest.TestCase):
             )
         with mock.patch.object(
             harness_server, "read_session_hint", lambda *_a, **_k: "hint-wins",
+        ), mock.patch.object(
+            harness_server, "_server_runtime", lambda: "codex",
         ), mock.patch.dict(
             os.environ, {"CODEX_THREAD_ID": "thread-from-env"}, clear=False,
         ):
             self.assertEqual(
                 harness_server._current_session_identity("/nonexistent"),
-                "hint-wins",
+                "thread-from-env",
             )
 
     def test_an_expired_record_is_not_evidence_about_now(self):
@@ -2249,7 +2247,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
             with \
              mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
              mock.patch.object(harness_server, "_SERVER", server), \
-             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": self.session_id}, clear=False), \
              mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=restore):
                 result = harness_server._register_task_start_watcher(
                     str(root), str(task_dir), control,
@@ -2280,7 +2278,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
 
         with self._repo(), \
              mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
-             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": self.session_id}, clear=False), \
              mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=failed), \
              mock.patch.object(harness_server, "receipt_capability_warning", return_value=""), \
              mock.patch.object(harness_server, "emit_compact_context", return_value={
@@ -2307,7 +2305,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
         harness_server = _server()
         with self._repo() as root, \
              mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
-             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": self.session_id}, clear=False), \
              mock.patch.object(
                  harness_server, "_restore_watcher_registration",
                  side_effect=RuntimeError("registration exploded"),
@@ -2355,7 +2353,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
             "/repo/task", "01a0563e-f4c4-7816-b98c-aa0582454037"
         )
 
-    def test_missing_identity_is_failure_after_codex_task_start(self):
+    def test_missing_identity_defers_registration_to_post_tool_hook(self):
         harness_server = _server()
         with self._repo() as root, \
              mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
@@ -2364,15 +2362,12 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
             result = harness_server._register_task_start_watcher(
                 str(root), str(root / "doc/harness/tasks/TASK__x"), {},
             )
-            diagnostics = json.loads(
-                (root / "doc/harness/.watcher-diagnostics.json").read_text(
-                    encoding="utf-8"
-                )
-            )
+            diagnostics_exists = (
+                root / "doc/harness/.watcher-diagnostics.json"
+            ).exists()
 
-        self.assertIs(result["registered"], False)
-        self.assertIn("no Codex thread identity", result["reason"])
-        self.assertIs(diagnostics["registration_present"], False)
+        self.assertIsNone(result)
+        self.assertFalse(diagnostics_exists)
 
     def test_rejected_exact_binding_is_failure_after_task_start(self):
         harness_server = _server()
@@ -2388,7 +2383,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
 
         with self._repo() as root, \
              mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
-             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": self.session_id}, clear=False), \
              mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=rejected):
             result = harness_server._register_task_start_watcher(
                 str(root), str(root / "doc/harness/tasks/TASK__x"), {},

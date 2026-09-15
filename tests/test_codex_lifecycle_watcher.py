@@ -795,7 +795,7 @@ def test_watcher_ignores_intermediate_message_before_final_delivery(tmp_path, mo
     ]
 
 
-def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, monkeypatch):
+def test_watcher_replays_child_that_completed_after_registered_spawn(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -813,7 +813,10 @@ def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, mon
          mock.patch.object(mod, "receipt_snapshot", return_value=_snapshot([])):
         for event in _spawn_events(root_id, child_id, "qa_cli", agent_path):
             watcher.feed(event)
-    assert receipts == []
+        watcher.feed(_delivery(agent_path, final))
+    assert [(item["event"], item.get("verdict")) for item in receipts] == [
+        ("started", None), ("completed", "PASS"),
+    ]
 
 
 def test_activity_and_structured_output_identity_must_match(tmp_path, monkeypatch):

@@ -198,19 +198,18 @@ DIAGNOSTICS_MAX_AGE_SECONDS = 12 * 3600
 
 
 def _current_session_identity(control_root: str = "") -> str:
-    """Who this process believes it is, for scoping diagnostics records.
+    """Return only an identity directly owned by this process.
 
-    The session hint is written from a `UserPromptSubmit` payload, so a runtime
-    without that hook never has one. `CODEX_THREAD_ID` is the same identity the
-    pre-spawn hook stamps with, so falling back to it keeps hook-written records
-    attributable on exactly the Codex path this REQ exists for — rather than
-    discarding them for want of a hint that runtime never writes.
+    A repository-global session hint is last-writer-wins compatibility state,
+    not evidence that a Codex MCP host belongs to that root session. Claude's
+    lifecycle bridge still uses its established hint path.
     """
+    if _server_runtime() == "codex":
+        return str(os.environ.get("CODEX_THREAD_ID") or "")
     try:
-        hint = read_session_hint(control_root or _control_root()) or ""
+        return read_session_hint(control_root or _control_root()) or ""
     except Exception:
-        hint = ""
-    return hint or str(os.environ.get("CODEX_THREAD_ID") or "")
+        return ""
 
 
 def _diagnostics_for_this_session(control_root: str = "") -> dict:
@@ -342,22 +341,22 @@ TASK_START_REGISTRATION_BUDGET_SECONDS = 0.5
 
 
 def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
-    """Register the exact new Codex run before returning lens guidance.
+    """Register directly only when this MCP process owns an exact Codex id.
 
-    ``restore_watcher_registration`` remains future-only: this call can attest
-    only subagents started after ``task_start``.  The exact-bind callback turns
-    the marker just published by ``task_start`` into a required precondition;
-    it never repairs, rewrites, or reconstructs receipt evidence.
+    Ordinary Codex MCP hosts have no such id; their successful result is bound
+    by PostToolUse before the next tool call. No hint-derived identity is used.
     """
     if _server_runtime() != "codex":
         return None
     if _SERVER is not None:
         _SERVER.watcher_thread_id = ""
 
-    payload_data = {"cwd": repo_root}
-    session_hint = read_session_hint(repo_root) or ""
-    if session_hint:
-        payload_data["session_id"] = session_hint
+    session_id = _current_session_identity(repo_root)
+    if not session_id:
+        # Ordinary Codex MCP calls have no root-session identity. The exact
+        # binding is established by PostToolUse from the successful result.
+        return None
+    payload_data = {"cwd": repo_root, "session_id": session_id}
     payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
     outcome: dict = {}
 
@@ -388,7 +387,7 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
             reason = f"{type(exc).__name__}: {exc}"
 
     if registered and outcome.get("status") in (None, _REGISTRATION_REGISTERED):
-        registered_thread_id = str(outcome.get("thread_id") or session_hint or "")
+        registered_thread_id = str(outcome.get("thread_id") or session_id or "")
         if _SERVER is not None:
             # The diagnostics file is advisory. Retain the exact identity that
             # successfully passed registration and active-task binding so live
@@ -419,7 +418,7 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
         "registration_present": False,
         "last_registration_error": reason,
         "last_registration_note": "",
-        "root_thread_id": outcome.get("thread_id") or session_hint or None,
+        "root_thread_id": outcome.get("thread_id") or session_id or None,
     }, repo_root)
     return {"registered": False, "reason": reason}
 
@@ -539,19 +538,12 @@ def _watcher_status(
                 # The env fallback supports older direct hosts, but ordinary
                 # Codex MCP processes have no CODEX_THREAD_ID of their own.
                 #
-                # `root_thread_id` is a last-resort lookup key, never an
-                # authority: it is read only when neither authoritative source
-                # resolved. Precedence keeps the trust boundary intact — a
-                # planted value cannot displace a real identity, so it can only
-                # surface an additional worker error, never hide one. Without
-                # this fallback a host that never populated `watcher_thread_id`
-                # never asks the worker at all, and reports a confident
-                # `receipts_recordable: True` from a path structurally unable to
-                # observe the failure.
+                # Diagnostics never choose a worker. Without an identity owned
+                # by this process, readiness stays unknown rather than letting
+                # a repository file select another session's worker state.
                 current_thread_id = str(
                     getattr(_SERVER, "watcher_thread_id", "")
                     or os.environ.get("CODEX_THREAD_ID")
-                    or diagnostics.get("root_thread_id")
                     or ""
                 )
                 if current_thread_id:
@@ -573,7 +565,11 @@ def _watcher_status(
     # `next_action` instructions.
     unrecordable_summary = ""
     unrecordable_reason = ""
-    recordable: bool | None = True
+    recordable: bool | None = (
+        None
+        if _server_runtime() == "codex" and not _current_session_identity()
+        else True
+    )
     if registration_present is False:
         unrecordable_summary = (
             "The receipt watcher is not registered for this session."
@@ -1015,8 +1011,10 @@ def handle_task_start(args: dict) -> dict:
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
     existing_control_path = task_control_file(task_dir)
     resumed_existing = os.path.lexists(existing_control_path)
-    session_id = read_session_hint(repo_root) or current_session_id()
-    if not resumed_existing and not _session_resumes(repo_root, task_dir, session_id):
+    exact_session_id = _current_session_identity(repo_root)
+    session_id = exact_session_id or current_session_id()
+    defer_codex_binding = _server_runtime() == "codex" and not exact_session_id
+    if not defer_codex_binding and not resumed_existing and not _session_resumes(repo_root, task_dir, session_id):
         return _err(
             "task_start refused: another open task owns the resolvable session focus",
             data={
@@ -1158,7 +1156,7 @@ def handle_task_start(args: dict) -> dict:
                         ),
                     },
                 )
-            if not _session_resumes(repo_root, task_dir, session_id):
+            if not defer_codex_binding and not _session_resumes(repo_root, task_dir, session_id):
                 transaction_stack.close()
                 return _err(
                     "task_start refused: another open task owns the resolvable session focus",
@@ -1435,16 +1433,9 @@ def handle_goal_finish(args: dict) -> dict:
 def _session_resumes(repo_root: str, task_dir: str, session_id: str) -> bool:
     """True when writing this session's marker for `task_dir` steals nothing.
 
-    `session_id` must be the exact id `write_active_marker` will key on,
-    `default` included. Asking about a different identity than the write uses
-    is how the first version failed: it resolved the binding for
-    `read_session_hint(...)` while the write fell back to
-    `current_session_id()`. Only the Claude `UserPromptSubmit` hook writes that
-    hint, so on Codex it is permanently empty, and both an empty id and
-    `default` resolve to no binding at all — the guard read "unbound" for every
-    session forever, and a `task_context` peek moved write focus to the peeked
-    task (Codex then promotes the `default` marker onto the real thread id in
-    `codex_hook_registration`, so the next subagent receipt landed there).
+    This guard is used only when the MCP process owns an exact session id.
+    Ordinary Codex MCP calls do not, so their successful result is bound later
+    by PostToolUse instead of consulting shared hint/default state here.
 
     Many tasks are open at once — C-09 queues a second mutating request, it
     does not close the first — so "the task being read is open" says nothing
@@ -1467,14 +1458,8 @@ def _session_resumes(repo_root: str, task_dir: str, session_id: str) -> bool:
     session's `task_start` rotated away, which is the one marker field
     `resolve_session_task_binding` will otherwise refuse a receipt for.
 
-    Known residuals, both recorded in
-    `doc/harness/REQ__receipt-subsystem-failures-are-observable.md` section 3:
-    a legitimate resume still rewrites the legacy `.active` another session may
-    rely on (only markerless readers observe it, since the per-session marker
-    wins), and a markerless session resuming an open task *other* than the one
-    `.active` names is refused binding — this surface cannot tell that resume
-    from a peek, so it refuses on the safe side and the caller must use
-    `task_start`.
+    Exact-runtime paths still publish the legacy `.active` compatibility file,
+    but exact lifecycle readers always prefer the per-session marker.
     """
     held = resolve_active_task_dir(repo_root, session_id=session_id)
     if not held or task_control_status(held, read_task_control(held)) != "open":
@@ -1489,9 +1474,12 @@ def handle_task_context(args: dict) -> dict:
     control = _validated_task_control(td)
     if not control:
         return _invalid_task_control_error("task_context", td)
-    # One identity, resolved once, for both the guard and the write.
-    session_id = read_session_hint(repo_root) or current_session_id()
-    if task_control_status(td, control) == "open" and _session_resumes(
+    # Only a process-owned identity may publish here. Ordinary Codex binding is
+    # performed by PostToolUse from this successful structured result.
+    exact_session_id = _current_session_identity(repo_root)
+    defer_codex_binding = _server_runtime() == "codex" and not exact_session_id
+    session_id = exact_session_id or current_session_id()
+    if not defer_codex_binding and task_control_status(td, control) == "open" and _session_resumes(
         repo_root, td, session_id,
     ):
         # A session that resumes an open task arrives here, and until it owns a
@@ -1530,6 +1518,8 @@ def handle_task_context(args: dict) -> dict:
     ctx = _gate_next_action(ctx, status)
     return _ok({
         "task_dir": td,
+        "task_id": os.path.basename(os.path.normpath(td)),
+        "run_id": context_run_id,
         "task_context": ctx,
         "watcher_status": status,
     })

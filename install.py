@@ -883,7 +883,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|.*create_goal",
+                    "matcher": "Bash|.*create_goal|.*task_start|.*task_context",
                     "hooks": [
                         {
                             "type": "command",

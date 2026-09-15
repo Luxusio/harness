@@ -30,9 +30,11 @@ one acquisition path:
 3. The matching structured spawn output supplies the same child agent path.
 4. The watcher records the start only after all three records agree.
 
-Missing, malformed, mismatched, or already-completed child evidence fails
-closed. Activity cannot authorize a lifecycle by itself; its path must match
-the structured spawn output and the trusted child rollout.
+Missing, malformed, or mismatched child evidence fails closed. A child that is
+already complete when a delayed watcher replays may establish a start only when
+the immutable registration offset precedes the exact root spawn and the replay
+contains the matching activity, structured output, and trusted depth-1 child
+rollout. Activity cannot authorize a lifecycle by itself.
 
 The watcher binds the active `TASK.json` generation, canonical repository, root session,
 root rollout, child thread, child agent path, structured task name, and derived
@@ -52,12 +54,16 @@ match the same text. Duplicate, conflicting, historical, cross-run, or
 out-of-order boundaries invalidate the lifecycle rather than selecting a
 convenient candidate.
 
-SessionStart creates the versioned root registration. Root and child rollout
+SessionStart may create the versioned root registration. A successful Harness
+`task_start` or `task_context` PostToolUse event is the binding authority because
+it contains both the exact hook session id and returned task/run. It publishes
+only `.active_sessions/<session-id>.json`; `.session-hint`, `default.json`, and
+the legacy `.active` file are never promoted into receipt authority. Root and child rollout
 paths are resolved only in the UUIDv7-derived runtime-local day directory used
 by Codex session storage. Spawn-selective
-PreToolUse may restore a missing registration immediately before a supported
-spawn, beginning at the current rollout offset. UserPromptSubmit, PostToolUse,
-and Stop do not recover registration. A stale registration is recreated, not
+PreToolUse may restore a missing registration for that already exact binding
+immediately before a supported spawn, beginning at the current rollout offset.
+Task PostToolUse may register; UserPromptSubmit and Stop do not. A stale registration is recreated, not
 migrated. Within one manager process, a successful worker suppresses only the
 same exact validated registration identity; a recreated or refreshed identity
 is eligible for one new worker, while a failed identity remains retryable. This
@@ -66,7 +72,8 @@ the registration's future-only offset.
 
 Alternate activity spellings, indirect tool adapters, status output,
 prompt-marker identity, synthetic events, diagnostics, and synchronous
-PostToolUse receipt writing are not receipt authorities.
+PostToolUse receipt writing are not receipt authorities. PostToolUse binds and
+registers only; the watcher remains the sole receipt writer.
 
 ## Integrity boundary
 
@@ -85,16 +92,19 @@ QA, runs one fresh `task_verify`, and parks through `task_blocked` when required
 hook-owned evidence is still absent. Any later fresh attested run is an explicit
 operator choice.
 
-Late registration can observe only future work. It cannot authorize a child
-that already completed, and it cannot manufacture a missing start.
+Registration can observe only lifecycle records after its immutable offset. A
+watcher that starts late may replay a child that has since completed when the
+entire correlated lifecycle follows that offset; registration after the spawn
+cannot see that spawn and cannot manufacture a missing start.
 
 ## Verification
 
 - A direct structured spawn, exact activity, matching structured output, and
   trusted child rollout record one start; matching child/root finals record one
   completion.
-- Activity-only, ambiguous, malformed, mismatched, pre-completed, replayed, or
-  unsupported protocol records create no authority.
+- Activity-only, ambiguous, malformed, mismatched, pre-registration, or
+  unsupported protocol records create no authority; repeated valid replay is
+  deduplicated.
 - Wrong task run, repository, session, rollout, thread, agent path, task name,
   lens, order, final, or verdict is rejected.
 - Focused watcher/hook tests and the full suite pass after verified install.
