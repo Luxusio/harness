@@ -46,8 +46,8 @@ search-before-building, repo ownership, context recovery, and conversational ask
 ## Step 0: Design scope assessment
 
 Rate initial design completeness 0-10. State what a 10 means for this plan,
-which existing patterns it should reuse, and the three biggest gaps. If a narrower
-focus is a material choice, return it as a decision candidate and continue provisionally.
+which existing patterns it should reuse, and the three biggest gaps. Return a narrower
+focus as a candidate only when it is unauthorized, material, and user-owned.
 
 ### Step 0.5: Visual mockups
 
@@ -110,8 +110,8 @@ For each sub-10 dimension:
 1. Identify the violated principle and smallest useful plan edit.
 2. Classify it as `structural` when omission would cause a broken or confusing
    implementation, otherwise `taste`.
-3. Add unambiguous structural requirements to the plan. Return any meaningful
-   alternative or product decision as a candidate first.
+3. Add unambiguous structural requirements to the plan. Return an alternative or
+   product decision only when it is unauthorized, material, and user-owned.
 4. Resolve taste choices with the parent decision principles and retain them in
    the audit trail; do not put them in the user gate unless they materially alter
    the authorized outcome or scope.

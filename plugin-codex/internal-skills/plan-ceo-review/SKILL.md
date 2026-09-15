@@ -49,7 +49,7 @@ Choose and then hold one mode:
 | SCOPE EXPANSION | Push up | Define the 10x experience and platonic ideal; offer each expansion for opt-in. |
 | SELECTIVE EXPANSION | Hold baseline, offer additions | Review baseline rigorously; offer each expansion neutrally for cherry-picking. |
 | HOLD SCOPE | Preserve | Strengthen architecture, safety, testing, operations, and rollout without expansion. |
-| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and return every proposed removal as a decision candidate. |
+| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and return only unauthorized material removals as candidates. |
 
 Defaults: greenfield → EXPANSION; enhancement → SELECTIVE; bug/refactor → HOLD;
 plans touching more than 15 files → consider REDUCTION. Explicit user language wins.
@@ -81,7 +81,7 @@ List the plan's 3-5 load-bearing premises:
 |---|---|---|---|
 
 Return the highest-blast-radius assumed or unknown premise as a decision candidate
-when it is material. Determine the actual user/business outcome, whether the plan
+only when it is unauthorized, material, and user-owned. Determine the actual user/business outcome, whether the plan
 solves it directly, and the cost of doing nothing.
 
 ### B. Existing-code leverage
@@ -113,7 +113,7 @@ candidate only when it is unauthorized and materially changes outcome or scope.
 - SELECTIVE: first find avoidable complexity and the minimum baseline, then surface
   10x, delight, and platform opportunities as individual choices.
 - HOLD: challenge excess complexity while preserving the approved boundary.
-- REDUCTION: split must-ship value from follow-up work and return every cut as a decision candidate.
+- REDUCTION: split must-ship value from follow-up work and return only unauthorized material cuts as candidates.
 
 For EXPANSION and SELECTIVE, persist decisions in
 `doc/harness/tasks/<task-id>/ceo-plan.md` with vision, mode, proposal table, accepted

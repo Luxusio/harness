@@ -50,7 +50,7 @@ Classify the plan from evidence as one or more of:
 - Claude Code Skill: `SKILL.md`, Claude Code, agents, MCP
 
 State the primary type and confidence. Return a candidate only if the classification
-materially changes the plan. If none apply, exit and recommend the engineering or
+creates an unauthorized material user-owned choice. If none apply, exit and recommend the engineering or
 design lens; do not manufacture DX scope.
 
 ## DX principles and modes
@@ -92,7 +92,8 @@ Complete A-G before scoring.
 ### A. Developer persona
 
 Infer 2-3 plausible personas from repository evidence, provisionally select the
-best-supported primary persona, and return a candidate if the choice is material. Capture:
+best-supported primary persona, and return a candidate only if the choice is
+unauthorized, material, and user-owned. Capture:
 
 | Field | Required content |
 |---|---|
@@ -136,8 +137,8 @@ candidate when no request or prior decision already authorizes the mode.
 ### F. Journey trace
 
 Trace Discover, Install, Hello World, Real Usage, Debug, and Upgrade through real files,
-commands, output, and errors. Return material friction choices as candidates for the
-parent's consolidated interaction.
+commands, output, and errors. Return only unauthorized material user-owned friction
+choices as candidates for the parent's consolidated interaction.
 TRIAGE traces only Install and Hello World. EXPANSION additionally offers a best-in-class
 improvement at each stage. Produce a resolved/deferred journey map.
 The final deliverable uses the full nine-stage Hall of Fame journey-map template.
@@ -155,7 +156,8 @@ For every pass:
 1. Recall specific Step 0 evidence and load only that pass's Hall of Fame section.
 2. Score 0-10 and describe what 10 means for this product/persona.
 3. Name each gap and its developer/adoption effect.
-4. Return genuine choices as candidates; apply already-authorized fixes to the plan.
+4. Return only unauthorized material user-owned choices as candidates; apply
+   already-authorized fixes to the plan.
 5. Re-score. Stop at 10 or at the user's accepted residual gap.
 
 EXPANSION may offer separate opt-in improvements after resolving the base score. POLISH
@@ -217,7 +219,8 @@ Avoid telemetry proposals that ignore privacy or cannot drive a decision.
 ### Conditional Claude Code Skill checklist
 
 When the product type includes Claude Code Skill, load only that checklist from the Hall
-of Fame reference. Report missing items and return material design decisions as candidates. It is
+of Fame reference. Report missing items and return only unauthorized material
+user-owned design decisions as candidates. It is
 not a ninth scored pass.
 
 ## Required plan outputs

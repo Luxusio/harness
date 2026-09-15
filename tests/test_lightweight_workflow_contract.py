@@ -189,6 +189,10 @@ def test_plan_review_lenses_defer_user_interaction_to_parent():
         "For each non-trivial decision, return a candidate",
         "For every non-trivial choice, return a decision candidate",
         "Queue taste choices for the user gate",
+        "Return each high-impact ambiguity as a decision candidate",
+        "Return any meaningful alternative or product decision as a candidate",
+        "return every proposed removal as a decision candidate",
+        "return every cut as a decision candidate",
     )
     for runtime in ("plugin/skills", "plugin-codex/internal-skills"):
         for name in (

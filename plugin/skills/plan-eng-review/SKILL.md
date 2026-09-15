@@ -52,8 +52,8 @@ Before detailed review:
 5. Reconcile overlapping `TODOS.md` entries: include them in acceptance criteria
    or keep them explicitly deferred.
 6. Challenge the premise, boundaries, migration strategy, and irreversible
-   choices. Return each high-impact ambiguity as a decision candidate with 2-3
-   options covering effort, blast radius, and rollback, then continue provisionally.
+   choices. Return a high-impact ambiguity only when it is an unauthorized material
+   user-owned choice, with 2-3 options covering effort, blast radius, and rollback.
 
 Emit a `Review Readiness Dashboard`:
 
@@ -209,7 +209,8 @@ The reviewed plan must contain:
 ```
 
 Mark `Critical gap? = YES` when mitigation is absent and blast radius is high or
-critical; return each as a material decision candidate before implementation.
+critical; add in-scope mitigation directly, or return it as a candidate only when
+resolution requires an unauthorized material user-owned choice.
 
 ### Worktree parallelization strategy
 
@@ -219,8 +220,8 @@ critical; return each as a material decision candidate before implementation.
 - Rollback and distribution notes where applicable.
 
 Present each potential TODO with What, Why, Pros, Cons, Context, and dependencies.
-Return `add to TODOS.md`, `skip`, or `build now` as a decision candidate when the
-choice is material. Never persist a vague or unauthorized TODO.
+Return `add to TODOS.md`, `skip`, or `build now` as a decision candidate only when
+the choice is unauthorized, material, and user-owned. Never persist a vague or unauthorized TODO.
 
 Finish with:
 
