@@ -124,6 +124,7 @@ def test_both_planning_procedures_ask_only_unresolved_material_decisions():
         assert "One decision interaction" in normalized
         assert "up to three" in normalized
         assert "explicitly requested pre-code plan approval" in normalized
+        assert "specific delta to §5.3" in normalized
         assert "Compact/full selection alone never runs it" in normalized
         assert "review depth" in normalized and "approval requirement" in normalized
         assert "one at a time" not in body
@@ -144,6 +145,8 @@ def test_thin_request_does_not_force_a_compact_prompt():
     assert "use it as the request summary" in prerequisite
     assert "skip this offer even when Phase 0.7 must select full" in prerequisite
     assert "Never couple this offer to compact/full selection" in prerequisite
+    assert "Skip →" not in prerequisite
+    assert "Point to context" in prerequisite
 
 
 def test_premise_authorization_and_scope_expansion_fail_closed():
@@ -183,6 +186,9 @@ def test_plan_review_lenses_defer_user_interaction_to_parent():
         "Confirm the mode and chosen implementation approach before proceeding",
         "ask before removing",
         "ask before every cut",
+        "For each non-trivial decision, return a candidate",
+        "For every non-trivial choice, return a decision candidate",
+        "Queue taste choices for the user gate",
     )
     for runtime in ("plugin/skills", "plugin-codex/internal-skills"):
         for name in (
@@ -196,6 +202,7 @@ def test_plan_review_lenses_defer_user_interaction_to_parent():
             assert "wait for the user" in normalized_ownership
             assert "unresolved material-decision candidate" in normalized_ownership
             assert "single post-review decision interaction" in normalized_ownership
+            assert "material" in body
             assert all(
                 phrase not in body for phrase in forbidden_direct_interaction
             ), f"{runtime}/{name} still owns a direct user interaction"

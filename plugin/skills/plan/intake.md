@@ -154,7 +154,7 @@ the same facts again later.
 
 Emit one AskUserQuestion:
 - A) Clarify inline → 3 goal-sharpening questions (outcome / NOT in scope / success)
-- B) Skip → proceed to 0.5 with the conversation summary; review may surface a material decision
+- B) Point to context → provide an existing issue, spec, file, or command that identifies the target and outcome
 - C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
 After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK.json` — if found, read and append it as `## Design Context` to the final PLAN.md.

@@ -64,10 +64,11 @@ inspection. Full and compact planning both reuse explicit requests,
 clarifications, and delegated authority; they collect only unresolved material
 outcome, scope, risk, irreversible-action, or external-state decisions into one
 post-review interaction. The answer authorizes the resulting plan. A separate
-final approval runs only when the user explicitly requested pre-code approval
-or a later review introduces a new unauthorized material delta. This authority
-is retained in the existing PLAN intent summary and decision trail, not a new
-task field or approval ledger.
+final approval runs only when the user explicitly requested pre-code approval.
+A later unauthorized material delta returns to the specific decision interaction
+instead of being hidden behind generic plan approval. This authority is retained
+in the existing PLAN intent summary and decision trail, not a new task field or
+approval ledger.
 
 `task_start` is both the creation and resume entry point; there is no separate
 `task_resume` operation. For an existing valid open or blocked task, the default

@@ -267,8 +267,9 @@ not create a new approval requirement.
 ### 5.4.1 Gate response options
 
 Run only when the user explicitly requested to approve the completed plan
-before coding, or when the §5.4 recheck finds a new unauthorized material delta
-that could not be included in §5.3. Compact/full selection alone never runs it.
+before coding. If §5.4 finds a new unauthorized material delta, return that
+specific delta to §5.3 instead of substituting generic plan approval.
+Compact/full selection alone never runs it.
 
 Invoke `AskUserQuestion` with the §5.1 summary visible in the preceding agent message and the following gate question. Binary options — modify and interrogate collapse into the built-in `Other` free-text mechanism.
 

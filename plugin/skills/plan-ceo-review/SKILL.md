@@ -107,7 +107,8 @@ the ideal. Then compare at least two credible approaches:
 |---|---|---|---|---|
 
 One must be the smallest viable diff and one the best long-term architecture. Give
-them equal weight and return an unresolved mode choice as a decision candidate.
+them equal weight. Select the evidence-backed mode provisionally; return it as a
+candidate only when it is unauthorized and materially changes outcome or scope.
 
 ### D. Mode-specific scope
 

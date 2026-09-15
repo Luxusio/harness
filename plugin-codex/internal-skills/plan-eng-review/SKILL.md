@@ -73,11 +73,12 @@ confidence 1-10, concrete `file:line` evidence, impact, and smallest fix.
 - 3-4: appendix only.
 - 1-2: omit unless potential P0.
 
-For every non-trivial choice, return a decision candidate with 2-3 lettered
+Classify every non-trivial choice with the parent decision principles. Apply
+Mechanical and Taste choices provisionally; return a decision candidate only
+for an unauthorized material user-owned choice. Give that candidate 2-3 lettered
 options, one-line effort/risk/maintenance tradeoffs, and a recommendation grounded
-in explicitness, DRY, testability, or minimal diff. Continue provisionally so the
-parent can batch unresolved candidates after all review lenses. A confirmed
-regression test is mandatory and needs no approval.
+in explicitness, DRY, testability, or minimal diff. A confirmed regression test
+is mandatory and needs no approval.
 
 ## 1. Architecture review
 

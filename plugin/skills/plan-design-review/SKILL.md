@@ -116,16 +116,18 @@ For each sub-10 dimension:
    implementation, otherwise `taste`.
 3. Add unambiguous structural requirements to the plan. Return any meaningful
    alternative or product decision as a candidate first.
-4. Queue taste choices for the user gate; never choose them silently.
+4. Resolve taste choices with the parent decision principles and retain them in
+   the audit trail; do not put them in the user gate unless they materially alter
+   the authorized outcome or scope.
 5. Re-score until the dimension reaches 8+, or identify the exact deferred taste
    decision that prevents it.
 
 ## Seven review passes
 
-Evaluate every pass; say `No issues found` when clear. For each non-trivial
-decision, return a candidate with 2-3 lettered options, effort/risk, and an
-opinionated recommendation. Continue provisionally; the parent batches unresolved
-candidates after all review lenses.
+Evaluate every pass; say `No issues found` when clear. Classify each non-trivial
+decision with the parent principles and return a candidate only for an unauthorized
+material user-owned choice. Give that candidate 2-3 lettered options, effort/risk,
+and an opinionated recommendation; resolve Mechanical and Taste items provisionally.
 
 1. **Information architecture:** content priority, page/screen structure,
    navigation and wayfinding. Add an ASCII hierarchy/flow diagram.

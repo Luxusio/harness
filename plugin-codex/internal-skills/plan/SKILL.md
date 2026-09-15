@@ -12,7 +12,7 @@ Codex planning pipeline with compact and full procedures. Conservatively eligibl
 > **Codex runtime notes** (delta from Claude):
 > - **Dual Voice is capability-routed.** Discover deferred tools before deciding. When `spawn_agent` or an external model route is available, run independent Voice A and Voice B contexts. Use one inline critical-reviewer pass only when no independent route exists, and record that fallback in PLAN.md's Review Status section.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
-> - **AskUserQuestion = conversational ask.** Both procedures collect unresolved material premises and User Challenges into one Phase 5.3 interaction. Phase 5.4.1 runs only for explicit pre-code approval or a new unauthorized material delta.
+> - **AskUserQuestion = conversational ask.** Both procedures collect unresolved material premises and User Challenges into one Phase 5.3 interaction. Phase 5.4.1 runs only for explicit pre-code approval; a later new delta returns to the specific Phase 5.3 format.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `write_plan`.
 > - **MCP tool names** bare (`task_start`, `task_context`, `write_plan`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
 
@@ -249,8 +249,9 @@ not create a new approval requirement.
 ### 5.4.1 Gate response options
 
 Run only when the user explicitly requested to approve the completed plan
-before coding, or when §5.4 finds a new unauthorized material delta that could
-not be included in §5.3. Compact/full selection alone never runs it.
+before coding. If §5.4 finds a new unauthorized material delta, return that
+specific delta to §5.3 instead of substituting generic plan approval.
+Compact/full selection alone never runs it.
 
 Emit §5.1 summary, then ask:
 
