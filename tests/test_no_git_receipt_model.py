@@ -162,6 +162,48 @@ def test_task_control_exact_four_field_schema_fails_closed(tmp_path):
     assert lib.read_task_control(task) == valid
 
 
+def test_review_depth_is_ephemeral_and_adds_no_artifact_or_lens_state():
+    """Risk-proportional fan-out is prompt policy, never persisted authority."""
+    assert lib.TASK_CONTROL_FIELDS == frozenset({
+        "run_id",
+        "execution_mode",
+        "required_lenses",
+        "close_receipt_fingerprint",
+    })
+    assert lib.RECEIPT_FIELDS == frozenset({
+        "ts",
+        "event",
+        "source",
+        "task_run_id",
+        "runtime_id",
+        "agent_id",
+        "agent_type",
+        "lens",
+        "verdict",
+        "summary",
+    })
+    assert lib._REVIEW_DETAIL_FIELDS == frozenset({"detail_sha256", "detail"})
+    assert lib._FORMAL_REVIEW_DETAIL_FIELDS == frozenset({"blocker", "findings"})
+    assert lib._FORMAL_REVIEW_FINDING_FIELDS == frozenset(
+        {"anchor", "issue", "evidence", "fix"}
+    )
+
+    persisted_names = (
+        lib.TASK_CONTROL_FIELDS
+        | lib.RECEIPT_FIELDS
+        | lib._REVIEW_DETAIL_FIELDS
+        | lib._FORMAL_REVIEW_DETAIL_FIELDS
+        | lib._FORMAL_REVIEW_FINDING_FIELDS
+        | frozenset(lib.LENS_ORDER)
+    )
+    assert not any(
+        "depth" in name or "hunter" in name
+        for name in persisted_names
+    )
+    assert not hasattr(lib, "REVIEW_DEPTH_FIELDS")
+    assert not hasattr(lib, "HUNTER_FIELDS")
+
+
 def test_uuid7_identity_is_canonical_timestamped_and_rotates(tmp_path):
     timestamp_ms = 1_786_424_400_900
     run_id = lib.new_uuid7(timestamp_ms)

@@ -305,11 +305,17 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 ### Phase 6.6: Independent Code Review Gate
 
 Read `quality-audit-pipeline.md` § Phase 6.6 and call `task_context`. For
-`review-code`, first spawn the two fresh, non-attesting defect hunters together,
-validate their minimal candidate arrays, then pass them as delimited untrusted
-leads to one newly spawned formal code reviewer. A routed security reviewer may
-run with the hunters and remains unchanged. Only formal reviewers own lens
-verdicts and receipts. Await explicit finals and require review PASS entries in
+`review-code`, classify the complete current evidence with the canonical
+LIGHT/STANDARD/DEEP decision table there. LIGHT spawns zero hunters, STANDARD
+spawns exactly the selected correctness or contract/test hunter, and DEEP
+spawns both together. Validate attempted minimal candidate arrays, then pass
+only available arrays as delimited untrusted leads to one newly spawned,
+full-sweep formal code reviewer at every depth. A routed security reviewer may
+run with discovery and remains separate and unchanged; security receives no
+hunter data. Only formal reviewers
+own lens verdicts and receipts. Depth is attempt-local and may only increase;
+resume/recovery recomputes it rather than reading task or receipt state. Await
+explicit finals and require review PASS entries in
 `RECEIPTS.jsonl` correlated to starts in the current task run. **The agent
 definition owns each formal verdict contract and hunter output contract — never
 restate, relocate, or paraphrase it in a spawn prompt.** Moving `VERDICT:` off the first line binds a formal review

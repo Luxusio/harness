@@ -95,8 +95,8 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | Agent | Role |
 |-------|------|
 | `developer` | Implements PLAN.md per AC |
-| `defect-hunter` | Runs two fresh, non-attesting evidence-only discovery passes before formal code review |
-| `code-reviewer` | Independently verifies hunter leads and current code; sole `review-code` verdict authority |
+| `defect-hunter` | Non-attesting evidence-only discovery: LIGHT runs 0, STANDARD 1 selected focus, and DEEP both focuses |
+| `code-reviewer` | Always runs fresh after discovery, independently sweeps the full scope, and is the sole `review-code` verdict authority |
 | `security-reviewer` | Conditional trust-boundary and exploitability specialist; sole `review-security` authority |
 | `dogfooder` | Post-QA power-user pass; finds friction + missing workflows |
 | `qa-browser` | Browser-first runtime QA via Chrome DevTools MCP |
@@ -104,6 +104,16 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-cli` | CLI / library runtime QA |
 | `qa-desktop` | Native GUI runtime QA via X11 tooling |
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
+
+Review discovery is deterministic and ephemeral: LIGHT runs no hunters,
+STANDARD runs one selected correctness or contract/test hunter, and DEEP runs
+both. Every tier still runs one fresh full-scope formal code reviewer; the
+conditional security review remains separate. Depth is not authoritative
+lifecycle state and has no dedicated task, receipt, or review-detail field;
+selected depth and evidence may appear in stored non-authoritative formal-review
+narrative. Rebase-LIGHT requires exact old/new endpoints,
+conflict-free one-to-one patch equivalence, affirmative semantic non-overlap,
+`HEAD` at the new tip, and a clean, fully accounted-for index and worktree.
 
 QA/UX agents return findings in their final response. Lifecycle hooks own the
 unified `RECEIPTS.jsonl`; `task_verify` enforces plan-declared lenses and

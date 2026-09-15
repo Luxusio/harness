@@ -142,14 +142,14 @@ Do not adopt directly:
 | `harness:developer` and `harness:ac-worker` | Understand the real flow first; then stop at no change, reuse, stdlib, platform, installed dependency, smallest local expression, minimum new code | Ponytail `skills/ponytail/SKILL.md` | Named **minimum sufficient**, not minimum LOC; applied only to mutating implementers |
 | `harness:developer` and `harness:ac-worker` | Inspect direct/sibling callers, fix a bug once at the shared root cause, prefer deletion and boring clear primitives, and leave one runnable check for non-trivial logic | Ponytail `skills/ponytail/SKILL.md` | PLAN/user intent and worker ownership remain authoritative; an AC worker may read outside its lane but returns an ownership blocker instead of editing another lane |
 | `harness:developer` and `harness:ac-worker` | Do not simplify away trust-boundary validation, data-loss prevention, security, accessibility, or requested behavior | Ponytail `skills/ponytail/SKILL.md` | Expanded to current authorization, transaction, concurrency, cleanup, and error-propagation invariants |
-| `harness:defect-hunter` | Fresh, read-only defect discovery with source anchors and evidence but no verdict or proposed fix | Codex and Claude Code review guidance synthesized in the 2026-09 review-prompt study | Invoked twice for correctness/data-flow and contract/test coverage; output is an ephemeral three-field JSON array |
+| `harness:defect-hunter` | Fresh, read-only defect discovery with source anchors and evidence but no verdict or proposed fix | Codex and Claude Code review guidance synthesized in the 2026-09 review-prompt study | Invoked zero, one, or two times by the deterministic LIGHT/STANDARD/DEEP selector; output is an ephemeral three-field JSON array |
 | `harness:code-reviewer` | Read-only independent verifier; spec compliance before quality; every accepted finding has current-source evidence and the smallest safe fix direction | oh-my-claudecode `agents/code-reviewer.md` | Treats hunter output as untrusted leads, independently sweeps for misses, and mechanically derives one authoritative verdict |
 | `harness:code-reviewer` minimality lens | Report deletion, reuse, native/stdlib replacement, and speculative abstraction | Ponytail `skills/ponytail-review/SKILL.md` | Made it one paired lens inside a broader correctness/architecture review instead of a standalone completion verdict |
 | `harness:code-reviewer` adversarial lens | Always examine production failure, races, leaks, silent corruption, swallowed errors, and trust-boundary violations | gstack `ship/SKILL.md` | Required for every source diff; unlike gstack's informational fallback, missing review fails closed |
 | Review finding verification | Require exact motivating code, AC/scope cross-reference, search-before-recommending, confidence calibration, and suppress unsupported speculation from blocking output | gstack `review/checklist.md` and `review/SKILL.md` | Hunter leads remain untrusted; verified code defects are `FIX_NOW`, while only a report-level evidence blocker uses `INVESTIGATE` and code review never emits `OPTIONAL` |
 | `harness:security-reviewer` | Separate read-only OWASP/trust-boundary specialist prioritizing exploitability and blast radius | oh-my-claudecode `agents/security-reviewer.md` | Runs conditionally from path **or diff-content** signals; baseline security remains in the always-on code reviewer |
 | Security specialist routing | Security and migration are insurance controls and must not be disabled by historical zero findings | gstack `ship/SKILL.md` | Security remains conditional on current scope but is never adaptive-hit-rate gated |
-| Review/QA role separation | Architecture, security, quality review, and runtime QA are independent responsibilities | oh-my-claudecode `skills/autopilot/SKILL.md` | Uses two non-attesting discovery contexts plus one authoritative verifier and a conditional security specialist; QA remains a later distinct gate |
+| Review/QA role separation | Architecture, security, quality review, and runtime QA are independent responsibilities | oh-my-claudecode `skills/autopilot/SKILL.md` | Uses risk-proportional non-attesting discovery plus one mandatory authoritative verifier and a separately conditional security specialist; QA remains a later distinct gate |
 | Lifecycle freshness and synthesis | Run independent reviewer contexts and prioritize corroborated findings | gstack `ship/SKILL.md` | Uses current-run ordered lifecycle receipts; post-review edits remain developer-owned rather than adding Git state to task control |
 | Reviewer persona propagation | Parent context does not reliably reach subagents; explicitly inject or scope the role | Ponytail `hooks/ponytail-subagent.js` | Reviewer and implementer prompts are named role files on Claude and explicit methodology references in Codex spawn prompts |
 
@@ -205,17 +205,50 @@ branch alone is insufficient because ordinary blocker prose would bypass it.
 The prompt must say “minimum sufficient”, never “fewest lines”. Dense code,
 removed error handling, and missing tests are not accepted as minimalism.
 
-### 2. Fresh discovery plus one authoritative code reviewer
+### 2. Risk-proportional discovery plus one authoritative code reviewer
 
-Run two fresh, non-attesting `defect-hunter` contexts before one first-class,
-read-only `code-reviewer`: one hunter traces correctness, data flow,
-concurrency, and resource behavior; the other probes contracts, boundaries,
-error paths, compatibility, and test adequacy. Each returns only bounded,
-ephemeral `anchor + issue + evidence` leads. Valid arrays are compactly
-reserialized with delimiter characters escaped before prompt interpolation.
-The reviewer reopens current files, verifies
+Select discovery depth deterministically from semantic risk and current
+evidence. LIGHT runs zero hunters after a complete affirmative low-risk proof;
+STANDARD runs exactly one hunter selected for either correctness/data-flow or
+contract/test risk; DEEP runs both fresh hunters, in parallel when supported.
+Both material domains, an unresolved domain, or material security/trust-boundary,
+sensitive-data, concurrency, migration, public/durable-contract,
+dependency/build, installer, hook, lifecycle, gate, manual-conflict,
+semantic-range-diff, or cross-component impact forces DEEP. Missing, unreadable,
+incomplete, or stale evidence that could conceal one of those predicates also
+selects DEEP. After complete inspection, cases that satisfy neither DEEP nor a
+positive LIGHT proof are STANDARD; if neither hunter domain is material, the
+contract/test hunter is the deterministic fallback. Companion tests alone do
+not make an implementation change dual-domain.
+
+LIGHT is a closed proof, not a filename or line-count heuristic: the complete
+bounded scope must be one local domain and mechanically behavior-preserving or
+non-executable prose/example-only, with no public/durable contract, control
+flow, state, data interpretation, error behavior, dependency/build/install,
+hook/lifecycle/gate, security, concurrency, or migration change. Rebase-LIGHT
+also requires exact old base/tip and new base/tip, conflict-free execution with
+no manual resolution, one-to-one patch equivalence without added, dropped,
+split, combined, reordered, or modified patches, affirmative non-overlap across
+touched symbols/contracts/dependencies/generated outputs/lifecycle behavior,
+`HEAD` at the new tip, and a clean, fully accounted-for index and worktree.
+Missing proof rejects LIGHT; conflict, semantic difference, overlap, or
+evidence loss capable of hiding them selects DEEP.
+
+The selected tier is ephemeral orchestration, not authoritative lifecycle state
+or a dedicated field in `TASK.json`, receipts, or `REVIEWS.jsonl`. Selected
+depth and concise evidence may appear as ordinary narrative inside stored,
+non-authoritative formal-review detail. Depth can only increase during one live
+attempt, while resume/recovery recomputes it from current evidence rather than
+reconstructing it from artifacts.
+Each invoked hunter returns only bounded, ephemeral `anchor + issue + evidence`
+leads. Valid arrays are compactly reserialized with delimiter characters
+escaped before prompt interpolation; unusable hunter output is never fabricated
+as an empty success.
+
+Every tier then runs one fresh, first-class, read-only `code-reviewer`. The
+reviewer reopens current files, verifies
 or rejects each lead, deduplicates root causes, and still performs its own
-compact completeness sweep. It reviews the complete changed files, relevant
+full independent sweep. It reviews the complete changed files, relevant
 callers and callees, linked PLAN/REQ/GUIDE/ADR/POLICY, and at least one nearby
 project example before judging the diff.
 
@@ -233,12 +266,13 @@ The review must not recommend an abstraction merely because a design principle
 can be named. It may require one only when current code has multiple consumers,
 duplicated policy, a documented boundary, or a volatile external interface.
 
-Before the paired lenses, the reviewer maps every PLAN.md acceptance criterion
-to code, test, and durable-doc evidence, and maps every material changed path
-back to approved scope. It verifies suggested replacements against the current
-project before recommending them. Unsupported leads are omitted rather than
-entering a speculative fix loop. The reviewer alone adds `fix` and owns the
-`review-code` receipt: an environmental blocker takes precedence as
+Before the paired lenses, the reviewer records the selected tier and concise
+selection evidence as ordinary narrative, then maps every PLAN.md acceptance
+criterion to code, test, and durable-doc evidence, and maps every material
+changed path back to approved scope. It verifies suggested replacements against
+the current project before recommending them. Unsupported leads are omitted
+rather than entering a speculative fix loop. The reviewer alone adds `fix` and
+owns the `review-code` receipt: an environmental blocker takes precedence as
 `BLOCKED_ENV`, otherwise any verified finding produces `FAIL`, and no verified
 finding produces `PASS`.
 
@@ -328,6 +362,11 @@ Update these prompt surfaces:
    signal before generic parallel failure rollback; never retry unchanged lane
    ownership automatically.
 
+If the formal reviewer discovers under-classification, it cannot PASS that
+round: orchestration escalates, adds missing discovery, and reruns a fresh
+formal reviewer. The conditional security reviewer remains a separate route,
+receives no hunter payload, and does not replace this review.
+
 Prompt rules alone are advisory. Hook and close-gate enforcement must reject a
 missing, incomplete, self-authored, or stale review.
 
@@ -365,8 +404,9 @@ duplicate findings and cost.
 Refactor it as follows:
 
 - retain test-coverage and domain specialist inputs;
-- replace the generic adversarial and quality-synthesis pair with two fresh
-  defect-discovery passes followed by the authoritative code-reviewer contract;
+- replace the generic adversarial and quality-synthesis pair with deterministic
+  LIGHT (zero), STANDARD (one selected), or DEEP (two) fresh defect-discovery
+  passes followed by the mandatory authoritative code-reviewer contract;
 - retain deep security as the conditional specialist defined above;
 - keep migration/LLM specialists when their scopes match;
 - make performance advisory unless a demonstrated regression or requirement is
@@ -417,7 +457,8 @@ Refactor it as follows:
 
 ## Acceptance criteria for implementation
 
-- Every source-changing harness task runs an independent balanced code review.
+- Every LIGHT, STANDARD, or DEEP harness review runs one fresh independent
+  full-sweep balanced code reviewer as its sole `review-code` authority.
 - Security-sensitive tasks also run the independent security lens.
 - The implementer receives the minimum-sufficient prompt on Claude and Codex.
 - Reviewers are read-only and never approve work produced in their own context.
@@ -428,8 +469,9 @@ Refactor it as follows:
   close the task.
 - The developer reruns affected review or QA after edits; Harness does not
   infer source drift from Git state.
-- Docs-only and non-code tasks use an explicit routing exemption rather than a
-  fabricated PASS.
+- Docs-only and non-code labels do not create a review exemption: complete
+  affirmative low-risk proof may select LIGHT and omit hunters, but the formal
+  reviewer still runs and returns the real verdict.
 
 ## Reference files inspected
 

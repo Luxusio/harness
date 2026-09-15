@@ -1,7 +1,7 @@
 ---
 tags: [harness, review, receipts, evidence]
 summary: 정식 리뷰 원문은 영수증과 같은 해시로 태스크 로컬 저장되며 한 번에 한 건만 선택 조회된다.
-updated: 2026-09-14
+updated: 2026-09-15
 freshness: current
 invalidated_by_paths:
   - plugin/agents/defect-hunter.md
@@ -17,24 +17,68 @@ invalidated_by_paths:
   - plugin/skills/develop/SKILL.md
   - plugin/skills/develop/quality-audit-pipeline.md
   - plugin-codex/internal-skills/develop/SKILL.md
-freshness_updated: 2026-09-14T00:00:00Z
+freshness_updated: 2026-09-15T00:00:00Z
 ---
 
 # REQ — formal review detail is selectively readable
 
 ## Expected normal behavior
 
-1. Before the authoritative code review, Harness runs two fresh, non-attesting
-   defect-discovery passes: one for correctness and data flow, and one for
-   contracts, error paths, and test adequacy. Each pass returns only a JSON
-   array of `anchor`, `issue`, and `evidence` strings. The formal reviewer
-   treats those values as untrusted leads, verifies or rejects them against the
-   current files, deduplicates them, and still performs an independent sweep.
+1. Before the authoritative code review, Harness deterministically selects an
+   ephemeral risk tier from the complete current diff, scope, callers,
+   contracts, dependencies, acceptance criteria, and operation evidence:
+   LIGHT runs no defect hunter, STANDARD runs exactly one selected correctness/
+   data-flow or contract/test hunter, and DEEP runs both fresh hunters (in
+   parallel when supported). The tier is not authoritative lifecycle state and
+   adds no dedicated field to `TASK.json`, receipts, or `REVIEWS.jsonl`.
+   Selected depth and concise evidence may appear as ordinary narrative inside
+   the stored, non-authoritative formal-review detail. Within one live attempt
+   depth may only increase; resume or recovery recomputes it from current
+   evidence rather than reconstructing it from artifacts.
+
+   LIGHT requires affirmative proof that the bounded one-domain change is
+   behavior-preserving mechanical work or non-executable prose/example-only
+   work and changes no public/durable contract, control flow, state, data or
+   error interpretation, dependency/build/install surface, hook/lifecycle/gate,
+   security boundary, concurrency, or migration behavior. Missing or stale
+   evidence that could hide a forced-DEEP condition selects DEEP. Material
+   security/trust-boundary, sensitive-data, concurrency, migration,
+   public/durable-contract, dependency/build, installer, hook, lifecycle, gate,
+   manual-conflict, semantic-range-diff, cross-component, or dual-hunter-domain
+   impact also forces DEEP. Remaining fully inspected cases are STANDARD: pick
+   the sole material hunter domain, use the contract/test hunter when neither
+   domain is material but LIGHT proof is incomplete, and escalate unresolved or
+   dual-domain scope to DEEP.
+
+   Rebase-LIGHT additionally requires exact old base/tip and new base/tip,
+   conflict-free execution without manual resolution, one-to-one patch
+   equivalence with no patch alteration or reordering, affirmative non-overlap
+   across touched symbols/contracts/dependencies/generated outputs/lifecycle
+   behavior, `HEAD` equal to the new tip, and a clean, fully accounted-for index
+   and worktree. Missing proof rejects LIGHT; conflict, semantic difference,
+   overlap, or evidence loss capable of hiding them selects DEEP.
+
+   Every invoked hunter returns only a JSON array of `anchor`, `issue`, and
+   `evidence` strings. The formal reviewer treats those values as untrusted
+   leads, verifies or rejects them against the current files, deduplicates them,
+   and still performs an independent full-scope sweep. A malformed, stale, or
+   unavailable hunter result is not represented as an empty successful array.
    Each array is limited to 20 objects and 65,536 UTF-8 bytes, each string to
    2,000 UTF-8 bytes, and validated arrays are compactly reserialized with
    literal `<`, `>`, and `&` escaped before prompt interpolation.
 
-2. The formal code reviewer remains the only `review-code` authority. Hunters
+   Before fan-out, Harness emits one compact live status line naming the tier,
+   hunter set, concrete selection reason, and that full formal review remains
+   mandatory. An upward escalation names the old tier, new tier, and trigger.
+   After resume or recovery, the status explicitly says the tier was
+   recomputed.
+
+2. Exactly one fresh formal code reviewer runs for LIGHT, STANDARD, and DEEP
+   and remains the only `review-code` authority. If it discovers that the tier
+   was too shallow, that round cannot PASS: Harness escalates, runs missing
+   discovery, and starts another fresh formal review. The conditional security
+   reviewer is routed separately, receives no hunter payload, and does not
+   replace formal code review. Hunters
    do not emit verdicts, finding counts, receipt fields, or lifecycle state.
    A verified finding adds only the smallest safe `fix` direction. An
    environmental inability to inspect takes precedence as `BLOCKED_ENV`;
@@ -77,8 +121,12 @@ freshness_updated: 2026-09-14T00:00:00Z
 
 ## Verification
 
-- Prompt-contract tests pin fresh hunter routing, the exact three-field schema,
-  independent verifier behavior, and the unchanged single formal authority.
+- Prompt-contract tests pin the decision-to-fan-out relations for deterministic
+  zero/one/two hunter routing, every conjunct of the rebase-LIGHT instructions,
+  the exact three-field schema, independent full-sweep verifier behavior, and
+  the unchanged single formal authority. They do not attest a runtime
+  classifier because selection is orchestration instruction, not lifecycle
+  code.
 - Store and CLI tests pin exact UTF-8 hashing, idempotency, limits, file safety,
   digest-only stdout, explicit error classes, and detail-before-receipt order.
 - Lifecycle regressions prove `REVIEWS.jsonl` cannot affect receipt selection,

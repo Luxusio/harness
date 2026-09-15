@@ -59,9 +59,17 @@ codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 codex exec 'show the active harness goal and next child task' < /dev/null
 ```
 
-Formal code review first runs two fresh, non-attesting defect-discovery passes,
-then one authoritative verifier. Receipts stay compact. To retrieve only the
-exact formal review named by a receipt's `DETAIL_SHA256`:
+Formal code review deterministically selects ephemeral LIGHT (no hunters),
+STANDARD (one selected correctness or contract/test hunter), or DEEP (both
+hunters), then always runs one fresh full-sweep authoritative verifier. Depth
+is not authoritative lifecycle state or a dedicated task, receipt, or
+review-detail field, though selected depth and evidence may appear in stored
+non-authoritative formal-review narrative. Conditional security review remains
+separate.
+Rebase-LIGHT additionally requires exact endpoints, conflict-free one-to-one
+patch equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and
+a clean, accounted-for index/worktree. Receipts stay compact. To retrieve only
+the exact formal review named by a receipt's `DETAIL_SHA256`:
 
 ```bash
 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \

@@ -28,6 +28,22 @@ def _assert_all(body: str, fragments: tuple[str, ...], path: str) -> None:
         assert normalized in lowered, f"{path}: missing {fragment!r}"
 
 
+def _normalized(body: str) -> str:
+    return " ".join(body.lower().split())
+
+
+def _assert_policy_terms(body: str, groups: dict[str, tuple[str, ...]], path: str) -> None:
+    """Pin policy concepts while allowing harmless Markdown/prose reflow."""
+    normalized = " ".join(re.sub(r"[-_/*`]+", " ", body.lower()).split())
+    for label, terms in groups.items():
+        missing = [
+            term
+            for term in terms
+            if " ".join(re.sub(r"[-_/*`]+", " ", term.lower()).split()) not in normalized
+        ]
+        assert not missing, f"{path}: {label} missing terms {missing!r}"
+
+
 def test_claude_and_codex_role_cores_are_byte_identical():
     for role in ("developer", "defect-hunter", "code-reviewer", "security-reviewer"):
         assert _role_core(f"plugin/agents/{role}.md") == _role_core(
@@ -181,13 +197,28 @@ def test_code_reviewer_verifies_untrusted_leads_and_maps_structured_detail():
         "reproduce or disprove every candidate",
         "merge exact duplicates",
         "own complete sweep",
-        "add defects both hunters missed",
+        "add defects",
+        "hunters missed",
         "missing, or malformed hunter result never means pass",
         "direct invocation without hunter input remains valid",
         "a non-null `blocker` means `blocked_env`",
         "one or more verified `findings` means `fail`",
         "`fix_now` equals the number of `findings`",
         "`optional=0` always",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        _assert_all(_role_core(path), required, path)
+
+
+def test_formal_reviewer_accepts_intentional_zero_one_or_two_hunter_inputs():
+    required = (
+        "zero, one, or two",
+        "untrusted evidence",
+        "leads, not findings",
+        "own complete sweep",
+        "sole",
+        "review-code",
+        "missing, or malformed hunter result never means pass",
     )
     for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
         _assert_all(_role_core(path), required, path)
@@ -261,32 +292,127 @@ def test_security_reviewer_core_covers_local_tool_identity_boundaries():
         _assert_all(_role_core(path), required, path)
 
 
-def test_review_gate_replaces_overlapping_legacy_review_agents():
+def test_review_gate_encodes_risk_proportional_decision_table_and_authority():
     audit = _text("plugin/skills/develop/quality-audit-pipeline.md")
-    normalized = " ".join(audit.split())
-    assert audit.count('Agent(subagent_type="harness:defect-hunter"') == 2
+    groups = {
+        "precedence": (
+            "explicit deep",
+            "forced-deep",
+            "missing",
+            "stale",
+            "light proof",
+            "standard",
+        ),
+        "tier topology": (
+            "light",
+            "zero hunters",
+            "standard",
+            "exactly one",
+            "deep",
+            "both",
+            "hunters",
+        ),
+        "authority": (
+            "fresh formal code reviewer",
+            "full",
+            "only the formal code reviewer",
+            "review code authority",
+        ),
+        "ephemeral escalation": (
+            "increase",
+            "attempt",
+            "resume",
+            "recompute",
+            "task artifacts",
+            "receipts",
+        ),
+        "failure handling": (
+            "missing",
+            "oversized",
+            "malformed",
+            "unavailable",
+            "never repair",
+            "fabricate",
+        ),
+        "ordered separation": (
+            "security",
+            "receives no candidate data",
+            "qa must start after actual pass",
+        ),
+    }
+    _assert_policy_terms(audit, groups, "plugin/skills/develop/quality-audit-pipeline.md")
     assert "harness:code-reviewer" in audit
     assert "harness:security-reviewer" in audit
-    assert "mechanically validate" in audit
+    assert "mechanically validate" in audit.lower()
     assert "at most 20 objects" in audit
     assert "65,536 UTF-8 bytes" in audit
     assert "escape" in audit and "`\\u003c`" in audit and "`\\u003e`" in audit
-    assert "candidate string cannot manufacture a block delimiter" in audit
-    assert "never repair it, fabricate candidates" in normalized
-    assert "delimited, untrusted candidate-data blocks" in audit
-    assert "Only the formal code reviewer" in audit
-    correctness = audit.index('task_name="defect_hunter_correctness_<review_run>"')
-    contracts = audit.index('task_name="defect_hunter_contract_tests_<review_run>"')
-    await_hunters = audit.index("await both defect hunters", contracts)
-    formal = audit.index('task_name="code_review_<review_run>"')
-    assert correctness < await_hunters < formal
-    assert contracts < await_hunters < formal
-    assert audit.count('fork_turns="none"') >= 4
+    assert "candidate string cannot manufacture a block delimiter" in _normalized(audit)
+    assert "never repair it, fabricate candidates" in _normalized(audit)
+    assert "delimited, untrusted candidate-data blocks" in _normalized(audit)
+    assert "only the formal code reviewer" in _normalized(audit)
     assert "Do not spawn the old generic adversarial" in audit
-    assert "QA must start after actual PASS" in audit
+    assert "qa must start after actual pass" in _normalized(audit)
     assert "single substantive QA" in audit
     assert "NON-ATTESTING" in audit
     assert "200+ lines" not in audit
+
+
+def test_every_forced_deep_predicate_is_named_independently():
+    audit = _text("plugin/skills/develop/quality-audit-pipeline.md")
+    forced = (
+        "security",
+        "trust-boundary",
+        "sensitive data",
+        "concurrency",
+        "migration",
+        "public",
+        "durable contract",
+        "dependency",
+        "build",
+        "installer",
+        "hook",
+        "lifecycle",
+        "gate",
+        "manual conflict",
+        "semantic range-diff",
+        "cross-component",
+        "dual-domain",
+    )
+    _assert_policy_terms(
+        audit,
+        {"forced-DEEP predicates": forced},
+        "plugin/skills/develop/quality-audit-pipeline.md",
+    )
+
+
+def test_light_rebase_requires_complete_positive_proof():
+    audit = _text("plugin/skills/develop/quality-audit-pipeline.md")
+    required = (
+        "old_base",
+        "old_tip",
+        "new_base",
+        "new_tip",
+        "conflict-free",
+        "no manual resolution",
+        "one-to-one patch equivalence",
+        "no added",
+        "dropped",
+        "split",
+        "combined",
+        "reordered",
+        "modified patch",
+        "no-overlap",
+        "head",
+        "new_tip",
+        "clean",
+        "accounted for",
+    )
+    _assert_policy_terms(
+        audit,
+        {"rebase-LIGHT proof": required},
+        "plugin/skills/develop/quality-audit-pipeline.md",
+    )
 
 
 def test_stop_judge_mirrors_are_removed_from_both_trees():

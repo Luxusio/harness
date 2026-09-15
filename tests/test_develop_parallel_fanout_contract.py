@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 
@@ -7,10 +9,175 @@ PARALLEL_FANOUT = REPO / "plugin" / "skills" / "develop" / "parallel-fanout.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md"
 CONTRACTS = REPO / "CONTRACTS.md"
 AC_WORKER = REPO / "plugin" / "agents" / "ac-worker.md"
+CODEX_PLUGIN = REPO / "plugin-codex" / ".codex-plugin" / "plugin.json"
 
 
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _normalized(body: str) -> str:
+    return " ".join(body.lower().split())
+
+
+def _policy_text(body: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", body.lower()).split())
+
+
+REVIEW_DEPTH_TERMS = {
+    "precedence": (
+        "explicit deep",
+        "forced-deep",
+        "missing",
+        "stale evidence",
+        "light proof",
+        "standard",
+    ),
+    "tiers": (
+        "light",
+        "zero hunters",
+        "standard",
+        "exactly one",
+        "deep",
+        "both",
+        "hunters",
+    ),
+    "standard choice": (
+        "correctness",
+        "contract/test",
+        "both material",
+        "unresolved",
+        "fallback",
+    ),
+    "attempt and recovery": (
+        "increase",
+        "attempt",
+        "resume",
+        "recompute",
+        "current evidence",
+        "receipts",
+    ),
+    "formal authority": (
+        "fresh formal",
+        "full",
+        "only",
+        "review-code",
+        "hunters",
+        "receipts",
+    ),
+    "security and qa": (
+        "security",
+        "receives no",
+        "data",
+        "qa",
+        "formal",
+        "pass",
+    ),
+}
+
+
+def _assert_review_depth_contract(body: str, path: Path) -> None:
+    normalized = _policy_text(body)
+    for label, terms in REVIEW_DEPTH_TERMS.items():
+        missing = [term for term in terms if _policy_text(term) not in normalized]
+        assert not missing, f"{path}: {label} missing terms {missing!r}"
+
+
+def _assert_relational_review_policy(body: str, path: Path) -> None:
+    """Assert tier inputs map to outputs, not just that both nouns exist."""
+    policy = _policy_text(body)
+    required_relations = (
+        "explicit deep",
+        "selects deep" if "selects **deep**" in body.lower() else "risk deep",
+        "missing unreadable incomplete or stale evidence",
+        "conceal a forced deep predicate",
+        "light requires complete positive proof"
+        if "requires complete positive proof" in policy
+        else "complete positive proof",
+        "remaining case is standard"
+        if "remaining case is" in policy
+        else "remaining work standard",
+        "correctness hunter" if "correctness hunter" in policy else "risk selects defect hunter correctness",
+        "contract test hunter"
+        if "contract test hunter" in policy
+        else "risk selects defect hunter contract tests",
+        "both material or either domain unresolved"
+        if "either domain unresolved" in policy
+        else "both material or either unresolved",
+        "deterministic standard fallback",
+        "light starts zero hunters" if "light starts" in policy else "light zero hunters",
+        "standard starts exactly the selected hunter"
+        if "standard starts" in policy
+        else "standard exactly the selected fresh hunter",
+        "deep starts both hunters" if "deep starts" in policy else "deep both fresh hunters",
+        "always spawn exactly one fresh"
+        if "always spawn" in policy
+        else "spawn exactly one fresh formal code reviewer",
+        "full sweep formal",
+        "attempt depth can only increase"
+        if "can only increase" in policy
+        else "never decrease the selected depth",
+        "resume recovery recompute",
+        "never restores depth from"
+        if "never restores" in policy
+        else "do not read or reconstruct depth from",
+    )
+    missing = [relation for relation in required_relations if relation not in policy]
+    assert not missing, f"{path}: missing relational review rules {missing!r}"
+
+    # Keep precedence relational: the forced predicate list belongs to the
+    # DEEP clause, rather than appearing elsewhere near a contradictory tier.
+    forced_clause = policy.split("missing unreadable incomplete or stale evidence", 1)[0]
+    assert "explicit deep" in forced_clause
+    assert "deep" in forced_clause
+    assert "standard" not in forced_clause
+
+    evidence_start = policy.index("missing unreadable incomplete or stale evidence")
+    light_start = policy.index("complete positive proof", evidence_start)
+    evidence_clause = policy[evidence_start:light_start]
+    assert "deep" in evidence_clause
+    assert "standard" not in evidence_clause
+
+    remaining_start = policy.index("after complete inspection", light_start)
+    remaining_clause = policy[remaining_start:policy.index("for standard", remaining_start)]
+    assert "standard" in remaining_clause
+
+    # Every rebase element is conjunctive inside the `LIGHT only` proof block.
+    rebase = policy.split("a rebase", 1)[1].split("fan out is exact", 1)[0]
+    assert "light only" in rebase or "qualifies for light only" in rebase
+    for predicate in (
+        "old base", "old tip", "new base", "new tip", "conflict free",
+        "no manual resolution", "one to one patch equivalence", "no added",
+        "dropped", "split", "combined", "reordered", "modified patch",
+        "no overlap", "head new tip", "clean", "accounted for",
+    ):
+        assert predicate in rebase, f"{path}: rebase-LIGHT does not require {predicate!r}"
+    assert "missing proof rejects rebase light" in rebase
+
+    fanout = policy.split("fan out is exact", 1)[1]
+    light_start = fanout.index("light")
+    standard_start = fanout.index("standard", light_start)
+    deep_start = fanout.index("deep", standard_start)
+    light_route = fanout[light_start:standard_start]
+    standard_route = fanout[standard_start:deep_start]
+    deep_route = fanout[deep_start:]
+    assert "zero hunters" in light_route
+    assert "both hunters" not in light_route
+    assert "correctness hunter" not in light_route
+    assert "contract test hunter" not in light_route
+    assert "exactly the selected" in standard_route
+    assert "zero hunters" not in standard_route
+    assert "both hunters" not in standard_route
+    assert "both" in deep_route and "hunters" in deep_route
+    assert "zero hunters" not in deep_route
+
+    if "then one fresh full sweep formal code reviewer" in light_route:
+        for route in (light_route, standard_route, deep_route):
+            assert route.count("one fresh full sweep formal code reviewer") == 1
+    else:
+        # Codex states the common convergence once, immediately after fan-out.
+        assert fanout.count("always spawn exactly one fresh") == 1
+        assert fanout.index("always spawn exactly one fresh") > deep_start
 
 
 def test_claude_develop_requires_lane_table_before_implementation():
@@ -125,28 +292,95 @@ def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
     assert "`dependency-conflict`, or `small-task`" in body
 
 
-def test_codex_review_gate_sequences_fresh_hunters_before_formal_verifier():
+def test_codex_review_gate_has_risk_proportional_fanout_before_formal_verifier():
     body = _text(CODEX_DEVELOP)
-
-    correctness = body.index("defect_hunter_correctness_<unique>")
-    contracts = body.index("defect_hunter_contract_tests_<unique>")
-    await_hunters = body.index("Await both hunter finals")
-    formal = body.index("code_review_<unique>")
-    assert correctness < await_hunters < formal
-    assert contracts < await_hunters < formal
-    assert body.count('fork_turns:"none"') >= 2
+    _assert_review_depth_contract(body, CODEX_DEVELOP)
     normalized = " ".join(body.split())
     assert "exactly nonempty-string `anchor`, `issue`, and `evidence`" in normalized
     assert "at most 20 objects" in body
     assert "65,536 UTF-8 bytes" in body
-    assert "missing/oversized/malformed output unavailable" in body
     assert "without repairing it or inventing `[]`" in body
     assert "escape literal `<`, `>`, `&`" in body
     assert "`\\u003c`, `\\u003e`, `\\u0026`" in body
-    assert "Only this formal reviewer" in body
-    assert "hunters never emit verdicts or receipts" in body
+    assert "only this full sweep formal reviewer" in _policy_text(body)
+    assert "hunters never emit verdicts or receipts" in _normalized(body)
     assert "Every retry uses new task names" in body
     assert "security receives no hunter data" in body
+
+
+def test_claude_and_codex_review_depth_policies_have_semantic_parity():
+    claude = _text(REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md")
+    codex = _text(CODEX_DEVELOP)
+    _assert_review_depth_contract(claude, CLAUDE_DEVELOP)
+    _assert_review_depth_contract(codex, CODEX_DEVELOP)
+    _assert_relational_review_policy(claude, CLAUDE_DEVELOP)
+    _assert_relational_review_policy(codex, CODEX_DEVELOP)
+
+    # These are the safety-sensitive predicates most likely to drift when the
+    # two runtimes are maintained separately. Formatting and explanatory prose
+    # may differ, but neither runtime may omit a predicate.
+    parity_terms = (
+        "trust-boundary",
+        "sensitive data",
+        "concurrency",
+        "migration",
+        "durable contract",
+        "dependency",
+        "installer",
+        "hook",
+        "lifecycle",
+        "manual conflict",
+        "semantic range-diff",
+        "cross-component",
+        "dual-domain",
+        "old_base",
+        "old_tip",
+        "new_base",
+        "new_tip",
+        "one-to-one patch equivalence",
+        "no-overlap",
+    )
+    for term in parity_terms:
+        assert _policy_text(term) in _policy_text(claude), (
+            f"Claude review policy missing {term!r}"
+        )
+        assert _policy_text(term) in _policy_text(codex), (
+            f"Codex review policy missing {term!r}"
+        )
+
+
+def test_review_depth_status_and_malformed_hunter_contract_are_visible():
+    for path in (
+        REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md",
+        CODEX_DEVELOP,
+    ):
+        body = _policy_text(_text(path))
+        alternatives = (
+            ("tier", "depth"),
+            "hunter set",
+            "concrete reason",
+            ("formal review remains mandatory", "full formal review remains mandatory"),
+            ("old tier", "old depth"),
+            ("new tier", "new depth"),
+            "trigger",
+            "missing",
+            "malformed",
+            "unavailable",
+            ("inventing `[]`", "convert it to `[]`", "fabricate candidates"),
+        )
+        for required in alternatives:
+            choices = required if isinstance(required, tuple) else (required,)
+            assert any(_policy_text(term) in body for term in choices), (
+                f"{path}: missing observable/failure contract {choices!r}"
+            )
+
+
+def test_codex_review_depth_route_is_coupled_to_advanced_cachebuster():
+    manifest = json.loads(_text(CODEX_PLUGIN))
+    version = manifest["version"]
+    assert version >= "2.3.0+codex.20260915013000"
+    assert "Independent Code Review Gate" in _text(CODEX_DEVELOP)
+    assert "LIGHT starts zero hunters" in _text(CODEX_DEVELOP)
 
 
 def test_coordinator_review_precedes_generic_parallel_failure_retry():

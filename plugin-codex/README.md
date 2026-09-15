@@ -59,8 +59,8 @@ Further references:
 
 ## Agents
 
-- `defect-hunter.md` — fresh evidence-only discovery role, invoked separately for correctness/data flow and contract/test paths; never a receipt lens.
-- `code-reviewer.md` — authoritative verifier that reopens current code, validates untrusted hunter leads, independently sweeps, and owns `review-code`.
+- `defect-hunter.md` — fresh evidence-only discovery role; deterministic LIGHT invokes neither focus, STANDARD one selected focus, and DEEP both; never a receipt lens.
+- `code-reviewer.md` — mandatory fresh authoritative verifier for every tier; reopens current code, validates any untrusted hunter leads, independently sweeps the full scope, and owns `review-code`.
 - `security-reviewer.md` — conditional trust-boundary specialist that owns `review-security`.
 - `qa-cli.md` — CLI / library QA lens.
 - `qa-api.md` — API endpoint QA lens.
@@ -70,7 +70,14 @@ Further references:
 - `dogfooder.md` — post-PASS user-facing-experience pass.
 - `developer.md` — source/doc implementation role.
 
-Formal review finals are stored separately from compact receipts. Retrieve one
+Review depth is ephemeral, not authoritative lifecycle state or a dedicated
+task, receipt, or review-detail field. Selected depth and evidence may appear
+inside stored non-authoritative formal-review narrative; resume/recovery still
+recomputes it. Conditional security review is routed separately.
+Rebase-LIGHT requires exact endpoints, conflict-free one-to-one patch
+equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and a
+clean, accounted-for index/worktree. Formal review finals are stored separately
+from compact receipts. Retrieve one
 exact body without dumping history:
 
 ```bash

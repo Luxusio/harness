@@ -40,7 +40,8 @@ Legend:
 | **Setup skill** | ✅ | ✅ | A dedicated Codex setup skill installs and configures the runtime-specific payload. |
 | **Maintain skill** | ✅ | 🟡 no dedicated Codex skill | Maintenance work still routes through the public run workflow. |
 | **Run skill (orchestrator)** | ✅ native | ✅ capability-routed | Both retain the public task-start→plan→develop→QA→close lifecycle, with review and verification as internal close gates. |
-| **Develop skill** | ✅ native fan-out | ✅ capability-routed fan-out | Both run fresh defect discovery before formal code review and route the declared QA lenses. |
+| **Develop skill** | ✅ native fan-out | ✅ capability-routed fan-out | Both deterministically select ephemeral LIGHT (0 hunters), STANDARD (1 selected hunter), or DEEP (2 hunters), then always run one fresh full-sweep formal code reviewer. Security remains separately conditional. Depth is not authoritative lifecycle state or a dedicated task/receipt/review-detail field, although it may appear in stored non-authoritative formal-review narrative. |
+| **Clean-rebase review proof** | ✅ | ✅ | Rebase-LIGHT requires exact old/new base and tip endpoints, conflict-free one-to-one patch equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and a clean accounted-for index/worktree. Missing proof rejects LIGHT; evidence loss that may hide conflict, drift, or overlap selects DEEP. |
 | **Plan skill (premise gate, scope confirmation)** | ✅ native | ✅ capability-routed | Codex uses its available collaboration/input surface and a conversational fallback where a structured question tool is unavailable. |
 | **Plan-* review skills (CEO/Eng/Design/DevEx)** | ✅ native | ✅ capability-routed | Codex carries runtime-specific internal skill variants and uses fresh agents when the collaboration surface is available. |
 | **qa-cli agent** | ✅ | ✅ | Text-only agent with shell-based verification. |
@@ -67,7 +68,7 @@ Legend:
 | setup | current | Dedicated Codex installation and configuration path. |
 | run | current | Public router plus a Codex-native internal workflow. |
 | plan | current | Capability-routed premise and plan review. |
-| develop | current | Capability-routed implementation, defect discovery, formal review, QA, and dogfood. |
+| develop | current | Capability-routed implementation; deterministic LIGHT/STANDARD/DEEP discovery; mandatory fresh full formal review; separate conditional security; QA and dogfood. |
 | plan-ceo-review | current | Installed Codex internal variant. |
 | plan-eng-review | current | Installed Codex internal variant. |
 | plan-design-review | current | Installed Codex internal variant. |
