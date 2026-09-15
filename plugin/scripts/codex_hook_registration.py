@@ -234,17 +234,15 @@ def register_task_result(
                 session_id=thread_id,
                 publish_legacy=False,
             )
+            return restore_watcher_registration(
+                payload,
+                budget_seconds=budget_seconds,
+                status_out=status_out,
+            )
     except Exception:
         if status_out is not None:
             status_out.update({"status": REGISTRATION_FAILED, "reason": "exact task binding failed"})
         return False
-    return restore_watcher_registration(
-        payload,
-        budget_seconds=budget_seconds,
-        status_out=status_out,
-    )
-
-
 def restore_watcher_registration(
     payload: bytes,
     *,

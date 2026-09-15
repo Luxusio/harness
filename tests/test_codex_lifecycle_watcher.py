@@ -198,6 +198,22 @@ def _write_task_control(task: Path, *, run_id: str = RUN_ID) -> None:
     }) + "\n", encoding="utf-8")
 
 
+def _write_exact_session_binding(repo: Path, root_id: str) -> tuple[str, str]:
+    task = repo / "doc/harness/tasks/TASK__registration"
+    task.mkdir(parents=True, exist_ok=True)
+    _write_task_control(task)
+    sessions = repo / "doc/harness/tasks/.active_sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{root_id}.json").write_text(json.dumps({
+        "session_id": root_id,
+        "task_dir": str(task),
+        "task_id": task.name,
+        "run_id": RUN_ID,
+        "updated": "2026-08-11T05:00:00Z",
+    }) + "\n", encoding="utf-8")
+    return task.name, RUN_ID
+
+
 def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
@@ -1152,24 +1168,28 @@ def test_ensure_refreshes_offset_when_task_generation_changes(tmp_path, monkeypa
     }}])
     first_run = RUN_ID
     second_run = "019f825b-f25f-70c3-8ee8-071f79fa1c99"
-    assert mod.ensure(
-        str(repo), root_id, task_id="TASK__first", run_id=first_run,
-    )
-    state_path = mod._state_path(str(repo), root_id)
-    first = json.loads(state_path.read_text())
-    with rollout.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"type": "event_msg", "payload": {"type": "later"}}) + "\n")
-    assert mod.ensure(
-        str(repo), root_id, task_id="TASK__first", run_id=first_run,
-    )
-    self_same = json.loads(state_path.read_text())
-    assert self_same["offset"] == first["offset"]
-    assert mod.ensure(
-        str(repo), root_id, task_id="TASK__second", run_id=second_run,
-    )
+    second_task_id = "TASK__" + "x" * 180
+    with mock.patch.object(mod, "_registration_binding_matches", return_value=True):
+        assert mod.ensure(
+            str(repo), root_id, task_id="TASK__first", run_id=first_run,
+        )
+        state_path = mod._state_path(str(repo), root_id)
+        first = json.loads(state_path.read_text())
+        with rollout.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "type": "event_msg", "payload": {"type": "later"},
+            }) + "\n")
+        assert mod.ensure(
+            str(repo), root_id, task_id="TASK__first", run_id=first_run,
+        )
+        same = json.loads(state_path.read_text())
+        assert same["offset"] == first["offset"]
+        assert mod.ensure(
+            str(repo), root_id, task_id=second_task_id, run_id=second_run,
+        )
     second = json.loads(state_path.read_text())
     assert second["offset"] == rollout.stat().st_size
-    assert (second["task_id"], second["run_id"]) == ("TASK__second", second_run)
+    assert (second["task_id"], second["run_id"]) == (second_task_id, second_run)
 
 
 def test_ensure_stops_recovery_when_deadline_expires_after_discovery(tmp_path, monkeypatch):
@@ -1363,7 +1383,8 @@ def test_registrations_revalidates_exact_root_and_rejects_symlink(tmp_path, monk
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
-    assert mod.ensure(str(repo), root_id)
+    task_id, run_id = _write_exact_session_binding(repo, root_id)
+    assert mod.ensure(str(repo), root_id, task_id=task_id, run_id=run_id)
     assert [item["thread_id"] for item in mod.registrations(str(repo))] == [root_id]
 
     state_path = mod._state_path(str(repo), root_id)
@@ -1389,7 +1410,8 @@ def test_registrations_prunes_expired_root_state(tmp_path, monkeypatch):
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
-    assert mod.ensure(str(repo), root_id)
+    task_id, run_id = _write_exact_session_binding(repo, root_id)
+    assert mod.ensure(str(repo), root_id, task_id=task_id, run_id=run_id)
     state_path = mod._state_path(str(repo), root_id)
     state = json.loads(state_path.read_text())
     expired = 1.0
@@ -1413,16 +1435,17 @@ def test_nonfinite_registration_timestamp_is_rejected_and_replaced(tmp_path, mon
         "session_id": root_id, "id": root_id, "cwd": str(repo),
         "thread_source": "user",
     }}])
+    task_id, run_id = _write_exact_session_binding(repo, root_id)
 
     for invalid in (float("nan"), float("inf"), float("-inf")):
-        assert mod.ensure(str(repo), root_id)
+        assert mod.ensure(str(repo), root_id, task_id=task_id, run_id=run_id)
         state_path = mod._state_path(str(repo), root_id)
         state = json.loads(state_path.read_text())
         state["registered_at"] = invalid
         state_path.write_text(json.dumps(state))
 
         assert mod.registrations(str(repo)) == []
-        assert mod.ensure(str(repo), root_id)
+        assert mod.ensure(str(repo), root_id, task_id=task_id, run_id=run_id)
         replacement = json.loads(state_path.read_text())
         assert math.isfinite(replacement["registered_at"])
         assert len(mod.registrations(str(repo))) == 1
@@ -2186,6 +2209,10 @@ def test_main_retries_bounded_rollout_creation_race():
     mod = _load()
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     with mock.patch.object(mod, "ensure", side_effect=[False, False, True]) as ensure, \
+         mock.patch.object(mod, "_active_task_binding_for_session", return_value={
+             "task_dir": "/repo/doc/harness/tasks/TASK__main",
+             "run_id": RUN_ID,
+         }), \
          mock.patch.object(mod.time, "monotonic", return_value=0.0), \
          mock.patch.object(mod.time, "sleep"):
         assert mod.main([
@@ -2193,6 +2220,9 @@ def test_main_retries_bounded_rollout_creation_race():
             "--retry-seconds", "1.0",
         ]) == 0
     assert ensure.call_count == 3
+    ensure.assert_called_with(
+        "/repo", root_id, task_id="TASK__main", run_id=RUN_ID,
+    )
 
 
 def test_active_task_requires_exact_session_marker_and_state(tmp_path):

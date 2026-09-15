@@ -51,6 +51,7 @@ THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 CALL_RE = re.compile(r"^[A-Za-z0-9_.-]{6,160}$")
 AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
 TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+TASK_ID_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
 # A 2 MiB UTF-8 final can expand sixfold when control characters are escaped
 # inside one JSONL string. Keep transport framing above the shared detail cap
 # while the existing whole-rollout bound remains the outer memory limit.
@@ -468,6 +469,18 @@ def _valid_current_registration(
         handle.close()
 
 
+def _registration_binding_matches(
+    repo_root: str, thread_id: str, task_id: str, run_id: str,
+) -> bool:
+    if not task_id or not run_id:
+        return True
+    binding = _active_task_binding_for_session(repo_root, thread_id)
+    return bool(
+        os.path.basename(str(binding.get("task_dir") or "")) == task_id
+        and binding.get("run_id") == run_id
+    )
+
+
 def ensure(
     repo_root: str,
     thread_id: str,
@@ -485,11 +498,13 @@ def ensure(
     """
     if not THREAD_RE.fullmatch(thread_id):
         return False
-    if bool(task_id) != bool(run_id) or (task_id and not TASK_NAME_RE.fullmatch(task_id)):
+    if bool(task_id) != bool(run_id) or (task_id and not TASK_ID_RE.fullmatch(task_id)):
         return False
     repo_root = os.path.realpath(repo_root)
     session_cwd = os.path.realpath(session_cwd or repo_root)
     if _authorized_control_root(session_cwd) != repo_root:
+        return False
+    if not _registration_binding_matches(repo_root, thread_id, task_id, run_id):
         return False
     if _valid_current_registration(repo_root, thread_id, task_id, run_id):
         return True
@@ -536,7 +551,12 @@ def ensure(
                 return False
         state_path = _state_path(repo_root, thread_id)
         state = _read_owned_json(state_path, runtime)
-        if _deadline_expired(deadline):
+        if (
+            _deadline_expired(deadline)
+            or not _registration_binding_matches(
+                repo_root, thread_id, task_id, run_id,
+            )
+        ):
             return False
         state_offset = state.get("offset")
         registered_at = state.get("registered_at")
@@ -600,15 +620,10 @@ def registrations(repo_root: str) -> list[dict[str, Any]]:
             state.get("version") != REGISTRATION_VERSION
             or state.get("owner") != REGISTRATION_OWNER
             or state.get("repo_root") != repo_root
-            or bool(task_id) != bool(run_id)
-            or (task_id and not TASK_NAME_RE.fullmatch(task_id))
-            or (
-                bool(task_id)
-                and (
-                    os.path.basename(str(binding.get("task_dir") or "")) != task_id
-                    or binding.get("run_id") != run_id
-                )
-            )
+            or not TASK_ID_RE.fullmatch(task_id)
+            or not run_id
+            or os.path.basename(str(binding.get("task_dir") or "")) != task_id
+            or binding.get("run_id") != run_id
             or not isinstance(session_cwd, str)
             or _authorized_control_root(session_cwd) != repo_root
             or path.name != f"{thread_id}.json"
@@ -1655,7 +1670,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     deadline = time.monotonic() + max(0.0, min(args.retry_seconds, 2.0))
     while True:
-        if ensure(args.repo_root, args.thread_id):
+        binding = _active_task_binding_for_session(args.repo_root, args.thread_id)
+        task_dir = str(binding.get("task_dir") or "")
+        task_id = os.path.basename(os.path.normpath(task_dir)) if task_dir else ""
+        run_id = str(binding.get("run_id") or "")
+        if task_id and run_id and ensure(
+            args.repo_root, args.thread_id, task_id=task_id, run_id=run_id,
+        ):
             return 0
         if time.monotonic() >= deadline:
             return 1
