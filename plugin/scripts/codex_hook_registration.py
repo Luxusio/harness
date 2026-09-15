@@ -8,6 +8,7 @@ import re
 import signal
 import sys
 import time
+from contextlib import ExitStack
 from typing import Callable
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -173,6 +174,27 @@ def _live_conflicts(control_root: str, marker: dict) -> list[dict]:
     return found
 
 
+def _conflict_task_dirs(control_root: str, marker: dict) -> list[str]:
+    """Return structurally valid task directories named by a conflict fence."""
+    tasks_root = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
+    found = []
+    raw = marker.get("conflicts")
+    if not isinstance(raw, list) or len(raw) != 2:
+        return found
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        task_dir = os.path.realpath(str(item.get("task_dir") or ""))
+        task_id = str(item.get("task_id") or "")
+        if (
+            TASK_RE.fullmatch(task_id)
+            and os.path.dirname(task_dir) == tasks_root
+            and os.path.basename(task_dir) == task_id
+        ):
+            found.append(task_dir)
+    return found
+
+
 REGISTERED = "registered"
 NOT_APPLICABLE = "not_applicable"
 REGISTRATION_FAILED = "failed"
@@ -248,14 +270,19 @@ def register_task_result(
         return False
     try:
         with active_session_transaction(control_root):
-            with receipt_stream_transaction(canonical_task):
+            marker = read_active_session_marker(control_root, thread_id)
+            lock_dirs = sorted(set(
+                [canonical_task] + _conflict_task_dirs(control_root, marker)
+            ))
+            with ExitStack() as locks:
+                for locked_task in lock_dirs:
+                    locks.enter_context(receipt_stream_transaction(locked_task))
                 control = read_task_control(canonical_task)
                 if (
                     task_control_status(canonical_task, control) != "open"
                     or control.get("run_id") != run_id
                 ):
                     return False
-                marker = read_active_session_marker(control_root, thread_id)
                 live_conflicts = _live_conflicts(control_root, marker)
                 candidate_binding = {
                     "task_dir": canonical_task, "task_id": task_id, "run_id": run_id,

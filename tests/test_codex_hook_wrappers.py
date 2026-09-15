@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -470,14 +471,36 @@ class TestCodexHookWrappers(unittest.TestCase):
             retry_mock.assert_not_called()
 
             recovery_payload = payloads[1]
+            locked_tasks = []
+            original_transaction = mod.receipt_stream_transaction
+
+            @contextlib.contextmanager
+            def traced_transaction(task_dir):
+                locked_tasks.append(os.path.realpath(task_dir))
+                with original_transaction(task_dir):
+                    yield
+
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
+            ), mock.patch.object(
+                mod, "receipt_stream_transaction", side_effect=traced_transaction,
             ):
                 self.assertFalse(mod.register_task_result(recovery_payload))
                 (root / "doc/harness/tasks/TASK__older/BLOCKED.md").write_text(
                     "blocked\n", encoding="utf-8",
                 )
-                self.assertTrue(mod.register_task_result(recovery_payload))
+                recovery_status = {}
+                self.assertTrue(
+                    mod.register_task_result(recovery_payload, status_out=recovery_status),
+                    recovery_status,
+                )
+            self.assertEqual(
+                set(locked_tasks),
+                {
+                    str(root / "doc/harness/tasks/TASK__older"),
+                    str(root / "doc/harness/tasks/TASK__newer"),
+                },
+            )
             binding = lib.resolve_session_task_binding(repo, session_id)
             self.assertEqual(binding["task_dir"], str(root / "doc/harness/tasks/TASK__newer"))
 

@@ -84,6 +84,8 @@ interval. The conflict marker is non-authoritative and retains only the two
 exact task/run generations needed to test whether ambiguity still exists.
 Neither can rebind while both remain open; once task state leaves exactly one
 of them live, a valid result for that sole generation may recover authority.
+Recovery holds both task receipt locks in canonical path order through state
+revalidation, marker publication, and registration refresh.
 Work remains fail-open while
 attestation fails closed until a later unambiguous exact result rebinds the
 session. An eligible new generation checkpoints the rollout at the new current

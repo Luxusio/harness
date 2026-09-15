@@ -22,7 +22,8 @@ All notable changes to the harness Claude Code plugin.
   binding and force a fresh-offset watcher registration on recovery, foreign
   MCP namespaces cannot impersonate task-result authority by
   suffix, replayed conflict results cannot cross a fence while both exact task
-  generations remain open, and watcher failure still never blocks the agent.
+  generations remain open, conflict recovery locks both task controls against
+  concurrent resume, and watcher failure still never blocks the agent.
 - Plan review no longer turns full-depth analysis into repeated approvals.
   Explicit requests and clarifications authorize matching premises and scope;
   unresolved material decisions are collected into one post-review interaction,
