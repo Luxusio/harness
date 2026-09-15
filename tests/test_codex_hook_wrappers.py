@@ -468,6 +468,51 @@ class TestCodexHookWrappers(unittest.TestCase):
                 self.assertFalse(mod.restore_watcher_registration(spawn_payload))
             retry_mock.assert_not_called()
 
+    def test_terminal_stale_task_result_preserves_current_session_binding(self):
+        mod = _load("codex_hook_registration")
+        lib = _load("_lib")
+        session_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+
+            payloads = []
+            tasks = []
+            runs = []
+            for name in ("stale", "current"):
+                task = root / f"doc/harness/tasks/TASK__{name}"
+                task.mkdir(parents=True)
+                run_id = lib.new_uuid7()
+                (task / "TASK.json").write_text(json.dumps({
+                    "run_id": run_id, "execution_mode": "standard",
+                    "required_lenses": ["review-code", "qa-cli"],
+                    "close_receipt_fingerprint": None,
+                }) + "\n", encoding="utf-8")
+                tasks.append(task)
+                runs.append(run_id)
+                payloads.append(json.dumps({
+                    "cwd": repo, "session_id": session_id,
+                    "tool_name": "task_start",
+                    "tool_response": {"structuredContent": {
+                        "task_dir": str(task), "task_id": task.name,
+                        "run_id": run_id,
+                    }},
+                }).encode())
+
+            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_ensure_with_deadline", return_value=True,
+            ) as ensure_mock:
+                self.assertTrue(mod.register_task_result(payloads[1]))
+                (tasks[0] / "BLOCKED.md").write_text("blocked\n", encoding="utf-8")
+                self.assertFalse(mod.register_task_result(payloads[0]))
+
+            binding = lib.resolve_session_task_binding(repo, session_id)
+            self.assertEqual(binding, {"task_dir": str(tasks[1]), "run_id": runs[1]})
+            self.assertEqual(ensure_mock.call_count, 1)
+
     def test_post_task_result_rejects_failed_or_mismatched_response(self):
         mod = _load("codex_hook_registration")
         root_id = "019f834e-1e91-7662-9024-f548103d751e"

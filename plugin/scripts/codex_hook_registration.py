@@ -224,26 +224,26 @@ def register_task_result(
         return False
     try:
         with active_session_transaction(control_root):
-            existing = resolve_session_task_binding(control_root, thread_id)
-            if existing and os.path.realpath(existing["task_dir"]) != canonical_task:
-                clear_active_marker(
-                    control_root,
-                    task_dir=existing["task_dir"],
-                    session_id=thread_id,
-                    strict=True,
-                )
-                if status_out is not None:
-                    status_out.update({
-                        "status": NOT_APPLICABLE,
-                        "reason": "conflicting open tasks invalidated exact session binding",
-                    })
-                return False
             with receipt_stream_transaction(canonical_task):
                 control = read_task_control(canonical_task)
                 if (
                     task_control_status(canonical_task, control) != "open"
                     or control.get("run_id") != run_id
                 ):
+                    return False
+                existing = resolve_session_task_binding(control_root, thread_id)
+                if existing and os.path.realpath(existing["task_dir"]) != canonical_task:
+                    clear_active_marker(
+                        control_root,
+                        task_dir=existing["task_dir"],
+                        session_id=thread_id,
+                        strict=True,
+                    )
+                    if status_out is not None:
+                        status_out.update({
+                            "status": NOT_APPLICABLE,
+                            "reason": "conflicting open tasks invalidated exact session binding",
+                        })
                     return False
                 write_active_marker(
                     control_root,
