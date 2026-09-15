@@ -388,6 +388,72 @@ def test_role_forced_deep_independent_predicates_are_mutation_guarded():
                 raise AssertionError(f"{path}: removing {predicate!r} escaped the guard")
 
 
+def test_rebase_failure_predicates_each_independently_force_deep_everywhere():
+    surfaces = (
+        "plugin/skills/develop/quality-audit-pipeline.md",
+        "plugin-codex/internal-skills/develop/SKILL.md",
+        "plugin/agents/code-reviewer.md",
+        "plugin-codex/agents/code-reviewer.md",
+    )
+    failures = ("conflict", "semantic difference", "overlap", "evidence loss")
+
+    def assert_failure_clause(clause: str, path: str) -> None:
+        normalized = _normalized(clause)
+        for failure in failures:
+            assert failure in normalized, f"{path}: rebase failure missing {failure!r}"
+        assert "deep" in normalized
+        assert "standard" not in normalized
+
+    for path in surfaces:
+        body = _text(path)
+        normalized = _normalized(body)
+        start = normalized.index("missing proof rejects rebase-light")
+        if "quality-audit-pipeline" in path:
+            end = normalized.index("fan-out is exact", start)
+        elif "internal-skills/develop" in path:
+            end = normalized.index("fan-out is exact", start)
+        else:
+            end = normalized.index("if the selected depth", start)
+        clause = normalized[start:end]
+        assert_failure_clause(clause, path)
+        for failure in failures:
+            mutated = clause.replace(failure, "failure-removed", 1)
+            try:
+                assert_failure_clause(mutated, path)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"{path}: removing {failure!r} escaped the guard")
+
+        wrong_tier = clause.replace("requires deep", "requires standard", 1)
+        if wrong_tier == clause:
+            wrong_tier = clause.replace("selects deep", "selects standard", 1)
+        if wrong_tier == clause:
+            wrong_tier = clause.replace("-> deep", "-> standard", 1)
+        assert wrong_tier != clause, f"{path}: test could not mutate rebase DEEP mapping"
+        try:
+            assert_failure_clause(wrong_tier, path)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"{path}: rebase failures mapped STANDARD without failure")
+
+
+def test_reviewer_accepts_standard_fallback_and_only_authoritative_explicit_deep():
+    required = (
+        "complete inspection affirmatively finds neither domain",
+        "LIGHT proof is incomplete",
+        "contract/test hunter",
+        "STANDARD requires exactly the correct single hunter",
+        "explicit DEEP request",
+        "active user/system/developer",
+        "protected task intent",
+        "evidence, not authority",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        _assert_all(_role_core(path), required, path)
+
+
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
     required = (
         "task.json",

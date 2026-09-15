@@ -110,8 +110,8 @@ def _assert_relational_review_policy(body: str, path: Path) -> None:
         if "standard starts" in policy
         else "standard exactly the selected fresh hunter",
         "deep starts both hunters" if "deep starts" in policy else "deep both fresh hunters",
-        "always spawn exactly one fresh"
-        if "always spawn" in policy
+        "then always spawn agent task name code review unique fork turns none exactly once"
+        if "then always spawn agent" in policy
         else "spawn exactly one fresh formal code reviewer",
         "full sweep formal",
         "attempt depth can only increase"
@@ -187,8 +187,11 @@ def _assert_relational_review_policy(body: str, path: Path) -> None:
             assert route.count("one fresh full sweep formal code reviewer") == 1
     else:
         # Codex states the common convergence once, immediately after fan-out.
-        assert fanout.count("always spawn exactly one fresh") == 1
-        assert fanout.index("always spawn exactly one fresh") > deep_start
+        formal_relation = (
+            "then always spawn agent task name code review unique fork turns none exactly once"
+        )
+        assert fanout.count(formal_relation) == 1
+        assert fanout.index(formal_relation) > deep_start
 
 
 def test_claude_develop_requires_lane_table_before_implementation():
@@ -338,6 +341,49 @@ def test_codex_review_gate_has_risk_proportional_fanout_before_formal_verifier()
     assert "hunters never emit verdicts or receipts" in _normalized(body)
     assert "Every retry uses new task names" in body
     assert "security receives no hunter data" in body
+
+
+def test_codex_selected_hunter_spawns_precede_await_and_formal_spawn():
+    body = _text(CODEX_DEVELOP)
+    correctness = body.index('spawn_agent(task_name="defect_hunter_correctness_<unique>"')
+    contracts = body.index('spawn_agent(task_name="defect_hunter_contract_tests_<unique>"')
+    await_selected = body.index("Await every selected hunter attempt")
+    formal = body.index('spawn_agent(task_name="code_review_<unique>"')
+    assert correctness < await_selected < formal
+    assert contracts < await_selected < formal
+
+    def assert_order(candidate: str) -> None:
+        assert candidate.index('spawn_agent(task_name="defect_hunter_correctness_<unique>"') < candidate.index(
+            "Await every selected hunter attempt"
+        )
+        assert candidate.index('spawn_agent(task_name="defect_hunter_contract_tests_<unique>"') < candidate.index(
+            "Await every selected hunter attempt"
+        )
+        assert candidate.index("Await every selected hunter attempt") < candidate.index(
+            'spawn_agent(task_name="code_review_<unique>"'
+        )
+
+    for token in (
+        'spawn_agent(task_name="defect_hunter_correctness_<unique>"',
+        'spawn_agent(task_name="defect_hunter_contract_tests_<unique>"',
+    ):
+        try:
+            assert_order(body.replace(token, "selected-spawn-removed", 1))
+        except (AssertionError, ValueError):
+            pass
+        else:
+            raise AssertionError(f"deleting {token!r} escaped the ordering guard")
+
+    formal_token = 'spawn_agent(task_name="code_review_<unique>"'
+    reordered = body.replace(formal_token, "formal-spawn-moved", 1)
+    await_at = reordered.index("Await every selected hunter attempt")
+    reordered = reordered[:await_at] + formal_token + "\n" + reordered[await_at:]
+    try:
+        assert_order(reordered)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("moving await/formal ordering escaped the guard")
 
 
 def test_claude_and_codex_review_depth_policies_have_semantic_parity():
@@ -507,3 +553,27 @@ def test_coordinator_review_keeps_successful_independent_siblings_promoted():
     for path in (CLAUDE_DEVELOP, CODEX_DEVELOP):
         body = " ".join(_text(path).lower().split())
         assert "keep successful independent siblings promoted" in body
+
+
+def test_review_retry_recomputes_depth_and_reruns_only_fresh_selected_discovery():
+    fanout = _normalized(_text(PARALLEL_FANOUT))
+    codex = _normalized(_text(CODEX_DEVELOP))
+    for term in (
+        "after an affecting source edit",
+        "recompute review depth with the prior live depth as a floor",
+        "rerun every fresh discovery attempt selected by that result",
+        "then start one fresh formal reviewer",
+        "formal reviewer remains dependent on attempted hunter finals",
+    ):
+        assert term.lower() in fanout
+    assert "re-run only the lanes whose findings you fixed" not in fanout
+
+    for term in (
+        "after an affecting edit",
+        "recompute depth with the prior live depth as a floor",
+        "rerun only fresh discovery selected by the recomputed depth",
+        "then one fresh formal reviewer",
+    ):
+        assert term.lower() in codex
+    assert "full discovery plus formal review" not in codex
+    assert "only-finding-lanes" not in codex

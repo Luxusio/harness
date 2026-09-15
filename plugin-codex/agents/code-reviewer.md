@@ -56,15 +56,19 @@ Repeat them at the start of the additional narrative as
 `REVIEW_DEPTH: <LIGHT|STANDARD|DEEP>; HUNTERS: <none|correctness|contract/test|both>; REASON: <reason>`.
 Independently validate that selection against the visible scope: LIGHT requires
 complete positive low-risk proof; STANDARD requires exactly the correct single
-hunter for one material domain; both or unresolved domains and every forced
-DEEP trigger require DEEP with both hunters.
+hunter for one material domain, or the contract/test hunter when complete
+inspection affirmatively finds neither domain but LIGHT proof is incomplete.
+Both or unresolved domains and every forced DEEP trigger require DEEP with both
+hunters.
 Missing, unreadable, incomplete, or stale evidence that could conceal a forced
 DEEP predicate also requires DEEP. LIGHT proof must establish bounded
 single-domain scope, mechanically behavior-preserving or non-executable work,
 no control-flow/state/data/error/contract/dependency/build/install/hook/
 lifecycle/gate/security/concurrency/migration behavior change, obvious intent,
 focused verification, and current worktree evidence.
-Forced-DEEP predicates are material security/trust-boundary, sensitive-data,
+Forced-DEEP predicates are an explicit DEEP request from active
+user/system/developer instructions or protected task intent, material
+security/trust-boundary, sensitive-data,
 concurrency, migration, public-contract, durable-contract, dependency, build,
 installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff,
 cross-component, and dual-domain risk. Treat these as the canonical minimum,

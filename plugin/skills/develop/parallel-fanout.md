@@ -159,10 +159,12 @@ completion order is not a PASS.
 
 ### Re-review after remediation
 
-Re-run only the lanes whose findings you fixed, in parallel, in one message. Do
-not collapse a multi-lane round into one serial generalist round — that is the
-shape this section exists to prevent, and it drops the lanes that were already
-clean back to unreviewed.
+After an affecting source edit, recompute review depth with the prior live
+depth as a floor, rerun every fresh discovery attempt selected by that result,
+then start one fresh formal reviewer. Do not reuse a previously clean hunter:
+its evidence describes pre-edit source. Batch only the newly selected,
+dependency-free discovery/security calls; the formal reviewer remains
+dependent on attempted hunter finals.
 
 ### Component-independent definition
 
