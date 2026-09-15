@@ -245,6 +245,21 @@ def test_formal_reviewer_depth_mismatches_use_the_existing_finding_verdict_path(
         assert "REVIEW_DEPTH_ASSESSMENT" not in core
 
 
+def test_formal_reviewer_accepts_only_the_bounded_deep_hunter_exception():
+    required = (
+        "sole hunter-set exception",
+        "coordinator-declared bounded formal-only review",
+        "discovery budget exhausted",
+        "discovery budget unknown and treated as exhausted",
+        "DEEP remains selected",
+        "absence alone is not an under-classification finding",
+        "never permits a lower depth",
+        "no persisted state or receipt field",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        _assert_all(_role_core(path), required, path)
+
+
 def test_formal_reviewer_pins_each_depth_mismatch_and_deep_sufficiency_case():
     relations = (
         "LIGHT requires complete positive low-risk proof",

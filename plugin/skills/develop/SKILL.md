@@ -325,7 +325,8 @@ Send only `FIX_NOW` findings to the original minimum-sufficient
 implementer, except coordinator-owned review-depth reroutes. Discovery has at
 most two live cycles (LIGHT 0 calls, STANDARD at most 2, DEEP at most 4): after
 the first round follow the canonical change-class retry matrix, then use a
-fresh formal-only pass once the budget is exhausted. Any affecting edit loops
+fresh formal-only pass with the canonical exhausted/unknown invocation reason
+once the budget is exhausted. Any affecting edit loops
 through focused tests/checkpoint and affected formal reviewers again. Normally
 do not start Phase 7 QA until receipt-backed review
 PASS. Under the Missing receipt policy, actual reviewer PASS finals permit one
@@ -496,5 +497,4 @@ Retrospective pass land with `status: candidate` frontmatter and do not block
 close on their own.
 
 ### Phase 8.7: Distilled Change Doc
-
 One-paragraph summary of the task's user-visible behavior change. Lives at `doc/changes/<date>-<slug>.md`. Optional if no user-visible change. Writer skill consumes this for release notes.

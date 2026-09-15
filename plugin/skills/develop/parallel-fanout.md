@@ -165,7 +165,8 @@ depth floor, test-logic-only work reruns contract/test only, and narrative or
 task-artifact wording uses deterministic checks without hunters. After the
 ceiling—or when prior cycle count is unavailable on recovery—spawn no hunter
 and let one fresh formal reviewer verify the final diff and prior remediation
-evidence. Rerun security only for security-relevant changes, independently and
+evidence, using the canonical exhausted or unknown-budget invocation reason.
+Rerun security only for security-relevant changes, independently and
 without hunter payload. The formal code reviewer remains dependent on any
 selected hunter attempts.
 

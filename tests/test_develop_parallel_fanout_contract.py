@@ -600,6 +600,19 @@ def test_review_discovery_budget_is_bounded_and_change_class_aware():
             assert term in policy, f"{path}: missing bounded retry term {term!r}"
 
 
+def test_exhausted_discovery_uses_a_live_formal_only_exception_without_state():
+    audit = _policy_text(_text(REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md"))
+    codex = _policy_text(_text(CODEX_DEVELOP))
+    for policy in (audit, codex):
+        assert "discovery budget exhausted" in policy
+        assert "discovery budget unknown and treated as exhausted" in policy
+        assert "formal reviewer" in policy
+    assert "spawn no more hunters" in audit
+    assert "spawn no hunter" in codex
+    assert "never reconstruct hunter counts from receipts" in audit
+    assert "no task receipt or review detail field" in codex
+
+
 def test_hunter_context_is_bounded_and_excludes_transcript_noise():
     for path in (
         REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md",

@@ -57,7 +57,7 @@ complete positive low-risk proof; STANDARD requires exactly the correct single
 hunter for one material domain, or the contract/test hunter when complete
 inspection affirmatively finds neither domain but LIGHT proof is incomplete.
 Both or unresolved domains and every forced DEEP trigger require DEEP with both
-hunters.
+hunters, except for the bounded formal-only path below.
 Missing, unreadable, incomplete, or stale evidence that could conceal a forced
 DEEP predicate also requires DEEP. LIGHT proof must establish bounded
 single-domain scope, mechanically behavior-preserving or non-executable work,
@@ -71,6 +71,14 @@ concurrency, migration, public-contract, durable-contract, dependency, build,
 installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff,
 cross-component, and dual-domain risk. Treat these as the canonical minimum,
 not examples.
+The sole hunter-set exception is a coordinator-declared bounded formal-only
+review. Its invocation reason must contain exactly `discovery budget exhausted`
+or `discovery budget unknown and treated as exhausted`. In that case DEEP
+remains selected, zero or only previously available hunter inputs are valid,
+and their absence alone is not an under-classification finding. Independently
+sweep the complete final diff and verify unresolved findings and remediation
+evidence. This live invocation exception never permits a lower depth and adds
+no persisted state or receipt field.
 A rebase is LIGHT only when all following predicates are required together and
 none is an alternative: exact old_base, old_tip, new_base, and new_tip;
 conflict-free execution without manual resolution; one-to-one patch

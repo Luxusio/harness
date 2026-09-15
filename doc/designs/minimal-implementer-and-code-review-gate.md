@@ -253,7 +253,9 @@ set from the live depth floor, test-logic-only changes run contract/test only,
 and narrative/task-artifact corrections use deterministic checks only. Once
 exhausted—or when recovery cannot know the prior count—one fresh formal
 reviewer verifies the final diff and remediation evidence without another
-hunter. Hunter prompts contain only base-to-HEAD diff, PLAN ACs, relevant
+hunter. Its exact live reason identifies the budget as exhausted or unknown and
+treated as exhausted, allowing the reviewer to accept the intentional DEEP
+hunter-set exception without lifecycle state. Hunter prompts contain only base-to-HEAD diff, PLAN ACs, relevant
 source/tests, and unresolved findings.
 
 Every tier then runs one fresh, first-class, read-only `code-reviewer`. The
