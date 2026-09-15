@@ -73,7 +73,8 @@ concurrency, migration, public-contract, durable-contract, dependency, build,
 installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff,
 cross-component, and dual-domain risk. Treat these as the canonical minimum,
 not examples.
-A rebase is LIGHT only with exact old_base, old_tip, new_base, and new_tip;
+A rebase is LIGHT only when all following predicates are required together and
+none is an alternative: exact old_base, old_tip, new_base, and new_tip;
 conflict-free execution without manual resolution; one-to-one patch
 equivalence without added, dropped, split, combined, reordered, or modified
 patches; affirmative semantic no-overlap across symbols, contracts,

@@ -439,6 +439,63 @@ def test_rebase_failure_predicates_each_independently_force_deep_everywhere():
             raise AssertionError(f"{path}: rebase failures mapped STANDARD without failure")
 
 
+def test_rebase_light_positive_proof_is_six_clause_all_of_with_operator_guards():
+    surfaces = (
+        "plugin/skills/develop/quality-audit-pipeline.md",
+        "plugin-codex/internal-skills/develop/SKILL.md",
+        "plugin/agents/code-reviewer.md",
+        "plugin-codex/agents/code-reviewer.md",
+    )
+
+    def positive_proof(body: str) -> str:
+        normalized = _normalized(body)
+        start = normalized.index("a rebase")
+        end = normalized.index("missing proof rejects rebase-light", start)
+        return normalized[start:end]
+
+    def assert_all_of(proof: str, path: str) -> None:
+        assert "light only" in proof or "qualifies for light only" in proof
+        clauses = [clause.strip() for clause in proof.split(";")]
+        assert len(clauses) == 6, f"{path}: rebase-LIGHT proof must have six all-of clauses"
+        required_by_clause = (
+            ("old_base", "old_tip", "new_base", "new_tip"),
+            ("conflict-free", "manual resolution"),
+            ("one-to-one patch equivalence", "added", "dropped", "split", "combined", "reordered", "modified"),
+            ("no-overlap", "symbols", "contracts", "dependencies", "generated outputs", "lifecycle behavior"),
+            ("head", "new_tip"),
+            ("clean", "accounted", "index/worktree"),
+        )
+        for clause, terms in zip(clauses, required_by_clause, strict=True):
+            for term in terms:
+                assert term in clause, f"{path}: rebase all-of clause missing {term!r}"
+        assert clauses[-1].startswith("and "), (
+            f"{path}: final rebase proof boundary must remain conjunctive"
+        )
+
+    for path in surfaces:
+        proof = positive_proof(_text(path))
+        assert_all_of(proof, path)
+        separators = [match.start() for match in re.finditer(";", proof)]
+        assert len(separators) == 5
+        for boundary in separators:
+            mutated = proof[:boundary] + " or " + proof[boundary + 1:]
+            try:
+                assert_all_of(mutated, path)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"{path}: semicolon-to-or boundary mutation escaped")
+
+        final_or = proof.replace("; and ", "; or ", 1)
+        assert final_or != proof
+        try:
+            assert_all_of(final_or, path)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"{path}: final and-to-or mutation escaped")
+
+
 def test_reviewer_accepts_standard_fallback_and_only_authoritative_explicit_deep():
     required = (
         "complete inspection affirmatively finds neither domain",

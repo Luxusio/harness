@@ -563,7 +563,7 @@ def test_review_retry_recomputes_depth_and_reruns_only_fresh_selected_discovery(
         "recompute review depth with the prior live depth as a floor",
         "rerun every fresh discovery attempt selected by that result",
         "then start one fresh formal reviewer",
-        "formal reviewer remains dependent on attempted hunter finals",
+        "formal code reviewer remains dependent on attempted hunter finals",
     ):
         assert term.lower() in fanout
     assert "re-run only the lanes whose findings you fixed" not in fanout
@@ -572,8 +572,40 @@ def test_review_retry_recomputes_depth_and_reruns_only_fresh_selected_discovery(
         "after an affecting edit",
         "recompute depth with the prior live depth as a floor",
         "rerun only fresh discovery selected by the recomputed depth",
-        "then one fresh formal reviewer",
+        "then every routed formal lens",
+        "code review remains one fresh formal reviewer",
     ):
         assert term.lower() in codex
     assert "full discovery plus formal review" not in codex
     assert "only-finding-lanes" not in codex
+
+
+def test_recovery_status_reports_recomputation_even_when_depth_is_unchanged():
+    for path in (
+        REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md",
+        CODEX_DEVELOP,
+    ):
+        body = _normalized(_text(path))
+        start = body.index("resume/recovery")
+        recovery = body[start:start + 350]
+        assert "status" in recovery
+        assert "recomputed" in recovery
+        assert "even when" in recovery
+        assert "unchanged" in recovery
+
+
+def test_post_edit_retry_reruns_every_routed_formal_lens_with_security_independent():
+    fanout = _normalized(_text(PARALLEL_FANOUT))
+    codex = _normalized(_text(CODEX_DEVELOP))
+    for body, label in ((fanout, "parallel-fanout"), (codex, "Codex develop")):
+        for term in (
+            "after an affecting",
+            "every routed formal lens",
+            "review-security",
+            "independent",
+            "no hunter",
+            "payload",
+        ):
+            assert term in body, f"{label}: retry contract missing {term!r}"
+    assert "formal code reviewer remains dependent on attempted hunter finals" in fanout
+    assert "security remains independent" in codex

@@ -76,10 +76,12 @@ Companion tests do not by themselves make an implementation change dual-domain.
 Within one live attempt, recompute after affecting edits but never decrease the
 selected depth (`LIGHT < STANDARD < DEEP`). On resume/recovery, recompute from
 current evidence; do not read or reconstruct depth from task artifacts,
-receipts, or review detail. Report every increase with old depth, new depth,
-and trigger.
+receipts, or review detail. The recovery status must explicitly say the depth
+was recomputed even when it is unchanged. Report every increase with old depth,
+new depth, and trigger.
 
-A rebase qualifies for LIGHT only when exact `old_base`, `old_tip`, `new_base`,
+A rebase qualifies for LIGHT only when all following predicates are required
+together and none is an alternative: exact `old_base`, `old_tip`, `new_base`,
 and `new_tip` are known; execution was conflict-free with no manual resolution;
 old and new ranges have one-to-one patch equivalence with no added, dropped,
 split, combined, reordered, or modified patch; upstream and topic changes have
@@ -193,7 +195,10 @@ reviewer may still classify specialist findings as
 - `OPTIONAL`: report as advisory. Never send it into an automatic code-growth
   loop.
 
-After fixing a reviewer finding, rerun that routed review before QA. Harness
+After fixing a reviewer finding, recompute depth, rerun its selected fresh
+discovery, and rerun every routed formal review lens before QA, including a
+fresh `review-security` when declared. Security stays independent and receives
+no hunter payload. Harness
 does not detect later source edits; deciding whether an unrelated or post-QA
 edit needs another review is developer-owned. QA must start after actual PASS
 finals from every required reviewer. Normally those PASS finals also have
