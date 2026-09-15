@@ -30,6 +30,11 @@ under 15 non-empty lines, write a concise intent summary from the current user
 prompt and explicitly label the source as `conversation summary`. Do not rely on
 `REQUEST.md` alone for future intent reconstruction.
 
+When an explicit clarification, approval, or consolidated decision answer
+authorizes a material premise or scope, summarize that authority here and keep
+the corresponding rationale in the existing Decision Audit Trail. Do not add
+an approval field, ledger, or sidecar.
+
 ### Durable Docs Decision
 
 Every PLAN.md must classify documentation impact before develop starts. This is

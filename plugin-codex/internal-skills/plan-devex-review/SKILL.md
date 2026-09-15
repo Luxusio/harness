@@ -9,8 +9,16 @@ description: |
 
 # Developer Experience Plan Review
 
-> **Codex runtime notes:** Use plain conversational prose with lettered options and wait
-> for the next turn where the Claude source says `AskUserQuestion`. Use bare Harness MCP
+## Parent interaction ownership
+
+When the parent plan pipeline invokes this review, do not ask or wait for the
+user. Any later instruction to ask or confirm means: return an unresolved
+material-decision candidate with options and a recommendation, then continue
+provisionally. The parent owns the single post-review decision interaction and
+reruns only affected review work.
+
+> **Codex runtime notes:** Return decision candidates in plain conversational prose with
+> lettered options where the Claude source refers to user decisions. Use bare Harness MCP
 > names and `HARNESS_PLUGIN_ROOT` if needed. Apply edits with `apply_patch`. Read Hall of
 > Fame sections from
 > `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-devex-review/dx-hall-of-fame.md`.
@@ -24,8 +32,8 @@ completeness, and conversational-ask rules in
 - The target developer, not an abstract "user", anchors every claim.
 - Gather evidence before scoring. Cite actual commands, docs, interfaces, errors,
   timestamps, and competitor sources.
-- Ask one decision per friction point or finding in plain prose. Recommend one option
-  with developer impact and why; wait. Never silently change a public interface or scope.
+- Return each unresolved material decision as a candidate. Recommend one option with
+  developer impact and why. Never silently change a public interface or scope.
 - Preserve explicit compatibility, migration, and deprecation decisions.
 - Read only the current pass from the Hall of Fame source; do not load it all.
 - Update the plan only after the relevant decision. No `TBD` or invented evidence.
@@ -41,8 +49,9 @@ Classify the plan from evidence as one or more of:
 - Documentation: guides, examples, references
 - Claude Code Skill: `SKILL.md`, Claude Code, agents, MCP
 
-State the primary type and ask for confirmation. If none apply, exit and recommend the
-engineering or design lens; do not manufacture DX scope.
+State the primary type and confidence. Return a candidate only if the classification
+materially changes the plan. If none apply, exit and recommend the engineering or
+design lens; do not manufacture DX scope.
 
 ## DX principles and modes
 
@@ -82,8 +91,8 @@ Complete A-G before scoring.
 
 ### A. Developer persona
 
-Infer 2-3 plausible personas from repository evidence and ask the user to select or
-correct the primary one. Capture:
+Infer 2-3 plausible personas from repository evidence, provisionally select the
+best-supported primary persona, and return a candidate if the choice is material. Capture:
 
 | Field | Required content |
 |---|---|
@@ -92,13 +101,14 @@ correct the primary one. Capture:
 | Tolerance | time/steps before abandonment |
 | Expects | assumed tools, guarantees, and workflows |
 
-Do not continue without a confirmed persona.
+Do not finalize persona-dependent findings while the persona remains unresolved;
+continue provisionally and identify which findings need rerun after the parent resolves it.
 
 ### B. Empathy narrative
 
 Trace the actual getting-started path in a 150-250 word first-person narrative. Name
-what the persona opens, runs, sees, feels, and where uncertainty starts. Ask the user to
-confirm or correct it; the corrected narrative becomes a plan output.
+what the persona opens, runs, sees, feels, and where uncertainty starts. Return material
+corrections as candidates; the resolved narrative becomes a plan output.
 
 ### C. Competitive benchmark
 
@@ -108,7 +118,8 @@ tools. If search is unavailable, label any fallback benchmark as reference data.
 | Tool | TTHW | Notable DX choice | Source |
 |---|---|---|---|
 
-Estimate this plan's steps and TTHW, then ask the user to choose the target tier.
+Estimate this plan's steps and TTHW, recommend a target tier, and return the tier as a
+candidate only when the choice materially changes scope or acceptance criteria.
 
 ### D. Magical moment
 
@@ -119,13 +130,14 @@ Persist the chosen vehicle and implementation requirements.
 
 ### E. Mode
 
-Recommend EXPANSION, POLISH, or TRIAGE from maturity and urgency, then obtain explicit
-selection.
+Recommend EXPANSION, POLISH, or TRIAGE from maturity and urgency. Return it as a
+candidate when no request or prior decision already authorizes the mode.
 
 ### F. Journey trace
 
 Trace Discover, Install, Hello World, Real Usage, Debug, and Upgrade through real files,
-commands, output, and errors. Ask separately about each evidenced friction point.
+commands, output, and errors. Return material friction choices as candidates for the
+parent's consolidated interaction.
 TRIAGE traces only Install and Hello World. EXPANSION additionally offers a best-in-class
 improvement at each stage. Produce a resolved/deferred journey map.
 The final deliverable uses the full nine-stage Hall of Fame journey-map template.
@@ -133,8 +145,8 @@ The final deliverable uses the full nine-stage Hall of Fame journey-map template
 ### G. First-time roleplay
 
 Using the confirmed persona and evidence, create a timestamped T+0:00 through outcome
-confusion log. Ask which confusion points belong in the plan and annotate their final
-status.
+confusion log. Recommend which confusion points belong in the plan; return only material
+scope choices as candidates and annotate their provisional status.
 
 ## Scoring method
 
@@ -143,7 +155,7 @@ For every pass:
 1. Recall specific Step 0 evidence and load only that pass's Hall of Fame section.
 2. Score 0-10 and describe what 10 means for this product/persona.
 3. Name each gap and its developer/adoption effect.
-4. Ask about genuine choices one at a time; apply approved fixes to the plan.
+4. Return genuine choices as candidates; apply already-authorized fixes to the plan.
 5. Re-score. Stop at 10 or at the user's accepted residual gap.
 
 EXPANSION may offer separate opt-in improvements after resolving the base score. POLISH
@@ -205,7 +217,7 @@ Avoid telemetry proposals that ignore privacy or cannot drive a decision.
 ### Conditional Claude Code Skill checklist
 
 When the product type includes Claude Code Skill, load only that checklist from the Hall
-of Fame reference. Report missing items and ask separately for design decisions. It is
+of Fame reference. Report missing items and return material design decisions as candidates. It is
 not a ninth scored pass.
 
 ## Required plan outputs

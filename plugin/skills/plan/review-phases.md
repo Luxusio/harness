@@ -105,7 +105,7 @@ Do not create a chronological side file. PLAN.md is the durable review record.
 | Both voices return, Voice B Agent-tool | `dual-voice` (nominal, same-model) | Build consensus normally |
 | External Voice B fails, Agent-tool B succeeds | `dual-voice-agent-fallback` (degraded) | Record `cross-model-failure` + retry reason in PLAN; use Agent-tool B output; continue |
 | One voice fails/timeout entirely | `single-voice` (degraded) | Record reason in PLAN with `mode=single-voice`; continue |
-| Both voices fail | `blocked` | Emit AskUserQuestion with details before proceeding |
+| Both voices fail | `blocked` | Record an operational finding and continue with coordinator evidence; do not create a separate user interaction |
 | `HARNESS_DISABLE_CROSS_MODEL=1` set | `dual-voice` (by user choice) | Agent-tool Voice B only; not a degradation |
 
 ---
@@ -114,24 +114,22 @@ Do not create a chronological side file. PLAN.md is the durable review record.
 
 Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-ceo-review/SKILL.md`. Conflict priority: **P1 + P2**.
 
-### 1.1 Premise extraction and gate (MANDATORY USER GATE)
+### 1.1 Premise extraction and authorization (MANDATORY ANALYSIS)
 
-Extract top 3-5 premises. Emit single AskUserQuestion — the only mandatory user interaction before Phase 5:
+Extract the top 3-5 premises and record the source of each. Classify them before
+review:
 
-```
-Premises for TASK__<id>:
+- **authorized:** directly stated in the current request, a later clarification,
+  or an explicit parent delegation;
+- **evidence-backed:** established by repository evidence and does not choose a
+  product outcome, material scope, risk acceptance, irreversible action, or
+  external-state change for the user;
+- **unresolved material:** unsupported and would make one of those choices.
 
-1. <premise 1>
-2. <premise 2>
-3. <premise 3>
-
-Do these premises hold?
-A) Yes, all hold — proceed with review
-B) Yes with caveats — (please describe)
-C) No, these need revisiting — (please describe)
-```
-
-**Never auto-decided.** If C or material caveats: update scope and re-extract premises. In spawned mode only: auto-resolve per 6 Decision Principles.
+Authorized and evidence-backed premises do not produce a question. Carry every
+unresolved material premise into the Phase 5 consolidated decision bundle, and
+review the relevant alternatives provisionally. Premise extraction is always
+mandatory; a separate premise-confirmation interaction is not.
 
 ### 1.2 CEO dimensions (6)
 
@@ -146,7 +144,7 @@ C) No, these need revisiting — (please describe)
 
 ### 1.3 Required outputs (checklist)
 
-- [ ] 0A Premise challenge with specific premises named
+- [ ] 0A Premises named, source-classified, and authorized or queued
 - [ ] 0B Existing code leverage map (sub-problems → existing modules)
 - [ ] 0C Dream state diagram (CURRENT → THIS PLAN → 12-MONTH IDEAL)
 - [ ] 0C-bis Implementation alternatives table (2-3 approaches, effort/risk/pros/cons)

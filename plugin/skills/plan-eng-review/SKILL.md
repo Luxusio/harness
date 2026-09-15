@@ -16,6 +16,14 @@ allowed-tools:
 
 # Engineering plan review
 
+## Parent interaction ownership
+
+When the parent plan pipeline invokes this review, do not call
+`AskUserQuestion` or wait for the user. Any later instruction to ask or confirm
+means: return an unresolved material-decision candidate with options and a
+recommendation, then continue provisionally. The parent owns the single
+post-review decision interaction and reruns only affected review work.
+
 Review and edit the plan only; do not implement product code. Apply the shared
 plan rules in `plugin/skills/plan/SKILL.md`, including search-before-building,
 repo ownership, and AskUserQuestion format. Prefer the smallest explicit,
@@ -44,8 +52,8 @@ Before detailed review:
 5. Reconcile overlapping `TODOS.md` entries: include them in acceptance criteria
    or keep them explicitly deferred.
 6. Challenge the premise, boundaries, migration strategy, and irreversible
-   choices. For a high-impact ambiguity, stop and ask with 2-3 options covering
-   effort, blast radius, and rollback.
+   choices. Return each high-impact ambiguity as a decision candidate with 2-3
+   options covering effort, blast radius, and rollback, then continue provisionally.
 
 Emit a `Review Readiness Dashboard`:
 
@@ -70,11 +78,11 @@ confidence 1-10, concrete `file:line` evidence, impact, and smallest fix.
 - 3-4: appendix only.
 - 1-2: omit unless potential P0.
 
-For every non-trivial choice, call AskUserQuestion separately. Give 2-3 lettered
+For every non-trivial choice, return a decision candidate with 2-3 lettered
 options, one-line effort/risk/maintenance tradeoffs, and a recommendation grounded
-in explicitness, DRY, testability, or minimal diff. Do not batch findings or move
-to the next section before answers are resolved. A confirmed regression test is
-mandatory and needs no approval.
+in explicitness, DRY, testability, or minimal diff. Continue provisionally so the
+parent can batch unresolved candidates after all review lenses. A confirmed
+regression test is mandatory and needs no approval.
 
 ## 1. Architecture review
 
@@ -171,8 +179,8 @@ observable assertion, and unit/integration/E2E/eval level. Ensure PLAN.md has:
 ### Fallbacks if unavailable
 ```
 
-For prompt/LLM changes, name eval suites, cases, baselines, and ask the user to
-confirm eval scope. `No issues found` is valid only after listing files read and
+For prompt/LLM changes, name eval suites, cases, baselines, and return any material
+eval-scope choice as a decision candidate. `No issues found` is valid only after listing files read and
 paths traced and showing the complete diagram.
 
 ## 4. Performance review
@@ -200,7 +208,7 @@ The reviewed plan must contain:
 ```
 
 Mark `Critical gap? = YES` when mitigation is absent and blast radius is high or
-critical; resolve each before implementation through an individual question.
+critical; return each as a material decision candidate before implementation.
 
 ### Worktree parallelization strategy
 
@@ -209,9 +217,9 @@ critical; resolve each before implementation through an individual question.
   otherwise state `Sequential implementation, no parallelization opportunity.`
 - Rollback and distribution notes where applicable.
 
-Present each potential TODO individually with What, Why, Pros, Cons, Context, and
-dependencies, then ask: add to `TODOS.md`, skip, or build now. Never persist a
-vague or unapproved TODO.
+Present each potential TODO with What, Why, Pros, Cons, Context, and dependencies.
+Return `add to TODOS.md`, `skip`, or `build now` as a decision candidate when the
+choice is material. Never persist a vague or unauthorized TODO.
 
 Finish with:
 

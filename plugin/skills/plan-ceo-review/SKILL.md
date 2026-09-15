@@ -19,6 +19,14 @@ allowed-tools:
 
 # CEO Plan Review
 
+## Parent interaction ownership
+
+When the parent plan pipeline invokes this review, do not call
+`AskUserQuestion` or wait for the user. Any later instruction to ask or confirm
+means: return an unresolved material-decision candidate with options and a
+recommendation, then continue provisionally. The parent owns the single
+post-review decision interaction and reruns only affected review work.
+
 Review the plan only. Do not implement code. Apply the shared rules in
 `plugin/skills/plan/SKILL.md` for evidence, context recovery, repository ownership,
 search, completeness, and AskUserQuestion formatting.
@@ -26,8 +34,8 @@ search, completeness, and AskUserQuestion formatting.
 ## Contract
 
 - The user owns every scope change. Never silently add, remove, or defer scope.
-- Ask one decision per finding. Give 2-3 concrete options, recommend one with why,
-  and wait. If there is genuinely no finding, say so and continue.
+- Return each unresolved material decision as a candidate with 2-3 concrete options
+  and a recommendation. If there is genuinely no finding, say so and continue.
 - Base claims on the current plan, repository evidence, prior task-local decisions,
   and relevant external evidence. Do not re-ask recorded decisions.
 - Name files, interfaces, failure modes, user effects, effort, and risk.
@@ -45,7 +53,7 @@ Choose and then hold one mode:
 | SCOPE EXPANSION | Push up | Define the 10x experience and platonic ideal; offer each expansion for opt-in. |
 | SELECTIVE EXPANSION | Hold baseline, offer additions | Review baseline rigorously; offer each expansion neutrally for cherry-picking. |
 | HOLD SCOPE | Preserve | Strengthen architecture, safety, testing, operations, and rollout without expansion. |
-| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and ask before removing anything. |
+| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and return every proposed removal as a decision candidate. |
 
 Defaults: greenfield → EXPANSION; enhancement → SELECTIVE; bug/refactor → HOLD;
 plans touching more than 15 files → consider REDUCTION. Explicit user language wins.
@@ -76,9 +84,9 @@ List the plan's 3-5 load-bearing premises. For each record:
 | Premise | stated / assumed / proven / unknown | blast radius if wrong | evidence |
 |---|---|---|---|
 
-Ask about the highest-blast-radius assumed or unknown premise. Determine the actual
-user/business outcome, whether the plan solves it directly, and the cost of doing
-nothing.
+Return the highest-blast-radius assumed or unknown premise as a decision candidate
+when it is material. Determine the actual user/business outcome, whether the plan
+solves it directly, and the cost of doing nothing.
 
 ### B. Existing-code leverage
 
@@ -99,7 +107,7 @@ the ideal. Then compare at least two credible approaches:
 |---|---|---|---|---|
 
 One must be the smallest viable diff and one the best long-term architecture. Give
-them equal weight and obtain user approval before selecting a mode.
+them equal weight and return an unresolved mode choice as a decision candidate.
 
 ### D. Mode-specific scope
 
@@ -108,7 +116,7 @@ them equal weight and obtain user approval before selecting a mode.
 - SELECTIVE: first find avoidable complexity and the minimum baseline, then surface
   10x, delight, and platform opportunities as individual choices.
 - HOLD: challenge excess complexity while preserving the approved boundary.
-- REDUCTION: split must-ship value from follow-up work and ask before every cut.
+- REDUCTION: split must-ship value from follow-up work and return every cut as a decision candidate.
 
 For EXPANSION and SELECTIVE, persist decisions in
 `doc/harness/tasks/<task-id>/ceo-plan.md` with vision, mode, proposal table, accepted
@@ -121,13 +129,13 @@ subagent is unavailable, disclose that the document is unreviewed and continue.
 
 Surface decisions an implementer would otherwise meet during foundations, core logic,
 integration, and verification. Show human and agent-assisted effort when useful.
-Confirm the mode and chosen implementation approach before proceeding.
+Record the authorized mode and approach; return either as a candidate when unresolved.
 
 ## Technical review
 
 Evaluate every applicable section. For each finding, record evidence, user impact,
-recommended resolution, owner, and verification; obtain the user's decision before
-writing it into the plan.
+recommended resolution, owner, and verification. Apply authorized decisions and
+return unresolved material choices as candidates before finalizing the plan.
 
 ### 1. Architecture
 

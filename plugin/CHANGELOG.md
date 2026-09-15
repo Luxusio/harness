@@ -13,6 +13,11 @@ All notable changes to the harness Claude Code plugin.
 
 ### Changed
 
+- Plan review no longer turns full-depth analysis into repeated approvals.
+  Explicit requests and clarifications authorize matching premises and scope;
+  unresolved material decisions are collected into one post-review interaction,
+  and unchanged plans proceed directly to develop unless pre-code approval was
+  explicitly requested.
 - `task_blocked` preserves each valid blocker field verbatim through an
   inclusive 120 KiB UTF-8 limit, rejects oversized content before mutation,
   and reports the argument that actually failed without echoing blocker prose.

@@ -4,12 +4,20 @@ user-invocable: false
 description: Review and improve a UI/UX plan before implementation.
 ---
 
-> **Codex runtime delta:** Ask questions as plain conversational prose with
-> lettered options and wait for the next turn; Codex has no structured
+> **Codex runtime delta:** Return decision candidates as plain conversational prose
+> with lettered options; Codex has no structured
 > `AskUserQuestion` tool. Use `apply_patch` for approved plan edits. No outside
 > voice or subagent workflow is part of this compressed skill.
 
 # Design plan review
+
+## Parent interaction ownership
+
+When the parent plan pipeline invokes this review, do not ask or wait for the
+user. Any later instruction to ask or confirm means: return an unresolved
+material-decision candidate with options and a recommendation, then continue
+provisionally. The parent owns the single post-review decision interaction and
+reruns only affected review work.
 
 Review and edit the plan only. Do not implement product code. Apply the shared
 plan rules in `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md`, including
@@ -38,15 +46,15 @@ search-before-building, repo ownership, context recovery, and conversational ask
 ## Step 0: Design scope assessment
 
 Rate initial design completeness 0-10. State what a 10 means for this plan,
-which existing patterns it should reuse, and the three biggest gaps. Ask whether
-the user wants a narrower focus; stop for the answer.
+which existing patterns it should reuse, and the three biggest gaps. If a narrower
+focus is a material choice, return it as a decision candidate and continue provisionally.
 
 ### Step 0.5: Visual mockups
 
 Unless the user requests text-only review, draw an ASCII/Markdown wireframe for
 every key screen or component, including navigation, hierarchy, primary actions,
 interaction flow, and responsive changes. Store any approved persistent mockup
-under `docs/designs/`. Show the wireframes and ask for corrections before scoring.
+under `docs/designs/`. Record likely corrections as candidates before scoring.
 
 ## Design rubric
 
@@ -102,8 +110,8 @@ For each sub-10 dimension:
 1. Identify the violated principle and smallest useful plan edit.
 2. Classify it as `structural` when omission would cause a broken or confusing
    implementation, otherwise `taste`.
-3. Add unambiguous structural requirements to the plan. For any meaningful
-   alternative or product decision, ask first.
+3. Add unambiguous structural requirements to the plan. Return any meaningful
+   alternative or product decision as a candidate first.
 4. Queue taste choices for the user gate; never choose them silently.
 5. Re-score until the dimension reaches 8+, or identify the exact deferred taste
    decision that prevents it.
@@ -111,9 +119,9 @@ For each sub-10 dimension:
 ## Seven review passes
 
 Evaluate every pass; say `No issues found` when clear. For each non-trivial
-decision, ask separately with 2-3 lettered options in prose, effort/risk,
-and an opinionated recommendation. Do not batch issues or continue before the
-answer.
+decision, return a candidate with 2-3 lettered options, effort/risk, and an
+opinionated recommendation. Continue provisionally; the parent batches unresolved
+candidates after all review lenses.
 
 1. **Information architecture:** content priority, page/screen structure,
    navigation and wayfinding. Add an ASCII hierarchy/flow diagram.
@@ -147,9 +155,9 @@ The reviewed plan must contain:
 | Screen/section | Mockup path | Direction | Constraints |
 ```
 
-Present each possible design-debt TODO individually with What, Why, Pros, Cons,
-Context, dependencies, then ask: add to `TODOS.md`, skip, or include now. Never
-write a vague or unapproved TODO.
+Present each possible design-debt TODO with What, Why, Pros, Cons, Context, and
+dependencies. Return `add to TODOS.md`, `skip`, or `include now` as a decision
+candidate when material. Never write a vague or unauthorized TODO.
 
 Finish with:
 

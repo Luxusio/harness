@@ -12,7 +12,7 @@ Codex planning pipeline with compact and full procedures. Conservatively eligibl
 > **Codex runtime notes** (delta from Claude):
 > - **Dual Voice is capability-routed.** Discover deferred tools before deciding. When `spawn_agent` or an external model route is available, run independent Voice A and Voice B contexts. Use one inline critical-reviewer pass only when no independent route exists, and record that fallback in PLAN.md's Review Status section.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
-> - **AskUserQuestion = conversational ask.** Full planning uses Phase 1.1 premise, Phase 5.3 User Challenge, and Phase 5.4.1 final approval gates. Compact planning asks only genuine Phase 5.3 User Challenges. Each ask is prose rather than a structured envelope.
+> - **AskUserQuestion = conversational ask.** Both procedures collect unresolved material premises and User Challenges into one Phase 5.3 interaction. Phase 5.4.1 runs only for explicit pre-code approval or a new unauthorized material delta.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `write_plan`.
 > - **MCP tool names** bare (`task_start`, `task_context`, `write_plan`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
 
@@ -35,14 +35,14 @@ Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${H
 
 - **Independent voices by capability.** Where the Claude source says "Voice A + Voice B via Agent", use separate subagent or external-model contexts when exposed. Otherwise run ONE inline critical-reviewer pass and note the degradation in PLAN.md `Review Status`; use the `single-voice` degradation row only for that fallback.
 - **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
-- **Premise gate mandatory for full plans.** Phase 1.1 emits one conversational ask before Phase 5. Compact planning asks only when a genuine User Challenge exists.
-- **Never-auto decisions.** User Challenge items get their own ask at Phase 5.3.
+- **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
+- **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
 - **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `write_plan`. Never Write/Edit them directly.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
 - **Never abort.** Full planning surfaces review failures and never silently shortens. Compact may escalate to full after inspection, but never bypasses its fail-closed assessment.
-- **Auto-decide mode.** When active, resolves intermediate asks except premise gate and User Challenge items via the 6 Decision Principles.
-- **Spawned session.** `spawned_session: true` or `HARNESS_SPAWNED=1` → force auto-decide, auto-resolve ALL asks (including premise gate), emit prose completion instead of waiting.
+- **Auto-decide mode.** When active, resolves Mechanical and Taste items via the 6 Decision Principles, never unresolved material user decisions.
+- **Spawned session.** `spawned_session: true` or `HARNESS_SPAWNED=1` → force auto-decide within explicitly delegated authority and relay undelegated material decisions.
 - **Sequential execution by procedure.** Compact runs 0 → bounded assessment → 5.0 → 5.3 only when challenged → 6. Full runs 0 → 1 → 2 → 3 → 4 → 5 → 6.
 
 ## Voice
@@ -56,25 +56,26 @@ Plan-orchestrator voice: opinionated, concrete, builder-to-builder.
 - Sound like a builder talking to a builder, not a consultant.
 - No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`.
 - Korean/English bilingual context: technical terms stay English, explanations may use Korean.
-- The user has context you do not. Full planning uses premise, User Challenge, and final approval gates; compact asks only genuine User Challenges.
+- The user has context you do not. Both procedures ask only unresolved material decisions; review depth never manufactures an approval requirement.
 
 Good: "Phase 3 Eng. AC-004 verification command already passes pre-edit (grep hit at write-artifacts.md:140). EUREKA — re-scope AC-004 to a smaller addition. Surface before writing PLAN.md."
 Bad: "I've completed the engineering review phase and identified some considerations regarding AC-004 that may warrant additional examination."
 
 ## Anti-shortcut clause
 
-PLAN.md is the output of the selected procedure, not a substitute for it. Full planning passes premise, User Challenge, and final approval gates. Compact may omit premise/final approval only after bounded inspection and escalation recheck; every genuine User Challenge is still surfaced before publication.
+PLAN.md is the output of the selected procedure, not a substitute for it. Both procedures finish premise analysis and resolve every material user decision. Explicit request, clarification, or delegation can already provide authorization; do not manufacture premise or final approval rounds from review depth.
 
 ## Confusion Protocol
 
-For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, premise-gate response interpretation, mid-pipeline scope expansion — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask.
+For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, conflicting review output, or mid-pipeline scope expansion — add the choice to the consolidated decision bundle. After that bundle, ask only for a new unauthorized material delta.
 
-Auto-decide scope-partition choices (split / combine / defer / do-a-subset) via Principle P1 (Choose completeness).
+Auto-decide scope partitioning within the explicitly authorized outcome via P1.
+Expanding or reducing the requested outcome is a material user decision.
 
 ## Context Health
 
 - **`[PROGRESS]` summary at phase boundaries.** When a phase takes longer than ~5 minutes, surface a 1-2 sentence checkpoint: done, next, surprises.
-- **Loop detection.** If the same finding fires 3 times without converging, STOP and reassess. Options: re-confirm premise via ask; pause for user check-in. Looping silently is worse than asking.
+- **Loop detection.** If the same finding fires 3 times without converging, STOP and surface only the unresolved material choice; do not repeat an already authorized premise. Looping silently is worse than asking.
 - Progress summaries and loop-detection notices NEVER mutate git state.
 
 ## Completeness — Boil the Lake
@@ -135,12 +136,12 @@ Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md
 ## Phase orchestration
 
 1. **Phase 0** — always runs and selects `compact` or `full` planning procedure; TASK.json remains `standard` or `micro` only.
-2. **Compact branch** — conservatively classified low-risk standard work gets one bounded assessment, genuine User Challenges only, then canonical publication.
-3. **Full branch Phase 1 — CEO Review** — premise gate at 1.1 is mandatory.
+2. **Compact branch** — conservatively classified low-risk standard work gets one bounded assessment, unresolved material decisions only, then canonical publication.
+3. **Full branch Phase 1 — CEO Review** — premise extraction and authorization classification are mandatory analysis.
 4. **Full branch Phase 2 — Design Review** — only if `ui_scope=true`.
 5. **Full branch Phase 3 — Engineering Review** — runs with independent voices when available.
 6. **Full branch Phase 4 — DX Review** — only if `dx_scope=true`.
-7. **Phase 5 — Final Approval Gate** — compact plans may proceed without confirmation only when intent/scope are explicit and there are no User Challenges.
+7. **Phase 5 — Consolidated Decision Gate** — either procedure asks once only when unresolved material decisions remain.
 8. **Phase 6 — Write artefacts** — always writes through `write_plan`; then removes optional PLAN_SESSION.json scratch.
 
 The compact assessment must inspect the named code/docs and recheck every
@@ -155,15 +156,16 @@ restarts at full Phase 1 before Phase 5/6.
 
 Branch once after §5.0:
 
-- **compact:** retain decisions/themes for PLAN.md, run §5.3 only for actual
-  User Challenges, then proceed directly to Phase 6. With zero challenges,
-  proceed directly from §5.0 to Phase 6. Do not emit §5.1 or run §5.4.1.
-- **full:** run §§5.1 through 5.4.1 as written.
+- **compact and full:** retain decisions/themes for PLAN.md, collect unresolved
+  material premises and User Challenges, and run §5.3 once only when that set
+  is non-empty. A complete answer authorizes the resulting scope. With no
+  unresolved material decision or unauthorized delta, proceed to Phase 6. Run
+  §5.4.1 only when the user explicitly requested pre-code plan approval.
 
 ### 5.0 Pre-Gate verification (max 2 retries)
 
 For `full`, verify required outputs before collecting decisions:
-- [ ] Phase 1: premise challenge user-confirmed; CEO consensus retained; phase-transition summary
+- [ ] Phase 1: premises source-classified and authorized or queued; CEO consensus retained; phase-transition summary
 - [ ] Phase 2 (if ran): Design consensus retained; phase-transition summary
 - [ ] Phase 3: Engineering consensus retained; phase-transition summary
 - [ ] Phase 4 (if ran): DX consensus retained; phase-transition summary
@@ -175,6 +177,8 @@ If missing after 2 retries, proceed to 5.1 with warning block:
 ⚠ Pre-Gate Warning: proceeding with incomplete phase outputs.
 Missing: <list>
 ```
+This warning may cover incomplete review metadata, never an unresolved material
+user decision; unresolved decisions still block Phase 6.
 
 For `compact`, require a named code/docs assessment, a post-inspection recheck
 of every escalation family, no remaining unknown/material choice, and complete
@@ -217,39 +221,36 @@ Auto-decided (Taste):
 
 Cross-phase theme detection writes to PLAN.md's `Cross-phase themes` section.
 
-### 5.3 User Challenge gate
+### 5.3 Consolidated material-decision gate
 
-Cognitive load:
-- **0 challenges:** compact goes directly to Phase 6; full goes to 5.4.
-- **1-7 challenges:** ask one at a time, in order. Do not batch into one turn.
-- **8+ challenges:** warning at top, group by phase.
+Combine unresolved material premises and User Challenges after all applicable
+review phases. With zero items, proceed directly to Phase 6. Otherwise ask once
+with up to three short questions in the same conversational interaction. If
+more than three items remain, group related items into at most three named
+decision bundles instead of interrupting sequentially.
 
-Per-challenge ask format (conversational):
-
-> **User Challenge: <item title>**
->
-> Your stated direction: <from REQUEST.md or the current conversation>
-> Reviewer recommends: <alternative>
-> Reasoning: <why the reviewer disagrees>
-> Blind spots: <what the reviewer may miss about your context>
-> Downside cost of proceeding as stated: <concrete estimate>
->
-> A) Accept the recommendation (Recommended) — switch to the alternative.
-> B) Keep my original direction — known risk acknowledged.
-> C) Modify — describe in your next reply.
-
-Reply parsing: A/B follow the option; any free-text reply treats as Modify.
+Each item names the current authorized direction, recommended alternative,
+reason, blind spot, downside, and concrete options. A complete answer authorizes
+the resulting scope. Free text may answer item by item. If an answer is partial,
+ask again only for unanswered items. Re-run only affected review work and ask
+again only if it introduces a new unauthorized material delta.
 
 **Note on single-voice fallback User Challenges:** when no independent route was available, one reviewer is weaker evidence than two agreeing voices and may flag challenges that dual-voice disagreement would resolve. Err on the side of fewer challenges; if uncertain, classify as Taste.
 
-### 5.4 Final scope confirmation
+### 5.4 Authorization recheck
 
-Full procedure only. If 5.3 responses changed scope, confirm updated scope
-before Phase 6. Compact incorporates the answer without a second confirmation.
+Compare the final outcome, in-scope boundary, out-of-scope boundary, material
+risk acceptance, irreversible actions, and external-state effects with the
+latest explicit request, clarification, delegation, and any §5.3 answer. With
+no unauthorized material delta, proceed directly to Phase 6. Mechanical
+implementation, tests, docs, and review detail inside the authorized outcome do
+not create a new approval requirement.
 
 ### 5.4.1 Gate response options
 
-Full procedure only. Compact never runs this subsection.
+Run only when the user explicitly requested to approve the completed plan
+before coding, or when §5.4 finds a new unauthorized material delta that could
+not be included in §5.3. Compact/full selection alone never runs it.
 
 Emit §5.1 summary, then ask:
 
@@ -265,8 +266,8 @@ Emit §5.1 summary, then ask:
 - **Reject:** clear all phase-level state and reset to Phase 0.
 - **Modify:** parse the free-text. Three sub-cases:
   - *Pure question (no change request):* answer fully, re-present §5.1 summary, re-offer the gate.
-  - *Scope override or taste-decision flip:* apply, re-present §5.1 summary with changes noted, re-offer the gate.
-  - *Phase re-run request:* re-run affected phases with updated scope; increment cycle counter; after 3 cycles proceed to Phase 6 with a warning block at top of PLAN.md.
+  - *Scope override or taste-decision flip:* apply it. Re-offer only when the user explicitly requested pre-code approval; otherwise the answer is the authorization.
+  - *Phase re-run request:* re-run affected phases with updated scope. Ask again only for a newly introduced material delta. After 3 non-converging cycles, stop with unresolved items.
 
 ---
 
@@ -277,7 +278,7 @@ TASK.json execution_mode remains exactly `standard|micro`; never persist
 
 | Procedure | Eligibility | Review shape | Mandatory output |
 |-----------|-------------|--------------|------------------|
-| `compact` | bounded, unambiguous, low blast radius, all scope/test decisions evident | one code/context assessment; ask only genuine User Challenges | canonical PLAN.md with stable ACs, in/out scope, allowed/test/forbidden paths, verification, durable-doc decision |
+| `compact` | bounded, unambiguous, low blast radius, all scope/test decisions evident | one code/context assessment; ask only unresolved material decisions | canonical PLAN.md with stable ACs, in/out scope, allowed/test/forbidden paths, verification, durable-doc decision |
 | `full` | explicit request, uncertain inputs, or any escalation trigger | capability-routed CEO/Engineering plus scoped Design/DX phases | full canonical PLAN.md |
 
 Escalate to full for security/auth/permissions/secrets, data/schema/migrations,
@@ -322,7 +323,7 @@ close fingerprint, Goal continuation, and verified installation boundaries.
   or skill/pattern docs and write `REQ: n/a` with `Pattern/skill doc enough` in
   the reason. For purely mechanical, test-only, or internal refactors, write
   `No durable doc needed` and name the unchanged durable knowledge surface.
-- **User gates.** Full planning asks for premise confirmation and User Challenges. Compact planning asks only genuine User Challenges when intent is otherwise explicit.
+- **User gates.** Both procedures ask once for unresolved material decisions. Explicit request and clarification are reusable authorization; review depth does not manufacture premise or final approval rounds.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.
 - **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.

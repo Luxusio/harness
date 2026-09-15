@@ -3,7 +3,7 @@
 tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-updated: 2026-08-13
+updated: 2026-09-15
 task_ref: TASK__harness-architecture
 
 ---
@@ -57,6 +57,17 @@ Independent review and `task_verify` are internal close gates, not additional
 public stages. No verification is skipped. If an internal gate finds a gap, the
 task returns to develop or creates a follow-up child task when the gap is
 separable.
+
+Planning depth does not determine how many times the user must approve. Intake
+may ask before review only when the target or outcome is too unclear for useful
+inspection. Full and compact planning both reuse explicit requests,
+clarifications, and delegated authority; they collect only unresolved material
+outcome, scope, risk, irreversible-action, or external-state decisions into one
+post-review interaction. The answer authorizes the resulting plan. A separate
+final approval runs only when the user explicitly requested pre-code approval
+or a later review introduces a new unauthorized material delta. This authority
+is retained in the existing PLAN intent summary and decision trail, not a new
+task field or approval ledger.
 
 `task_start` is both the creation and resume entry point; there is no separate
 `task_resume` operation. For an existing valid open or blocked task, the default

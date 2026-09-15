@@ -9,8 +9,16 @@ description: |
 
 # CEO Plan Review
 
-> **Codex runtime notes:** Use conversational prose with lettered options and wait for
-> the next turn where the Claude source says `AskUserQuestion`. Use bare Harness MCP
+## Parent interaction ownership
+
+When the parent plan pipeline invokes this review, do not ask or wait for the
+user. Any later instruction to ask or confirm means: return an unresolved
+material-decision candidate with options and a recommendation, then continue
+provisionally. The parent owns the single post-review decision interaction and
+reruns only affected review work.
+
+> **Codex runtime notes:** Return decision candidates in conversational prose with
+> lettered options where the Claude source refers to user decisions. Use bare Harness MCP
 > names and `HARNESS_PLUGIN_ROOT` if needed. Apply edits with `apply_patch`. Run the
 > independent CEO adversarial spec pass with `spawn_agent` when available; use the
 > same pass inline only when the current runtime exposes no subagent capability.
@@ -22,8 +30,8 @@ ownership, search, completeness, and conversational asks.
 ## Contract
 
 - The user owns every scope change. Never silently add, remove, or defer scope.
-- Ask one decision per finding in plain prose. Give 2-3 lettered options, recommend one
-  with why, and wait for the next turn. If there is no finding, say so and continue.
+- Return each unresolved material decision as a candidate with 2-3 lettered options
+  and a recommendation. If there is no finding, say so and continue.
 - Base claims on the current plan, repository evidence, task-local decisions, and
   relevant external evidence. Do not re-ask recorded decisions.
 - Name files, interfaces, failure modes, user effects, effort, and risk.
@@ -41,7 +49,7 @@ Choose and then hold one mode:
 | SCOPE EXPANSION | Push up | Define the 10x experience and platonic ideal; offer each expansion for opt-in. |
 | SELECTIVE EXPANSION | Hold baseline, offer additions | Review baseline rigorously; offer each expansion neutrally for cherry-picking. |
 | HOLD SCOPE | Preserve | Strengthen architecture, safety, testing, operations, and rollout without expansion. |
-| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and ask before removing anything. |
+| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and return every proposed removal as a decision candidate. |
 
 Defaults: greenfield → EXPANSION; enhancement → SELECTIVE; bug/refactor → HOLD;
 plans touching more than 15 files → consider REDUCTION. Explicit user language wins.
@@ -72,9 +80,9 @@ List the plan's 3-5 load-bearing premises:
 | Premise | stated / assumed / proven / unknown | blast radius if wrong | evidence |
 |---|---|---|---|
 
-Ask about the highest-blast-radius assumed or unknown premise. Determine the actual
-user/business outcome, whether the plan solves it directly, and the cost of doing
-nothing.
+Return the highest-blast-radius assumed or unknown premise as a decision candidate
+when it is material. Determine the actual user/business outcome, whether the plan
+solves it directly, and the cost of doing nothing.
 
 ### B. Existing-code leverage
 
@@ -95,7 +103,7 @@ the ideal. Compare at least two credible approaches:
 |---|---|---|---|---|
 
 One must be the smallest viable diff and one the best long-term architecture. Give
-them equal weight and obtain user approval before selecting a mode.
+them equal weight and return an unresolved mode choice as a decision candidate.
 
 ### D. Mode-specific scope
 
@@ -104,7 +112,7 @@ them equal weight and obtain user approval before selecting a mode.
 - SELECTIVE: first find avoidable complexity and the minimum baseline, then surface
   10x, delight, and platform opportunities as individual choices.
 - HOLD: challenge excess complexity while preserving the approved boundary.
-- REDUCTION: split must-ship value from follow-up work and ask before every cut.
+- REDUCTION: split must-ship value from follow-up work and return every cut as a decision candidate.
 
 For EXPANSION and SELECTIVE, persist decisions in
 `doc/harness/tasks/<task-id>/ceo-plan.md` with vision, mode, proposal table, accepted
@@ -116,13 +124,13 @@ unresolved concerns.
 
 Surface decisions an implementer would otherwise meet during foundations, core logic,
 integration, and verification. Show human and agent-assisted effort when useful.
-Confirm the mode and chosen implementation approach before proceeding.
+Record the authorized mode and approach; return either as a candidate when unresolved.
 
 ## Technical review
 
 Evaluate every applicable section. For each finding, record evidence, user impact,
-recommended resolution, owner, and verification; obtain the user's decision before
-writing it into the plan.
+recommended resolution, owner, and verification. Apply authorized decisions and
+return unresolved material choices as candidates before finalizing the plan.
 
 ### 1. Architecture
 

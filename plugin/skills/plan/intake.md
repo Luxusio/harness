@@ -11,7 +11,11 @@ _SPAWNED="false"
 [ "${HARNESS_SPAWNED:-}" = "1" ] && _SPAWNED="true"
 ```
 
-If spawned: keep `auto_decide: true` in working context (and optional recovery scratch when one exists), auto-resolve ALL AskUserQuestion (including premise gate), suppress upgrade/usage-stats prompts, emit prose completion at end. Log: `[spawned-mode] Auto-decide ON.`
+If spawned: keep `auto_decide: true` in working context (and optional recovery
+scratch when one exists), reuse only authority explicitly delegated by the
+parent, suppress upgrade/usage-stats prompts, and emit prose completion at end.
+Return any undelegated unresolved material decision bundle to the parent rather
+than selecting it. Log: `[spawned-mode] Auto-decide ON within delegated scope.`
 
 ## Phase 0.0: Session Recovery (resume case)
 
@@ -135,23 +139,28 @@ Store as `BASE_BRANCH`.
 
 **Trigger:** REQUEST.md absent, gitignored, OR < 15 non-empty lines.
 
-Before emitting anything, provisionally apply the same fail-closed eligibility
-rules as Phase 0.7 to the current conversation plus code/task context. When
-intent, scope, acceptance, and verification are already explicit and every
-compact predicate passes, use the conversation summary and skip this offer.
-If any input is ambiguous or an escalation trigger appears, select full and
-continue with the offer below. Phase 0.7 rechecks the provisional compact choice
-after source/context inspection.
+This offer is about whether meaningful read-only review can start, not whether
+the task qualifies for compact planning. If the current conversation names a
+concrete outcome or target that can be inspected, use it as the request summary
+and skip this offer even when Phase 0.7 must select full. Missing acceptance or
+verification detail that repository inspection can resolve is not a reason to
+interrupt here. Carry only genuinely unresolved material choices to the single
+post-review decision interaction.
+
+Emit the offer only when the target or outcome is so underspecified that useful
+repository inspection cannot begin. A clarification answer becomes request and
+premise authorization for the facts it states; do not ask the user to confirm
+the same facts again later.
 
 Emit one AskUserQuestion:
 - A) Clarify inline → 3 goal-sharpening questions (outcome / NOT in scope / success)
-- B) Skip → proceed to 0.5 with thin REQUEST.md (premise challenge will surface the gap)
+- B) Skip → proceed to 0.5 with the conversation summary; review may surface a material decision
 - C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
 After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK.json` — if found, read and append it as `## Design Context` to the final PLAN.md.
 
-Skip cleanly if the trigger is not met or provisional compact eligibility
-passes. Never loop.
+Skip cleanly if the trigger is not met or meaningful inspection can begin.
+Never couple this offer to compact/full selection and never loop.
 
 **Note:** harness does not ship a separate `office-hours` skill. `Skill(harness:setup)` fills the pre-planning / scope-sharpening role through its interactive intake flow.
 
@@ -212,8 +221,8 @@ dependency/platform/configuration/workflow-control changes, unclear acceptance
 or a material user choice, cross-component scope, and high-risk maintenance.
 Unknown means full. File count alone never proves low risk.
 
-The compact branch performs a single code/context assessment, asks only genuine
-User Challenges, and then publishes the same canonical PLAN.md contract. It
+The compact branch performs a single code/context assessment, asks only
+unresolved material decisions, and then publishes the same canonical PLAN.md contract. It
 must include objective, in/out scope, stable ACs, allowed/test/forbidden paths,
 verification, and Durable Docs Decision. Runtime review, conditional security
 review, QA, receipts, close fingerprint, Goal continuation, and install checks

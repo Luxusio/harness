@@ -1,7 +1,7 @@
 # OBS design-planning harness friction
 tags: [observation, harness, planning, design-iteration, status:active]
 summary: Harness preserves durable decisions well, but product/design exploration needs a lighter loop than full implementation tasks.
-updated: 2026-05-31
+updated: 2026-09-15
 freshness: current
 confidence: medium
 source: User-requested retrospective. First section (2026-05-29) covered planning/design exploration; second section (2026-05-31) covers implementation-track friction from a long product-dev session.
@@ -186,3 +186,20 @@ existing repos need a `git rm --cached` migration step.
 5. Standing-constraint capture prompt.
 6. task_blocked input validation fix + task_close error message rewrite.
 7. SLOP detector context-awareness (suppress on test-verified, user-approved diffs).
+
+---
+
+## Repeated planning approval friction (2026-09-15)
+
+Full planning previously coupled review depth to three possible interruptions:
+prerequisite clarification, premise confirmation, and final plan approval. A
+clear UI/API or workflow request could still select full review and then ask the
+user to confirm the same direction twice. User feedback established the durable
+rule: review depth controls analysis, not approval count.
+
+Harness now reuses explicit requests and clarifications as authorization. It
+performs premise extraction without a mandatory premise question, collects only
+unresolved material choices after review, and asks them in one interaction. A
+complete answer proceeds to develop without another confirmation; final plan
+approval remains only when explicitly requested or when a later unauthorized
+material delta appears. No approval state or sidecar is persisted.

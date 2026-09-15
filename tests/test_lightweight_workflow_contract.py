@@ -114,15 +114,21 @@ def test_compact_review_report_never_claims_full_review():
         assert "full Phase 1" in body
 
 
-def test_compact_without_challenges_skips_unconditional_approval():
+def test_both_planning_procedures_ask_only_unresolved_material_decisions():
     for path in (
         REPO / "plugin/skills/plan/SKILL.md",
         REPO / "plugin-codex/internal-skills/plan/SKILL.md",
     ):
         body = path.read_text(encoding="utf-8")
-        assert "With zero challenges" in body
-        assert "directly" in body and "Phase 6" in body
-        assert "Compact never runs this subsection" in body
+        normalized = " ".join(body.split())
+        assert "One decision interaction" in normalized
+        assert "up to three" in normalized
+        assert "explicitly requested pre-code plan approval" in normalized
+        assert "Compact/full selection alone never runs it" in normalized
+        assert "review depth" in normalized and "approval requirement" in normalized
+        assert "one at a time" not in body
+        assert "Do not batch" not in body
+        assert "Full planning asks for premise confirmation" not in body
         assert "Sequential execution.** 0 → 1 → 2 → 3 → 4 → 5 → 6" not in body
     codex = (REPO / "plugin-codex/internal-skills/plan/SKILL.md").read_text(
         encoding="utf-8"
@@ -135,9 +141,73 @@ def test_thin_request_does_not_force_a_compact_prompt():
     prerequisite = intake.split("## Phase 0.4.5: Prerequisite offer", 1)[1].split(
         "## Phase 0.5:", 1
     )[0]
-    assert "use the conversation summary and skip this offer" in prerequisite
-    assert "If any input is ambiguous" in prerequisite
-    assert "Phase 0.7 rechecks" in prerequisite
+    assert "use it as the request summary" in prerequisite
+    assert "skip this offer even when Phase 0.7 must select full" in prerequisite
+    assert "Never couple this offer to compact/full selection" in prerequisite
+
+
+def test_premise_authorization_and_scope_expansion_fail_closed():
+    review = (REPO / "plugin/skills/plan/review-phases.md").read_text(
+        encoding="utf-8"
+    )
+    principles = (REPO / "plugin/skills/plan/decision-principles.md").read_text(
+        encoding="utf-8"
+    )
+    writer = (REPO / "plugin/skills/plan/write-artifacts.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Premise extraction and authorization (MANDATORY ANALYSIS)" in review
+    assert "Authorized and evidence-backed premises do not produce a question" in review
+    assert "separate premise-confirmation interaction is not" in review
+    assert "P1 never grants authority" in principles
+    assert "relay the unresolved decision bundle" in principles
+    assert "approval field, ledger, or sidecar" in writer
+
+
+def test_plan_review_lenses_defer_user_interaction_to_parent():
+    forbidden_direct_interaction = (
+        "Ask one decision per",
+        "ask separately",
+        "wait for the next turn",
+        "stop for the answer",
+        "Do not continue without a confirmed",
+        "obtain explicit selection",
+        "ask the user to choose",
+        "ask the user to select",
+        "ask the user to confirm",
+        "obtain user approval",
+        "obtain the user's decision",
+        "individual question",
+        "then ask:",
+        "Confirm the mode and chosen implementation approach before proceeding",
+        "ask before removing",
+        "ask before every cut",
+    )
+    for runtime in ("plugin/skills", "plugin-codex/internal-skills"):
+        for name in (
+            "plan-ceo-review", "plan-eng-review", "plan-design-review",
+            "plan-devex-review",
+        ):
+            body = (REPO / runtime / name / "SKILL.md").read_text(encoding="utf-8")
+            ownership = body.split("## Parent interaction ownership", 1)[1].split("##", 1)[0]
+            normalized_ownership = " ".join(ownership.split())
+            assert "do not" in normalized_ownership
+            assert "wait for the user" in normalized_ownership
+            assert "unresolved material-decision candidate" in normalized_ownership
+            assert "single post-review decision interaction" in normalized_ownership
+            assert all(
+                phrase not in body for phrase in forbidden_direct_interaction
+            ), f"{runtime}/{name} still owns a direct user interaction"
+
+    review_phases = (REPO / "plugin/skills/plan/review-phases.md").read_text(
+        encoding="utf-8"
+    )
+    both_fail = next(
+        line for line in review_phases.splitlines() if "Both voices fail" in line
+    )
+    assert "do not create a separate user interaction" in both_fail
+    assert "AskUserQuestion" not in both_fail
 
 
 def test_new_progress_fixtures_have_exact_seven_key_shape():

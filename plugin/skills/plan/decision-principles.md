@@ -31,13 +31,22 @@ Applied to every contested item between Voice A and Voice B. First applicable wi
 
 **Taste** — Two reasonable approaches with tradeoffs (naming, structure, sequencing). Auto-decide via principles. Surface at Phase 5.2 for user awareness.
 
-**User Challenge** — Both voices independently recommend changing a user-stated direction. **Never auto-decided.** Surface at Phase 5.3 with full framing (user direction / dual-model recommendation / reasoning / blind spots / downside cost).
+**User Challenge / unresolved material decision** — Review needs a user-owned
+choice about product outcome, material scope, risk acceptance, irreversible
+behavior, external state, or changing a user-stated direction. Reviewer
+agreement strengthens a recommendation but is not required for a genuinely
+unresolved choice. **Never auto-decided.** Collect it for the single Phase 5.3
+decision interaction.
 
-**Scope decisions** (split / combine / defer / do-a-subset) — Mechanical by default. Auto-decide via **P1 (Choose completeness)** unless the user has explicitly stated a scope preference that contradicts it. Never surface as User Challenge — "do more vs do less" is not the kind of decision that benefits from user re-confirmation when the original request already named the scope.
+**Scope decisions** within the explicitly authorized outcome (implementation
+partitioning, tests, docs, and complete handling of named behavior) are
+Mechanical by default. A material outcome or scope expansion beyond the request
+or clarification is a User Challenge; P1 never grants authority to add it.
 
 If voices disagree on classification, escalate to higher tier (Taste vs. User Challenge → User Challenge).
 
-**Adversarial** — Rows from fresh-context reviewers at the approval gate. Surface at Phase 5 for informational review; never auto-applied.
+**Adversarial** — Rows from fresh-context reviewers. Retain informational rows
+in PLAN.md; surface them only when they create an unresolved material decision.
 
 ---
 
@@ -53,16 +62,18 @@ When `auto_decide` is active:
 - Complete all mandatory phase outputs at full depth.
 
 **MUST NOT:**
-- Auto-decide premise confirmation (Phase 1.1).
-- Auto-decide User Challenge items (Phase 5.3).
+- Auto-decide unresolved material premises or User Challenge items.
 - Reduce Voice A/B depth or skip any mandatory output.
 - Redirect to interactive mid-pipeline. All decisions accumulate and surface at Phase 5.
 
-**Two gates never auto-decided:**
-1. Phase 1.1 premise confirmation.
-2. Phase 5.3 User Challenge items.
+**User-owned decisions are never auto-decided.** Existing request,
+clarification, and explicit delegation may already authorize a decision; model
+agreement or a planning mode cannot create that authority.
 
-**Spawned mode override:** `spawned_session: true` (or `HARNESS_SPAWNED=1`) forces auto-decide AND auto-resolves ALL AskUserQuestion including the premise gate, using recommended option or Principles. See intake.md Phase 0.0-S.
+**Spawned mode:** `spawned_session: true` (or `HARNESS_SPAWNED=1`) may reuse
+authority explicitly delegated by the parent context. If a material choice is
+not delegated, return or relay the unresolved decision bundle; do not select it
+with the Principles. See intake.md Phase 0.0-S.
 
 ---
 
@@ -95,7 +106,9 @@ Use exactly one of:
 `REPO_MODE` (from task context; default `unknown` → treat as `collaborative`):
 
 - **solo** — You own everything. Investigate proactively; offer to fix. One-sentence note: what you noticed and impact.
-- **collaborative** — Others may own adjacent code. Flag via AskUserQuestion; do NOT fix without approval.
+- **collaborative** — Others may own adjacent code. Add a material ownership or
+scope choice to the consolidated decision bundle; do not fix it without
+authorization.
 - **unknown** — Treat as collaborative.
 
 Always flag anything wrong, even in collaborative mode. One sentence. Never silently ignore a visible defect.
@@ -133,9 +146,11 @@ Every AskUserQuestion from this skill MUST begin with a one-line orientation hea
 Task: TASK__<id> | Phase: <current> | Step: <name>
 ```
 
-Applies to: premise gate (1.1), prerequisite offer (0.4.5), User Challenge (5.3).
+Applies to: prerequisite offer (0.4.5) and the consolidated decision interaction (5.3).
 
-**Exception — Phase 5 final approval gate (§5.4.1):** uses the §5.1 outcome-only template, not the 4-rule body. The gate intentionally hides internal review state (decision counts, taste tallies, cross-phase themes); applying the 4-rule body here would re-leak that state.
+**Exception — an explicitly requested pre-code approval (§5.4.1):** uses the
+§5.1 outcome-only template, not the 4-rule body. It intentionally hides internal
+review state.
 
 **4-rule question structure:** every AskUserQuestion body MUST follow this four-part shape:
 
@@ -144,26 +159,25 @@ Applies to: premise gate (1.1), prerequisite offer (0.4.5), User Challenge (5.3)
 3. **Recommend** — one line: `RECOMMENDATION: <option> because <one-line reason>`. Always prefer the completeness-dominant option (see Principle P1). Include `Completeness: X/10` per option (scoring below). Flag explicitly if any option is ≤5.
 4. **Options** — lettered 2-4 options (AskUserQuestion's schema caps at 4). For effort-heavy options, show both scales: `(human: ~X / plan-skill: ~Y)`.
 
-**Concrete example** (from the CEO premise gate):
+**Concrete example** (from the consolidated decision interaction):
 
 ```
-Task: TASK__<id> | Phase: 1 | Step: Premise gate
+Task: TASK__<id> | Phase: 5 | Step: Unresolved decisions
 
-[Re-ground] We are reviewing the plan for <feature>, in <repo>, on branch <branch>. Phase 1 (CEO) extracts the top 3-5 premises the plan rests on. These drive every downstream review.
+[Re-ground] We reviewed the plan for <feature> in <repo>. Everything already authorized by the request or clarification is settled.
 
-[Simplify] Before the reviewers run, I need you to confirm the plan is built on the right ideas. If these premises are wrong, the whole plan is wrong — better to catch it now.
+[Simplify] The items below still change outcome, scope, or risk and need your decision before implementation.
 
-Premises:
-1. <premise 1>
-2. <premise 2>
-3. <premise 3>
+Decisions:
+1. <decision + recommendation>
+2. <decision + recommendation>
 
-[Recommend] RECOMMENDATION: A (Yes, all hold) because the premises were derived directly from REQUEST.md and no contradiction with current repo state was detected. Completeness: 10/10 (A), 7/10 (B caveats), 3/10 (C reject).
+[Recommend] RECOMMENDATION: A because it preserves the requested outcome with the smallest risk. Completeness: 10/10 (A), 7/10 (B), 7/10 (C).
 
 [Options]
-A) Yes, all hold — proceed with review        (Completeness: 10/10)
-B) Yes with caveats — describe                 (Completeness: 7/10)
-C) No, these need revisiting — describe        (Completeness: 3/10)
+A) Accept the recommended bundle               (Completeness: 10/10)
+B) Keep the original directions                (Completeness: 7/10)
+C) Modify item by item in the reply             (Completeness: 7/10)
 ```
 
 Keep the bracketed labels (`[Re-ground]`, `[Simplify]`, `[Recommend]`, `[Options]`) literally in the question body — they help the user scan long questions after a context gap.
