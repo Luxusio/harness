@@ -43,7 +43,7 @@ REQ quality checklist:
 - Includes verification cues that a QA agent can execute or inspect
 - States out-of-scope boundaries when likely to be misread
 
-## Conversation requirement pass (C-101)
+## Conversation requirement pass
 
 Use the user requirements supplied in your delegation context together with
 PLAN.md, REQUEST.md when present, and the changed durable docs. Fail when an

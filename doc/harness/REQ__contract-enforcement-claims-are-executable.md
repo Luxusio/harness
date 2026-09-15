@@ -5,7 +5,6 @@ updated: 2026-09-04
 freshness: current
 invalidated_by_paths:
   - CONTRACTS.md
-  - CONTRACTS.local.md
   - plugin/scripts/contract_lint.py
   - plugin/hooks/hooks.json
   - plugin/skills/setup/templates/CONTRACTS.md
@@ -89,8 +88,8 @@ against every discovered plugin root. The hard-drift and weight assertions are
 each mutation-paired, because a scan that reaches nothing also reports nothing.
 The soft-channel assertion is not mutation-paired there; its detector is
 fixture-proven in `tests/test_contract_lint.py`, which is therefore load-bearing
-coverage rather than a redundant duplicate. Recorded as C-102 in
-`CONTRACTS.local.md`.
+coverage rather than a redundant duplicate. This repository records that
+project-specific enforcement directly in its runtime project documents.
 
 A hook was deliberately not added. Enforcement belongs on the cheapest surface
 that still runs on every change; a SessionStart hook would charge every session

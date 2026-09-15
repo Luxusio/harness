@@ -9,3 +9,4 @@
 - Harness bootstrap or repair → invoke `$harness:setup`.
 - Read-only questions, explanations, reviews, and status reports → answer directly without starting a task.
 - Hooks provide routing reminders and state only; `task_verify` and `task_close` are authoritative for fresh code-review, conditional security-review, and QA evidence.
+- Changes to managed contracts, Harness skills, or `contract_lint.py` must keep the real-tree contract and skill-weight tests passing.

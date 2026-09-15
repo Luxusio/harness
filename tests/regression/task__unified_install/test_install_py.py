@@ -1019,6 +1019,7 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
     assert (cached / "skills" / "setup" / "verify-report.md").is_file()
     assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()
+    assert not (cached / "skills" / "setup" / "templates" / "CONTRACTS.local.md").exists()
     assert str(cached / "scripts" / "hook_pre_tool_use.py") in (cached / "hooks.json").read_text()
     assert str(cached / "mcp" / "harness_server.py") in (cached / ".mcp.json").read_text()
 

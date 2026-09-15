@@ -14,6 +14,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
+
 from _lib import (  # type: ignore
     GitBindingError,
     _direct_gitlink_index_entries,
@@ -83,7 +87,6 @@ REQUIRED_SETUP_RESOURCES = (
     "skills/setup/bootstrap.md",
     "skills/setup/verify-report.md",
     "skills/setup/templates/CONTRACTS.md",
-    "skills/setup/templates/CONTRACTS.local.md",
     "scripts/contract_lint.py",
     "scripts/setup_finalize.py",
 )
@@ -458,10 +461,9 @@ def validate_structure(
                 f"{CODEX_RUN_POLICY} must set policy.allow_implicit_invocation: true"
             )
 
-    for rel in ("CONTRACTS.md", "CONTRACTS.local.md"):
-        path = safe_path(repo, rel)
-        if not path.is_file() or not path.read_text(encoding="utf-8").strip():
-            errors.append(f"{rel} is missing or empty")
+    path = safe_path(repo, "CONTRACTS.md")
+    if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+        errors.append("CONTRACTS.md is missing or empty")
     for lens in ("plan", "runtime", "document"):
         rel = f"doc/harness/critics/{lens}.md"
         path = safe_path(repo, rel)
@@ -621,6 +623,16 @@ def _with_contract_import(text: str) -> str:
     suffix = text[offset:]
     separator = "" if not prefix or prefix.endswith(("\n", "\r")) else newline
     return prefix + separator + "@CONTRACTS.md" + newline + suffix
+
+
+def _without_legacy_local_contract_import(text: str) -> str:
+    """Detach only the exact setup-owned import after the managed block."""
+    pattern = re.compile(
+        r"(?m)(^<!-- harness:managed-end -->[ \t]*\r?\n)"
+        r"(?:[ \t]*\r?\n)?"
+        r"@CONTRACTS\.local\.md[ \t]*(?:\r?\n|$)"
+    )
+    return pattern.sub(r"\1", text, count=1)
 
 
 def _with_routing_block(text: str) -> str:
@@ -863,6 +875,7 @@ def main(argv: list[str] | None = None) -> int:
         gitignore_path = safe_path(repo, ".gitignore")
         manifest_path = safe_path(repo, "doc/harness/manifest.yaml")
         version_path = safe_path(repo, "doc/harness/.version")
+        contract_path = safe_path(repo, "CONTRACTS.md")
     except ValueError as exc:
         print(f"SETUP_ERROR: {exc}")
         return 1
@@ -873,7 +886,11 @@ def main(argv: list[str] | None = None) -> int:
     manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode) if manifest_path.exists() else None
     version_original = version_path.read_text(encoding="utf-8") if version_path.is_file() else None
     version_mode = stat.S_IMODE(version_path.stat().st_mode) if version_path.exists() else None
+    contract_original = contract_path.read_text(encoding="utf-8") if contract_path.is_file() else None
+    contract_mode = stat.S_IMODE(contract_path.stat().st_mode) if contract_path.exists() else None
     gitignore_candidate = render_gitignore(gitignore_original or "")
+    contract_candidate = _without_legacy_local_contract_import(contract_original or "")
+    contract_changed = contract_original is not None and contract_candidate != contract_original
 
     if args.gitignore_only:
         atomic_write(gitignore_path, gitignore_candidate)
@@ -914,6 +931,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         atomic_write(gitignore_path, gitignore_candidate)
         atomic_write(manifest_path, manifest_candidate)
+        if contract_changed:
+            atomic_write(contract_path, contract_candidate)
         errors = effective_ignore_errors(repo)
         if errors:
             raise RuntimeError("\n".join(errors))
@@ -925,6 +944,8 @@ def main(argv: list[str] | None = None) -> int:
         restore(gitignore_path, gitignore_original, gitignore_mode)
         restore(manifest_path, manifest_original, manifest_mode)
         restore(version_path, version_original, version_mode)
+        if contract_changed:
+            restore(contract_path, contract_original, contract_mode)
         for error in str(exc).splitlines() or [repr(exc)]:
             print(f"SETUP_ERROR: {error}")
         return 1

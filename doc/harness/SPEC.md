@@ -232,13 +232,20 @@ atomic helper for routing and contract-import changes.
 Setup applies the recommended routing and operating profile without asking the
 user to design Harness policy: proactive routing is enabled, the runtime
 routing block is injected, audience defaults to SaaS/public, execution defaults
-to standard plan-review-merge, and the full verification loop is enabled. The
-failure-avoidance question is also omitted; setup owns and reapplies C-100 as
-`말하지 않은 범위도 멋대로 수정하는 것`. Project purpose and
-undetectable verification facts remain the only interview inputs. Setup also
+to standard plan-review-merge, and the full verification loop is enabled.
+Project purpose and undetectable verification facts remain the only interview
+inputs; scope protection comes from the managed Harness contract and plan scope
+lock rather than a generated project-local contract. Setup also
 adds a missing `@CONTRACTS.md` runtime import with an idempotent targeted edit
 and enables Health scoring from every census-detected API/frontend test and
 quality command without asking.
+
+Fresh setup creates no `CONTRACTS.local.md` overlay. On Repair/Upgrade, setup
+removes only the canonical legacy import immediately after the managed
+`CONTRACTS.md` block; any existing project-owned local file is left untouched
+but is no longer loaded. Project-specific instructions belong in `AGENTS.md`,
+`CLAUDE.md`, or the matching durable `doc/` surface, while executable setup
+configuration remains in the manifest.
 
 No model-callable MCP tool can author review or QA evidence. Runtime and stream
 integrity rules fail closed as specified by the two receipt ADRs above.

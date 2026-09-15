@@ -1,7 +1,7 @@
 <!-- harness:managed v1 — do not edit between the begin/end markers.
      Changes inside the managed block will be overwritten on harness upgrade.
-     Project-specific contracts (C-100+) belong in CONTRACTS.local.md,
-     which is imported below and never touched by the harness. -->
+     Project-specific guidance belongs in AGENTS.md, CLAUDE.md, or doc/;
+     Harness does not create or import a local contract overlay. -->
 
 # CONTRACTS
 
@@ -167,7 +167,9 @@ detects marker tampering; setup regenerates from template. Authorized writers
 for additive Edits within the managed block: active tasks with a `MAINTENANCE`
 marker (additive Edits only, never deletions, never edits outside the managed
 block markers).
-**On violation:** soft-warn. User can move content to `CONTRACTS.local.md`.
+**On violation:** soft-warn. Restore the managed template through setup or an
+authorized maintenance task; put project-specific guidance in the runtime
+project document or `doc/`.
 **Why:** The managed block is upgraded atomically on harness release; manual
 edits are lost.
 
@@ -240,12 +242,10 @@ optional extra work. It is not optional; the verifier reports the tier reached.
 
 **Title:** Setup must not overwrite user-owned files.
 **When:** `setup` or continuous maintenance installs/updates harness files.
-**Enforced by:** Skill procedure — `CLAUDE.md` gets at most a 1-line
-`@CONTRACTS.md` import; `CONTRACTS.md` respects managed-block markers;
-setup may idempotently add that missing import without asking and may replace
-only the setup-owned C-100 block in `CONTRACTS.local.md` on rerun. Every other
-line in the runtime project document and `CONTRACTS.local.md` remains
-user-owned.
+**Enforced by:** Skill procedure — the runtime project document gets at most a
+1-line `@CONTRACTS.md` import plus the bounded Harness routing block;
+`CONTRACTS.md` respects managed-block markers. Every other line in the runtime
+project document remains user-owned.
 **On violation:** hard-block. Any rewrite outside those two bounded,
 setup-owned operations must present a diff via `AskUserQuestion` first.
 **Why:** User trust is the most load-bearing contract. Surprise overwrites
@@ -332,5 +332,3 @@ inline and stalled mid-task; user feedback 2026-05-14 narrowed scope to
 MCP-only after the Bash matcher fired on legitimate `pytest`/`vitest` use.
 
 <!-- harness:managed-end -->
-
-@CONTRACTS.local.md

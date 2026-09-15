@@ -4,6 +4,13 @@ All notable changes to the harness Claude Code plugin.
 
 ## [Unreleased]
 
+### Removed
+
+- Harness setup no longer creates, imports, validates, or writes
+  `CONTRACTS.local.md`. Existing project-owned files are left untouched but are
+  no longer loaded by the canonical managed contract. Move any still-relevant
+  guidance to `AGENTS.md`, `CLAUDE.md`, or the matching durable `doc/` surface.
+
 ### Changed
 
 - `task_blocked` preserves each valid blocker field verbatim through an

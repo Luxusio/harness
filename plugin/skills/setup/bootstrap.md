@@ -263,19 +263,7 @@ AskUserQuestion:
     - C) Show me the diff first
 ```
 
-### 3.7.2 CONTRACTS.local.md (user's project-specific stub)
-
-```bash
-_LOCAL_TEMPLATE="${_PLUGIN_ROOT}/skills/setup/templates/CONTRACTS.local.md"
-if [ ! -f CONTRACTS.local.md ]; then
-  cp "$_LOCAL_TEMPLATE" CONTRACTS.local.md
-fi
-```
-After creation, preserve every user-authored rule. On setup rerun, replace only
-the setup-owned C-100 block with the current fixed default from the template;
-never bulk-rewrite or modify any other content.
-
-### 3.7.3 Runtime project-document import line
+### 3.7.2 Runtime project-document import line
 
 ```bash
 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
@@ -289,8 +277,11 @@ When missing, do not ask. The same containment-safe, no-follow helper inserts
 frontmatter block, or after the first H1 when no frontmatter exists. If neither
 exists, it prepends the line. It rejects symlinked project documents, preserves
 all existing bytes outside the insertion, and uses an atomic replacement.
+On Repair/Upgrade, the prepare finalizer also removes only the setup-owned
+`@CONTRACTS.local.md` line immediately after the managed contract block. It
+does not open or mutate any existing `CONTRACTS.local.md` file.
 
-### 3.7.4 Verify contract lint
+### 3.7.3 Verify contract lint
 
 ```bash
 python3 "${_PLUGIN_ROOT}/scripts/contract_lint.py" \

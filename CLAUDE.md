@@ -62,6 +62,7 @@ do not create tasks automatically.
 - When a script API changes (e.g. `_lib.SCHEMA_FIELDS`), grep `plugin/skills/`
   for every SKILL.md that calls the script and update the example invocations.
 - The setup skill lives at `plugin/skills/setup/SKILL.md`; its procedure text must stay consistent with actual generated output and with the current runtime loop described above.
+- Changes to managed contracts, Harness skills, or `contract_lint.py` must keep the real-tree contract and skill-weight tests passing.
 
 ## Memory
 

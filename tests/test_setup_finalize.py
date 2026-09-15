@@ -31,7 +31,6 @@ def make_plugin_root(tmp_path: Path) -> Path:
         "skills/setup/bootstrap.md",
         "skills/setup/verify-report.md",
         "skills/setup/templates/CONTRACTS.md",
-        "skills/setup/templates/CONTRACTS.local.md",
         "scripts/contract_lint.py",
         "scripts/setup_finalize.py",
     ):
@@ -56,7 +55,6 @@ def make_repo(tmp_path: Path, *, manifest: str, project_doc: str = "AGENTS.md") 
             f"# {lens} critic project playbook\n- Verify {lens} behavior.\n", encoding="utf-8"
         )
     shutil.copy2(REPO / "plugin/skills/setup/templates/CONTRACTS.md", repo / "CONTRACTS.md")
-    shutil.copy2(REPO / "plugin/skills/setup/templates/CONTRACTS.local.md", repo / "CONTRACTS.local.md")
     (repo / project_doc).write_text(
         "@CONTRACTS.md\n<!-- harness:routing-injected -->\n"
         "Repository mutation -> invoke $harness:run before editing.\n",
@@ -105,6 +103,27 @@ def test_project_doc_helper_inserts_import_and_preserves_content(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert project_doc.read_text(encoding="utf-8") == (
         "---\nname: pay\n---\n@CONTRACTS.md\n# Existing\nkeep me\n"
+    )
+
+
+def test_legacy_local_contract_import_removal_is_position_bounded():
+    setup_finalize = load_setup_finalize("setup_finalize_local_import_test")
+    source = (
+        "@CONTRACTS.local.md\n"
+        "<!-- harness:managed-end -->\n"
+        "\n"
+        "@CONTRACTS.local.md\n"
+        "# User tail\n"
+        "@CONTRACTS.local.md\n"
+    )
+
+    result = setup_finalize._without_legacy_local_contract_import(source)
+
+    assert result == (
+        "@CONTRACTS.local.md\n"
+        "<!-- harness:managed-end -->\n"
+        "# User tail\n"
+        "@CONTRACTS.local.md\n"
     )
 
 
@@ -791,11 +810,10 @@ def test_empty_verify_item_comment_import_and_missing_attestations_are_rejected(
     assert not (valid / "doc/harness/.version").exists()
 
 
-def test_missing_resource_or_contract_does_not_stamp_or_mutate_manifest(tmp_path):
+def test_missing_resource_does_not_stamp_or_mutate_manifest(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     (plugin_root / "skills/setup/bootstrap.md").unlink()
     repo = make_repo(tmp_path, manifest=canonical_manifest())
-    (repo / "CONTRACTS.local.md").unlink()
     (repo / "doc/harness/.version").write_text("2.2.0\n")
     before = (repo / "doc/harness/manifest.yaml").read_text()
 
@@ -803,7 +821,7 @@ def test_missing_resource_or_contract_does_not_stamp_or_mutate_manifest(tmp_path
 
     assert result.returncode == 1
     assert "installed setup resource is missing or empty: skills/setup/bootstrap.md" in result.stdout
-    assert "CONTRACTS.local.md is missing or empty" in result.stdout
+    assert "CONTRACTS.local.md" not in result.stdout
     assert (repo / "doc/harness/.version").read_text() == "2.2.0\n"
     assert (repo / "doc/harness/manifest.yaml").read_text() == before
     assert not (repo / ".gitignore").exists()
@@ -914,9 +932,51 @@ def test_codex_installed_mirror_prepare_and_finalize_end_to_end(tmp_path):
 def test_canonical_setup_resources_exist_in_source_tree():
     for rel in (
         "repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md",
-        "templates/CONTRACTS.md", "templates/CONTRACTS.local.md",
+        "templates/CONTRACTS.md",
     ):
         assert (SETUP_SOURCE / rel).is_file(), rel
+    assert not (SETUP_SOURCE / "templates/CONTRACTS.local.md").exists()
+
+
+def test_setup_succeeds_without_contracts_local_and_never_creates_it(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    contract_inode = (repo / "CONTRACTS.md").stat().st_ino
+
+    result = run(repo, plugin_root)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (repo / "CONTRACTS.local.md").exists()
+    assert (repo / "CONTRACTS.md").stat().st_ino == contract_inode
+    assert "@CONTRACTS.local.md" not in (repo / "CONTRACTS.md").read_text(encoding="utf-8")
+
+
+def test_setup_ignores_existing_contracts_local_file_and_symlink(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+
+    regular = make_repo(tmp_path / "regular", manifest=canonical_manifest())
+    legacy = regular / "CONTRACTS.local.md"
+    legacy.write_bytes(b"# user owned\ncustom: \xff\n")
+    os.chmod(legacy, 0o640)
+    contract = regular / "CONTRACTS.md"
+    contract.write_text(
+        contract.read_text(encoding="utf-8") + "\n@CONTRACTS.local.md\n",
+        encoding="utf-8",
+    )
+    before = (legacy.read_bytes(), stat.S_IMODE(legacy.stat().st_mode), legacy.stat().st_ino)
+    result = run(regular, plugin_root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (legacy.read_bytes(), stat.S_IMODE(legacy.stat().st_mode), legacy.stat().st_ino) == before
+    assert "@CONTRACTS.local.md" not in contract.read_text(encoding="utf-8")
+
+    linked = make_repo(tmp_path / "linked", manifest=canonical_manifest())
+    target = tmp_path / "outside-local"
+    target.write_text("outside\n", encoding="utf-8")
+    (linked / "CONTRACTS.local.md").symlink_to(target)
+    result = run(linked, plugin_root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (linked / "CONTRACTS.local.md").is_symlink()
+    assert target.read_text(encoding="utf-8") == "outside\n"
 
 
 def test_non_git_control_workspace_finalizes_against_explicit_source_roots(tmp_path):

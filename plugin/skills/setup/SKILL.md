@@ -395,7 +395,7 @@ Phase 3; never create a partial manifest during Phase 2.5.
 
 ## Phase 3: Bootstrap Core Structure
 
-See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and MCP config), CLAUDE.md, critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check).
+See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and MCP config), CLAUDE.md, critic playbooks, doc/harness/ directory + gitignore, and non-destructive `CONTRACTS.md` installation with one runtime-document import and lint check.
 
 ## Phase 3.5: Apply staged configuration
 

@@ -399,7 +399,7 @@ during this phase.
 
 ## Phase 3: Bootstrap Core Structure
 
-See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and setup-time MCP reporting), AGENTS.md (or CLAUDE.md fallback via `project_doc_fallback_filenames` in `~/.codex/config.toml`), critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check). On Codex, project setup preserves project-root `.mcp.json` as user-owned configuration.
+See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and setup-time MCP reporting), AGENTS.md (or CLAUDE.md fallback via `project_doc_fallback_filenames` in `~/.codex/config.toml`), critic playbooks, doc/harness/ directory + gitignore, and non-destructive `CONTRACTS.md` installation with one runtime-document import and lint check. On Codex, project setup preserves project-root `.mcp.json` as user-owned configuration.
 
 ## Phase 3.5: Apply staged configuration
 

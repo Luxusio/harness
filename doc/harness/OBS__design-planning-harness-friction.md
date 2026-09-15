@@ -158,9 +158,9 @@ adjacent test evidence + commit-eligible artifact reference should suppress.
 Constraints surfaced mid-session ("commit only, never push", "pnpm install
 forbidden — 9p driver kills it", "QA theater forbidden", "DB init must not
 time out") lived in volatile conversation context. One compaction would
-drop them. `CONTRACTS.local.md` is the right home, but there is no
-prompt-time helper that detects "this looks like a standing rule" and offers
-to capture it.
+drop them. The runtime project document or the matching durable `doc/` surface
+is the right home; a generated contract sidecar creates a hidden second source
+of authority.
 
 ### task_close does not commit its own durable outputs
 

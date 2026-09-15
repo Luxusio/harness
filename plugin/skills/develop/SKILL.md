@@ -486,8 +486,8 @@ committed artifact. Deferred requires an `AskUserQuestion` decision and records
 Mechanical. Read the task's changed paths and `doc/CLAUDE.md` registered roots. For each file, map to doc root. Call `task_verify`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
-`POLICY__*.md` OR the current task contains explicit durable user corrections
-(per C-101 in `CONTRACTS.local.md`), spawn the documentation-review subagent after
+`POLICY__*.md` OR the current task contains explicit durable user corrections,
+spawn the documentation-review subagent after
 durable docs. It verifies both durable docs consistency and durable doc quality, and
 runs the Retrospective REQ pass over the conversation to catch user-stated
 requirements that closed without becoming durable REQ docs. The task cannot

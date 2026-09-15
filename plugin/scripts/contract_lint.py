@@ -377,8 +377,8 @@ def check_doc_test_references(repo_root: str = ".") -> list[str]:
 
     Reported as soft. The enforcement that fails a build is
     `tests/test_contract_lint_real_tree.py`, which asserts this list is empty
-    for this repository — the same arrangement C-102 already uses for the
-    managed block and the weight budget.
+    for this repository — the same real-tree arrangement used for the managed
+    block and the weight budget.
     """
     defined, used = _test_identifiers(repo_root)
     issues = []

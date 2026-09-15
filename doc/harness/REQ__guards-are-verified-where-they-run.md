@@ -149,7 +149,7 @@ allowlist:
 - Gitignored trees under `doc/harness/` (tasks, retros, reviews) are working
   state, not durable knowledge.
 
-Reported as a soft lint issue, in the same arrangement C-102 already uses for
+Reported as a soft lint issue, in the same real-tree arrangement used for
 the managed block and the weight budget: the build-failing enforcement is
 `tests/test_contract_lint_real_tree.py`, which asserts the list is empty for
 this repository and, by emptying the definition set, proves the scan reaches

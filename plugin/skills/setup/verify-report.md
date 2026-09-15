@@ -38,14 +38,16 @@ python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --project-doc "$_PROJECT_DOC" --prepare
 ```
 
-This command prepares the canonical manifest and operational ignores but does
-not stamp a version. It also verifies:
+This command prepares the canonical manifest and operational ignores, detaches
+the exact legacy local-contract import from the managed contract, and does not
+stamp a version. It never opens or mutates an existing local-contract file. It
+also verifies:
 
 1. Adds every operational harness artifact to `.gitignore` idempotently.
 2. Requires manifest schema `version: 5`, top-level `name` and `type`, and
    nested `qa.browser_qa_supported`.
 3. Requires the runtime project document and routing marker.
-4. Requires contracts, the `@CONTRACTS.md` import, all three critic files,
+4. Requires `CONTRACTS.md`, the runtime-document `@CONTRACTS.md` import, all three critic files,
    a verification command, and every packaged setup sub-file/template.
 
 Any `SETUP_ERROR` is blocking. Fix it and rerun the command.

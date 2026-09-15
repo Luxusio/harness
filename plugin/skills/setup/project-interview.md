@@ -17,7 +17,7 @@ task when the project character has drifted (re-anchor).
 
 Direct and brief. Ask Q1 only when the user has not already supplied a project
 purpose. Ask Q5 only when verification commands or QA mode cannot be detected.
-Never ask Q2-Q4 or Q6; apply their fixed defaults silently.
+Never ask Q2-Q4; apply their fixed defaults silently.
 
 ## Questions
 
@@ -55,7 +55,6 @@ Record these values as if selected during every setup:
   compact/full planning은 persisted execution mode가 아니라 plan 절차 선택이다.
 - Q4 (Wedge) →
   - `manifest.yaml` `maintenance_default:`
-  - `CONTRACTS.local.md` C-101 — "이 프로젝트에서 활성화된 하네스 범위" 선언
   - 훅 스파서시티(hooks.json 항목 수) 설정에 힌트
 
 ### Q5 — Verification today
@@ -74,32 +73,14 @@ AskUserQuestion:
 **Maps to:**
 - `manifest.yaml` `verify_commands:` (A 선택 시 명령어 배열)
 - `manifest.yaml` `qa.browser_qa_supported: true` (C 선택 시)
-- E 선택 시: `CONTRACTS.local.md` C-102 — "verify 규율 없음, 하네스가 강제" 경고성 규약
-
-### Q6 — Fixed failure mode (never ask)
-
-Always record this exact answer:
-
-`말하지 않은 범위도 멋대로 수정하는 것`
-
-**Maps to:** `CONTRACTS.local.md` C-100 — 최상위 실패 회피 규약.
-
-템플릿:
-```markdown
-### C-100
-**Title:** 말하지 않은 범위도 멋대로 수정하는 것
-**When:** 사용자가 하네스 설치 시 이 조건을 회피 요청함.
-**Enforced by:** SessionStart/close-time continuous maintenance detects this
-condition and asks the user before changing project-level rules.
-**On violation:** AskUserQuestion으로 "하네스 재조정 필요"를 제안.
-**Why:** 사용자 신뢰가 최우선 제약 (C-15 재강조).
-```
+- E 선택 시에도 별도 prose contract를 만들지 않는다. Harness의 기존 verification
+  gate가 적용되며, executable configuration은 manifest에만 둔다.
 
 ## After the interview and fixed defaults
 
 ### Step 1 — Write answers atomically
 
-Before any permanent file write, dump all six answers to
+Before any permanent file write, dump all five answers to
 `doc/harness/.interview-answers.json` (tmp). This is the single
 authoritative record. If the setup crashes mid-apply, this file lets a later
 setup or active harness task replay the config without re-asking the user.
@@ -115,14 +96,15 @@ setup or active harness task replay the config without re-asking the user.
     "q2_audience":   { "value": "D", "value_detail": "public library/SaaS", "skipped": false, "source": "setup_default" },
     "q3_status_quo": { "value": "B", "value_detail": "standard plan-review-merge", "skipped": false, "source": "setup_default" },
     "q4_wedge":      { "value": "C", "skipped": false, "source": "setup_default" },
-    "q5_verify":     { "value": "<A|B|C|D|E|null>", "verify_commands": [], "skipped": false },
-    "q6_avoid":      { "value": "말하지 않은 범위도 멋대로 수정하는 것", "skipped": false, "source": "setup_default" }
+    "q5_verify":     { "value": "<A|B|C|D|E|null>", "verify_commands": [], "skipped": false }
   }
 }
 ```
 
 `schema_version` bump on breaking changes — setup/continuous maintenance refuses
 to apply unknown versions and prompts user.
+Existing v1 records may contain the retired `q6_avoid` answer; ignore that
+extra field when replaying them.
 
 ### Step 2 — Apply to target files after bootstrap
 
@@ -137,15 +119,12 @@ In this order (each uses Edit/Write with the appropriate gate):
 3. `doc/harness/manifest.yaml` — set `audience`, `execution_mode_default`,
    `maintenance_default`, `verify_commands`, `qa.browser_qa_supported` per
    Q2-Q5
-4. `CONTRACTS.local.md` — replace the setup-owned C-100 block with the fixed
-   Q6 value and apply C-101/C-102 as needed. This setup-owned block is
-   intentionally overwritten on rerun; do not append duplicates.
-
 ### Step 3 — Durable project memory
 
 Do not append a full interview transcript. Persist only the durable outcomes:
 `doc/common/REQ__project__primary-goals.md`, `doc/common/CLAUDE.md`,
-`doc/harness/manifest.yaml`, and any CONTRACTS.local.md rules from the answers.
+and `doc/harness/manifest.yaml`. Do not create a contract overlay or another
+interview-derived prose state file.
 
 ### Step 4 — Log re-interview trigger for continuous maintenance
 
@@ -155,16 +134,14 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational","source":"
 
 ## Re-interview flow (continuous maintenance)
 
-When project character drifts, re-open only Q1 and Q5. Reapply Q2-Q4 and Q6
+When project character drifts, re-open only Q1 and Q5. Reapply Q2-Q4
 from the fixed setup defaults without presenting them as questions.
 
 ## Safety invariants
 
 - Never overwrite an existing `doc/common/CLAUDE.md` body. Insert only
   into empty `summary:` or append new sections.
-- The setup-owned `CONTRACTS.local.md` C-100 block is replaced idempotently
-  with the fixed Q6 text on every setup run. Other C-## entries remain untouched.
 - Every manifest write goes through Edit on specific fields, never a
   bulk Write that could clobber other keys.
 - If the user skips Q1 or Q5, record `null` for that question. Never replace
-  the fixed Q2-Q4 or Q6 defaults with `null`.
+  the fixed Q2-Q4 defaults with `null`.

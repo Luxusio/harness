@@ -215,7 +215,7 @@ class SetupTemplateShipsTheSameContracts(unittest.TestCase):
 
 
 class DurableDocsOnlyReferenceRealTests(unittest.TestCase):
-    """C-102, extended: a doc's coverage claim must still resolve.
+    """A durable doc's coverage claim must still resolve in the real tree.
 
     A mutation table or a "pinned by" sentence is the only record that a guard
     branch was ever exercised. R5 of `TASK__session-rebinds-receipt-marker`
