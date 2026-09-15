@@ -48,13 +48,21 @@ Candidates are leads, not findings, counts, or authority.
 You are the sole `review-code` authority at every review depth; hunter outputs
 never narrow or replace your full independent review.
 
-Validate the supplied depth evidence against the material risks visible in the
-approved scope. Start the additional narrative after `REVIEW_DETAIL` with
-exactly `REVIEW_DEPTH_ASSESSMENT: SUFFICIENT` or
-`REVIEW_DEPTH_ASSESSMENT: ESCALATE_DEEP — <reason>`. Use escalation when the
-scope materially spans both hunter domains or contains a DEEP trigger omitted
-from the supplied evidence. This narrative signal does not change finding
-counts or the verdict mapping; the coordinator must rerun at DEEP before QA.
+The invocation must name the selected depth, attempted hunter set, and concise
+selection reason.
+Repeat them at the start of the additional narrative as
+`REVIEW_DEPTH: <LIGHT|STANDARD|DEEP>; HUNTERS: <none|correctness|contract/test|both>; REASON: <reason>`.
+Independently validate that selection against the visible scope: LIGHT requires
+complete positive low-risk proof; STANDARD requires exactly the correct single
+hunter for one material domain; both or unresolved domains and every forced
+DEEP trigger require DEEP with both hunters. If the selected depth is too low
+or the STANDARD focus is wrong, add exactly one ordinary structured finding
+whose fix is to run the missing discovery and a fresh formal review. The normal
+finding-to-FAIL mapping then prevents QA. At already-selected DEEP, an omitted
+secondary reason is narrative correction, not another escalation.
+Concretely, LIGHT -> STANDARD, LIGHT -> DEEP, or a wrong STANDARD hunter focus
+uses exactly one ordinary structured FIX_NOW finding; the existing FAIL mapping
+means it cannot PASS. At already-selected DEEP, DEEP is sufficient.
 
 Reopen the current files and reproduce or disprove every candidate from primary
 repository evidence. Explicitly identify unsupported candidates, merge exact

@@ -115,9 +115,17 @@ delimiter. State the selected depth and concise evidence in the invocation so
 the formal narrative records it without a new schema field. The verifier must
 reopen current files, verify/reject/deduplicate every lead, perform its own
 complete sweep, and may add findings the selected hunters missed. A formal
-reviewer reports its required narrative depth assessment. If it reports
-`ESCALATE_DEEP`, do not accept even a mechanically valid PASS as advancement;
-increase depth and rerun the necessary discovery plus a fresh formal review.
+reviewer repeats the selected depth, hunter set, and reason in its stored
+narrative and validates the selection. Under-classification or a wrong
+STANDARD focus becomes exactly one ordinary `FIX_NOW` finding, so the existing
+finding mapping returns FAIL instead of an authoritative PASS. Reroute the
+missing discovery and a fresh formal review without a source edit. At DEEP, a
+missing secondary rationale is corrected in narrative without an impossible
+further escalation.
+Concretely, LIGHT to STANDARD, LIGHT to DEEP, or a wrong STANDARD hunter focus
+uses exactly one ordinary structured FIX_NOW finding; the existing FAIL mapping
+means it cannot PASS. At already-selected DEEP, DEEP is sufficient. The stored
+narrative names the selected depth, hunter set, and concise reason.
 
 When `review-security` is also routed, start it with the selected discovery
 batch (or alongside the formal reviewer for LIGHT); it remains independent and

@@ -127,10 +127,21 @@ def _assert_relational_review_policy(body: str, path: Path) -> None:
 
     # Keep precedence relational: the forced predicate list belongs to the
     # DEEP clause, rather than appearing elsewhere near a contradictory tier.
-    forced_clause = policy.split("missing unreadable incomplete or stale evidence", 1)[0]
+    forced_start = policy.index("explicit deep")
+    forced_end = policy.index("missing unreadable incomplete or stale evidence", forced_start)
+    forced_clause = policy[forced_start:forced_end]
     assert "explicit deep" in forced_clause
     assert "deep" in forced_clause
     assert "standard" not in forced_clause
+    for predicate in (
+        "security", "trust boundary", "sensitive data", "concurrency",
+        "migration", "public durable contract", "dependency build", "installer",
+        "hook", "lifecycle", "gate", "manual conflict", "semantic range diff",
+        "cross component", "dual domain",
+    ):
+        assert predicate in forced_clause, (
+            f"{path}: forced-DEEP clause does not contain {predicate!r}"
+        )
 
     evidence_start = policy.index("missing unreadable incomplete or stale evidence")
     light_start = policy.index("complete positive proof", evidence_start)
@@ -347,6 +358,70 @@ def test_claude_and_codex_review_depth_policies_have_semantic_parity():
         assert _policy_text(term) in _policy_text(codex), (
             f"Codex review policy missing {term!r}"
         )
+
+
+def test_forced_deep_clause_rejects_each_predicate_removal_and_wrong_mapping():
+    paths = (
+        REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md",
+        CODEX_DEVELOP,
+    )
+    predicates = (
+        "security", "trust-boundary", "sensitive-data", "concurrency", "migration",
+        "public/durable-contract", "dependency/build", "installer", "hook", "lifecycle",
+        "gate", "manual-conflict", "semantic-range-diff", "cross-component", "dual-domain",
+    )
+    for path in paths:
+        body = _text(path)
+        forced_start = body.index("Explicit DEEP")
+        for predicate in predicates:
+            predicate_start = body.index(predicate, forced_start)
+            mutated = (
+                body[:predicate_start]
+                + "predicate-removed"
+                + body[predicate_start + len(predicate):]
+            )
+            try:
+                _assert_relational_review_policy(mutated, path)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"{path}: removing {predicate!r} escaped the contract")
+
+        wrong_tier = body.replace("selects **DEEP**", "selects **STANDARD**", 1)
+        if wrong_tier == body:
+            wrong_tier = body.replace("risk -> DEEP", "risk -> STANDARD", 1)
+        try:
+            _assert_relational_review_policy(wrong_tier, path)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"{path}: forced-DEEP mapped to STANDARD without failure")
+
+
+def test_underclassification_uses_one_ordinary_finding_and_never_a_marker():
+    for path in (
+        REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md",
+        CODEX_DEVELOP,
+    ):
+        body = _policy_text(_text(path))
+        for relation in (
+            "light to standard",
+            "light to deep",
+            "wrong standard focus",
+            "exactly one ordinary",
+            "fix now finding",
+            "existing fail mapping",
+            "cannot pass",
+            "deep is sufficient",
+            "impossible",
+            "escalation",
+        ):
+            assert relation in body, f"{path}: missing under-classification rule {relation!r}"
+        narrative_at = body.rindex("stored narrative")
+        narrative = body[max(0, narrative_at - 120):narrative_at + 160]
+        for term in ("selected depth", "hunter set", "concise reason"):
+            assert term in narrative, f"{path}: stored narrative does not name {term!r}"
+        assert "review depth assessment" not in body
 
 
 def test_review_depth_status_and_malformed_hunter_contract_are_visible():

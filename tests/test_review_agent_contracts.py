@@ -224,6 +224,41 @@ def test_formal_reviewer_accepts_intentional_zero_one_or_two_hunter_inputs():
         _assert_all(_role_core(path), required, path)
 
 
+def test_formal_reviewer_depth_mismatches_use_the_existing_finding_verdict_path():
+    required = (
+        "selected depth",
+        "attempted hunter set",
+        "concise selection reason",
+        "LIGHT",
+        "STANDARD",
+        "DEEP",
+        "exactly one",
+        "ordinary structured finding",
+        "normal finding-to-FAIL mapping",
+        "prevents QA",
+        "one or more verified `findings` means `FAIL`",
+        "repeat them at the start of the additional narrative",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        core = _role_core(path)
+        _assert_all(core, required, path)
+        assert "REVIEW_DEPTH_ASSESSMENT" not in core
+
+
+def test_formal_reviewer_pins_each_depth_mismatch_and_deep_sufficiency_case():
+    relations = (
+        "LIGHT requires complete positive low-risk proof",
+        "STANDARD requires exactly the correct single hunter for one material domain",
+        "both or unresolved domains and every forced DEEP trigger require DEEP with both hunters",
+        "selected depth is too low or the STANDARD focus is wrong",
+        "At already-selected DEEP, an omitted secondary reason is narrative correction, not another escalation",
+    )
+    for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
+        core = _normalized(_role_core(path))
+        for relation in relations:
+            assert relation.lower() in core, f"{path}: missing depth relation {relation!r}"
+
+
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
     required = (
         "task.json",
