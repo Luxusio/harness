@@ -572,7 +572,7 @@ def test_review_retry_recomputes_depth_and_uses_bounded_selected_discovery():
         "standard at most 1 per cycle/2 total",
         "deep at most 2 per cycle/4 total",
         "test-logic-only reruns contract/test only",
-        "spawn no hunter and use one fresh formal reviewer",
+        "select or retain DEEP, spawn no hunter, and use one fresh formal reviewer",
     ):
         assert term.lower() in codex
 
@@ -606,6 +606,7 @@ def test_exhausted_discovery_uses_a_live_formal_only_exception_without_state():
     for policy in (audit, codex):
         assert "discovery budget exhausted" in policy
         assert "discovery budget unknown and treated as exhausted" in policy
+        assert "select or retain deep" in policy
         assert "formal reviewer" in policy
     assert "spawn no more hunters" in audit
     assert "spawn no hunter" in codex

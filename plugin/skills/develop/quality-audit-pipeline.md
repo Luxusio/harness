@@ -120,14 +120,15 @@ second and final hunter cycle:
 - rerun a routed security reviewer only when security-relevant source or
   evidence changed; it remains independent and receives no hunter payload.
 
-Once cycle two was attempted, spawn no more hunters. One fresh formal reviewer
-must instead inspect the final diff and verify each prior finding against its
-remediation evidence. Put the exact phrase `discovery budget exhausted` in its
-invocation reason so the reviewer accepts the intentional hunter-set exception
-without lowering DEEP. On resume/recovery, if the previous discovery count is
-unavailable, treat the hunter budget as exhausted and use that formal-only
-path with the exact reason `discovery budget unknown and treated as exhausted`;
-never reconstruct hunter counts from receipts. Depth and budget stay in
+Once cycle two was attempted, select or retain DEEP and spawn no more hunters.
+One fresh formal reviewer must instead inspect the final diff and verify each
+prior finding against its remediation evidence. Put the exact phrase
+`discovery budget exhausted` in its invocation reason so the reviewer accepts
+the intentional hunter-set exception. On resume/recovery, if the previous
+discovery count is unavailable, select or retain DEEP, treat the hunter budget
+as exhausted, and use that formal-only path with the exact reason
+`discovery budget unknown and treated as exhausted`; never reconstruct hunter
+counts from receipts. Depth and budget stay in
 live orchestration context and add no task, receipt, or review-detail field.
 
 Bound every hunter prompt to the reviewed base..HEAD diff, PLAN acceptance

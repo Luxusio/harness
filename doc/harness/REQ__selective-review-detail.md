@@ -79,7 +79,7 @@ freshness_updated: 2026-09-15T00:00:00Z
    prior tier as a floor; test-logic-only changes rerun contract/test only;
    documentation, HEAD/count/command-text, checkpoint, and receipt-wording
    corrections use deterministic checks without hunters. Cycle two is final.
-   An exhausted or unknown recovery budget runs one fresh formal reviewer on
+   An exhausted or unknown recovery budget selects or retains DEEP, then runs one fresh formal reviewer on
    the final diff and prior remediation evidence without another hunter.
    Its live invocation reason is exactly `discovery budget exhausted` or
    `discovery budget unknown and treated as exhausted`; the reviewer keeps DEEP
