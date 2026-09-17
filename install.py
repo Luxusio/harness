@@ -122,7 +122,18 @@ def _open_inventory_root(root: Path) -> int:
                 or (mode & 0o022 and not sticky_shared)
                 or (final and not _trusted_inventory_directory(current_fd))
             ):
-                raise PermissionError(f"unsafe payload path component: {absolute}")
+                # Name the component that was rejected, not the path that was
+                # asked for. Naming the payload root sent a reader to inspect a
+                # directory whose modes were fine while a writable *ancestor*
+                # was the refusal — and since `--force` does not clear
+                # ancestors, the repair the tool prints left `--if-stale`
+                # failing identically on the next run. An unrecoverable loop
+                # deserves at least an accurate name.
+                component = Path(*absolute.parts[: index + 2])
+                raise PermissionError(
+                    f"unsafe payload path component: {component} "
+                    f"(mode {mode:04o}, uid {info.st_uid}) while inspecting {absolute}"
+                )
         return current_fd
     except BaseException:
         os.close(current_fd)
@@ -174,7 +185,13 @@ def _tree_inventory(root: Path) -> tuple[str, dict[str, tuple[str, int, str]], s
                     or (mode & 0o022 and not sticky_shared)
                 ):
                     os.close(next_fd)
-                    return PAYLOAD_ERROR, {}, f"unsafe payload path component: {absolute}"
+                    # Same reason as the sibling check in
+                    # `_open_inventory_root`: name the rejected component.
+                    component = Path(*absolute.parts[: index + 2])
+                    return PAYLOAD_ERROR, {}, (
+                        f"unsafe payload path component: {component} "
+                        f"(mode {mode:04o}, uid {info.st_uid}) while inspecting {absolute}"
+                    )
                 os.close(current_fd)
                 current_fd = next_fd
         except OSError as exc:
@@ -323,6 +340,24 @@ def _tree_inventory(root: Path) -> tuple[str, dict[str, tuple[str, int, str]], s
 
 
 def _compare_payload_trees(expected: Path, actual: Path) -> tuple[str, str]:
+    # The expected tree is built seconds ago by `copytree(..., copy2)` from the
+    # source checkout, so it inherits the source's modes. On a checkout
+    # bind-mounted from a Windows host every file reads `0o777`, and
+    # `_tree_inventory` then refuses a tree this installer created itself, from
+    # bytes it is about to install anyway: `--if-stale` dies with `expected
+    # payload unavailable`, which takes out `install_verified.py` — the
+    # harness's own delivery path — while `--force` still works.
+    #
+    # Normalizing here is a correction, not a loosening. The expected tree is
+    # the *canonical projection* of what an install produces, and since
+    # `_normalize_payload_modes` an install produces cleared `0o022` bits; the
+    # projection was simply missing the installer's own last step. No source
+    # mode is trusted, compared, or allowed into a verdict — it is removed from
+    # the installer's own scratch copy before that copy is inventoried. The
+    # `actual` side is deliberately not normalized here: this function reads an
+    # installed tree, and the install paths own mutating it.
+    # See `doc/harness/REQ__installed-tree-modes-are-installer-owned.md`.
+    _normalize_payload_modes(expected)
     expected_state, expected_inventory, expected_reason = _tree_inventory(expected)
     if expected_state != PAYLOAD_SYNCHRONIZED:
         return PAYLOAD_ERROR, f"expected payload unavailable: {expected_reason}"
@@ -665,9 +700,12 @@ def _normalize_payload_modes(root: Path) -> list[str]:
     reads as `0o777`, so the installed runtime lands world-writable — and
     `_lib`'s two canonical-import guards refuse exactly that: `bind()` has
     `before.st_mode & 0o022` in its refusal conjunction and the receipt-adapter
-    bind has `not (info.st_mode & 0o022)` inside `structural`. The result is an
-    install that reports success while the MCP server cannot open a task and no
-    hook can record a receipt. Reproduced 2026-09-17: a clean `HEAD` copy passes
+    bind has `not (info.st_mode & 0o022)` inside `structural`. The MCP server
+    then cannot open a task and no hook can record a receipt. The runtime smoke
+    catches that, so the install reports ERROR rather than success — but it
+    reported the cause as a stale `__pycache__`, which sent the field report
+    into a `--force` loop that clears caches and nothing else. Reproduced
+    2026-09-17: a clean `HEAD` copy passes
     the runtime smoke, the same copy at `chmod -R 777` fails it identically to
     the field report, and `chmod -R go-w` restores it.
 
@@ -1365,10 +1403,35 @@ def install_codex(*, dry_run: bool, force: bool,
         )
         for payload_root in codex_payload_roots:
             steps.extend(_prune_bytecode_caches(payload_root))
-            # Same placement reason as the prune: a tree left world-writable by
-            # an earlier install is refused by the import guards, and payload
-            # comparison would otherwise skip the install that replaces it.
-            steps.extend(_normalize_payload_modes(payload_root))
+        # Same placement reason as the prune: a tree left world-writable by an
+        # earlier install is refused by the import guards, and payload
+        # comparison would otherwise skip the install that replaces it.
+        #
+        # Normalized from the installer-created *ancestors* down, not from the
+        # payload roots: `_open_inventory_root` refuses a writable ancestor
+        # too, and normalizing only the payload left `--if-stale` failing
+        # permanently on a state that the `--force` the tool prints does not
+        # clear. Both roots here are created by this installer —
+        # `sync_codex_payload` mkdirs `CODEX_INSTALL_ROOT`, and
+        # `install_codex_plugin_cache` mkdirs the cache entry's parent. The
+        # walk deliberately stops at the marketplace directory: `plugins/` and
+        # `cache/` under the Codex home are Codex's namespace, shared with
+        # every other plugin, so this installer does not re-permission them —
+        # they get a named diagnosis from `_open_inventory_root` instead.
+        #
+        # Stated precisely, because the weaker claim is false:
+        # `install_codex_plugin_cache` mkdirs the cache entry's parents, so
+        # under a permissive umask this installer may well have *created*
+        # `plugins/` and `cache/`. Creating a missing parent is not ownership —
+        # the directory holds other plugins' trees, and widening the walk to
+        # reach it would chmod them too. The boundary is what the harness
+        # exclusively owns, not what it happened to mkdir.
+        for owned_root in (
+            CODEX_INSTALL_ROOT,
+            _codex_home_for_config(config_path)
+            / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE,
+        ):
+            steps.extend(_normalize_payload_modes(owned_root))
     if if_stale:
         payload_state, payload_reason = _codex_payload_state(config_path)
         if payload_state == PAYLOAD_ERROR:
@@ -1435,9 +1498,14 @@ def install_codex(*, dry_run: bool, force: bool,
         steps.append(f"installed Codex plugin cache entry {CODEX_PLUGIN_ID} at {cached_plugin_root}")
         steps.append("installed Codex plugin-local hooks.json")
         # The sync and the cache install both copy source modes verbatim, so
-        # the freshly written trees are normalized before anything imports them.
-        steps.extend(_normalize_payload_modes(source_plugin_root))
-        steps.extend(_normalize_payload_modes(cached_plugin_root))
+        # the freshly written trees are normalized before anything imports
+        # them. From the installer-created ancestors, for the reason given at
+        # the pre-check call above: a writable ancestor is refused just as a
+        # writable payload file is.
+        steps.extend(_normalize_payload_modes(CODEX_INSTALL_ROOT))
+        steps.extend(_normalize_payload_modes(
+            codex_home / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE
+        ))
         # The cache entry is the tree Codex actually loads: its hooks are
         # registered with absolute commands into this directory.
         smoke_ok, smoke_steps = _smoke_installed_runtime(cached_plugin_root)

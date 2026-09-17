@@ -59,6 +59,12 @@ def test_subagent_lifecycle_reads_the_discriminator_from_lib():
     assert body.count("_UNNAMED_AGENT_ID = re.compile") == 1
     definition = body.index("_UNNAMED_AGENT_ID = re.compile")
     assert body.index("except Exception:") < definition
+    # One copy is not the point — one *pattern* is. AC1's stated motive is that
+    # two copies of a CLI encoding drift apart silently, and the fallback can
+    # still do exactly that while satisfying every assertion above.
+    fallback = body[definition:].split("\n", 1)[0]
+    pattern = _lib().UNNAMED_AGENT_ID_RE.pattern
+    assert repr(pattern) in fallback or pattern in fallback, (fallback, pattern)
 
 
 def test_named_spawn_gets_its_own_diagnosis():

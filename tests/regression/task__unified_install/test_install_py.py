@@ -278,13 +278,21 @@ def test_tree_comparison_rejects_byte_bounds_and_concurrent_directory_mutation(
 
     real_scandir = module.os.scandir
     mutated = False
-    root_scan_count = 0
+    actual_identity = (os.stat(actual).st_dev, os.stat(actual).st_ino)
 
     def racing_scandir(fd):
-        nonlocal mutated, root_scan_count
+        # Keyed on *which* directory is being scanned, not on how many scans
+        # have happened. A call count silently encodes every other scan the
+        # installer happens to make: `_compare_payload_trees` normalizes the
+        # expected tree first, whose `os.walk` scans shifted the index and made
+        # this test fail for a reason unrelated to the race it exercises.
+        nonlocal mutated
         entries = real_scandir(fd)
-        root_scan_count += 1
-        if mutated or root_scan_count != 2:
+        try:
+            info = module.os.fstat(fd)
+        except (OSError, TypeError):
+            return entries
+        if mutated or (info.st_dev, info.st_ino) != actual_identity:
             return entries
 
         def enumerate_then_mutate():

@@ -6,6 +6,7 @@ freshness: current
 invalidated_by_paths:
   - install.py
   - plugin/scripts/install_smoke.py
+  - tests/test_install_writable_source_comparison.py
   - plugin/scripts/_lib.py
   - tests/test_install_writable_payload.py
 ---
@@ -86,13 +87,58 @@ smoke, `chmod -R 777` on the same copy fails it identically to the field report,
   points are driven so that deleting a call site fails a test rather than only
   contradicting a comment.
 
-## Known limitation — comparison still refuses a writable *source*
+## Comparison from a world-writable checkout — resolved without relaxing anything
 
-`_tree_inventory` refuses any file outside `{0600, 0644, 0755}` and any
-group/other-writable directory or path component, on the source side as well as
-the installed side. On a world-writable checkout, `install.py --if-stale`
-therefore reports `payload comparison failed: unsafe payload path component`
-before it reaches any of the above. That is a separate defect with its own
-security weight — the refusal exists so an attacker-writable tree is never
-compared or trusted — and relaxing it for source checkouts is a decision this
-note does not make. `--force` is unaffected and is the working path today.
+Originally recorded here as a known limitation: `_tree_inventory` refuses any
+file outside `{0600, 0644, 0755}` and any group/other-writable directory or path
+component, so on a world-writable checkout `install.py --if-stale` died with
+`expected payload unavailable`, taking out `install_verified.py` — the harness's
+own delivery path — while `--force` kept working.
+
+The refusal was never the problem. `_compare_payload_trees` builds the
+*expected* side with `copytree(..., copy2)` into a `TemporaryDirectory`, so that
+staging tree inherits the source's `0o777` and the installer ends up refusing
+its own scratch copy, made seconds earlier, from bytes it is about to install.
+Running `_normalize_payload_modes` on that staging tree fixes it and relaxes
+nothing: the expected tree is the *canonical projection* of what an install
+produces, and since this REQ an install produces cleared `0o022` bits — the
+projection was simply missing the installer's own last step. No source mode is
+trusted, compared, or admitted to a verdict.
+
+Mode still participates in the verdict, deliberately. `0o777 & ~0o022` is
+`0o755`, which is not `0o644`, so a checkout whose modes change between installs
+reports STALE and gets re-synced. Both sides derive from the same checkout in
+the real flow, so they converge.
+
+## Installer-created ancestors are installer-owned too
+
+`_open_inventory_root` refuses a writable *ancestor* of a payload root as well.
+Normalizing only the payload roots left a state that nothing could clear: the
+qa-cli lens found that a writable `~/.codex/harness`, `~/.codex/harness/plugins`,
+or the marketplace directory made `--if-stale` fail permanently, the message
+named the payload root rather than the ancestor, and the `--force` the output
+printed exited 0 without clearing ancestors — so the next `--if-stale` failed
+identically.
+
+Normalization therefore starts at the ancestors the harness **exclusively
+owns**: `CODEX_INSTALL_ROOT`, and the cache's marketplace directory —
+`<codex_home>/plugins/cache/harness/`, which holds harness cache entries and
+nothing else. It deliberately stops there.
+
+**The criterion is exclusive ownership, not authorship.** The weaker rule —
+"don't chmod what you didn't create" — is false here and following it would
+cause the harm this boundary exists to prevent: `install_codex_plugin_cache`
+mkdirs the cache entry's parents, so under a permissive umask this installer
+may well have created `plugins/` and `cache/` itself. Those directories hold
+every other Codex plugin's tree. A maintainer who hits the stuck-loop on a
+writable `~/.codex/plugins/cache` and applies the authorship test would conclude
+the walk may be widened there, and would chmod trees belonging to plugins the
+harness has nothing to do with. Creating a missing parent does not confer
+ownership.
+
+Everything outside that boundary — `plugins/` and `cache/` under the Codex home,
+and everything above `~/.claude/harness-dev` — gets a named diagnosis instead of
+a mutation. The refusal now reports the component it actually rejected with its
+mode and uid, not the path that was asked for, on both rejection sites: the
+`_open_inventory_root` walk and the absent-target ancestor walk in
+`_tree_inventory` that a first install hits.
