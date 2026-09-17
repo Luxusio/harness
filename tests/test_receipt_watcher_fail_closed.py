@@ -1189,6 +1189,23 @@ class TestRegistrationFailurePropagates(unittest.TestCase):
             self.assertNotIn("RECEIPTS.jsonl", produced)
 
 
+def _marker_isolation(harness_server):
+    """Neutralise the hook-capability marker read, when that branch exists.
+
+    `_hook_capability_marker` reads a real file under the developer's own repo
+    root, so a leftover marker would flip these cases to a positively observed
+    `False`. It is added by a separate in-flight task, so the patch has to be
+    conditional: asserting its presence would couple this file's tests to a
+    commit that has not landed, and `mock.patch.object` raises on a missing
+    attribute.
+    """
+    if hasattr(harness_server, "_hook_capability_marker"):
+        return mock.patch.object(
+            harness_server, "_hook_capability_marker", lambda *_a, **_k: "",
+        )
+    return contextlib.nullcontext()
+
+
 class TestReadinessIsTriState(unittest.TestCase):
     """A suspicion must not be reported as an observation.
 
@@ -1314,7 +1331,194 @@ class TestReadinessIsTriState(unittest.TestCase):
         self.assertIs(status["receipts_recordable"], False)
         self.assertIn("receipt lock unavailable", status["last_watcher_error"])
 
-    def test_earlier_receipt_does_not_mask_live_worker_error(self):
+    def test_a_receipt_does_not_settle_a_missing_session_identity(self):
+        """The REQ's core statement, pinned where nothing else pins it.
+
+        `REQ__subagent-receipt-session-binding.md`: "when the MCP host lacks an
+        exact thread environment, watcher readiness is unknown until a session
+        hook can establish or disprove it." A receipt written earlier in the run
+        is not that hook, and the receipts override used to treat it as one.
+
+        No watcher manager here on purpose — that is what separates this from
+        `test_earlier_receipt_does_not_mask_unreadable_worker_state` and makes
+        it the case that fails when the override's guard is widened back from
+        `unknown_cause == "capability-warning"` to a bare `recordable is None`.
+        """
+        harness_server = _server()
+
+        class Manager:
+            # Running, and exposing no `worker_error` — so there is no observed
+            # failure and no unreadable worker state either. The only thing
+            # missing is the session identity, which is the point.
+            @staticmethod
+            def is_running():
+                return True
+
+        class Server:
+            watcher_manager = Manager()
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "_current_session_identity", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: True,
+             ), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {},
+             ):
+            status = harness_server._watcher_status(
+                task_dir="task", task_id="t", run_id="r",
+            )
+
+        self.assertIsNone(status["receipts_recordable"])
+
+    def test_the_unknown_summary_does_not_overwrite_another_cause(self):
+        """The trailing summary block must not rewrite a reason already set.
+
+        The capability-warning branch sets a reason and no summary, so a
+        summary-only guard replaced its text — remediation sentence included —
+        with "no exact session identity", which on a Claude runtime is not even
+        what produced the unknown. Introduced and caught in review within the
+        same task; this pins it.
+        """
+        harness_server = _server()
+
+        with mock.patch.object(harness_server, "_SERVER", None), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "claude",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning",
+                 lambda *_a, **_k: "stale plugin tree: run install.py",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: False,
+             ), _marker_isolation(harness_server), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {},
+             ):
+            status = harness_server._watcher_status(
+                task_dir="task", task_id="t", run_id="r",
+            )
+
+        self.assertIsNone(status["receipts_recordable"])
+        self.assertIn("stale plugin tree", status["receipts_unrecordable_reason"])
+        self.assertNotIn(
+            "no exact session identity", status["receipts_unrecordable_reason"],
+        )
+
+    def test_a_raising_worker_query_survives_an_owned_identity(self):
+        """Unreadable is unreadable, identity or not.
+
+        With an identity present the initializer is `True`, so a guard keyed on
+        `recordable is None` left a raising worker query reported as recordable
+        — the fail-open this file is named for, on the one arm the REQ claimed
+        was covered.
+        """
+        harness_server = _server()
+
+        class Manager:
+            @staticmethod
+            def is_running():
+                return True
+
+            @staticmethod
+            def worker_error(_thread_id):
+                raise RuntimeError("worker registry unavailable")
+
+        class Server:
+            watcher_manager = Manager()
+            watcher_thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "_current_session_identity",
+                 lambda *_a, **_k: "sess-123",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: True,
+             ), _marker_isolation(harness_server), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {},
+             ):
+            status = harness_server._watcher_status(
+                task_dir="task", task_id="t", run_id="r",
+            )
+
+        self.assertIsNone(status["receipts_recordable"])
+        self.assertIn(
+            "could not be read", status["receipts_unrecordable_summary"],
+        )
+
+    def test_a_raising_worker_query_is_unreadable_not_silent(self):
+        """The third arm of the same flag: the query ran and threw.
+
+        Left unpinned in the first version of this fix, and the surviving
+        mutant was the *pre-change* source line — `except Exception: pass` — so
+        an ordinary revert or merge resolution would have reintroduced the
+        fail-open with nothing going red. A failure to read is a failure to
+        read whether the cause is a missing identity or an exception.
+        """
+        harness_server = _server()
+
+        class Manager:
+            @staticmethod
+            def is_running():
+                return True
+
+            @staticmethod
+            def worker_error(_thread_id):
+                raise RuntimeError("worker registry unavailable")
+
+        class Server:
+            watcher_manager = Manager()
+            watcher_thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+            last_watcher_error = ""
+
+        with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
+             mock.patch.object(
+                 harness_server, "_server_runtime", lambda: "codex",
+             ), mock.patch.object(
+                 harness_server, "_current_session_identity", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "receipt_capability_warning", lambda *_a, **_k: "",
+             ), mock.patch.object(
+                 harness_server, "_run_has_receipts", lambda *_a, **_k: True,
+             ), mock.patch.object(
+                 harness_server, "_diagnostics_for_this_session", lambda *_a, **_k: {},
+             ):
+            status = harness_server._watcher_status(
+                task_dir="task", task_id="t", run_id="r",
+            )
+
+        self.assertIsNone(status["receipts_recordable"])
+        self.assertIn(
+            "could not be read", status["receipts_unrecordable_summary"],
+        )
+
+    def test_earlier_receipt_does_not_mask_unreadable_worker_state(self):
+        """An earlier receipt cannot settle a worker state nobody could read.
+
+        Red from `a01bf3f` until 2026-09-17 under its previous name,
+        `test_earlier_receipt_does_not_mask_live_worker_error`, which asserted
+        `False` plus the error text. That demanded the worker be queried with
+        no session identity — precisely what `a01bf3f` forbade so the
+        attacker-influenced diagnostics file cannot select whose worker state
+        is read (see `test_diagnostic_root_id_cannot_hide_current_worker_error`,
+        which still passes). The two assertions could not both hold.
+
+        The intent survives and is what is asserted here: the earlier receipt
+        must not promote readiness. The value is `None`, not `False`, because
+        nothing was observed — a read was refused, and `_watcher_status`'s
+        docstring reserves `False` for a positively observed failure. See
+        `doc/harness/REQ__unreadable-worker-state-is-not-recordable.md`.
+        """
         harness_server = _server()
 
         class Manager:
@@ -1342,8 +1546,15 @@ class TestReadinessIsTriState(unittest.TestCase):
                 task_dir="task", task_id="t", run_id="r",
             )
 
-        self.assertIs(status["receipts_recordable"], False)
-        self.assertIn("receipt lock unavailable", status["last_watcher_error"])
+        # Not promoted, despite `_run_has_receipts` being True.
+        self.assertIsNone(status["receipts_recordable"])
+        # And it says why, rather than leaving a bare null to interpret.
+        self.assertIn(
+            "could not be read", status["receipts_unrecordable_summary"],
+        )
+        # The refusal to borrow an identity still holds: no worker was queried,
+        # so the manager's error text does not appear.
+        self.assertNotIn("receipt lock unavailable", status["last_watcher_error"])
 
     def test_diagnostic_root_id_cannot_hide_current_worker_error(self):
         harness_server = _server()
@@ -1446,7 +1657,15 @@ class TestReadinessIsTriState(unittest.TestCase):
 
         queried, status = _status("")
         self.assertEqual(queried, [])
-        self.assertIs(status["receipts_recordable"], True)
+        # No worker is queried without an authoritative identity, and readiness
+        # is therefore unknown — not True. `REQ__subagent-receipt-session-binding.md`
+        # owns this: "when the MCP host lacks an exact thread environment,
+        # watcher readiness is unknown until a session hook can establish or
+        # disprove it." This line asserted True from `a01bf3f` until
+        # 2026-09-17, directly contradicting both that REQ and the sibling test
+        # in this class, which asserted the opposite for the same state and was
+        # left red rather than reconciled.
+        self.assertIsNone(status["receipts_recordable"])
         self.assertEqual(status["last_watcher_error"], "")
 
     def test_a_receipt_from_this_run_disproves_the_warning(self):

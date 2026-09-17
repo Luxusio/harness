@@ -528,6 +528,12 @@ def _watcher_status(
         or diagnostics.get("last_watcher_error")
         or ""
     )
+    # Distinguishes "no live worker state exists" from "live worker state
+    # exists and this process could not read it". Before this flag both landed
+    # on an empty `last_watcher_error`, and the receipts override below then
+    # reported the second one as recordable. See
+    # `doc/harness/REQ__unreadable-worker-state-is-not-recordable.md`.
+    worker_state_unreadable = False
     if _SERVER is not None and _SERVER.watcher_manager is not None:
         worker_error = getattr(_SERVER.watcher_manager, "worker_error", None)
         if callable(worker_error):
@@ -550,8 +556,12 @@ def _watcher_status(
                     last_watcher_error = worker_error(
                         current_thread_id
                     ) or last_watcher_error
+                else:
+                    worker_state_unreadable = True
             except Exception:
-                pass
+                # An exception is also a failure to read it. Silence here used
+                # to be indistinguishable from "there was nothing to read".
+                worker_state_unreadable = True
 
     # Readiness is per-runtime. `capability_warning` inspects the *Claude*
     # plugin registration only, so on Codex it is silent even when the Codex
@@ -606,13 +616,61 @@ def _watcher_status(
         unrecordable_reason = capability_warning
         recordable = None
 
-    if recordable is None and _run_has_receipts(task_dir, run_id, snapshot):
-        # A receipt disproves only the heuristic capability warning. Positive
-        # live failures (worker error, dead manager, failed registration) may
-        # occur after an earlier start receipt and must remain fail-closed.
-        unrecordable_summary = ""
-        unrecordable_reason = ""
-        recordable = True
+    if worker_state_unreadable and recordable is not False:
+        # Third state, and the one this override used to swallow. A manager
+        # exposing `worker_error` exists, so live failure state *is* being
+        # tracked somewhere — this process simply had no identity to query it
+        # with, and since a01bf3f it will not borrow one from the diagnostics
+        # file. That leaves the answer genuinely unknown, and an earlier
+        # receipt cannot settle it: the worker may have failed after that
+        # receipt was written.
+        #
+        # `None`, not `False`: nothing was observed here, a read was refused.
+        # The docstring above owns that distinction, and collapsing unknown
+        # into False is named there as what once produced a self-deadlock.
+        unrecordable_summary = (
+            "Receipt watcher state could not be read for this session."
+        )
+        unrecordable_reason = (
+            "A receipt watcher manager is present and its worker state could "
+            "not be read — no session identity to query it with, or the query "
+            "raised — so whether receipts are recordable is unknown."
+        )
+        # Downgrades a `True` initializer, not only an existing `None`. A
+        # raising query on a host that *does* own an identity is just as
+        # unread as one with no identity to query with, and reporting that as
+        # recordable is the fail-open this file is named for. `is not False`
+        # keeps a positively observed failure above from being softened.
+        recordable = None
+    if recordable is None and not unrecordable_summary and not unrecordable_reason:
+        # The remaining unknown: a Codex host with no exact session identity.
+        # `REQ__subagent-receipt-session-binding.md` calls this state unknown
+        # "until a session hook can establish or disprove it", and a null with
+        # no summary beside it leaves the reader to guess which question went
+        # unanswered — the same defect one level down.
+        #
+        # Guarded on the reason as well as the summary: the capability-warning
+        # branch sets a reason and no summary, and a summary-only guard
+        # overwrote its text with a cause that was not the one that fired.
+        unrecordable_summary = (
+            "Receipt watcher readiness is unknown for this session."
+        )
+        unrecordable_reason = (
+            "This process has no exact session identity, so whether the receipt "
+            "watcher is recording for this session cannot be established here."
+        )
+
+    # No promotion branch follows, deliberately. A receipt disproves exactly one
+    # cause — the heuristic capability warning — and it already does so where
+    # that warning is raised: the `capability_warning and not
+    # _run_has_receipts(...)` guard above means a run with receipts never enters
+    # the warning branch at all, so `recordable` keeps its initializer. A second
+    # `recordable is None and _run_has_receipts(...)` promotion used to sit here
+    # and could not tell that cause from the other two, so it also disproved a
+    # missing session identity and an unreadable worker state — neither of which
+    # asks a question a receipt answers, because the worker can fail after the
+    # receipt was written. Re-adding one is what
+    # `test_a_receipt_does_not_settle_a_missing_session_identity` fails on.
 
     return {
         # Every value sourced from the diagnostics file is flattened and bounded
