@@ -15,6 +15,7 @@ try:
         _bind_runtime_receipt_adapter,
         _infer_receipt_lens,
         SUPPORTED_LENSES,
+        UNNAMED_AGENT_ID_RE as _UNNAMED_AGENT_ID,
         current_session_id,
         normalize_receipt_completion,
         record_subagent_receipt,
@@ -71,6 +72,12 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
         return ""
 
     SUPPORTED_LENSES: frozenset[str] = frozenset()
+    # Same pattern as `_lib.UNNAMED_AGENT_ID_RE`. Restated rather than omitted
+    # because every other name in this block has a fallback, and a missing one
+    # would raise `NameError` inside `_lens_absent` on the degraded path — in a
+    # module whose whole job is to keep recording receipts when `_lib` is the
+    # broken import.
+    _UNNAMED_AGENT_ID = re.compile(r"^a[0-9a-f]{16}$")
 
 
 DEFAULT_STALE_SECS = 30 * 60
@@ -104,9 +111,6 @@ def _agent_type(payload: dict[str, Any]) -> str:
     if isinstance(nested, dict):
         return _payload_value(nested, "type", "agent_type", "agentType")
     return ""
-
-
-_UNNAMED_AGENT_ID = re.compile(r"^a[0-9a-f]{16}$")
 
 
 def _lens_absent(diagnostics: dict[str, Any] | None, agent_type: str, agent_id: str) -> bool:

@@ -370,3 +370,21 @@ __all__ = [
     "scratch_task_in_real_repo",
     "active_marker_lock",
 ]
+
+
+def unnamed_agent_id(label: str) -> str:
+    """A realistic *unnamed* Claude spawn id for a fixture label.
+
+    The id shape carries meaning since 2026-09-17: `_lib.UNNAMED_AGENT_ID_RE`
+    matches `a` + 16 hex, which is what the CLI emits when no `name=` was
+    passed, and `nonparsing_completion_note` reads it to tell a malformed report
+    apart from a named spawn whose resolved type never reached the hook. A
+    literal like `agent-<label>` models neither shape and reads as named, so
+    fixtures that mean "an ordinary spawn whose report was wrong" must use this.
+
+    Deterministic per label so a `started` row and its `completed` row pair.
+    See `doc/harness/REQ__unbound-verdict-names-the-spawn-shape.md`.
+    """
+    import hashlib
+
+    return "a" + hashlib.sha256(str(label).encode()).hexdigest()[:16]

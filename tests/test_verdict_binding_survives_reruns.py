@@ -68,6 +68,9 @@ def _append(task_dir, entry):
         handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+from conftest import unnamed_agent_id
+
+
 def _agent_type(lens):
     return "harness:code-reviewer" if lens.startswith("review-") else f"harness:{lens}"
 
@@ -79,8 +82,8 @@ def _start(task_dir, run_id, lens, agent):
         "event": "started",
         "source": "claude_hook",
         "task_run_id": run_id,
-        "runtime_id": f"claude:session-disproof:agent-{agent}",
-        "agent_id": f"agent-{agent}",
+        "runtime_id": f"claude:session-disproof:{unnamed_agent_id(agent)}",
+        "agent_id": unnamed_agent_id(agent),
         "agent_type": _agent_type(lens),
         "lens": lens,
         "verdict": "",
@@ -96,8 +99,8 @@ def _complete(task_dir, run_id, summary, lens="review-code", agent="disproof"):
         "event": "completed",
         "source": "claude_hook",
         "task_run_id": run_id,
-        "runtime_id": f"claude:session-disproof:agent-{agent}",
-        "agent_id": f"agent-{agent}",
+        "runtime_id": f"claude:session-disproof:{unnamed_agent_id(agent)}",
+        "agent_id": unnamed_agent_id(agent),
         "agent_type": _agent_type(lens),
         "lens": lens,
         "verdict": verdict,

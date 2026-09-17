@@ -3800,6 +3800,22 @@ def publish_task_close(task_dir, control, *, receipt_fingerprint):
     return updated
 
 
+UNNAMED_AGENT_ID_RE = re.compile(r"^a[0-9a-f]{16}$")
+"""Agent-id shape of a spawn that passed no `name=`, per this CLI's encoding.
+
+An unnamed spawn's id is `a` + 16 hex (`a6b82fbc186344eb9`); a named spawn's
+embeds the display name (`areview-code-3-32d77a6e778ff60c`). Owned here rather
+than in `subagent_lifecycle` because both the write side (choosing between
+silence and a breadcrumb) and the read side (`nonparsing_completion_note`,
+naming why a verdict did not bind) discriminate on it, and two copies of a CLI
+encoding the harness does not own would drift apart silently.
+
+Advisory on both sides: it selects diagnostic wording, never whether a receipt
+is admitted or refused. If the encoding changes, the cost is a misworded
+sentence, not a lost PASS.
+"""
+
+
 def _infer_receipt_lens(agent_type, explicit_lens=""):
     lens = _receipt_short(explicit_lens, 80).lower()
     if lens:
@@ -4554,7 +4570,28 @@ def nonparsing_completion_lenses(task_dir, state=None, snapshot=None):
         if bound is None or not _valid_completion(newest_completion, receipts):
             kinds[lens] = "unpaired"
         else:
-            kinds[lens] = _pending_completion_kind(lens, newest_completion)
+            kind = _pending_completion_kind(lens, newest_completion)
+            # A named spawn lands on `shape` because that is what the report
+            # looks like from here, and every word of the `shape` advice is
+            # wrong for it: the format was never the fault, respawning with the
+            # same `name=` reproduces it exactly, and the second failure
+            # escalates to a park on a task that is finished. Measured
+            # 2026-09-17: five named spawns returned substantive verdicts and
+            # bound none, one unnamed spawn bound immediately.
+            # Gated on the Claude source. The id shape is that CLI's encoding,
+            # verified against its own transcript filenames; a Codex row's id
+            # comes from a different runtime and matches the unnamed pattern
+            # only by accident, so applying this test to one would tell every
+            # Codex coordinator to drop a `name=` argument it never passed.
+            if (
+                kind == "shape"
+                and str(newest_completion.get("source") or "") == "claude_hook"
+                and not UNNAMED_AGENT_ID_RE.match(
+                    str(newest_completion.get("agent_id") or "")
+                )
+            ):
+                kind = "shape_named"
+            kinds[lens] = kind
     return dict(sorted(kinds.items()))
 
 
@@ -4565,6 +4602,7 @@ def nonparsing_completion_note(lenses):
     kinds = lenses if isinstance(lenses, dict) else {lens: "shape" for lens in lenses}
     parts = []
     shape = [lens for lens, kind in kinds.items() if kind == "shape"]
+    shape_named = [lens for lens, kind in kinds.items() if kind == "shape_named"]
     inconsistent = [lens for lens, kind in kinds.items() if kind == "inconsistent"]
     unpaired = [lens for lens, kind in kinds.items() if kind == "unpaired"]
     stale_followup = [lens for lens, kind in kinds.items() if kind == "stale_followup"]
@@ -4580,6 +4618,26 @@ def nonparsing_completion_note(lenses):
             "relocate, or paraphrase the verdict format in the spawn prompt — the "
             "agent definition owns it. If a fresh spawn also fails to bind, that is "
             "the missing-attestation case, not a lens to run a third time."
+        )
+    if shape_named:
+        # Separate branch, not a sentence appended to `shape`: the generic text
+        # ends by routing a second failure to the missing-attestation park, and
+        # for this cause that park would record a false statement about a task
+        # whose lens never had a chance to attest.
+        parts.append(
+            f"Recorded but unusable: {', '.join(shape_named)} completed for this run "
+            "but no verdict could be bound, and the completion's agent id carries a "
+            "display name — the shape a spawn that passed `name=` produces. The "
+            "report is not the fault and its format is not the fault. The CLI puts "
+            "the display name in the agent-type position and drops the resolved "
+            "type, so what the hook records is not what the lens definition would "
+            "have supplied; a name that happens to encode a lens still infers one, "
+            "which is why a receipt row exists at all. Spawn that lens again with no "
+            "`name=` argument and put the lane label in the prompt instead — see "
+            "`plugin/skills/develop/parallel-fanout.md`. Do not reformat the report, "
+            "do not restate the verdict contract in the spawn prompt, and do not "
+            "treat a second failure as the missing-attestation case until an "
+            "unnamed spawn has also failed to bind."
         )
     if inconsistent:
         # Deliberately enumerated rather than diagnosed. This branch knows the

@@ -85,8 +85,10 @@ def _task_with_receipt():
                 "event": "started",
                 "source": "claude_hook",
                 "task_run_id": run_id,
-                "runtime_id": "claude:session-disproof:agent-disproof",
-                "agent_id": "agent-disproof",
+                # Unnamed-spawn id shape; see `conftest.unnamed_agent_id`.
+                # Must stay paired with `_complete`'s default label "disproof".
+                "runtime_id": "claude:session-disproof:af9e7d4ce56c2fae1",
+                "agent_id": "af9e7d4ce56c2fae1",
                 "agent_type": "harness:code-reviewer",
                 "lens": "review-code",
                 "verdict": "",
@@ -207,6 +209,9 @@ class TestVerdictAuthorityIsPositional(unittest.TestCase):
         self.assertEqual(_lib.extract_qa_verdict("prose\nVERDICT: PASS\n"), "")
 
 
+from conftest import unnamed_agent_id  # noqa: E402
+
+
 class TestNonParsingCompletionIsNamed(unittest.TestCase):
     """A rejected verdict shape must not read like an unrun lens.
 
@@ -238,8 +243,8 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
             "event": "completed",
             "source": "claude_hook",
             "task_run_id": run_id,
-            "runtime_id": f"claude:session-disproof:agent-{agent}",
-            "agent_id": f"agent-{agent}",
+            "runtime_id": f"claude:session-disproof:{unnamed_agent_id(agent)}",
+            "agent_id": unnamed_agent_id(agent),
             "agent_type": agent_type,
             "lens": lens,
             "verdict": verdict,
@@ -260,8 +265,8 @@ class TestNonParsingCompletionIsNamed(unittest.TestCase):
             "event": "started",
             "source": "claude_hook",
             "task_run_id": run_id,
-            "runtime_id": f"claude:session-disproof:agent-{agent}",
-            "agent_id": f"agent-{agent}",
+            "runtime_id": f"claude:session-disproof:{unnamed_agent_id(agent)}",
+            "agent_id": unnamed_agent_id(agent),
             "agent_type": agent_type,
             "lens": lens,
             "verdict": "",
