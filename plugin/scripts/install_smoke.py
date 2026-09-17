@@ -41,6 +41,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -122,6 +123,69 @@ def _probe_env(plugin_root: str, session_id: str) -> dict:
     return env
 
 
+def _world_writable_sources(plugin_root: str, limit: int = 3) -> list[str]:
+    """Installed `.py` files carrying group/other-write bits, bounded sample.
+
+    This is the *other* way a tree gets refused by the canonical-import guards,
+    and until 2026-09-17 the only wording offered was the stale-`__pycache__`
+    one — so a user on a Windows bind mount, where every synced file lands
+    `0o777`, re-ran `install.py --force` (which clears caches and nothing else)
+    against an unchanged failure. `_lib.bind` refuses on
+    `before.st_mode & 0o022` and the receipt-adapter bind refuses on the same
+    term inside `structural`, which is why that failure surfaces as the generic
+    `PermissionError` rather than `StaleBytecodeCacheError`.
+
+    Symlinks are not followed: the mode that matters is the one the guard
+    lstat()s. Never raises — a diagnosis helper must not replace the failure it
+    is trying to explain.
+    """
+    found: list[str] = []
+    for parent, dirnames, filenames in os.walk(plugin_root):
+        # Sorted, and with the modules the guards actually reject first, so the
+        # bounded sample is deterministic and names something recognizable
+        # rather than whichever file the directory happened to yield first.
+        dirnames.sort()
+        for name in sorted(
+            filenames, key=lambda item: (item[: -len(".py")] not in CORE_MODULES, item),
+        ):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(parent, name)
+            try:
+                info = os.lstat(path)
+            except OSError:
+                continue
+            if stat.S_ISLNK(info.st_mode) or not stat.S_IMODE(info.st_mode) & 0o022:
+                continue
+            found.append(path)
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def _refusal_cause(plugin_root: str) -> list[str]:
+    """The cause line for a probe failure, chosen by what the tree actually is.
+
+    Writable modes are reported when present because they are both checkable
+    and actionable; the `__pycache__` wording stays as the fallback, which is
+    what it always was — a known cause, not an observed one.
+    """
+    writable = _world_writable_sources(plugin_root)
+    if not writable:
+        return [
+            "        cause: a stale __pycache__ is the known cause; "
+            "`python3 install.py --force` clears it",
+        ]
+    return [
+        "        cause: this tree is group/other-writable, which the "
+        "canonical-import guard refuses (not a stale __pycache__ — "
+        "`--force` will not fix it)",
+        *[f"          writable: {path}" for path in writable],
+        f"        remedy: chmod -R go-w {plugin_root}",
+        "          (a fixed installer also normalizes this on the next install)",
+    ]
+
+
 def _import_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
     modules = _hook_modules(plugin_root)
     if not modules:
@@ -149,9 +213,9 @@ def _import_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
         detail = (result.stdout + result.stderr).strip().splitlines()
         return False, [
             "FAIL import: an installed hook module does not import — "
-            "receipts cannot be recorded from this tree "
-            "(a stale __pycache__ is the known cause; `python3 install.py --force` clears it)",
+            "receipts cannot be recorded from this tree",
             *[f"        {line}" for line in detail[-3:]],
+            *_refusal_cause(plugin_root),
         ]
     return True, [f"ok import: {len(modules)} hook modules ({', '.join(modules)})"]
 
@@ -192,6 +256,7 @@ def _receipt_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
             return False, [
                 "FAIL receipt: the installed MCP server could not open a task",
                 *[f"        {line}" for line in detail],
+                *_refusal_cause(plugin_root),
             ]
 
         payload = json.dumps({

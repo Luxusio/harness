@@ -657,6 +657,71 @@ def _prune_bytecode_caches(root: Path) -> list[str]:
     return steps
 
 
+def _normalize_payload_modes(root: Path) -> list[str]:
+    """Clear group/other-write bits across an installer-owned tree.
+
+    The payload is copied with `shutil.copytree(..., copy2)`, which preserves
+    source modes. On a checkout bind-mounted from a Windows host every file
+    reads as `0o777`, so the installed runtime lands world-writable — and
+    `_lib`'s two canonical-import guards refuse exactly that: `bind()` has
+    `before.st_mode & 0o022` in its refusal conjunction and the receipt-adapter
+    bind has `not (info.st_mode & 0o022)` inside `structural`. The result is an
+    install that reports success while the MCP server cannot open a task and no
+    hook can record a receipt. Reproduced 2026-09-17: a clean `HEAD` copy passes
+    the runtime smoke, the same copy at `chmod -R 777` fails it identically to
+    the field report, and `chmod -R go-w` restores it.
+
+    Normalizing here rather than relaxing the guards is deliberate. The mode
+    check is a real security property — a world-writable module is one any local
+    account can swap between the guard's read and the interpreter's — so the
+    installer is what must stop producing trees that violate it. See
+    `doc/harness/REQ__installed-tree-modes-are-installer-owned.md`.
+
+    Idempotent, and a no-op on an already-clean tree, so it cannot turn a
+    SYNCHRONIZED payload pair into a STALE one. Symlinks are skipped rather than
+    followed: `os.walk` does not descend them, and `chmod` through one would
+    retarget a file outside the tree.
+    """
+    steps: list[str] = []
+    _reject_real_install_root_under_test(root)
+    if not root.is_dir():
+        return steps
+    changed = 0
+    failures: list[str] = []
+
+    def payload_paths():
+        # The root itself is included: `sync_claude_payload` hands over a
+        # `mkdtemp` directory, so in practice it is already `0o700`, but a tree
+        # placed by hand or by an older installer need not be.
+        yield root
+        for parent, dirnames, filenames in os.walk(root):
+            for name in [*dirnames, *filenames]:
+                yield Path(parent) / name
+
+    for path in payload_paths():
+        try:
+            info = os.lstat(path)
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            mode = stat.S_IMODE(info.st_mode)
+            if not mode & 0o022:
+                continue
+            os.chmod(path, mode & ~0o022)
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+            continue
+        changed += 1
+    if changed:
+        steps.append(
+            f"cleared group/other-write bits on {changed} payload path(s) in {root}"
+        )
+    for failure in failures[:3]:
+        steps.append(f"could not clear write bits on {failure}")
+    if len(failures) > 3:
+        steps.append(f"… and {len(failures) - 3} more path(s) whose write bits remain")
+    return steps
+
+
 def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple[bool, list[str]]:
     """Drive the tree that was just installed and report what it produced.
 
@@ -1293,13 +1358,17 @@ def install_codex(*, dry_run: bool, force: bool,
         steps.append(f"codex {version} >= pin {pin or 'unset'}")
     # Same reason as install_claude: prune before the staleness decision.
     if not dry_run:
-        steps.extend(_prune_bytecode_caches(
-            CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
-        ))
-        steps.extend(_prune_bytecode_caches(
+        codex_payload_roots = (
+            CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME,
             _codex_home_for_config(config_path)
-            / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME
-        ))
+            / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME,
+        )
+        for payload_root in codex_payload_roots:
+            steps.extend(_prune_bytecode_caches(payload_root))
+            # Same placement reason as the prune: a tree left world-writable by
+            # an earlier install is refused by the import guards, and payload
+            # comparison would otherwise skip the install that replaces it.
+            steps.extend(_normalize_payload_modes(payload_root))
     if if_stale:
         payload_state, payload_reason = _codex_payload_state(config_path)
         if payload_state == PAYLOAD_ERROR:
@@ -1365,6 +1434,10 @@ def install_codex(*, dry_run: bool, force: bool,
         cached_plugin_root = install_codex_plugin_cache(codex_plugin_source_root, codex_home)
         steps.append(f"installed Codex plugin cache entry {CODEX_PLUGIN_ID} at {cached_plugin_root}")
         steps.append("installed Codex plugin-local hooks.json")
+        # The sync and the cache install both copy source modes verbatim, so
+        # the freshly written trees are normalized before anything imports them.
+        steps.extend(_normalize_payload_modes(source_plugin_root))
+        steps.extend(_normalize_payload_modes(cached_plugin_root))
         # The cache entry is the tree Codex actually loads: its hooks are
         # registered with absolute commands into this directory.
         smoke_ok, smoke_steps = _smoke_installed_runtime(cached_plugin_root)
@@ -1454,6 +1527,9 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
     # receipt subsystem still answers SYNCHRONIZED and skips the sync.
     if not dry_run:
         steps.extend(_prune_bytecode_caches(claude_install_root))
+        # Same placement reason as the prune: a tree left world-writable by an
+        # earlier install is refused by the import guards, yet compares equal.
+        steps.extend(_normalize_payload_modes(claude_install_root))
     if if_stale:
         payload_state, payload_reason = _claude_payload_state()
         if payload_state == PAYLOAD_ERROR:
@@ -1490,6 +1566,9 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
     else:
         installed_plugin_root = sync_claude_payload(claude_install_root)
         steps.append(f"synced plugin payload to {claude_install_root} (.git excluded)")
+        # `copytree` preserved the source modes; normalize before the smoke
+        # imports anything out of this tree.
+        steps.extend(_normalize_payload_modes(claude_install_root))
         smoke_ok, smoke_steps = _smoke_installed_runtime(installed_plugin_root)
         steps.extend(smoke_steps)
         if not smoke_ok:
