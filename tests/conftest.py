@@ -61,6 +61,32 @@ def _default_install_tree_roots() -> list[str]:
 # (tests/test_install_tree_removal_guard.py).
 _INSTALL_TREE_ROOTS = _default_install_tree_roots()
 
+# A nested pytest session launched by a test in this suite — currently only
+# `test_qa_knowledge_shape.red_claim_violation`, which probes whether a
+# known-red note's node still fails.
+#
+# Such a session runs with cwd=REPO_ROOT and so re-enters the session hooks
+# below, which is actively harmful rather than merely wasteful: the marker
+# snapshot renames the developer's live `.active` away for the probe's
+# duration, and `pytest_sessionfinish` unlinks whatever `.active` it finds
+# before restoring — so a marker created by an unlocked sibling test running
+# concurrently can be destroyed. Measured 2026-09-18 with a 10ms poller: 13
+# consecutive samples with `.active` absent and a session-backup sidecar
+# present. `doc/harness/REQ__test-suite-determinism-under-xdist.md` rule 2
+# forbids exactly this.
+#
+# The install-tree guard is skipped for the same reason in reverse: the nested
+# session inventories ~1500 installed files twice while the outer session is
+# already watching them, and its assertion answers a question the outer
+# session owns.
+#
+# Read at call time rather than import time so the guard is testable: a
+# module-level constant would freeze whatever the environment held when pytest
+# imported this file, and the three call sites could then only be checked by
+# reading their source.
+def is_nested_probe() -> bool:
+    return os.environ.get("HARNESS_NESTED_PROBE") == "1"
+
 
 def _install_tree_inventory(root: str) -> dict[str, int]:
     """Map file path -> size for one install tree; empty when it is absent.
@@ -119,7 +145,16 @@ def install_trees_lose_no_files():
     See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 
     Absent trees (fresh machine, CI) inventory as empty and never fail.
+
+    A nested probe session skips this entirely — see `is_nested_probe`. Its
+    teardown assertion also made exit 1 ambiguous for the caller: a passing
+    selected test plus a failing session-scoped teardown yields
+    `1 passed, 1 error` and rc=1, which `red_claim_violation` would read as
+    "the named node is still red".
     """
+    if is_nested_probe():
+        yield
+        return
     before = {root: _install_tree_inventory(root) for root in _INSTALL_TREE_ROOTS}
     yield
     removed = _install_tree_removals(before)
@@ -322,6 +357,9 @@ def pytest_sessionstart(session):
     else with a single move.
     """
     global _SESSION_ACTIVE_BACKUP
+    if is_nested_probe():
+        _SESSION_ACTIVE_BACKUP = None
+        return
     with active_marker_lock(REPO_ROOT):
         active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
         if not os.path.isfile(active_path):
@@ -345,6 +383,9 @@ def pytest_sessionfinish(session, exitstatus):
     `mv` it back manually.
     """
     global _SESSION_ACTIVE_BACKUP
+    if is_nested_probe():
+        _SESSION_ACTIVE_BACKUP = None
+        return
     backup = _SESSION_ACTIVE_BACKUP
     _SESSION_ACTIVE_BACKUP = None
     if not backup or not os.path.isfile(backup):

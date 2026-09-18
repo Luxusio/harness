@@ -1642,6 +1642,13 @@ def handle_task_verify(args: dict) -> dict:
         "review_verdict": review_verdict,
         "required_review_lenses": required_review_lenses(td, st),
         "required_qa_lenses": ctx.get("required_qa_lenses", []),
+        # Reported for the same reason task_start and task_context report it,
+        # and with more force here: `_gate_next_action` above rewrites
+        # next_action from this status, so omitting it left the protocol's most
+        # authoritative surface stating a conclusion while withholding the
+        # observation it came from. A caller reading only task_verify could not
+        # distinguish an unreadable watcher from a healthy one.
+        "watcher_status": status,
     }
     if verify_run is not None:
         payload["verify_run"] = verify_run

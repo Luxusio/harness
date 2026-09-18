@@ -1237,6 +1237,40 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "doc/harness/tasks/TASK__mcp/RECEIPTS.jsonl",
             )
 
+    def test_task_verify_reports_the_watcher_status_it_gated_on(self):
+        """The key-set test above proves presence; this proves it is the same
+        observation the handler acted on.
+
+        `handle_task_verify` computes `_watcher_status` and passes it to
+        `_gate_next_action`, which can rewrite next_action entirely. Returning a
+        conclusion while withholding the observation left a caller unable to
+        distinguish an unreadable watcher from a healthy one — on the surface
+        the protocol treats as most authoritative, and unlike `task_start` and
+        `task_context`, which both report it.
+        """
+        unreadable = {
+            "receipts_recordable": None,
+            "receipts_unrecordable_reason": "worker_state_unreadable",
+            "receipts_unrecordable_summary": "watcher worker state could not be read",
+            "receipt_capability_warning": "",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__verifywatcher")
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                with mock.patch.object(
+                    harness_server, "_watcher_status", return_value=unreadable,
+                ):
+                    verify = harness_server.handle_task_verify(
+                        {"task_id": "TASK__verifywatcher"},
+                    )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+
+        self.assertNotIn("isError", verify)
+        self.assertEqual(verify["structuredContent"]["watcher_status"], unreadable)
+
     def test_critic_tools_are_not_exposed(self):
         for tool in ("write_critic_document", "write_critic_qa", "write_critic_ux"):
             result = harness_server.call_tool(
@@ -1311,10 +1345,13 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertNotIn("subagent_receipts", verify["structuredContent"])
         self.assertNotIn("review_receipts", verify["structuredContent"])
         self.assertNotIn("review_report_path", verify["structuredContent"])
+        # `watcher_status` joins the compact set rather than breaking it: it is
+        # the bounded dict `task_start` and `task_context` already return, and
+        # `task_verify` gates its own next_action on it.
         self.assertEqual(set(verify["structuredContent"]), {
             "task_dir", "runtime_verdict", "next_action", "missing_for_close",
             "report_path", "review_verdict", "required_review_lenses",
-            "required_qa_lenses",
+            "required_qa_lenses", "watcher_status",
         })
         self.assertEqual(verify["structuredContent"]["required_qa_lenses"], ["qa-cli"])
         self.assertEqual(

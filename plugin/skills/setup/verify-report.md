@@ -99,8 +99,14 @@ For browser/desktop QA, verify required tools from the current session or
 global runtime configuration. Setup reads MCP availability from global/runtime settings
 and preserves project-root .mcp.json as user-owned configuration. Any missing
 server is fixed in global/runtime MCP settings, not by editing the project file.
-For pytest-based `test_command`, also run
-`python3 -m pytest --version` and report a missing runner as blocking.
+For a pytest-based `test_command`, probe **the runner the manifest declares**,
+not a guessed one: take `test_command` truncated at its `pytest` token and
+append `--version` (`uv run pytest ...` → `uv run pytest --version`). Report
+blocking only when that fails. Probing a fixed `python3 -m pytest --version`
+instead reports a healthy repo as blocked whenever the suite runs through a
+launcher — `uv`, `poetry`, `hatch`, `tox`, a venv interpreter — which is the
+normal case, not the exception. Truncate rather than running `test_command`
+whole: the declared command runs the suite.
 
 ## 4.4 Runtime-specific checks
 
