@@ -10,7 +10,7 @@ invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/skills/develop/SKILL.md
   - plugin/skills/run/SKILL.md
-freshness_updated: 2026-09-07T04:13:35Z
+freshness_updated: 2026-09-18T06:40:00Z
 ---
 
 # REQ — the lens verdict contract belongs to the agent definition

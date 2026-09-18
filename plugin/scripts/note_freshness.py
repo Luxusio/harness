@@ -107,6 +107,133 @@ except ImportError:
 FRESHNESS_CURRENT = "current"
 FRESHNESS_SUSPECT = "suspect"
 
+# QA_KNOWLEDGE.yaml is a mapping document, not a note with frontmatter, so the
+# `doc/**/*.md` walk below never sees it — while its `qa_notes:` entries are
+# exactly the claims that go false when source moves under them. The reader is
+# line-oriented rather than a YAML parse on purpose: this script is stdlib-only
+# and system python3 has no PyYAML here (see the `qa_venv_has_no_pip_or_pyyaml`
+# entry in the file itself).
+QA_KNOWLEDGE_PARTS = ("harness", "qa", "QA_KNOWLEDGE.yaml")
+QA_NOTES_SECTION = "qa_notes:"
+QA_ENTRY_INDENT = "    "
+_QA_ENTRY_RE = re.compile(r"^  ([A-Za-z0-9_][A-Za-z0-9_.-]*):\s*$")
+
+
+def _qa_note_spans(lines: list) -> list:
+    """Return (key, start, end) per `qa_notes` entry; end is exclusive."""
+    spans: list = []
+    in_section = False
+    key = None
+    start = 0
+    section_end = len(lines)
+    for i, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        if not in_section:
+            if line.split("#", 1)[0].rstrip() == QA_NOTES_SECTION:
+                in_section = True
+            continue
+        # Any non-blank line back at column 0 is the next top-level key, so the
+        # section — and the last entry in it — ends here rather than at EOF.
+        if line.strip() and not line.startswith(" "):
+            section_end = i
+            break
+        m = _QA_ENTRY_RE.match(line)
+        if m:
+            if key is not None:
+                spans.append((key, start, i))
+            key, start = m.group(1), i
+    if key is not None:
+        spans.append((key, start, section_end))
+    return spans
+
+
+def _dedent_entry(lines: list, start: int, end: int) -> str:
+    """Entry fields sit at indent 4; shift them to column 0 so the shared
+    frontmatter readers in _lib can parse them unchanged."""
+    out = []
+    for raw in lines[start + 1:end]:
+        out.append(raw[len(QA_ENTRY_INDENT):] if raw.startswith(QA_ENTRY_INDENT) else raw)
+    return "".join(out)
+
+
+def qa_note_candidates(text: str) -> list:
+    """Every `qa_notes` entry that declares a non-empty invalidated_by_paths."""
+    lines = text.splitlines(keepends=True)
+    candidates: list = []
+    for key, start, end in _qa_note_spans(lines):
+        body = _dedent_entry(lines, start, end)
+        paths = [p for p in read_array_field(body, "invalidated_by_paths") if p]
+        if not paths:
+            continue
+        candidates.append({
+            "key": key,
+            "start": start,
+            "end": end,
+            "paths": paths,
+            "superseded": read_scalar_field(body, "superseded"),
+            "freshness": read_scalar_field(body, "freshness") or FRESHNESS_CURRENT,
+        })
+    return candidates
+
+
+def _flip_qa_entry(block: list, stamp: str) -> list:
+    """Set freshness/freshness_updated on one entry's lines, in place-ish."""
+    block = list(block)
+    wrote_freshness = wrote_stamp = False
+    for i, raw in enumerate(block):
+        if raw.startswith(QA_ENTRY_INDENT + "freshness:"):
+            block[i] = f"{QA_ENTRY_INDENT}freshness: {FRESHNESS_SUSPECT}\n"
+            wrote_freshness = True
+        elif raw.startswith(QA_ENTRY_INDENT + "freshness_updated:"):
+            block[i] = f"{QA_ENTRY_INDENT}freshness_updated: {stamp}\n"
+            wrote_stamp = True
+    # After `discovered:` when present, so the entry still opens with when it
+    # was learned; otherwise directly under the key.
+    insert_at = 1
+    for i, raw in enumerate(block):
+        if raw.startswith(QA_ENTRY_INDENT + "discovered:"):
+            insert_at = i + 1
+            break
+    added = []
+    if not wrote_freshness:
+        added.append(f"{QA_ENTRY_INDENT}freshness: {FRESHNESS_SUSPECT}\n")
+    if not wrote_stamp:
+        added.append(f"{QA_ENTRY_INDENT}freshness_updated: {stamp}\n")
+    block[insert_at:insert_at] = added
+    return block
+
+
+def scan_qa_notes(path: str, changed: set, stamp=None) -> list:
+    """Flip matching `qa_notes` entries current -> suspect. No match means the
+    file is not rewritten at all."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    hits = []
+    for cand in qa_note_candidates(text):
+        if cand["superseded"]:
+            continue
+        if cand["freshness"] != FRESHNESS_CURRENT:
+            continue
+        matched = next((p for p in cand["paths"] if _path_matches(p, changed)), None)
+        if matched:
+            hits.append((cand, matched))
+    if not hits:
+        return []
+    lines = text.splitlines(keepends=True)
+    stamp = stamp or now_iso()
+    for cand, _matched in sorted(hits, key=lambda h: h[0]["start"], reverse=True):
+        block = _flip_qa_entry(lines[cand["start"]:cand["end"]], stamp)
+        lines[cand["start"]:cand["end"]] = block
+    try:
+        _atomic_write(path, "".join(lines))
+    except OSError:
+        return []
+    return [{"path": f"{path}#{cand['key']}", "matched": matched}
+            for cand, matched in hits]
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -232,6 +359,7 @@ def main() -> int:
             print("note_freshness: no changed paths — nothing to do")
         return 0
     results = scan(args.doc_root, changed)
+    results += scan_qa_notes(os.path.join(args.doc_root, *QA_KNOWLEDGE_PARTS), changed)
     if not args.quiet:
         if not results:
             print(f"note_freshness: 0 notes invalidated ({len(changed)} paths checked)")

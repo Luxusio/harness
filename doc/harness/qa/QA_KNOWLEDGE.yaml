@@ -143,6 +143,9 @@ patterns:
 qa_notes:
   install_verified_session_hint:
     discovered: 2026-08-26
+    invalidated_by_paths:
+      - plugin/scripts/install_verified.py
+      - plugin/scripts/_lib.py
     notes: >
       The verified-install helper runs as a plain subprocess and resolves the
       session id from doc/harness/tasks/.active_sessions/.session-hint when
@@ -155,6 +158,8 @@ qa_notes:
     fixture_helper: tests/test_install_verified.py::_repo
   stale_hook_tree_detection:
     discovered: 2026-08-26
+    invalidated_by_paths:
+      - plugin/scripts/hook_tree_health.py
     notes: >
       hook_tree_health.receipt_capability_warning() reads BOTH the
       harness@harness installPath from
@@ -171,6 +176,10 @@ qa_notes:
     fixture_helper: tests/test_hook_tree_health.py::_tree
   attestation_pair_single_source:
     discovered: 2026-09-02
+    invalidated_by_paths:
+      - plugin/scripts/_lib.py
+      - plugin/mcp/harness_server.py
+      - plugin/scripts/stop_gate.py
     notes: >
       The fixed missing-attestation blocked_reason/unblock_condition pair is
       owned solely by plugin/scripts/_lib.py
@@ -222,15 +231,27 @@ qa_notes:
       each mutation-testing baseline instead of reusing one sandbox.
   mcp_bash_guard_false_positive:
     discovered: 2026-09-02
+    superseded: 2026-09-18
     notes: >
-      The mcp_bash_guard blocks a Bash command whose text contains
+      SUPERSEDED 2026-09-18 — the guard it describes no longer exists.
+      plugin/scripts/mcp_bash_guard.py was deleted in 5d29f55 ("remove bash
+      guard and harden receipt flow"), so no Bash command is blocked on this
+      path and the Python-restore workaround is no longer required. Found by
+      seeding invalidated_by_paths onto this entry: the path-existence check
+      in tests/test_note_freshness_qa_notes.py::RealFileTests::test_every_declared_path_exists
+      rejected the seed, which is the only reason anyone re-read the claim.
+      Historical record follows.
+      The mcp_bash_guard blocked a Bash command whose text contained
       `cp ... plugin/scripts/_lib.py` even when both operands are inside a
-      scratchpad sandbox outside the repo. The guard matches the command
-      string, not the resolved target path. Workaround for sandboxed
-      mutation testing: perform file restores in Python
+      scratchpad sandbox outside the repo. The guard matched the command
+      string, not the resolved target path, and the workaround for sandboxed
+      mutation testing was to perform file restores in Python
       (pathlib.write_text) rather than shell cp/mv.
   verdict_parser_probe_harness:
     discovered: 2026-09-02
+    invalidated_by_paths:
+      - plugin/scripts/_lib.py
+      - tests/test_receipt_watcher_fail_closed.py
     notes: >
       To exercise the receipt verdict parser directly without spawning a lens:
       sys.path.insert(0, "plugin/scripts") then call
@@ -274,6 +295,8 @@ qa_notes:
       1-in-5 report as unreproduced on this host.
   contract_lint_weight_is_soft_and_quiet_hides_it:
     discovered: 2026-09-02
+    invalidated_by_paths:
+      - plugin/scripts/contract_lint.py
     notes: >
       `contract_lint.py --check-weight` reports C-13 overage as [SOFT] and still
       exits 0, and `--quiet` suppresses the warning entirely. A typo'd
@@ -282,6 +305,9 @@ qa_notes:
       "[SOFT] C-13 weight" string instead.
   hook_tree_health_candidate_roots:
     discovered: 2026-09-02
+    invalidated_by_paths:
+      - plugin/scripts/hook_tree_health.py
+      - plugin/scripts/contract_lint.py
     notes:
       - "CLAUDE_CONFIG_DIR drives hook_tree_health.py's __main__ end-to-end; build a fixture config dir with plugins/known_marketplaces.json ({\"harness\": {\"installLocation\": \"...\"}}) and plugins/installed_plugins.json ({\"version\":2,\"plugins\":{\"harness@harness\":[{\"installPath\":\"...\"}]}}) to exercise every branch without touching ~/.claude."
       - "Also unset HARNESS_RUNTIME and CODEX_THREAD_ID; _runtime() infers codex from CODEX_THREAD_ID and short-circuits the Claude registration branch."
@@ -290,6 +316,9 @@ qa_notes:
       - "Exit codes are masked when piping to tail/grep; use `cmd >/dev/null 2>&1; echo $?` for real exit codes. contract_lint.py exits 2 on an unrecognized flag."
   next_action_mutation_sweep:
     discovered: 2026-09-02
+    invalidated_by_paths:
+      - plugin/scripts/_lib.py
+      - plugin/mcp/harness_server.py
     notes:
       - "To mutate RECEIPT_UNAVAILABLE_NEXT_ACTION / RECEIPT_PENDING_VERIFY_NEXT_ACTION, render the constant, split at 'blocked_reason=', rewrite the assignment as repr(mutated_prefix) followed by the two unchanged f-string ATTESTATION lines. Verified with an identical-restructure control: the full suite stays green, so every RED is a real deletion catch, not a restructure artifact."
       - "SUPERSEDED 2026-09-04 — see runtime_normative_text_single_source_qa. Also superseded in this key: the mutation recipe in the note above says to keep 'the two unchanged f-string ATTESTATION lines'. Those lines no longer exist in either harness_server constant (grep 'blocked_reason=' returns 0); the pair now reaches both constants through attestation_endgame(). The recipe still runs because ATTESTATION_BLOCKED_REASON / ATTESTATION_UNBLOCK_CONDITION stay bound in harness_server, but rewrite the assignment as repr(mutated_prefix) plus the f-string TRUST_BOUNDARY/attestation_endgame() tail. The survivor count below is wrong and the docstring it cites no longer exists: two more survivors were found ('Run any required substantive lens that', 'their results are substantive but'), both green at 3ec78a7 too, both now pinned. Re-run the sweep; do not trust a recorded survivor count. Clause-level sweep (split on comma/semicolon/period/em-dash) against the full suite: 29 clauses, exactly 1 survivor - the opening 'Task verification is still pending.' This reproduces the claim in test_every_normative_clause_in_both_next_actions_is_pinned's docstring."
@@ -297,6 +326,9 @@ qa_notes:
       - "Full suite takes ~15s (1013 tests, 228 subtests, xdist); a 29-case clause sweep against it is ~8 min, a 173-case word sweep against the 6 pinning files (~2s each) is ~6 min."
   pytest_suite_stability_under_xdist:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - pyproject.toml
+      - plugin/scripts/_lib.py
     notes:
       - "The suite runs under pytest-xdist (addopts -n auto --dist worksteal in pyproject.toml), so worker partitioning changes between runs and a single green run does not establish stability. Run the full suite >=10 times before accepting 'green'."
       - "Observed intermittent signature: PermissionError 'TASK.json mutation requires the task-control MCP' raised from _trusted_control_writer() in plugin/scripts/_lib.py, failing tests in tests/test_harness_mcp_server.py::HarnessMcpServerPR2CloseGate and tests/test_receipt_watcher_fail_closed.py::TestReadinessIsTriState."
@@ -305,19 +337,33 @@ qa_notes:
       - "RESOLVED 2026-09-03: the dominant cause was importlib.reload(_lib) in tests/test_promote_learnings_current_run.py, which emptied the control-writer bindings closure. Full analysis in doc/harness/REQ__test-suite-determinism-under-xdist.md. Do not re-open a HarnessMcpServerPR2CloseGate PermissionError from this note; the >=10-run guidance above remains durable."
   preexisting_single_worker_order_dependency:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - tests/test_harness_mcp_server.py
     notes:
       - "RESOLVED 2026-09-03. Was: pytest -n0 tests/test_harness_mcp_server.py tests/test_receipt_watcher_fail_closed.py failing on TestNonParsingCompletionIsNamed::test_trailing_verdict_completion_is_reported_as_a_format_failure. Cause was the unguarded harness_server re-exec in test_harness_mcp_server.py; the reuse guard fixed it. Do not re-open from this note."
   appending_to_this_file:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - tests/test_qa_knowledge_shape.py
     notes:
       - "This document is a mapping. Append under an existing top-level key as '<slug>: {discovered, notes}' -- never as a top-level '- topic:' sequence item. Doing so makes the whole file unparseable and destroys every accumulated section at once. This has now happened twice (2026-09-02, 2026-09-03); tests/test_qa_knowledge_shape.py catches it."
   contract_lint_mutation_probes:
     discovered: 2026-09-03
+    freshness: current
+    freshness_updated: 2026-09-18T06:40:00Z
+    invalidated_by_paths:
+      - plugin/scripts/contract_lint.py
+      - tests/test_contract_lint_real_tree.py
+      - plugin-codex/internal-skills/develop/SKILL.md
     notes:
-      - "contract_lint guards are mutation-verifiable in seconds. Duplicate id: insert a second '### C-01' block -> [HARD] duplicate contract id, CLI exit 1. Marker tamper: sed harness:managed-begin -> [HARD] markers missing/duplicated/inverted, exit 1. Broken Enforced-by path: rewrite a backticked path to a nonexistent file -> [SOFT], CLI exit stays 0 (soft is advisory) but tests/test_contract_lint_real_tree.py asserts report.soft == [] so the suite still reddens. Weight: append 2 lines to plugin-codex/internal-skills/develop/SKILL.md (exactly 500) -> [SOFT] C-13 weight, but only with --plugin-root plugin-codex; the CLI default ./plugin never reaches the codex twin."
-      - "Trimming plugin-codex/internal-skills/develop/SKILL.md to 450 lines keeps test_contract_lint_real_tree.py fully green (5 passed) -- the cap-boundary test derives its threshold from the file length, not from SKILL_WEIGHT_LIMIT."
+      - "contract_lint guards are mutation-verifiable in seconds. Duplicate id: insert a second '### C-01' block -> [HARD] duplicate contract id, CLI exit 1. Marker tamper: sed harness:managed-begin -> [HARD] markers missing/duplicated/inverted, exit 1. Broken Enforced-by path: rewrite a backticked path to a nonexistent file -> [SOFT], CLI exit stays 0 (soft is advisory) but tests/test_contract_lint_real_tree.py asserts report.soft == [] so the suite still reddens. Weight: append 2 lines to plugin-codex/internal-skills/develop/SKILL.md (499 lines at 66e0fa3, so any 2-line append crosses the 500 cap) -> [SOFT] C-13 weight, but only with --plugin-root plugin-codex; the CLI default ./plugin never reaches the codex twin."
+      - "Trimming plugin-codex/internal-skills/develop/SKILL.md to 450 lines keeps test_contract_lint_real_tree.py fully green (5 passed when measured 2026-09-03; the file collects 11 at 66e0fa3 -- check the exit code, not the count) -- the cap-boundary test derives its threshold from the file length, not from SKILL_WEIGHT_LIMIT."
   suite_isolation_ab_recipes:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - tests/conftest.py
+      - tests/test_harness_mcp_server.py
+      - pyproject.toml
     notes:
       - "Deterministic, no xdist: '.venv/bin/python -m pytest -q -n0 tests/test_promote_learnings_current_run.py tests/test_harness_mcp_server.py'. With importlib.reload(_lib) present in setUp -> 53 failed, 57 passed; without -> 104 passed."
       - "The harness_server reuse guard in tests/test_harness_mcp_server.py is only load-bearing when another file imports harness_server FIRST. Repro: '-n0 tests/test_session_hint_marker_binding.py tests/test_harness_mcp_server.py' -> collection error when the guard is reverted, 101 passed with it. The pair ordering recorded elsewhere (test_harness_mcp_server + test_receipt_watcher_fail_closed) does NOT reproduce it in either direction."
@@ -325,6 +371,10 @@ qa_notes:
       - "pyproject addopts inject '-n auto --dist worksteal'; '-p no:xdist' errors. Use '-n0' for serial. Full suite: ~15s parallel, ~60-200s serial."
   stop_gate_state_matrix_probe:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - plugin/scripts/stop_gate.py
+      - plugin/scripts/_lib.py
+      - tests/test_stop_gate.py
     notes:
       - "stop_gate.py reason text is state-dependent. Reproduce every branch by building fake repos with tests/test_stop_gate.py helpers (_fake_repo, _write_completed_lenses) and running the script as a subprocess with HARNESS_BACKGROUND_WAIT_SECS=0. Branches: no-task-dir, plan-missing, review-pending, qa-pending, review-fail, review-blocked-env, qa-fail, close-ready, task-blocked (silent), no-active (silent), non-harness-repo (silent), corrupt TASK.json, corrupt RECEIPTS.jsonl."
       - "Measured reason sizes on 24-core aarch64 Linux 6.12.69-linuxkit: HEAD 3e4585b was 192 words / 1411 chars in EVERY blocking state (not ~250). After TASK__state-aware-stop-gate-message: no-task-dir 92/624, plan-missing 112/768, review-pending 202/1401, qa-pending 195/1355, close-ready 100/676. The qa-pending figure originally recorded here (157/1072) was a mid-task measurement taken while the dedup guard was keyed on the partial phrase 'structurally delivered'; that guard dropped two trust-boundary clauses and was fixed before the task closed. Measurement entries must name the tree state they were taken on."
@@ -333,12 +383,18 @@ qa_notes:
       - "A/B a gate change against HEAD by copying plugin/scripts to a scratch dir and overwriting only stop_gate.py from 'git show HEAD:...' - the script does sys.path.insert(dirname(__file__)) so it must sit beside _lib.py."
   stop_gate_trust_boundary_guard:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - plugin/scripts/stop_gate.py
+      - plugin/scripts/_lib.py
     notes:
       - "Resolution of the dedup hazard recorded in stop_gate_state_matrix_probe: the guard now keys on 'BLOCKED_ENV takes precedence', which is a reliable marker for a complete restatement. Verified exhaustive: that phrase occurs in exactly one next_action producer, plugin/scripts/_lib.py:3375 (the review-pending branch). No string returned by stop_gate._next_action_for_missing contains it, so no other suppression path exists."
       - "Residual: the review-pending next_action restates 3 of the 4 boundary fragments; 'actual review PASS must precede actual QA PASS' is not restated verbatim, so that sentence is absent from the review-pending reason while present in every other blocking state. Ordering is still conveyed narratively by that branch."
       - "To assert the QA-pending branch is actually reached (not a fixture fall-through to the no-derived-state path), check emit_compact_context(td)['next_action'].startswith('Run and await the required QA subagent(s)') and missing_for_close == ['completed QA verdict: qa-cli']. _write_completed_lenses(repo, task_id, [('review-code','PASS')]) reaches it."
   stop_gate_reason_ab_and_mutation_method:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - plugin/scripts/stop_gate.py
+      - plugin/scripts/_lib.py
     notes:
       - "A/B stop_gate gate logic against HEAD by comparing every payload key EXCEPT reason (decision, next_action_command, owner_skill, docs, exit code, stdout-empty) across fabricated states. 19 states checked on 2026-09-03 (incl. corrupt TASK.json, corrupt RECEIPTS.jsonl, empty/traversal/unicode .active, no manifest, non-repo, malformed/empty/null stdin): zero non-reason differences."
       - "task_blocked silent-allow is only reachable when BLOCKED.md passes _lib._blocked_artifact_valid: regular file, owned by uid, st_nlink==1, and no group/other write bit. Under a 002 umask a fabricated BLOCKED.md is 0664 -> status 'invalid' -> the gate still blocks. chmod 600 the fixture."
@@ -346,6 +402,10 @@ qa_notes:
       - "CORRECTION to stop_gate_state_matrix_probe: its 'qa-pending 157/1072' is NOT the shipped size. 157w is what the pre-fix guard (keyed on 'structurally delivered') produced; the shipped tree measures 195w/1355c for qa-pending. review-pending 202w, plan-missing 112w, no-task-dir 92w are current. Char counts vary a few chars with task_id length."
   trust_boundary_canonical_constant:
     discovered: 2026-09-03
+    invalidated_by_paths:
+      - plugin/scripts/_lib.py
+      - plugin/scripts/stop_gate.py
+      - plugin/mcp/harness_server.py
     notes:
       - "PARTLY SUPERSEDED 2026-09-04 — see runtime_normative_text_single_source_qa. The stop_gate literal is gone; the named drift guard tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant still exists and passes, but no longer guards drift — with both sides now derived from _lib it is an integration check only. Content coverage moved to tests/test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary. Also superseded in this key: the 'task_verify still carries 3 of 4 paraphrased (exclusion list absent)' measurement below. RECEIPT_PENDING_VERIFY_NEXT_ACTION now composes TRUST_BOUNDARY contiguously, so task_verify carries 4 of 4 — that was AC-3 of this task, measured True for all four elements. plugin/scripts/_lib.py now owns TRUST_BOUNDARY (the four-element C-14 sentence block). stop_gate.py keeps a spelled-out literal because tests/test_review_agent_contracts.py::test_direct_blocker_flow_preserves_structural_result_trust_boundary is a raw-source scan over 9 surfaces and cannot see a reference; tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant is the drift guard between them."
       - "Differential A/B recipe for emit_compact_context + stop_gate: 'git archive HEAD | tar x -C <scratch>/head', copy the worktree to <scratch>/wt, then drive both trees with one script that builds 9 states (no_plan, review_pending, review_fail, review_blocked, qa_pending, qa_fail, qa_blocked, both_pass, no_active) and diffs the full JSON. Measured on the TASK__trust-boundary-single-constant worktree (HEAD 3e4585b + staged diff), 24-core aarch64 Linux 6.12.69-linuxkit: only review_pending and qa_pending differ, and only in reason/next_action; decision, owner_skill, docs, next_action_command shape and exit codes are byte-identical."
@@ -353,6 +413,10 @@ qa_notes:
       - "The background-subagent-running stop_gate branch (orphan 'started' row, no completion) never carried the trust boundary and is unchanged by boundary work. Reproduce with tests/test_stop_gate.py::_write_claude_start; it reports 'active for ~Ns' until HARNESS_BACKGROUND_STALE_SECS (default 1800) ages the row out, confirming doc/harness/REQ__subagent-lifecycle-receipt-boundaries.md."
   runtime_normative_text_single_source_qa:
     discovered: 2026-09-04
+    invalidated_by_paths:
+      - plugin/scripts/_lib.py
+      - plugin/mcp/harness_server.py
+      - plugin/scripts/stop_gate.py
     notes:
       - "Isolating stop_gate.py's own behavior change from _lib next_action changes: `git show <base>:plugin/scripts/stop_gate.py > plugin/scripts/stop_gate_BASEQA.py`, then run both scripts as subprocesses. stop_gate.py does `sys.path.insert(0, dirname(__file__))`, so the copied base script imports the CURRENT _lib — the emitted stop message is then a pure A/B of the gate's own logic. Measured 2026-09-04: byte-identical for no-task, needs-plan, needs-lenses. Delete the copy afterwards; it is inside plugin/ and would be picked up by tests/test_review_agent_contracts.py::_runtime_python_files."
       - "Driving emit_compact_context across all 9 lifecycle states without mocks: import tests/test_harness_mcp_server as a module and reuse its `_record_receipt_fixture` (hand-rolled receipt rows fail _receipt_entry_semantics_valid). Build tmp repo with .git/ + doc/harness/manifest.yaml, chdir, call handle_task_start, then write PLAN.md and receipts."
@@ -364,15 +428,25 @@ qa_notes:
       - "Full suite is fast and stable here: ~15s with xdist worksteal, ~60s with -n0. Four repeated runs plus one -n0 run on 2026-09-04 were all green; no flakiness observed. Test counts are deliberately omitted — a recorded total is stale the next time anyone adds a test, and this note is about timing and stability."
   setup_template_contract_drift_qa:
     discovered: 2026-09-04
+    freshness: current
+    freshness_updated: 2026-09-18T06:40:00Z
+    invalidated_by_paths:
+      - plugin/scripts/note_freshness.py
+      - plugin/scripts/contract_lint.py
+      - plugin/scripts/golden_replay.py
+      - plugin/skills/setup/templates/CONTRACTS.md
     notes:
-      - "plugin/scripts/note_freshness.py --paths MUTATES the notes it inspects: it rewrites `freshness: current` -> `suspect` and inserts a `freshness_updated:` line. Running it as a read-only QA probe dirties doc/**. Back up or `git checkout --` afterwards; untracked notes must be repaired by hand."
+      - "plugin/scripts/note_freshness.py --paths MUTATES the notes it inspects: it rewrites `freshness: current` -> `suspect` and inserts a `freshness_updated:` line. Running it as a read-only QA probe dirties doc/**. Back up or `git checkout --` afterwards; untracked notes must be repaired by hand. Since 2026-09-18 this includes THIS file: qa_notes entries declaring invalidated_by_paths are flipped the same way, so a probe run against a path any entry depends on will rewrite doc/harness/qa/QA_KNOWLEDGE.yaml. A run that matches nothing leaves it byte-identical."
       - "contract_lint.py takes the file via --path, not positionally: `contract_lint.py CONTRACTS.md` exits 2 with argparse usage. Correct forms: `--path CONTRACTS.md`, `--path plugin/skills/setup/templates/CONTRACTS.md --repo-root .`. `--check-weight` also lints ./CONTRACTS.md as a side effect."
       - "Template-vs-root managed-block divergence baseline recipe: `git show <base>:CONTRACTS.md` and `git show <base>:plugin/skills/setup/templates/CONTRACTS.md` into a scratch dir, then `diff -U0`. Hunk counts are context-sensitive — the same divergence reads 12 hunks at -U0, 10 at -U1, 8 at default -U3. Line totals: use `git diff --no-index --numstat` (100/28 measured); `grep -c '^+'` over a unified diff overcounts by 1 because it matches the `+++` header."
       - "golden_replay.py::test_contract_lint_template lints the shipped template with --repo-root <plugin dir> and checks returncode only. Verified 2026-09-04: that exact invocation emits 5 SOFT path-hint warnings (C-01/C-02/C-05/C-11/C-12) and still reports [PASS]. golden_replay is under plugin/scripts and pytest testpaths=[\"tests\"], so it is never collected — `pytest --collect-only | grep golden_replay` returns 0 matches."
       - "Installing the template into a fresh `git init` repo and linting with --repo-root . reproduces exactly 5 SOFTs, identical before and after the 2026-09-04 change; that set is the documented out-of-scope path-hint gap, not a regression signal."
-      - "contract_lint id regexes are asymmetric after 2026-09-04: CONTRACT_HEADING is `C-\\d+[a-z]*` but MATRIX_LINK is `C-\\d+[A-Za-z]*`. A heading written `### C-19B` is invisible to the lint AND to tests/test_contract_lint_real_tree.py::SetupTemplateShipsTheSameContracts (all 9 tests stay green with a smuggled template-only contract); `### C-19b` is caught. Use a lowercase suffix when mutation-testing that guard."
+      - "contract_lint id regexes are asymmetric after 2026-09-04: CONTRACT_HEADING is `C-\\d+[a-z]*` but MATRIX_LINK is `C-\\d+[A-Za-z]*`. A heading written `### C-19B` is invisible to the lint AND to tests/test_contract_lint_real_tree.py::SetupTemplateShipsTheSameContracts (all tests in the file stay green with a smuggled template-only contract; 9 when measured 2026-09-04, 11 at 66e0fa3); `### C-19b` is caught. Use a lowercase suffix when mutation-testing that guard."
   docs_only_provenance_qa:
     discovered: 2026-09-16
+    invalidated_by_paths:
+      - doc/harness/manifest.yaml
+      - plugin/scripts/contract_lint.py
     notes:
       - "`python3 -m pytest` is NOT installed in this container. The suite runs via `uv run pytest tests/ -q` from the repo root (the manifest test_command; uv shim at /home/ccc/.local/share/mise/shims/uv), or equivalently via ./.venv/bin/python -m pytest (venv at /project/harness-5265216677d3/.venv, Python 3.12.13). Both work in the coordinator shell and in subagent shells — re-probed 2026-09-18. Full suite ~17s with xdist. Said `only via uv run pytest` when written; that word is what a later note contradicted itself against."
       - "Known pre-existing RED at master 90a7afe: tests/test_receipt_watcher_fail_closed.py::TestReadinessIsTriState::test_earlier_receipt_does_not_mask_live_worker_error (AssertionError: True is not False at line 1340). Reproduced in a detached `git worktree add -f <dir> HEAD --detach` tree, so it is not caused by any working-tree diff. Baseline totals: 1 failed, 1365 passed, 328 subtests. SUPERSEDED 2026-09-17 by TASK__unreadable-worker-state-is-not-recordable — do NOT deselect anything on the strength of this entry. That red was a fail-open regression from a01bf3f, not a baseline; it is fixed and the test is renamed to test_earlier_receipt_does_not_mask_unreadable_worker_state. The suite is green, so any red in this file is now attributable."
@@ -381,6 +455,11 @@ qa_notes:
       - "Path-existence sweeps over provenance/attribution docs must exclude backticked UPSTREAM paths (e.g. gstack `ship/SKILL.md`, OMC `agents/code-reviewer.md`, Ponytail `skills/ponytail/SKILL.md`) and format tokens (`D<N>/ELI10/OK-NG`). They look like repo paths to a naive regex but are foreign-repo citations by design."
   lens_verdict_contract_survives_into_output_qa:
     discovered: 2026-09-17
+    invalidated_by_paths:
+      - plugin/mcp/harness_server.py
+      - plugin/scripts/_lib.py
+      - plugin/scripts/subagent_lifecycle.py
+      - plugin/scripts/install_smoke.py
     notes:
       - "End-to-end probe for the unbound-verdict diagnosis: import plugin/mcp/harness_server + plugin/scripts/_lib in a tempdir repo (needs `.git/` and `doc/harness/manifest.yaml`), call handle_task_start, then append a hand-built started/completed pair to RECEIPTS.jsonl and read handle_task_verify/handle_task_context next_action. `_receipt_entry_semantics_valid(row)` is the cheapest pre-check; it rejects rows with an empty agent_id, so the shape_named branch cannot be reached with a blank id."
       - "handle_write_plan takes `plan=`, not `content=`; an unknown field returns an isError dict rather than raising, so a wrong key silently leaves PLAN.md absent and task_context's next_action stays 'Create PLAN.md via plan skill before source writes.' (the nonparsing note is then only visible in task_verify)."
@@ -389,6 +468,8 @@ qa_notes:
       - "plugin/scripts/subagent_lifecycle.py is not a standalone CLI: running it directly raises PermissionError('unsupported receipt lifecycle adapter') and exits 1 at HEAD as well as in the worktree. Do not report that as a regression."
   install_writable_payload_qa:
     discovered: 2026-09-17
+    invalidated_by_paths:
+      - install.py
     notes:
       - "Driving install.py for Codex with a scratch HOME needs mise reachable from that HOME: /home/ccc/.local/bin/codex is a shim that execs `~/.local/bin/mise exec node@22 -- codex`. Symlink mise into <scratch>/.local/bin/mise plus <scratch>/.local/share/mise and <scratch>/.config/mise, otherwise the install fails with `codex --version failed: exec: <scratch>/.local/bin/mise: not found`. codex then prints a harmless WARNING about refusing PATH aliases under /tmp and still reports its version."
       - "CODEX_INSTALL_ROOT is a module-level `Path.home() / '.codex' / 'harness'` computed at import, so only HOME redirects it; HARNESS_DEST redirects the Claude root only. --config-path moves config.toml alone."
@@ -398,6 +479,8 @@ qa_notes:
       - "pytest is not importable via `python3 -m pytest` here; use /project/harness-5265216677d3/.venv/bin/python -m pytest (full suite ~15s, xdist)."
   install_comparison_names_the_writable_component_qa:
     discovered: 2026-09-17
+    invalidated_by_paths:
+      - install.py
     notes:
       - "SUPERSEDES the two install_writable_payload_qa notes about --if-stale on a world-writable source and about _normalize_payload_modes covering payload roots only. After TASK__install-comparison-names-the-writable-component, _compare_payload_trees normalizes the expected staging copy, and install_codex normalizes from CODEX_INSTALL_ROOT and <codex_home>/plugins/cache/harness downward."
       - "Fast codex stub for install.py QA: the real codex shim execs mise and hangs on a scratch HOME (node@22 download). Instead put `#!/bin/sh` + `if [ \"$1\" = --version ]; then echo 'codex-cli 99.0.0'; exit 0; fi; exit 0` at <scratch>/bin/codex and prepend it to PATH. install.py only needs exit 0 from `codex plugin marketplace remove/add` and `codex features enable plugin_hooks`."
@@ -407,6 +490,9 @@ qa_notes:
       - "Do not run pytest from a `chmod -R 777` source copy: the canonical-import guards refuse the tree and ~68 tests in test_receipt_watcher_fail_closed.py fail for that reason alone."
   unreadable_worker_state_qa:
     discovered: 2026-09-17
+    invalidated_by_paths:
+      - plugin/mcp/harness_server.py
+      - plugin/scripts/_lib.py
     notes:
       - "Drive receipts_recordable end-to-end without mocks: `git init` a scratch dir, add doc/harness/manifest.yaml + doc/harness/tasks/TASK__x/{TASK.json,PLAN.md,RECEIPTS.jsonl}, then pipe newline-delimited JSON-RPC (initialize with clientInfo.name=codex, then tools/call task_context) into `.venv/bin/python plugin/mcp/harness_server.py` with cwd = scratch repo. The server accepts bare NDJSON as well as Content-Length framing, so no MCP client is needed."
       - "RECEIPTS.jsonl has no HMAC; a hand-written line with exactly the 10 RECEIPT_FIELDS (all string values, event in {started,completed}) validates, so `_run_has_receipts` can be made true legitimately instead of patched."

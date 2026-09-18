@@ -11,6 +11,7 @@ invalidated_by_paths:
   - tests/test_setup_verify_report_probe.py
   - doc/harness/manifest.yaml
   - plugin/mcp/harness_server.py
+freshness_updated: 2026-09-18T06:40:00Z
 ---
 
 # REQ — recorded claims must stay falsifiable
@@ -200,9 +201,12 @@ close 하려 했다. QA 렌즈가 MCP stdio 경로로 직접 확인해 잡았다
 여기서 나오는 규칙: **AC3 의 기계 강제는 known-red 부류만 덮는다. 나머지 절반은
 사람 몫이고, 그 절반은 실제로 빠졌다.** 코드 표면을 바꾸는 태스크는 close 전에
 "이 diff 가 QA_KNOWLEDGE 에 기록된 것 중 무엇을 거짓으로 만들었는가" 를 명시적으로
-grep 해야 한다. 자동화 후보는 QA 렌즈가 남겼다: `qa_notes` 항목별 선택적
-`invalidated_by_paths` + `note_freshness.py` 연동. 그러면 
-`plugin/mcp/harness_server.py` 를 건드린 순간 그 줄이 표시됐을 것이다.
+grep 해야 한다. QA 렌즈가 남긴 자동화 후보 — `qa_notes` 항목별 선택적
+`invalidated_by_paths` + `note_freshness.py` 연동 — 는 2026-09-18 에 구현됐다.
+`doc/harness/REQ__qa-notes-carry-their-own-invalidation.md` 를 보라. 그 태스크의
+첫 실행이 이 문단을 suspect 로 뒤집었고, 그래서 지금 이 문장이 고쳐졌다.
+다만 덮이는 범위는 여전히 "의존 경로를 선언한 항목" 뿐이고, 선언 여부와
+그 다음 판단은 사람 몫으로 남는다.
 
 한 가지 더, 규모에 대해: 이 태스크는 리뷰 6라운드를 돌았고 그중 다섯 라운드에서
 "문서가 강제한다고 주장하는데 실제로는 실행되지 않는 지점" 이 새로 발견됐다.

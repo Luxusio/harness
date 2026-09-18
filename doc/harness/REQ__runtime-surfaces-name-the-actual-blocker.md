@@ -19,7 +19,7 @@ invalidated_by_paths:
   - tests/test_no_git_receipt_model.py
   - tests/test_receipt_watcher_fail_closed.py
   - tests/test_harness_mcp_server.py
-freshness_updated: 2026-09-11T00:00:00Z
+freshness_updated: 2026-09-18T06:40:00Z
 ---
 
 # REQ — 런타임 표면은 실제 blocker를 지목한다

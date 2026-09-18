@@ -17,7 +17,7 @@ invalidated_by_paths:
   - plugin/skills/develop/SKILL.md
   - plugin/skills/develop/quality-audit-pipeline.md
   - plugin-codex/internal-skills/develop/SKILL.md
-freshness_updated: 2026-09-15T00:00:00Z
+freshness_updated: 2026-09-18T06:40:00Z
 ---
 
 # REQ — formal review detail is selectively readable
