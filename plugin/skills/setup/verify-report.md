@@ -33,7 +33,7 @@ fi
 ## 4.2 Prepare the mechanical setup contract
 
 ```bash
-python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
   --project-doc "$_PROJECT_DOC" --prepare
 ```
@@ -132,7 +132,7 @@ Claude Code:
 Only after Sections 4.3 and 4.4 pass, run:
 
 ```bash
-python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
   --project-doc "$_PROJECT_DOC" \
   --qa-verified --runtime-verified

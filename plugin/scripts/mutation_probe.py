@@ -401,12 +401,18 @@ def mutation_sites(path, source, lines, notes=None):
         # declined to read must not read as a file it covered. A UTF-8 BOM
         # reaches this branch on a file CPython itself compiles happily, since
         # `source_at` opens with `utf-8` rather than `utf-8-sig`, so the whole
-        # file would contribute zero sites and say nothing about it.
+        # file contributes zero sites; name that cause in its note.
         if notes is not None:
-            notes.append(
-                f"{path}: not parsed, so no site was offered for it — "
-                f"{exc.msg} (line {exc.lineno})"
-            )
+            if source.startswith("\ufeff"):
+                notes.append(
+                    f"{path}: not parsed, so no site was offered for it — "
+                    "leading UTF-8 BOM; save as UTF-8 without BOM"
+                )
+            else:
+                notes.append(
+                    f"{path}: not parsed, so no site was offered for it — "
+                    f"{exc.msg} (line {exc.lineno})"
+                )
         return []
     index = _line_index(source)
     symbols = _symbol_map(tree)

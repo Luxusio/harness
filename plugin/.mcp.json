@@ -2,7 +2,10 @@
   "mcpServers": {
     "harness": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"],
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      }
     }
   }
 }

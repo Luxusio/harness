@@ -902,8 +902,19 @@ def test_codex_hooks_config_uses_absolute_cache_python_and_reviews_all_events(tm
     for event, command in expected_commands.items():
         hook = hooks[event][0]["hooks"][0]
         assert hook["type"] == "command"
-        assert hook["command"] == f"{module._python_cmd()} {command}"
-        assert hook["command"].startswith("/")
+        # The PYTHONDONTWRITEBYTECODE prefix is part of the contract, not noise:
+        # Codex hook commands are generated here rather than read from
+        # plugin/hooks/hooks.json, so they were the uncovered half of the
+        # bytecode-cache fix. See
+        # doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md.
+        assert hook["command"] == f"{module._python_hook_cmd()} {command}"
+        assert hook["command"].startswith("PYTHONDONTWRITEBYTECODE=1 ")
+        # The interpreter must still be an absolute path — this test's original
+        # point, and the reason `_python_cmd` resolves `sys.executable`. The env
+        # assignment now precedes it, so check the interpreter token itself
+        # rather than the start of the string.
+        interpreter = hook["command"].split(" ", 2)[1]
+        assert interpreter.startswith("/"), hook["command"]
         assert hook["timeout"] > 0
         assert hook["statusMessage"]
     assert hooks["PostToolUse"][0]["matcher"] == (
@@ -973,9 +984,15 @@ def test_codex_mcp_config_uses_absolute_python_and_installed_plugin_root(tmp_pat
     assert mcp["command"] == module._python_cmd()
     assert Path(mcp["command"]).is_absolute()
     assert mcp["args"] == [str(plugin_root.resolve() / "mcp" / "harness_server.py")]
+    # PYTHONDONTWRITEBYTECODE is required, not incidental: this server imports
+    # `_lib`, `hook_tree_health`, `codex_hook_registration`, and
+    # `codex_lifecycle_watcher` from the installed scripts tree, which is how
+    # those four caches were poisoned on 2026-09-16. See
+    # doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md.
     assert mcp["env"] == {
         "HARNESS_PLUGIN_ROOT": str(plugin_root.resolve()),
         "CLAUDE_PLUGIN_ROOT": str(plugin_root.resolve()),
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
     assert mcp["command"] != "python3"
 

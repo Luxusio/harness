@@ -21,7 +21,7 @@ recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
 call `task_verify` once; close on ordered receipt PASS, otherwise call
 `task_blocked` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`task_verify` response's `next_action`. There are two pairs and the receipt
+`task_verify` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
 stream picks which one: use the empty-stream pair when no receipt of any kind
 was recorded for the run, and the missing-attestation pair when receipts exist
 but a required completion is absent. Both are owned by
@@ -194,7 +194,7 @@ echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","key":"F
 Before closing, capture the final project health score:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
 ```
 
 Store the printed score for inclusion in the completion report.

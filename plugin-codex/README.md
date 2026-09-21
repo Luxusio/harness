@@ -83,7 +83,7 @@ from compact receipts. Retrieve one
 exact body without dumping history:
 
 ```bash
-python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
   --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
 ```
 

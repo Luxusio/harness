@@ -36,6 +36,9 @@ from _lib import (  # type: ignore
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
     is_harness_enabled_repo,
     attestation_block_instruction, no_receipts_block_instruction,
+    receipt_outage_block_instruction, receipt_outage_next_action,
+    is_spawn_instruction,
+    CAPABILITY_MARKER_RELPATH,
     TRUST_BOUNDARY,
 )
 from _gate_response import block as gate_block, proceed as gate_proceed  # type: ignore
@@ -289,6 +292,36 @@ def _background_reason(task_id: str, active: list[dict]) -> str:
         "whose transcripts have all stopped advancing.",
         *_active_record_lines(active),
     ])
+
+
+def _receipt_capability_broken(repo_root: str) -> bool:
+    """Did a hook that failed to import record the outage for this repo?
+
+    An observation, not an inference. Nothing here reads the receipt stream:
+    an empty stream is the ordinary state of a task that has not reached review,
+    and releasing the gate on it was built, measured, and rejected — see
+    doc/harness/REQ__gate-does-not-demand-impossible-evidence.md. Only the
+    marker a broken hook wrote about itself gets a say.
+
+    `lstat` + `S_ISREG`, not `isfile`, and not a read. The content is purely
+    diagnostic so the fact is enough, and the predicate has to match the MCP's
+    reader of this same marker byte for byte: `isfile` follows symlinks, so a
+    link planted at this fixed name would let any existing file masquerade as a
+    marker. `harness_server` rejects that; a gate that accepted it would have
+    the two readers of one file disagreeing about whether recording works. A
+    fifo is excluded for the same reason and is never opened, so nothing here
+    can block a hook that has a 10s budget.
+
+    Never raises — a gate that dies on a stat is worse than one that says
+    nothing (C-12).
+    """
+    try:
+        if not repo_root:
+            return False
+        path = os.path.join(repo_root, CAPABILITY_MARKER_RELPATH)
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except Exception:
+        return False
 
 
 def _active_task_id(active_path):
@@ -552,14 +585,51 @@ def main():
         if missing and len(missing) > 3:
             missing_summary += f", +{len(missing) - 3} more"
 
+        # Stated right after the missing list, because it is what reframes that
+        # list. Everything below still runs: the decision to block is unchanged,
+        # and the exits are the same exits. What changes is that one of them —
+        # "a genuine external blocker" — is now visibly the applicable one
+        # instead of a general possibility the reader has to match to a fact
+        # reported several turns ago by a different surface.
+        # Conditional on `missing_summary`, not on the marker alone. The
+        # sentence refers to "the missing verdicts above" and prescribes a park;
+        # in the close-ready state there is no list above it and the correct
+        # move is task_close. Appending it there told the coordinator to park a
+        # task the same message was telling it to close. The marker legitimately
+        # survives into that state — `harness_server` puts the marker branch
+        # above the `_run_has_receipts` override on purpose, since receipts
+        # earlier in a run do not disprove a break that happened after them.
+        # Gated on the routing being a spawn instruction, not merely on there
+        # being missing items. `missing_for_close` leads with PLAN.md when the
+        # task has not been planned, and PLAN.md is producible work: parking
+        # there would tell the coordinator to abandon a task for want of
+        # evidence it has not begun to gather, and the sentence's "cannot be
+        # produced by continuing" would be describing a list whose first entry
+        # can. The MCP asks exactly this question before replacing its own
+        # routing, and `is_spawn_instruction` is now the one predicate both ask.
+        outage_active = bool(
+            missing_summary
+            and is_spawn_instruction(next_action)
+            and _receipt_capability_broken(repo_root)
+        )
+        outage = ""
+        if outage_active:
+            outage = f" {receipt_outage_block_instruction()}"
+            # The routing fields too, not only the prose. Leaving them on the
+            # spawn-a-lens mapping made the payload contradict its own sentence,
+            # and `next_action_command` is the field a coordinator follows.
+            next_action, owner_skill = receipt_outage_next_action()
         reason = (
             f"Active harness task {task_id} is open"
             + (f" — missing: {missing_summary}." if missing_summary else ".")
-            + " Do not stop; finish task start -> plan -> develop -> QA -> close"
-            " (review and task_verify are internal close gates). Exits: after"
-            " substantive QA call task_verify once and call task_close only on"
-            " runtime_verdict=PASS, or call task_blocked directly for a genuine"
-            " external blocker or an observed lens BLOCKED_ENV."
+            + outage
+            + ("" if outage_active else (
+                " Do not stop; finish task start -> plan -> develop -> QA -> close"
+                " (review and task_verify are internal close gates). Exits: after"
+                " substantive QA call task_verify once and call task_close only on"
+                " runtime_verdict=PASS, or call task_blocked directly for a genuine"
+                " external blocker or an observed lens BLOCKED_ENV."
+            ))
         )
         # Retained deliberately: this is the one part of the old paragraph that
         # changes what may *authorize* an exit rather than restating how the

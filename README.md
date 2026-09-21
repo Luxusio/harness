@@ -132,7 +132,7 @@ To inspect the exact text behind one review receipt without loading review
 history, pass its lowercase digest explicitly:
 
 ```bash
-python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
   --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
 ```
 
@@ -286,6 +286,28 @@ python3 -m pytest tests/ -x --tb=short
 python3 plugin/scripts/health.py --dry-run
 python3 plugin/scripts/retro.py --days 7
 ```
+
+## Lineage
+
+Harness was assembled, not invented from nothing. Three prior agent-harness
+projects supplied its parts, each stripped of host-specific infrastructure and
+rewritten against harness contracts:
+
+- **gstack** — the planning pipeline, the four plan review voices, the always-on
+  adversarial review posture, hypothesis-driven debugging, and the health /
+  retro / checkpoint / learnings scripts.
+- **oh-my-claudecode** — read-only reviewer and security-reviewer role
+  boundaries, review/QA separation, and the parallel agent fanout convention.
+- **Ponytail** — the minimum-sufficient implementation ladder and the minimality
+  review lens.
+
+The `defect-hunter` role came from comparing published AI code-review prompts
+after harness's own review started behaving like a yes-man.
+
+These are behavioral references, not vendored dependencies. What was **refused**
+matters as much as what was taken — see
+[doc/harness/PROVENANCE.md](doc/harness/PROVENANCE.md) for the per-flow-part
+attribution, the pinned upstream revisions, and the full refusal list.
 
 ## Self-dogfooding
 

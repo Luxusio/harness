@@ -185,7 +185,7 @@ Conversation history is not durable memory, and
 the task records a specific PLAN durable-doc decision when no doc applies.
 
 ```bash
-python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
   --project-doc "$_PROJECT_DOC" --project-doc-only --ensure-routing
 ```
@@ -226,7 +226,7 @@ Install the canonical operational ignore list. The shared finalizer owns this
 list so runtime writers and setup cannot drift apart:
 
 ```bash
-python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
   --project-doc "$_PROJECT_DOC" --gitignore-only
 ```
@@ -266,7 +266,7 @@ AskUserQuestion:
 ### 3.7.2 Runtime project-document import line
 
 ```bash
-python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
   --project-doc "$_PROJECT_DOC" --project-doc-only \
   --ensure-contract-import
@@ -286,7 +286,7 @@ user-owned content outside it, and does not open or mutate any existing
 ### 3.7.3 Verify contract lint
 
 ```bash
-python3 "${_PLUGIN_ROOT}/scripts/contract_lint.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/contract_lint.py" \
   --path CONTRACTS.md --repo-root . --quick || \
   echo "WARN: contract_lint reported issues — handle in the active/next harness task"
 ```

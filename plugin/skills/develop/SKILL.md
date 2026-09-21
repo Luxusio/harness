@@ -41,7 +41,7 @@ Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
 receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
 PASS, otherwise call `task_blocked` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`task_verify` response's `next_action`. There are two pairs and the receipt
+`task_verify` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
 stream picks which one: use the empty-stream pair when no receipt of any kind
 was recorded for the run, and the missing-attestation pair when receipts exist
 but a required completion is absent. Both are owned by
@@ -217,7 +217,7 @@ Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`) to
 After all ACs reach `implemented_candidate`, snapshot task state for session resume:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
   --task-dir doc/harness/tasks/<task_id>/ \
   --note "Phase 3 complete — all ACs at implemented_candidate"
 ```
@@ -465,7 +465,7 @@ after one or more failed attempts, record it before close as a pending runbook
 candidate:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
   --id "<short-id>" \
   --description "<what this starts/tests/verifies>" \
   --failed-command "<representative failed command>" \

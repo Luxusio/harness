@@ -8,8 +8,8 @@ Each project type has its own smoke test. All projects run this phase.
 Before browser or API smoke, start declared background services:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runtime_services.py start
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runtime_services.py status
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runtime_services.py start
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runtime_services.py status
 ```
 
 The script reads `doc/harness/manifest.yaml` `runtime.services[]`, writes state

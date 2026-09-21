@@ -92,7 +92,7 @@ Capture only when all of these are true:
 Use the helper so the candidate stays pending until close-time review:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
   --id "<short-id>" \
   --description "<what this starts/tests/verifies>" \
   --failed-command "<representative failed command>" \
@@ -214,7 +214,7 @@ candidate requires a separately reviewed Harness task. Automatic close-time
 mode always binds the current task and TASK.json run_id:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py \
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py \
   --task "<task_id>" --task-run-id "<task_run_id>" 2>/dev/null || true
 ```
 
@@ -236,10 +236,10 @@ After promote_learnings.py, check if a retro should fire (>=3 tasks closed since
 ```bash
 _LAST_RETRO=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1)
 _LAST_RETRO_TS=$(stat -c %Y "$_LAST_RETRO" 2>/dev/null || echo 0)
-_TASKS_SINCE=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --count-closed-since "$_LAST_RETRO_TS" 2>/dev/null || echo 0)
+_TASKS_SINCE=$(PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --count-closed-since "$_LAST_RETRO_TS" 2>/dev/null || echo 0)
 if [ "${_TASKS_SINCE:-0}" -ge 3 ] && [ "${HARNESS_DISABLE_RETRO:-}" != "1" ]; then
   _RETRO_FIRST=$([ -z "$_LAST_RETRO" ] && echo "true" || echo "false")
-  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --save 2>/dev/null && _RETRO_OUT=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1) || _RETRO_OUT=""
+  PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --save 2>/dev/null && _RETRO_OUT=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1) || _RETRO_OUT=""
   if [ "$_RETRO_FIRST" = "true" ] && [ -n "$_RETRO_OUT" ]; then
     echo "Auto-retro enabled. Silence with HARNESS_DISABLE_RETRO=1. Output at $_RETRO_OUT."
   fi

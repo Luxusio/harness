@@ -2,11 +2,12 @@
 tags: [harness, receipts, verdict, lenses, qa, claude-runtime]
 summary: 런타임이 자기 스캐너 공지로 최종 응답을 감싸도 준수한 판정은 바인딩된다. 그 공지 하나만 예외이고 나머지 선행 텍스트는 여전히 판정을 무효화한다. 그리고 바인딩에 실패한 completion 은 기록 시점에 스스로를 알린다.
 updated: 2026-09-10
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/scripts/subagent_lifecycle.py
   - tests/test_verdict_binding_survives_output_framing.py
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — verdict binding survives output framing

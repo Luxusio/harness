@@ -66,6 +66,29 @@ def _python_cmd() -> str:
     """Return a Python executable that bypasses cwd-sensitive shims."""
     return str(Path(sys.executable).resolve())
 
+
+NO_BYTECODE_ENV = "PYTHONDONTWRITEBYTECODE=1"
+
+
+def _python_hook_cmd() -> str:
+    """`_python_cmd` with bytecode writing disabled, for generated commands.
+
+    Every process that imports from the installed `scripts/` tree must run with
+    this set, not only the ones registered in `plugin/hooks/hooks.json`.
+
+    The importer sets overlap, so no single launcher explains the 2026-09-16
+    caches. `_lib` is imported by seven hooks.json commands, by the MCP server,
+    and by most `scripts/*.py` entrypoints. `codex_hook_registration` and
+    `codex_lifecycle_watcher` are imported by the generated Codex hook
+    entrypoints and by the MCP server. `hook_tree_health` is imported by the MCP
+    server. That is why coverage is applied to every launcher — hook commands,
+    both MCP registrations, and the `scripts/*.py` invocations documented in
+    skill and agent files — rather than to whichever one seemed responsible.
+
+    See `doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md`.
+    """
+    return f"{NO_BYTECODE_ENV} {shlex.quote(_python_cmd())}"
+
 @dataclass
 class InstallResult:
     runtime: str
@@ -411,7 +434,13 @@ def _mcp_block(plugin_root: str) -> str:
         "[mcp_servers.harness]\n"
         f'command = "{_python_cmd()}"\n'
         f'args = ["{plugin_root}/mcp/harness_server.py"]\n'
-        f'env = {{ HARNESS_PLUGIN_ROOT = "{plugin_root}", CLAUDE_PLUGIN_ROOT = "{plugin_root}", HARNESS_RUNTIME = "codex" }}\n'
+        # PYTHONDONTWRITEBYTECODE is load-bearing, not tidiness: this server
+        # imports `_lib`, `hook_tree_health`, `codex_hook_registration`, and
+        # `codex_lifecycle_watcher` from the installed scripts tree, which is
+        # how four of the six caches were poisoned on 2026-09-16. This TOML
+        # block is the registration Codex actually launches; the JSON
+        # `_codex_mcp_config` is the sibling writer and carries the same key.
+        f'env = {{ HARNESS_PLUGIN_ROOT = "{plugin_root}", CLAUDE_PLUGIN_ROOT = "{plugin_root}", HARNESS_RUNTIME = "codex", PYTHONDONTWRITEBYTECODE = "1" }}\n'
         "startup_timeout_sec = 10\n"
         "tool_timeout_sec = 60\n"
         "enabled = true\n"
@@ -952,7 +981,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['SessionStart']))}",
+                            "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['SessionStart']))}",
                             "timeout": 20,
                             "statusMessage": "Loading harness context",
                         }
@@ -965,7 +994,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['PreToolUse']))}",
+                            "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['PreToolUse']))}",
                             "timeout": 5,
                             "statusMessage": "Checking harness gates",
                         }
@@ -977,7 +1006,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['UserPromptSubmit']))}",
+                            "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['UserPromptSubmit']))}",
                             "timeout": 8,
                             "statusMessage": "Loading harness memory",
                         }
@@ -995,7 +1024,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['PostToolUse']))}",
+                            "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['PostToolUse']))}",
                             "timeout": 3,
                             "statusMessage": "Checking harness routing and QA completion",
                         }
@@ -1179,6 +1208,13 @@ def _codex_mcp_config(shared_plugin_root: Path) -> dict:
                 "env": {
                     "HARNESS_PLUGIN_ROOT": str(plugin_root),
                     "CLAUDE_PLUGIN_ROOT": str(plugin_root),
+                    # This server imports `_lib`, `hook_tree_health`,
+                    # `codex_hook_registration`, and `codex_lifecycle_watcher`
+                    # from the installed scripts tree. Importer sets overlap —
+                    # hook commands import `_lib` and the Codex entrypoints too
+                    # — so no single launcher explains the 2026-09-16 caches.
+                    # See `_python_hook_cmd`; coverage is applied to every one.
+                    "PYTHONDONTWRITEBYTECODE": "1",
                 },
             }
         }
@@ -1705,13 +1741,18 @@ def install_claude(*, dry_run: bool, force: bool, if_stale: bool = False) -> Ins
         steps.append(f"would run: claude mcp add harness python3 -- {installed_mcp_server} "
                      f"(env: HARNESS_PLUGIN_ROOT={installed_plugin_root}, "
                      f"CLAUDE_PLUGIN_ROOT={installed_plugin_root}, "
-                     "HARNESS_RUNTIME=claude)")
+                     "HARNESS_RUNTIME=claude, PYTHONDONTWRITEBYTECODE=1)")
         return InstallResult("claude", True,
                              "dry-run — would install Claude (steps above)", steps)
     env_args = [
         "-e", f"HARNESS_PLUGIN_ROOT={installed_plugin_root}",
         "-e", f"CLAUDE_PLUGIN_ROOT={installed_plugin_root}",
         "-e", "HARNESS_RUNTIME=claude",
+        # Same reason as `_codex_mcp_config`: this server imports four of the
+        # six modules whose caches were poisoned on 2026-09-16. Importer sets
+        # overlap with the hook commands, so every launcher is covered rather
+        # than whichever one seemed responsible. See `_python_hook_cmd`.
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
     ]
     if force or if_stale:
         _run(["claude", "mcp", "remove", "harness"], dry_run)

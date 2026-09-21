@@ -2,12 +2,13 @@
 tags: [harness, receipts, diagnostics, subagents, verdicts]
 summary: verdict 가 바인딩되지 않은 completion 은 실제 원인을 지목해야 한다. named spawn 은 리포트 형식 문제로 보이지만 형식은 원인이 아니며, 형식 진단을 따르면 같은 실패를 재현하고 끝난 태스크를 잘못 park 한다.
 updated: 2026-09-17
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/scripts/subagent_lifecycle.py
   - plugin/skills/develop/parallel-fanout.md
   - tests/test_named_spawn_diagnosis.py
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — an unbound verdict names the spawn shape, not just the report shape

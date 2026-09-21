@@ -11,6 +11,7 @@ invalidated_by_paths:
   - tests/test_contract_lint_real_tree.py
   - plugin/scripts/stop_gate.py
   - tests/test_stop_gate.py
+freshness_updated: 2026-09-18T08:05:00Z
 ---
 
 # REQ — a contract's "Enforced by" names something that actually runs

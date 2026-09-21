@@ -14,6 +14,7 @@ invalidated_by_paths:
   - tests/test_task_context_binds_resuming_session.py
   - tests/regression/task__unified_install/test_install_py.py
   - tests/conftest.py
+freshness_updated: 2026-09-18T08:05:00Z
 ---
 
 # REQ — 영수증 서브시스템의 실패는 관측 가능하다

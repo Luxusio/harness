@@ -143,6 +143,8 @@ patterns:
 qa_notes:
   install_verified_session_hint:
     discovered: 2026-08-26
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/install_verified.py
       - plugin/scripts/_lib.py
@@ -176,6 +178,8 @@ qa_notes:
     fixture_helper: tests/test_hook_tree_health.py::_tree
   attestation_pair_single_source:
     discovered: 2026-09-02
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - plugin/mcp/harness_server.py
@@ -249,6 +253,8 @@ qa_notes:
       (pathlib.write_text) rather than shell cp/mv.
   verdict_parser_probe_harness:
     discovered: 2026-09-02
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - tests/test_receipt_watcher_fail_closed.py
@@ -316,6 +322,8 @@ qa_notes:
       - "Exit codes are masked when piping to tail/grep; use `cmd >/dev/null 2>&1; echo $?` for real exit codes. contract_lint.py exits 2 on an unrecognized flag."
   next_action_mutation_sweep:
     discovered: 2026-09-02
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - plugin/mcp/harness_server.py
@@ -326,6 +334,8 @@ qa_notes:
       - "Full suite takes ~15s (1013 tests, 228 subtests, xdist); a 29-case clause sweep against it is ~8 min, a 173-case word sweep against the 6 pinning files (~2s each) is ~6 min."
   pytest_suite_stability_under_xdist:
     discovered: 2026-09-03
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - pyproject.toml
       - plugin/scripts/_lib.py
@@ -371,18 +381,22 @@ qa_notes:
       - "pyproject addopts inject '-n auto --dist worksteal'; '-p no:xdist' errors. Use '-n0' for serial. Full suite: ~15s parallel, ~60-200s serial."
   stop_gate_state_matrix_probe:
     discovered: 2026-09-03
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/stop_gate.py
       - plugin/scripts/_lib.py
       - tests/test_stop_gate.py
     notes:
-      - "stop_gate.py reason text is state-dependent. Reproduce every branch by building fake repos with tests/test_stop_gate.py helpers (_fake_repo, _write_completed_lenses) and running the script as a subprocess with HARNESS_BACKGROUND_WAIT_SECS=0. Branches: no-task-dir, plan-missing, review-pending, qa-pending, review-fail, review-blocked-env, qa-fail, close-ready, task-blocked (silent), no-active (silent), non-harness-repo (silent), corrupt TASK.json, corrupt RECEIPTS.jsonl."
+      - "stop_gate.py reason text is state-dependent. Reproduce every branch by building fake repos with tests/test_stop_gate.py helpers (_fake_repo, _write_completed_lenses) and running the script as a subprocess with HARNESS_BACKGROUND_WAIT_SECS=0. Branches: no-task-dir, plan-missing, review-pending, qa-pending, review-fail, review-blocked-env, qa-fail, close-ready, task-blocked (silent), no-active (silent), non-harness-repo (silent), corrupt TASK.json, corrupt RECEIPTS.jsonl. Since 2026-09-18 there is also receipt-outage, and it is narrower than first recorded here: touching doc/harness/.receipt-capability-broken in the fixture repo changes a blocking state ONLY when its next_action is a spawn instruction — measured, that is review-pending and qa-pending and nothing else. unplanned, review-FAIL, close-ready, corrupt TASK.json and corrupt RECEIPTS.jsonl all keep their healthy text with the marker present. In the two states that do change, next_action_command and owner_skill change too (owner becomes harness-goal); the decision never does. The earlier wording here said \"any blocking state\" and \"no other state changes\" -- both were made false by review rounds 3 and 4 of the same task that wrote this note, and QA caught it."
       - "Measured reason sizes on 24-core aarch64 Linux 6.12.69-linuxkit: HEAD 3e4585b was 192 words / 1411 chars in EVERY blocking state (not ~250). After TASK__state-aware-stop-gate-message: no-task-dir 92/624, plan-missing 112/768, review-pending 202/1401, qa-pending 195/1355, close-ready 100/676. The qa-pending figure originally recorded here (157/1072) was a mid-task measurement taken while the dedup guard was keyed on the partial phrase 'structurally delivered'; that guard dropped two trust-boundary clauses and was fixed before the task closed. Measurement entries must name the tree state they were taken on."
       - "emit_compact_context missing_for_close can contain at most three items (PLAN.md, review verdict, QA verdict), so any '+N more' truncation branch keyed on len(missing) > 3 is unreachable in production."
       - "The qa-pending next_action from emit_compact_context contains the substring 'structurally delivered' but NOT 'actual FAIL or BLOCKED_ENV takes precedence' nor the coordinator-paraphrase exclusion list. Any dedup guard keyed on the short substring silently drops those clauses in that branch."
       - "A/B a gate change against HEAD by copying plugin/scripts to a scratch dir and overwriting only stop_gate.py from 'git show HEAD:...' - the script does sys.path.insert(dirname(__file__)) so it must sit beside _lib.py."
   stop_gate_trust_boundary_guard:
     discovered: 2026-09-03
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/stop_gate.py
       - plugin/scripts/_lib.py
@@ -392,6 +406,8 @@ qa_notes:
       - "To assert the QA-pending branch is actually reached (not a fixture fall-through to the no-derived-state path), check emit_compact_context(td)['next_action'].startswith('Run and await the required QA subagent(s)') and missing_for_close == ['completed QA verdict: qa-cli']. _write_completed_lenses(repo, task_id, [('review-code','PASS')]) reaches it."
   stop_gate_reason_ab_and_mutation_method:
     discovered: 2026-09-03
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/stop_gate.py
       - plugin/scripts/_lib.py
@@ -402,6 +418,8 @@ qa_notes:
       - "CORRECTION to stop_gate_state_matrix_probe: its 'qa-pending 157/1072' is NOT the shipped size. 157w is what the pre-fix guard (keyed on 'structurally delivered') produced; the shipped tree measures 195w/1355c for qa-pending. review-pending 202w, plan-missing 112w, no-task-dir 92w are current. Char counts vary a few chars with task_id length."
   trust_boundary_canonical_constant:
     discovered: 2026-09-03
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - plugin/scripts/stop_gate.py
@@ -413,6 +431,8 @@ qa_notes:
       - "The background-subagent-running stop_gate branch (orphan 'started' row, no completion) never carried the trust boundary and is unchanged by boundary work. Reproduce with tests/test_stop_gate.py::_write_claude_start; it reports 'active for ~Ns' until HARNESS_BACKGROUND_STALE_SECS (default 1800) ages the row out, confirming doc/harness/REQ__subagent-lifecycle-receipt-boundaries.md."
   runtime_normative_text_single_source_qa:
     discovered: 2026-09-04
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - plugin/mcp/harness_server.py
@@ -455,6 +475,8 @@ qa_notes:
       - "Path-existence sweeps over provenance/attribution docs must exclude backticked UPSTREAM paths (e.g. gstack `ship/SKILL.md`, OMC `agents/code-reviewer.md`, Ponytail `skills/ponytail/SKILL.md`) and format tokens (`D<N>/ELI10/OK-NG`). They look like repo paths to a naive regex but are foreign-repo citations by design."
   lens_verdict_contract_survives_into_output_qa:
     discovered: 2026-09-17
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/mcp/harness_server.py
       - plugin/scripts/_lib.py
@@ -490,6 +512,8 @@ qa_notes:
       - "Do not run pytest from a `chmod -R 777` source copy: the canonical-import guards refuse the tree and ~68 tests in test_receipt_watcher_fail_closed.py fail for that reason alone."
   unreadable_worker_state_qa:
     discovered: 2026-09-17
+    freshness: suspect
+    freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/mcp/harness_server.py
       - plugin/scripts/_lib.py
@@ -499,3 +523,29 @@ qa_notes:
       - "Setting CODEX_THREAD_ID before task_start triggers _register_task_start_watcher, which times out at 0.5s and writes registration_present:false into doc/harness/.watcher-diagnostics.json. That branch outranks last_watcher_error, so to exercise the observed-failure branch use task_context with _SERVER.watcher_thread_id set and no CODEX_THREAD_ID, and delete the diagnostics file between scenarios."
       - "SUPERSEDED 2026-09-18 by TASK__surfaces-teach-the-runnable-command — both sentences are now false. It said `task_verify does NOT return watcher_status` and that the tri-state is observable there `only through next_action`. task_verify now returns watcher_status in the same key/shape as task_start and task_context, and it is the same object that rewrote next_action, so read the field directly instead of inferring from prose. Measured through the MCP stdio path: task_verify keys = ['missing_for_close','next_action','report_path','required_qa_lenses','required_review_lenses','review_verdict','runtime_verdict','task_dir','watcher_status']. The next_action behaviour it described is still accurate: receipts_recordable False swaps in RECEIPT_UNAVAILABLE_NEXT_ACTION ('Receipt recording is unavailable.'), while None and True leave the pending/attestation guidance — which is exactly why the field is now reported, since None and True were indistinguishable from next_action alone."
       - "SUPERSEDED 2026-09-18 — the totals are stale. It recorded `1418 passed, 328 subtests` as the baseline after TASK__unreadable-worker-state-is-not-recordable. Measured 2026-09-18 on master plus the surfaces-teach-the-runnable-command worktree: 1435 passed, 335 subtests, exit 0, ~16-23s, stable across 9 consecutive full runs and 2 concurrent ones. Suite totals are a moving target by construction; compare exit code and attributability, not a pinned count."
+
+# ── Runtime / interpreter notes (appended by qa-cli, 2026-09-18) ──
+environment_notes:
+  - topic: "python3 resolution is cwd-dependent on this host (mise shim)"
+    detail: >
+      /home/ccc/.local/share/mise/shims/python3 resolves to mise CPython 3.12.13 (Clang) when cwd has a
+      trusted mise config (this repo), and to /usr/bin/python3 3.12.3 (GCC) from other cwds such as /tmp
+      sandboxes. Both share importlib magic b'\xcb\r\r\n' and cache tag cpython-312, so __pycache__ written
+      by one is header-valid for the other while co_linetable bytes differ. That trips the receipt-adapter
+      guard in plugin/scripts/_lib.py: subagent_lifecycle import raises StaleBytecodeCacheError (PermissionError
+      at e291dae), stop_gate.py exits 1 with empty stdout, and hooks.json's `|| true` masks it.
+      When reproducing bytecode-cache issues, always record WHICH interpreter wrote and which read the cache.
+    discovered: 2026-09-18
+  - topic: "test suite invocation"
+    detail: >
+      `uv run pytest tests/ -q` (1478 passed / 357 subtests) or ./.venv/bin/python -m pytest. `python3 -m pytest`
+      does not work. ruff is not installed. Copying the tree to a sandbox without .git makes
+      test_plan_test_references (PLAN.md test-name references) fail; that failure is a sandbox artifact.
+    discovered: 2026-09-18
+  - topic: "stop_gate.py manual exercise"
+    detail: >
+      Fixture: repo with .git/, doc/harness/manifest.yaml, doc/harness/tasks/.active naming a task dir holding
+      PLAN.md + TASK.json(run_id, required_lenses). Run
+      `HARNESS_BACKGROUND_WAIT_SECS=0 python3 plugin/scripts/stop_gate.py <<< '{}'`. Marker for the outage branch:
+      doc/harness/.receipt-capability-broken (regular file only; symlink/dir/fifo are ignored by design).
+    discovered: 2026-09-18

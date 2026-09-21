@@ -818,14 +818,21 @@ class TestCodexRegistrationFailureIsDetected(unittest.TestCase):
         # suite rebinds, so isolate it or a sibling test's recorded error leaks
         # in and this assertion stops testing what it claims to.
         original_server = harness_server._SERVER
+        # Same isolation reason: this reads a real file in the developer's own
+        # repo, so a hook that failed at any point in the past would otherwise
+        # turn this assertion red for a reason it does not test. Owned by
+        # tests/test_bytecode_cache_cannot_disable_receipts.py.
+        original_marker = harness_server._hook_capability_marker
         harness_server._diagnostics_for_this_session = lambda root="": diagnostics
         harness_server.receipt_capability_warning = lambda *_a, **_kw: ""
+        harness_server._hook_capability_marker = lambda *_a, **_kw: False
         harness_server._SERVER = None
         try:
             return harness_server._watcher_status(task_dir="", task_id="TASK__x")
         finally:
             harness_server._diagnostics_for_this_session = original_read
             harness_server.receipt_capability_warning = original_warning
+            harness_server._hook_capability_marker = original_marker
             harness_server._SERVER = original_server
 
     def test_unregistered_codex_watcher_is_not_recordable(self):
@@ -1222,6 +1229,12 @@ class TestReadinessIsTriState(unittest.TestCase):
             "_diagnostics_for_this_session": lambda *_a, **_k: {},
             "_run_has_receipts": lambda *_a, **_k: False,
             "_server_runtime": lambda: "claude",
+            # Same isolation reason as _SERVER below: this reads a real file in
+            # the developer's own repo, so a hook that failed at any point in
+            # the past would otherwise turn these assertions red for reasons
+            # they do not test. Owned by
+            # tests/test_bytecode_cache_cannot_disable_receipts.py.
+            "_hook_capability_marker": lambda *_a, **_k: False,
         }
         defaults.update(patches)
         with contextlib.ExitStack() as stack:

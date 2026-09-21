@@ -2,7 +2,7 @@
 tags: [harness, review, receipts, evidence]
 summary: 정식 리뷰 원문은 영수증과 같은 해시로 태스크 로컬 저장되며 한 번에 한 건만 선택 조회된다.
 updated: 2026-09-15
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/agents/defect-hunter.md
   - plugin/agents/code-reviewer.md
@@ -17,7 +17,7 @@ invalidated_by_paths:
   - plugin/skills/develop/SKILL.md
   - plugin/skills/develop/quality-audit-pipeline.md
   - plugin-codex/internal-skills/develop/SKILL.md
-freshness_updated: 2026-09-18T06:40:00Z
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — formal review detail is selectively readable

@@ -250,8 +250,9 @@ rather than silently offering zero sites. Three routes reach this:
   contributes zero sites, because there is no source to walk.
 * **does not parse.** `ast.parse` raising `SyntaxError` is caught in
   `mutation_sites` before any node is walked, so a file in this state also
-  contributes zero sites for the whole file, named with the parse error and
-  line rather than dropped in silence.
+  contributes zero sites for the whole file. Ordinary syntax errors are named
+  with the parse error and line; a leading UTF-8 BOM gets a specific no-sites
+  note that advises saving the source as UTF-8 without BOM.
 * **does not stay under the repository root.** `_contained(root, rel)`
   resolves `rel` against `root` with `os.path.realpath` and checks the
   result's common path is `root` itself; an absolute path or one carrying
@@ -924,14 +925,13 @@ person does not have to re-derive it from the same incident.
   bounded: a crash, not a wrong span.
 - **A `--rev` range is probed only where the checkout still matches it.** §1;
   the files that moved on are named in the report rather than mutated.
-- **A UTF-8 BOM reads as a parse failure, silently.** `source_at` opens files
+- **A UTF-8 BOM still contributes zero mutation sites.** `source_at` opens files
   with `encoding="utf-8"`, not `utf-8-sig`, so a leading BOM survives into the
   string `ast.parse` receives; CPython's own compiler accepts a BOM and
   `ast.parse` does not, so a file that runs fine lands in the does-not-parse
-  branch in §3 and contributes zero sites, named only by `mutation_sites`'s
-  generic parse note. A reader checking whether a file was
-  covered has no signal that the cause was specifically a BOM rather than
-  invalid syntax.
+  branch in §3. `mutation_sites` names the UTF-8 BOM, says no site was offered,
+  and advises saving as UTF-8 without BOM. It does not remove the BOM or offer
+  mutation coverage for that file.
 - **Cost is dominated by process startup, not by the mutations.** Measured on
   the loaded host of 2026-09-10, a single `import pytest` cost 2.4s wall against
   0.1s CPU. Any budget claim is a claim about the host it was measured on.
@@ -992,7 +992,8 @@ on that direction, and it is manual.
 | build the changed-test prefix from an unnormalised `--tests-dir`, so `./tests` makes the diff's test files mutation subjects | `test_a_tests_dir_written_with_a_leading_dot_still_excludes_its_own_tests` |
 | read a non-UTF-8 source as if it decoded, or drop it silently instead of naming it | `test_a_source_that_is_not_utf8_is_named_and_does_not_lose_the_rest` |
 | let one non-UTF-8 file in a diff lose the rest of the diff's sites | `test_a_changed_line_that_is_not_utf8_does_not_lose_the_rest_of_the_diff` |
-| offer zero sites for a file that does not parse without naming it | `test_a_file_that_does_not_parse_is_named_not_silently_skipped` |
+| offer zero sites for a file that does not parse without naming it, or omit the UTF-8 BOM remedy | `test_a_file_that_does_not_parse_is_named_not_silently_skipped` |
+| mislabel ordinary invalid syntax as a UTF-8 BOM | `test_an_ordinary_syntax_error_keeps_the_generic_parse_note` |
 | anchor the header parse on a preceding `--- ` line instead of `diff --git `, so a colluding removed/added line pair forges a header | `test_a_colluding_removed_and_added_line_pair_does_not_forge_a_header` |
 | reattribute a hunk to a source line that merely starts `++ `, absent a colluding removed line | `test_an_added_line_shaped_like_a_diff_header_does_not_reattribute_hunks` |
 | slice a `+++ ` target blindly instead of checking the `b/` prefix, so a non-ASCII filename `core.quotePath` quoted and octal-escaped reads as garbage | `test_a_non_ascii_filename_is_not_hidden_by_default_quote_path` |

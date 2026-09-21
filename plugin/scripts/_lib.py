@@ -88,6 +88,138 @@ TRUST_BOUNDARY = (
 )
 
 
+class StaleBytecodeCacheError(PermissionError):
+    """A module's loaded code does not match a fresh compile of its own source.
+
+    Raised only from the receipt-adapter guard, and only when every identity
+    and filesystem predicate around it already passed. That combination has
+    exactly one benign cause and it is not tampering: CPython's default
+    timestamp invalidation compares a `.pyc` header's mtime and size against
+    the `.py` and nothing else, so a cache whose header matches but whose
+    bytecode does not is accepted for as long as it sits on disk.
+
+    Subclasses `PermissionError` on purpose. Every existing caller catches the
+    broad shape, so the refusal is unchanged for anything that does not ask for
+    this type by name; the guard's decision is identical either way. The type
+    exists so the hook can tell a recoverable cache from a compromised module
+    and prune the former, and so a reader gets the cause instead of a tamper
+    accusation. See `doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md`.
+    """
+
+
+def stale_bytecode_message(module_path: str) -> str:
+    """Name the failing module, the mechanism, and the one-line remedy."""
+    cache = os.path.join(os.path.dirname(module_path), "__pycache__")
+    return (
+        f"stale bytecode cache for {module_path}: the loaded code does not match "
+        f"a fresh compile of this file, and its .pyc header still looks valid to "
+        f"timestamp invalidation, so Python will keep loading it. Remove {cache} "
+        f"to recover; regeneration is automatic and safe."
+    )
+
+
+# The one fact both the MCP and the turn-end gate state about an observed
+# outage. They give different instructions from it — the MCP says continue and
+# await, the gate says park — so the sentences around it legitimately differ.
+# The fact itself must not, or the two surfaces end up disagreeing about
+# whether recording works while each is individually plausible.
+RECEIPT_RECORDING_UNAVAILABLE = "Receipt recording is unavailable."
+
+# The marker a failed hook import leaves behind, so a later reader can move from
+# "unknown" to a definite "broken" without guessing.
+#
+# Already spelled in `background_hook` (which must NOT import this module — it
+# is the one that runs when `_lib` itself may be the broken import) and in
+# `harness_server` and `setup_finalize`. A fourth literal would be a fourth
+# thing to keep in step, so this is the authoritative one and a drift test pins
+# the others against it.
+CAPABILITY_MARKER_RELPATH = os.path.join("doc", "harness", ".receipt-capability-broken")
+
+
+def receipt_outage_block_instruction() -> str:
+    """What the turn-end gate says when the outage is an observation.
+
+    Not an inference from an empty receipt stream. That design was built, and
+    measured, and rejected: zero receipts is the ordinary state of a task that
+    has not reached review, so releasing on it disabled the gate from turn 4 of
+    a normal task. `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`
+    keeps the measurements. This text is reached only when a hook that failed to
+    import left `doc/harness/.receipt-capability-broken` behind.
+
+    Three clauses, and the middle one is the whole point. Without it the gate's
+    existing reason lists missing verdicts, which reads as work still to do —
+    and a coordinator who reads it that way keeps spawning lenses whose results
+    can never be recorded. That loop is what this text exists to break; the
+    field report ran ~15 turns of it.
+
+    `attestation_endgame()` is deliberately NOT appended in this state, and the
+    do-not-rerun ban is therefore stated here in the one form the gate needs
+    ("rather than spawning another lens") instead of being respelled in full.
+    The endgame exists to choose between the two missing-attestation park pairs,
+    and both assert that the lenses ran and returned results — which is exactly
+    what an observed outage leaves unknown. The REQ that owns those pairs
+    records that presenting an inapplicable pair first is the failure it was
+    written to fix, so appending them here would reintroduce it one state over.
+    """
+    return (
+        f"{RECEIPT_RECORDING_UNAVAILABLE} A hook that could not import recorded "
+        f"this at {CAPABILITY_MARKER_RELPATH}, so the missing verdicts above "
+        "cannot be produced by continuing — they are not work that remains. "
+        "An observed recording outage is a genuine external blocker: publish it "
+        "through task_blocked rather than spawning another lens."
+    )
+
+
+def is_spawn_instruction(text: str) -> bool:
+    """Does this next_action tell the caller to run a verification subagent?
+
+    Lives here because two surfaces must answer it identically. `harness_server`
+    has asked it since 2026-09-04 to decide whether a receipt outage may replace
+    the routing; the turn-end gate now asks the same question for the same
+    reason, and a second copy of the predicate would let the two disagree about
+    which states an outage is allowed to redirect.
+
+    The wording it inspects is produced in this module, so the coupling is real
+    either way; it is pinned by a test that feeds every spawn instruction `_lib`
+    can render through the predicate. Without that test a reword here would
+    silently disable both gates and nothing would fail.
+    """
+    lowered = text.lower()
+    return "subagent" in lowered or "spawn" in lowered
+
+
+def receipt_outage_next_action() -> tuple[str, str]:
+    """The routing fields for an observed outage: (next_action, owner_skill).
+
+    The reason sentence alone was not enough, and the gap is worth stating.
+    `_gate_response` documents `next_action_command` as the exact call that
+    resolves the block and `owner_skill` as who owns the next step; those are
+    the fields a coordinator follows. Naming the park in prose while leaving
+    them pointing at "spawn and await a review subagent" left the payload
+    telling the reader to do the very thing the sentence forbade — and the loop
+    this exists to break is a coordinator dutifully spawning lenses.
+
+    Deliberately NOT a third fixed park pair. C-17 scopes verbatim-copy pairs to
+    the missing-attestation branch, and both of them assert the lenses ran and
+    returned results, which an observed outage leaves unknown. The route used
+    here is C-17's other one — a direct `task_blocked` for a genuine external
+    environment blocker, whose reason the coordinator authors from what it
+    observed. So this names the shape and leaves the wording to the caller.
+    """
+    return (
+        "mcp__plugin_harness_harness__task_blocked { task_id: '<task_id>', "
+        "blocked_reason: '<what was observed>', unblock_condition: '<a check>' } "
+        "— a direct park for a genuine external blocker. All three arguments are "
+        "required by the tool schema. Write the blocked_reason "
+        "from the observed outage and make the unblock_condition a check, not a "
+        "diagnosis: resume when spawning one lens is confirmed to add a started "
+        "row to RECEIPTS.jsonl. Do not copy either fixed attestation pair here; "
+        "both assert the lenses ran and returned results, which this state "
+        "leaves unknown.",
+        "harness-goal",
+    )
+
+
 NO_RECEIPTS_BLOCKED_REASON = (
     "The required lenses ran and returned results, and no review/QA receipt of "
     "any kind was recorded for this task run."
@@ -3937,24 +4069,45 @@ def _make_runtime_receipt_writer():
                     value for value in candidate.co_consts
                     if isinstance(value, CodeType)
                 )
-            if (
-                caller is None
-                or caller.f_code.co_name != "<module>"
-                or caller.f_code != canonical_root
-                or module is None
-                or not canonical_loader
-                or caller.f_globals is not vars(module)
-                or function.__globals__ is not vars(module)
-                or module_path != expected_path
-                or os.path.realpath(function.__code__.co_filename) != expected_path
-                or owner is not function
-                or len(candidates) != 1
-                or candidates[0] != function.__code__
-                or not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_nlink != 1
-                or info.st_mode & 0o022
-            ):
+            # The same conjunction as before, split into the two questions it
+            # was answering at once. Both halves still refuse; only the error
+            # identity differs. Widening what binds is NOT the goal and would
+            # be a security regression: an attacker who swaps the `.py` after a
+            # good import also lands in the code-mismatch half, so that half
+            # must stay a refusal. What it buys is a name for the benign shape,
+            # because a generic "requires its canonical module import" sent
+            # three separate sessions hunting for tampering that never existed.
+            #
+            # `structural` covers loader identity, module ownership, filesystem
+            # shape, and source unambiguity — none of which bytecode staleness
+            # can disturb. `code_matches` covers the two comparisons against a
+            # fresh compile of the current source, which staleness disturbs and
+            # nothing else in this conjunction does.
+            structural = (
+                caller is not None
+                and caller.f_code.co_name == "<module>"
+                and module is not None
+                and canonical_loader
+                and caller.f_globals is vars(module)
+                and function.__globals__ is vars(module)
+                and module_path == expected_path
+                and os.path.realpath(function.__code__.co_filename) == expected_path
+                and owner is function
+                and len(candidates) == 1
+                and stat.S_ISREG(info.st_mode)
+                and info.st_uid == os.getuid()
+                and info.st_nlink == 1
+                and not (info.st_mode & 0o022)
+            )
+            code_matches = bool(
+                caller is not None
+                and caller.f_code == canonical_root
+                and len(candidates) == 1
+                and candidates[0] == function.__code__
+            )
+            if structural and not code_matches:
+                raise StaleBytecodeCacheError(stale_bytecode_message(expected_path))
+            if not (structural and code_matches):
                 raise PermissionError("receipt adapter binding requires its canonical module import")
         finally:
             del caller

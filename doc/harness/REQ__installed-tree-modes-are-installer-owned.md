@@ -2,13 +2,14 @@
 tags: [harness, install, guards, permissions, diagnostics]
 summary: 설치된 런타임 트리의 권한 모드는 설치기의 책임이다. 가드가 group/other-writable 모듈을 거부하는 것은 정상이며, 완화 대상이 아니라 설치기가 그런 트리를 만들지 않아야 한다. 그리고 거부 메시지는 실제로 거부한 조건을 말해야 한다.
 updated: 2026-09-17
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - install.py
   - plugin/scripts/install_smoke.py
   - tests/test_install_writable_source_comparison.py
   - plugin/scripts/_lib.py
   - tests/test_install_writable_payload.py
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — installed-tree modes are the installer's responsibility

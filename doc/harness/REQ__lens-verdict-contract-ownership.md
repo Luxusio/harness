@@ -2,7 +2,7 @@
 tags: [harness, receipts, review, qa]
 summary: 스폰 프롬프트는 판정 포맷을 재진술하지 않는다. 포맷 불일치로 바인딩된 완료는 미실행이 아니라 포맷 실패로 보고된다.
 updated: 2026-09-07
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/agents/code-reviewer.md
   - plugin/agents/qa-cli.md
@@ -10,7 +10,7 @@ invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/skills/develop/SKILL.md
   - plugin/skills/run/SKILL.md
-freshness_updated: 2026-09-18T06:40:00Z
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — the lens verdict contract belongs to the agent definition

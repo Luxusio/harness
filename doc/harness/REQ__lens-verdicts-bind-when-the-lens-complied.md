@@ -2,7 +2,7 @@
 tags: [harness, receipts, verdict, lenses, review, qa]
 summary: 렌즈가 자기 agent definition 을 지킨 보고서를 내면 그 판정은 바인딩돼야 한다. 바인딩 실패는 미실행과 구별 가능해야 하고, 그 진단은 수신자가 실제로 할 수 있는 조치를 지시해야 한다.
 updated: 2026-09-07
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/agents/code-reviewer.md
@@ -11,7 +11,7 @@ invalidated_by_paths:
   - plugin-codex/agents/security-reviewer.md
   - tests/test_verdict_binding_survives_reruns.py
   - tests/test_receipt_watcher_fail_closed.py
-freshness_updated: 2026-09-07T04:13:35Z
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — 렌즈가 계약을 지켰으면 판정은 바인딩된다

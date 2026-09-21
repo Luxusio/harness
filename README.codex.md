@@ -74,7 +74,7 @@ reviewer without another hunter. Receipts stay compact. To retrieve only
 the exact formal review named by a receipt's `DETAIL_SHA256`:
 
 ```bash
-python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
   --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
 ```
 

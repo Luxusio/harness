@@ -1196,18 +1196,32 @@ def test_a_file_that_does_not_parse_is_named_not_silently_skipped():
     that was covered, which is AC-3's failure at file granularity.
     """
     notes: list = []
-    bommed = "﻿" + "def f(a):\n    return a == 3\n"
+    bommed = "\ufeff" + "def f(a):\n    return a == 3\n"
 
     sites = mp.mutation_sites("m.py", bommed, {2}, notes=notes)
 
     assert sites == []
     assert len(notes) == 1, notes
     assert "m.py" in notes[0] and "no site was offered" in notes[0], notes
+    assert "UTF-8 BOM" in notes[0], notes
+    assert "save as UTF-8 without BOM" in notes[0], notes
     # A file that parses produces no such note — the diagnostic must not fire
     # on the healthy path, or it becomes noise like every other one here.
     clean: list = []
     assert mp.mutation_sites("m.py", "def f(a):\n    return a == 3\n", {2}, notes=clean)
     assert clean == []
+
+
+def test_an_ordinary_syntax_error_keeps_the_generic_parse_note():
+    notes: list = []
+
+    sites = mp.mutation_sites("m.py", "def f(:\n    return 3\n", {2}, notes=notes)
+
+    assert sites == []
+    assert len(notes) == 1, notes
+    assert "m.py: not parsed, so no site was offered" in notes[0], notes
+    assert "invalid syntax" in notes[0], notes
+    assert "UTF-8 BOM" not in notes[0], notes
 
 
 def test_a_changed_line_that_is_not_utf8_does_not_lose_the_rest_of_the_diff(tmp_path):

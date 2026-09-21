@@ -273,7 +273,7 @@ echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","runtime
 If Phase 3 did not already capture it, capture the final project health score:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
 ```
 
 Store the printed score for inclusion in the completion report.

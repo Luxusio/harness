@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -107,6 +108,7 @@ from _lib import (  # type: ignore
     # interpolating it, so these two names have no runtime consumer here.
     ATTESTATION_BLOCKED_REASON, ATTESTATION_UNBLOCK_CONDITION,
     TRUST_BOUNDARY, attestation_endgame,
+    RECEIPT_RECORDING_UNAVAILABLE, is_spawn_instruction,
     nonparsing_completion_lenses, nonparsing_completion_note,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
@@ -447,6 +449,82 @@ def _apply_task_start_registration_status(
     return status
 
 
+_HOOK_CAPABILITY_MARKER = os.path.join("doc", "harness", ".receipt-capability-broken")
+
+
+def _hook_capability_marker_file(task_dir: str = "") -> str:
+    """Path of the marker a failing receipt hook leaves behind, or ''.
+
+    Written by `plugin/scripts/background_hook.py` when its import block fails,
+    and removed by the next hook invocation that imports cleanly.
+
+    `task_dir` anchors the lookup, matching how the rest of this module resolves
+    a control root. Resolving from the server's cwd instead made an unrelated
+    repo's marker visible to every call, which turned three pre-existing
+    `_watcher_status` tests red on any machine where a hook had ever failed.
+
+    Only the Claude hook tree writes and clears this marker, so it is consulted
+    only in that runtime. On Codex the recording path is the watcher, and a
+    marker left by an earlier Claude failure would otherwise pin
+    `receipts_recordable: false` with no Codex-side writer able to retire it.
+
+    `lstat`, not `isfile`: `isfile` follows symlinks, so a link planted at this
+    fixed name would let any existing file masquerade as a marker and pin the
+    capability signal false.
+    """
+    if _server_runtime() == "codex":
+        return ""
+    try:
+        anchor = task_dir or ""
+        root = find_harness_root(anchor) or find_repo_root(anchor)
+    except Exception:
+        return ""
+    if not root:
+        return ""
+    path = os.path.join(str(root), _HOOK_CAPABILITY_MARKER)
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return ""
+    except OSError:
+        return ""
+    return path
+
+
+def _hook_capability_marker(task_dir: str = "") -> bool:
+    return bool(_hook_capability_marker_file(task_dir))
+
+
+def _hook_capability_marker_reason(task_dir: str = "") -> str:
+    """The marker's recorded cause, bounded like every other reason string.
+
+    Falls back to a fixed sentence when the file is unreadable or malformed: the
+    marker's presence is the signal, and losing the detail must not downgrade a
+    positively observed failure into silence.
+    """
+    fallback = (
+        "The receipt hook could not import its dependencies, so no receipt can "
+        "be recorded. See doc/harness/learnings.jsonl for the recorded cause."
+    )
+    path = _hook_capability_marker_file(task_dir)
+    if not path:
+        return fallback
+    # The hardened reader, not a bare `open`. This file is untrusted local data
+    # in the same class as the watcher diagnostics, and `read_json_diagnostics`
+    # already carries the protections that class needs: O_NOFOLLOW, O_NONBLOCK
+    # (the MCP server has no timeout around this call, so a FIFO planted at the
+    # name would hang the control plane), an S_ISREG check, and a size cap.
+    try:
+        data = read_json_diagnostics(path)
+    except Exception:
+        return fallback
+    if not isinstance(data, Mapping):
+        return fallback
+    error = str(data.get("error") or "").strip()
+    remedy = str(data.get("remedy") or "").strip()
+    detail = "; ".join(part for part in (error, remedy) if part)
+    return f"{fallback} {detail}".strip() if detail else fallback
+
+
 def _run_has_receipts(task_dir: str, run_id: str, snapshot=None) -> bool:
     """Has this exact run already recorded a receipt?
 
@@ -603,6 +681,18 @@ def _watcher_status(
         unrecordable_summary = "Receipt watcher manager is not running."
         unrecordable_reason = "Receipt watcher manager is not running."
         recordable = False
+    elif _hook_capability_marker(task_dir):
+        # A positive observation, unlike `capability_warning` below: the hook
+        # process that failed to import wrote this marker itself, so there is no
+        # inference about which tree was loaded. It is cleared by the next
+        # successful hook import, so a present marker means the most recent hook
+        # to run could not record. Fail-closed, and deliberately above the
+        # `_run_has_receipts` override — earlier receipts in the same run do not
+        # disprove a break that happened after them, which is exactly the shape
+        # a mid-run bytecode-cache poisoning takes.
+        unrecordable_summary = "The receipt hook could not import its dependencies."
+        unrecordable_reason = _hook_capability_marker_reason(task_dir)
+        recordable = False
     elif capability_warning and not _run_has_receipts(task_dir, run_id, snapshot):
         # A suspicion, not an observation: this inspects plugin registration,
         # not whether receipts are actually being written. Checked against the
@@ -716,7 +806,9 @@ def _watcher_status(
 # surface in the protocol was the one emitting the least complete boundary.
 # Compose; do not restate. See doc/harness/REQ__runtime-normative-text-has-one-source.md.
 RECEIPT_UNAVAILABLE_NEXT_ACTION = (
-    "Receipt recording is unavailable. Continue and await the required review "
+    # Head sentence shared with the turn-end gate; the advice that follows is
+    # not (there: park, here: continue and await). See _lib.
+    f"{RECEIPT_RECORDING_UNAVAILABLE} Continue and await the required review "
     "and QA: their results are substantive but NON-ATTESTING and cannot "
     "authorize task_close. Remediate an actual FAIL and publish an actual "
     "BLOCKED_ENV through task_blocked. Recording is unavailable in every state "
@@ -732,16 +824,10 @@ RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
 )
 
 
-def _is_spawn_instruction(text: str) -> bool:
-    """Does this next_action tell the caller to run a verification subagent?
-
-    The wording is produced in `_lib`, so this is a cross-module coupling. It is
-    pinned by a test that feeds every spawn instruction `_lib` can render
-    through this predicate — without that test a reword there would silently
-    disable the gate and nothing would fail.
-    """
-    lowered = text.lower()
-    return "subagent" in lowered or "spawn" in lowered
+# Re-exported under the private name this module has always used; the
+# predicate itself is owned by `_lib`, because the turn-end gate must answer
+# the same question the same way. See `_lib.is_spawn_instruction`.
+_is_spawn_instruction = is_spawn_instruction
 
 
 def _gate_next_action(ctx: dict, status: dict) -> dict:

@@ -181,7 +181,7 @@ Per-AC test failures -> fix immediately. These are free; only Phase 7 full-suite
 After all ACs reach `implemented_candidate`, snapshot task state for session resume:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_checkpoint.py \
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_checkpoint.py \
   --task-dir doc/harness/tasks/<task_id>/ \
   --note "Phase 3 complete — all ACs at implemented_candidate"
 ```
@@ -199,7 +199,7 @@ Runs continuously during Phase 3.
 
   *QA codifier* (after Phase 7 PASS, before close):
   ```bash
-  python3 ${HARNESS_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
+  PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
   ```
   Parses `codifiable:` YAML blocks emitted by the QA pass and stages validated tests to `tests/regression/<sanitized-task-id>/`. Same script as Claude side; runtime-agnostic.
 	- **3.6 Fix-first pattern** — read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; surface ASK items through the current user-input mechanism or final response. The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
@@ -379,7 +379,7 @@ When the repository being changed is the harness plugin source itself (root
 review+QA PASS receipts MUST immediately run:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/install_verified.py \
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/install_verified.py \
   --task-dir doc/harness/tasks/<task_id>
 ```
 
@@ -446,7 +446,7 @@ after one or more failed attempts, record it before close as a pending runbook
 candidate:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
   --id "<short-id>" \
   --description "<what this starts/tests/verifies>" \
   --failed-command "<representative failed command>" \

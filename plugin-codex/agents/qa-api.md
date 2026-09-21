@@ -45,9 +45,9 @@ For every service, database, queue, runtime, or dependency claimed by PLAN:
 
 Use:
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py start 2>&1
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py status 2>&1
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py logs <service> 2>&1
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py start 2>&1
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py status 2>&1
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py logs <service> 2>&1
 ```
 
 **AC-to-evidence 1:1 mapping (CRITICAL):**

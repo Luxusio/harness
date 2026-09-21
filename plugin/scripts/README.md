@@ -44,7 +44,7 @@ non-authoritative `REVIEWS.jsonl` appendix before publishing the compact
 receipt. Operators may retrieve that one body through its `DETAIL_SHA256`:
 
 ```bash
-python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
+PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
   [--task-dir doc/harness/tasks/TASK__slug] <64-lowercase-hex>
 ```
 
@@ -52,7 +52,7 @@ For diagnostics or adapter tests, append one exact final through the shared
 writer instead of writing the protected file directly:
 
 ```bash
-python3 "$HARNESS_PLUGIN_ROOT/scripts/review-log" \
+PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-log" \
   [--task-dir doc/harness/tasks/TASK__slug] < review-final.txt
 ```
 

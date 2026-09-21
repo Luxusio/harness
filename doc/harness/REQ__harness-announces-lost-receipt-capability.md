@@ -5,6 +5,7 @@ invalidated_by_paths:
   - plugin/scripts/drift_warn.py
   - plugin/mcp/harness_server.py
   - plugin/hooks/hooks.json
+freshness_updated: 2026-09-18T08:05:00Z
 ---
 
 # REQ — a harness that cannot record receipts must say so

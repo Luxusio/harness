@@ -127,7 +127,20 @@ def test_the_installer_runs_the_smoke_on_the_tree_it_installed():
 
 
 def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path):
-    """Both halves of AC-2 on one tree: detection, then the installer's repair."""
+    """Both halves of AC-2 on one tree: detection, then the installer's repair.
+
+    The receipt half no longer fails alongside the import half. `background_hook`
+    now prunes the offending `__pycache__` when its import hits the stale-cache
+    shape, so by the time the smoke's receipt probe runs the cache is gone and
+    the probe succeeds. That is the intended behavior of
+    `doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md`: a stale cache
+    must not be able to keep the receipt subsystem down.
+
+    The install still fails, and must: the import probe observed a tree that
+    could not import, and the installer is not entitled to certify a runtime on
+    the strength of its own self-repair. Detection stays; only the blast radius
+    shrank.
+    """
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     plugin_root = _installed_tree(tmp_path)
     pyc = _plant_stale_pyc(plugin_root / "scripts" / "subagent_lifecycle.py")
@@ -137,11 +150,14 @@ def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path):
     report = "\n".join(steps)
     assert not ok, report
     assert "FAIL import:" in report
-    assert "FAIL receipt:" in report
+    # Self-heal already ran during the failing import, so the cache is gone.
+    assert not pyc.exists(), report
 
     steps = install._prune_bytecode_caches(plugin_root)
-    assert any("removed bytecode cache" in step for step in steps), steps
-    assert not pyc.exists()
+    # Pruning an already-clean tree is a no-op, not an error. The installer's
+    # prune remains the belt to the hook's braces: it also covers trees whose
+    # hooks never ran.
+    assert all("could not remove" not in step for step in steps), steps
 
     ok, steps = install._smoke_installed_runtime(plugin_root)
     assert ok, steps

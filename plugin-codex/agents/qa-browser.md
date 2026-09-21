@@ -47,12 +47,12 @@ For every runtime, service, browser feature, or dependency claimed by PLAN:
 - If `runtime.services[]` exists, run:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py start 2>&1
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py status 2>&1
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py start 2>&1
+PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py status 2>&1
 ```
 
 - If a service is `BLOCKED`, include
-  `python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py logs <service>`
+  `PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py logs <service>`
   plus `failure_class`, `recommended_action`, and `last_log_excerpt` from
   `doc/harness/runtime/services.json`.
 - Install/start feasible local dependencies before declaring blocked.

@@ -42,7 +42,7 @@ Do NOT emit for: browser interactions, multi-step flows, outputs that vary by da
 Invoked from develop Phase 3.5 after Phase 7 PASS, before Phase 8 HANDOFF:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
+PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
 ```
 
 Pipeline:

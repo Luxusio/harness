@@ -2,7 +2,7 @@
 tags: [harness, qa, knowledge, diagnostics, setup]
 summary: 축적된 QA 지식은 재검증되지 않으면 이후 렌즈를 잘못 이끈다. known-red 주장은 기계적으로 반증 가능해야 하고, 가용성 프로브는 추측한 명령이 아니라 manifest 가 선언한 명령을 대상으로 해야 한다.
 updated: 2026-09-18
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - doc/harness/qa/QA_KNOWLEDGE.yaml
   - tests/test_qa_knowledge_shape.py
@@ -11,7 +11,7 @@ invalidated_by_paths:
   - tests/test_setup_verify_report_probe.py
   - doc/harness/manifest.yaml
   - plugin/mcp/harness_server.py
-freshness_updated: 2026-09-18T06:40:00Z
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — recorded claims must stay falsifiable

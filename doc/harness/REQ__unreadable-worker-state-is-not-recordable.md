@@ -2,11 +2,12 @@
 tags: [harness, receipts, watcher, diagnostics, fail-closed]
 summary: 읽지 못한 워처 상태는 "기록 가능"이 아니다. 영수증은 capability warning 이라는 휴리스틱 하나만 반증할 수 있으며, session identity 부재나 읽을 수 없는 worker 상태까지 뒤집으면 fail-open 이다.
 updated: 2026-09-17
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - tests/test_receipt_watcher_fail_closed.py
   - doc/harness/REQ__subagent-receipt-session-binding.md
+freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — an unreadable worker state is not "recordable"
