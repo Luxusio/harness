@@ -1,5 +1,6 @@
 # harness manifest
 version: 5
+harness_version: 1
 initialized_at: 2026-03-30
 
 # --- Top-level identity ---

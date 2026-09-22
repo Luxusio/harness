@@ -594,7 +594,8 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (repo / "doc/harness/.version").read_text() == "2.3.0\n"
-    assert (repo / "doc/harness/.format-version").read_text() == "1\n"
+    assert "harness_version: 1\n" in (repo / "doc/harness/manifest.yaml").read_text()
+    assert not (repo / "doc/harness/.format-version").exists()
     for rel in (
         "doc/harness/goals/current.json",
         "doc/harness/tasks/TASK__probe/STATE.json",
@@ -742,6 +743,10 @@ def test_prepare_migrates_legacy_manifest_but_does_not_stamp(tmp_path):
     assert "custom_field: keep-me" in body
     assert "qa:\n  default_mode: browser\n  browser_qa_supported: true" in body
     assert not (repo / "doc/harness/.version").exists()
+
+    finalized = run(repo, plugin_root)
+    assert finalized.returncode == 0, finalized.stdout + finalized.stderr
+    assert "harness_version: 1\n" in (repo / "doc/harness/manifest.yaml").read_text()
 
 
 def test_future_schema_and_legacy_collision_fail_without_mutation(tmp_path):
@@ -895,19 +900,20 @@ def test_gitignore_only_does_not_read_contract(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (repo / ".gitignore").is_file()
-    assert not (repo / "doc/harness/.format-version").exists()
+    assert "harness_version" not in (repo / "doc/harness/manifest.yaml").read_text()
 
 
-def test_gitignore_only_does_not_require_valid_format_marker(tmp_path):
+def test_gitignore_only_does_not_require_valid_format_field(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     repo = make_repo(tmp_path, manifest=canonical_manifest())
-    marker = repo / "doc/harness/.format-version"
-    marker.write_text("future-or-invalid\n")
+    manifest = repo / "doc/harness/manifest.yaml"
+    manifest.write_text(manifest.read_text() + "harness_version: future-or-invalid\n")
+    before = manifest.read_text()
 
     result = run(repo, plugin_root, "--gitignore-only")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert marker.read_text() == "future-or-invalid\n"
+    assert manifest.read_text() == before
     assert (repo / ".gitignore").is_file()
 
 
@@ -1002,6 +1008,7 @@ def test_finalize_failure_after_contract_refresh_restores_legacy_contract(tmp_pa
 
     assert rc == 1
     assert contract.read_text(encoding="utf-8") == legacy
+    assert "harness_version" not in (repo / "doc/harness/manifest.yaml").read_text()
 
 
 def test_codex_installed_mirror_prepare_and_finalize_end_to_end(tmp_path):

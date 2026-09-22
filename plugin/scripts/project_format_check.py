@@ -20,27 +20,33 @@ from setup_finalize import (  # type: ignore
 
 def reminder(repo: Path) -> str:
     try:
-        marker = safe_path(repo, "doc/harness/.format-version")
+        manifest = safe_path(repo, "doc/harness/manifest.yaml")
+        legacy = safe_path(repo, "doc/harness/.format-version")
         gitignore = safe_path(repo, ".gitignore")
         require_exact_git_root(repo)
-        version = read_project_format_version(marker)
+        version = read_project_format_version(manifest)
         lines = set(gitignore.read_text(encoding="utf-8").splitlines()) if gitignore.is_file() else set()
     except (OSError, ValueError) as exc:
-        return f"[harness-format] Cannot check project format: {exc}. Inspect Harness setup before editing."
+        return f"[harness-version] Cannot check Harness version: {exc}. Inspect Harness setup before editing."
 
     missing = [entry for entry in OPERATIONAL_IGNORES if entry not in lines]
     ignore_errors = effective_ignore_errors(repo) if not missing else []
-    if version == PROJECT_FORMAT_VERSION and not missing and not ignore_errors:
+    if version == PROJECT_FORMAT_VERSION and not missing and not ignore_errors and not legacy.exists():
         return ""
 
     script = shlex.quote(str(Path(__file__).with_name("setup_finalize.py")))
-    command = f"PYTHONDONTWRITEBYTECODE=1 python3 {script} --repo {shlex.quote(str(repo))} --migrate-file-format"
-    detail = f"project format {version} -> {PROJECT_FORMAT_VERSION}" if version < PROJECT_FORMAT_VERSION else "operational .gitignore drift"
+    command = f"PYTHONDONTWRITEBYTECODE=1 python3 {script} --repo {shlex.quote(str(repo))} --migrate-harness-version"
+    if version < PROJECT_FORMAT_VERSION:
+        detail = f"harness version {version} -> {PROJECT_FORMAT_VERSION}"
+    elif legacy.exists() and not missing and not ignore_errors:
+        detail = "obsolete standalone version file"
+    else:
+        detail = "operational .gitignore drift"
     return (
-        f"[harness-format] {detail}; {len(missing)} ignore entries missing, "
+        f"[harness-version] {detail}; {len(missing)} ignore entries missing, "
         f"effective-ignore errors={len(ignore_errors)}. "
         f"For a mutating task, invoke $harness:run and run `{command}`. "
-        "Commit the resulting .gitignore and doc/harness/.format-version changes. "
+        "Commit the resulting .gitignore and doc/harness/manifest.yaml changes. "
         "If an operational file is already tracked, report it; an ignore rule cannot untrack it."
     )
 

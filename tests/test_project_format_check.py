@@ -26,13 +26,14 @@ def load_check():
 def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "doc/harness").mkdir(parents=True)
+    (root / "doc/harness/manifest.yaml").write_text("version: 5\nname: demo\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     return root
 
 
 def migrate(root: Path):
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--repo", str(root), "--migrate-file-format"],
+        [sys.executable, str(SCRIPT), "--repo", str(root), "--migrate-harness-version"],
         capture_output=True, text=True, timeout=10,
     )
 
@@ -42,13 +43,13 @@ def test_legacy_project_is_prompted_and_migrated_once(tmp_path):
     (root / ".gitignore").write_text("# user\ncustom.log\n", encoding="utf-8")
     check = load_check()
     message = check.reminder(root)
-    assert "project format 0 -> 1" in message
-    assert "--migrate-file-format" in message
+    assert "harness version 0 -> 1" in message
+    assert "--migrate-harness-version" in message
 
     first = migrate(root)
     assert first.returncode == 0, first.stdout + first.stderr
     assert "updated=true" in first.stdout
-    assert (root / "doc/harness/.format-version").read_text() == "1\n"
+    assert "harness_version: 1\n" in (root / "doc/harness/manifest.yaml").read_text()
     ignores = (root / ".gitignore").read_text()
     assert "custom.log" in ignores
     assert "doc/harness/.watcher-diagnostics.json" in ignores
@@ -60,9 +61,9 @@ def test_legacy_project_is_prompted_and_migrated_once(tmp_path):
     assert (root / ".gitignore").read_text() == ignores
 
 
-def test_current_marker_with_missing_ignore_is_repaired(tmp_path):
+def test_current_field_with_missing_ignore_is_repaired(tmp_path):
     root = repo(tmp_path)
-    (root / "doc/harness/.format-version").write_text("1\n")
+    (root / "doc/harness/manifest.yaml").write_text("version: 5\nharness_version: 1\n")
     (root / ".gitignore").write_text("# user\n")
     assert "operational .gitignore drift" in load_check().reminder(root)
     assert migrate(root).returncode == 0
@@ -87,7 +88,7 @@ def test_migration_rejects_subdirectory_and_non_git_root(tmp_path):
     assert wrong.returncode == 1
     assert "exact Git root" in wrong.stdout
     assert not (nested / ".gitignore").exists()
-    assert not (nested / "doc/harness/.format-version").exists()
+    assert not (nested / "doc/harness/manifest.yaml").exists()
 
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -113,18 +114,23 @@ def test_missing_future_migration_fails_closed(tmp_path, monkeypatch):
         pending_project_format_migrations(1)
 
 
-def test_invalid_and_future_markers_do_not_mutate(tmp_path):
+def test_invalid_and_future_fields_do_not_mutate(tmp_path):
     root = repo(tmp_path)
-    marker = root / "doc/harness/.format-version"
-    for raw in ("garbage\n", "2\n"):
-        marker.write_text(raw)
+    manifest = root / "doc/harness/manifest.yaml"
+    for raw in ("garbage", "2", "'1'", "true"):
+        manifest.write_text(f"version: 5\nharness_version: {raw}\n")
+        before = manifest.read_text()
         message = load_check().reminder(root)
-        assert "Cannot check project format" in message
-        assert "--migrate-file-format" not in message
+        assert "Cannot check Harness version" in message
+        assert "--migrate-harness-version" not in message
         result = migrate(root)
         assert result.returncode == 1
-        assert marker.read_text() == raw
+        assert manifest.read_text() == before
         assert not (root / ".gitignore").exists()
+
+    manifest.write_text("version: 5\nharness_version: 1\nharness_version: 1\n")
+    assert "duplicate top-level key" in migrate(root).stdout
+    assert not (root / ".gitignore").exists()
 
 
 def test_tracked_operational_file_does_not_advance_marker(tmp_path):
@@ -135,7 +141,7 @@ def test_tracked_operational_file_does_not_advance_marker(tmp_path):
     result = migrate(root)
     assert result.returncode == 1
     assert "already tracked" in result.stdout
-    assert not (root / "doc/harness/.format-version").exists()
+    assert "harness_version" not in (root / "doc/harness/manifest.yaml").read_text()
     assert not (root / ".gitignore").exists()
 
 
@@ -148,13 +154,79 @@ def test_alternate_git_index_cannot_hide_tracked_operational_file(tmp_path):
     env["GIT_INDEX_FILE"] = str(tmp_path / "empty-index")
 
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--repo", str(root), "--migrate-file-format"],
+        [sys.executable, str(SCRIPT), "--repo", str(root), "--migrate-harness-version"],
         capture_output=True, text=True, timeout=10, env=env,
     )
 
     assert result.returncode == 1
     assert "already tracked" in result.stdout
-    assert not (root / "doc/harness/.format-version").exists()
+    assert "harness_version" not in (root / "doc/harness/manifest.yaml").read_text()
+
+
+def test_legacy_standalone_marker_removed_after_success(tmp_path):
+    root = repo(tmp_path)
+    legacy = root / "doc/harness/.format-version"
+    legacy.write_text("1\n")
+    assert "harness version 0 -> 1" in load_check().reminder(root)
+    assert migrate(root).returncode == 0
+    assert not legacy.exists()
+    assert "harness_version: 1" in (root / "doc/harness/manifest.yaml").read_text()
+
+
+def test_current_field_with_legacy_file_prompts_cleanup(tmp_path):
+    root = repo(tmp_path)
+    assert migrate(root).returncode == 0
+    legacy = root / "doc/harness/.format-version"
+    legacy.write_text("1\n")
+    assert "obsolete standalone version file" in load_check().reminder(root)
+    assert migrate(root).returncode == 0
+    assert not legacy.exists()
+
+
+def test_pre_v5_manifest_migrates_schema_before_stamping(tmp_path):
+    root = repo(tmp_path)
+    manifest = root / "doc/harness/manifest.yaml"
+    manifest.write_text("project: demo\nproject_type: api\nharness_version: 2\n")
+    result = migrate(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    body = manifest.read_text()
+    assert "version: 5\n" in body
+    assert "name: demo\n" in body
+    assert "harness_version: 1\n" in body
+    assert "harness version 0 -> 1" not in load_check().reminder(root)
+
+
+def test_future_manifest_schema_is_not_modified(tmp_path):
+    root = repo(tmp_path)
+    manifest = root / "doc/harness/manifest.yaml"
+    manifest.write_text("version: 6\nname: future\n")
+    result = migrate(root)
+    assert result.returncode == 1
+    assert "newer than supported schema" in result.stdout
+    assert manifest.read_text() == "version: 6\nname: future\n"
+    assert not (root / ".gitignore").exists()
+
+
+def test_terminal_manifest_version_without_newline_remains_valid(tmp_path):
+    root = repo(tmp_path)
+    manifest = root / "doc/harness/manifest.yaml"
+    manifest.write_text("name: demo\nversion: 5")
+    result = migrate(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert manifest.read_text() == "name: demo\nversion: 5\nharness_version: 1\n"
+    assert load_check().reminder(root) == ""
+
+
+def test_legacy_marker_preserved_when_validation_fails(tmp_path):
+    root = repo(tmp_path)
+    legacy = root / "doc/harness/.format-version"
+    legacy.write_text("1\n")
+    target = root / "doc/harness/.watcher-diagnostics.json"
+    target.write_text("{}\n")
+    subprocess.run(["git", "-C", str(root), "add", "-f", str(target)], check=True)
+    assert migrate(root).returncode == 1
+    assert legacy.read_text() == "1\n"
+    assert "harness_version" not in (root / "doc/harness/manifest.yaml").read_text()
 
 
 def test_both_session_start_hooks_run_check():
