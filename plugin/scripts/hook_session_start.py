@@ -52,6 +52,7 @@ def main() -> int:
         restore_watcher_registration(payload, retry_seconds=1.0, budget_seconds=1.25)
     commands = [
         ["verification_gap_check.py"],
+        ["project_format_check.py"],
     ]
     for command in commands:
         out = _run(command, payload)

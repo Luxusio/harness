@@ -27,6 +27,8 @@ from _lib import (  # type: ignore
 
 
 HARNESS_VERSION = "2.3.0"
+PROJECT_FORMAT_VERSION = 1
+PROJECT_FORMAT_MIGRATIONS = (1,)
 MANIFEST_SCHEMA = 5
 ROUTING_MARKER = "<!-- harness:routing-injected -->"
 CODEX_RUN_POLICY = "skills/run/agents/openai.yaml"
@@ -89,6 +91,7 @@ REQUIRED_SETUP_RESOURCES = (
     "skills/setup/verify-report.md",
     "skills/setup/templates/CONTRACTS.md",
     "scripts/contract_lint.py",
+    "scripts/project_format_check.py",
     "scripts/setup_finalize.py",
 )
 
@@ -154,6 +157,70 @@ def render_gitignore(original: str) -> str:
     lines.append("# harness - operational artifacts (ephemeral, not durable knowledge)")
     lines.extend(OPERATIONAL_IGNORES)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def read_project_format_version(path: Path) -> int:
+    """Missing markers describe pre-versioned projects; invalid ones are errors."""
+    if not path.exists():
+        return 0
+    raw = path.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[0-9]+", raw):
+        raise ValueError("doc/harness/.format-version must contain one nonnegative integer")
+    version = int(raw)
+    if version > PROJECT_FORMAT_VERSION:
+        raise ValueError(
+            f"project format {version} is newer than supported format {PROJECT_FORMAT_VERSION}; upgrade Harness"
+        )
+    return version
+
+
+def pending_project_format_migrations(version: int) -> tuple[int, ...]:
+    pending = tuple(range(version + 1, PROJECT_FORMAT_VERSION + 1))
+    unavailable = [step for step in pending if step not in PROJECT_FORMAT_MIGRATIONS or step != 1]
+    if unavailable:
+        raise ValueError(f"project format migration {unavailable[0]} is not implemented")
+    return pending
+
+
+def require_exact_git_root(repo: Path) -> None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5, env=_trusted_git_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("project format migration requires a readable Git root") from exc
+    if result.returncode != 0 or Path(result.stdout.strip()).resolve() != repo.resolve():
+        raise ValueError("project format migration requires the exact Git root")
+
+
+def migrate_project_format(repo: Path) -> bool:
+    """Apply numbered project-file migrations and stamp only after validation."""
+    require_exact_git_root(repo)
+    gitignore_path = safe_path(repo, ".gitignore")
+    marker_path = safe_path(repo, "doc/harness/.format-version")
+    version = read_project_format_version(marker_path)
+    pending = pending_project_format_migrations(version)
+    original = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else None
+    marker_original = marker_path.read_text(encoding="utf-8") if marker_path.is_file() else None
+    gitignore_mode = stat.S_IMODE(gitignore_path.stat().st_mode) if gitignore_path.exists() else None
+    marker_mode = stat.S_IMODE(marker_path.stat().st_mode) if marker_path.exists() else None
+    candidate = render_gitignore(original or "")
+    changed = candidate != (original or "") or bool(pending)
+    try:
+        if candidate != (original or ""):
+            atomic_write(gitignore_path, candidate)
+        errors = operational_symlink_errors(repo) + effective_ignore_errors(repo)
+        if errors:
+            raise ValueError("; ".join(errors))
+        if pending:
+            # v1 adds the canonical operational ignore list, including watcher diagnostics.
+            atomic_write(marker_path, f"{PROJECT_FORMAT_VERSION}\n")
+    except BaseException:
+        restore(gitignore_path, original, gitignore_mode)
+        restore(marker_path, marker_original, marker_mode)
+        raise
+    return changed
 
 
 def manifest_maps(text: str) -> tuple[dict[str, str], dict[str, str], list[str]]:
@@ -544,6 +611,7 @@ def effective_ignore_errors(repo: Path) -> list[str]:
         input="\0".join(requested) + "\0",
         capture_output=True,
         text=True,
+        env=_trusted_git_env(),
     )
     if result.returncode not in (0, 1):
         errors.append("git check-ignore failed while validating operational paths")
@@ -553,7 +621,8 @@ def effective_ignore_errors(repo: Path) -> list[str]:
     for rel in sorted(existing_rel - ignored):
         errors.append(f"existing operational path is not effectively ignored: {rel}")
     tracked = subprocess.run(
-        ["git", "-C", str(repo), "ls-files", "-z"], capture_output=True, text=True
+        ["git", "-C", str(repo), "ls-files", "-z"], capture_output=True, text=True,
+        env=_trusted_git_env(),
     )
     if tracked.returncode != 0:
         errors.append("repository is not a readable git worktree")
@@ -868,11 +937,12 @@ def update_project_doc(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare or finalize a harness setup")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--plugin-root", type=Path, required=True)
-    parser.add_argument("--project-doc", choices=("AGENTS.md", "CLAUDE.md"), required=True)
+    parser.add_argument("--plugin-root", type=Path, default=Path(SCRIPTS_DIR).parent)
+    parser.add_argument("--project-doc", choices=("AGENTS.md", "CLAUDE.md"), default="AGENTS.md")
     parser.add_argument("--check", action="store_true", help="verify without modifying files")
     parser.add_argument("--prepare", action="store_true", help="apply migration and ignores without stamping")
     parser.add_argument("--gitignore-only", action="store_true", help="only apply and verify operational ignores")
+    parser.add_argument("--migrate-file-format", action="store_true", help="apply numbered project-file migrations")
     parser.add_argument("--qa-verified", action="store_true", help="attest that setup QA prerequisites passed")
     parser.add_argument("--runtime-verified", action="store_true", help="attest that runtime checks passed")
     parser.add_argument("--project-doc-only", action="store_true", help="only apply safe runtime-document edits")
@@ -882,6 +952,14 @@ def main(argv: list[str] | None = None) -> int:
 
     repo = args.repo.resolve()
     plugin_root = args.plugin_root.resolve()
+    if args.migrate_file_format:
+        try:
+            changed = migrate_project_format(repo)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"SETUP_ERROR: {exc}")
+            return 1
+        print(f"PROJECT_FORMAT_OK: version={PROJECT_FORMAT_VERSION} updated={str(changed).lower()}")
+        return 0
     if args.project_doc_only:
         try:
             changed = update_project_doc(
@@ -923,6 +1001,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        format_path = safe_path(repo, "doc/harness/.format-version")
+        format_original = format_path.read_text(encoding="utf-8") if format_path.is_file() else None
+        format_mode = stat.S_IMODE(format_path.stat().st_mode) if format_path.exists() else None
+        format_version = read_project_format_version(format_path)
+        pending_project_format_migrations(format_version)
+    except (OSError, ValueError) as exc:
+        print(f"SETUP_ERROR: {exc}")
+        return 1
+
+    try:
         contract_path = safe_path(repo, "CONTRACTS.md")
     except ValueError as exc:
         print(f"SETUP_ERROR: {exc}")
@@ -953,6 +1041,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"SETUP_ERROR: {error}")
         return 1
     if args.check:
+        if format_version != PROJECT_FORMAT_VERSION:
+            print(f"SETUP_ERROR: project format {format_version} requires migration to {PROJECT_FORMAT_VERSION}")
+            return 1
         errors = effective_ignore_errors(repo)
         for error in errors:
             print(f"SETUP_ERROR: {error}")
@@ -973,10 +1064,12 @@ def main(argv: list[str] | None = None) -> int:
             print("SETUP_PREPARED: manifest and operational ignores verified")
             return 0
         atomic_write(version_path, HARNESS_VERSION + "\n")
+        atomic_write(format_path, f"{PROJECT_FORMAT_VERSION}\n")
     except BaseException as exc:
         restore(gitignore_path, gitignore_original, gitignore_mode)
         restore(manifest_path, manifest_original, manifest_mode)
         restore(version_path, version_original, version_mode)
+        restore(format_path, format_original, format_mode)
         if contract_changed:
             restore(contract_path, contract_original, contract_mode)
         for error in str(exc).splitlines() or [repr(exc)]:

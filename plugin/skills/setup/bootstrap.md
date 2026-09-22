@@ -233,6 +233,16 @@ PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
 
 This early call applies ignores without validating or stamping a version.
 Phase 4 runs the full finalizer after every required artifact exists.
+The finalizer also stamps the integer `doc/harness/.format-version` after
+successful validation. SessionStart reports older project formats; repair them
+with:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+  --repo "$_ROOT" --migrate-file-format
+```
+
+The release `doc/harness/.version` and manifest schema version remain separate.
 
 ## 3.7 Contracts installation (non-destructive)
 
@@ -297,5 +307,5 @@ WARN is non-blocking. Use the continuous maintenance flow to repair drift.
 
 Phase 4 invokes `setup_finalize.py` without `--check`. The command applies the
 canonical `.gitignore`, verifies the manifest and packaged setup resources,
-and writes `doc/harness/.version` only when every required check passes. Never
-write the version stamp earlier.
+and writes `doc/harness/.version` and `doc/harness/.format-version` only when
+every required check passes. Never write either version stamp earlier.

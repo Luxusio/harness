@@ -32,6 +32,7 @@ def make_plugin_root(tmp_path: Path) -> Path:
         "skills/setup/verify-report.md",
         "skills/setup/templates/CONTRACTS.md",
         "scripts/contract_lint.py",
+        "scripts/project_format_check.py",
         "scripts/setup_finalize.py",
     ):
         source = REPO / "plugin" / rel
@@ -593,6 +594,7 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (repo / "doc/harness/.version").read_text() == "2.3.0\n"
+    assert (repo / "doc/harness/.format-version").read_text() == "1\n"
     for rel in (
         "doc/harness/goals/current.json",
         "doc/harness/tasks/TASK__probe/STATE.json",
@@ -892,6 +894,20 @@ def test_gitignore_only_does_not_read_contract(tmp_path):
     result = run(repo, plugin_root, "--gitignore-only")
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / ".gitignore").is_file()
+    assert not (repo / "doc/harness/.format-version").exists()
+
+
+def test_gitignore_only_does_not_require_valid_format_marker(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    marker = repo / "doc/harness/.format-version"
+    marker.write_text("future-or-invalid\n")
+
+    result = run(repo, plugin_root, "--gitignore-only")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert marker.read_text() == "future-or-invalid\n"
     assert (repo / ".gitignore").is_file()
 
 

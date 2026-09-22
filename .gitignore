@@ -9,11 +9,20 @@ __MACOSX/
 .pytest_cache/
 .harness-replay-fixtures/
 
+doc/harness/hygiene.yaml
+doc/harness/.hygiene-last-run
+doc/harness/.hygiene-observe.log
+doc/harness/.hygiene-pending.json
+doc/harness/.hygiene.lock
+doc/harness/.hygiene-session-count
+.venv/
+
 # harness - operational artifacts (ephemeral, not durable knowledge)
 doc/harness/tasks/
 doc/harness/goals/
 doc/harness/reviews/
 doc/harness/learnings.jsonl
+doc/harness/runbook_candidates.yaml
 doc/harness/checkpoints/
 doc/harness/visual-baselines/
 doc/harness/local.yaml
@@ -31,13 +40,6 @@ doc/harness/health-history.jsonl
 doc/harness/benchmark/
 doc/harness/audits/
 doc/harness/quality-trend.jsonl
-doc/harness/hygiene.yaml
-doc/harness/.hygiene-last-run
-doc/harness/.hygiene-observe.log
-doc/harness/.hygiene-pending.json
-doc/harness/.hygiene.lock
-doc/harness/.hygiene-session-count
 doc/harness/.maintain-last-run
 doc/harness/.maintain-observe.log
 doc/harness/.maintain-pending.json
-.venv/
