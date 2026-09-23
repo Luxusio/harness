@@ -203,7 +203,7 @@ def test_future_manifest_schema_is_not_modified(tmp_path):
     manifest.write_text("version: 7\nname: future\n")
     result = migrate(root)
     assert result.returncode == 1
-    assert "newer than supported schema" in result.stdout
+    assert "newer than supported version 6; upgrade Harness" in result.stdout
     assert manifest.read_text() == "version: 7\nname: future\n"
     assert not (root / ".gitignore").exists()
 
@@ -259,3 +259,12 @@ def test_both_session_start_hooks_run_check():
     assert sum("project_format_check.py" in item for item in commands) == 1
     codex = (ROOT / "plugin/scripts/hook_session_start.py").read_text()
     assert '["project_format_check.py"]' in codex
+
+
+def test_future_version_wording_is_identical_in_reminder_and_migrate(tmp_path):
+    """Both surfaces must say the same thing, including the "upgrade Harness" advice."""
+    root = repo(tmp_path)
+    (root / "doc/harness/manifest.yaml").write_text("version: 7\nname: demo\n")
+    expected = "manifest version 7 is newer than supported version 6; upgrade Harness"
+    assert expected in load_check().reminder(root)
+    assert expected in migrate(root).stdout

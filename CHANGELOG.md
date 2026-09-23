@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Manifest version messages** — a future manifest version now reports `manifest version N is newer than supported version 6; upgrade Harness` from both `--migrate-harness-version` and SessionStart; the setup skill's version check trims whitespace and reports `UPGRADE_AVAILABLE: unknown (...)` for a non-integer `version:` instead of `no`.
+
 ### Changed
 
 - **Single manifest version** — the manifest `harness_version` integer is

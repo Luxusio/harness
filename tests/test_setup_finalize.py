@@ -757,7 +757,7 @@ def test_future_schema_and_legacy_collision_fail_without_mutation(tmp_path):
     before = (future / "doc/harness/manifest.yaml").read_text()
     result = run(future, plugin_root)
     assert result.returncode == 1
-    assert "newer than supported schema 6" in result.stdout
+    assert "newer than supported version 6; upgrade Harness" in result.stdout
     assert (future / "doc/harness/manifest.yaml").read_text() == before
     assert not (future / "doc/harness/.version").exists()
 

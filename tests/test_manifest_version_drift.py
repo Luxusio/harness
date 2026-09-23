@@ -62,6 +62,14 @@ def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
         b'version: "5"\n': "UPGRADE_AVAILABLE: 5 -> 6",
         b"name: x\n": "UPGRADE_AVAILABLE: 0 -> 6",
         b"version: 6\n": "UPGRADE_AVAILABLE: no",
+        b"version: 5  \n": "UPGRADE_AVAILABLE: 5 -> 6",
+        b"version: 5  \r\n": "UPGRADE_AVAILABLE: 5 -> 6",
+        b"version: 99999999999999999999\n": "UPGRADE_AVAILABLE: no",  # newer; no bash overflow
+        b"version: 05\n": "UPGRADE_AVAILABLE: 05 -> 6",
+        b"version: 5 # c\n": (
+            "UPGRADE_AVAILABLE: unknown (manifest version '5 # c' is not an integer; "
+            "run setup_finalize.py --check)"
+        ),
         None: "UPGRADE_AVAILABLE: no",  # no manifest at all
     }
     for rel in ("plugin/skills/setup/SKILL.md", "plugin-codex/skills/setup/SKILL.md"):

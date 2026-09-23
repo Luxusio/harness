@@ -435,7 +435,7 @@ def migrate_manifest_text(original: str) -> tuple[str, list[str]]:
             return original, errors
         version = int(raw_version)
         if version > MANIFEST_VERSION:
-            errors.append(f"manifest version {version} is newer than supported schema {MANIFEST_VERSION}")
+            errors.append(f"manifest version {version} is newer than supported version {MANIFEST_VERSION}; upgrade Harness")
             return original, errors
         if version >= 5:
             legacy = sorted((set(_LEGACY_RENAMES) | set(_FLAT_QA)) & set(top))

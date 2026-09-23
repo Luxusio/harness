@@ -81,9 +81,15 @@ _CONTRIBUTORS=$(git log --oneline --format='%ae' 2>/dev/null | sort -u | wc -l |
 # Version check
 _HARNESS_MANIFEST_VERSION=6
 _MANIFEST="$_ROOT/doc/harness/manifest.yaml"
-_INSTALLED_VERSION=$({ tr -d '\r"'"'" < "$_MANIFEST"; } 2>/dev/null | sed -n 's/^version:[[:space:]]*//p' | head -1)
+_INSTALLED_VERSION=$({ tr -d '\r"'"'" < "$_MANIFEST"; } 2>/dev/null | sed -n 's/^version:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*$//')
 [ -f "$_MANIFEST" ] && _INSTALLED_VERSION=${_INSTALLED_VERSION:-0}
-[ -n "$_INSTALLED_VERSION" ] && [ "$_INSTALLED_VERSION" -lt "$_HARNESS_MANIFEST_VERSION" ] 2>/dev/null && echo "UPGRADE_AVAILABLE: $_INSTALLED_VERSION -> $_HARNESS_MANIFEST_VERSION" || echo "UPGRADE_AVAILABLE: no"
+if [ -n "$_INSTALLED_VERSION" ] && ! [[ "$_INSTALLED_VERSION" =~ ^[0-9]+$ ]]; then
+  echo "UPGRADE_AVAILABLE: unknown (manifest version '$_INSTALLED_VERSION' is not an integer; run setup_finalize.py --check)"
+elif [ -n "$_INSTALLED_VERSION" ] && [ "${#_INSTALLED_VERSION}" -le 9 ] && [ "$((10#$_INSTALLED_VERSION))" -lt "$_HARNESS_MANIFEST_VERSION" ]; then
+  echo "UPGRADE_AVAILABLE: $_INSTALLED_VERSION -> $_HARNESS_MANIFEST_VERSION"
+else
+  echo "UPGRADE_AVAILABLE: no"
+fi
 ```
 
 Config helper:
@@ -105,6 +111,8 @@ If `SPAWNED_SESSION=true`: no AskUserQuestion (auto-choose recommended); no onbo
 ### Upgrade path
 
 `UPGRADE_AVAILABLE` shows version transition → AskUserQuestion: A) Upgrade now, B) Remind later, C) Skip version.
+
+`UPGRADE_AVAILABLE: unknown (...)` is not an upgrade offer: the manifest `version:` is not an integer. Run `setup_finalize.py --check`, fix the `version:` value, and do not ask the upgrade question.
 
 ### Existing setup
 
