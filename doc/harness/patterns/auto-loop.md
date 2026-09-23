@@ -1,16 +1,23 @@
 ---
-tags: [harness, hooks, stop-gate, auto-loop, claude-goal]
-summary: Native /goal과 harness stop_gate.py가 함께 Goal child-task close loop를 유지하는 방식, 두 Stop hook primitive의 차이, 동시 사용 방법.
+tags: [harness, auto-loop, claude-goal]
+summary: native `/goal`은 Claude에서 유일한 auto-continue primitive다. Harness는 Goal을 durable task state에 동기화하고, close-gate(`task_close` PASS)를 `/goal` condition에 넣는 것으로 지속 루프를 만든다. `stop_gate.py`는 등록되지 않아 자동 재개에 관여하지 않는다.
 freshness: current
-updated: 2026-06-12
+updated: 2026-09-23
 ---
 
-# Auto-loop primitive — native `/goal`과 harness `stop_gate.py`
+# Auto-loop primitive — native `/goal`
 
 ## 한 줄 요약
-**native `/goal`은 명시적 Goal 진입점이고, plain mutating request는 agent가 task로 열 수 있다.** Harness는 Goal을 durable state에 동기화하고, 각 Goal child task 또는 direct task의 task start → plan → develop → QA → close 공개 루프는 `plugin/scripts/stop_gate.py`가 close-gate를 감지해 자동 재개시킨다. 독립 리뷰와 `task_verify`는 close 전 내부 게이트다.
+**native `/goal`이 Claude에서 유일한 auto-continue primitive다.** Harness는
+Goal을 durable state에 동기화하고, 각 Goal child task 또는 direct task의
+task start → plan → develop → QA → close 공개 루프는 코디네이터가 직접
+진행한다. 독립 리뷰와 `task_verify`는 close 전 내부 게이트다. Turn-end는
+Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록은 2026-09-23
+제거됐다 (`plugin/hooks/hooks.json`에 `Stop` 엔트리 없음). `plugin/scripts/stop_gate.py`는
+트리에 남아 있지만 어느 런타임에서도 등록된 caller가 없는 dormant 스크립트이며,
+자동 재개에 관여하지 않는다.
 
-## 동작 메커니즘 비교
+## 동작 메커니즘
 
 ### Anthropic `/goal` (Claude Code v2.1.139+)
 1. 사용자가 `/goal <자연어 조건>` 입력.
@@ -26,74 +33,40 @@ updated: 2026-06-12
 6. `ok:true`면 goal clear, 사용자에게 컨트롤 반환.
 7. `/goal clear` 또는 `/clear`로 취소.
 
-### harness `stop_gate.py`
-1. 사용자가 native `/goal <objective>` 입력 → hook이 harness Goal state를 생성/동기화한다. 이후 agent가 Goal context를 보고 필요한 경우 `task_start` + `goal_add_task`로 `doc/harness/tasks/.active` 마커를 만든다. Plain repo-mutating request에서도 hook이 task를 자동 생성하지 않으며, agent가 필요성을 판단해 `task_start`로 direct task를 연다.
-2. `plugin/hooks/hooks.json` Stop 엔트리에 등록된 `python3 plugin/scripts/stop_gate.py`가 매 turn 종료 시 실행.
-3. `stop_gate.py:77-151`이 active task 마커 확인 → `emit_compact_context`로 `missing_for_close` 계산:
-   - PLAN.md 없음, 필수 review/QA receipt 없음, `runtime_verdict ≠ PASS` 등.
-4. 미완료이면 `_gate_response.block(...)`이 `{"decision": "block", "reason": "...", "hookSpecificOutput": {...}}` JSON을 stdout으로 emit.
-5. Claude Code Stop hook contract에 따라 `reason`이 **Claude 다음 turn 입력으로 주입** → 자동 재개. `next_action_command`까지 함께 줘서 정확한 다음 호출을 명시.
-6. `runtime_verdict=PASS` + `task_close` 성공 시 `.active` 마커 제거 → 다음 Stop hook은 silent allow.
-7. `task_blocked`가 안전한 `BLOCKED.md`를 게시해 `runtime_verdict=BLOCKED_ENV`가 파생되면 silent allow한다.
+### Harness Goal 동기화
+1. 사용자가 native `/goal <objective>` 입력 → hook이 harness Goal state를
+   생성/동기화한다. 이후 agent가 Goal context를 보고 필요한 경우
+   `task_start` + `goal_add_task`로 `doc/harness/tasks/.active` 마커를
+   만든다. Plain repo-mutating request에서도 hook이 task를 자동 생성하지
+   않으며, agent가 필요성을 판단해 `task_start`로 direct task를 연다.
+2. Turn-end 자체는 hook으로 강제되지 않는다. 태스크가 `in_progress`인 동안
+   완결로 인정되는 것은 receipt-backed `runtime_verdict: PASS` 를 거친
+   `task_close` 뿐이다 (C-04, C-17).
+3. `/goal` 조건에 close 조건을 넣으면 native Stop hook이 그 조건이
+   충족될 때까지 자동 재개시킨다: `/goal harness task <task_id>이 닫힐
+   때까지 진행. PLAN.md의 acceptance intent를 충족하고, 필수 review/QA
+   lifecycle receipt로 runtime_verdict=PASS를 만든 뒤 task_close 성공.`
+4. Task가 `.active`로 열린 채 turn이 끝나면, 태스크는 다음 turn 또는 다음
+   session에서 `task_start`/`task_context`로 재개된다 — 이것이 native
+   `/goal`을 쓰지 않는 경우의 지속 경로다. `/goal`을 쓰면 native Stop hook의
+   재호출이 그 재개를 자동화한다.
 
-### 핵심 동일성
-양쪽 모두 **Stop hook 응답 contract**의 동일한 surface를 사용한다:
-- `{decision/ok}: block/false` 키
-- `reason` 문자열 → Claude 다음 turn 입력으로 fed back
-- 매 turn 종료 시 자동 발사
+## 왜 `stop_gate.py`가 아닌가
 
-따라서 "develop 완료될 때까지 Claude를 멈추지 못하게 한다"는 핵심 동작은 `stop_gate.py`로 **이미 구현되어 있다**.
+2026-09-23 이전에는 `plugin/hooks/hooks.json`의 `Stop` 엔트리가
+`stop_gate.py`를 등록해, close-gate 미충족 시 매 turn을 block했다. 그 설계는
+백그라운드 리뷰 서브에이전트를 기다리는 동안 "아직 돌고 있다"는 내용만 담은
+반복적인 빈 turn을 만들어냈고, 사용자가 그 등록을 제거하라고 명시적으로
+요청했다 (2026-09-23). 지속적인 non-stop 진행이 필요할 때는 native `/goal`을
+쓴다는 것이 확정 방침이다.
 
-## 남은 차이
-
-| 항목 | `/goal` | `stop_gate.py` |
-|---|---|---|
-| Evaluator | Haiku (자연어 transcript 판단) | Python 규칙 (`missing_for_close`, declared lenses, ordered receipts) |
-| 조건 입력 | 자연어 4000자 (`/goal …`) | 하드코딩 close-gate (PLAN.md / RECEIPTS.jsonl / runtime_verdict) |
-| 초기 kickoff | 조건 텍스트가 first directive로 즉시 발사 | native Goal sync 후 Goal child task가 plan→develop 체이닝 |
-| 저장 위치 | 세션 메모리 (휘발) | `plugin/hooks/hooks.json` (영속) |
-| Turn cap | "or stop after N turns" 명시 가능 | 없음 (close-gate 충족까지 지속) |
-| Cancel UX | `/goal clear` | task_close 또는 qualified blocker → task_blocked |
-| 신뢰성 | LLM 판단 의존 (transcript 잘못 읽으면 오판) | exact `TASK.json` + `RECEIPTS.jsonl` 기반 (deterministic) |
-
-규칙 기반 평가는 결정성이 강점이지만, `/goal`의 자연어 조건은 더 유연하다. 둘 다 같은 turn-주입 primitive 위에 올라간 다른 정책일 뿐이다.
-
-## 동시 사용 (선택)
-
-Anthropic 실제 `/goal`을 함께 켜고 싶다면 develop 진입 시점에 수동으로:
-
-```
-/goal harness task <task_id>이 닫힐 때까지 진행. PLAN.md의 acceptance intent를 충족하고, 필수 review/QA lifecycle receipt로 runtime_verdict=PASS를 만든 뒤 task_close 성공. 또는 25 turn 후 중단.
-```
-
-매 turn 종료 시 Stop hook 두 개가 모두 발사된다:
-1. `stop_gate.py` (deterministic) → close-gate 미충족 시 block + reason.
-2. `/goal` prompt-based hook → Haiku가 transcript 보고 block + reason.
-
-두 reason이 모두 Claude 입력으로 합쳐져 들어온다. **주의**: deterministic 쪽이 BLOCKED_ENV(fresh)로 silent allow를 결정해도 `/goal` 쪽은 자체 판단을 계속한다. `/goal`도 같이 멈추려면 `/goal clear`를 따로 쳐야 한다.
-
-대부분의 경우 native `/goal` + harness Goal child task close gate만으로 충분하므로 별도 prompt-based `/goal` stop hook을 수동으로 겹쳐 쓰는 것은 권장 default가 아니다.
-
-## 코드 인용
-
-- `plugin/scripts/stop_gate.py` — BLOCKED_ENV silent allow:
-  ```python
-  if verdict == "BLOCKED_ENV":
-      return 0  # silent allow after task_blocked
-  ```
-- `plugin/scripts/stop_gate.py:133-150` — reason 본문과 `gate_block` emit:
-  ```python
-  reason = (
-      f"Active harness task {task_id} is open. Do not stop — finish the "
-      "task start -> plan -> develop -> QA -> close loop. ..."
-  )
-  payload = gate_block(reason=reason, next_action_command=next_action, ...)
-  json.dump(payload, sys.stdout)
-  ```
-- `plugin/hooks/hooks.json` Stop 엔트리에 `stop_gate.py` 등록되어 매 turn 발사.
+`stop_gate.py` 자체는 되돌리기(revert)를 위해 트리에 남아 있지만 어느
+런타임의 hook 등록에도 연결돼 있지 않다 (`install.py`의
+`_codex_hooks_config`도 `hook_stop.py`를 배선하지 않는다). 삭제는 별도
+follow-up이다.
 
 ## 참고
 - Anthropic 공식 문서: <https://code.claude.com/docs/en/goal>
 - Prompt-based hooks: <https://code.claude.com/docs/en/hooks-guide#prompt-based-hooks>
-- 관련 contract: [`CONTRACTS.md` C-17 Stop gate freshness](../../../CONTRACTS.md#c-17)
-- 관련 task: `TASK__harness-run-auto-goal-loop` (2026-05-21 — 본 조사 결과 doc-only로 종결)
+- 관련 contract: [`CONTRACTS.md` C-17 turn-end/continuation guidance](../../../CONTRACTS.md#c-17)
+- 관련 task: `TASK__harness-run-auto-goal-loop` (2026-05-21 — 최초 조사, doc-only로 종결); `TASK__plan-single-voice-review` (2026-09-23 — Stop hook 등록 제거)

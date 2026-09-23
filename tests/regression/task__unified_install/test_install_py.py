@@ -1791,3 +1791,24 @@ def test_codex_hook_wrappers_emit_empty_or_valid_json():
             parsed = json.loads(r.stdout)
             assert "hookSpecificOutput" in parsed
             assert "hookEventName" in parsed["hookSpecificOutput"]
+
+
+def test_claude_payload_over_old_tree_registers_no_stop_hook(tmp_path):
+    """AC-010 (TASK__plan-single-voice-review): reinstalling over a runtime whose
+    hooks.json still registered `Stop` -> stop_gate.py drops that entry, while the
+    dormant script itself stays shipped for revert."""
+    module = _load_install_module()
+    install_root = tmp_path / "claude" / "harness-dev"
+    old_hooks = install_root / "plugin" / "hooks" / "hooks.json"
+    old_hooks.parent.mkdir(parents=True)
+    old_hooks.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{
+        "type": "command",
+        "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/stop_gate.py || true",
+    }]}]}}))
+
+    plugin_root = module.sync_claude_payload(install_root)
+
+    hooks = json.loads((plugin_root / "hooks" / "hooks.json").read_text())["hooks"]
+    assert "Stop" not in hooks
+    assert {"SubagentStart", "SubagentStop"} <= set(hooks)
+    assert (plugin_root / "scripts" / "stop_gate.py").is_file()

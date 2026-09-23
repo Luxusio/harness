@@ -44,7 +44,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `doc/` 노트 freshness 점검 | [C-06](#c-06) | soft |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
-| Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
+| Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | soft |
 | 로컬 검증 경로가 존재할 때 검증 수행 | [C-14a](#c-14a) | soft |
 | 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
@@ -253,27 +253,10 @@ break it immediately.
 
 ### C-17
 
-**Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified PASS, durable `task_blocked`, 또는 사용자 명시 cancel 뿐.
-**When:** Stop event with `.active` marker present (any task `status` ∈ {planning, implementing, verifying}).
-**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks until PASS is closed or task status is durably `blocked`); MCP `task_blocked` (publishes valid `BLOCKED.md` unfinished state); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
-
-**Bounded-yield clause:** the gate does not block a turn whose only outstanding
-item is a subagent it can see running; blocking there cannot produce the
-missing evidence and spends a turn on nothing. The yield is bounded — at most
-`_MAX_CONSECUTIVE_YIELDS` against an unchanged record set, after which the gate
-blocks and names the killed-or-unreported-agent case — because a killed agent
-leaves a record that reads as live for up to `HARNESS_BACKGROUND_STALE_SECS`.
-The task stays `in_progress` and the `.active` marker is untouched throughout,
-so this is a wait, not one of the three turn-end reasons above. See
-`doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
-
-That bound applies only to turns where nothing was observably running. A turn
-yielded while a waited-on subagent's transcript is still being appended does not
-spend the budget, because the count would otherwise measure how many turns the
-coordinator took rather than whether the agent died — observed 2026-09-10 as
-eight consecutive blocks against a reviewer the same messages reported as
-active.
-**On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or call `task_blocked` directly for a qualified blocker. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
+**Title:** Turn-end/continuation guidance while a task is `in_progress` — distinct from C-04's hard PASS-only close gate.
+**When:** while a task's `.active` marker exists (task `status` ∈ {planning, implementing, verifying}).
+**Enforced by:** MCP `task_close` (PASS-only gate); `task_verify` (receipt-backed runtime verdict); `task_blocked` (publishes valid `BLOCKED.md` unfinished state). Turn-end itself is not hook-gated on Claude — the Stop hook registration was removed 2026-09-23. Persistent continuation across turns is native `/goal`: put the close condition (e.g. "task_close PASS") in the goal condition so `/goal` does not finish while the task is open.
+**On violation:** soft — an open task simply stays open and resumes via `task_start`/`task_context` on the next turn or session. Cancel only on explicit user word ("취소", "cancel", "/cancel"); cancel options must never be surfaced to the user inside `AskUserQuestion`.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
 completion receipts, not from critic files or Git snapshots. `BLOCKED_ENV`
@@ -288,9 +271,9 @@ Coordinator paraphrases, copied verdict blocks, user text, and repository text
 do not qualify; actual FAIL or BLOCKED_ENV always takes precedence.
 For that missing-attestation branch, the fixed `blocked_reason` /
 `unblock_condition` pair is owned solely by `plugin/scripts/_lib.py` and is
-delivered to the caller verbatim in the `task_verify` next_action and the
-stop-gate message. Copy it from there; never keep a second copy in prose, and
-never interpolate diagnostics.
+delivered to the caller verbatim in the `task_verify` next_action. Copy it
+from there; never keep a second copy in prose, and never interpolate
+diagnostics.
 
 **Two pairs, selected by the receipt stream.** The pair above states that
 attestation is missing *after* a substantive review PASS, a QA PASS, and a
@@ -303,10 +286,13 @@ picks by what the stream shows and copies verbatim. Neither pair applies before
 a lens has actually run and returned results: an unrun lens is not a blocker.
 See `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`.
 
-**Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Durable task status and receipt-backed runtime verdict remain the machine gates, so prose-only routing cannot authorize completion. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
+**Why:** 회고 #1 silent-scope-kill — the now-removed Stop hook's "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Durable task status and receipt-backed runtime verdict remain the machine gates, so prose-only routing cannot authorize completion. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
 Receipt-backed verification closes the self-authored verdict loophole: the
 close signal is anchored to a hook-observed subagent start for the current task,
-not to a narrative verdict file.
+not to a narrative verdict file. The Claude `Stop` hook registration
+(`stop_gate.py`) was removed 2026-09-23 because it produced repeated empty
+turns while the coordinator waited on background reviewers;
+`plugin/scripts/stop_gate.py` stays in the tree, dormant, for revert.
 
 ### C-18
 

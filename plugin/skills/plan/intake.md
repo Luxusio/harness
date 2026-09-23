@@ -41,7 +41,11 @@ Never infer partial review progress from another file.
 
 Use working context by default. Create PLAN_SESSION.json only when the plan must
 survive a turn/context boundary or delegated planning requires shared recovery
-state. Its absence is normal and never an error.
+state. Its absence is normal and never an error. When scratch is malformed or
+stale, malformed legacy scratch is equivalent to absent scratch — ignore it
+and reconstruct from PLAN.md/task context. Legacy reviewer-transport-selection
+keys from old PLAN_SESSION.json scratch are ignored; they no longer select
+anything.
 
 ## Phase 0.1.5: Load project learnings
 
@@ -54,60 +58,6 @@ mcp__plugin_harness_harness__task_start { task_id: "<ARGUMENTS>" }
 ```
 Extract: `risk_level`, `planning_mode`, `compat.execution_mode`, `workflow_locked`, `maintenance_task`, `ui_scope`, `dx_scope`, `must_read`.
 
-## Phase 0.3: Cross-model Voice B availability probe
-
-Probe whether an external model (Codex or Gemini) is available for Voice B in the dual-voice phases. If available and not disabled, Phase 1/3/4 Voice B spawns routes through `omc ask codex|gemini` instead of the Agent tool — giving genuine cross-model adversariality instead of same-model Agent-B.
-
-```bash
-_CODEX_AVAIL=false
-_GEMINI_AVAIL=false
-_OMC_ASK_AVAIL=false
-if command -v codex >/dev/null 2>&1; then _CODEX_AVAIL=true; fi
-if command -v gemini >/dev/null 2>&1; then _GEMINI_AVAIL=true; fi
-if command -v omc >/dev/null 2>&1 && omc ask --help 2>&1 | grep -q "claude\|codex\|gemini"; then
-  _OMC_ASK_AVAIL=true
-fi
-
-# Kill switch honored first
-if [ "${HARNESS_DISABLE_CROSS_MODEL:-}" = "1" ]; then
-  _CROSS_MODEL_VOICE="agent"
-elif [ "$_OMC_ASK_AVAIL" = "true" ] && [ "$_CODEX_AVAIL" = "true" ]; then
-  _CROSS_MODEL_VOICE="codex"       # preferred: codex CLI via `omc ask codex`
-elif [ "$_OMC_ASK_AVAIL" = "true" ] && [ "$_GEMINI_AVAIL" = "true" ]; then
-  _CROSS_MODEL_VOICE="gemini"      # fallback: gemini CLI via `omc ask gemini`
-elif [ "$_CODEX_AVAIL" = "true" ]; then
-  _CROSS_MODEL_VOICE="codex-direct" # no omc ask; call `codex exec` directly
-else
-  _CROSS_MODEL_VOICE="agent"       # final fallback: same-model Agent tool
-fi
-echo "CROSS_MODEL_VOICE=$_CROSS_MODEL_VOICE"
-```
-
-Keep `_CROSS_MODEL_VOICE` in working context. If optional recovery scratch is
-already in use, also store it as a `cross_model_voice` hint. A resumed Phase
-1/3/4 MUST re-probe current availability and re-apply
-`HARNESS_DISABLE_CROSS_MODEL` before accepting that hint:
-
-```bash
-python3 - <<PY
-import json, pathlib
-p = pathlib.Path("doc/harness/tasks/TASK__<id>/PLAN_SESSION.json")
-if p.is_file():
-    try:
-        d = json.loads(p.read_text())
-        if not isinstance(d, dict):
-            raise ValueError("scratch root must be an object")
-        d["cross_model_voice"] = "$_CROSS_MODEL_VOICE"
-        p.write_text(json.dumps(d))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        pass  # malformed legacy scratch is equivalent to absent scratch
-PY
-```
-
-**Kill switch:** `HARNESS_DISABLE_CROSS_MODEL=1` forces `agent` regardless of CLI availability. Session-wide while set.
-
-**Never blocks.** If the probe errors out entirely, default to `agent` and log one row to `learnings.jsonl` with `type=operational` + `key=cross-model-probe-fail`.
-
 ## Phase 0.4: Read task pack
 
 Read in order: `TASK.json`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files in `must_read`.
@@ -118,7 +68,7 @@ Read in order: `TASK.json`, `REQUEST.md` (if exists), existing `PLAN.md` (if exi
 git log --oneline -20 2>/dev/null || true
 git diff --stat HEAD 2>/dev/null || git diff --stat 2>/dev/null || true
 ```
-Store as `GIT_CONTEXT`. Prepend `## Git context` block to Voice A/B briefs in Phases 1 and 3.
+Store as `GIT_CONTEXT`. Prepend `## Git context` block to the reviewer brief in Phases 1 and 3.
 
 ## Phase 0.4.2: Base branch detection
 

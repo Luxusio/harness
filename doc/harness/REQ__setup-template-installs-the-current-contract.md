@@ -9,9 +9,18 @@ invalidated_by_paths:
   - plugin/scripts/contract_lint.py
   - plugin/skills/setup/bootstrap.md
   - tests/test_contract_lint_real_tree.py
+freshness_updated: 2026-09-23T00:42:07Z
 ---
 
 # REQ — setup은 런타임이 강제하는 그 계약을 설치한다
+
+> **2026-09-23 note.** 아래 "관측된 격차 (2026-09-04)" 절의 "`stop_gate.py`
+> 는 첫 세션부터 그것을 강제한다"는 그 당시(Stop 훅이 여전히 등록돼 있던
+> 시점)의 관측이며 historical 이다. Claude `Stop` 훅 등록은 2026-09-23
+> 제거되어 C-17은 더 이상 hook-enforced 가 아니고 soft-level turn-end/
+> continuation guidance다 (`CONTRACTS.md` C-17). 이 REQ의 살아있는 요구사항
+> — 루트와 템플릿의 계약 id 집합·규범적 주장 일치 — 는 변하지 않았고, C-17은
+> 양쪽 파일에서 동일하게 soft로 갱신됐다.
 
 ## Expected behavior
 

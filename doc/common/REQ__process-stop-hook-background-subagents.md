@@ -1,5 +1,10 @@
 # REQ - Process Stop Hook Background Subagents
 
+> **Historical (2026-09-23).** The Claude `Stop` hook registration was removed from
+> `plugin/hooks/hooks.json`; no runtime runs `stop_gate.py` now, so the behavior below
+> no longer executes. It is kept as the design record for the dormant script.
+> Turn-end continuation is native `/goal`; see `doc/harness/patterns/auto-loop.md`.
+
 ## Intent
 Define the Stop hook behavior when Claude has active background subagents or monitors running for an active harness task.
 

@@ -95,12 +95,12 @@ Full procedure:
 ```markdown
 ## Review Status
 
-| Phase | Ran | Voices | Confirmed | Disagree | User Challenges |
-|-------|-----|--------|-----------|----------|-----------------|
-| 1 CEO | yes | dual | <N> | <N> | <N> |
-| 2 Design | <yes/skipped> | <dual/—> | <N/—> | <N/—> | <N/—> |
-| 3 Eng | yes | dual | <N> | <N> | <N> |
-| 4 DX | <yes/skipped> | <dual/—> | <N/—> | <N/—> | <N/—> |
+| Phase | Ran | Reviewer | Findings | User Challenges |
+|-------|-----|----------|----------|-----------------|
+| 1 CEO | yes | <subagent/coordinator-only> | <N> | <N> |
+| 2 Design | <yes/skipped> | <subagent/coordinator-only/—> | <N/—> | <N/—> |
+| 3 Eng | yes | <subagent/coordinator-only> | <N> | <N> |
+| 4 DX | <yes/skipped> | <subagent/coordinator-only/—> | <N/—> | <N/—> |
 
 **Auto-decided:** <N> | **Taste surfaced:** <N> | **User Challenges:** <N>
 **Planning procedure:** <compact/full>
@@ -134,7 +134,9 @@ Full procedure:
 | 3 Eng Review | yes | complete | <N> confirmed |
 | 4 DX Review | <yes/no (no DX scope)> | — | — |
 
-**VERDICT:** REVIEWED — plan has passed the full dual-voice pipeline.
+**VERDICT:** REVIEWED — plan has passed the full review pipeline. If any phase
+ran coordinator-only, use `REVIEWED_DEGRADED — <phases> ran coordinator-only`
+and set completion status DONE_WITH_CONCERNS instead.
 ```
 
 Compact procedure:
@@ -146,7 +148,7 @@ Compact procedure:
 |------------|--------|----------|
 | Compact code/context assessment | complete | <N> confirmed; post-inspection escalation recheck clear |
 
-**VERDICT:** ASSESSED_COMPACT — low-risk plan passed the bounded code/context assessment; no full dual-voice review is claimed.
+**VERDICT:** ASSESSED_COMPACT — low-risk plan passed the bounded code/context assessment; no full review is claimed.
 ```
 
 If review state is unavailable, use a placeholder table with all "—" and a
@@ -227,5 +229,5 @@ Deferred scope:    <N> items (see deferred-scope.md)
 Review summary:    <N> phase-summary rows
 ```
 
-- **DONE_WITH_CONCERNS** — any of: phase ran single-voice degraded; User Challenge unresolved; convergence guard issues.
+- **DONE_WITH_CONCERNS** — any of: phase ran coordinator-only; User Challenge unresolved; convergence guard issues.
 - **BLOCKED** — Phase 6 MCP artifact write failed. (Review findings alone are never BLOCKED — use DONE_WITH_CONCERNS.)

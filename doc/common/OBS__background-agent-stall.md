@@ -50,6 +50,9 @@ All timestamps are 2026-04-11, UTC. Elapsed = wall time from first to last seria
 
 ## Stop-gate interaction
 
+> **Historical (2026-09-23):** the Claude `Stop` hook no longer registers `stop_gate.py`;
+> this section describes behavior while it was registered.
+
 `stop_gate.py` runs on the **main session** stop hook. It reads each task's exact `TASK.json`
 and blocks the main-session stop when open tasks exist. It has no mechanism to inject into or
 affect subagent sessions — subagents run with their own stop hooks via `subagent_stop_gate.py`

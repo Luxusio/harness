@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Plan skill review pipeline** — plan-time review phases now spawn exactly
+  one independent reviewer subagent per phase instead of two (Voice A + Voice
+  B). Cross-model transport, the consensus table, and the dual-voice
+  degradation matrix are removed on both Claude and Codex. See
+  `doc/common/REQ__process__plan-skill-review-pipeline.md`.
+- **Claude `Stop` hook removed** — `plugin/hooks/hooks.json` no longer
+  registers `stop_gate.py` for the Claude `Stop` event; it produced repeated
+  empty turns while the coordinator waited on background reviewers. Turn-end
+  is no longer hook-gated on Claude; task completion still requires
+  receipt-backed `runtime_verdict: PASS` via `task_close`, and persistent
+  non-stop continuation is native `/goal` (put the close condition, e.g.
+  "task_close PASS", in the goal condition). `plugin/scripts/stop_gate.py`
+  stays in the tree, dormant, for revert. **Action required:** reinstall
+  (`python3 install.py`) and reload the Claude session to drop the stale
+  registration from an already-installed runtime.
+- **`CONTRACTS.md` C-17 refreshed** — existing projects pick up the new,
+  soft-level turn-end/continuation wording through the normal setup
+  managed-block regeneration (`contract_lint.py` / setup).
+
 ## Unreleased — v2.3.0 (dual-runtime v1)
 
 Opt-in support for OpenAI Codex CLI alongside Claude Code. Pure-additive: existing `plugin/` is untouched.

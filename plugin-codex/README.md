@@ -50,9 +50,9 @@ Further references:
 | setup | — | — | 71 | v1.5 spike port |
 | run (public entry) | — | thin | — | Trigger and routing wrapper over `internal-skills/run` |
 | internal-skills/run | 171 | 176 | 56 | Canonical Codex orchestration workflow |
-| internal-skills/plan | — | 292 | 45 | v1.5 spike port; dual-voice is capability-routed |
+| internal-skills/plan | — | 292 | 45 | v1.5 spike port; single independent reviewer via spawn_agent |
 | internal-skills/develop | 500 | 500 | 48 | Agent fan-out is capability-routed; sub-files fall back to plugin/skills/develop/<sub>.md |
-| internal-skills/plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; single-voice degraded adversarial |
+| internal-skills/plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; coordinator-only degraded adversarial |
 | internal-skills/plan-eng-review | 846 | 912 | 55 | 9 AskUQ → prose; rubrics sub-file falls back to Claude tree |
 | internal-skills/plan-design-review | 853 | 910 | — | Browser MCP refs degrade to ASCII wireframes + `open file://...` |
 | internal-skills/plan-devex-review | 1022 | 1105 | 52 | dx-hall-of-fame.md sub-file falls back to Claude tree |
@@ -93,7 +93,7 @@ changes receipt, verification, or close validity.
 ## What's deferred to v2
 
 - **Browser MCP verification** — qa-browser methodology is ported, but runtime calls to `mcp__chrome-devtools__*` have no Codex equivalent yet. Wire Codex Playwright MCP in v2.
-- **Dual-voice plan-* reviews without collaboration capability** — current Codex builds route independent voices through `spawn_agent`; older builds without that surface degrade to one voice.
+- **plan-* reviews without `spawn_agent`** — current Codex builds route the single independent reviewer through `spawn_agent`; builds without that surface run one inline critical-reviewer pass recorded as coordinator-only.
 - **AskUserQuestion** — every call site in the 9 ported skills converted to conversational prose with numbered/lettered options. Functional but UX-wise less discoverable than the structured tool. v2 may introduce a Codex helper that renders prose asks with a consistent shape.
 - **Inline advisory evidence** — verification receipts remain watcher-owned. Inline advisory roles return final-response findings and do not write critic artifacts or satisfy strict independent PASS gates.
 - **Stop loop control** — disabled on Codex. Codex follows the prompt in `run` / `develop` to continue through verify and close inside the current turn when feasible. It does not rely on Stop-hook auto-resume.

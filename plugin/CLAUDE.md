@@ -70,7 +70,7 @@ Short approvals only authorize the last explicit transition proposed.
 `execution_mode: micro` (passed to `task_start`) exempts the PLAN.md rule for
 one-shot bugfix/maintenance edits; the REQ durable-doc gate still applies.
 
-## 4a. Turn-end rule (P1 strict)
+## 4a. Turn-end rule
 
 Task in_progress (`.active` marker exists) 동안:
 
@@ -78,23 +78,23 @@ Task in_progress (`.active` marker exists) 동안:
 - 모호한 종결 발화는 무시 — 사용자의 "여기까지", "오늘 그만", "내일", "다음에", "later" 등은 task 종결 사유가 아니다. Session 자연 종료(터미널 닫힘 등)는 task 상태를 건드리지 않으며, 다음 SessionStart 가 resume 한다.
 - AskUserQuestion 옵션 라벨에 "중단/취소/일시정지/나중에/cancel/stop/pause/defer/skip" 류 제시 금지.
 - Cancel 은 사용자가 명시 단어("취소", "cancel", "/cancel") 로 표명할 때만.
-- 자가 판단으로 turn 종결 금지.
-- 예외 아님 — 대기: 미결 항목이 오직 게이트가 실행 중으로 확인한 서브에이전트
-  뿐이면 stop_gate 는 막지 않고 턴을 양보한다. 태스크는 `in_progress` 로
-  남고 `.active` 마커도 그대로다. 변하지 않은 레코드 집합에 대한 양보는
-  횟수 제한이 있고, 소진되면 다시 막으면서 죽은/미보고 에이전트 경우를
-  지목한다. 단 그 횟수는 **아무것도 돌지 않는 것으로 관측된 턴**에만
-  누적된다 — 기다리는 서브에이전트의 트랜스크립트가 계속 쓰이고 있으면
-  예산을 소비하지 않는다. 자세한 근거는
-  `doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
+- 자가 판단으로 task 를 끝내지 않는다 (아래 Task 종결 사유만).
+- Turn-end 는 Claude 에서 hook 으로 게이트되지 않는다 (Stop 훅 등록이
+  2026-09-23 제거됨). Task 는 열린 채로 남고, close 는 여전히
+  `task_close` 의 receipt-backed PASS 만 인정한다. Turn 간 지속(continuation)
+  은 native `/goal` 이 담당한다 — close 조건(예: "task_close PASS")을 goal
+  condition 에 넣는다.
+- 대기는 종결이 아니다: 실행 중인 lens 서브에이전트를 기다릴 때는 turn 을
+  끝낸다 — 폴링하지 않는다. 태스크는 `in_progress` 로, `.active` 마커도
+  그대로 남고, 완료 알림이 다음 turn 에서 작업을 재개시킨다.
 
-Turn 종결 정당 사유 (runtime_verdict 기반):
+Task 종결 사유 (runtime_verdict 기반, turn 대기와 무관):
 
 1. **PASS** — 모든 AC 가 `passed`/`deferred` → `task_close`.
 2. **BLOCKED_ENV** — 진짜 blocker 확인 → `task_blocked(blocked_reason, unblock_condition)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
-BLOCKED_ENV로 멈출 때는 `task_blocked`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `task_verify` 1회 후에도 남은 필수 attestation 누락이다. 렌즈가 실제로 돌아 결과를 냈는데 필수 증거가 없는 경우에는 고정 쌍만 쓴다. 단 기록 능력 상실이 **관측된** 경우(`doc/harness/.receipt-capability-broken` 존재)는 외부 환경 blocker 분기가 우선하며 고정 쌍을 쓰지 않는다 — 두 쌍 모두 "렌즈가 돌아 결과를 냈다"를 단언하는데 그 상태에서는 그게 미지이기 때문이다. 근거는 `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. 쌍은 **둘**이고 어느 쪽인지는 영수증 스트림이 정한다 — 이 run 에 아무 영수증도 기록되지 않았으면 empty-stream 쌍, 영수증은 있는데 필수 completion 이 없으면 missing-attestation 쌍. 두 `blocked_reason`/`unblock_condition` 문자열 모두 `plugin/scripts/_lib.py`가 소유하며, 방금 돌린 `task_verify` 응답의 `next_action`(또는 같은 두 쌍을 싣는 stop-gate 메시지)에서 **그대로 복사**한다. 기억에 의존해 다시 타이핑하거나, 바꿔 쓰거나, 진단 문구를 끼워 넣지 않는다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 기존 task_verify+task_close.
+BLOCKED_ENV로 멈출 때는 `task_blocked`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `task_verify` 1회 후에도 남은 필수 attestation 누락이다. 렌즈가 실제로 돌아 결과를 냈는데 필수 증거가 없는 경우에는 고정 쌍만 쓴다. 단 기록 능력 상실이 **관측된** 경우(`doc/harness/.receipt-capability-broken` 존재)는 외부 환경 blocker 분기가 우선하며 고정 쌍을 쓰지 않는다 — 두 쌍 모두 "렌즈가 돌아 결과를 냈다"를 단언하는데 그 상태에서는 그게 미지이기 때문이다. 근거는 `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. 쌍은 **둘**이고 어느 쪽인지는 영수증 스트림이 정한다 — 이 run 에 아무 영수증도 기록되지 않았으면 empty-stream 쌍, 영수증은 있는데 필수 completion 이 없으면 missing-attestation 쌍. 두 `blocked_reason`/`unblock_condition` 문자열 모두 `plugin/scripts/_lib.py`가 소유하며, 방금 돌린 `task_verify` 응답의 `next_action`에서 **그대로 복사**한다. 기억에 의존해 다시 타이핑하거나, 바꿔 쓰거나, 진단 문구를 끼워 넣지 않는다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 기존 task_verify+task_close.
 
 파킹 뒤에는 별도 resume 도구가 없다. plain `task_start`가 같은 run과
 review/QA 영수증을 보존해 재개한다. 이미 끝난 증거를 의도적으로 버리고 새

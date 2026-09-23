@@ -11,10 +11,18 @@ invalidated_by_paths:
   - tests/test_contract_lint_real_tree.py
   - plugin/scripts/stop_gate.py
   - tests/test_stop_gate.py
-freshness_updated: 2026-09-18T08:05:00Z
+freshness_updated: 2026-09-23T00:42:07Z
 ---
 
 # REQ — a contract's "Enforced by" names something that actually runs
+
+> **2026-09-23 note.** C-17's `Enforced by` field no longer names
+> `stop_gate.py`; the Claude `Stop` hook registration was removed
+> (`plugin/hooks/hooks.json` has no `Stop` entry). The `stop_gate.py`
+> instances below (module docstring claim, second instance) remain
+> historical examples of the general rule this REQ states; they describe a
+> defect found while the hook was still registered, not a claim about the
+> hook's current registration status.
 
 ## Expected behavior
 

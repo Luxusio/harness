@@ -1,5 +1,12 @@
 # REQ - Session Start Hooks No Op Outside Harness
 
+> **2026-09-23 note.** `stop_gate.py` is still covered below as a script that
+> must no-op outside a harness-enabled repo, and that property is unchanged.
+> Separately, the Claude `Stop` hook registration for `stop_gate.py` was
+> removed from `plugin/hooks/hooks.json` on 2026-09-23, so the script is no
+> longer invoked as a live hook on any Claude turn; it is exercised only by
+> direct script invocation (e.g. `tests/test_non_harness_hooks_noop.py`).
+
 ## Intent
 Harness SessionStart/PreToolUse/PostToolUse/Stop/Subagent hooks must no-op silently when invoked from a repository that has not completed harness setup. "Not set up" means doc/harness/manifest.yaml is absent. Hooks are installed globally and fire from any project Claude Code or Codex opens, so this no-op contract is what keeps non-harness repos free of runtime files. This REQ captures the expected normal behavior surfaced by the 2026-05-31 stale-install pollution bug (root cause documented in OBS__design-planning-harness-friction.md Implementation-track section; resolving commit 0c5dd7b 2026-05-27).
 

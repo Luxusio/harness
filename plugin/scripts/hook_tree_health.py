@@ -14,7 +14,8 @@ from `~/.claude/plugins/cache/harness/harness/2.3.0` — registered in
 marketplace was repointed at `~/.claude/harness-dev`. That tree predates the
 receipt subsystem entirely: no `background_hook.py`, no `subagent_lifecycle.py`,
 and no `SubagentStart`/`SubagentStop` registration. Every *other* hook
-(`prewrite_gate.py`, `stop_gate.py`, `prompt_memory.py`)
+(`prewrite_gate.py`, `stop_gate.py` (its `Stop` registration was removed
+2026-09-23), `prompt_memory.py`)
 does exist there and fired normally all session, so the harness presented as
 fully healthy. The only symptom was an absence: no receipts, and — because
 `background_hook.py` was never on disk to run — not even a `binding-miss`

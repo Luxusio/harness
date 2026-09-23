@@ -549,3 +549,18 @@ environment_notes:
       `HARNESS_BACKGROUND_WAIT_SECS=0 python3 plugin/scripts/stop_gate.py <<< '{}'`. Marker for the outage branch:
       doc/harness/.receipt-capability-broken (regular file only; symlink/dir/fifo are ignored by design).
     discovered: 2026-09-18
+  - topic: "temp-root install without touching ~/.claude or ~/.codex"
+    detail: >
+      Import install.py and call install.sync_claude_payload(<tmp>/claude) and
+      install.sync_codex_payload(<tmp>/codex); both skip the claude/codex CLIs. Codex plan sub-files land in
+      <tmp>/codex/plugins/harness/internal-skills/plan/ with ${CLAUDE_PLUGIN_ROOT}/skills rewritten to
+      ${HARNESS_PLUGIN_ROOT}/internal-skills. install._claude_payload_state(<tmp>/claude) -> SYNCHRONIZED.
+      Since 2026-09-23 plugin/hooks/hooks.json has no Stop key; stop_gate.py is dormant but still runnable.
+    discovered: 2026-09-23
+  - topic: "upgrade-path check for removed Claude hooks"
+    detail: >
+      Seed <tmp>/claude/plugin/hooks/hooks.json with an old {"hooks":{"Stop":[...]}} entry, then run
+      install.sync_claude_payload(<tmp>/claude); the staged-tree activation replaces the file wholesale, so the
+      resulting key set is exactly the source hooks.json keys. Pointer-audit for plan skill: grep
+      -nE "\bbelow\b|\babove\b|[Ss]ee |§" over plugin/skills/plan/*.md and plugin-codex/internal-skills/plan/SKILL.md.
+    discovered: 2026-09-23

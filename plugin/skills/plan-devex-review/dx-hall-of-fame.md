@@ -123,5 +123,4 @@ Use when reviewing plans for Claude Code skills, MCP servers, or AI agent tools.
 - [ ] **Auto-resume**: A completed PLAN.md Review Status resumes into develop; incomplete planning is reviewed again instead of replaying a side ledger.
 - [ ] **Graceful degradation**: Missing tools skip cleanly, log reason to learnings.jsonl type `operational`. Never install missing tools automatically.
 - [ ] **Kill switches**: HARNESS_DISABLE_* env vars for every auto-behavior. Honored before CLI detection.
-- [ ] **Cross-model Voice B**: Detect codex/gemini CLI availability; fall back to Agent tool with same prompt on failure. Filesystem boundary prompt mandatory for external voices.
 - [ ] **Bounded autonomy**: Gate at every user-scope decision (premise, challenge, gate). Auto-decide covers mechanical + taste; never premises or user challenges.

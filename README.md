@@ -173,6 +173,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `review-read` | Return exactly one stored formal-review final by lowercase SHA-256 digest | stdout |
 | `subagent_lifecycle.py` | Receipt-backed Claude lifecycle handling, active-work queries, and trusted stop-only inference | task `RECEIPTS.jsonl` |
 | `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |
+| `stop_gate.py` | Dormant turn-end gate; no runtime registers it since the Claude `Stop` hook was removed 2026-09-23 (kept for revert) | — |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: compares source against the scripts dir it is executing from, so a session loading a different tree is visible (silent in non-dev / non-harness repos) | — |
@@ -201,8 +202,7 @@ steps may append signals or save a due retro. The pass completes before
 
 | Hook | Script | Purpose |
 |------|--------|---------|
-| Stop | `stop_gate.py` | Warn if open tasks remain |
-| SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
+| SubagentStart | `background_hook.py` | Register active Claude subagent work for the receipt lifecycle |
 | SubagentStop | `background_hook.py` | Mark Claude work complete; infer the correlated start when this runtime emitted no start event |
 | PreToolUse (direct writes) | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse (selected mutation/lifecycle tools) | `hook_pre_tool_use.py` | Codex wrapper for direct-write gates and spawn registration recovery |
@@ -213,7 +213,7 @@ steps may append signals or save a due retro. The pass completes before
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
 | Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
 | Codex task PostToolUse/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Bind the exact task/run returned to each root session, register or repair its rollout checkpoint before spawn, then replay real subagent starts and completions from MCP-hosted daemon threads without a detached process |
-| Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
+| Stop | `hook_stop.py` | Codex plugin wrapper for stop gating (not registered by `install.py`; dormant) |
 
 Codex MCP servers are loaded for the lifetime of the Codex session. After a
 Harness runtime update, start a new Codex session before relying on watcher

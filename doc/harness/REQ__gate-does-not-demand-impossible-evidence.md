@@ -15,10 +15,14 @@ invalidated_by_paths:
   - plugin/skills/develop/SKILL.md
   - plugin/skills/run/SKILL.md
   - CONTRACTS.md
-freshness_updated: 2026-09-18T08:05:00Z
+freshness_updated: 2026-09-23T00:42:07Z
 ---
 
 # REQ — park 사유는 관측되지 않은 전제를 단언하지 않는다
+
+> **2026-09-23 — Claude Stop 등록 제거.** 고정 park 쌍은 이제 `task_verify`
+> 의 `next_action` 으로만 전달된다. 아래의 stop-gate 메시지 서술은
+> `stop_gate.py` 가 등록돼 있던 동안의 historical 근거다 (스크립트는 dormant).
 
 ## Expected behavior
 

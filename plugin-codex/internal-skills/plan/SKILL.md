@@ -10,7 +10,7 @@ Codex planning pipeline with compact and full procedures. Conservatively eligibl
 > publishes it with required lens declarations in `TASK.json`.
 
 > **Codex runtime notes** (delta from Claude):
-> - **Dual Voice is capability-routed.** Discover deferred tools before deciding. When `spawn_agent` or an external model route is available, run independent Voice A and Voice B contexts. Use one inline critical-reviewer pass only when no independent route exists, and record that fallback in PLAN.md's Review Status section.
+> - **One independent reviewer, capability-mapped.** Discover deferred tools before deciding. When `spawn_agent` is available, run exactly one independent reviewer subagent per phase. Use one inline critical-reviewer pass only when no independent route exists, and record that phase as `coordinator-only` in PLAN.md's Review Status section.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Both procedures collect unresolved material premises and User Challenges into one Phase 5.3 interaction. Phase 5.4.1 runs only for explicit pre-code approval; a later new delta returns to the specific Phase 5.3 format.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `write_plan`.
@@ -23,7 +23,7 @@ This skill is split across four sub-files (Claude tree until AC-005 ports them):
 | File | Content |
 |------|---------|
 | `intake.md` | Phase 0 (spawned detection, recovery, task context, scope detection, planning-procedure branch) |
-| `review-phases.md` | Phases 1-4 (review template + per-lens dimensions, checklists, degradation matrix) |
+| `review-phases.md` | Phases 1-4 (review template + per-lens dimensions, checklists, findings table) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, ask format |
 | `write-artifacts.md` | Phase 6 (PLAN.md / TASK.json lens declarations + MCP writes, learnings, close) |
 
@@ -33,7 +33,7 @@ Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${H
 
 ## Invariants (Codex variant)
 
-- **Independent voices by capability.** Where the Claude source says "Voice A + Voice B via Agent", use separate subagent or external-model contexts when exposed. Otherwise run ONE inline critical-reviewer pass and note the degradation in PLAN.md `Review Status`; use the `single-voice` degradation row only for that fallback.
+- **Independent reviewer by capability.** Where the Claude source says "independent reviewer subagent via Agent", use `spawn_agent` when exposed. Otherwise run ONE inline critical-reviewer pass and record the phase as `coordinator-only` in PLAN.md `Review Status`.
 - **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
@@ -93,7 +93,7 @@ Each review phase reads its corresponding Codex internal prompt and executes the
 - Phase 3 → `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-eng-review/SKILL.md`
 - Phase 4 → `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
 
-These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex, route them through independent contexts when available; otherwise record the fallback in PLAN.md Review Status.
+These sub-skills are heavy review pipelines on the Claude side. On Codex, route them through one independent reviewer subagent via `spawn_agent` when available; otherwise run inline and record the phase as `coordinator-only` in PLAN.md Review Status.
 
 ---
 
@@ -110,26 +110,29 @@ turn. It is never task control or artifact authority.
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
 | `closed` | post-6 | Transitional state immediately before scratch removal |
 
-When used, it contains `{"state": "...", "phase": "...", "source": "plan-skill"}` and may include transport hints. Remove it after successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
+When used, it contains `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
 
 ---
 
-## Capability-Routed Voice Protocol (Codex variant)
+## Reviewer Protocol (Codex variant)
 
-Phases 1-4 first discover `spawn_agent` and external-model routes. When an
-independent route exists, run Voice A and Voice B in separate contexts and
-synthesize their results. Only when none exists, run ONE inline
-critical-reviewer pass. Every pass:
+Phases 1-4 first discover `spawn_agent`. When it is available, spawn exactly
+one independent reviewer subagent per phase. Only when no independent route
+exists, run ONE inline critical-reviewer pass and record the phase as
+`coordinator-only`. Every pass:
 - Reads the phase brief (lens dimensions from `review-phases.md`).
 - Produces findings per dimension.
 - Classifies each finding (Mechanical / Taste / User Challenge).
-- Retains a consensus row for PLAN.md, marked `single-voice` only when the independent route was unavailable.
+- Retains a findings row for PLAN.md, marked `coordinator-only` only when the independent route was unavailable.
 
-The fallback has less cross-blind-spot detection and no Voice A vs Voice B
-disagreement surfacing, so record it explicitly. A Codex run with independent
-subagents is not a degraded single-voice run merely because the runtime differs.
+The `coordinator-only` fallback has less independent detection, so record it
+explicitly. One reviewer is the normal case; a Codex run with an independent
+subagent is not a degraded run merely because the runtime differs. Any
+coordinator-only phase makes the completion status DONE_WITH_CONCERNS and the
+plan report VERDICT `REVIEWED_DEGRADED` (`write-artifacts.md`, shared across
+runtimes).
 
-Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md` (Claude tree). The Codex orchestrator uses the `single-voice` row only as the capability fallback.
+Full protocol, dimensions, checklists, and findings table: `review-phases.md` (Claude tree). The Codex orchestrator uses the `coordinator-only` row only as the capability fallback.
 
 ---
 
@@ -139,7 +142,7 @@ Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md
 2. **Compact branch** — conservatively classified low-risk standard work gets one bounded assessment, unresolved material decisions only, then canonical publication.
 3. **Full branch Phase 1 — CEO Review** — premise extraction and authorization classification are mandatory analysis.
 4. **Full branch Phase 2 — Design Review** — only if `ui_scope=true`.
-5. **Full branch Phase 3 — Engineering Review** — runs with independent voices when available.
+5. **Full branch Phase 3 — Engineering Review** — runs with an independent reviewer subagent when available.
 6. **Full branch Phase 4 — DX Review** — only if `dx_scope=true`.
 7. **Phase 5 — Consolidated Decision Gate** — either procedure asks once only when unresolved material decisions remain.
 8. **Phase 6 — Write artefacts** — always writes through `write_plan`; then removes optional PLAN_SESSION.json scratch.
@@ -165,12 +168,12 @@ Branch once after §5.0:
 ### 5.0 Pre-Gate verification (max 2 retries)
 
 For `full`, verify required outputs before collecting decisions:
-- [ ] Phase 1: premises source-classified and authorized or queued; CEO consensus retained; phase-transition summary
-- [ ] Phase 2 (if ran): Design consensus retained; phase-transition summary
-- [ ] Phase 3: Engineering consensus retained; phase-transition summary
-- [ ] Phase 4 (if ran): DX consensus retained; phase-transition summary
+- [ ] Phase 1: premises source-classified and authorized or queued; CEO findings retained; phase-transition summary
+- [ ] Phase 2 (if ran): Design findings retained; phase-transition summary
+- [ ] Phase 3: Engineering findings retained; phase-transition summary
+- [ ] Phase 4 (if ran): DX findings retained; phase-transition summary
 - [ ] PLAN.md Review Status has ≥ 1 row per completed phase
-- [ ] Any single-voice fallback is logged with the concrete unavailable independent route for each affected phase.
+- [ ] Any coordinator-only fallback is logged with the concrete unavailable independent route for each affected phase.
 
 If missing after 2 retries, proceed to 5.1 with warning block:
 ```
@@ -206,7 +209,7 @@ That is the entire user-facing summary.
 
 ### 5.1.1 Collect all decisions
 
-From the available consensus rows across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
+From the available findings rows across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
 
 ### 5.2 Retain Taste decisions for PLAN.md (no gate render)
 
@@ -235,8 +238,9 @@ the resulting scope. Free text may answer item by item. If an answer is partial,
 ask again only for unanswered items. Re-run only affected review work and ask
 again only if it introduces a new unauthorized material delta.
 
-**Note on single-voice fallback User Challenges:** one reviewer is weaker evidence
-for the recommendation, but review confidence never changes decision ownership.
+**Note on coordinator-only fallback User Challenges:** one reviewer is the
+normal case; a coordinator-only fallback is weaker evidence for the
+recommendation, but review confidence never changes decision ownership.
 Retain every unauthorized material user-owned choice in the bundle; only
 non-material alternatives may be classified as Taste.
 

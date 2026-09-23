@@ -176,7 +176,7 @@ task_start { slug: "<ARGUMENTS>" }
 
 Read `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md` and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
 
-On Codex side the plan skill uses the available runtime surface. When `spawn_agent` or external model routes are available, use them for independent review voices; otherwise run the review methodology inline and state the fallback in task state or final response if expected independence was lost. The premise gate becomes a conversational ask.
+On Codex side the plan skill uses the available runtime surface. When `spawn_agent` is available, use it to run one independent reviewer subagent per phase; otherwise run the review methodology inline as coordinator-only and state the fallback in task state or final response if expected independence was lost. The premise gate becomes a conversational ask.
 
 ### Phase 3: Develop
 

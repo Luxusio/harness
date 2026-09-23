@@ -63,7 +63,8 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     assert "Do not run a second QA or close cycle" in run
     assert "Verify recovery (only when develop returned before close)" in run
     assert "Skip the `task_close` call when Phase 3 already closed" in run
-    assert "Dual Voice is capability-routed" in plan
+    assert "Reviewer Protocol (Codex variant)" in plan
+    assert "Dual Voice" not in plan
     assert "Codex has no Agent fan-out tool" not in plan
     assert "Single-Voice Protocol" not in plan
     assert "Voice count is single in both" not in plan

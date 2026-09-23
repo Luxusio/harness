@@ -15,7 +15,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `setup_finalize.py` — applies canonical operational ignores, migrates legacy manifests to schema v5, verifies setup resources and routing, and stamps `.version` only after success
 - `contract_lint.py` — CONTRACTS.md managed-block lint; `--check-weight` enforces C-13 SKILL.md budget
 - `prewrite_gate.py` — PreToolUse hook (artifact ownership + plan-first enforcement)
-- `stop_gate.py` — Stop hook (open task reminder)
+- `stop_gate.py` — dormant; no registered caller in either runtime (the Claude `Stop` hook registration was removed 2026-09-23), kept in the tree for revert
 - `golden_replay.py` — regression smoke tests for the scripts above (stdlib only)
 - `review-log` — read one bounded formal-review final from stdin and append it to the active or explicitly selected task's `REVIEWS.jsonl`; prints only `DETAIL_SHA256:<hex>`
 - `review-read` — stream and validate one task-local `REVIEWS.jsonl` entry selected by lowercase SHA-256; prints only that exact detail and never dumps the log

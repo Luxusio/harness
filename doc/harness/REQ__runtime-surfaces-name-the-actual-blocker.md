@@ -24,6 +24,14 @@ freshness_updated: 2026-09-18T08:05:00Z
 
 # REQ — 런타임 표면은 실제 blocker를 지목한다
 
+> **2026-09-23 — Claude Stop 등록 제거.** `plugin/hooks/hooks.json`의 `Stop`
+> 엔트리(`stop_gate.py`)가 제거되어, 이 문서가 서술하는 turn-end
+> block/yield/하트비트 동작은 현재 Claude 세션에서 실행되지 않는다.
+> `plugin/scripts/stop_gate.py`와 관련 테스트는 트리에 남아 있고
+> (dormant, revert 대비), 아래 서술은 그 스크립트가 등록돼 있던 동안의
+> 설계 근거로서 historical 이다. Turn-end 지속은 native `/goal`이 맡는다
+> (`doc/harness/patterns/auto-loop.md`, `CONTRACTS.md` C-17).
+
 ## Expected behavior
 
 하네스가 코디네이터에게 내보내는 모든 런타임 응답 — 게이트 결정, MCP

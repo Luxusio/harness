@@ -1,12 +1,12 @@
 ---
 name: plan
-description: Harness-native planning pipeline with a compact low-risk branch and a full dual-voice branch; both write PLAN.md and task lens declarations via MCP.
+description: Harness-native planning pipeline with a compact low-risk branch and a full single-reviewer branch; both write PLAN.md and task lens declarations via MCP.
 argument-hint: <task-slug>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__write_plan
 ---
 
-Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full 7-phase dual-voice review. Both publish the final task contract through the protected-artifact MCP.
+Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full 7-phase single-reviewer review. Both publish the final task contract through the protected-artifact MCP.
 
 > Current artifact model: acceptance criteria live in `PLAN.md`; `write_plan`
 > publishes it with required lens declarations in `TASK.json`.
@@ -18,7 +18,7 @@ This skill is split across four sub-files. Load on demand:
 | File | Content |
 |------|---------|
 | `intake.md` | Phase 0 (spawned detection, session recovery, task pack read, git context, base branch, scope detection, planning-procedure branch) |
-| `review-phases.md` | Phases 1-4 (dual-voice template + per-lens dimensions, checklists, degradation matrix) |
+| `review-phases.md` | Phases 1-4 (reviewer template + per-lens dimensions, checklists, coordinator-only fallback) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, AskUserQuestion format |
 | `write-artifacts.md` | Phase 6 (PLAN.md / TASK.json lens declarations + MCP writes, learnings, close) |
 
@@ -28,7 +28,7 @@ Phase 5 (procedure-aware user gate) stays inline below.
 
 ## Invariants
 
-- **Full-plan Dual Voice required.** Every full-plan review phase (1-4) spawns Voice A and Voice B via Agent. Single-voice is prohibited; degradation matrix applies when a voice fails.
+- **Full-plan single independent reviewer required.** Every full-plan review phase (1-4) spawns exactly one independent reviewer subagent; that phase falls back to coordinator-only on reviewer failure.
 - **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
@@ -36,7 +36,7 @@ Phase 5 (procedure-aware user gate) stays inline below.
 - **Zero browser-flag participation.** Does not invent or inspect undeclared browser verification flags.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
-- **Never abort.** In full planning, both-voices-fail surfaces as a finding and continues; premise refusal may block. Never silently shorten a selected full procedure. Compact may escalate to full after inspection, but never bypasses its own fail-closed assessment.
+- **Never abort.** In full planning, reviewer failure surfaces as a finding and continues coordinator-only; premise refusal may block. Never silently shorten a selected full procedure. Compact may escalate to full after inspection, but never bypasses its own fail-closed assessment.
 - **Auto-decide mode.** When active, resolves Mechanical and Taste items via the 6 Decision Principles, never unresolved material user decisions. Replaces judgment, not analysis depth.
 - **Spawned session.** `spawned_session: true` or `HARNESS_SPAWNED=1` → force auto-decide within explicitly delegated authority, relay undelegated material decisions, suppress upgrade/usage-stats prompts, emit prose completion instead of waiting.
 - **Sequential execution by procedure.** Compact runs 0 → bounded assessment → 5.0 → 5.3 only when challenged → 6. Full runs 0 → 1 → 2 → 3 → 4 → 5 → 6. Review phases never overlap.
@@ -52,7 +52,7 @@ Plan-orchestrator voice: opinionated, concrete, builder-to-builder. The plan-ski
 - Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
 - No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These signal AI prose; cut them.
 - Korean/English bilingual context: technical terms stay English, explanations may use Korean.
-- The user has context you do not. Cross-model agreement is a recommendation, not authority. Both procedures ask only unresolved material decisions; review depth never manufactures an approval requirement.
+- The user has context you do not. Reviewer agreement is a recommendation, not authority. Both procedures ask only unresolved material decisions; review depth never manufactures an approval requirement.
 
 Good: "Phase 3 Eng. AC-004 verification command already passes pre-edit (grep hit at write-artifacts.md:140). EUREKA — re-scope AC-004 to a smaller addition. Surface before writing PLAN.md."
 Bad: "I've completed the engineering review phase and identified some considerations regarding AC-004 that may warrant additional examination."
@@ -63,7 +63,7 @@ PLAN.md is the output of the selected planning procedure, not a substitute for i
 
 ## Confusion Protocol
 
-For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, conflicting Voice A/B output the principles cannot resolve, or mid-pipeline scope expansion — add the choice to the consolidated material-decision bundle. If it appears after that bundle was answered, ask only when it is a new unauthorized material delta.
+For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, coordinator/reviewer disagreement the principles cannot resolve, or mid-pipeline scope expansion — add the choice to the consolidated material-decision bundle. If it appears after that bundle was answered, ask only when it is a new unauthorized material delta.
 
 Reserve this protocol for high-stakes planning ambiguity where the wrong choice changes intent, scope, or verification outcome. The bar is: "if I pick wrong, the entire plan is built on a misread of intent or scope, and the cost to unwind shows up in develop or verify, not now."
 
@@ -75,8 +75,8 @@ Expanding or reducing the requested outcome is a material user decision.
 
 Soft directive — degrade gracefully, never block.
 
-- **`[PROGRESS]` summary at phase boundaries.** When a phase takes longer than ~5 minutes (Phase 1 + 3 dual-voice spawns are the longest), surface a 1-2 sentence checkpoint: done, next, surprises. Helps the user track progress without scrolling, and helps you self-check direction.
-- **Loop detection.** If the same finding, Voice disagreement, or decision rule fires 3 times without converging, STOP and surface only the unresolved material choice. Do not repeat an already authorized premise. Looping silently is worse than asking.
+- **`[PROGRESS]` summary at phase boundaries.** When a phase takes longer than ~5 minutes (Phase 1 + 3 reviewer spawns are the longest), surface a 1-2 sentence checkpoint: done, next, surprises. Helps the user track progress without scrolling, and helps you self-check direction.
+- **Loop detection.** If the same finding, coordinator/reviewer disagreement, or decision rule fires 3 times without converging, STOP and surface only the unresolved material choice. Do not repeat an already authorized premise. Looping silently is worse than asking.
 - Progress summaries and loop-detection notices NEVER mutate git state.
 
 ## Completeness — Boil the Lake
@@ -128,16 +128,16 @@ It is scratch only and never controls task routing or artifact ownership.
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
 | `closed` | post-6 | Transitional state immediately before scratch removal |
 
-When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}` and may include transport hints. Remove it after a successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
+When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after a successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
 
 
 ---
 
-## Dual Voice Protocol (summary)
+## Reviewer Protocol (summary)
 
-Phases 1-4 spawn Voice A (independent, no prior-phase context) and Voice B (same prompt + `## Prior phase findings` from earlier consensus). Exception: Phase 2 keeps both fully independent. Consensus stays in working context and is materialized in PLAN.md.
+Phases 1, 3, 4 spawn one independent reviewer subagent per phase with `## Prior phase findings` from earlier phases. Phase 2 keeps no prior findings (anti-anchoring). The coordinator classifies findings against the plan. Findings stay in working context and are materialized in PLAN.md.
 
-Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md`.
+Full protocol, dimensions, checklists, and the coordinator-only fallback: `review-phases.md`.
 
 ---
 
@@ -168,12 +168,12 @@ Branch once after §5.0:
 ### 5.0 Pre-Gate verification (max 2 retries)
 
 For `full`, verify required outputs before collecting decisions:
-- [ ] Phase 1: premises source-classified and authorized or queued; CEO consensus retained; phase-transition summary
-- [ ] Phase 2 (if ran): Design consensus retained; phase-transition summary
-- [ ] Phase 3: Engineering consensus retained; phase-transition summary
-- [ ] Phase 4 (if ran): DX consensus retained; phase-transition summary
+- [ ] Phase 1: premises source-classified and authorized or queued; CEO findings retained; phase-transition summary
+- [ ] Phase 2 (if ran): Design findings retained; phase-transition summary
+- [ ] Phase 3: Engineering findings retained; phase-transition summary
+- [ ] Phase 4 (if ran): DX findings retained; phase-transition summary
 - [ ] PLAN.md Review Status has ≥ 1 row per completed phase
-- [ ] Dual voices ran (or single-voice degradation logged with reason) for each phase
+- [ ] Reviewer ran (or coordinator-only logged with reason) for each phase
 
 If missing after 2 retries, proceed to 5.1 with warning block:
 ```
@@ -208,11 +208,11 @@ The user only needs two things at the gate: **what this plan will do** and **wha
 
 That is the entire user-facing summary. Anything more belongs in PLAN.md, not here.
 
-**Hard guard.** Never render at this gate: the 4-rule body, decision counts, taste tallies, voice consensus tallies, or cross-phase summaries. Those belong in PLAN.md only.
+**Hard guard.** Never render at this gate: the 4-rule body, decision counts, taste tallies, reviewer finding tallies, or cross-phase summaries. Those belong in PLAN.md only.
 
 ### 5.1.1 Collect all decisions
 
-From consensus tables across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
+From findings tables across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
 
 ### 5.2 Retain Taste decisions for PLAN.md (no gate render)
 
@@ -301,7 +301,7 @@ The exact TASK.json mode remains `standard|micro`. Standard work uses the
 fail-closed compact/full selection in `intake.md` Phase 0.7. Compact planning
 collapses plan-time review into one bounded assessment but retains the same
 canonical PLAN.md output and every develop-time verification boundary. Full
-planning follows Phases 0 through 6 and the complete dual-voice checklists.
+planning follows Phases 0 through 6 and the complete review checklists.
 
 ---
 
@@ -309,7 +309,7 @@ planning follows Phases 0 through 6 and the complete dual-voice checklists.
 
 Capstone — restating six load-bearing rules in one place. Most also appear in Invariants; consolidated here for at-a-glance reference.
 
-- **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Both-voices-fail surfaces as a finding and continues.
+- **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Reviewer failure surfaces as a finding and continues coordinator-only.
 - **User gates.** Both planning procedures ask once for unresolved material decisions. Explicit request and clarification are reusable authorization; review depth does not manufacture premise or final approval rounds.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail. No silent auto-decisions.
 - **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.

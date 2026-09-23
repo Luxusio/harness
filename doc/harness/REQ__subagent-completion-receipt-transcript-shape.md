@@ -4,6 +4,7 @@ invalidated_by_paths:
   - plugin/scripts/subagent_lifecycle.py
   - plugin/scripts/background_hook.py
   - plugin/hooks/hooks.json
+freshness_updated: 2026-09-23T00:42:07Z
 ---
 
 # REQ — subagent completion receipts survive runtime transcript shape

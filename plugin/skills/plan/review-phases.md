@@ -1,64 +1,51 @@
 # Phases 1-4: Review Phase Template
 
-Sub-file for plan/SKILL.md. Each of the 4 review phases follows the same dual-voice structure, parameterized by lens.
+Sub-file for plan/SKILL.md. Each of the 4 review phases follows the same single-reviewer structure, parameterized by lens.
 
 ---
 
 ## Common structure (applies to every review phase)
 
-### 1. Dual voice spawn
+### 1. Reviewer spawn
 
-Spawn two voices. Voice A is always an Agent subagent, independent (no prior-phase context). Voice B's transport is selected by the `cross_model_voice` field set at Phase 0.3; it carries the same prompt plus a `## Prior phase findings` section (terse bullet summary from earlier consensus tables). **Exception:** Phase 2 (Design) — both voices fully independent to prevent aesthetic anchoring.
-
-**Voice B transport:** use the freshly probed working-context value. Optional
-PLAN_SESSION.json may supply a recovery hint only. On resume, validate the hint
-against the four allowed values below, re-probe current command/tool
-availability, and re-apply `HARNESS_DISABLE_CROSS_MODEL=1`; an invalid,
-unavailable, disabled, stale, or malformed hint falls back to `agent`.
-
-| Value | Transport | Command |
-|-------|-----------|---------|
-| `codex` | External via OMC | `omc ask codex -p "<brief>"` |
-| `gemini` | External via OMC | `omc ask gemini -p "<brief>"` |
-| `codex-direct` | External direct | `codex exec "<brief>" -s read-only` |
-| `agent` | Same-model Agent subagent | `Agent({subagent_type:"explore", prompt:"<brief>"})` |
-
-For external Voice B (`codex`, `gemini`, `codex-direct`) the brief MUST be prefixed with the filesystem boundary instruction below. **Copy-paste verbatim** — do not paraphrase; external models parse the literal path patterns to filter their own read set.
-
-```
-IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition
-directories (paths containing plugin/skills, .claude/skills, .claude/plugins, or
-claude/plugins). These are AI-assistant skill definitions meant for a different
-system — reading them will derail your review. Stay focused on the plan text
-and the repository code it references.
-```
-
-The prefix above is the single source of truth. Do not duplicate or re-author it in caller code — reference this section by path (`plan/review-phases.md` § "filesystem boundary instruction").
-
-Timeout external calls at 600s. On any external failure, retain a `cross-model-failure` decision for PLAN.md and fall back to the Agent-tool transport for this phase only. Never block on external unavailability.
+Spawn exactly one independent reviewer subagent, no prior-phase context bias
+beyond the `## Prior phase findings` block. On Claude, spawn it via
+`Agent({subagent_type:"explore", prompt:"<brief>"})`. **Exception:** Phase 2
+(Design) — brief has no `## Prior phase findings` block, to prevent aesthetic
+anchoring.
 
 Every brief must include:
 - Plan content
 - Phase-specific dimensions (see per-lens section below)
-- `Format: | dimension | assessment (high/med/low risk) | finding | recommendation |` (Phase 2 uses `| dimension | score | finding | fix |`)
-- **Do NOT** read SKILL.md files or skill definition directories — those are AI-assistant definitions meant for a different system. (Duplicated in the boundary prefix for external Voice B; restated inline for Voice A.)
+- `Format: | dimension | risk (high/med/low) | finding | decision |` (Phase 2 uses `| dimension | score | finding | fix |`)
+- `## Prior phase findings` — terse bullet summary from earlier phases; empty for Phase 1
+- **Do NOT** read SKILL.md files or skill definition directories (paths
+  containing `plugin/skills`, `.claude/skills`, `.claude/plugins`, or
+  `claude/plugins`) — those are AI-assistant skill definitions meant for a
+  different system; reading them will derail the review. Stay focused on the
+  plan text and the repository code it references.
+
+Timeout the reviewer call at 600s. On reviewer failure or timeout, run that
+phase `coordinator-only`: record the reason in PLAN.md and continue; do not
+create a separate user interaction.
 
 ### Deep understanding (every brief)
 
-Before judging the plan or proposing AC cuts, both voices must build a working mental model of the system the plan lands in.
+Before judging the plan or proposing AC cuts, the reviewer must build a working mental model of the system the plan lands in.
 
 - **Think before reviewing.** Read the actual repository code the plan references; trace the relevant data flow end to end: inputs, transformations, outputs, error paths. Reason from the code, not the plan text. Where premises are weak or multiple interpretations exist, surface them rather than silently picking one.
 - **Simplicity first.** Prefer the smallest plan that solves the stated problem. Challenge speculative scope, unneeded abstractions, and configurability nobody asked for. If the plan is overbuilt for its goal, say so.
 - **Surgical scope.** Flag any AC or change not justified by the request. Suspect "while we are here" plan expansion and adjacent-cleanup creep. Every AC should trace to the stated intent.
 - **Goal-driven.** Every AC must have a concrete, checkable verification path; flag any AC whose success cannot be proven. Find the real seams in the existing code (where it already wants to be cut) before accepting or proposing AC boundaries.
-- **Scope note:** this instruction targets repository source code and test files. It does NOT extend to SKILL.md files or skill definition directories, which the boundary above already prohibits. Repository code yes; skill-definition files no.
+- **Scope note:** this instruction targets repository source code and test files. It does NOT extend to SKILL.md files or skill definition directories, which the rule above already prohibits. Repository code yes; skill-definition files no.
 
-### 2. Build consensus table
+### 2. Build findings table
 
-For each disagreement:
+For each reviewer finding:
 1. Classify: Mechanical / Taste / User Challenge (see `decision-principles.md`)
-2. Apply per-phase conflict-resolution priority (see matrix below)
-3. Record consensus row
+2. Apply the per-phase conflict-resolution priority from `decision-principles.md` § Per-phase priority (the single source for phase priorities)
+3. Record a findings row. If the coordinator and reviewer disagree on
+   classification, escalate to the higher tier.
 
 Keep rows in working context and materialize them once in PLAN.md's
 `Decision Audit Trail` during Phase 6. Do not create a second audit artifact.
@@ -70,24 +57,22 @@ Audit row format (7 pipe-delimited columns):
 
 Materialize each auto-decided row in PLAN.md's `## Decision Audit Trail` section.
 
-### 3. Consensus table display
+### 3. Findings table display
 
 ```
-<LENS> DUAL VOICES — CONSENSUS TABLE:
+<LENS> REVIEW — FINDINGS TABLE:
 ═══════════════════════════════════════════════════════════════
-  Dimension                           Voice A  Voice B  Consensus
-  ──────────────────────────────────── ──────── ──────── ─────────
-  1. <dimension 1>                     —        —        —
-  ...
+| dimension | risk | finding | decision |
+| --------- | ---- | ------- | -------- |
+| <dimension 1> | <high/med/low> | <finding> | <Mechanical/Taste/User Challenge> |
+...
 ═══════════════════════════════════════════════════════════════
-CONFIRMED = both agree. DISAGREE = voices differ (→ taste decision).
-Missing voice = N/A. Single critical finding from one voice = flagged regardless.
 ```
 
 ### 4. Phase-transition summary
 
 ```
-Phase <N> consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
+Phase <N> findings: <N> total (mechanical=<N> taste=<N> user-challenge=<N>)
 User Challenge items queued: <N>
 ```
 
@@ -97,22 +82,18 @@ Keep the phase summary for PLAN.md's Review Status table.
 
 Do not create a chronological side file. PLAN.md is the durable review record.
 
-### Degradation matrix (apply per phase)
+### Reviewer availability (apply per phase)
 
-| Condition | Mode | Action |
-|-----------|------|--------|
-| Both voices return, Voice B external | `dual-voice-cross-model` (nominal, best) | Build consensus normally; log `cross_model_voice=<codex\|gemini\|codex-direct>` in phase-summary |
-| Both voices return, Voice B Agent-tool | `dual-voice` (nominal, same-model) | Build consensus normally |
-| External Voice B fails, Agent-tool B succeeds | `dual-voice-agent-fallback` (degraded) | Record `cross-model-failure` + retry reason in PLAN; use Agent-tool B output; continue |
-| One voice fails/timeout entirely | `single-voice` (degraded) | Record reason in PLAN with `mode=single-voice`; continue |
-| Both voices fail | `blocked` | Record an operational finding and continue with coordinator evidence; do not create a separate user interaction |
-| `HARNESS_DISABLE_CROSS_MODEL=1` set | `dual-voice` (by user choice) | Agent-tool Voice B only; not a degradation |
+| Condition | Reviewer | Action |
+|-----------|----------|--------|
+| Reviewer returns | subagent | Build findings table normally |
+| Reviewer fails/times out | coordinator-only | Record reason in PLAN.md with `mode=coordinator-only`; continue; do not create a separate user interaction |
 
 ---
 
 ## Phase 1 — CEO Review (full procedure)
 
-Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-ceo-review/SKILL.md`. Conflict priority: **P1 + P2**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-ceo-review/SKILL.md`.
 
 ### 1.1 Premise extraction and authorization (MANDATORY ANALYSIS)
 
@@ -154,16 +135,16 @@ mandatory; a separate premise-confirmation interaction is not.
 - [ ] Error & Rescue Registry table
 - [ ] Failure Modes Registry table
 - [ ] Completion Summary
-- [ ] CEO consensus represented in PLAN.md Review Status
+- [ ] CEO findings represented in PLAN.md Review Status
 - [ ] Phase-transition summary emitted
 
 ---
 
 ## Phase 2 — Design Review (if ui_scope=true)
 
-Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-design-review/SKILL.md`. Conflict priority: **P5 + P1**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-design-review/SKILL.md`.
 
-Both voices fully independent (no `## Prior phase findings` in either brief — aesthetic anchoring prevention).
+No `## Prior phase findings` in the brief (aesthetic anchoring prevention).
 
 Brief format: `| dimension | score | finding | fix |` — score each dimension 0-10 and identify fix-to-10 path.
 
@@ -171,7 +152,7 @@ Brief format: `| dimension | score | finding | fix |` — score each dimension 0
 
 ## Phase 3 — Engineering Review (full procedure)
 
-Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 + P3**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-eng-review/SKILL.md`.
 
 ### Dimensions (6)
 
@@ -192,7 +173,7 @@ Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-eng-review/SKILL.md`. Conflict p
 - [ ] Completion Summary
 - [ ] Deferred items appended to `deferred-scope.md`
 - [ ] Deferred items appended to TODOS.md (if exists at repo root)
-- [ ] Engineering consensus represented in PLAN.md Review Status
+- [ ] Engineering findings represented in PLAN.md Review Status
 
 **Section 3 (Test Review) NEVER SKIP OR COMPRESS.** Read actual code, not memory. Build test diagram: list every NEW codepath and branch; for each: what test type covers it? does one exist? gaps? Auto-deciding test gaps = identify → decide add/defer (with rationale+principle) → log. Does NOT mean skip analysis.
 
@@ -200,7 +181,7 @@ Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-eng-review/SKILL.md`. Conflict p
 
 ## Phase 4 — DX Review (if dx_scope=true)
 
-Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-devex-review/SKILL.md`. Conflict priority: **P5 + P3**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-devex-review/SKILL.md`.
 
 ### Dimensions (6)
 
@@ -221,7 +202,7 @@ Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-devex-review/SKILL.md`. Conflict
 - [ ] TTHW (Time to Hello World) current → target
 - [ ] DX Implementation Checklist
 - [ ] Deferred items appended to `deferred-scope.md`
-- [ ] DX consensus represented in PLAN.md Review Status
+- [ ] DX findings represented in PLAN.md Review Status
 
 ---
 

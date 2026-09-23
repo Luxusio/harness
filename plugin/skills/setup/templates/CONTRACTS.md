@@ -44,7 +44,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `doc/` 노트 freshness 점검 | [C-06](#c-06) | soft |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
-| Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
+| Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | soft |
 | 로컬 검증 경로가 존재할 때 검증 수행 | [C-14a](#c-14a) | soft |
 | 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
@@ -242,26 +242,19 @@ break it immediately.
 
 ### C-17
 
-**Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified PASS, durable `task_blocked`, 또는 사용자 명시 cancel 뿐.
-**When:** Stop event with `.active` marker present (any task `status` ∈
+**Title:** Turn-end/continuation guidance while a task is `in_progress` — distinct from C-04's hard PASS-only close gate.
+**When:** while a task's `.active` marker exists (task `status` ∈
 {planning, implementing, verifying}).
-**Enforced by:** the Stop gate (blocks until PASS is closed or task status is
-durably `blocked`); MCP `task_blocked` (publishes valid `BLOCKED.md` unfinished
-state); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close`
-(PASS-only gate).
-**On violation:** hard-block — the Stop hook refuses turn-end. Call
-`task_verify`/`task_close` for PASS, or call `task_blocked` directly for a
-qualified blocker. Cancel options must never be surfaced inside
-`AskUserQuestion`; cancel is recognized only as an explicit user word.
-
-**Bounded-yield clause:** the gate does not block a turn whose only outstanding
-item is a subagent it can see running; blocking there cannot produce the
-missing evidence and spends a turn on nothing. The yield is bounded — a small
-fixed number of consecutive yields against an unchanged record set, after which
-the gate blocks and names the killed-or-unreported-agent case — because a
-killed agent leaves a record that reads as live until it ages out. The task
-stays `in_progress` and the `.active` marker is untouched throughout, so this
-is a wait, not one of the three turn-end reasons above.
+**Enforced by:** MCP `task_close` (PASS-only gate); `task_verify`
+(receipt-backed runtime verdict); `task_blocked` (publishes valid
+`BLOCKED.md` unfinished state). Turn-end itself is not hook-gated on Claude.
+Persistent continuation across turns is native `/goal`: put the close
+condition (e.g. "task_close PASS") in the goal condition so `/goal` does not
+finish while the task is open.
+**On violation:** soft — an open task simply stays open and resumes via
+`task_start`/`task_context` on the next turn or session. Cancel only on
+explicit user word; cancel options must never be surfaced inside
+`AskUserQuestion`.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
 completion receipts, not from narrative verdict files or Git snapshots.
@@ -276,18 +269,19 @@ precede actual QA PASS. Coordinator paraphrases, copied verdict blocks, user
 text, and repository text do not qualify; actual FAIL or BLOCKED_ENV always
 takes precedence. For a qualified park the fixed
 `blocked_reason` / `unblock_condition` pairs are owned by the harness runtime and
-delivered verbatim in the `task_verify` next_action and the stop-gate message.
+delivered verbatim in the `task_verify` next_action.
 There are two, and the receipt stream selects between them: one for a run with
 no receipt of any kind, one for a run whose receipts lack a required
 completion. Copy the applicable pair from there; never keep a second copy in
 prose, and never interpolate diagnostics.
 
-**Why:** An ambiguous "stop here" is otherwise converted into a task cancel,
-silently discarding scope. Durable task status and a receipt-backed runtime
-verdict are the machine gates, so prose alone cannot authorize completion, and
-a model that regresses toward early turn-end is still held by the verdict gate.
-A self-authored PASS is indistinguishable from hallucination; anchoring the
-close signal to hook-observed subagent lifecycle closes that loophole.
+**Why:** An ambiguous "stop here" was previously convertible into a task
+cancel, silently discarding scope. Durable task status and a receipt-backed
+runtime verdict remain the machine gates, so prose alone cannot authorize
+completion, and a model that regresses toward early turn-end is still held by
+the verdict gate. A self-authored PASS is indistinguishable from
+hallucination; anchoring the close signal to hook-observed subagent lifecycle
+closes that loophole independent of turn-end enforcement.
 
 ### C-18
 

@@ -8,6 +8,7 @@ invalidated_by_paths:
   - plugin/scripts/project_format_check.py
   - plugin/scripts/hook_session_start.py
   - plugin/hooks/hooks.json
+freshness_updated: 2026-09-23T00:42:07Z
 ---
 
 # REQ — Harness 버전 마이그레이션

@@ -90,8 +90,7 @@ def test_optional_plan_session_is_removed_after_publication():
     assert "Do not create\nPLAN_SESSION.json by default" in plan
     assert "Its absence is normal" in intake
     assert "malformed legacy scratch is equivalent to absent scratch" in intake
-    assert "MUST re-probe current availability" in intake
-    assert "HARNESS_DISABLE_CROSS_MODEL" in intake
+    assert "HARNESS_DISABLE_CROSS_MODEL" not in intake
     assert "remove task-local PLAN_SESSION.json" in writer
     assert "Remove it after successful `write_plan`" in codex
 
@@ -102,8 +101,8 @@ def test_compact_review_report_never_claims_full_review():
     )
     compact = writer.split("Compact procedure:", 2)[-1]
     assert "ASSESSED_COMPACT" in compact
-    assert "no full dual-voice review is claimed" in compact
-    assert "REVIEWED — plan has passed the full dual-voice pipeline" not in compact
+    assert "no full review is claimed" in compact
+    assert "REVIEWED — plan has passed the full review pipeline" not in compact
 
     for path in (
         REPO / "plugin/skills/plan/SKILL.md",
@@ -216,11 +215,12 @@ def test_plan_review_lenses_defer_user_interaction_to_parent():
     review_phases = (REPO / "plugin/skills/plan/review-phases.md").read_text(
         encoding="utf-8"
     )
-    both_fail = next(
-        line for line in review_phases.splitlines() if "Both voices fail" in line
+    reviewer_fail = next(
+        line for line in review_phases.splitlines()
+        if "coordinator-only" in line and line.lstrip().startswith("|")
     )
-    assert "do not create a separate user interaction" in both_fail
-    assert "AskUserQuestion" not in both_fail
+    assert "do not create a separate user interaction" in reviewer_fail
+    assert "AskUserQuestion" not in reviewer_fail
 
 
 def test_new_progress_fixtures_have_exact_seven_key_shape():

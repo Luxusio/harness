@@ -6,7 +6,7 @@ Sub-file for plan/SKILL.md. Covers: 6 Decision Principles, classification, auto-
 
 ## The 6 Decision Principles
 
-Applied to every contested item between Voice A and Voice B. First applicable wins.
+Applied to every contested item between the coordinator and the reviewer. First applicable wins.
 
 | Code | Name | Rule |
 |------|------|------|
@@ -43,9 +43,9 @@ partitioning, tests, docs, and complete handling of named behavior) are
 Mechanical by default. A material outcome or scope expansion beyond the request
 or clarification is a User Challenge; P1 never grants authority to add it.
 
-If voices disagree on classification, escalate to higher tier (Taste vs. User Challenge → User Challenge).
+If coordinator and reviewer disagree on classification, escalate to the higher tier (Taste vs. User Challenge → User Challenge).
 
-**Adversarial** — Rows from fresh-context reviewers. Retain informational rows
+**Adversarial** — Rows from the fresh-context reviewer. Retain informational rows
 in PLAN.md; surface them only when they create an unresolved material decision.
 
 ---
@@ -63,7 +63,7 @@ When `auto_decide` is active:
 
 **MUST NOT:**
 - Auto-decide unresolved material premises or User Challenge items.
-- Reduce Voice A/B depth or skip any mandatory output.
+- Reduce reviewer depth or skip any mandatory output.
 - Redirect to interactive mid-pipeline. All decisions accumulate and surface at Phase 5.
 
 **User-owned decisions are never auto-decided.** Existing request,
@@ -117,7 +117,7 @@ Always flag anything wrong, even in collaborative mode. One sentence. Never sile
 
 ## Search Before Building — 3 Layers
 
-Apply when Voice A/B briefs prompt reviewers to evaluate technical choices. Include one-line "Layer X reasoning" note in brief when choice is non-obvious.
+Apply when reviewer briefs prompt the reviewer to evaluate technical choices. Include one-line "Layer X reasoning" note in brief when choice is non-obvious.
 
 - **Layer 1 (tried-and-true):** Well-established patterns with years of production validation. Prize these. Reuse existing modules/patterns/conventions before proposing new.
 - **Layer 2 (new-and-popular):** Recently popular, growing adoption. Scrutinise: popular because it solves a real problem, or because it is new? Check codebase before recommending.
