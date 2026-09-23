@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Receipt-backed Claude subagent lifecycle hooks and Stop-gate queries."""
+"""Receipt-backed Claude subagent lifecycle hooks and active-work queries."""
 from __future__ import annotations
 
 import json
@@ -81,8 +81,6 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
 
 DEFAULT_STALE_SECS = 30 * 60
-DEFAULT_WAIT_SECS = 6.0
-POLL_SECS = 0.25
 
 
 def _now() -> float:
@@ -708,28 +706,6 @@ def active_records(
     if not task_dir or (task_id and _task_id_from_dir(task_dir) != task_id):
         return []
     return _active_from_snapshot(task_dir, run_id, sid, stale_secs=stale_secs)
-
-
-def wait_for_clear(
-    repo_root: str,
-    *,
-    task_id: str,
-    session_id: str = "",
-    timeout_secs: float = DEFAULT_WAIT_SECS,
-    stale_secs: float = DEFAULT_STALE_SECS,
-    poll_secs: float = POLL_SECS,
-) -> dict[str, Any]:
-    """Poll until no active records remain, or timeout expires."""
-    deadline = _now() + max(0.0, timeout_secs)
-    last = active_records(repo_root, task_id=task_id, session_id=session_id, stale_secs=stale_secs)
-    while last and _now() < deadline:
-        time.sleep(max(0.01, poll_secs))
-        last = active_records(repo_root, task_id=task_id, session_id=session_id, stale_secs=stale_secs)
-    return {
-        "cleared": not last,
-        "active": last,
-        "waited_secs": max(0.0, timeout_secs - max(0.0, deadline - _now())),
-    }
 
 
 _bind_runtime_receipt_adapter(SOURCE, register_subagent_start)

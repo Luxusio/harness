@@ -301,7 +301,7 @@ close fingerprint, Goal continuation, and verified installation boundaries.
 
 ## Important Rules
 
-- **Never abort.** Surface every decision; never silently redirect to a shorter path.
+- **Never abort.** Record every decision in PLAN.md; never silently redirect to a shorter path.
 - **Durable Docs Decision.** Every PLAN.md classifies documentation impact
   before develop starts. This is a judgment step, not a blanket REQ
   requirement. Use one of these outcomes in the reason: `REQ needed`,

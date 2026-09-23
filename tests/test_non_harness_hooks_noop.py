@@ -91,16 +91,6 @@ def test_tool_routing_noops_without_manifest(tmp_path: Path):
     _assert_no_harness_files(repo)
 
 
-def test_stop_gate_noops_without_manifest(tmp_path: Path):
-    repo = _repo(tmp_path)
-
-    result = _run("stop_gate.py", repo, {"cwd": str(repo)})
-
-    assert result.returncode == 0
-    assert result.stdout == ""
-    _assert_no_harness_files(repo)
-
-
 def test_note_freshness_does_not_mutate_without_manifest(tmp_path: Path):
     repo = _repo(tmp_path)
     doc = repo / "doc" / "note.md"

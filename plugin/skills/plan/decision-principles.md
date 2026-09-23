@@ -29,7 +29,7 @@ Applied to every contested item between the coordinator and the reviewer. First 
 
 **Mechanical** — Objectively correct answer exists (wrong import, broken ref, missing required field). Auto-decide silently and retain any material rationale in PLAN.md.
 
-**Taste** — Two reasonable approaches with tradeoffs (naming, structure, sequencing). Auto-decide via principles. Surface at Phase 5.2 for user awareness.
+**Taste** — Two reasonable approaches with tradeoffs (naming, structure, sequencing). Auto-decide via principles. Record in PLAN.md's Decision Audit Trail; do not render at the user-facing gate.
 
 **User Challenge / unresolved material decision** — Review needs a user-owned
 choice about product outcome, material scope, risk acceptance, irreversible
@@ -57,7 +57,7 @@ When `auto_decide` is active:
 **MUST:**
 - Resolve every Mechanical and Taste via 6 Principles (first applicable wins).
 - Keep every auto-decision in working context and materialize it in PLAN.md.
-- Surface all auto-decided Taste items at Phase 5.2.
+- Record all auto-decided Taste items in PLAN.md's Decision Audit Trail; do not render them at the user-facing gate.
 - Default CEO to SELECTIVE EXPANSION; DX to DX POLISH.
 - Complete all mandatory phase outputs at full depth.
 

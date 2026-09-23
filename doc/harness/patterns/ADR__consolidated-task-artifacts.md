@@ -50,13 +50,12 @@ environment facts are recomputed when needed. An unsupported task pack is
 refused in place; `fresh_run: true` is not repair authority for it. Recovery
 uses a distinct valid task rather than deleting unreadable evidence.
 
-One transient exception, named here so the sentence above does not read it as
-debris: `.stop_yield.<session>.json` is stop-gate scratch. `stop_gate.py`
-writes one per session to count consecutive turn-yields against an unchanged
-background record set, and nothing else reads it. It carries no lifecycle
-authority, is not evidence, and is never migrated. Deleting it resets that
-session's counter, so it costs at most `_MAX_CONSECUTIVE_YIELDS` further
-yields before the gate blocks again — not one. See
+One historical exception, named here so the sentence above does not read it
+as debris: `.stop_yield.<session>.json` was turn-end stop-gate scratch. The
+gate script that wrote one per session to count consecutive turn-yields
+against an unchanged background record set (deleted 2026-09-23, see
+`doc/harness/patterns/auto-loop.md`) is gone, so nothing writes or reads this
+file anymore; any leftover copy in an old task dir is inert. See
 `doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
 
 Every task generation uses one append-only `RECEIPTS.jsonl`. It is the only
@@ -230,11 +229,11 @@ append failure restores the prior stream and leaves the same stop retryable.
 Concurrent/retried stops reuse one exact already-durable lifecycle identity
 instead of appending a duplicate pair in the same transaction.
 
-Claude Stop-hook active-work protection derives unmatched current-run
-`started` receipts from this stream for the exact session, without secondary
-runtime state. A valid start may age out of Stop waiting without mutating the
-append-only evidence; malformed or future timestamps remain active and fail
-closed.
+Active work is still derivable from this stream: `subagent_lifecycle.active_records`
+returns unmatched current-run `started` receipts for the exact session, without
+secondary runtime state (malformed or future timestamps stay active and fail
+closed). Its only runtime consumer, the Claude Stop-hook wait in `stop_gate.py`,
+was deleted on 2026-09-23; no runtime path waits on active work now.
 
 Entries that do not match the exact `RECEIPTS.jsonl` schema are rejected with
 fresh-run guidance. They are not normalized, migrated, or partially accepted.

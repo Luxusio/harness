@@ -1,6 +1,6 @@
 """Canonical gate-response shape for all harness gate scripts.
 
-Every active gate (stop_gate, prewrite_gate, task_close)
+Every active gate (prewrite_gate, task_close)
 emits the same JSON shape so the orchestrator can resolve a block in one step
 instead of grepping for the helper script. The retro from 2026-05-12 surfaced
 that error messages saying "blocked" without an actionable next step force the
@@ -15,9 +15,10 @@ Shape:
         "docs": "<doc path>"
     }
 
-`decision` field name is preserved across consumers — stop_gate.py uses "block"
-(Stop-hook contract), prewrite_gate.py uses "deny" (PreToolUse contract). Both
-shapes carry the new informational keys without breaking legacy readers.
+`decision` field name is preserved across consumers — prewrite_gate.py uses
+"deny" (PreToolUse contract); "block" (Stop-hook contract) was used by the
+now-deleted stop_gate.py. Both shapes carry the new informational keys
+without breaking legacy readers.
 
 There is a second, non-blocking shape:
 

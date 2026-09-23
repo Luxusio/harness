@@ -781,7 +781,8 @@ def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
 
     assert plugin_root == tmp_path / "codex" / "harness" / "plugins" / "harness"
     assert (plugin_root / "mcp" / "harness_server.py").is_file()
-    assert (plugin_root / "scripts" / "stop_gate.py").is_file()
+    assert not (plugin_root / "scripts" / "stop_gate.py").exists()
+    assert not (plugin_root / "scripts" / "hook_stop.py").exists()
     assert not stale_guard.exists()
     assert not (plugin_root / ".claude-plugin").exists()
     assert not (tmp_path / "codex" / "harness" / "plugin").exists()
@@ -1794,9 +1795,11 @@ def test_codex_hook_wrappers_emit_empty_or_valid_json():
 
 
 def test_claude_payload_over_old_tree_registers_no_stop_hook(tmp_path):
-    """AC-010 (TASK__plan-single-voice-review): reinstalling over a runtime whose
-    hooks.json still registered `Stop` -> stop_gate.py drops that entry, while the
-    dormant script itself stays shipped for revert."""
+    """AC-010 (TASK__plan-single-voice-review) plus
+    TASK__remove-dormant-stop-gate-and-taste-contradiction: reinstalling over a
+    runtime whose hooks.json still registered `Stop` -> stop_gate.py drops that
+    entry, and stop_gate.py/hook_stop.py are no longer shipped at all (deleted,
+    not merely dormant)."""
     module = _load_install_module()
     install_root = tmp_path / "claude" / "harness-dev"
     old_hooks = install_root / "plugin" / "hooks" / "hooks.json"
@@ -1811,4 +1814,5 @@ def test_claude_payload_over_old_tree_registers_no_stop_hook(tmp_path):
     hooks = json.loads((plugin_root / "hooks" / "hooks.json").read_text())["hooks"]
     assert "Stop" not in hooks
     assert {"SubagentStart", "SubagentStop"} <= set(hooks)
-    assert (plugin_root / "scripts" / "stop_gate.py").is_file()
+    assert not (plugin_root / "scripts" / "stop_gate.py").exists()
+    assert not (plugin_root / "scripts" / "hook_stop.py").exists()

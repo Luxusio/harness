@@ -777,7 +777,6 @@ def test_live_routing_surfaces_do_not_route_stop_judge():
         "plugin/CLAUDE.md",
         "plugin/mcp/harness_server.py",
         "plugin/scripts/_lib.py",
-        "plugin/scripts/stop_gate.py",
         "plugin/skills/run/SKILL.md",
         "plugin/skills/develop/SKILL.md",
         "plugin-codex/internal-skills/run/SKILL.md",
@@ -855,7 +854,7 @@ def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
     ):
         _assert_all(_text(path), TRUST_BOUNDARY_ELEMENTS, path)
 
-    for path in ("plugin/mcp/harness_server.py", "plugin/scripts/stop_gate.py"):
+    for path in ("plugin/mcp/harness_server.py",):
         body = _text(path)
         # Presence is not enough: `from _lib import (... TRUST_BOUNDARY ...)`
         # satisfies a bare substring check on its own, so a future edit could
@@ -904,8 +903,9 @@ def test_lib_owns_exactly_one_literal_trust_boundary():
       see the comment on it.
     - `attestation_endgame()` equals an independently written literal, for the
       same reason: clause pins catch deletion, not inversion.
-    - No runtime file holds a second literal copy. `stop_gate.py` held one
-      until 2026-09-04, while this test's name already claimed otherwise.
+    - No runtime file holds a second literal copy. `stop_gate.py` (since
+      deleted) held one until 2026-09-04, while this test's name already
+      claimed otherwise.
     """
     spec = importlib.util.spec_from_file_location(
         "_harness_lib_trust_boundary", ROOT / "plugin" / "scripts" / "_lib.py"
@@ -1069,43 +1069,31 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
         "attestation_block_instruction",
         "attestation_endgame",
     )
-    for path in ("plugin/mcp/harness_server.py", "plugin/scripts/stop_gate.py"):
-        # Comments stripped first. A count over the raw file is satisfied by
-        # the import line plus any prose mentioning the name — including the
-        # comment on `harness_server.py`'s own import explaining that these are
-        # a test-facing re-export. Review measured that: deleting both live
-        # compositions left this assertion green. Counting code only is what
-        # makes "past its import" true rather than aspirational.
-        body = "\n".join(
-            line for line in _text(path).splitlines()
-            if not line.lstrip().startswith("#")
-        )
-        assert any(body.count(name) >= 2 for name in delivering), (
-            f"{path}: no longer emits the fixed pair to the caller. It must "
-            f"reference one of {', '.join(delivering)} in code past its import."
-        )
+    path = "plugin/mcp/harness_server.py"
+    # Comments stripped first. A count over the raw file is satisfied by
+    # the import line plus any prose mentioning the name — including the
+    # comment on `harness_server.py`'s own import explaining that these are
+    # a test-facing re-export. Review measured that: deleting both live
+    # compositions left this assertion green. Counting code only is what
+    # makes "past its import" true rather than aspirational.
+    body = "\n".join(
+        line for line in _text(path).splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert any(body.count(name) >= 2 for name in delivering), (
+        f"{path}: no longer emits the fixed pair to the caller. It must "
+        f"reference one of {', '.join(delivering)} in code past its import."
+    )
 
     # `delivering` above is an `any()` over names that all resolve to the
     # attestation pair, so it stays green when turn-end regresses to teaching
     # only that pair. Review measured exactly that on 2026-09-08: reverting the
     # whole `_next_action_for_missing` message to its pre-change single-pair
-    # text left the suite green. Turn-end is where the field-report-A
-    # coordinator was standing when it wrote the false reason into BLOCKED.md,
-    # so the empty-stream branch has to be pinned at that surface by name.
-    # `harness_server.py` is deliberately not held to this: it reaches both
-    # pairs through `attestation_endgame()` and never names this function.
-    stop_gate_body = "\n".join(
-        line for line in _text("plugin/scripts/stop_gate.py").splitlines()
-        if not line.lstrip().startswith("#")
-    )
-    assert stop_gate_body.count("no_receipts_block_instruction") >= 2, (
-        "plugin/scripts/stop_gate.py: turn-end no longer offers the "
-        "empty-stream park pair. A coordinator blocked here with an empty "
-        "receipt stream would be handed the attestation pair, whose stated "
-        "preconditions (review PASS, QA PASS, one fresh task_verify) are false "
-        "in that state — the exact BLOCKED.md falsehood this task closed. It "
-        "must call no_receipts_block_instruction() in code past its import."
-    )
+    # text left the suite green. The empty-stream park pair
+    # (`no_receipts_block_instruction`) used to be pinned here at the
+    # now-deleted turn-end gate (`stop_gate.py`); `harness_server.py` reaches
+    # both pairs through `attestation_endgame()` and never names that function
+    # directly, so there is no equivalent live surface to pin it against.
 
     prose_surfaces = (
         "CONTRACTS.md",

@@ -55,7 +55,7 @@ the repository because stop-only receipt provenance depends on them.
 
 Files that define harness runtime behaviour. Writes require a task with a
 `MAINTENANCE` marker. The set currently includes `plugin/CLAUDE.md`,
-`plugin/hooks/hooks.json`, `plugin/scripts/{prewrite_gate,stop_gate,_lib}.py`,
+`plugin/hooks/hooks.json`, `plugin/scripts/{prewrite_gate,_lib}.py`,
 `plugin/mcp/harness_server.py`, `doc/harness/manifest.yaml`.
 
 Touch `doc/harness/tasks/<task>/MAINTENANCE` to enable writes, and record the

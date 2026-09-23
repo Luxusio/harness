@@ -52,7 +52,8 @@ supported for diagnostics and tests, regardless of the caller's runtime.
 ## Why remaining gates deliberately keep firing
 
 The obvious reading of "stop the gates firing while the harness is half-dead" is
-to disable `prewrite_gate.py` / `stop_gate.py` when receipts are unavailable.
+to disable `prewrite_gate.py` / the turn-end stop-gate script (deleted
+2026-09-23) when receipts are unavailable.
 That is rejected. Direct Write/Edit ownership and open-task warnings remain
 useful independent signals. Bash/shell mutation is outside Harness PreToolUse
 enforcement and is not part of this guarantee.

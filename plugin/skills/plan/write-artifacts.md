@@ -102,7 +102,7 @@ Full procedure:
 | 3 Eng | yes | <subagent/coordinator-only> | <N> | <N> |
 | 4 DX | <yes/skipped> | <subagent/coordinator-only/—> | <N/—> | <N/—> |
 
-**Auto-decided:** <N> | **Taste surfaced:** <N> | **User Challenges:** <N>
+**Auto-decided:** <N> | **Taste recorded:** <N> | **User Challenges:** <N>
 **Planning procedure:** <compact/full>
 **Execution mode:** <standard/micro>
 ```
@@ -223,7 +223,7 @@ Phases run:        <list, e.g. 0, 1, 2, 3, 4, 5, 6>
 Planning procedure:<compact/full>
 Execution mode:    <standard/micro>
 Auto-decided:      <N> decisions
-Taste surfaced:    <N> items
+Taste recorded:    <N> items
 User Challenges:   <N> items
 Deferred scope:    <N> items (see deferred-scope.md)
 Review summary:    <N> phase-summary rows

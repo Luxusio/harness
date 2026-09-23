@@ -423,7 +423,7 @@ Codex-specific verifications:
 - The installed public `skills/run/SKILL.md` exists, its
   `agents/openai.yaml` enables implicit invocation, and AGENTS.md routes
   repository mutations to `$harness:run`.
-- (Best effort) Trigger a benign `codex exec` to fire PreToolUse + Stop hooks; verify no `gate-crash` entries in `learnings.jsonl`.
+- (Best effort) Trigger a benign `codex exec` to fire PreToolUse hooks; verify no `gate-crash` entries in `learnings.jsonl`.
 
 ---
 

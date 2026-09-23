@@ -103,7 +103,6 @@ WORKFLOW_CONTROL_SURFACE = {
     "plugin/hooks/hooks.json",
     "plugin/mcp/harness_server.py",
     "plugin/scripts/prewrite_gate.py",
-    "plugin/scripts/stop_gate.py",
     "plugin/scripts/_lib.py",
     "doc/harness/manifest.yaml",
 }

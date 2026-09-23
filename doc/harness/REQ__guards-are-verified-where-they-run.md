@@ -140,7 +140,7 @@ allowlist:
 - Identifiers that appear in Python sources without being test definitions are
   not coverage claims: `test_command` and `test_paths` are manifest keys
   documented under `doc/harness/patterns/`.
-- File paths (`tests/test_stop_gate.py`) and anything suffixed are references
+- File paths (`tests/test_contract_lint.py`) and anything suffixed are references
   to a file, not a claim about a function. The trailing lookaround must reject
   the *whole* token; a bare negative lookahead lets the regex backtrack and
   match `test_promote_learnings_current_ru` out of `..._run.py`.

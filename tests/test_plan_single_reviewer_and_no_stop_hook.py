@@ -133,3 +133,23 @@ def test_phase_priorities_have_one_source():
     assert "Conflict priority:" not in review_phases
     assert "Per-phase priority" in review_phases
     assert "**Per-phase priority:**" in _text(REPO / "plugin/skills/plan/decision-principles.md")
+
+
+def test_dormant_turn_end_gate_is_deleted():
+    """TASK__remove-dormant-stop-gate-and-taste-contradiction: nothing registered
+    stop_gate.py / hook_stop.py after the Stop hook removal, so they are gone."""
+    for rel in ("plugin/scripts/stop_gate.py", "plugin/scripts/hook_stop.py"):
+        assert not (REPO / rel).exists(), rel
+
+
+def test_taste_decisions_are_recorded_not_surfaced_at_the_gate():
+    files = [*CLAUDE_PLAN, CODEX_PLAN,
+             REPO / "doc/common/REQ__process__plan-skill-review-pipeline.md"]
+    banned = re.compile(
+        r"surface at phase 5\.2|surface all auto-decided|surface every taste"
+        r"|surface every decision|taste surfaced",
+        re.IGNORECASE,
+    )
+    for path in files:
+        hits = [line.strip() for line in _text(path).splitlines() if banned.search(line)]
+        assert not hits, f"{path.relative_to(REPO)} still surfaces Taste: {hits}"

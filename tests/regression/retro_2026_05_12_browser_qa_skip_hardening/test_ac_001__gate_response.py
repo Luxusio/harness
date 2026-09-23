@@ -3,7 +3,6 @@
 Covers:
   - canonical shape (`decision`, `reason`, `next_action_command`, `owner_skill`, `docs`)
   - `emit_permission_decision` kwargs land in the PreToolUse envelope as a tail
-  - stop_gate.py emits next_action_command derived from missing_for_close
 
 Run: python3 -m unittest tests.regression.retro_2026_05_12_browser_qa_skip_hardening.test_ac_001__gate_response
 """
@@ -13,9 +12,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
-import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -99,83 +96,6 @@ class TestEmitPermissionDecisionAppendsTail(unittest.TestCase):
         with mock.patch.object(sys, "stdout", buf):
             lib.emit_permission_decision("allow", "anything", next_action_command="x")
         self.assertEqual(buf.getvalue(), "")
-
-
-class TestStopGateEmitsNextAction(unittest.TestCase):
-    """End-to-end: stop_gate.py builds payload with next_action_command from missing_for_close."""
-
-    def setUp(self):
-        self.td_obj = tempfile.TemporaryDirectory()
-        self.repo = self.td_obj.name
-        os.makedirs(os.path.join(self.repo, "doc", "harness", "tasks"), exist_ok=True)
-        with open(os.path.join(self.repo, "doc", "harness", "manifest.yaml"), "w", encoding="utf-8") as f:
-            f.write("version: 4\ntype: test\n")
-        os.makedirs(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo"), exist_ok=True)
-        # exact TASK.json for emit_compact_context
-        with open(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo",
-                               "TASK.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "run_id": "0198c349-5800-7000-8000-000000000001",
-                "execution_mode": "standard",
-                "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
-            }, f)
-        with open(os.path.join(self.repo, "doc", "harness", "tasks", ".active"),
-                  "w", encoding="utf-8") as f:
-            f.write(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo"))
-
-    def tearDown(self):
-        self.td_obj.cleanup()
-
-    def test_stop_gate_block_has_next_action_when_handoff_missing(self):
-        stop_gate = _load("stop_gate_test", SCRIPTS / "stop_gate.py")
-        # Patch find_repo_root to point at our fixture
-        with mock.patch.object(stop_gate, "find_repo_root", return_value=self.repo):
-            buf = io.StringIO()
-            with mock.patch.object(sys, "stdin", io.StringIO("")):
-                with mock.patch.object(sys, "stdout", buf):
-                    stop_gate.main()
-            out = buf.getvalue()
-        self.assertIn("decision", out)
-        payload = json.loads(out)
-        self.assertEqual(payload["decision"], "block")
-        self.assertIn("next_action_command", payload)
-        # PLAN.md missing → plan-skill route
-        self.assertIn("plan", payload["next_action_command"].lower())
-
-    def test_commit_backed_learning_missing_no_longer_has_next_action(self):
-        stop_gate = _load("stop_gate_commit_learning_test", SCRIPTS / "stop_gate.py")
-        command, owner = stop_gate._next_action_for_missing(
-            "Commit-backed Learnings section in HANDOFF.md"
-        )
-        self.assertEqual(command, "")
-        self.assertEqual(owner, "")
-
-    def test_self_healing_missing_no_longer_has_next_action(self):
-        stop_gate = _load("stop_gate_self_healing_test", SCRIPTS / "stop_gate.py")
-        command, owner = stop_gate._next_action_for_missing(
-            "Self-Healing Candidates section in HANDOFF.md"
-        )
-        self.assertEqual(command, "")
-        self.assertEqual(owner, "")
-
-    def test_stop_gate_uses_context_next_action_priority(self):
-        stop_gate = _load("stop_gate_priority_test", SCRIPTS / "stop_gate.py")
-        task_dir = os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo")
-        with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
-            f.write("# plan\n")
-        with open(os.path.join(task_dir, "HANDOFF.md"), "w", encoding="utf-8") as f:
-            f.write("# handoff\n\nNo commit-backed learning classification.\n")
-        with mock.patch.object(stop_gate, "find_repo_root", return_value=self.repo):
-            buf = io.StringIO()
-            with mock.patch.object(sys, "stdin", io.StringIO("")):
-                with mock.patch.object(sys, "stdout", buf):
-                    stop_gate.main()
-            out = buf.getvalue()
-        payload = json.loads(out)
-        self.assertIn("Run and await the required read-only review", payload["next_action_command"])
-        self.assertNotIn("Commit-backed Learnings", payload["next_action_command"])
-        self.assertEqual(payload["owner_skill"], "harness:code-reviewer or harness:security-reviewer")
 
 
 if __name__ == "__main__":

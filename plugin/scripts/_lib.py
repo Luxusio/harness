@@ -63,13 +63,13 @@ ATTESTATION_UNBLOCK_CONDITION = (
 # overrides everything else.
 #
 # This existed as five differently-worded variants across `_lib`,
-# `harness_server`, and `stop_gate`, each weaving the elements into its own
-# sentence flow — and two of them silently dropped elements. On 2026-09-03 the
-# stop gate deduplicated its copy against the inlined next_action by testing for
-# the substring "structurally delivered"; the QA-pending branch below used that
-# phrase while omitting the exclusion list and the precedence rule, so the gate
-# suppressed the only complete statement and two clauses vanished from that
-# state. No test constructed it.
+# `harness_server`, and the since-deleted turn-end `stop_gate`, each weaving
+# the elements into its own sentence flow — and two of them silently dropped
+# elements. On 2026-09-03 the stop gate deduplicated its copy against the
+# inlined next_action by testing for the substring "structurally delivered";
+# the QA-pending branch below used that phrase while omitting the exclusion
+# list and the precedence rule, so the gate suppressed the only complete
+# statement and two clauses vanished from that state. No test constructed it.
 #
 # The general failure is that any consumer wanting to deduplicate or verify the
 # boundary has to pick one fragment as a proxy for the whole, and a proxy is
@@ -118,11 +118,9 @@ def stale_bytecode_message(module_path: str) -> str:
     )
 
 
-# The one fact both the MCP and the turn-end gate state about an observed
-# outage. They give different instructions from it — the MCP says continue and
-# await, the gate says park — so the sentences around it legitimately differ.
-# The fact itself must not, or the two surfaces end up disagreeing about
-# whether recording works while each is individually plausible.
+# What the MCP states about an observed outage: continue and await the
+# required review/QA rather than treating the outage as evidence one way or
+# the other.
 RECEIPT_RECORDING_UNAVAILABLE = "Receipt recording is unavailable."
 
 # The marker a failed hook import leaves behind, so a later reader can move from
@@ -136,48 +134,11 @@ RECEIPT_RECORDING_UNAVAILABLE = "Receipt recording is unavailable."
 CAPABILITY_MARKER_RELPATH = os.path.join("doc", "harness", ".receipt-capability-broken")
 
 
-def receipt_outage_block_instruction() -> str:
-    """What the turn-end gate says when the outage is an observation.
-
-    Not an inference from an empty receipt stream. That design was built, and
-    measured, and rejected: zero receipts is the ordinary state of a task that
-    has not reached review, so releasing on it disabled the gate from turn 4 of
-    a normal task. `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`
-    keeps the measurements. This text is reached only when a hook that failed to
-    import left `doc/harness/.receipt-capability-broken` behind.
-
-    Three clauses, and the middle one is the whole point. Without it the gate's
-    existing reason lists missing verdicts, which reads as work still to do —
-    and a coordinator who reads it that way keeps spawning lenses whose results
-    can never be recorded. That loop is what this text exists to break; the
-    field report ran ~15 turns of it.
-
-    `attestation_endgame()` is deliberately NOT appended in this state, and the
-    do-not-rerun ban is therefore stated here in the one form the gate needs
-    ("rather than spawning another lens") instead of being respelled in full.
-    The endgame exists to choose between the two missing-attestation park pairs,
-    and both assert that the lenses ran and returned results — which is exactly
-    what an observed outage leaves unknown. The REQ that owns those pairs
-    records that presenting an inapplicable pair first is the failure it was
-    written to fix, so appending them here would reintroduce it one state over.
-    """
-    return (
-        f"{RECEIPT_RECORDING_UNAVAILABLE} A hook that could not import recorded "
-        f"this at {CAPABILITY_MARKER_RELPATH}, so the missing verdicts above "
-        "cannot be produced by continuing — they are not work that remains. "
-        "An observed recording outage is a genuine external blocker: publish it "
-        "through task_blocked rather than spawning another lens."
-    )
-
-
 def is_spawn_instruction(text: str) -> bool:
     """Does this next_action tell the caller to run a verification subagent?
 
-    Lives here because two surfaces must answer it identically. `harness_server`
-    has asked it since 2026-09-04 to decide whether a receipt outage may replace
-    the routing; the turn-end gate now asks the same question for the same
-    reason, and a second copy of the predicate would let the two disagree about
-    which states an outage is allowed to redirect.
+    Lives here because `harness_server` has asked it since 2026-09-04 to decide
+    whether a receipt outage may replace the routing.
 
     The wording it inspects is produced in this module, so the coupling is real
     either way; it is pinned by a test that feeds every spawn instruction `_lib`
@@ -186,38 +147,6 @@ def is_spawn_instruction(text: str) -> bool:
     """
     lowered = text.lower()
     return "subagent" in lowered or "spawn" in lowered
-
-
-def receipt_outage_next_action() -> tuple[str, str]:
-    """The routing fields for an observed outage: (next_action, owner_skill).
-
-    The reason sentence alone was not enough, and the gap is worth stating.
-    `_gate_response` documents `next_action_command` as the exact call that
-    resolves the block and `owner_skill` as who owns the next step; those are
-    the fields a coordinator follows. Naming the park in prose while leaving
-    them pointing at "spawn and await a review subagent" left the payload
-    telling the reader to do the very thing the sentence forbade — and the loop
-    this exists to break is a coordinator dutifully spawning lenses.
-
-    Deliberately NOT a third fixed park pair. C-17 scopes verbatim-copy pairs to
-    the missing-attestation branch, and both of them assert the lenses ran and
-    returned results, which an observed outage leaves unknown. The route used
-    here is C-17's other one — a direct `task_blocked` for a genuine external
-    environment blocker, whose reason the coordinator authors from what it
-    observed. So this names the shape and leaves the wording to the caller.
-    """
-    return (
-        "mcp__plugin_harness_harness__task_blocked { task_id: '<task_id>', "
-        "blocked_reason: '<what was observed>', unblock_condition: '<a check>' } "
-        "— a direct park for a genuine external blocker. All three arguments are "
-        "required by the tool schema. Write the blocked_reason "
-        "from the observed outage and make the unblock_condition a check, not a "
-        "diagnosis: resume when spawning one lens is confirmed to add a started "
-        "row to RECEIPTS.jsonl. Do not copy either fixed attestation pair here; "
-        "both assert the lenses ran and returned results, which this state "
-        "leaves unknown.",
-        "harness-goal",
-    )
 
 
 NO_RECEIPTS_BLOCKED_REASON = (
@@ -1091,7 +1020,7 @@ def log_gate_crash(exc, script, hook_input=None):
     Schema (one JSON line in `doc/harness/learnings.jsonl`):
       ts            ISO timestamp
       type          "gate-crash" (versus _log_gate_error's "gate-error" for legacy callers)
-      script        the gate name (e.g. "prewrite_gate", "stop_gate")
+      script        the gate name (e.g. "prewrite_gate", "task_close")
       tool_name     hook_input["tool_name"] if present, truncated to 120 chars
       payload_keys  sorted top-level keys of hook_input (for drift detection)
       error         "<ExceptionName>: <message>" capped at 400 chars

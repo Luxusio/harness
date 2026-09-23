@@ -25,14 +25,6 @@ def test_stop_judge_agent_file_is_removed():
         )
 
 
-def test_blocked_env_transition_is_owned_by_task_blocked():
-    stop_gate = open(os.path.join(REPO, "plugin", "scripts", "stop_gate.py")).read()
-    assert "task_blocked" in stop_gate, "task_blocked transition path missing"
-    assert "stop-judge" not in stop_gate, "stop-judge routing remains in stop_gate"
-    assert "stop_judge" not in stop_gate, "stop-judge routing remains in stop_gate"
-
-
 if __name__ == "__main__":
     test_stop_judge_agent_file_is_removed()
-    test_blocked_env_transition_is_owned_by_task_blocked()
     print("OK")

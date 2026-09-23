@@ -183,7 +183,6 @@ qa_notes:
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - plugin/mcp/harness_server.py
-      - plugin/scripts/stop_gate.py
     notes: >
       The fixed missing-attestation blocked_reason/unblock_condition pair is
       owned solely by plugin/scripts/_lib.py
@@ -193,13 +192,12 @@ qa_notes:
       names (`import harness_server`). Loading harness_server.py via
       importlib.spec_from_file_location raises
       PermissionError("task-control writer requires its canonical module
-      import") from _lib.bind at import time. Delivery points:
+      import") from _lib.bind at import time. Delivery point:
       harness_server.RECEIPT_PENDING_VERIFY_NEXT_ACTION (returned by
       handle_task_verify only when runtime_verdict == PENDING AND
-      watcher_status["receipts_recordable"] is not False) and
-      stop_gate.attestation_block_instruction() (emitted unconditionally in
-      the active-task block reason, so the pair reaches the caller even in the
-      receipts_recordable=False branch).
+      watcher_status["receipts_recordable"] is not False). The turn-end
+      stop_gate.py caller of this pair was deleted 2026-09-23 (see
+      CHANGELOG.md); it was never the sole delivery point.
     fixture_helper: tests/test_review_agent_contracts.py::test_missing_attestation_pair_has_exactly_one_authoritative_location
   contract_lint_weight_scope:
     discovered: 2026-09-02
@@ -381,54 +379,31 @@ qa_notes:
       - "pyproject addopts inject '-n auto --dist worksteal'; '-p no:xdist' errors. Use '-n0' for serial. Full suite: ~15s parallel, ~60-200s serial."
   stop_gate_state_matrix_probe:
     discovered: 2026-09-03
-    freshness: suspect
-    freshness_updated: 2026-09-18T08:10:50Z
-    invalidated_by_paths:
-      - plugin/scripts/stop_gate.py
-      - plugin/scripts/_lib.py
-      - tests/test_stop_gate.py
+    superseded: 2026-09-23
     notes:
-      - "stop_gate.py reason text is state-dependent. Reproduce every branch by building fake repos with tests/test_stop_gate.py helpers (_fake_repo, _write_completed_lenses) and running the script as a subprocess with HARNESS_BACKGROUND_WAIT_SECS=0. Branches: no-task-dir, plan-missing, review-pending, qa-pending, review-fail, review-blocked-env, qa-fail, close-ready, task-blocked (silent), no-active (silent), non-harness-repo (silent), corrupt TASK.json, corrupt RECEIPTS.jsonl. Since 2026-09-18 there is also receipt-outage, and it is narrower than first recorded here: touching doc/harness/.receipt-capability-broken in the fixture repo changes a blocking state ONLY when its next_action is a spawn instruction — measured, that is review-pending and qa-pending and nothing else. unplanned, review-FAIL, close-ready, corrupt TASK.json and corrupt RECEIPTS.jsonl all keep their healthy text with the marker present. In the two states that do change, next_action_command and owner_skill change too (owner becomes harness-goal); the decision never does. The earlier wording here said \"any blocking state\" and \"no other state changes\" -- both were made false by review rounds 3 and 4 of the same task that wrote this note, and QA caught it."
-      - "Measured reason sizes on 24-core aarch64 Linux 6.12.69-linuxkit: HEAD 3e4585b was 192 words / 1411 chars in EVERY blocking state (not ~250). After TASK__state-aware-stop-gate-message: no-task-dir 92/624, plan-missing 112/768, review-pending 202/1401, qa-pending 195/1355, close-ready 100/676. The qa-pending figure originally recorded here (157/1072) was a mid-task measurement taken while the dedup guard was keyed on the partial phrase 'structurally delivered'; that guard dropped two trust-boundary clauses and was fixed before the task closed. Measurement entries must name the tree state they were taken on."
-      - "emit_compact_context missing_for_close can contain at most three items (PLAN.md, review verdict, QA verdict), so any '+N more' truncation branch keyed on len(missing) > 3 is unreachable in production."
-      - "The qa-pending next_action from emit_compact_context contains the substring 'structurally delivered' but NOT 'actual FAIL or BLOCKED_ENV takes precedence' nor the coordinator-paraphrase exclusion list. Any dedup guard keyed on the short substring silently drops those clauses in that branch."
-      - "A/B a gate change against HEAD by copying plugin/scripts to a scratch dir and overwriting only stop_gate.py from 'git show HEAD:...' - the script does sys.path.insert(dirname(__file__)) so it must sit beside _lib.py."
+      - "RETIRED 2026-09-23 -- plugin/scripts/stop_gate.py and tests/test_stop_gate.py were deleted (the turn-end Stop hook registration was already removed 2026-09-23 in an earlier commit; see CHANGELOG.md). Kept as historical record only; nothing in the current tree exercises these branches."
   stop_gate_trust_boundary_guard:
     discovered: 2026-09-03
-    freshness: suspect
-    freshness_updated: 2026-09-18T08:10:50Z
-    invalidated_by_paths:
-      - plugin/scripts/stop_gate.py
-      - plugin/scripts/_lib.py
+    superseded: 2026-09-23
     notes:
-      - "Resolution of the dedup hazard recorded in stop_gate_state_matrix_probe: the guard now keys on 'BLOCKED_ENV takes precedence', which is a reliable marker for a complete restatement. Verified exhaustive: that phrase occurs in exactly one next_action producer, plugin/scripts/_lib.py:3375 (the review-pending branch). No string returned by stop_gate._next_action_for_missing contains it, so no other suppression path exists."
-      - "Residual: the review-pending next_action restates 3 of the 4 boundary fragments; 'actual review PASS must precede actual QA PASS' is not restated verbatim, so that sentence is absent from the review-pending reason while present in every other blocking state. Ordering is still conveyed narratively by that branch."
-      - "To assert the QA-pending branch is actually reached (not a fixture fall-through to the no-derived-state path), check emit_compact_context(td)['next_action'].startswith('Run and await the required QA subagent(s)') and missing_for_close == ['completed QA verdict: qa-cli']. _write_completed_lenses(repo, task_id, [('review-code','PASS')]) reaches it."
+      - "RETIRED 2026-09-23 -- plugin/scripts/stop_gate.py was deleted; kept as historical record only."
   stop_gate_reason_ab_and_mutation_method:
     discovered: 2026-09-03
-    freshness: suspect
-    freshness_updated: 2026-09-18T08:10:50Z
-    invalidated_by_paths:
-      - plugin/scripts/stop_gate.py
-      - plugin/scripts/_lib.py
+    superseded: 2026-09-23
     notes:
-      - "A/B stop_gate gate logic against HEAD by comparing every payload key EXCEPT reason (decision, next_action_command, owner_skill, docs, exit code, stdout-empty) across fabricated states. 19 states checked on 2026-09-03 (incl. corrupt TASK.json, corrupt RECEIPTS.jsonl, empty/traversal/unicode .active, no manifest, non-repo, malformed/empty/null stdin): zero non-reason differences."
-      - "task_blocked silent-allow is only reachable when BLOCKED.md passes _lib._blocked_artifact_valid: regular file, owned by uid, st_nlink==1, and no group/other write bit. Under a 002 umask a fabricated BLOCKED.md is 0664 -> status 'invalid' -> the gate still blocks. chmod 600 the fixture."
-      - "Mutation-test stop_gate by backing the file up, writing the mutant in place, running '.venv/bin/python -m pytest tests/test_stop_gate.py -n0 -q', and restoring in a finally block. Verified 2026-09-03: guard reverted to the partial phrase -> test_trust_boundary_survives_the_qa_pending_branch red; trust-boundary block deleted -> 2 red; inlined 'Next:' deleted -> test_attestation_pair_is_absent_when_that_branch_does_not_apply red."
-      - "CORRECTION to stop_gate_state_matrix_probe: its 'qa-pending 157/1072' is NOT the shipped size. 157w is what the pre-fix guard (keyed on 'structurally delivered') produced; the shipped tree measures 195w/1355c for qa-pending. review-pending 202w, plan-missing 112w, no-task-dir 92w are current. Char counts vary a few chars with task_id length."
+      - "RETIRED 2026-09-23 -- plugin/scripts/stop_gate.py and tests/test_stop_gate.py were deleted; kept as historical record only."
   trust_boundary_canonical_constant:
     discovered: 2026-09-03
     freshness: suspect
     freshness_updated: 2026-09-18T08:10:50Z
     invalidated_by_paths:
       - plugin/scripts/_lib.py
-      - plugin/scripts/stop_gate.py
       - plugin/mcp/harness_server.py
     notes:
-      - "PARTLY SUPERSEDED 2026-09-04 — see runtime_normative_text_single_source_qa. The stop_gate literal is gone; the named drift guard tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant still exists and passes, but no longer guards drift — with both sides now derived from _lib it is an integration check only. Content coverage moved to tests/test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary. Also superseded in this key: the 'task_verify still carries 3 of 4 paraphrased (exclusion list absent)' measurement below. RECEIPT_PENDING_VERIFY_NEXT_ACTION now composes TRUST_BOUNDARY contiguously, so task_verify carries 4 of 4 — that was AC-3 of this task, measured True for all four elements. plugin/scripts/_lib.py now owns TRUST_BOUNDARY (the four-element C-14 sentence block). stop_gate.py keeps a spelled-out literal because tests/test_review_agent_contracts.py::test_direct_blocker_flow_preserves_structural_result_trust_boundary is a raw-source scan over 9 surfaces and cannot see a reference; tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant is the drift guard between them."
-      - "Differential A/B recipe for emit_compact_context + stop_gate: 'git archive HEAD | tar x -C <scratch>/head', copy the worktree to <scratch>/wt, then drive both trees with one script that builds 9 states (no_plan, review_pending, review_fail, review_blocked, qa_pending, qa_fail, qa_blocked, both_pass, no_active) and diffs the full JSON. Measured on the TASK__trust-boundary-single-constant worktree (HEAD 3e4585b + staged diff), 24-core aarch64 Linux 6.12.69-linuxkit: only review_pending and qa_pending differ, and only in reason/next_action; decision, owner_skill, docs, next_action_command shape and exit codes are byte-identical."
+      - "HISTORICAL (stop_gate.py and tests/test_stop_gate.py deleted 2026-09-23; recipe no longer runs). PARTLY SUPERSEDED 2026-09-04 — see runtime_normative_text_single_source_qa. The stop_gate literal is gone; the named drift guard tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant still exists and passes, but no longer guards drift — with both sides now derived from _lib it is an integration check only. Content coverage moved to tests/test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary. Also superseded in this key: the 'task_verify still carries 3 of 4 paraphrased (exclusion list absent)' measurement below. RECEIPT_PENDING_VERIFY_NEXT_ACTION now composes TRUST_BOUNDARY contiguously, so task_verify carries 4 of 4 — that was AC-3 of this task, measured True for all four elements. plugin/scripts/_lib.py now owns TRUST_BOUNDARY (the four-element C-14 sentence block). stop_gate.py keeps a spelled-out literal because tests/test_review_agent_contracts.py::test_direct_blocker_flow_preserves_structural_result_trust_boundary is a raw-source scan over 9 surfaces and cannot see a reference; tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant is the drift guard between them."
+      - "HISTORICAL (stop_gate.py and tests/test_stop_gate.py deleted 2026-09-23; recipe no longer runs). Differential A/B recipe for emit_compact_context + stop_gate: 'git archive HEAD | tar x -C <scratch>/head', copy the worktree to <scratch>/wt, then drive both trees with one script that builds 9 states (no_plan, review_pending, review_fail, review_blocked, qa_pending, qa_fail, qa_blocked, both_pass, no_active) and diffs the full JSON. Measured on the TASK__trust-boundary-single-constant worktree (HEAD 3e4585b + staged diff), 24-core aarch64 Linux 6.12.69-linuxkit: only review_pending and qa_pending differ, and only in reason/next_action; decision, owner_skill, docs, next_action_command shape and exit codes are byte-identical."
       - "The MCP task_verify PENDING branch (plugin/mcp/harness_server.py handle_task_verify) OVERWRITES ctx['next_action'] with RECEIPT_PENDING_VERIFY_NEXT_ACTION, so _lib branch text does not reach task_verify while runtime_verdict is PENDING. Verify _lib next_action changes through handle_task_context / handle_task_start instead. Measured 2026-09-03 on the same worktree: task_context qa-pending carried 1 of 4 boundary elements at HEAD and 4 of 4 after the change; task_verify still carries 3 of 4 paraphrased (exclusion list absent) on both, which PLAN AC-2 leaves out of scope."
-      - "The background-subagent-running stop_gate branch (orphan 'started' row, no completion) never carried the trust boundary and is unchanged by boundary work. Reproduce with tests/test_stop_gate.py::_write_claude_start; it reports 'active for ~Ns' until HARNESS_BACKGROUND_STALE_SECS (default 1800) ages the row out, confirming doc/harness/REQ__subagent-lifecycle-receipt-boundaries.md."
+      - "HISTORICAL (stop_gate.py and tests/test_stop_gate.py deleted 2026-09-23; recipe no longer runs). The background-subagent-running stop_gate branch (orphan 'started' row, no completion) never carried the trust boundary and is unchanged by boundary work. Reproduce with tests/test_stop_gate.py::_write_claude_start; it reports 'active for ~Ns' until HARNESS_BACKGROUND_STALE_SECS (default 1800) ages the row out, confirming doc/harness/REQ__subagent-lifecycle-receipt-boundaries.md."
   runtime_normative_text_single_source_qa:
     discovered: 2026-09-04
     freshness: suspect
@@ -436,15 +411,14 @@ qa_notes:
     invalidated_by_paths:
       - plugin/scripts/_lib.py
       - plugin/mcp/harness_server.py
-      - plugin/scripts/stop_gate.py
     notes:
-      - "Isolating stop_gate.py's own behavior change from _lib next_action changes: `git show <base>:plugin/scripts/stop_gate.py > plugin/scripts/stop_gate_BASEQA.py`, then run both scripts as subprocesses. stop_gate.py does `sys.path.insert(0, dirname(__file__))`, so the copied base script imports the CURRENT _lib — the emitted stop message is then a pure A/B of the gate's own logic. Measured 2026-09-04: byte-identical for no-task, needs-plan, needs-lenses. Delete the copy afterwards; it is inside plugin/ and would be picked up by tests/test_review_agent_contracts.py::_runtime_python_files."
+      - "HISTORICAL (stop_gate.py and tests/test_stop_gate.py deleted 2026-09-23; recipe no longer runs). Isolating stop_gate.py's own behavior change from _lib next_action changes: `git show <base>:plugin/scripts/stop_gate.py > plugin/scripts/stop_gate_BASEQA.py`, then run both scripts as subprocesses. stop_gate.py does `sys.path.insert(0, dirname(__file__))`, so the copied base script imports the CURRENT _lib — the emitted stop message is then a pure A/B of the gate's own logic. Measured 2026-09-04: byte-identical for no-task, needs-plan, needs-lenses. Delete the copy afterwards; it is inside plugin/ and would be picked up by tests/test_review_agent_contracts.py::_runtime_python_files."
       - "Driving emit_compact_context across all 9 lifecycle states without mocks: import tests/test_harness_mcp_server as a module and reuse its `_record_receipt_fixture` (hand-rolled receipt rows fail _receipt_entry_semantics_valid). Build tmp repo with .git/ + doc/harness/manifest.yaml, chdir, call handle_task_start, then write PLAN.md and receipts."
       - "CORRECTED 2026-09-04 (an earlier version of this note said review BLOCKED_ENV is not an accepted verdict shape; it is). `VERDICT: BLOCKED_ENV` parses fine — _QA_VERDICT_RE accepts it. What demotes it to PENDING is the counts-consistency rule at _lib.normalize_receipt_completion (plugin/scripts/_lib.py, `if verdict == 'BLOCKED_ENV' and not investigate`), the same rule that demotes PASS-with-findings and FAIL-with-FIX_NOW=0. Measured: FINDING_COUNTS with INVESTIGATE=0 -> PENDING (lands in the 'Recorded but unusable' nonparsing branch); INVESTIGATE>=1 -> BLOCKED_ENV. Build review_blocked fixtures with INVESTIGATE>=1, and do not triage a real reviewer BLOCKED_ENV as a format failure — C-14 and C-17 both treat a lens-level BLOCKED_ENV as an actual result."
       - "handle_task_verify overwrites ctx['next_action'] in the PENDING branch, so in the no-PLAN state task_verify never tells the caller PLAN.md is missing — that information survives only in missing_for_close. Pre-existing at 3ec78a7; verify _lib branch text through handle_task_context, not task_verify."
       - "Constant sizes measured 2026-09-04 at the TASK__next-action-single-source tree: TRUST_BOUNDARY 38w/274c, attestation_endgame() 76w/544c, attestation_block_instruction() 34w/290c, ATTESTATION pair 29w, RECEIPT_UNAVAILABLE 173w/1211c, RECEIPT_PENDING_VERIFY 132w/946c, _lib review-pending 157w/1085c, _lib qa-pending 141w/988c. At 3ec78a7 (six values, labelled because two of the eight above did not exist then): TRUST_BOUNDARY 38w/274c, attestation_block_instruction() 33w/281c, RECEIPT_UNAVAILABLE 131w/948c, RECEIPT_PENDING_VERIFY 101w/734c, _lib review-pending 146w/1024c, _lib qa-pending 115w/831c. attestation_endgame() and the 29w pair figure have no 3ec78a7 baseline — the endgame did not exist, and the pair was only ever measured inside attestation_block_instruction()."
       - "CLOSED 2026-09-04: deleting `NON-ATTESTING.` from _lib.emit_compact_context's pending heads once left the full suite green, at 3ec78a7 and in this worktree as first delivered. Now pinned by tests/test_lib_gate_helpers.py::TrustBoundaryReachesEveryPendingNextAction::test_both_pending_heads_label_a_receiptless_final_non_attesting (both subtests redden). Kept as a worked example: the deletion does not just drop a word, it ships 'label it Only structurally delivered completion/final records...'. The other two state-scoped head bans are the _lib review-pending 'do not rerun review solely for a receipt' and harness_server RECEIPT_UNAVAILABLE '...at any point'."
-      - "SUPERSEDES two earlier notes in this file, which this change falsified. (1) trust_boundary_canonical_constant says 'stop_gate.py keeps a spelled-out literal' and names tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant as the drift guard between the two copies. No longer true: stop_gate.py composes _lib.TRUST_BOUNDARY, and that test is now an integration check only — it proves the gate reaches the branch and emits the constant, not that the constant says the right thing. The content guard is tests/test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary, which holds an independently written literal. Do not trust the old note when judging whether content coverage exists. (2) next_action_mutation_sweep says '29 clauses, exactly 1 survivor' and cites a docstring sentence in test_every_normative_clause_in_both_next_actions_is_pinned. That sentence was deleted 2026-09-04 as unmeasured: two more survivors were found ('Run any required substantive lens that', 'their results are substantive but'), both green at 3ec78a7 too, and both are now pinned. Re-run the sweep rather than trusting any recorded survivor count."
+      - "HISTORICAL (stop_gate.py and tests/test_stop_gate.py deleted 2026-09-23; recipe no longer runs). SUPERSEDES two earlier notes in this file, which this change falsified. (1) trust_boundary_canonical_constant says 'stop_gate.py keeps a spelled-out literal' and names tests/test_stop_gate.py::test_emitted_trust_boundary_equals_the_canonical_constant as the drift guard between the two copies. No longer true: stop_gate.py composes _lib.TRUST_BOUNDARY, and that test is now an integration check only — it proves the gate reaches the branch and emits the constant, not that the constant says the right thing. The content guard is tests/test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary, which holds an independently written literal. Do not trust the old note when judging whether content coverage exists. (2) next_action_mutation_sweep says '29 clauses, exactly 1 survivor' and cites a docstring sentence in test_every_normative_clause_in_both_next_actions_is_pinned. That sentence was deleted 2026-09-04 as unmeasured: two more survivors were found ('Run any required substantive lens that', 'their results are substantive but'), both green at 3ec78a7 too, and both are now pinned. Re-run the sweep rather than trusting any recorded survivor count."
       - "Full suite is fast and stable here: ~15s with xdist worksteal, ~60s with -n0. Four repeated runs plus one -n0 run on 2026-09-04 were all green; no flakiness observed. Test counts are deliberately omitted — a recorded total is stale the next time anyone adds a test, and this note is about timing and stability."
   setup_template_contract_drift_qa:
     discovered: 2026-09-04
@@ -542,12 +516,15 @@ environment_notes:
       does not work. ruff is not installed. Copying the tree to a sandbox without .git makes
       test_plan_test_references (PLAN.md test-name references) fail; that failure is a sandbox artifact.
     discovered: 2026-09-18
-  - topic: "stop_gate.py manual exercise"
+  - topic: "stop_gate.py manual exercise (retired 2026-09-23)"
     detail: >
-      Fixture: repo with .git/, doc/harness/manifest.yaml, doc/harness/tasks/.active naming a task dir holding
-      PLAN.md + TASK.json(run_id, required_lenses). Run
-      `HARNESS_BACKGROUND_WAIT_SECS=0 python3 plugin/scripts/stop_gate.py <<< '{}'`. Marker for the outage branch:
-      doc/harness/.receipt-capability-broken (regular file only; symlink/dir/fifo are ignored by design).
+      RETIRED 2026-09-23 -- plugin/scripts/stop_gate.py was deleted (its Stop hook registration was already
+      removed earlier the same day). Historical recipe kept for record: fixture was a repo with .git/,
+      doc/harness/manifest.yaml, doc/harness/tasks/.active naming a task dir holding PLAN.md +
+      TASK.json(run_id, required_lenses), run with
+      HARNESS_BACKGROUND_WAIT_SECS=0 python3 plugin/scripts/stop_gate.py <<< '{}'. Marker for the outage
+      branch was doc/harness/.receipt-capability-broken (regular file only; symlink/dir/fifo ignored by
+      design).
     discovered: 2026-09-18
   - topic: "temp-root install without touching ~/.claude or ~/.codex"
     detail: >
@@ -555,7 +532,7 @@ environment_notes:
       install.sync_codex_payload(<tmp>/codex); both skip the claude/codex CLIs. Codex plan sub-files land in
       <tmp>/codex/plugins/harness/internal-skills/plan/ with ${CLAUDE_PLUGIN_ROOT}/skills rewritten to
       ${HARNESS_PLUGIN_ROOT}/internal-skills. install._claude_payload_state(<tmp>/claude) -> SYNCHRONIZED.
-      Since 2026-09-23 plugin/hooks/hooks.json has no Stop key; stop_gate.py is dormant but still runnable.
+      Since 2026-09-23 plugin/hooks/hooks.json has no Stop key; the gate script it used to register (stop_gate.py) was deleted the same day (see CHANGELOG.md).
     discovered: 2026-09-23
   - topic: "upgrade-path check for removed Claude hooks"
     detail: >
@@ -563,4 +540,16 @@ environment_notes:
       install.sync_claude_payload(<tmp>/claude); the staged-tree activation replaces the file wholesale, so the
       resulting key set is exactly the source hooks.json keys. Pointer-audit for plan skill: grep
       -nE "\bbelow\b|\babove\b|[Ss]ee |§" over plugin/skills/plan/*.md and plugin-codex/internal-skills/plan/SKILL.md.
+    discovered: 2026-09-23
+  - topic: "Codex payload staleness in a scratch root; importing harness_server as a module"
+    detail: >
+      To probe install._codex_payload_state in scratch, set install.CODEX_INSTALL_ROOT=<tmp>/codexroot before
+      calling it (it reads the module global, not an argument). Without the codex CLI the cache half always
+      reports 'Codex current cache: target is missing' (install_codex populates it), so look for the
+      'Codex mirror: installed payload differs' reason in STALE output. A planted mirror/scripts/stop_gate.py
+      flips mirror to STALE; sync_codex_payload removes it. Separately: `import harness_server` of
+      /project/.../plugin/mcp with mise python3 from a scratch cwd raises PermissionError('task-control writer
+      requires its canonical module import') on this fakeowner bind mount, while .venv/bin/python, repo cwd, or
+      a copied tree under /tmp import fine. Environmental; not a regression. The MCP server as a script
+      (`python3 plugin/mcp/harness_server.py` with tools/list on stdin) works.
     discovered: 2026-09-23

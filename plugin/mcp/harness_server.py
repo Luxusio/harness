@@ -806,8 +806,9 @@ def _watcher_status(
 # surface in the protocol was the one emitting the least complete boundary.
 # Compose; do not restate. See doc/harness/REQ__runtime-normative-text-has-one-source.md.
 RECEIPT_UNAVAILABLE_NEXT_ACTION = (
-    # Head sentence shared with the turn-end gate; the advice that follows is
-    # not (there: park, here: continue and await). See _lib.
+    # Head sentence owned by _lib; the advice that follows is specific to this
+    # surface (continue and await). The turn-end gate that also used the head
+    # was deleted 2026-09-23. See _lib.
     f"{RECEIPT_RECORDING_UNAVAILABLE} Continue and await the required review "
     "and QA: their results are substantive but NON-ATTESTING and cannot "
     "authorize task_close. Remediate an actual FAIL and publish an actual "
@@ -825,8 +826,8 @@ RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
 
 
 # Re-exported under the private name this module has always used; the
-# predicate itself is owned by `_lib`, because the turn-end gate must answer
-# the same question the same way. See `_lib.is_spawn_instruction`.
+# predicate itself is owned by `_lib` (it once had a second caller, the turn-end
+# gate deleted 2026-09-23). See `_lib.is_spawn_instruction`.
 _is_spawn_instruction = is_spawn_instruction
 
 

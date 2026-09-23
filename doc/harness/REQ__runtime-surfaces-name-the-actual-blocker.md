@@ -4,7 +4,6 @@ summary: 런타임 표면은 호출자가 다음 행동을 정하는 데 필요�
 updated: 2026-09-11
 freshness: current
 invalidated_by_paths:
-  - plugin/scripts/stop_gate.py
   - plugin/scripts/_gate_response.py
   - plugin/scripts/_lib.py
   - plugin/scripts/subagent_lifecycle.py
@@ -13,7 +12,6 @@ invalidated_by_paths:
   - plugin/skills/develop/SKILL.md
   - plugin/skills/develop/parallel-fanout.md
   - tests/test_develop_parallel_fanout_contract.py
-  - tests/test_stop_gate.py
   - tests/test_subagent_lifecycle.py
   - tests/test_lib_gate_helpers.py
   - tests/test_no_git_receipt_model.py
@@ -24,12 +22,14 @@ freshness_updated: 2026-09-18T08:05:00Z
 
 # REQ — 런타임 표면은 실제 blocker를 지목한다
 
-> **2026-09-23 — Claude Stop 등록 제거.** `plugin/hooks/hooks.json`의 `Stop`
-> 엔트리(`stop_gate.py`)가 제거되어, 이 문서가 서술하는 turn-end
-> block/yield/하트비트 동작은 현재 Claude 세션에서 실행되지 않는다.
-> `plugin/scripts/stop_gate.py`와 관련 테스트는 트리에 남아 있고
-> (dormant, revert 대비), 아래 서술은 그 스크립트가 등록돼 있던 동안의
-> 설계 근거로서 historical 이다. Turn-end 지속은 native `/goal`이 맡는다
+> **2026-09-23 — Claude Stop 등록 제거, 스크립트 삭제 (deleted 2026-09-23).**
+> `plugin/hooks/hooks.json`의 `Stop` 엔트리가 먼저 제거되었고, 같은 날
+> `plugin/scripts/stop_gate.py`/`hook_stop.py`와 그 전용 테스트
+> (`tests/test_stop_gate.py` 등)도 트리에서 삭제됐다. 이 문서가 서술하는
+> turn-end block/yield/하트비트 동작은 현재 어느 Claude 세션에서도 실행되지
+> 않는다. 아래 서술은 그 스크립트가 등록돼 있던 동안의 설계 근거로서
+> historical 이며, Enforcement 섹션의 해당 테스트 이름은 plain text로만
+> 남겨둔 과거 기록이다. Turn-end 지속은 native `/goal`이 맡는다
 > (`doc/harness/patterns/auto-loop.md`, `CONTRACTS.md` C-17).
 
 ## Expected behavior
@@ -93,7 +93,7 @@ C-17은 태스크가 `in_progress`인 동안 임의 종결을 막는다. 여기�
   (`active_records` 가 session binding, task_id, `run_id`,
   `claude:<sid>:` 런타임 접두사로 필터한다).
 - 레코드가 사라지면 Stop 은 종전대로 막힌다
-  (`test_yielding_to_a_lens_does_not_survive_the_record_clearing`).
+  (test_yielding_to_a_lens_does_not_survive_the_record_clearing).
 
 ### 양보는 레코드의 수명이지 에이전트의 수명이 아니다 — 하트비트로 구분하고 횟수로 받친다
 
@@ -401,15 +401,17 @@ normal behavior.
 
 ## Enforcement
 
-- `test_yields_the_turn_to_an_active_background_subagent` — 새 Stop이 lens
+(2026-09-23: the following stop_gate.py-only tests below were deleted along with plugin/scripts/stop_gate.py; kept as plain-text historical record, not live references.)
+
+- test_yields_the_turn_to_an_active_background_subagent (deleted 2026-09-23) — 새 Stop이 lens
   대기 중 양보하고, 무엇을 기다리는지 보고하며, 옛 지시문을 반복하지 않는다.
-- `test_yielding_to_a_lens_does_not_survive_the_record_clearing` — 스코핑
+- test_yielding_to_a_lens_does_not_survive_the_record_clearing — 스코핑
   절반. 레코드가 사라지면 양보도 끝난다.
-- `test_repeated_yields_on_an_unchanged_record_set_block` — 수명 절반.
+- test_repeated_yields_on_an_unchanged_record_set_block — 수명 절반.
   25분 된 고아 행으로 재현: 3회 양보 후 막고, 처방을 지목한다.
-- `test_a_live_transcript_heartbeat_yields_past_the_turn_budget` — 하트비트가
+- test_a_live_transcript_heartbeat_yields_past_the_turn_budget — 하트비트가
   있는 6턴(예산의 2배)이 전부 양보되고, 원장은 **생성조차 되지 않는다**.
-- `test_a_stale_transcript_falls_back_to_the_turn_budget` — 트랜스크립트가
+- test_a_stale_transcript_falls_back_to_the_turn_budget — 트랜스크립트가
   존재하되 전진하지 않으면 옛 경계가 그대로 적용되고, 블록 문구에
   `active for` 가 없다.
 - `test_a_lens_less_agent_writes_no_receipt_and_no_crash` — 세 lens-less
@@ -426,19 +428,19 @@ normal behavior.
   채널(`gate-crash`, binding-miss)이 각각 옳은 쪽으로만 열린다.
 - `test_a_stop_that_is_owed_a_completion_is_never_silenced` — start 의 타입이
   lens 를 담았는데 트랜스크립트 타입이 잃은 경우, 그 stop 은 침묵되지 않는다.
-- `test_a_glob_metacharacter_in_an_agent_id_cannot_forge_a_heartbeat` /
-  `test_a_config_root_containing_pattern_syntax_still_resolves` — 하트비트
+- test_a_glob_metacharacter_in_an_agent_id_cannot_forge_a_heartbeat /
+  test_a_config_root_containing_pattern_syntax_still_resolves — 하트비트
   경로의 보간값은 전부 이스케이프되고, 우리 `*` 만 패턴이다.
 - `test_claude_develop_forbids_collapsing_independent_acs_into_one_executor` —
   `SKILL.md` 에 `Agent(name=` 이 없고 금지 문장이 있다.
 - `test_old_unified_schema_fails_closed_without_advising_a_reset` /
   `test_exact_schema_rejects_an_unknown_event` — 네 사유 코드가 각각 도달
   가능하고, 줄 번호를 담고, 영수증 내용을 담지 않으며, reset 을 권하지 않는다.
-- `test_malformed_receipt_stream_blocks_normal_stop` /
+- test_malformed_receipt_stream_blocks_normal_stop /
   `..._recursive_stop` — 게이트 문구도 같은 성질.
-- `test_a_changed_record_set_restarts_the_yield_budget` — 진행이 있으면
+- test_a_changed_record_set_restarts_the_yield_budget — 진행이 있으면
   예산이 초기화되어 실제 두 번째 lens 가 벌받지 않는다.
-- `test_stop_hook_active_with_active_background_allows_and_reports` — 재귀
+- test_stop_hook_active_with_active_background_allows_and_reports — 재귀
   경로도 같은 결정·같은 보고.
 - `TestTaskVerifyKeepsThePrerequisiteBlocker` — 실제 핸들러를 구동해 PLAN.md가
   `next_action`에 먼저 오고, attestation 안내가 온전히 남는지.

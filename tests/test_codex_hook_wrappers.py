@@ -279,7 +279,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 self.assertEqual(mod.main(), 0)
         restore.assert_called_once_with(raw.encode(), retry_seconds=1.0, budget_seconds=1.25)
 
-        for name in ("hook_post_tool_use", "hook_user_prompt_submit", "hook_stop"):
+        for name in ("hook_post_tool_use", "hook_user_prompt_submit"):
             self.assertFalse(hasattr(_load(name), "restore_watcher_registration"), name)
 
     def test_registration_helper_retries_and_late_recovery_is_future_only(self):
@@ -841,7 +841,6 @@ class TestCodexHookWrappers(unittest.TestCase):
         modules = [
             ("hook_post_tool_use", {"tool_name": "Bash"}),
             ("hook_user_prompt_submit", {}),
-            ("hook_stop", {}),
         ]
         for name, extra in modules:
             mod = _load(name)

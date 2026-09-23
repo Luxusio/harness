@@ -30,11 +30,11 @@ force the full procedure. File count alone is not an eligibility rule.
 |-------|------|-----------|
 | 0 | Intake + Context + procedure selection | always |
 | compact | Bounded code/context assessment | low-risk standard tasks only |
-| 1 | CEO Review | full procedure (mandatory premise AskUserQuestion) |
+| 1 | CEO Review | full procedure (premise extraction and source-classification mandatory; AskUserQuestion only for unresolved material premises, asked together with User Challenges at Phase 5.3) |
 | 2 | Design Review | full procedure and ui_scope: true |
 | 3 | Engineering Review | full procedure |
 | 4 | DX Review | full procedure and dx_scope: true |
-| 5 | Procedure-aware user gate | full asks final approval; compact asks only genuine User Challenges and otherwise proceeds directly to publication |
+| 5 | Procedure-aware user gate | both procedures run one consolidated decision interaction (§5.3) only when unresolved material premises or User Challenges remain, otherwise proceed directly to publication; explicit pre-code final approval (§5.4.1) runs only if the user asked for it |
 | 6 | Write PLAN.md + declared lenses in TASK.json | always |
 
 ## Invariants
@@ -50,8 +50,9 @@ force the full procedure. File count alone is not an eligibility rule.
   sets the completion status to DONE_WITH_CONCERNS and the report VERDICT to
   `REVIEWED_DEGRADED — <phases> ran coordinator-only`.
 - **Decision Classification**: every finding is classified by the coordinator
-  as Mechanical (auto-decide silently), Taste (auto-decide + surface at Phase
-  5.2), or User Challenge (never auto-decide; present at Phase 5.3 with full
+  as Mechanical (auto-decide silently), Taste (auto-decide, then recorded in
+  PLAN.md's Decision Audit Trail and never rendered at the user-facing gate),
+  or User Challenge (never auto-decide; present at Phase 5.3 with full
   framing). Reviewer agreement is not required for a User Challenge — the
   coordinator classifies each finding using the existing decision principles.
   If the coordinator's classification and the reviewer's stated concern level

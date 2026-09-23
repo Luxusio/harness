@@ -81,9 +81,10 @@ session start; Codex has no equivalent pre-check.
    `plugin/scripts/_lib.py` (`ATTESTATION_BLOCKED_REASON` /
    `ATTESTATION_UNBLOCK_CONDITION`, `NO_RECEIPTS_BLOCKED_REASON` /
    `NO_RECEIPTS_UNBLOCK_CONDITION`). The runtime
-   delivers both to the caller verbatim — `harness_server` embeds them in the
-   `task_verify` next_action and `stop_gate.py` emits them via
-   `attestation_endgame()` — and the branch is only reachable after a
+   delivers both to the caller verbatim — `harness_server` and `_lib.py`'s
+   emit_compact_context() both embed them via `attestation_endgame()` (the
+   turn-end `stop_gate.py` caller that used to compose the same pair was
+   deleted 2026-09-23) — and the branch is only reachable after a
    fresh `task_verify`, so the exact text is always in context when it is
    needed. Callers copy the applicable pair and never interpolate diagnostics.
    Prose surfaces (contracts, runtime docs, skills) must reference this rule

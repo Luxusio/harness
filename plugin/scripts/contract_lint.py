@@ -280,10 +280,10 @@ def lint(path: str, quick: bool = False, repo_root: str = ".") -> LintReport:
 
 
 # A backticked `test_...` identifier in a durable doc. Both lookarounds are
-# load-bearing: `tests/test_stop_gate.py` is a file reference, not a claim that
-# a test function by that name exists, and a trailing `.py` must reject the
-# whole token — a bare negative lookahead lets the engine backtrack and match
-# `test_promote_learnings_current_ru` out of `..._run.py`.
+# load-bearing: `tests/test_prewrite_gate_scope.py` is a file reference, not a
+# claim that a test function by that name exists, and a trailing `.py` must
+# reject the whole token — a bare negative lookahead lets the engine backtrack
+# and match `test_promote_learnings_current_ru` out of `..._run.py`.
 DOC_TEST_REFERENCE = re.compile(
     r"(?<![A-Za-z0-9_/.])(test_[A-Za-z0-9_]+)(?![A-Za-z0-9_.])"
 )

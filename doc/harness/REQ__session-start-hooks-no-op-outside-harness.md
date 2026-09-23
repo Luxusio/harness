@@ -1,29 +1,28 @@
 # REQ - Session Start Hooks No Op Outside Harness
 
-> **2026-09-23 note.** `stop_gate.py` is still covered below as a script that
-> must no-op outside a harness-enabled repo, and that property is unchanged.
-> Separately, the Claude `Stop` hook registration for `stop_gate.py` was
-> removed from `plugin/hooks/hooks.json` on 2026-09-23, so the script is no
-> longer invoked as a live hook on any Claude turn; it is exercised only by
-> direct script invocation (e.g. `tests/test_non_harness_hooks_noop.py`).
+> **2026-09-23 note.** The Claude `Stop` hook registration for `stop_gate.py`
+> was removed from `plugin/hooks/hooks.json` earlier on 2026-09-23, and
+> `plugin/scripts/stop_gate.py` was deleted the same day (see CHANGELOG.md).
+> It is no longer part of the covered-hook-script lists below;
+> `tests/test_non_harness_hooks_noop.py` no longer exercises it.
 
 ## Intent
 Harness SessionStart/PreToolUse/PostToolUse/Stop/Subagent hooks must no-op silently when invoked from a repository that has not completed harness setup. "Not set up" means doc/harness/manifest.yaml is absent. Hooks are installed globally and fire from any project Claude Code or Codex opens, so this no-op contract is what keeps non-harness repos free of runtime files. This REQ captures the expected normal behavior surfaced by the 2026-05-31 stale-install pollution bug (root cause documented in OBS__design-planning-harness-friction.md Implementation-track section; resolving commit 0c5dd7b 2026-05-27).
 
 ## Observable Behavior
 - In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
-- The covered hook scripts are: prewrite_gate.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
+- The covered hook scripts are: prewrite_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
 - Specifically, none of `doc/harness/learnings.jsonl`, `doc/harness/.hygiene-*`, `doc/harness/timeline.jsonl`, `doc/harness/checkpoints/`, or `doc/harness/tasks/` appear after firing any of those hooks against a non-harness-enabled repo. Lifecycle hooks never create a separate background registry or registry lock in any repository.
 - Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
 
 ## Acceptance Signals
 - In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
-- The covered hook scripts are: prewrite_gate.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
+- The covered hook scripts are: prewrite_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
 - Specifically, none of `doc/harness/learnings.jsonl`, `doc/harness/.hygiene-*`, `doc/harness/timeline.jsonl`, `doc/harness/checkpoints/`, or `doc/harness/tasks/` appear after firing any of those hooks against a non-harness-enabled repo. Lifecycle hooks never create a separate background registry or registry lock in any repository.
 - Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
 
 ## Verification Cues
-- tests/test_non_harness_hooks_noop.py covers prewrite_gate, tool_routing, stop_gate, and note_freshness — all subprocess-invoke each hook with a tmp non-harness repo and assert stdout=='' and that no doc/harness/ tree is created.
+- tests/test_non_harness_hooks_noop.py covers prewrite_gate, tool_routing, and note_freshness — all subprocess-invoke each hook with a tmp non-harness repo and assert stdout=='' and that no doc/harness/ tree is created. (Historical: it also covered stop_gate.py until that script was deleted 2026-09-23.)
 - A new test (this task) adds the same property to drift_warn.py via tests/test_drift_warn.py::test_drift_warn_noop_outside_harness_enabled_repo.
 - Manual: open a fresh terminal in a directory with .git but no doc/harness/manifest.yaml; start a Claude Code session; confirm ls -la doc/ shows no harness/ subdirectory after several tool calls and Stop events.
 - Drift surveillance: plugin/scripts/drift_warn.py compares source SHAs to installed SHAs for plugin/scripts/*.py in dev-of-harness repos; if the installed copy lags, it prints a one-line reminder so the no-op fix propagates promptly.

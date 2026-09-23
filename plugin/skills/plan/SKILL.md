@@ -309,7 +309,7 @@ planning follows Phases 0 through 6 and the complete review checklists.
 
 Capstone — restating six load-bearing rules in one place. Most also appear in Invariants; consolidated here for at-a-glance reference.
 
-- **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Reviewer failure surfaces as a finding and continues coordinator-only.
+- **Never abort.** The user invoked plan-skill. Record every taste decision in PLAN.md; never silently redirect to a shorter path. Reviewer failure surfaces as a finding and continues coordinator-only.
 - **User gates.** Both planning procedures ask once for unresolved material decisions. Explicit request and clarification are reusable authorization; review depth does not manufacture premise or final approval rounds.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail. No silent auto-decisions.
 - **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.

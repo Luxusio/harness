@@ -1,8 +1,9 @@
 # REQ - Process Stop Hook Background Subagents
 
-> **Historical (2026-09-23).** The Claude `Stop` hook registration was removed from
-> `plugin/hooks/hooks.json`; no runtime runs `stop_gate.py` now, so the behavior below
-> no longer executes. It is kept as the design record for the dormant script.
+> **Retired (2026-09-23).** The Claude `Stop` hook registration was removed from
+> `plugin/hooks/hooks.json`, and `plugin/scripts/stop_gate.py` and
+> `plugin/scripts/hook_stop.py` were then deleted the same day. Nothing implements
+> the behavior below; this REQ is kept only as a design record.
 > Turn-end continuation is native `/goal`; see `doc/harness/patterns/auto-loop.md`.
 
 ## Intent
@@ -19,7 +20,7 @@ Define the Stop hook behavior when Claude has active background subagents or mon
 - Start, completion, replay, concurrency, stale-start, cross-session, prior-run, recursive Stop, and normal open-task paths behave as specified using only the unified receipt stream.
 
 ## Verification Cues
-- Verify with `tests/test_stop_gate.py` for normal background blocking, recursive active-background silent success, stale-start fallback, cross-session/run isolation, and ordinary open-task blocking.
+- Historical: verified with the now-deleted test_stop_gate.py test module (removed 2026-09-23 along with plugin/scripts/stop_gate.py) for normal background blocking, recursive active-background silent success, stale-start fallback, cross-session/run isolation, and ordinary open-task blocking.
 - Verify direct Claude lifecycle publication, stop-only provenance, replay/concurrency idempotence, and absence of registry artifacts with the focused subagent lifecycle tests.
 
 ## Non-Goals

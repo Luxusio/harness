@@ -5,12 +5,10 @@ updated: 2026-09-18
 freshness: current
 invalidated_by_paths:
   - plugin/scripts/_lib.py
-  - plugin/scripts/stop_gate.py
   - plugin/mcp/harness_server.py
   - plugin/scripts/background_hook.py
   - tests/test_lib_gate_helpers.py
   - tests/test_review_agent_contracts.py
-  - tests/test_stop_gate_receipt_outage.py
   - plugin/CLAUDE.md
   - plugin/skills/develop/SKILL.md
   - plugin/skills/run/SKILL.md
@@ -20,9 +18,12 @@ freshness_updated: 2026-09-23T00:42:07Z
 
 # REQ — park 사유는 관측되지 않은 전제를 단언하지 않는다
 
-> **2026-09-23 — Claude Stop 등록 제거.** 고정 park 쌍은 이제 `task_verify`
-> 의 `next_action` 으로만 전달된다. 아래의 stop-gate 메시지 서술은
-> `stop_gate.py` 가 등록돼 있던 동안의 historical 근거다 (스크립트는 dormant).
+> **2026-09-23 — Claude Stop 등록 제거, 스크립트 삭제 (deleted 2026-09-23).**
+> 고정 park 쌍은 이제 `task_verify` 의 `next_action` 으로만 전달된다. 아래의
+> stop-gate 메시지 서술은 `stop_gate.py` 가 등록돼 있던 동안의 historical
+> 근거다. 그 스크립트와 `tests/test_stop_gate_receipt_outage.py` 는 트리에서
+> 삭제됐다; 살아있던 두 커버리지(마커 경로 4개 보유자 일치, MCP 방출 문자열
+> 불변)는 `tests/test_lib_gate_helpers.py` 로 이전됐다.
 
 ## Expected behavior
 
@@ -260,11 +261,13 @@ durable park 다.
 
 ### Enforcement
 
-`tests/test_stop_gate_receipt_outage.py` — 마커 판독(부재/존재/디렉터리/
-심볼릭 링크/fifo/빈 root/예외), 두 상태의 문구, **마커 없는 평범한 열린
-태스크가 바이트 단위로 불변**이라는 핀, close-ready 핀, 그리고 단일 출처
-핀(마커 경로 4개 보유자 일치, 게이트가 공유 문장을 다시 적지 않음, MCP 방출
-문자열 불변, outage 문구가 두 쌍을 싣지 않음).
+(deleted 2026-09-23, historical) test_stop_gate_receipt_outage.py — 마커
+판독(부재/존재/디렉터리/심볼릭 링크/fifo/빈 root/예외), 두 상태의 문구,
+**마커 없는 평범한 열린 태스크가 바이트 단위로 불변**이라는 핀, close-ready
+핀, 그리고 단일 출처 핀(마커 경로 4개 보유자 일치, 게이트가 공유 문장을
+다시 적지 않음, MCP 방출 문자열 불변, outage 문구가 두 쌍을 싣지 않음). 마커
+경로 일치와 MCP 방출 문자열 핀은 `tests/test_lib_gate_helpers.py` 로
+이전됐다.
 
 리뷰 1라운드가 잡은 두 결함, 둘 다 회귀 핀이 생겼다:
 

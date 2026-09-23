@@ -290,9 +290,9 @@ See `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`.
 Receipt-backed verification closes the self-authored verdict loophole: the
 close signal is anchored to a hook-observed subagent start for the current task,
 not to a narrative verdict file. The Claude `Stop` hook registration
-(`stop_gate.py`) was removed 2026-09-23 because it produced repeated empty
-turns while the coordinator waited on background reviewers;
-`plugin/scripts/stop_gate.py` stays in the tree, dormant, for revert.
+was removed 2026-09-23 because it produced repeated empty turns while the
+coordinator waited on background reviewers; the now-unregistered gate script
+was deleted the same day (2026-09-23).
 
 ### C-18
 

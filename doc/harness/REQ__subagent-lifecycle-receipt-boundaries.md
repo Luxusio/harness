@@ -6,7 +6,6 @@ freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/subagent_lifecycle.py
   - plugin/scripts/background_hook.py
-  - plugin/scripts/stop_gate.py
   - plugin/hooks/hooks.json
 freshness_updated: 2026-09-18T08:10:49Z
 ---

@@ -11,12 +11,62 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(REPO_ROOT, "plugin", "scripts")
 sys.path.insert(0, SCRIPTS)
 
 import _lib  # noqa: E402
+
+
+def _write_completed_lenses(repo: str, task_id: str, lenses: list[tuple[str, str]]) -> None:
+    """Write paired lifecycle rows for isolated gate-helper tests."""
+    task_dir = Path(repo) / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    control_path = task_dir / "TASK.json"
+    if not control_path.exists():
+        control_path.write_text(json.dumps({
+            "run_id": _lib.new_uuid7(),
+            "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }), encoding="utf-8")
+    (task_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    run_id = _lib.read_task_control(str(task_dir))["run_id"]
+    rows = []
+    for index, (lens, verdict) in enumerate(lenses):
+        agent_id = f"agent-{index}"
+        common = {
+            "source": "claude_hook",
+            "task_run_id": run_id,
+            "runtime_id": f"claude:test-session:{agent_id}",
+            "agent_id": agent_id,
+            "agent_type": f"harness:{lens}",
+            "lens": lens,
+        }
+        rows.append({
+            **common, "ts": _lib.now_iso(), "event": "started",
+            "verdict": "", "summary": "",
+        })
+        summary = f"VERDICT: {verdict}"
+        if lens.startswith("review-"):
+            summary += (
+                "\nFINDING_COUNTS: FIX_NOW=" + ("1" if verdict == "FAIL" else "0")
+                + " INVESTIGATE=" + ("1" if verdict == "BLOCKED_ENV" else "0")
+                + " OPTIONAL=0"
+            )
+        normalized_verdict, normalized_summary = _lib.normalize_receipt_completion(
+            lens, summary, verdict,
+        )
+        rows.append({
+            **common, "ts": _lib.now_iso(), "event": "completed",
+            "verdict": normalized_verdict, "summary": normalized_summary,
+        })
+    (task_dir / "RECEIPTS.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def _mark_harness_enabled(path: str) -> None:
@@ -352,8 +402,6 @@ class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
         and a fixture that silently fails validation would test the error path
         instead of the branch.
         """
-        from test_stop_gate import _write_completed_lenses  # local: shared fixture
-
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, "doc", "harness", "tasks"))
             task_id = "TASK__pending"
@@ -384,10 +432,9 @@ class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
     def test_both_pending_next_actions_carry_the_shared_endgame(self):
         """The park route is the same in both states, so it has one text.
 
-        Asserted here rather than only at the gate: `stop_gate` composes its own
-        copy when the context omits one, so a branch that loses the endgame
-        still produces a complete stop message while the MCP response — which
-        no gate rewrites — silently loses it.
+        The now-deleted turn-end gate (`stop_gate.py`) used to compose its own
+        copy when the context omitted one; asserting the endgame here on the MCP
+        response — which no gate rewrites — guards it independently of that.
         """
         for review_done in (False, True):
             with self.subTest(review_done=review_done):
@@ -402,9 +449,9 @@ class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
     # test_receipt_watcher_fail_closed.py; a mutation sweep confirmed it was
     # the only guard on this diff with no unique detector. C-17's "call
     # task_blocked directly" is still enforced elsewhere — removing `directly`
-    # reddens test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary,
-    # test_receipt_watcher_fail_closed.py::test_every_normative_clause_in_both_next_actions_is_pinned,
-    # and test_stop_gate.py::test_missing_receipts_do_not_prescribe_receipt_only_reruns.
+    # reddens test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary
+    # and test_receipt_watcher_fail_closed.py::test_every_normative_clause_in_both_next_actions_is_pinned
+    # (a third guard, in the now-deleted test_stop_gate.py, confirmed the same thing).
     # Named rather than counted: this comment justifies a deletion, so a stale
     # number here is worse than none.
 
@@ -534,3 +581,64 @@ class ParkReasonsDoNotAssertUnobservedPreconditions(unittest.TestCase):
             endgame,
         )
         self.assertNotIn("Neither is an instruction", endgame)
+
+
+class SingleSourceTests(unittest.TestCase):
+    """No clause may get a second home (REQ__runtime-normative-text-has-one-source).
+
+    Relocated from tests/test_stop_gate_receipt_outage.py 2026-09-23 when the
+    turn-end gate was deleted; this coverage does not depend on stop_gate.py.
+    """
+
+    def test_every_holder_of_the_marker_path_agrees(self):
+        # Three holders, and one of them cannot be deduplicated: background_hook
+        # must not import _lib, because it is the hook that still has to run
+        # when _lib is the broken import. So the literals stay and this pins
+        # them together instead.
+        import importlib.util
+
+        ROOT = Path(REPO_ROOT)
+        spec = importlib.util.spec_from_file_location(
+            "background_hook_probe", str(ROOT / "plugin" / "scripts" / "background_hook.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        sys.path.insert(0, str(ROOT / "plugin" / "mcp"))
+        import harness_server
+
+        setup_finalize_src = (
+            ROOT / "plugin" / "scripts" / "setup_finalize.py"
+        ).read_text(encoding="utf-8")
+
+        with self.subTest(holder="background_hook"):
+            self.assertEqual(module.CAPABILITY_MARKER_RELPATH, _lib.CAPABILITY_MARKER_RELPATH)
+        with self.subTest(holder="harness_server"):
+            self.assertEqual(harness_server._HOOK_CAPABILITY_MARKER, _lib.CAPABILITY_MARKER_RELPATH)
+        with self.subTest(holder="setup_finalize"):
+            self.assertIn(
+                _lib.CAPABILITY_MARKER_RELPATH.replace(os.sep, "/"), setup_finalize_src,
+            )
+
+    def test_the_mcp_string_is_unchanged_by_the_extraction(self):
+        # The constant moved to composition; the emitted advice must not shift.
+        # This is the text a caller of task_verify reads, and it is normative.
+        ROOT = Path(REPO_ROOT)
+        sys.path.insert(0, str(ROOT / "plugin" / "mcp"))
+        import harness_server
+
+        # The whole string, written out here independently, not a prefix. The
+        # REQ claims this text is unchanged by the extraction; a prefix check
+        # would leave that claim wider than what runs, and everything after the
+        # extracted head is exactly the part a prefix check cannot see.
+        expected = (
+            "Receipt recording is unavailable. Continue and await the required "
+            "review and QA: their results are substantive but NON-ATTESTING and "
+            "cannot authorize task_close. Remediate an actual FAIL and publish "
+            "an actual BLOCKED_ENV through task_blocked. Recording is "
+            "unavailable in every state here, so do not repair, restart, "
+            "resume, recollect, or rerun a lens solely to obtain a receipt at "
+            "any point. "
+            f"{_lib.TRUST_BOUNDARY} {_lib.attestation_endgame()}"
+        )
+        self.assertEqual(harness_server.RECEIPT_UNAVAILABLE_NEXT_ACTION, expected)

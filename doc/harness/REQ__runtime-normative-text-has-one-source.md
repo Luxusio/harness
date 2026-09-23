@@ -6,15 +6,17 @@ freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/mcp/harness_server.py
-  - plugin/scripts/stop_gate.py
   - tests/test_review_agent_contracts.py
   - tests/test_receipt_watcher_fail_closed.py
   - tests/test_lib_gate_helpers.py
-  - tests/test_stop_gate.py
 freshness_updated: 2026-09-07T04:13:35Z
 ---
 
 # REQ — normative runtime text is composed, not restated
+
+> **2026-09-23:** `plugin/scripts/stop_gate.py` was deleted; the MCP
+> `task_verify` response (`emit_compact_context`) is now the only surface that
+> delivers these strings. Mentions of the stop gate below are historical.
 
 ## Expected behavior
 
@@ -27,8 +29,8 @@ the fixed blocker pairs that `plugin/CLAUDE.md` requires the caller to copy
    `ATTESTATION_UNBLOCK_CONDITION`, `NO_RECEIPTS_BLOCKED_REASON`,
    `NO_RECEIPTS_UNBLOCK_CONDITION`, `attestation_block_instruction()`,
    `no_receipts_block_instruction()`, and `attestation_endgame()`.
-2. **Every other runtime surface composes.** `harness_server.py` and
-   `stop_gate.py` interpolate those names and hold no literal of their own. A
+2. **Every other runtime surface composes.** `harness_server.py`
+   interpolates those names and hold no literal of their own. A
    runtime file that spells the boundary out is a defect even when the words
    are correct, because correctness at one moment is not the property being
    protected. `stop_gate.py` was the last runtime holdout and was converted on
@@ -120,8 +122,8 @@ test, which is why AC-5 of `TASK__next-action-single-source` exists.
 
 ## The layer that hides it
 
-`stop_gate.py` appends its own boundary copy when the context it received does
-not already contain one. That is a reasonable defensive default and it is
+`stop_gate.py` (deleted 2026-09-23) appended its own boundary copy when the
+context it received did not already contain one. That is a reasonable defensive default and it is
 exactly why the `_lib` qa-pending branch could sit at 2-of-4 unnoticed: every
 *stop message* was complete, so gate-level tests stayed green, while the MCP
 response — which nothing rewrites — silently shipped the partial text.
@@ -204,8 +206,8 @@ a comment saying why, or the next consolidation deletes them as duplication.
 The sharpest form of this, found on the third review round of the task that
 wrote this REQ.
 
-`stop_gate.py` held a second literal copy of the boundary, and
-`test_emitted_trust_boundary_equals_the_canonical_constant` compared it against
+`stop_gate.py` (deleted 2026-09-23) held a second literal copy of the boundary, and
+test_emitted_trust_boundary_equals_the_canonical_constant (also deleted 2026-09-23) compared it against
 `_lib.TRUST_BOUNDARY`. Two independently written strings, so *any* content edit
 to the constant reddened the suite. Collapsing that duplicate — the change this
 very document argues for — was correct for ownership and silently removed the

@@ -1,6 +1,6 @@
 ---
 tags: [harness, auto-loop, claude-goal]
-summary: native `/goal`은 Claude에서 유일한 auto-continue primitive다. Harness는 Goal을 durable task state에 동기화하고, close-gate(`task_close` PASS)를 `/goal` condition에 넣는 것으로 지속 루프를 만든다. `stop_gate.py`는 등록되지 않아 자동 재개에 관여하지 않는다.
+summary: native `/goal`은 Claude에서 유일한 auto-continue primitive다. Harness는 Goal을 durable task state에 동기화하고, close-gate(`task_close` PASS)를 `/goal` condition에 넣는 것으로 지속 루프를 만든다. 예전 stop-gate 스크립트는 2026-09-23 삭제됐고 자동 재개에 관여하지 않는다.
 freshness: current
 updated: 2026-09-23
 ---
@@ -13,8 +13,8 @@ Goal을 durable state에 동기화하고, 각 Goal child task 또는 direct task
 task start → plan → develop → QA → close 공개 루프는 코디네이터가 직접
 진행한다. 독립 리뷰와 `task_verify`는 close 전 내부 게이트다. Turn-end는
 Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록은 2026-09-23
-제거됐다 (`plugin/hooks/hooks.json`에 `Stop` 엔트리 없음). `plugin/scripts/stop_gate.py`는
-트리에 남아 있지만 어느 런타임에서도 등록된 caller가 없는 dormant 스크립트이며,
+제거됐다 (`plugin/hooks/hooks.json`에 `Stop` 엔트리 없음). 그 등록이 가리키던
+스크립트(옛 stop-gate turn-end 게이트)는 같은 날 트리에서 삭제됐으며,
 자동 재개에 관여하지 않는다.
 
 ## 동작 메커니즘
@@ -51,19 +51,18 @@ Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록�
    `/goal`을 쓰지 않는 경우의 지속 경로다. `/goal`을 쓰면 native Stop hook의
    재호출이 그 재개를 자동화한다.
 
-## 왜 `stop_gate.py`가 아닌가
+## 왜 옛 stop-gate 스크립트가 아닌가
 
 2026-09-23 이전에는 `plugin/hooks/hooks.json`의 `Stop` 엔트리가
-`stop_gate.py`를 등록해, close-gate 미충족 시 매 turn을 block했다. 그 설계는
-백그라운드 리뷰 서브에이전트를 기다리는 동안 "아직 돌고 있다"는 내용만 담은
-반복적인 빈 turn을 만들어냈고, 사용자가 그 등록을 제거하라고 명시적으로
-요청했다 (2026-09-23). 지속적인 non-stop 진행이 필요할 때는 native `/goal`을
-쓴다는 것이 확정 방침이다.
+turn-end 게이트 스크립트를 등록해, close-gate 미충족 시 매 turn을 block했다.
+그 설계는 백그라운드 리뷰 서브에이전트를 기다리는 동안 "아직 돌고 있다"는
+내용만 담은 반복적인 빈 turn을 만들어냈고, 사용자가 그 등록을 제거하라고
+명시적으로 요청했다 (2026-09-23). 지속적인 non-stop 진행이 필요할 때는
+native `/goal`을 쓴다는 것이 확정 방침이다.
 
-`stop_gate.py` 자체는 되돌리기(revert)를 위해 트리에 남아 있지만 어느
-런타임의 hook 등록에도 연결돼 있지 않다 (`install.py`의
-`_codex_hooks_config`도 `hook_stop.py`를 배선하지 않는다). 삭제는 별도
-follow-up이다.
+등록 해제 이후 어느 런타임의 hook 등록에도 연결돼 있지 않던 그 스크립트와
+Codex wrapper (`install.py`의 `_codex_hooks_config`가 배선한 적 없음)는
+2026-09-23 같은 날 트리에서 삭제됐다 (deleted 2026-09-23).
 
 ## 참고
 - Anthropic 공식 문서: <https://code.claude.com/docs/en/goal>
