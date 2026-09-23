@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Single manifest version** — the manifest `harness_version` integer is
+  merged into the top-level `version` field (now 6); `doc/harness/.version`
+  and `doc/harness/.format-version` are removed. **Action required:** run
+  `python3 plugin/scripts/setup_finalize.py --repo <root> --migrate-harness-version`
+  and commit the updated `.gitignore`, `doc/harness/manifest.yaml`, and the
+  deletion of `doc/harness/.version`.
 - **Plan skill review pipeline** — plan-time review phases now spawn exactly
   one independent reviewer subagent per phase instead of two (Voice A + Voice
   B). Cross-model transport, the consensus table, and the dual-voice

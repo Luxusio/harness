@@ -50,7 +50,7 @@ doc/<area>/<TYPE>__<name>.md     # durable knowledge by area / bounded context
 ## 3.2 manifest.yaml
 
 ```yaml
-version: 5
+version: 6
 initialized_at: {date}
 name: {project_name}
 type: {detected_or_chosen}
@@ -233,16 +233,17 @@ PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
 
 This early call applies ignores without validating or stamping a version.
 Phase 4 runs the full finalizer after every required artifact exists.
-The finalizer also writes the integer `harness_version` field in
-`doc/harness/manifest.yaml` after successful validation. SessionStart reports older Harness versions; repair them
-with:
+Manifest `version: 6` comes from the template above (or from `--prepare` /
+`--migrate-harness-version` migrating an older manifest); it records the
+project-file format, not setup success. The full finalizer validates it,
+deletes any legacy `doc/harness/.version` and `doc/harness/.format-version`
+files, and reports success with `SETUP_OK`. There is no separate release stamp.
+SessionStart reports older Harness versions; repair them with:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --repo "$_ROOT" --migrate-harness-version
 ```
-
-The release `doc/harness/.version` and manifest schema version remain separate.
 
 ## 3.7 Contracts installation (non-destructive)
 
@@ -307,5 +308,5 @@ WARN is non-blocking. Use the continuous maintenance flow to repair drift.
 
 Phase 4 invokes `setup_finalize.py` without `--check`. The command applies the
 canonical `.gitignore`, verifies the manifest and packaged setup resources,
-and writes `doc/harness/.version` and manifest `harness_version` only
-when every required check passes. Never write either version value earlier.
+and prints `SETUP_OK` only when every required check passes. Treat `SETUP_OK`,
+not the manifest `version`, as the setup-success signal.

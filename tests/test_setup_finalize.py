@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "plugin/scripts/setup_finalize.py"
 SETUP_SOURCE = REPO / "plugin/skills/setup"
@@ -573,7 +574,7 @@ def test_setup_ignores_ambient_alternate_git_index(tmp_path, monkeypatch):
     assert "[REGISTERED_SOURCE_NOT_DIRECT_GITLINK]" in errors[0]
 
 
-def canonical_manifest(version: int = 5) -> str:
+def canonical_manifest(version: int = 6) -> str:
     return (
         f"version: {version}\n"
         "initialized_at: 2026-07-20\n"
@@ -593,8 +594,9 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
     result = run(repo, plugin_root)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / "doc/harness/.version").read_text() == "2.3.0\n"
-    assert "harness_version: 1\n" in (repo / "doc/harness/manifest.yaml").read_text()
+    assert not (repo / "doc/harness/.version").exists()
+    assert "version: 6\n" in (repo / "doc/harness/manifest.yaml").read_text()
+    assert "harness_version" not in (repo / "doc/harness/manifest.yaml").read_text()
     assert not (repo / "doc/harness/.format-version").exists()
     for rel in (
         "doc/harness/goals/current.json",
@@ -723,7 +725,7 @@ def test_codex_finalize_rejects_marker_without_public_run_route(tmp_path):
     assert "route repository mutation to $harness:run" in result.stdout
 
 
-def test_prepare_migrates_legacy_manifest_but_does_not_stamp(tmp_path):
+def test_prepare_migrates_legacy_manifest_to_v6_without_finalizing(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     repo = make_repo(
         tmp_path,
@@ -738,7 +740,7 @@ def test_prepare_migrates_legacy_manifest_but_does_not_stamp(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     body = (repo / "doc/harness/manifest.yaml").read_text()
-    assert "version: 5" in body and "name: demo" in body and "type: api" in body
+    assert "version: 6" in body and "name: demo" in body and "type: api" in body
     assert "project_type:" not in body and "harness_version:" not in body
     assert "custom_field: keep-me" in body
     assert "qa:\n  default_mode: browser\n  browser_qa_supported: true" in body
@@ -746,16 +748,16 @@ def test_prepare_migrates_legacy_manifest_but_does_not_stamp(tmp_path):
 
     finalized = run(repo, plugin_root)
     assert finalized.returncode == 0, finalized.stdout + finalized.stderr
-    assert "harness_version: 1\n" in (repo / "doc/harness/manifest.yaml").read_text()
+    assert "harness_version" not in (repo / "doc/harness/manifest.yaml").read_text()
 
 
 def test_future_schema_and_legacy_collision_fail_without_mutation(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
-    future = make_repo(tmp_path / "future", manifest=canonical_manifest(6))
+    future = make_repo(tmp_path / "future", manifest=canonical_manifest(7))
     before = (future / "doc/harness/manifest.yaml").read_text()
     result = run(future, plugin_root)
     assert result.returncode == 1
-    assert "newer than supported schema 5" in result.stdout
+    assert "newer than supported schema 6" in result.stdout
     assert (future / "doc/harness/manifest.yaml").read_text() == before
     assert not (future / "doc/harness/.version").exists()
 
@@ -869,7 +871,7 @@ def test_check_is_read_only_and_atomic_write_preserves_modes(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert stat.S_IMODE((repo / ".gitignore").stat().st_mode) == 0o644
     assert stat.S_IMODE((repo / "doc/harness/manifest.yaml").stat().st_mode) == 0o640
-    assert stat.S_IMODE((repo / "doc/harness/.version").stat().st_mode) == 0o644
+    assert not (repo / "doc/harness/.version").exists()
 
 
 def test_check_rejects_pending_contract_migration_without_writing(tmp_path):
@@ -990,17 +992,12 @@ def test_finalize_failure_after_contract_refresh_restores_legacy_contract(tmp_pa
         1,
     ) + "\n@CONTRACTS.local.md\n"
     contract.write_text(legacy, encoding="utf-8")
-    real_write = module.atomic_write
-    failed = False
+    original_manifest = (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8")
 
-    def fail_version(path, text, **kwargs):
-        nonlocal failed
-        if path.name == ".version" and not failed:
-            failed = True
-            raise OSError("simulated version replace failure")
-        return real_write(path, text, **kwargs)
+    def failing_ignore_errors(repo):
+        return ["simulated post-write ignore drift"]
 
-    monkeypatch.setattr(module, "atomic_write", fail_version)
+    monkeypatch.setattr(module, "effective_ignore_errors", failing_ignore_errors)
     rc = module.main([
         "--repo", str(repo), "--plugin-root", str(plugin_root),
         "--project-doc", "AGENTS.md", "--qa-verified", "--runtime-verified",
@@ -1008,7 +1005,7 @@ def test_finalize_failure_after_contract_refresh_restores_legacy_contract(tmp_pa
 
     assert rc == 1
     assert contract.read_text(encoding="utf-8") == legacy
-    assert "harness_version" not in (repo / "doc/harness/manifest.yaml").read_text()
+    assert (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8") == original_manifest
 
 
 def test_codex_installed_mirror_prepare_and_finalize_end_to_end(tmp_path):
@@ -1031,7 +1028,8 @@ def test_codex_installed_mirror_prepare_and_finalize_end_to_end(tmp_path):
 
     finalized = run(repo, mirror)
     assert finalized.returncode == 0, finalized.stdout + finalized.stderr
-    assert (repo / "doc/harness/.version").read_text() == "2.3.0\n"
+    assert not (repo / "doc/harness/.version").exists()
+    assert "version: 6" in (repo / "doc/harness/manifest.yaml").read_text()
 
 
 def test_canonical_setup_resources_exist_in_source_tree():
@@ -1125,3 +1123,120 @@ def test_non_git_control_workspace_rejects_unregistered_or_missing_sources(tmp_p
 
     assert result.returncode == 1
     assert "requires source_git_roots" in result.stdout
+
+
+def basic_repo(tmp_path: Path, manifest_text: str) -> Path:
+    """Minimal repo for migrate_project_format(): manifest + git, nothing else."""
+    repo = tmp_path / "repo"
+    (repo / "doc/harness").mkdir(parents=True)
+    (repo / "doc/harness/manifest.yaml").write_text(manifest_text, encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    return repo
+
+
+_CONVERGENCE_STARTING_STATES = [
+    ("legacy-below-5", "name: demo\n", {}),
+    ("v4-string-harness-version", "version: 4\nname: demo\nharness_version: unknown\n", {}),
+    ("v5-no-harness-version", "version: 5\nname: demo\n", {}),
+    ("v5-with-harness-version", "version: 5\nname: demo\nharness_version: 1\n", {}),
+    ("v5-with-format-version-file", "version: 5\nname: demo\n", {"doc/harness/.format-version": "1\n"}),
+    ("v5-with-version-file", "version: 5\nname: demo\n", {"doc/harness/.version": "2.3.0\n"}),
+]
+
+
+def test_migration_converges_every_starting_state_to_v6(tmp_path):
+    for label, manifest_text, extra_files in _CONVERGENCE_STARTING_STATES:
+        repo = basic_repo(tmp_path / label, manifest_text)
+        for rel, content in extra_files.items():
+            path = repo / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(repo), "--migrate-harness-version"],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert result.returncode == 0, f"{label}: {result.stdout + result.stderr}"
+        assert "updated=true" in result.stdout, label
+
+        body = (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8")
+        assert "version: 6" in body, label
+        assert "harness_version" not in body, label
+        assert not (repo / "doc/harness/.version").exists(), label
+        assert not (repo / "doc/harness/.format-version").exists(), label
+        ignores = (repo / ".gitignore").read_text(encoding="utf-8")
+        for entry in ("doc/harness/tasks/", "doc/harness/.watcher-diagnostics.json"):
+            assert entry in ignores, label
+
+        rerun = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(repo), "--migrate-harness-version"],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert rerun.returncode == 0, f"{label}: {rerun.stdout + rerun.stderr}"
+        assert "updated=false" in rerun.stdout, label
+
+
+def test_migrate_rollback_when_manifest_write_fails_after_gitignore(tmp_path, monkeypatch):
+    module = load_setup_finalize("setup_finalize_migrate_rollback_gitignore_test")
+    repo = basic_repo(tmp_path, "version: 5\nname: demo\n")
+    original_manifest = (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8")
+    real_write = module.atomic_write
+
+    def fail_manifest(path, text, **kwargs):
+        if path.name == "manifest.yaml":
+            raise OSError("simulated manifest write failure")
+        return real_write(path, text, **kwargs)
+
+    monkeypatch.setattr(module, "atomic_write", fail_manifest)
+    try:
+        module.migrate_project_format(repo)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("manifest write failure must propagate")
+
+    assert not (repo / ".gitignore").exists()
+    assert (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8") == original_manifest
+
+
+def test_migrate_rollback_when_leftover_unlink_fails_after_manifest_write(tmp_path, monkeypatch):
+    module = load_setup_finalize("setup_finalize_migrate_rollback_unlink_test")
+    repo = basic_repo(tmp_path, "version: 5\nname: demo\n")
+    (repo / "doc/harness/.version").write_text("2.3.0\n", encoding="utf-8")
+    (repo / "doc/harness/.format-version").write_text("1\n", encoding="utf-8")
+    original_manifest = (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def failing_unlink(self, *args, **kwargs):
+        if self.name == ".format-version":
+            raise OSError("simulated unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    try:
+        module.migrate_project_format(repo)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("leftover unlink failure must propagate")
+
+    assert (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8") == original_manifest
+    assert (repo / "doc/harness/.version").read_text(encoding="utf-8") == "2.3.0\n"
+    assert (repo / "doc/harness/.format-version").read_text(encoding="utf-8") == "1\n"
+
+
+
+def test_v5_to_v6_migration_preserves_crlf_line_endings(tmp_path):
+    """Hunter finding: reading the manifest in text mode dropped CRLF before
+    _strip_to_v6 could preserve it."""
+    repo = basic_repo(tmp_path, "placeholder\n")
+    manifest = repo / "doc/harness/manifest.yaml"
+    manifest.write_bytes(b"version: 5\r\nname: demo\r\nharness_version: 1\r\ntype: cli\r\n")
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--repo", str(repo), "--migrate-harness-version"],
+        capture_output=True, text=True, timeout=20,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert manifest.read_bytes() == b"version: 6\r\nname: demo\r\ntype: cli\r\n"

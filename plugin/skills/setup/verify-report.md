@@ -1,7 +1,8 @@
 # Phase 4: Verify & Report
 
 Sub-file for setup/SKILL.md. Verification is runtime-neutral and fail-closed:
-do not report DONE or stamp a version until the shared finalizer passes.
+do not report DONE until the shared finalizer passes (`SETUP_OK`). Manifest
+`version` is the project-file format number, not a setup-success marker.
 
 ## 4.1 Resolve runtime paths
 
@@ -39,12 +40,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
 ```
 
 This command prepares the canonical manifest and operational ignores, detaches
-the exact legacy local-contract import from the managed contract, and does not
-stamp a version. It never opens or mutates an existing local-contract file. It
+the exact legacy local-contract import from the managed contract, and writes the
+current manifest `version: 6` as part of that migration. It never opens or mutates an existing local-contract file. It
 also verifies:
 
 1. Adds every operational harness artifact to `.gitignore` idempotently.
-2. Requires manifest schema `version: 5`, top-level `name` and `type`, and
+2. Requires manifest schema `version: 6`, top-level `name` and `type`, and
    nested `qa.browser_qa_supported`.
 3. Requires the runtime project document and routing marker.
 4. Requires `CONTRACTS.md`, the runtime-document `@CONTRACTS.md` import, all three critic files,
@@ -138,8 +139,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
   --qa-verified --runtime-verified
 ```
 
-This final validation writes `doc/harness/.version`. Never write the stamp
-manually or run this command before QA/runtime prerequisites pass.
+This final validation confirms the manifest is at `version: 6`, removes legacy
+`doc/harness/.version`/`.format-version` files, and prints `SETUP_OK`. Never
+run this command before QA/runtime prerequisites pass.
 
 ## 4.6 Completion report
 
@@ -149,11 +151,10 @@ STATUS: DONE
 harness is set up for {project}.
 
 Verified:
-  - manifest schema: v5 ({type})
+  - manifest schema: v6 ({type})
   - operational artifacts: gitignored
   - setup resources: packaged
   - routing: {AGENTS.md|CLAUDE.md}
-  - installed version: 2.3.0
   - QA strategy: {browser|desktop|api|cli|tests_only}
 ```
 

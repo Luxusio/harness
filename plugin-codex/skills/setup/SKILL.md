@@ -91,9 +91,11 @@ _CONTRIBUTORS=$(git log --oneline --format='%ae' 2>/dev/null | sort -u | wc -l |
 [ "$_CONTRIBUTORS" -le 1 ] 2>/dev/null && _REPO_MODE="solo" || _REPO_MODE="collaborative"
 
 # Version check
-_HARNESS_VERSION="2.3.0"
-_INSTALLED_VERSION=$(cat "$_ROOT/doc/harness/.version" 2>/dev/null || echo "")
-[ -n "$_INSTALLED_VERSION" ] && [ "$_INSTALLED_VERSION" != "$_HARNESS_VERSION" ] && echo "UPGRADE_AVAILABLE: $_INSTALLED_VERSION -> $_HARNESS_VERSION" || echo "UPGRADE_AVAILABLE: no"
+_HARNESS_MANIFEST_VERSION=6
+_MANIFEST="$_ROOT/doc/harness/manifest.yaml"
+_INSTALLED_VERSION=$({ tr -d '\r"'"'" < "$_MANIFEST"; } 2>/dev/null | sed -n 's/^version:[[:space:]]*//p' | head -1)
+[ -f "$_MANIFEST" ] && _INSTALLED_VERSION=${_INSTALLED_VERSION:-0}
+[ -n "$_INSTALLED_VERSION" ] && [ "$_INSTALLED_VERSION" -lt "$_HARNESS_MANIFEST_VERSION" ] 2>/dev/null && echo "UPGRADE_AVAILABLE: $_INSTALLED_VERSION -> $_HARNESS_MANIFEST_VERSION" || echo "UPGRADE_AVAILABLE: no"
 ```
 
 Config helper:
@@ -128,7 +130,7 @@ A/B: skip to Phase 3 preserving existing manifest values; first re-run Phase 4.2
 
 | Issue | Auto-fix? | Action |
 |-------|-----------|--------|
-| legacy `project_type`/flat QA manifest schema | Yes | Run `setup_finalize.py`; migrate to v5 while preserving unknown fields |
+| legacy `project_type`/flat QA manifest schema | Yes | Run `setup_finalize.py`; migrate to manifest `version: 6` while preserving unknown fields |
 | dev_command missing from manifest | Yes | Detect from package.json, add |
 | entry_url missing from manifest | Yes | Default from framework port table |
 | Test command wrong in manifest | Yes | Re-detect and update |

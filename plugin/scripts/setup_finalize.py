@@ -26,10 +26,7 @@ from _lib import (  # type: ignore
 )
 
 
-HARNESS_VERSION = "2.3.0"
-PROJECT_FORMAT_VERSION = 1
-PROJECT_FORMAT_MIGRATIONS = (1,)
-MANIFEST_SCHEMA = 5
+MANIFEST_VERSION = 6
 ROUTING_MARKER = "<!-- harness:routing-injected -->"
 CODEX_RUN_POLICY = "skills/run/agents/openai.yaml"
 ROUTING_BLOCK = """## Harness routing
@@ -159,59 +156,36 @@ def render_gitignore(original: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def read_project_format_version(path: Path) -> int:
-    """Read the top-level manifest field; absence means pre-versioned format 0."""
+def read_manifest_version(path: Path) -> int:
+    """Read the single top-level manifest version; absence means format 0."""
     if not path.is_file():
         raise ValueError("doc/harness/manifest.yaml is missing")
     text = path.read_text(encoding="utf-8")
     top, _, errors = manifest_maps(text)
     if errors:
         raise ValueError("; ".join(errors))
-    if top.get("version") != str(MANIFEST_SCHEMA):
-        # Pre-v5 manifests used harness_version for a retired setup value.
-        # migrate_manifest_text removes that key before the new integer is written.
+    raw = top.get("version")
+    if raw is None:
         return 0
-    if "harness_version" not in top:
-        return 0
-    fields = [line.split(":", 1)[1].strip() for line in text.splitlines()
-              if line.startswith("harness_version:")]
-    if len(fields) != 1 or not re.fullmatch(r"[0-9]+", fields[0]):
-        raise ValueError("manifest harness_version must be one nonnegative integer")
-    version = int(fields[0])
-    if version > PROJECT_FORMAT_VERSION:
+    if not re.fullmatch(r"[0-9]+", raw):
+        raise ValueError(f"manifest version must be a nonnegative integer, got {raw!r}")
+    version = int(raw)
+    if version > MANIFEST_VERSION:
         raise ValueError(
-            f"harness version {version} is newer than supported version {PROJECT_FORMAT_VERSION}; upgrade Harness"
+            f"manifest version {version} is newer than supported version {MANIFEST_VERSION}; upgrade Harness"
         )
     return version
 
 
-def with_project_format_version(text: str) -> str:
-    """Upsert the top-level field while preserving all unrelated manifest lines."""
-    top, _, errors = manifest_maps(text)
-    if errors:
-        raise ValueError("; ".join(errors))
-    newline = "\r\n" if "\r\n" in text else "\n"
-    lines = text.splitlines(keepends=True)
-    replacement = f"harness_version: {PROJECT_FORMAT_VERSION}{newline}"
-    for index, line in enumerate(lines):
-        if line.startswith("harness_version:"):
-            lines[index] = replacement
-            return "".join(lines)
-    for index, line in enumerate(lines):
-        if line.startswith("version:"):
-            if not line.endswith(("\n", "\r")):
-                lines[index] = line + newline
-            lines.insert(index + 1, replacement)
-            return "".join(lines)
-    return replacement + text
-
-
-def pending_project_format_migrations(version: int) -> tuple[int, ...]:
-    pending = tuple(range(version + 1, PROJECT_FORMAT_VERSION + 1))
-    unavailable = [step for step in pending if step not in PROJECT_FORMAT_MIGRATIONS or step != 1]
-    if unavailable:
-        raise ValueError(f"harness version migration {unavailable[0]} is not implemented")
-    return pending
+def _leftover_snapshot(path: Path) -> tuple[str | None, int | None]:
+    """Read a standalone leftover marker file; fail closed on non-regular files."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None, None
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"{path} must be a regular file")
+    return path.read_text(encoding="utf-8"), stat.S_IMODE(info.st_mode)
 
 
 def require_exact_git_root(repo: Path) -> None:
@@ -227,28 +201,31 @@ def require_exact_git_root(repo: Path) -> None:
 
 
 def migrate_project_format(repo: Path) -> bool:
-    """Apply numbered project-file migrations and stamp only after validation."""
+    """Migrate manifest/gitignore to the current version and drop leftover markers."""
     require_exact_git_root(repo)
     gitignore_path = safe_path(repo, ".gitignore")
     manifest_path = safe_path(repo, "doc/harness/manifest.yaml")
-    legacy_path = safe_path(repo, "doc/harness/.format-version")
-    version = read_project_format_version(manifest_path)
-    pending = pending_project_format_migrations(version)
+    version_path = safe_path(repo, "doc/harness/.version")
+    format_path = safe_path(repo, "doc/harness/.format-version")
+
+    version_original, version_mode = _leftover_snapshot(version_path)
+    format_original, format_mode = _leftover_snapshot(format_path)
+
     original = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else None
-    manifest_original = manifest_path.read_text(encoding="utf-8")
-    legacy_original = legacy_path.read_text(encoding="utf-8") if legacy_path.is_file() else None
+    manifest_original = manifest_path.read_bytes().decode("utf-8")  # keep CRLF for _strip_to_v6
     gitignore_mode = stat.S_IMODE(gitignore_path.stat().st_mode) if gitignore_path.exists() else None
     manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode)
-    legacy_mode = stat.S_IMODE(legacy_path.stat().st_mode) if legacy_path.exists() else None
     candidate = render_gitignore(original or "")
-    if pending:
-        migrated, migration_errors = migrate_manifest_text(manifest_original)
-        if migration_errors:
-            raise ValueError("; ".join(migration_errors))
-        manifest_candidate = with_project_format_version(migrated)
-    else:
-        manifest_candidate = manifest_original
-    changed = candidate != (original or "") or manifest_candidate != manifest_original or legacy_original is not None
+    manifest_candidate, migration_errors = migrate_manifest_text(manifest_original)
+    if migration_errors:
+        raise ValueError("; ".join(migration_errors))
+
+    changed = (
+        candidate != (original or "")
+        or manifest_candidate != manifest_original
+        or version_original is not None
+        or format_original is not None
+    )
     wrote_ignore = False
     wrote_manifest = False
     try:
@@ -261,15 +238,19 @@ def migrate_project_format(repo: Path) -> bool:
         if manifest_candidate != manifest_original:
             atomic_write(manifest_path, manifest_candidate)
             wrote_manifest = True
-        if legacy_original is not None:
-            legacy_path.unlink()
+        if version_original is not None:
+            version_path.unlink()
+        if format_original is not None:
+            format_path.unlink()
     except BaseException:
         if wrote_ignore:
             restore(gitignore_path, original, gitignore_mode)
         if wrote_manifest:
             restore(manifest_path, manifest_original, manifest_mode)
-        if legacy_original is not None and not legacy_path.exists():
-            restore(legacy_path, legacy_original, legacy_mode)
+        if version_original is not None and not version_path.exists():
+            restore(version_path, version_original, version_mode)
+        if format_original is not None and not format_path.exists():
+            restore(format_path, format_original, format_mode)
         raise
     return changed
 
@@ -427,23 +408,42 @@ def source_git_root_errors(repo: Path, manifest_text: str) -> list[str]:
     return errors
 
 
+def _strip_to_v6(text: str, version: int) -> str:
+    """Drop leftover harness_version lines and bump version 5 -> 6 in place."""
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        ending = line[len(stripped):]
+        if stripped.startswith("harness_version:"):
+            continue
+        if version == 5 and stripped.startswith("version:"):
+            out.append(f"version: {MANIFEST_VERSION}{ending}")
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 def migrate_manifest_text(original: str) -> tuple[str, list[str]]:
     top, existing_qa, errors = manifest_maps(original)
     raw_version = top.get("version")
-    if raw_version:
-        try:
-            version = int(raw_version)
-        except ValueError:
-            errors.append(f"manifest version must be an integer, got {raw_version!r}")
+    if raw_version is not None:
+        # Same rule as read_manifest_version, so migrate and the SessionStart
+        # reminder never disagree about what counts as a valid version.
+        if not re.fullmatch(r"[0-9]+", raw_version):
+            errors.append(f"manifest version must be a nonnegative integer, got {raw_version!r}")
             return original, errors
-        if version > MANIFEST_SCHEMA:
-            errors.append(f"manifest version {version} is newer than supported schema {MANIFEST_SCHEMA}")
+        version = int(raw_version)
+        if version > MANIFEST_VERSION:
+            errors.append(f"manifest version {version} is newer than supported schema {MANIFEST_VERSION}")
             return original, errors
-        if version == MANIFEST_SCHEMA:
+        if version >= 5:
             legacy = sorted((set(_LEGACY_RENAMES) | set(_FLAT_QA)) & set(top))
             if legacy:
                 errors.append("schema v5 manifest contains legacy keys: " + ", ".join(legacy))
-            return original, errors
+            if errors:
+                return original, errors
+            return _strip_to_v6(original, version), []
 
     for legacy, canonical in _LEGACY_RENAMES.items():
         if legacy in top and canonical in top:
@@ -461,7 +461,7 @@ def migrate_manifest_text(original: str) -> tuple[str, list[str]]:
             continue
         key, rest = match.groups()
         if key == "version":
-            out.append(f"version: {MANIFEST_SCHEMA}")
+            out.append(f"version: {MANIFEST_VERSION}")
             saw_version = True
         elif key == "harness_version" or key in _FLAT_QA:
             continue
@@ -470,7 +470,7 @@ def migrate_manifest_text(original: str) -> tuple[str, list[str]]:
         else:
             out.append(raw)
     if not saw_version:
-        out.insert(0, f"version: {MANIFEST_SCHEMA}")
+        out.insert(0, f"version: {MANIFEST_VERSION}")
 
     qa_start = next((i for i, line in enumerate(out) if line == "qa:"), None)
     if qa_start is None:
@@ -541,8 +541,8 @@ def validate_structure(
     top, qa, parse_errors = manifest_maps(manifest_text)
     errors.extend(parse_errors)
     errors.extend(source_git_root_errors(repo, manifest_text))
-    if top.get("version") != str(MANIFEST_SCHEMA):
-        errors.append(f"manifest version must be {MANIFEST_SCHEMA}")
+    if top.get("version") != str(MANIFEST_VERSION):
+        errors.append(f"manifest version must be {MANIFEST_VERSION}")
     for key in ("name", "type"):
         if not top.get(key):
             errors.append(f"manifest top-level {key} is missing")
@@ -991,7 +991,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plugin-root", type=Path, default=Path(SCRIPTS_DIR).parent)
     parser.add_argument("--project-doc", choices=("AGENTS.md", "CLAUDE.md"), default="AGENTS.md")
     parser.add_argument("--check", action="store_true", help="verify without modifying files")
-    parser.add_argument("--prepare", action="store_true", help="apply migration and ignores without stamping")
+    parser.add_argument("--prepare", action="store_true", help="apply manifest migration (to the current version) and ignores without finalizing")
     parser.add_argument("--gitignore-only", action="store_true", help="only apply and verify operational ignores")
     parser.add_argument("--migrate-harness-version", "--migrate-file-format", dest="migrate_harness_version", action="store_true", help="apply numbered Harness project migrations")
     parser.add_argument("--qa-verified", action="store_true", help="attest that setup QA prerequisites passed")
@@ -1009,7 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as exc:
             print(f"SETUP_ERROR: {exc}")
             return 1
-        print(f"HARNESS_MIGRATION_OK: version={PROJECT_FORMAT_VERSION} updated={str(changed).lower()}")
+        print(f"HARNESS_MIGRATION_OK: version={MANIFEST_VERSION} updated={str(changed).lower()}")
         return 0
     if args.project_doc_only:
         try:
@@ -1027,17 +1027,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         gitignore_path = safe_path(repo, ".gitignore")
         manifest_path = safe_path(repo, "doc/harness/manifest.yaml")
-        version_path = safe_path(repo, "doc/harness/.version")
     except ValueError as exc:
         print(f"SETUP_ERROR: {exc}")
         return 1
 
     gitignore_original = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else None
-    manifest_original = manifest_path.read_text(encoding="utf-8") if manifest_path.is_file() else None
+    manifest_original = manifest_path.read_bytes().decode("utf-8") if manifest_path.is_file() else None
     gitignore_mode = stat.S_IMODE(gitignore_path.stat().st_mode) if gitignore_path.exists() else None
     manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode) if manifest_path.exists() else None
-    version_original = version_path.read_text(encoding="utf-8") if version_path.is_file() else None
-    version_mode = stat.S_IMODE(version_path.stat().st_mode) if version_path.exists() else None
     gitignore_candidate = render_gitignore(gitignore_original or "")
 
     if args.gitignore_only:
@@ -1053,16 +1050,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         legacy_format_path = safe_path(repo, "doc/harness/.format-version")
-        legacy_format_original = legacy_format_path.read_text(encoding="utf-8") if legacy_format_path.is_file() else None
-        legacy_format_mode = stat.S_IMODE(legacy_format_path.stat().st_mode) if legacy_format_path.exists() else None
+        legacy_format_original, legacy_format_mode = _leftover_snapshot(legacy_format_path)
+        version_path = safe_path(repo, "doc/harness/.version")
+        version_original, version_mode = _leftover_snapshot(version_path)
     except (OSError, ValueError) as exc:
         print(f"SETUP_ERROR: {exc}")
         return 1
-    format_version = 0
+
+    manifest_version = 0
     format_errors: list[str] = []
     try:
-        format_version = read_project_format_version(manifest_path)
-        pending_project_format_migrations(format_version)
+        manifest_version = read_manifest_version(manifest_path)
     except (OSError, ValueError) as exc:
         format_errors.append(str(exc))
 
@@ -1082,8 +1080,6 @@ def main(argv: list[str] | None = None) -> int:
         manifest_candidate, migration_errors = "", ["doc/harness/manifest.yaml is missing"]
     else:
         manifest_candidate, migration_errors = migrate_manifest_text(manifest_original)
-        if not (args.check or args.prepare) and not migration_errors and not format_errors:
-            manifest_candidate = with_project_format_version(manifest_candidate)
     errors = format_errors + migration_errors + validate_structure(
         repo, plugin_root, args.project_doc, manifest_candidate, gitignore_candidate
     ) + operational_symlink_errors(repo)
@@ -1099,8 +1095,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"SETUP_ERROR: {error}")
         return 1
     if args.check:
-        if format_version != PROJECT_FORMAT_VERSION:
-            print(f"SETUP_ERROR: harness version {format_version} requires migration to {PROJECT_FORMAT_VERSION}")
+        if manifest_version != MANIFEST_VERSION:
+            print(f"SETUP_ERROR: manifest version {manifest_version} requires migration to {MANIFEST_VERSION}")
+            return 1
+        original_top, _, _ = manifest_maps(manifest_original)
+        if "harness_version" in original_top:
+            print("SETUP_ERROR: obsolete harness_version manifest key requires migration")
+            return 1
+        if version_original is not None:
+            print("SETUP_ERROR: obsolete doc/harness/.version requires migration")
             return 1
         if legacy_format_original is not None:
             print("SETUP_ERROR: obsolete doc/harness/.format-version requires migration")
@@ -1124,21 +1127,23 @@ def main(argv: list[str] | None = None) -> int:
         if args.prepare:
             print("SETUP_PREPARED: manifest and operational ignores verified")
             return 0
-        atomic_write(version_path, HARNESS_VERSION + "\n")
         if legacy_format_original is not None:
             legacy_format_path.unlink()
+        if version_original is not None:
+            version_path.unlink()
     except BaseException as exc:
         restore(gitignore_path, gitignore_original, gitignore_mode)
         restore(manifest_path, manifest_original, manifest_mode)
-        restore(version_path, version_original, version_mode)
         if legacy_format_original is not None and not legacy_format_path.exists():
             restore(legacy_format_path, legacy_format_original, legacy_format_mode)
+        if version_original is not None and not version_path.exists():
+            restore(version_path, version_original, version_mode)
         if contract_changed:
             restore(contract_path, contract_original, contract_mode)
         for error in str(exc).splitlines() or [repr(exc)]:
             print(f"SETUP_ERROR: {error}")
         return 1
-    print(f"SETUP_OK: runtime document={args.project_doc}; version={HARNESS_VERSION}")
+    print(f"SETUP_OK: runtime document={args.project_doc}; version={MANIFEST_VERSION}")
     return 0
 
 

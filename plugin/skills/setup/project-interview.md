@@ -90,7 +90,7 @@ setup or active harness task replay the config without re-asking the user.
 {
   "schema_version": 1,
   "interviewed_at": "<ISO8601>",
-  "harness_release_version": "<from doc/harness/.version>",
+  "manifest_version": "<from doc/harness/manifest.yaml version>",
   "answers": {
     "q1_purpose":    { "value": "<str|null>", "skipped": false },
     "q2_audience":   { "value": "D", "value_detail": "public library/SaaS", "skipped": false, "source": "setup_default" },
@@ -101,10 +101,9 @@ setup or active harness task replay the config without re-asking the user.
 }
 ```
 
-Older interview snapshots may contain `harness_version` as a release string.
-Treat that field as the legacy spelling of `harness_release_version` during
-replay; it is unrelated to the integer `harness_version` in
-`doc/harness/manifest.yaml`.
+Older interview snapshots may contain `harness_release_version` or
+`harness_version` as a legacy release-string field. Ignore both on replay;
+they have no equivalent since the manifest carries a single integer `version`.
 
 `schema_version` bump on breaking changes — setup/continuous maintenance refuses
 to apply unknown versions and prompts user.
