@@ -129,3 +129,20 @@ def test_generated_routing_uses_same_wbs_and_preserves_user_content():
     assert 'wbs(action="verify")' in rendered and 'wbs(action="close")' in rendered
     assert "Goal child" not in rendered and "sync/create Goal" not in rendered
     assert "task_verify" not in rendered
+
+
+def test_current_operational_docs_use_supported_recovery_actions():
+    repo = Path(__file__).resolve().parents[1]
+    readme = (repo / "README.md").read_text()
+    guide = (repo / "doc/harness/GUIDE__how-harness-works.md").read_text()
+    assert "Goal executor" not in readme and "selecting the next child" not in readme
+    assert "goal_storage_root" not in guide and "goal-control-mcp" not in guide
+    faq = guide.split("## 16. 문제 해결 FAQ", 1)[1].split("## 17.", 1)[0]
+    # Private error prefixes such as `task_start refused ...` remain accurate.
+    # Bare retired operation names followed by Korean call/route particles
+    # instead prescribe unavailable public operations in this recovery section.
+    assert not re.search(r"`(?:task_(?:start|context|verify|close|blocked)|write_plan)(?:\([^`]*\))?`(?:를|을|로|나)", faq)
+    for action in ("open", "context", "plan", "verify", "block"):
+        assert f'wbs(action="{action}")' in faq
+    assert "fresh_run" in faq and "NON-ATTESTING" in faq
+    assert "정말 작은 작업이면 `execution_mode" not in faq
