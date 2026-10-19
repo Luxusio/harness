@@ -53,7 +53,7 @@ DOC_GATE = (
 QA_GATE = (
     "[harness-qa] PENDING: ALL_TOOLS→spawn_agent(QA lenses)→await status-map "
     "completion; use available list_agents only if wait omitted identities "
-    "→explicit VERDICT→task_verify; start≠PASS."
+    "→explicit VERDICT→wbs(action='verify'); start≠PASS."
 )
 REVIEW_GATE = (
     "[harness-review] PENDING: spawn+await structural completions for required "

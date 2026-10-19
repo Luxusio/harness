@@ -635,7 +635,7 @@ class SingleSourceTests(unittest.TestCase):
             "Receipt recording is unavailable. Continue and await the required "
             "review and QA: their results are substantive but NON-ATTESTING and "
             "cannot authorize task_close. Remediate an actual FAIL and publish "
-            "an actual BLOCKED_ENV through task_blocked. Recording is "
+            "an actual BLOCKED_ENV through wbs(action='block'). Recording is "
             "unavailable in every state here, so do not repair, restart, "
             "resume, recollect, or rerun a lens solely to obtain a receipt at "
             "any point. "

@@ -327,13 +327,13 @@ def _execute(argv, repo, timeout):
 def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     from _lib import _atomic_text_write
     state = read_state(task_dir)
-    require(state is not None and state["run_id"] == run_id, "baseline current task run first through write_plan")
+    require(state is not None and state["run_id"] == run_id, "baseline current task run first through wbs(action='plan')")
     if state.get("batch"):
         require(batch_route(task_dir, repo, state)["route"] == "integration", "work pack is unfinished; preserve parked parent")
     require(from_plan(Path(task_dir, "PLAN.md").read_text()) == state["nodes"], "plan/evidence mismatch")
     node = next((n for n in leaves(state["nodes"]) if n["id"] == leaf_id), None)
     require(node is not None, "unknown leaf")
-    require(node.get("check"), "choose the outcome assertion through write_plan when ready; no implementation layout required")
+    require(node.get("check"), "choose the outcome assertion through wbs(action='plan') when ready; no implementation layout required")
     before_progress = task_progress(task_dir, repo, run_id, now=now)
     verified = {row["id"] for row in before_progress["outcomes"] if row["verified"]}
     def complete(key):
@@ -419,7 +419,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
     import batch_state
     batch_state.requests_valid(requests)
     result = dict(batch_id=prefix, requests=requests,
-                next_action="Before dispatch park this open parent through task_blocked for the worktree handoff. Run the existing batch workflow with these exact requests and --owner-task-id " + Path(task_dir).name + ". No parent source writes while leads run. Resume parent only after the pool is integrated; recheck outcomes and run combined review/QA.")
+                next_action="Before dispatch park this open parent through wbs(action='block') for the worktree handoff. Run the existing batch workflow with these exact requests and --owner-task-id " + Path(task_dir).name + ". No parent source writes while leads run. Resume parent only after the pool is integrated; recheck outcomes and run combined review/QA.")
     if bind:
         import work_pack
         from _lib import _atomic_text_write

@@ -798,7 +798,7 @@ RECEIPT_UNAVAILABLE_NEXT_ACTION = (
     f"{RECEIPT_RECORDING_UNAVAILABLE} Continue and await the required review "
     "and QA: their results are substantive but NON-ATTESTING and cannot "
     "authorize task_close. Remediate an actual FAIL and publish an actual "
-    "BLOCKED_ENV through task_blocked. Recording is unavailable in every state "
+    "BLOCKED_ENV through wbs(action='block'). Recording is unavailable in every state "
     "here, so do not repair, restart, resume, recollect, or rerun a lens solely "
     "to obtain a receipt at any point. "
     f"{TRUST_BOUNDARY} {attestation_endgame()}"
@@ -1079,7 +1079,7 @@ def _invalid_task_control_error(operation: str, td: str) -> dict:
         f"{operation} failed: missing or invalid TASK.json",
         data={
             "task_dir": td,
-            "next_action": "Call task_start to initialize a fresh exact TASK.json run.",
+            "next_action": "Call wbs(action='open') to initialize a fresh exact TASK.json run.",
         },
     )
 
@@ -1095,8 +1095,8 @@ def _minimal_task_start_context(task_dir: str, task_id: str) -> dict:
         "context_complete": False,
         "source_write_allowed": False,
         "next_action": (
-            f"Call task_context with task_id {task_id}. "
-            "Do not call task_start again."
+            f"Call wbs(action='context', wbs_id={task_id!r}). "
+            "Do not call wbs(action='open') again."
         ),
     }
 
@@ -1104,15 +1104,15 @@ def _minimal_task_start_context(task_dir: str, task_id: str) -> dict:
 def _task_resume_next_action(status: str) -> str:
     if status == "blocked":
         return (
-            "Call task_start with this task_id to resume the same run and preserve "
+            "Call wbs(action='open') with this wbs_id to resume the same run and preserve "
             "its review/QA receipts."
         )
     if status == "closed":
         return (
-            "Call task_start with fresh_run=true only to deliberately create a new "
+            "Call wbs(action='open', fresh_run=true) only to deliberately create a new "
             "evidence generation and discard the completed run's review/QA receipts."
         )
-    return "Choose a new task_id and call task_start."
+    return "Choose a new wbs_id and call wbs(action='open')."
 
 
 # ── Tool handlers ────────────────────────────────────────────────────────
@@ -1180,7 +1180,7 @@ def handle_task_start(args: dict) -> dict:
             data={
                 "task_dir": task_dir,
                 "next_action": (
-                    "Choose a new task_id and call task_start. Harness does not "
+                    "Choose a new wbs_id and call wbs(action='open'). Harness does not "
                     "migrate or rewrite an unsupported existing task control."
                 ),
             },
@@ -1250,7 +1250,7 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
             data={
                 "task_dir": task_dir,
                 "status": "absent",
-                "next_action": "Finish or park the currently focused task, then retry task_start.",
+                "next_action": "Finish or park the currently focused task, then retry wbs(action='open').",
             },
         )
     if not resumed_existing:
@@ -1265,7 +1265,7 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
                 data={
                     "task_dir": task_dir,
                     "next_action": (
-                        "Choose a new task_id and call task_start. Harness does not "
+                        "Choose a new wbs_id and call wbs(action='open'). Harness does not "
                         "migrate or rewrite an unsupported existing task control."
                     ),
                 },
@@ -1365,7 +1365,7 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
                         "task_dir": task_dir,
                         "status": "closed",
                         "next_action": (
-                            "Call task_start with fresh_run=true only to deliberately "
+                            "Call wbs(action='open', fresh_run=true) only to deliberately "
                             "create a new evidence generation and discard the current "
                             "review/QA receipts."
                         ),
@@ -1393,7 +1393,7 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
                     data={
                         "task_dir": task_dir,
                         "status": terminal_resume_status,
-                        "next_action": "Finish or park the currently focused task, then retry task_start.",
+                        "next_action": "Finish or park the currently focused task, then retry wbs(action='open').",
                     },
                 )
         if resumed_existing and not fresh_run:
@@ -1529,7 +1529,7 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
             "detail": registration["reason"],
             "retry_action": (
                 "Continue substantive review and QA. After actual QA PASS, call "
-                "task_verify once and use task_blocked if required evidence is missing."
+                "wbs(action='verify') once and use wbs(action='block') if required evidence is missing."
             ),
         })
 
@@ -1881,7 +1881,7 @@ def _handle_task_blocked_locked(td: str, *, reason: str, unblock: str) -> dict:
                   "next_action": _task_resume_next_action(status)},
         )
     resume_guidance = (
-        "Call task_start with this task_id to resume the same run and preserve "
+        "Call wbs(action='open') with this wbs_id to resume the same run and preserve "
         "its review/QA receipts. Pass fresh_run=true only to deliberately start "
         "a new evidence generation and discard those receipts."
     )
@@ -2119,7 +2119,7 @@ def _publish_write_plan(args, td, control, preflight):
         return _err(
             "write_plan refused: task changed before publication",
             data={"task_dir": td, "written": [],
-                  "next_action": "Call task_context and retry only if the task is open."},
+                  "next_action": "Call wbs(action='context') and retry only if the task is open."},
         )
     written: list[str] = []
     bytes_written: dict[str, int] = {}

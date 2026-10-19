@@ -12,7 +12,9 @@ hook's session id in agreement.
 """
 from __future__ import annotations
 
-from test_harness_mcp_server import call_execution
+def call_execution(*args, **kwargs):
+    from test_harness_mcp_server import call_execution as execute
+    return execute(*args, **kwargs)
 
 import importlib.util
 import json

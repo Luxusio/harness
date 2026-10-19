@@ -93,7 +93,7 @@ def _codex_capability_warning() -> str:
         "Codex receipt watcher registration and live host are not positively confirmed for "
         "this root thread. Continue substantive review and QA, but treat their "
         "results as non-attesting when receipts are absent. After QA PASS, call "
-        "task_verify once and use task_blocked if required evidence is still missing."
+        "wbs(action='verify') once and use wbs(action='block') if required evidence is still missing."
     )
 
 
@@ -306,7 +306,7 @@ def receipt_capability_warning(config_dir: str | None = None) -> str:
             "recording — check RECEIPTS.jsonl for the current run before acting. "
             "If receipts really are missing, continue substantive review and QA "
             "and label their results non-attesting; task_close will still refuse. "
-            "After QA PASS, call task_verify once and use task_blocked when required "
+            "After QA PASS, call wbs(action='verify') once and use wbs(action='block') when required "
             "hook-owned evidence remains missing. Watcher repair is out-of-band "
             "maintenance, not the current task's next action."
         )

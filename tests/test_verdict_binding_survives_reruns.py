@@ -610,19 +610,19 @@ class ABoundVerdictSurvivesALaterRestatement(unittest.TestCase):
         self.assertIn("no rerun is needed to restore it", note)
         self.assertNotIn("not in the position and shape", note)
         self.assertIn("Bound verdict stands", surfaced)
-        self.assertIn("run task_close", surfaced)
+        self.assertIn("run wbs(action='close')", surfaced)
         # The branch also fires for a bound FAIL or BLOCKED_ENV, so the sentence
         # must not assert the state of the gate — it once said "nothing is
         # blocked" beside a runtime verdict of FAIL.
         self.assertNotIn("Nothing is blocked", note)
 
     def test_only_the_advisory_kind_rides_the_closable_branch(self):
-        """A work order must not print immediately before "run task_close".
+        """A work order must not print immediately before "run wbs(action='close')".
 
         An undeclared lens reaches the all-PASS branch — the kind scan covers
         every supported lens, not only declared ones, and `review-security`
         routinely runs undeclared. Prefixing the whole note there emitted
-        "route the findings and respawn" beside "run task_close" with nothing
+        "route the findings and respawn" beside "run wbs(action='close')" with nothing
         marking which governs.
         """
         _lib = _lib_mod()
@@ -645,7 +645,7 @@ class ABoundVerdictSurvivesALaterRestatement(unittest.TestCase):
             )
             ctx = _lib.emit_compact_context(task_dir)
         self.assertEqual(ctx["runtime_verdict"], "PASS")
-        self.assertIn("run task_close", ctx["next_action"])
+        self.assertIn("run wbs(action='close')", ctx["next_action"])
         self.assertNotIn("Route the reported findings first", ctx["next_action"])
         self.assertNotIn("Recorded but unusable", ctx["next_action"])
 

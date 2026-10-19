@@ -550,8 +550,8 @@ class TestNextActionGate(unittest.TestCase):
         self.assertIn("NON-ATTESTING", gated["next_action"])
         self.assertIn(_harness_lib().TRUST_BOUNDARY, gated["next_action"])
         self.assertIn(_harness_lib().attestation_endgame(), gated["next_action"])
-        self.assertIn("task_verify once", gated["next_action"])
-        self.assertIn("task_blocked", gated["next_action"])
+        self.assertIn("wbs(action='verify') once", gated["next_action"])
+        self.assertIn("wbs(action='block')", gated["next_action"])
         self.assertNotIn("to repair", gated["next_action"].lower())
         self.assertNotIn("start a new session", gated["next_action"].lower())
 
@@ -577,7 +577,7 @@ class TestNextActionGate(unittest.TestCase):
         sweeps then found clauses deletable with the suite green — first the
         instructions themselves, then their preconditions. The worst was the
         guard on the park instruction: without "if required hook-owned evidence
-        is still missing", `call task_blocked directly` reads as an
+        is still missing", `call wbs(action='block') directly` reads as an
         unconditional order to park a task that was never blocked.
 
         Coverage is established by deletion sweep, not by asserting it here.
@@ -633,12 +633,12 @@ class TestNextActionGate(unittest.TestCase):
             )
             self.assertIn("if required hook-owned evidence is still missing", action)
             self.assertIn("solely to obtain a receipt", action)
-            self.assertIn("call task_blocked directly with", action)
+            self.assertIn("call wbs(action='block') directly with", action)
             self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
             self.assertIn(harness_server.ATTESTATION_UNBLOCK_CONDITION, action)
             self.assertLess(
-                action.index("task_verify once"),
-                action.index("call task_blocked directly with"),
+                action.index("wbs(action='verify') once"),
+                action.index("call wbs(action='block') directly with"),
                 "the park call must follow the single task_verify, not precede it",
             )
 
@@ -646,7 +646,7 @@ class TestNextActionGate(unittest.TestCase):
             "Continue and await",
             "NON-ATTESTING",
             "Remediate an actual FAIL",
-            "publish an actual BLOCKED_ENV through task_blocked",
+            "publish an actual BLOCKED_ENV through wbs(action='block')",
             "cannot authorize task_close",
             # The substantive-but-non-attesting distinction. Deleting it ships
             # "Continue and await the required review and QA: NON-ATTESTING and
@@ -746,8 +746,8 @@ class TestNextActionGate(unittest.TestCase):
             )
 
         self.assertEqual(result["runtime_verdict"], "PENDING")
-        self.assertIn("task_verify once", result["next_action"])
-        self.assertIn("task_blocked", result["next_action"])
+        self.assertIn("wbs(action='verify') once", result["next_action"])
+        self.assertIn("wbs(action='block')", result["next_action"])
         self.assertIn("completed QA verdict: qa-cli", result["missing_for_close"])
 
     def test_task_verify_pending_never_prescribes_receipt_only_rerun(self):
@@ -798,7 +798,7 @@ class TestNextActionGate(unittest.TestCase):
         # Assert the constants reach the response, not a paraphrase of them.
         self.assertIn(lib.TRUST_BOUNDARY, result["next_action"])
         self.assertIn(lib.attestation_endgame(), result["next_action"])
-        self.assertIn("task_blocked", result["next_action"])
+        self.assertIn("wbs(action='block')", result["next_action"])
 
 
 class TestRemediedFailureWithoutAttestation(unittest.TestCase):
@@ -847,7 +847,7 @@ class TestRemediedFailureWithoutAttestation(unittest.TestCase):
                     self.assertIn(lib.attestation_endgame(), action)
                     self.assertIn(lib.attestation_block_instruction(), action)
                     self.assertLess(action.index("Remediate the finding"), action.index("Only if"))
-                    self.assertLess(action.index("Only if"), action.index("call task_blocked"))
+                    self.assertLess(action.index("Only if"), action.index("call wbs(action='block')"))
                 self.assertTrue(closed.get("isError"), closed)
                 self.assertIsNone(lib.read_task_control(task_dir)["close_receipt_fingerprint"])
                 self.assertEqual(receipts.read_bytes(), before)
@@ -1345,7 +1345,7 @@ class TestReadinessIsTriState(unittest.TestCase):
             },
         )
         self.assertIn("Continue and await", gated["next_action"])
-        self.assertIn("task_blocked", gated["next_action"])
+        self.assertIn("wbs(action='block')", gated["next_action"])
         self.assertNotIn("watcher never started", gated["next_action"])
 
     def test_a_watcher_start_failure_also_routes_substantive_verification(self):
@@ -2585,7 +2585,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
         self.assertEqual(status, "open")
         self.assertIs(started["watcher_status"]["receipts_recordable"], False)
         self.assertIn("continue and await", started["next_action"].lower())
-        self.assertIn("task_blocked", started["next_action"].lower())
+        self.assertIn("wbs(action='block')", started["next_action"].lower())
         self.assertIn(
             "RECEIPT_WATCHER_REGISTRATION_FAILED",
             [item["code"] for item in started["warnings"]],

@@ -196,7 +196,7 @@ def no_receipts_block_instruction() -> str:
     attempt at this task turn the C-17 gate off for ordinary tasks.
     """
     return (
-        "call task_blocked directly with "
+        "call wbs(action='block') directly with "
         f"blocked_reason={NO_RECEIPTS_BLOCKED_REASON!r} and "
         f"unblock_condition={NO_RECEIPTS_UNBLOCK_CONDITION!r}"
     )
@@ -212,7 +212,7 @@ def attestation_block_instruction() -> str:
     surrounding sentence.
     """
     return (
-        "call task_blocked directly with "
+        "call wbs(action='block') directly with "
         f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
         f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}"
     )
@@ -233,16 +233,16 @@ def attestation_endgame() -> str:
     - "an awaited actual review PASS" — without the qualifier, unawaited
       launches route to park.
     - "if required hook-owned evidence is still missing" — without it,
-      `call task_blocked` reads as an unconditional order to park a task that
+      `call wbs(action='block')` reads as an unconditional order to park a task that
       was never blocked.
     - "solely to obtain a receipt" — without it, the do-not-rerun rule reads as
       a ban on rerunning a lens at all, including after a real FAIL.
     """
     return (
         "After an awaited actual review PASS and then an actual QA PASS, call"
-        " task_verify once; if required hook-owned evidence is still missing, do"
+        " wbs(action='verify') once; if required hook-owned evidence is still missing, do"
         " not repair, restart, resume, recollect, or rerun a lens, or call"
-        " task_verify again, solely to obtain a receipt; park instead, and"
+        " wbs(action='verify') again, solely to obtain a receipt; park instead, and"
         " choose the reason by what the receipt stream shows. If no receipt of"
         " any kind was recorded for this run, "
         f"{no_receipts_block_instruction()}. If receipts exist but a required"
@@ -4688,7 +4688,7 @@ def emit_compact_context(task_dir, snapshot=None):
         return {
             "error": "missing or invalid exact four-field TASK.json",
             "task_dir": task_dir,
-            "next_action": "Call task_start to initialize a fresh TASK.json run.",
+            "next_action": "Call wbs(action='open') to initialize a fresh TASK.json run.",
         }
 
     snapshot = snapshot or receipt_snapshot(task_dir)
@@ -4742,7 +4742,7 @@ def emit_compact_context(task_dir, snapshot=None):
         )
     elif review_verdict == "BLOCKED_ENV":
         next_action = (
-            "A required review receipt reports BLOCKED_ENV. Call task_blocked "
+            "A required review receipt reports BLOCKED_ENV. Call wbs(action='block') "
             "directly with the concrete blocker and an actionable unblock "
             "condition; do not start QA."
         )
@@ -4763,7 +4763,7 @@ def emit_compact_context(task_dir, snapshot=None):
         )
     elif runtime_verdict == "BLOCKED_ENV":
         next_action = (
-            "A required QA receipt reports BLOCKED_ENV. Call task_blocked directly "
+            "A required QA receipt reports BLOCKED_ENV. Call wbs(action='block') directly "
             "with the concrete blocker and an actionable unblock condition."
         )
     elif runtime_verdict != "PASS":
@@ -4790,7 +4790,7 @@ def emit_compact_context(task_dir, snapshot=None):
         # branch — `nonparsing_completion_lenses` deliberately covers every
         # supported lens, not only the declared ones, and `review-security`
         # routinely runs undeclared — so prefixing the whole note printed
-        # "route the findings and respawn" immediately before "run task_close",
+        # "route the findings and respawn" immediately before "run wbs(action='close')",
         # with nothing marking which governs. A coordinator either burns a
         # remediation round on a lens that gates nothing, or learns the prefix
         # is noise, which destroys the signal this branch was restoring.
@@ -4800,7 +4800,7 @@ def emit_compact_context(task_dir, snapshot=None):
         }
         next_action = (
             nonparsing_completion_note(followup)
-            + "Completed QA verdicts present — run task_close."
+            + "Completed QA verdicts present — run wbs(action='close')."
         )
     from wbs import task_progress
     progress = task_progress(task_dir, find_repo_root(task_dir), st["run_id"])
@@ -4812,7 +4812,7 @@ def emit_compact_context(task_dir, snapshot=None):
         source_write_allowed = False
         why_blocked = "WBS work pack owns source writes; park parent and complete isolated leads first"
         missing_for_close.append("integrated WBS work pack")
-        next_action = "Park this parent through task_blocked before batch admission; finish its exact work pack before resuming."
+        next_action = "Park this parent through wbs(action='block') before batch admission; finish its exact work pack before resuming."
     if progress.get("refinement_due"):
         next_action += " WBS has no earned progress for two hours: refine unclear unfinished work at this boundary without changing weights; report real external blockers instead of splitting them."
     return {

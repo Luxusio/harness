@@ -211,8 +211,8 @@ def test_tree_missing_receipt_modules_warns(tmp_path):
     message = mod.receipt_capability_warning(str(cfg))
     assert WARNING_TEXT in message
     assert str(root) in message, "the warning must name the offending tree"
-    assert "task_verify once" in message
-    assert "task_blocked" in message
+    assert "wbs(action='verify') once" in message
+    assert "wbs(action='block')" in message
     assert "restart the session" not in message
 
 
@@ -338,7 +338,7 @@ def test_codex_without_positive_registration_is_not_clean(monkeypatch):
     message = mod.receipt_capability_warning()
     assert "not positively confirmed" in message
     assert "Continue substantive review and QA" in message
-    assert "task_verify once" in message
+    assert "wbs(action='verify') once" in message
 
 
 def test_codex_mcp_uses_verified_session_hint_without_thread_env(tmp_path, monkeypatch):

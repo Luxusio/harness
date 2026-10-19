@@ -536,7 +536,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             payload = result["structuredContent"]
             self.assertTrue(result.get("isError"))
             self.assertIn("unsupported task-control schema", payload["error"])
-            self.assertIn("new task_id", payload["next_action"])
+            self.assertIn("new wbs_id", payload["next_action"])
             self.assertNotIn("Correct the named selector", payload["next_action"])
             self.assertEqual(state.read_bytes(), before)
 
@@ -1113,12 +1113,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(result["structuredContent"]["status"], "blocked")
             body = (Path(task_dir) / "BLOCKED.md").read_text(encoding="utf-8")
             self.assertIn("CI service is unavailable", body)
-            self.assertIn("task_start", body)
+            self.assertIn("wbs(action='open')", body)
             self.assertIn("fresh_run", body)
             self.assertIn("preserv", body.lower())
             self.assertIn("discard", body.lower())
             payload = result["structuredContent"]
-            self.assertIn("task_start", payload["next_action"])
+            self.assertIn("wbs(action='open')", payload["next_action"])
             self.assertIn("fresh_run", payload["next_action"])
             self.assertIn("preserv", payload["next_action"].lower())
             self.assertIn("discard", payload["next_action"].lower())
@@ -1517,7 +1517,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 },
             )
             self.assertTrue(result.get("isError"))
-            self.assertIn("task_start", result["structuredContent"].get("next_action", ""))
+            self.assertIn("wbs(action='open')", result["structuredContent"].get("next_action", ""))
             self.assertFalse(task_dir.exists())
 
     def test_task_blocked_rejects_symlinked_state_without_touching_target(self):
@@ -2062,7 +2062,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIsInstance(payload["task_context"], dict)
             self.assertFalse(payload["task_context"]["context_complete"])
             self.assertFalse(payload["task_context"]["source_write_allowed"])
-            self.assertIn("Do not call task_start again", payload["next_action"])
+            self.assertIn("Do not call wbs(action='open') again", payload["next_action"])
             self.assertEqual(payload["warnings"][0]["code"], "TASK_CONTEXT_DEFERRED")
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
             self.assertTrue((task_dir / "TASK.json").is_file())

@@ -343,9 +343,9 @@ def test_req_documents_worktree_location_and_multi_repo_shapes():
     )
 
 
-def test_task_lead_never_touches_the_coordinator_goal_and_defines_verdicts():
+def test_task_lead_operates_only_its_worktree_wbs_and_defines_verdicts():
     norm = _normalized(_text(TASK_LEAD))
-    assert _normalized("Never call the `goal_*` tools") in norm
+    assert _normalized("Operate only the lead WBS in your worktree. The coordinator owns its") in norm
     for verdict in ("`closed`", "`blocked`", "`failed`"):
         assert verdict in norm
     assert _normalized("`failed` when the lifecycle could not reach PASS") in norm

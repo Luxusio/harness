@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
+from conftest import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 import _lib

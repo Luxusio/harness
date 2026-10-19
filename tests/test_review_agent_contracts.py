@@ -1110,7 +1110,7 @@ def test_lib_owns_exactly_one_literal_trust_boundary():
     # 114 normative words and carries the pair `plugin/CLAUDE.md` requires the
     # caller to copy verbatim, yet clause pins alone catch only *deletion*.
     # Review measured three inversions that passed the full suite: "and then an
-    # actual QA PASS" -> "or without an actual QA PASS"; "task_verify once" ->
+    # actual QA PASS" -> "or without an actual QA PASS"; "wbs(action='verify') once" ->
     # "once or as many times as needed"; and an appended sentence permitting
     # receipt-only reruns. Each ships an instruction contradicting C-14/C-17.
     #
@@ -1119,17 +1119,17 @@ def test_lib_owns_exactly_one_literal_trust_boundary():
     # Consolidating made one place worth guarding.
     assert lib.attestation_endgame() == (
         "After an awaited actual review PASS and then an actual QA PASS, call"
-        " task_verify once; if required hook-owned evidence is still missing, do"
+        " wbs(action='verify') once; if required hook-owned evidence is still missing, do"
         " not repair, restart, resume, recollect, or rerun a lens, or call"
-        " task_verify again, solely to obtain a receipt; park instead, and"
+        " wbs(action='verify') again, solely to obtain a receipt; park instead, and"
         " choose the reason by what the receipt stream shows. If no receipt of"
         " any kind was recorded for this run, "
-        "call task_blocked directly with "
+        "call wbs(action='block') directly with "
         f"blocked_reason={lib.NO_RECEIPTS_BLOCKED_REASON!r} and "
         f"unblock_condition={lib.NO_RECEIPTS_UNBLOCK_CONDITION!r}."
         " If receipts exist but a required"
         " completion is absent, "
-        "call task_blocked directly with "
+        "call wbs(action='block') directly with "
         f"blocked_reason={lib.ATTESTATION_BLOCKED_REASON!r} and "
         f"unblock_condition={lib.ATTESTATION_UNBLOCK_CONDITION!r}."
         " Neither applies before a lens has actually run and returned results."
