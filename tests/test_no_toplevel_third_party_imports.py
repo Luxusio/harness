@@ -40,6 +40,12 @@ def _allowed_toplevel_modules() -> set[str]:
     return set(sys.stdlib_module_names) | {"conftest"} | _local_script_modules()
 
 
+def _allowed_runtime_modules() -> set[str]:
+    """Recognize concrete modules from both shipped Python directories."""
+    mcp_modules = {path.stem for path in (REPO_ROOT / "plugin" / "mcp").glob("*.py")}
+    return set(sys.stdlib_module_names) | _local_script_modules() | mcp_modules
+
+
 def get_toplevel_imports(source: str) -> list[tuple[str, int]]:
     """Return list of (module_name, lineno) for top-level imports."""
     tree = ast.parse(source)
@@ -144,7 +150,7 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
             *sorted((REPO_ROOT / "plugin" / "mcp").glob("*.py")),
             REPO_ROOT / "install.py",
         ]
-        allowed = set(sys.stdlib_module_names) | _local_script_modules()
+        allowed = _allowed_runtime_modules()
         violations = []
         for path in runtime_files:
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -161,6 +167,13 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
                     if name.split(".")[0] not in allowed:
                         violations.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {name}")
         self.assertEqual(violations, [], "runtime imports a non-stdlib module")
+
+    def test_runtime_allowlist_includes_shipped_mcp_but_rejects_external_modules(self):
+        allowed = _allowed_runtime_modules()
+        self.assertIn("harness_server", allowed)
+        self.assertIn("_lib", allowed)
+        self.assertNotIn("synthetic_third_party", allowed)
+        self.assertNotIn("yaml", allowed)
 
     def test_literal_dynamic_imports_are_resolved(self):
         cases = {
