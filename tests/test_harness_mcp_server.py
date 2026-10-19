@@ -37,19 +37,7 @@ else:
 import _lib as harness_lib  # type: ignore
 
 
-EXPECTED_TOOLS = {
-    "goal_start",
-    "goal_context",
-    "goal_add_task",
-    "goal_next_task",
-    "goal_finish",
-    "task_start",
-    "task_context",
-    "task_verify",
-    "task_close",
-    "task_blocked",
-    "write_plan",
-}
+EXPECTED_TOOLS = {"wbs"}
 
 
 def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -> None:
@@ -365,14 +353,14 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("inputSchema", tool)
             self.assertTrue(tool["description"], f"{tool['name']} missing description")
 
-        task_start = next(tool for tool in harness_server.list_tools() if tool["name"] == "task_start")
+        task_start = next(tool for tool in harness_server.TOOL_DEFS if tool["name"] == "task_start")
         fresh_run = task_start["inputSchema"]["properties"]["fresh_run"]
         self.assertEqual(fresh_run["type"], "boolean")
         self.assertIn("discard", fresh_run["description"].lower())
         self.assertIn("preserv", task_start["description"].lower())
 
         task_blocked = next(
-            tool for tool in harness_server.list_tools() if tool["name"] == "task_blocked"
+            tool for tool in harness_server.TOOL_DEFS if tool["name"] == "task_blocked"
         )
         properties = task_blocked["inputSchema"]["properties"]
         self.assertIn("bare safe ID", properties["task_id"]["description"])
@@ -973,7 +961,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         response = json.loads(stdout_bytes.getvalue().decode())
         server.close()
         instructions = response["result"]["instructions"]
-        self.assertIn("Goal-first control plane", instructions)
+        self.assertIn("WBS-first control plane", instructions)
         self.assertIn("goal_start", instructions)
         self.assertIn("plain repo-mutating request", instructions)
         self.assertIn("hooks do not create tasks automatically", instructions)
@@ -1052,7 +1040,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         response = json.loads(stdout_bytes.getvalue().decode())
         instructions = response["result"]["instructions"]
-        self.assertIn("Goal-first control plane", instructions)
+        self.assertIn("WBS-first control plane", instructions)
         self.assertIn("goal_context", instructions)
         self.assertIn("plain repo-mutating request", instructions)
         self.assertIn("Protocol tool names are bare", instructions)
@@ -1227,6 +1215,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "source_write_allowed", "why_source_write_blocked", "review_verdict",
                 "required_review_lenses", "required_qa_lenses", "missing_for_close",
                 "next_action", "report_path", "effective_close_gate",
+                "progress",
             })
             self.assertNotIn("subagent_receipts", context)
             self.assertNotIn("review_receipts", context)

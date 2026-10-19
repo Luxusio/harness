@@ -208,7 +208,8 @@ def _task_result(payload: bytes) -> tuple[str, str, str]:
     """Extract one successful task result from known Codex hook envelopes."""
     data = _payload_data(payload)
     tool_name = str(data.get("tool_name") or data.get("tool") or "")
-    if not is_codex_task_binding_tool(tool_name):
+    arguments = data.get("tool_input") or data.get("input") or data.get("arguments")
+    if not is_codex_task_binding_tool(tool_name, arguments):
         return "", "", ""
     response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
     if (

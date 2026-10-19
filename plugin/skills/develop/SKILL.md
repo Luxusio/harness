@@ -141,7 +141,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Build the routing contract from PLAN file ownership and dependencies before
+Read `ready-lanes.md` for WBS measurement/worktree routing first. Build the contract from PLAN ownership and dependencies before
 editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |

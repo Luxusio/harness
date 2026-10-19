@@ -1,5 +1,39 @@
 # Ready-lane dispatch
 
+## WBS worktree routing takes precedence for independent development
+
+At active phase boundaries read `wbs(action="context").progress`. After two hours
+without earned weight, refine only unclear unfinished WBS outcomes through
+`write_plan`, preserving weight while adapting actual next steps. Report real external blockers
+instead of recursively splitting waits. Use `wbs(action="check", node_id=...)` for ready outcomes. Report measured weight and concrete remaining
+outcomes with integration/review/QA separately; task additions, plan rewrites
+and splits earn nothing. One leaf is enough for small work. WBS exists to help
+delivery, not to generate progress-reporting work.
+
+Build dependencies from WBS outcomes; choose current ownership only when
+actually dispatching concurrent work, never to prescribe a layout for progress. Substantial
+independent outcomes run in separate worktrees through `harness:batch`, with
+development, independent review, QA and task close inside each lead. Use
+`wbs(action="dispatch", ownership={"<outcome id>":["<current scope>"]})`
+to bind the exact work pack for an already-open
+ordinary execution envelope. Dispatch parks the parent for the actual
+worktree handoff before pool admission; do no parent source writes
+while leads run. `task_start` refuses resumption until that exact pool is
+integrated and closed. Then resume the same parent, verify WBS assertions in
+the integrated checkout and run combined review/QA. Never treat a proposed
+pack or a lead's narrative PASS as integrated progress.
+
+When independence is known at intake, prefer declaring/running the work pack
+before opening its integration task. Native Goals use the same WBS root and dispatch; keep no second Goal queue. Use the shared pool's capacity,
+scope reservations, dependency-after-integration rule and serialized finish;
+do not run concurrent merges into one target branch. Refill as leads finish.
+Do not create worktrees for tiny or dependent work merely to satisfy a count.
+The scheduler below remains useful for bounded role pairing within a worktree
+and for small direct work; it does not authorize independent source writers
+sharing the parent checkout instead of this worktree route.
+
+## Bounded role admission
+
 Use `scripts/parallel_dispatch.py` on both runtimes to calculate which declared
 ACs can start. It returns proposals; the coordinator owns actual tool calls and
 must reserve the whole returned group against fresh host inventory before

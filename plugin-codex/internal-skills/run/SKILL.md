@@ -127,6 +127,16 @@ Use inline execution as the fallback for roles that normally benefit from indepe
 
 Direct, terse. Status updates, not narration. "Phase N done." not "I have completed Phase N."
 
+## One public WBS interface
+
+Use only `wbs` MCP for this workflow. Names below identify internal owners,
+not additional public tools: task_start → wbs(action="open"), task_context →
+context, write_plan → plan, task_verify → verify, task_close → close,
+task_blocked → block. Pass `wbs_id` using the known root or legacy task ID;
+plan/check/dispatch share that same tree. check uses node_id; dispatch accepts
+current execution ownership and parks the parent automatically. Preserve
+workspace on every worktree call. No separate Goal WBS or child task queue.
+
 ## Flow
 
 Execute phases in strict order. Each phase must complete before the next begins. On any phase failure: stop, report, ask how to proceed.
@@ -138,23 +148,17 @@ harness task yourself and continue through this flow.
 
 ### Native Goal continuation
 
-Before opening a main-checkout task, cut a broad Goal into declared requests
-with literal path scopes and dependencies. When two or more requests can run
-independently, call `goal_add_task` with a new integration child ID and
-`batch_requests: [{slug, request, scopes, depends_on}]`; future child IDs are
-valid. This records intent without opening the integration task. Do not require
-the user to ask for batch mode. Reuse known file ownership, never infer it from
-titles. Unsupported or genuinely dependent work keeps the ordinary task route.
-
-Call `goal_next_task` and follow its `dispatch`: `route: batch` reads
-`${HARNESS_PLUGIN_ROOT}/internal-skills/batch/SKILL.md` and runs the exact
-returned batch ID and requests, resuming that pool if it exists. Do not open
-the integration child while leads run. `route: integration` starts that
-canonical child and reviews/tests the combined result before close. Goal
-completion rechecks integration/archive evidence and the closed integration
-child; abandoned work never counts as completion. Without a work pack,
-`goal_next_task` selects first queued/active as before.
-Present the selected next task as status, including its route and effective capacity.
+Read the native objective with get_goal and open/resume the same WBS with
+`wbs(action="open", objective="<objective>")`, or use the already-known root
+wbs_id. Keep one coarse outcome tree and refine only work about to be done.
+Use wbs context/next for measured progress and dependency-ready outcomes;
+plan updates the same PLAN. For substantial independent work use wbs dispatch
+with current execution ownership, then run the returned exact batch through
+the existing batch skill. Leads develop, independently review, test and close
+inside their own worktrees. The pool serializes integration and preserves
+proof. Reopen the same root after pool completion, check integrated outcomes,
+then run combined review/QA and close. Native Goal completion uses that root's
+receipt-backed completion, not a second goal_start/goal_add_task ledger.
 
 ### Phase 0: Resume detection
 
@@ -174,7 +178,7 @@ Resume routing:
 Only call `task_start` when no active task can be resolved, or when the user
 explicitly asks for a new task.
 
-If only a Goal is active, call `goal_next_task`; if none and unproven, attach a child.
+If only a native Goal is active, open/resume its one WBS root; never attach a second planning ledger.
 
 ### Phase 1: Start task
 

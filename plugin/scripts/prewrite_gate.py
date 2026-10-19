@@ -77,6 +77,7 @@ PROTECTED_ARTIFACTS = {
     "PLAN.md": "plan-skill",
     "RECEIPTS.jsonl": "receipt-lifecycle-hook",
     "REVIEWS.jsonl": "review-detail-writer",
+    "WBS.json": "task-control-mcp",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
@@ -85,6 +86,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
     "REVIEWS.jsonl": "the shared review-detail writer",
+    "WBS.json": "write_plan and task_wbs MCP tools",
 }
 GOAL_CONTROL_DIR = os.path.join("doc", "harness", "goals")
 
@@ -833,6 +835,13 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             )
             _deny("C-02-plan-first", file_path, "plan-skill", human, repo_root)
             return 0
+
+    try:
+        from wbs import require_integrated_for_task
+        require_integrated_for_task(repo_root, os.path.basename(active_dir))
+    except (OSError, ValueError, RuntimeError) as exc:
+        _deny("wbs-work-pack", file_path, "task-control-mcp", str(exc), repo_root)
+        return 0
 
     rel = _rel(file_path, repo_root)
     if _observable_req_needed_for_path(rel) and not _task_has_req_reference(active_dir):

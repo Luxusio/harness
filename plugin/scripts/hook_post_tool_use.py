@@ -91,10 +91,10 @@ def _is_create_goal_tool(tool_name: str) -> bool:
     return name == "create_goal" or name.endswith(".create_goal") or name.endswith("__create_goal")
 
 
-def _is_task_binding_tool(tool_name: str) -> bool:
+def _is_task_binding_tool(tool_name: str, arguments=None) -> bool:
     return bool(
         is_codex_task_binding_tool is not None
-        and is_codex_task_binding_tool(tool_name)
+        and is_codex_task_binding_tool(tool_name, arguments)
     )
 
 
@@ -125,9 +125,14 @@ def _goal_routing_hint(payload: bytes) -> str:
             return ""
 
         tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
+        if isinstance(tool_input, str):
+            tool_input = json.loads(tool_input)
         objective = ""
         if isinstance(tool_input, dict):
             objective = " ".join(str(tool_input.get("objective") or "").split())
+        from _lib import native_wbs_is_synced
+        if native_wbs_is_synced(repo_root, objective):
+            return ""
         current = read_current_goal(repo_root)
         current_objective = " ".join(str(current.get("objective") or "").split())
         if (
@@ -140,18 +145,18 @@ def _goal_routing_hint(payload: bytes) -> str:
         return ""
     return (
         "[harness-goal] Native Goal was created. Invoke $harness:run; before implementation call "
-        "get_goal, then harness goal_start with that objective; call goal_context; "
-        "for independent work packs, call goal_add_task with batch_requests before task_start. "
-        "For a sequential child, call task_start then goal_add_task. Continue with "
-        "goal_next_task and follow its route. Do not treat create_goal alone as harness activation."
+        "get_goal, then wbs(action=open, objective=...) to open or resume the same outcome tree. "
+        "Use wbs context/plan/check/dispatch/verify/close; do not create a separate Goal/task planning ledger. "
+        "Do not treat create_goal alone as harness activation."
     )
 
 
 def main() -> int:
     deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
+    data = _json_payload(payload)
     tool_name = _tool_name(payload)
-    if _is_task_binding_tool(tool_name):
+    if _is_task_binding_tool(tool_name, data.get("tool_input") or data.get("input") or data.get("arguments")):
         _register_task_result(payload)
         return 0
     goal_hint = ""

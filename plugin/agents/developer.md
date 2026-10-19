@@ -2,7 +2,7 @@
 name: developer
 description: harness developer — implements source changes within PLAN.md scope and returns changed paths, verification, durable docs, and risk.
 model: sonnet
-tools: Read, Write, Bash, Glob, Grep, LS, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context
+tools: Read, Write, Bash, Glob, Grep, LS, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__wbs
 ---
 
 <!-- harness:role-core:start -->

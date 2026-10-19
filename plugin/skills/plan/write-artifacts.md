@@ -6,8 +6,35 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ## 6.1 Artifact writer
 
-PLAN.md is written through the harness MCP `write_plan` tool. The same call
+PLAN.md is written through `wbs(action="plan", wbs_id=...)`; `write_plan` is its internal owner. The same call
 stores the canonical required lens set in `TASK.json`.
+
+### Measured WBS
+
+Use the acceptance outcomes as the WBS; do not write a second task breakdown.
+Include one `wbs` JSON fence in PLAN, with a small number of measurable leaves:
+
+```wbs
+[{"id":"AC-001","title":"Invalid input is rejected with an actionable error","weight":1}]
+```
+
+Every leaf needs an observable outcome and positive integer weight. Add an
+assertion argv as `check` when ready to verify; do not freeze test commands or
+implementation layout at intake. WBS has no edited-file lists. Optional
+`parent` and `depends_on` name node IDs. A group has no `check`; its children's weights sum
+to its weight. Choose coarse, understandable weights, not invented effort
+precision. One leaf suffices for small work. `write_plan` atomically publishes
+the baseline and runtime WBS evidence without changing TASK's schema.
+Use `wbs(action="check", node_id=...)` only when an outcome is ready to
+check. Read `task_context.progress`; never author a percentage or count task
+additions as accomplishment. Passing commands still need review for adequacy.
+To refine, keep the pending leaf's ID and weight as a group, remove its check
+and add concrete children conserving weight. Adapt pending outcomes, checks
+and dependencies as discovery requires; changed definitions lose old credit.
+Start with large results and elaborate only work about to be done. Splitting
+earns nothing and never restarts the progress clock. File ownership belongs
+only to actual concurrent execution, separately from progress measurement.
+See `doc/harness/REQ__measurable-wbs-progress.md` for the observable contract.
 
 ## 6.2 Assemble PLAN.md content
 
@@ -174,6 +201,12 @@ Planning decisions from earlier phases are included directly in PLAN.md's
 Decision Audit Trail before the single MCP publication.
 
 ### Per-AC shape
+
+For rolling outcome-based WBS, leave implementation file/test annotations
+out until current code and actual execution ownership are known. Do not invent
+file lists, helper structure or test commands merely to calculate progress.
+The shape below is for execution-ready ACs; WBS outcomes may stay coarse and
+adapt throughout implementation. Add ownership only when assigning writers.
 
 Write each acceptance criterion in this shape:
 

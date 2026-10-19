@@ -27,6 +27,7 @@ REVIEW_DETAILS_NAME = "REVIEWS.jsonl"
 TASK_CONTROL_NAME = "TASK.json"
 
 CODEX_TASK_BINDING_TOOLS = frozenset({
+    "wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs",
     "task_start",
     "task_context",
     "mcp__harness__task_start",
@@ -36,9 +37,31 @@ CODEX_TASK_BINDING_TOOLS = frozenset({
 })
 
 
-def is_codex_task_binding_tool(tool_name):
+def is_codex_task_binding_tool(tool_name, arguments=None):
     """Accept only the bare and Harness-qualified Codex task tool ids."""
-    return isinstance(tool_name, str) and tool_name.lower() in CODEX_TASK_BINDING_TOOLS
+    if not isinstance(tool_name, str) or tool_name.lower() not in CODEX_TASK_BINDING_TOOLS:
+        return False
+    if tool_name.lower() in {"wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"}:
+        try:
+            arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
+        except (ValueError, TypeError):
+            return False
+        return isinstance(arguments, dict) and arguments.get("action") in {"open", "context"}
+    return True
+
+
+def native_wbs_id(objective):
+    """Stable root identity, without a parallel native-Goal planning ledger."""
+    normalized = " ".join(str(objective or "").split())
+    return "WBS__native-" + hashlib.sha256(normalized.encode()).hexdigest()[:20]
+
+
+def native_wbs_is_synced(repo_root, objective):
+    if not str(objective or "").strip():
+        return False
+    task_id = "TASK__" + native_wbs_id(objective)[5:]
+    td = canonical_task_dir(task_id=task_id, repo_root=repo_root)
+    return bool(read_task_control(td))
 
 TASK_CONTROL_FIELDS = frozenset({
     "run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint",
@@ -889,6 +912,8 @@ def next_goal_task(repo_root: str) -> dict:
 
 def require_goal_batch_integrated(repo_root: str, task_id: str) -> None:
     """Do not open or close an integration child before its work pack lands."""
+    from wbs import require_integrated_for_task
+    require_integrated_for_task(repo_root, task_id)
     current = read_current_goal(repo_root)
     if current.get("status") != "active":
         return
@@ -1500,6 +1525,7 @@ def _make_control_writer_authority():
             "handle_task_start", "handle_task_context", "handle_task_close",
             "handle_task_blocked", "handle_write_plan", "handle_goal_start",
             "handle_goal_add_task", "handle_goal_finish",
+            "handle_task_wbs",
         },
         "codex_hook_registration": {
             "restore_watcher_registration", "register_task_result",
@@ -5084,12 +5110,26 @@ def emit_compact_context(task_dir, snapshot=None):
             nonparsing_completion_note(followup)
             + "Completed QA verdicts present — run task_close."
         )
+    from wbs import task_progress
+    progress = task_progress(task_dir, find_repo_root(task_dir), st["run_id"])
+    if progress.get("status") != "unbaselined" and (
+        progress.get("status") != "measured" or progress["verified_weight"] != progress["total_weight"]
+    ):
+        missing_for_close.append("verified WBS outcomes")
+    if progress.get("integration") and progress["integration"]["route"] != "integration":
+        source_write_allowed = False
+        why_blocked = "WBS work pack owns source writes; park parent and complete isolated leads first"
+        missing_for_close.append("integrated WBS work pack")
+        next_action = "Park this parent through task_blocked before batch admission; finish its exact work pack before resuming."
+    if progress.get("refinement_due"):
+        next_action += " WBS has no earned progress for two hours: refine unclear unfinished work at this boundary without changing weights; report real external blockers instead of splitting them."
     return {
         "task_id": os.path.basename(task_dir),
         "status": task_control_status(task_dir, st, snapshot),
         "task_dir": task_dir,
         "routing": routing,
         "runtime_verdict": runtime_verdict,
+        "progress": progress,
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_blocked,
         "review_verdict": review_verdict,

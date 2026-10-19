@@ -6,6 +6,29 @@ owner: harness
 
 # Native Goals
 
+## Current public model: one WBS
+
+A native Goal supplies an objective and persistent continuation. Harness uses
+that same objective's WBS root through `wbs(action="open", objective=...)`.
+Ordinary requests use the same public tool and tree. There is no second Goal
+baseline, manually maintained child queue or progress estimate. PLAN owns
+rolling outcome intent; explicit checks earn measured weight, and internal
+execution envelopes preserve existing independent review/QA and close proof.
+
+Use wbs context/plan/check/next/dispatch/verify/close/block for that root.
+Keep outcomes coarse until useful details emerge; do not specify edited files
+or freeze the code layout for progress calculation. Dispatch supplies current
+writer ownership to the existing isolated-worktree pool and parks the parent.
+After real integration, reopen the same root for integrated checks and
+independent review/QA. See ../REQ__measurable-wbs-progress.md.
+
+## Legacy compatibility reference
+
+The remainder documents preserved Goal/task APIs and stored state for old
+clients. These handlers remain callable but are not advertised to new sessions;
+do not create this parallel planning ledger for new WBS work.
+
+
 Harness treats native `/goal` as the explicit-goal orchestration entry point.
 Users do not choose orchestration modes; Goal owns explicit broad requests and
 the harness state decides whether one child task is enough or whether the

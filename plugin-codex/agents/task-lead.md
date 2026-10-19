@@ -16,9 +16,9 @@ and mutation permission, recheck the exact worktree/branch and any prepared
 S1 module manifest. Read the normal internal run/plan/develop workflow and
 execute it inside W, with these overrides:
 
-- Pass `workspace: W` on task_start, task_context, write_plan, task_verify,
-  task_close and task_blocked. Do not call Goal tools: those belong to main.
-  Start with `task_start(task_id=<exact claim task_id>, workspace=W)`; never
+- Use the single wbs tool: open/context/plan/check/verify/close/block, with
+  wbs_id=<exact claim task_id> and workspace=W on every call.
+  Start with `wbs(action="open", wbs_id=<exact claim task_id>, workspace=W)`; never
   derive a different task identity from the prose request.
 - Nested workers and reviewers receive explicit W and scoped paths. Their
   native ancestry plus your hook-owned worktree binding determines receipt

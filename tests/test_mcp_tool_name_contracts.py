@@ -71,7 +71,9 @@ def test_task_tools_declare_optional_workspace_and_goal_tools_do_not():
         server = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = server
         spec.loader.exec_module(server)
-    schemas = {tool["name"]: tool["inputSchema"] for tool in server.list_tools()}
+    schemas = {tool["name"]: tool["inputSchema"] for tool in server.TOOL_DEFS}
+    assert {tool["name"] for tool in server.list_tools()} == {"wbs"}
+    assert schemas["wbs"]["properties"]["workspace"]["type"] == "string"
     for name in ("task_start", "task_context", "write_plan", "task_verify", "task_close", "task_blocked"):
         props = schemas[name]["properties"]
         assert props.get("workspace", {}).get("type") == "string", name

@@ -42,43 +42,26 @@ def _runtime_from_initialize(params: dict) -> str:
 
 def _initialize_instructions(runtime: str) -> str:
     base = (
-        "harness MCP — Goal-first control plane plus exact TASK.json. "
-        "Use goal_start/goal_context/goal_add_task/goal_next_task/goal_finish "
-        "for native /goal orchestration. A Goal owns a child task queue; create "
-        "or attach child tasks as scope expands. "
-        "When no native goal context is active, a plain repo-mutating request "
-        "may create or continue a harness task directly with task_start/task_context; "
-        "hooks do not create tasks automatically. "
-        "For an existing open or blocked task, task_start preserves the current "
-        "run and review/QA receipts by default. Pass fresh_run=true only to "
-        "deliberately rotate the run and discard that evidence. "
-        "Protocol tool names are bare: goal_start, goal_context, "
-        "goal_add_task, goal_next_task, goal_finish, task_start, "
-        "task_context, task_verify, task_close, task_blocked, and write_plan. "
-        "write_plan is the canonical task-local PLAN writer. "
+        "harness MCP — WBS-first control plane. One WBS tree owns outcomes and progress for any request. "
+        "Protocol tool names are bare: wbs. Use wbs(action=open|context|plan|check|next|dispatch|verify|close|block, wbs_id=...). "
+        "Open a root for a plain repo-mutating request; hooks do not create tasks automatically. "
+        "Start with coarse observable outcomes in PLAN's wbs fence, with optional check argv. "
+        "Never prescribe edited files for progress or freeze implementation at intake. Refine as discovery requires. "
+        "check runs one declared outcome assertion; verify reads ordered independent review/QA evidence; close still requires both. "
+        "dispatch hands independently owned work to the existing isolated-worktree pool and parks its parent until integration. "
+        "File ownership is supplied only at this actual concurrent execution handoff. "
+        "Internally task_start preserves the execution run and receipts; fresh_run=true deliberately discards evidence. "
+        "write_plan and legacy goal_start/goal_context handlers remain compatibility machinery, not separate progress ledgers. "
     )
     if runtime == "codex":
-        return (
-            base
-            + "Codex callers should use these bare tool names directly; do not "
-            "use Claude display prefixes like mcp__plugin_harness_harness__*. "
-            "When native Codex goal context is active, call get_goal to read "
-            "the objective, then call goal_start to sync it. Use goal_context; "
-            "declare independent work packs with goal_add_task(batch_requests) before task_start. "
-            "Use goal_next_task dispatch to run the batch then its integration child; "
-            "ordinary children retain task_start then goal_add_task."
+        return base + (
+            "Codex callers should use these bare tool names directly; do not use Claude display prefixes like mcp__plugin_harness_harness__*. "
+            "For a native Goal, read get_goal and use the same WBS root and objective, never a second Goal baseline."
         )
     if runtime == "claude":
-        return (
-            base
-            + "Claude Code may display callable tools with a runtime prefix; "
-            "that prefix is a Claude UI naming convention over the same shared MCP server."
-        )
-    return (
-        base
-        + "Clients may display these tools with runtime-specific prefixes; follow "
-        "the active client's tool-call syntax while preserving the bare MCP names."
-    )
+        return base + "Claude Code may display callable tools with a runtime prefix over the same wbs tool."
+    return base
+
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore
@@ -2026,6 +2009,98 @@ def _record_write(path: str, text: str, written: list[str], bytes_written: dict[
     bytes_written[name] = len(text.encode("utf-8"))
 
 
+def handle_task_wbs(args: dict) -> dict:
+    """Explicit bounded check or read-only work-pack proposal; never a verdict."""
+    import wbs
+    _, repo = _task_roots(args)
+    td = canonical_task_dir(task_id=_req(args, "task_id"), repo_root=repo)
+    control = _validated_task_control(td)
+    if not control:
+        return _invalid_task_control_error("task_wbs", td)
+    action = args.get("action", "context")
+    if action == "context":
+        return _ok({"progress": wbs.task_progress(td, repo, control["run_id"])})
+    if action == "dispatch":
+        with receipt_stream_transaction(td):
+            if _validated_task_control(td) != control or task_control_status(td, control) != "open":
+                raise ValueError("WBS dispatch requires the same open parent task")
+            return _ok(wbs.work_pack(td, repo, control["run_id"], bind=True, ownership=args.get("ownership")))
+    if action != "verify":
+        raise ValueError("task_wbs action must be context, verify or dispatch")
+    timeout = args.get("timeout", 60)
+    if type(timeout) is not int or not 1 <= timeout <= 60:
+        raise ValueError("WBS verification timeout must be 1..60 seconds")
+    with receipt_stream_transaction(td):
+        current = _validated_task_control(td)
+        if current != control or task_control_status(td, current) != "open":
+            raise ValueError("WBS verification requires the same open task run")
+        return _ok(wbs.verify(td, repo, current["run_id"], _req(args, "leaf_id"), timeout=timeout))
+
+
+def handle_wbs(args: dict) -> dict:
+    """One public outcome tree; existing handlers retain execution authority."""
+    import wbs
+    action = _req(args, "action")
+    if action == "open" and not args.get("wbs_id"):
+        from _lib import native_wbs_id
+        selector = native_wbs_id(_req(args, "objective"))
+    else:
+        selector = _req(args, "wbs_id")
+    raw_id = selector[5:] if selector.startswith("WBS__") else selector
+    task_id = canonical_task_id(task_id=raw_id)
+    common = {"task_id": task_id}
+    if "workspace" in args:
+        common["workspace"] = args["workspace"]
+    routes = {
+        "open": ("task_start", {"fresh_run"}),
+        "context": ("task_context", set()),
+        "plan": ("write_plan", {"plan", "required_lenses"}),
+        "check": ("task_wbs", {"timeout"}),
+        "dispatch": ("task_wbs", {"ownership"}),
+        "verify": ("task_verify", set()),
+        "close": ("task_close", set()),
+        "block": ("task_blocked", {"blocked_reason", "unblock_condition"}),
+        "next": ("task_context", set()),
+    }
+    if action not in routes:
+        raise ValueError("unknown WBS action")
+    operation, fields = routes[action]
+    unknown = set(args) - ({"action", "wbs_id", "workspace"} | fields
+                          | ({"node_id"} if action == "check" else set())
+                          | ({"objective"} if action == "open" else set()))
+    if unknown:
+        raise ValueError("unexpected fields for WBS action: " + ", ".join(sorted(unknown)))
+    call_args = dict(common, **{key: args[key] for key in fields if key in args})
+    if action == "plan":
+        if wbs.from_plan(_req(args, "plan")) is None:
+            raise ValueError("WBS planning requires an outcome tree; begin with one coarse outcome and refine during work")
+    if action == "check":
+        call_args.update(action="verify", leaf_id=_req(args, "node_id"))
+    elif action == "dispatch":
+        call_args["action"] = "dispatch"
+    result = call_tool(operation, call_args)
+    if result.get("isError"):
+        return result
+    body = dict(result["structuredContent"], wbs_id="WBS__" + task_id[6:])
+    if action == "dispatch":
+        parked = call_tool("task_blocked", dict(common,
+            blocked_reason="WBS execution is handed off to its bound isolated worktree pool.",
+            unblock_condition="Integrate and close the exact bound work pack, then reopen this WBS for combined verification."))
+        if parked.get("isError"):
+            return parked
+        body.update(execution="awaiting_worktrees", next_action="Run the returned exact work pack through the batch workflow. Reopen this WBS after integration; no parent source writes while leads run.")
+    if action in {"open", "context", "next"}:
+        _, repo = _task_roots(common)
+        td = body["task_dir"]
+        state = wbs.read_state(td)
+        projection = body["task_context"].get("progress", {})
+        body["tree"] = state["nodes"] if state else []
+        body["progress"] = projection
+        if action == "next":
+            body["ready"] = wbs.ready_outcomes(state, projection) if state else []
+    return _ok(body)
+
+
 def handle_write_plan(args: dict) -> dict:
     allowed_args = {"task_id", "task_dir", "plan", "required_lenses", "workspace"}
     unknown_args = sorted(set(args) - allowed_args)
@@ -2120,12 +2195,17 @@ def _publish_write_plan(args, td, control, preflight):
     plan_path = os.path.join(td, "PLAN.md")
     control_path = task_control_file(td)
     try:
+        import wbs
+        wbs_state = wbs.prepare(td, checked_plan, control["run_id"])
+        state_path = os.path.join(td, wbs.STATE)
         snapshots = {
             path: _strict_regular_text_snapshot(path, max_size=1024 * 1024)
-            for path in (plan_path, control_path)
+            for path in (plan_path, control_path, state_path)
         }
         _record_write(plan_path, checked_plan, written, bytes_written)
         write_task_control(td, candidate_control)
+        if wbs_state is not None:
+            _record_write(state_path, json.dumps(wbs_state, sort_keys=True) + "\n", written, bytes_written)
         written.append("TASK.json")
         bytes_written["TASK.json"] = len(
             json.dumps(candidate_control, indent=2, sort_keys=True).encode("utf-8")
@@ -2148,7 +2228,7 @@ def _publish_write_plan(args, td, control, preflight):
 
 for _control_writer in (
     handle_task_start, handle_task_context, handle_task_close,
-    handle_task_blocked, handle_write_plan,
+    handle_task_blocked, handle_write_plan, handle_task_wbs,
     handle_goal_start, handle_goal_add_task, handle_goal_finish,
 ):
     _bind_control_writer(_control_writer)
@@ -2159,6 +2239,21 @@ del _bind_control_writer
 # ── Tool definitions ─────────────────────────────────────────────────────
 
 TOOL_DEFS: list[dict[str, Any]] = [
+    {"name": "wbs", "title": "Work through one WBS outcome tree",
+     "description": "One entry point for opening/resuming a WBS, rolling outcome planning, measured progress, explicit outcome checks, isolated worktree dispatch, independent verification and receipt-backed completion. Implementation tasks are internal execution envelopes.",
+     "inputSchema": {"type": "object", "properties": {
+         "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block"]},
+         "wbs_id": {"type": "string", "description": "Stable root ID; WBS__<id>, legacy TASK__<id>, or a bare safe ID."},
+         "objective": {"type": "string", "description": "For open without an ID, derive one stable root for this objective, including native Goals."},
+         "node_id": {"type": "string"}, "plan": {"type": "string"},
+         "required_lenses": {"type": "array", "items": {"type": "string"}},
+         "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+         "timeout": {"type": "integer", "minimum": 1, "maximum": 60},
+         "fresh_run": {"type": "boolean"}, "blocked_reason": {"type": "string"},
+         "unblock_condition": {"type": "string"},
+         "workspace": {"type": "string", "description": "Registered linked worktree for an execution envelope."}},
+         "required": ["action"], "additionalProperties": False},
+     "handler": handle_wbs},
     {"name": "goal_start", "title": "Start or sync a native goal",
      "description": "Create or update the active harness Goal from a native /goal objective. Goal is the public orchestration container and owns child harness tasks.",
      "inputSchema": {"type": "object", "properties": {
@@ -2214,6 +2309,17 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_context},
+    {"name": "task_wbs", "title": "Measure task WBS outcomes",
+     "description": "Read measured progress, execute one declared leaf assertion, or propose a work pack for the existing isolated-worktree batch workflow. Never supplies a task-close verdict. Define WBS in PLAN.md through write_plan first.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"},
+         "action": {"type": "string", "enum": ["context", "verify", "dispatch"]},
+         "leaf_id": {"type": "string"},
+         "timeout": {"type": "integer", "minimum": 1, "maximum": 60},
+         "ownership": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+         "workspace": {"type": "string"}},
+         "required": ["task_id"], "additionalProperties": False},
+     "handler": handle_task_wbs},
     {"name": "task_verify", "title": "Run task verification",
      "description": "Compute verification state from ordered hook-owned review and QA completion receipts. After substantive QA, use one fresh call before closing or entering the blocked path.",
      "inputSchema": {"type": "object", "properties": {
@@ -2257,7 +2363,8 @@ TOOLS = {t["name"]: t for t in TOOL_DEFS}
 
 
 def list_tools() -> list[dict]:
-    return [{k: v for k, v in t.items() if k != "handler"} for t in TOOL_DEFS]
+    # Preserve internal/legacy calls for existing clients; advertise one model.
+    return [{k: v for k, v in TOOLS["wbs"].items() if k != "handler"}]
 
 
 def call_tool(name: str, args: dict | None) -> dict:

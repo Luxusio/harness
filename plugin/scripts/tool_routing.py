@@ -82,11 +82,16 @@ def goal_hint_main() -> int:
             or data.get("arguments")
             or {}
         )
+        if isinstance(tool_input, str):
+            tool_input = json.loads(tool_input)
         objective = (
             " ".join(str(tool_input.get("objective") or "").split())
             if isinstance(tool_input, dict)
             else ""
         )
+        from _lib import native_wbs_is_synced
+        if native_wbs_is_synced(repo_root, objective):
+            return 0
         current = read_current_goal(repo_root)
         if (
             objective
@@ -99,11 +104,9 @@ def goal_hint_main() -> int:
         return 0
     sys.stdout.write(
         "[harness-goal] Native Goal was created. Invoke $harness:run; before "
-        "implementation call get_goal, then harness goal_start with that "
-        "objective; call goal_context; declare independent work with "
-        "goal_add_task with batch_requests before task_start, then follow "
-        "goal_next_task dispatch. For ordinary work, create and attach a child "
-        "task with task_start then goal_add_task. Do not treat "
+        "implementation call get_goal, then wbs(action=open, objective=...) "
+        "to open or resume one outcome tree. Use wbs context/plan/check/dispatch/verify/close. "
+        "Do not create a separate Goal/task planning ledger. Do not treat "
         "create_goal alone as harness activation."
     )
     return 0
