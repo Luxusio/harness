@@ -1,7 +1,7 @@
 ---
 tags: [harness, lifecycle, worktree, batch, mcp, contracts]
 summary: 한 세션이 과제마다 worktree 리드를 띄워 병렬로 진행한다. Claude는 native isolation을, Codex는 검증된 workspace와 native coordinator 신원 연결을 사용한다. 병합 후 통합 과제가 전체 검증과 설치를 맡는다.
-updated: 2026-09-29
+updated: 2026-10-20
 freshness: current
 invalidated_by_paths:
   - plugin/mcp/harness_server.py
@@ -42,6 +42,12 @@ freshness_updated: 2026-10-19T06:06:13Z
   Tests pin the frontmatter text only: Claude Code ignores an unknown
   frontmatter key, so nothing here proves the TTL takes effect at runtime.
 
+## Worktree completion intent and derived mechanism (2026-10-20)
+
+User source: current conversation, “야 지금 작업하면서 자꾸 worktree제대로 정리 안 하는 현상 있는데? 이것도 고쳐야겠는데?” The requested outcome is completion and cleanup of task-owned temporary worktrees while preserving their intended changes.
+
+Derived implementation decision: authenticate process-owned Codex native identity before eager workspace binding and reuse the existing binding/registration owners. This is an engineering mechanism for the requested completion outcome, not a claim that the user requested a particular authentication design. Retention of unresolved work remains required; successful integration and evidence harvest precede disposal.
+
 ## Requirement
 
 - One Claude Code session can run several harness tasks at once. The main
@@ -51,7 +57,7 @@ freshness_updated: 2026-10-19T06:06:13Z
   "Worktree location").
 - Codex uses the same pool with explicitly created registered worktrees and
   native lead agents. Its task tools pass canonical workspace while native cwd
-  may remain main; trusted hooks bind the authenticated coordinator to the
+  may remain main; the shared binding owner binds the authenticated coordinator to the
   worktree. See `plugin-codex/internal-skills/batch/SKILL.md` and the
   [Codex receipt protocol](patterns/ADR__single-direct-codex-receipt-protocol.md).
 - Each linked worktree is a separate checkout with its own write focus (C-09).
@@ -252,11 +258,16 @@ linked worktree of the repository the MCP server controls:
 Anything else is refused with `WORKSPACE_NOT_REGISTERED_WORKTREE` and nothing
 is written; a non-string value is refused with `reason: wrong_type`. A
 `workspace` equal to the control root resolves to that root. Codex echoes an
-explicit workspace and defers exact native identity to PostToolUse, even when
-the shared MCP process has a thread ID. Omitting workspace selects the control
-root. Without an exact environment thread identity that call also defers;
-with one, main retains eager binding under shared session locks that exclude
-conflicting open bindings in other workspaces.
+explicit workspace. An ordinary shared MCP host without authenticated native
+identity defers binding to genuine PostToolUse. A process-owned exact thread
+may bind an explicit workspace eagerly only after trusted native metadata, its actual native cwd,
+and every parent spawn edge authenticate that actor. An environment ID alone
+is insufficient. Omitting workspace selects the control root. Both direct
+and hook binding use the existing cross-root session locks and conflict fences;
+neither may acquire simultaneous authority for different open tasks. The
+native session cwd may remain main while the canonical task root is a linked
+worktree. Invalid workspace proof publishes no new exact binding or registration.
+Existing exact main-call behavior retains its shared session-lock protection.
 
 Task paths, focus markers, scaffolds, and `request_file` resolve under the
 workspace. Session identity (the Claude session hint), watcher diagnostics, and
@@ -264,6 +275,10 @@ gate-warn learnings stay on the control root, because only the main checkout
 receives `UserPromptSubmit` and every Claude lead shares the main session id.
 Codex leads instead have distinct authenticated native coordinator threads;
 their exact markers and registrations live under their own task workspaces.
+For a process-owned exact Codex actor, close and block snapshot, remove and
+validate cleanup of that same actor’s marker, even when an inherited session
+ID names its parent. Failure restores that actor’s marker; it must not alter
+the parent’s marker. Existing conflict fences remain intact.
 
 Claude hooks need no argument: they already resolve the repo from the payload `cwd`,
 and a nested reviewer/QA subagent spawned by a lead runs with the worktree as
@@ -571,9 +586,10 @@ remain outside S1 and use the ordinary sequential route.
   capabilities and reserves room for independent review/QA. Leads operate
   only their worktree WBS; close never updates a coordinator Goal ledger.
   A task-owned work pack releases its parent only after all requests integrate
-  and the exact pool closes. Codex MCP returns canonical workspace without eagerly binding its
-  own process identity; exact PostToolUse/native rollout validation owns that
-  binding. Missing identity never grants a receipt or successful close.
+  and the exact pool closes. Codex MCP returns canonical workspace and either
+  defers to genuine PostToolUse or binds its process-owned actor after native
+  metadata/cwd/full-ancestry authentication under the shared binding owner.
+  Missing or unverified identity never grants a receipt or successful close.
 - Cross-checkout protection: when a lead's Edit/Write target lies outside its
   worktree, the prewrite gate resolves the target's own harness root and
   applies the C-05 protected-artifact rules there, so the main checkout's or a
@@ -638,11 +654,16 @@ and blocker.
 
 - `tests/test_worktree_workspace.py`: accepted registered worktree; refusals for
   plain directory, other repository, relative/symlinked path, missing manifest,
-  forged back-pointer and non-string value; Codex routing defers exact binding; control root
+  forged back-pointer and non-string value; ordinary Codex routing defers exact
+  binding; control root
   treated as omitted; marker file named after the control-root session hint;
   `task_blocked` and full-lifecycle `task_close` leave the main checkout
   byte-identical; a lead close never touches coordinator state; hook
   start and stop receipts from `cwd=<worktree>` land in the worktree task.
+- `tests/test_codex_worktree_receipts.py`: authenticated native workspace open/context,
+  missing/unverified identity deferral, invalid workspace proof without fresh
+  authority, main native cwd distinct from target worktree, cross-root
+  conflicts/fences and only future nested lifecycle evidence.
 - `tests/test_mcp_tool_name_contracts.py`: the sole WBS tool declares optional
   `workspace`; retired tool aliases are rejected.
 - `tests/test_batch_finish.py` (scratch repos, lead worktrees under

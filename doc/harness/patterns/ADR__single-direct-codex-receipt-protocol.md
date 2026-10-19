@@ -64,9 +64,20 @@ out-of-order boundaries invalidate the lifecycle rather than selecting a
 convenient candidate.
 
 SessionStart may create the versioned root registration. A successful Harness
-`task_start` or `task_context` PostToolUse event is the binding authority because
-it contains both the exact hook session id and returned task/run. It publishes
-only `.active_sessions/<session-id>.json`. Eligibility is an explicit allowlist
+`task_start` or `task_context` PostToolUse event supplies exact hook session
+identity and returned task/run to the shared binding owner. A source MCP host
+may also bind an explicit workspace using its process-owned exact thread only
+after authenticating trusted
+native metadata, the actual session cwd and the complete parent spawn ancestry.
+The environment string alone, an echoed workspace, and repository hints do not
+authenticate that actor. Both paths validate the canonical registered task root
+and current run under the same cross-root locks and conflict fences, and publish
+only `.active_sessions/<session-id>.json`. The actual native cwd remains separate
+from a linked worktree task root. Invalid native proof on the workspace path
+creates no fresh authority. Existing exact main-call behavior keeps its shared
+session-lock protection.
+A valid exact binding may survive unavailable watcher registration so a later
+pre-spawn hook can restore it; this grants no receipt or close by itself. Eligibility is an explicit allowlist
 of the bare Codex ids and exact Harness MCP-qualified ids; suffix matches from
 other tool namespaces are not authority. `.session-hint`, `default.json`, and
 the legacy `.active` file are never promoted into receipt authority. Root and child rollout
@@ -101,7 +112,11 @@ Recovery holds all relevant task receipt locks in canonical path order through s
 revalidation, marker publication, and registration refresh.
 Any published conflict fence continues to revoke pre-conflict registrations even
 after competing tasks are parked. Ordinary task-close and parking marker cleanup
-must preserve these non-authoritative fences. Ordinary watcher restoration cannot acknowledge
+must preserve these non-authoritative fences. A process-owned exact Codex
+actor is also the identity used for terminal marker snapshot, cleanup, cleanup
+validation and rollback; an inherited parent session ID must not select a
+different marker. Unidentified MCP hosts and Claude retain their existing
+identity owner. Ordinary watcher restoration cannot acknowledge
 that history. Only a successful exact task result for the sole surviving
 generation may recover: invalidate all surviving registrations before clearing
 acknowledged fences, then register at the current rollout offset. Interruption or
@@ -110,12 +125,14 @@ be replayed into receipts.
 
 An explicit workspace binding additionally requires the successful task result
 to echo the exact requested canonical workspace and the target to be a
-revalidated linked worktree of the same repository. Explicit-workspace calls defer exact binding to native PostToolUse regardless
-of MCP process identity. Main calls without an exact environment thread identity
-also defer; main calls with that identity retain eager binding under shared
-session locks that exclude conflicting open bindings in other workspaces. Native cwd may remain the shared main checkout. The hook
-serializes binding across registered workspaces and rejects simultaneous open
-bindings for the same coordinator. The manager discovers only validated
+revalidated linked worktree of the same repository. Explicit-workspace calls
+without authenticated process-owned identity defer to native PostToolUse. A
+process-owned actor that passes the native proof above can bind directly through
+the same owner. Main calls without an exact environment thread identity also
+defer; exact main calls retain their shared session-lock protection. Native cwd
+may remain the shared main checkout. Both paths serialize binding across
+registered workspaces and reject simultaneous open bindings for the same
+coordinator. The manager discovers only validated
 worktrees and applies one shared watcher-thread cap; worktree-local registrations
 cannot manufacture an independent unlimited manager budget.
 Work remains fail-open while

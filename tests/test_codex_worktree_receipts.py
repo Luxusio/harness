@@ -4,6 +4,8 @@ import subprocess
 from unittest import mock
 
 def pytest_generate_tests(metafunc):
+    if "terminal_operation" in metafunc.fixturenames:
+        metafunc.parametrize("terminal_operation", ["task_close", "task_blocked"])
     if "fence_kind" in metafunc.fixturenames:
         metafunc.parametrize("fence_kind", ["normal", "overflow"])
     if "corruption" in metafunc.fixturenames:
@@ -53,6 +55,554 @@ def worktrees(tmp_path):
     git("worktree", "add", "-b", "lead", str(lead))
     git("worktree", "add", "-b", "sibling", str(sibling))
     return main, lead, sibling
+
+
+def _native_mcp_workspace(tmp_path, monkeypatch):
+    from test_worktree_workspace import _setup
+    main, lead = _setup(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    paths = native_tree(home, main)
+    return main, lead, paths
+
+
+def _seed_failed_native_diagnostics(root):
+    from datetime import datetime, timezone
+    path = root / "doc/harness/.watcher-diagnostics.json"
+    path.write_text(json.dumps({
+        "session_id": LEAD, "updated": datetime.now(timezone.utc).isoformat(),
+        "registration_present": False,
+        "last_registration_error": "previous native registration failed",
+    }))
+    return path
+
+
+def test_native_workspace_registration_recovery_clears_main_diagnostics(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, _payload, harness_server
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    # Isolate native readiness from this machine's unrelated Claude plugin
+    # heuristic; native authentication and registration remain production code.
+    monkeypatch.setattr(harness_server, "receipt_capability_warning", lambda: "")
+    args = {"task_id": "TASK__diagnostic_recovery", "workspace": str(lead)}
+    for tool in ("task_start", "task_context"):
+        diagnostics = _seed_failed_native_diagnostics(main)
+        result = _call(main, tool, args)
+        assert not result.get("isError"), result
+        status = _payload(result)["watcher_status"]
+        assert status["registration_present"] is True, status
+        assert status["receipts_recordable"] is True, status
+        assert not status["last_registration_error"], status
+        recovered = json.loads(diagnostics.read_text())
+        assert recovered["registration_present"] is True
+        assert not recovered["last_registration_error"]
+        assert watcher.registrations(str(lead))
+        assert not (lead / "doc/harness/.watcher-diagnostics.json").exists()
+
+
+def test_native_context_recovery_rebuilds_ungated_next_action(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, _payload, lib, harness_server
+    main, _, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(harness_server, "receipt_capability_warning", lambda: "")
+    args = {"task_id": "TASK__context_recovery", "workspace": str(main)}
+    assert not _call(main, "task_start", args).get("isError")
+    assert not _call(main, "write_plan", dict(args,
+        plan="# Plan\n\nValidate native context recovery.\n",
+        required_lenses=["review-code", "qa-cli"],
+    )).get("isError")
+    task = main / "doc/harness/tasks/TASK__context_recovery"
+    expected = lib.emit_compact_context(str(task))["next_action"]
+    assert "review" in expected.lower()
+    _seed_failed_native_diagnostics(main)
+    result = _call(main, "task_context", args)
+    assert not result.get("isError"), result
+    data = _payload(result)
+    assert data["watcher_status"]["receipts_recordable"] is True
+    assert data["task_context"]["next_action"] == expected, data
+
+
+def test_native_workspace_recovery_preserves_minimal_context_fallback(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, _payload, harness_server
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    args = {"task_id": "TASK__minimal_context", "workspace": str(lead)}
+    with mock.patch.object(harness_server, "emit_compact_context", side_effect=RuntimeError("context scan unavailable")) as emit:
+        result = _call(main, "task_start", args)
+    assert not result.get("isError"), result
+    data = _payload(result)
+    assert emit.call_count == 1
+    assert data["task_context"]["context_complete"] is False
+    assert data["task_context"]["source_write_allowed"] is False
+    assert data["start_status"] == "ready_with_warnings"
+    assert any(warning["code"] == "TASK_CONTEXT_DEFERRED" for warning in data["warnings"])
+    assert watcher.registrations(str(lead))
+
+
+def _assert_native_context_uses_one_snapshot(tmp_path, monkeypatch, *, registration_available):
+    from test_worktree_workspace import _call, _payload, harness_server, lib
+    import codex_hook_registration as hook
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(harness_server, "receipt_capability_warning", lambda: "")
+    args = {"task_id": "TASK__single_snapshot", "workspace": str(lead)}
+    assert not _call(main, "task_start", args).get("isError")
+    assert not _call(main, "write_plan", dict(args,
+        plan="# Plan\n\nOne consistent receipt observation.\n",
+        required_lenses=["review-code", "qa-cli"],
+    )).get("isError")
+    task = lead / "doc/harness/tasks/TASK__single_snapshot"
+    expected = lib.emit_compact_context(str(task))
+    observed = []
+    real_snapshot = lib._receipt_snapshot_unlocked
+
+    def read_then_append(task_dir):
+        snapshot = real_snapshot(task_dir)
+        observed.append(snapshot)
+        # Simulate an untrusted concurrent append after the immutable read.
+        # It cannot change this operation's context or readiness observation.
+        with (task / lib.RECEIPTS_NAME).open("a") as handle:
+            handle.write('{"event":"completed","verdict":"PASS"}\n')
+        return snapshot
+
+    _seed_failed_native_diagnostics(main)
+    with mock.patch.object(lib, "_receipt_snapshot_unlocked", side_effect=read_then_append) as reads, mock.patch.object(harness_server, "_watcher_status", wraps=harness_server._watcher_status) as statuses:
+        if registration_available:
+            result = _call(main, "task_context", args)
+        else:
+            with mock.patch.object(hook, "_ensure_with_deadline", return_value=False):
+                result = _call(main, "task_context", args)
+    assert not result.get("isError"), result
+    assert reads.call_count == 1, reads.call_args_list
+    assert not observed[0].entries
+    assert all(call.kwargs.get("snapshot") is observed[0] for call in statuses.call_args_list)
+    data = _payload(result)
+    assert data["task_context"]["runtime_verdict"] == expected["runtime_verdict"]
+    if registration_available:
+        assert data["watcher_status"]["receipts_recordable"] is True
+        assert data["task_context"]["next_action"] == expected["next_action"]
+    else:
+        assert data["watcher_status"]["receipts_recordable"] is False
+        assert any(warning["code"] == "RECEIPT_WATCHER_REGISTRATION_FAILED" for warning in data["warnings"])
+
+
+def test_native_workspace_context_shares_one_snapshot_after_registration_recovery(tmp_path, monkeypatch):
+    _assert_native_context_uses_one_snapshot(tmp_path, monkeypatch, registration_available=True)
+
+
+def test_native_workspace_context_shares_one_snapshot_when_registration_unavailable(tmp_path, monkeypatch):
+    _assert_native_context_uses_one_snapshot(tmp_path, monkeypatch, registration_available=False)
+
+
+def test_native_closed_workspace_context_reads_one_receipt_snapshot(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, _payload, harness_server, lib
+    from test_harness_mcp_server import _record_receipt_fixture
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_SESSION_ID", ROOT)
+    monkeypatch.setattr(harness_server, "receipt_capability_warning", lambda: "")
+    args = {"task_id": "TASK__closed_snapshot", "workspace": str(lead)}
+    assert not _call(main, "task_start", args).get("isError")
+    assert not _call(main, "write_plan", dict(args,
+        plan="# Plan\n\nClosed context projection uses its receipt snapshot.\n",
+        required_lenses=["review-code", "qa-cli"],
+    )).get("isError")
+    task = lead / "doc/harness/tasks/TASK__closed_snapshot"
+    for agent, kind, summary in (
+        ("closed-review", "harness:code-reviewer", "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"),
+        ("closed-qa", "harness:qa-cli", "VERDICT: PASS"),
+    ):
+        for event in ("started", "completed"):
+            _record_receipt_fixture(str(task), {
+                "agent_id": agent, "agent_type": kind, "event": event,
+                "verdict": "PASS" if event == "completed" else "",
+                "summary": summary if event == "completed" else "",
+                "source": "claude_hook", "runtime_id": f"claude:{LEAD}:{agent}",
+            })
+    closed = _call(main, "task_close", args)
+    assert not closed.get("isError"), closed
+    assert _payload(closed)["closed"] is True
+    assert not lib.resolve_session_task_binding(str(lead), LEAD)
+    assert not (lead / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json").exists()
+    with mock.patch.object(lib, "_receipt_snapshot_unlocked", wraps=lib._receipt_snapshot_unlocked) as reads:
+        result = _call(main, "task_context", args)
+    assert not result.get("isError"), result
+    assert reads.call_count == 1, reads.call_args_list
+    context = _payload(result)["task_context"]
+    assert context["status"] == "closed"
+    assert context["runtime_verdict"] == "PASS"
+    assert not lib.resolve_session_task_binding(str(lead), LEAD)
+
+
+def _native_terminal_fixture(tmp_path, monkeypatch, operation):
+    from test_worktree_workspace import _call
+    from test_harness_mcp_server import _record_receipt_fixture
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_SESSION_ID", ROOT)
+    args = {"task_id": "TASK__terminal_identity", "workspace": str(lead)}
+    assert not _call(main, "task_start", args).get("isError")
+    if operation == "task_close":
+        assert not _call(main, "write_plan", dict(args,
+            plan="# Plan\n\nExact actor cleanup.\n", required_lenses=["review-code", "qa-cli"],
+        )).get("isError")
+        task = lead / "doc/harness/tasks/TASK__terminal_identity"
+        for agent, kind, summary in (
+            ("terminal-review", "harness:code-reviewer", "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"),
+            ("terminal-qa", "harness:qa-cli", "VERDICT: PASS"),
+        ):
+            for event in ("started", "completed"):
+                _record_receipt_fixture(str(task), {
+                    "agent_id": agent, "agent_type": kind, "event": event,
+                    "verdict": "PASS" if event == "completed" else "",
+                    "summary": summary if event == "completed" else "",
+                    "source": "claude_hook", "runtime_id": f"claude:{LEAD}:{agent}",
+                })
+    else:
+        args.update(blocked_reason="park native child", unblock_condition="resume separately")
+    # A parent's independent focus must survive a native child's terminal action.
+    parent = _conflict_task(lead, "TASK__parent_identity")
+    parent_marker = lead / "doc/harness/tasks/.active_sessions" / f"{ROOT}.json"
+    parent_marker.write_text(json.dumps(dict(parent, session_id=ROOT)))
+    child_marker = parent_marker.with_name(f"{LEAD}.json")
+    assert child_marker.is_file()
+    return main, lead, args, parent_marker, child_marker
+
+
+def test_native_terminal_cleanup_uses_child_identity_preserving_parent(tmp_path, monkeypatch, terminal_operation):
+    from test_worktree_workspace import _call, lib
+    main, lead, args, parent, child = _native_terminal_fixture(tmp_path, monkeypatch, terminal_operation)
+    parent_before = parent.read_bytes()
+    result = _call(main, terminal_operation, args)
+    assert not result.get("isError"), result
+    assert not child.exists()
+    assert not (lead / "doc/harness/tasks/.active").exists()
+    assert parent.read_bytes() == parent_before
+    assert lib.resolve_session_task_binding(str(lead), ROOT)["task_dir"].endswith("/TASK__parent_identity")
+
+
+def test_native_terminal_cleanup_failure_restores_child_and_preserves_parent(tmp_path, monkeypatch, terminal_operation):
+    from test_worktree_workspace import _call, _snapshot, harness_server
+    main, lead, args, parent, child = _native_terminal_fixture(tmp_path, monkeypatch, terminal_operation)
+    before = _snapshot(lead)
+    real_unlink = harness_server.os.unlink
+    removed = []
+
+    def unlink_child_then_fail(path, *args, **kwargs):
+        if str(path) == str(child) and not removed:
+            real_unlink(path, *args, **kwargs)
+            removed.append(str(path))
+            raise OSError("child cleanup interrupted after unlink")
+        return real_unlink(path, *args, **kwargs)
+
+    with mock.patch.object(harness_server.os, "unlink", side_effect=unlink_child_then_fail):
+        result = _call(main, terminal_operation, args)
+    assert result.get("isError"), result
+    assert removed == [str(child)]
+    assert _snapshot(lead) == before
+
+
+def test_native_mcp_open_and_context_bind_worktree_with_actual_main_session_cwd(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, _payload, lib
+    import codex_lifecycle_watcher as watcher
+    main, lead, (_, lead_rollout, _) = _native_mcp_workspace(tmp_path, monkeypatch)
+    args = {"task_id": "TASK__native_lead", "workspace": str(lead)}
+    opened = _call(main, "task_start", args)
+    assert not opened.get("isError"), opened
+    data = _payload(opened)
+    task_dir = str(lead / "doc/harness/tasks/TASK__native_lead")
+    assert lib.resolve_session_task_binding(str(lead), LEAD)["task_dir"] == task_dir
+    registered = watcher.registrations(str(lead))
+    assert len(registered) == 1
+    assert registered[0]["session_cwd"] == str(main)
+    assert registered[0]["run_id"] == data["run_id"]
+    assert registered[0]["offset"] == lead_rollout.stat().st_size
+    assert not lib.resolve_session_task_binding(str(main), LEAD)
+    assert watcher.registrations(str(main)) == []
+    assert not (main / "doc/harness/tasks/TASK__native_lead").exists()
+    # Resuming context must preserve the same future-only observation boundary.
+    with lead_rollout.open("a") as handle:
+        handle.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count"}}) + "\n")
+    context = _call(main, "task_context", args)
+    assert not context.get("isError"), context
+    assert _payload(context)["run_id"] == data["run_id"]
+    assert watcher.registrations(str(lead))[0]["offset"] == registered[0]["offset"]
+
+
+def test_native_mcp_registration_observes_only_future_nested_lens_lifecycle(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from test_worktree_workspace import _call, _payload
+    from test_codex_lifecycle_watcher import _spawn_events, _delivery, _snapshot, _child_events, _write_jsonl, _rollout_path
+    import codex_lifecycle_watcher as watcher
+    main, lead, (_, lead_rollout, _) = _native_mcp_workspace(tmp_path, monkeypatch)
+    final = "VERDICT: PASS\nPassed."
+    delivery = _delivery("/root/lead/qa_cli", final)
+    delivery["payload"]["recipient"] = "/root/lead"
+
+    def append(events):
+        with lead_rollout.open("a") as handle:
+            for event in events:
+                handle.write(json.dumps(event) + "\n")
+
+    append(_spawn_events(LEAD, LENS, "qa_cli", "/root/lead/qa_cli", "call_historical") + [delivery])
+    opened = _call(main, "task_start", {"task_id": "TASK__future_lens", "workspace": str(lead)})
+    assert not opened.get("isError"), opened
+    data = _payload(opened)
+    registration = watcher.registrations(str(lead))[0]
+    receipts = []
+
+    def observe():
+        return watcher.watch(str(lead), LEAD, str(lead_rollout), registration["offset"],
+            session_cwd=str(main), task_id=data["task_id"], run_id=data["run_id"],
+            idle_seconds=1, expected_generation=watcher._registration_generation(registration))
+
+    with mock.patch.object(watcher, "record_subagent_receipt", side_effect=lambda task, receipt: receipts.append((task, receipt)) or receipt), mock.patch.object(watcher, "receipt_snapshot", side_effect=lambda _: _snapshot([receipt for _, receipt in receipts])):
+        assert observe() == 0
+        assert receipts == []
+        fresh_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe71"
+        fresh_path = "/root/lead/qa_cli_future"
+        child = _child_events(LEAD, fresh_id, fresh_path, str(main), final)
+        child[0]["payload"]["session_id"] = ROOT
+        child[0]["payload"]["source"]["subagent"]["thread_spawn"]["depth"] = 2
+        child[4]["payload"]["author"] = "/root/lead"
+        _write_jsonl(_rollout_path(tmp_path / "codex", fresh_id), child)
+        future_delivery = _delivery(fresh_path, final)
+        future_delivery["payload"]["recipient"] = "/root/lead"
+        future_events = _spawn_events(LEAD, fresh_id, "qa_cli_future", fresh_path, "call_future")
+        # Shared fixtures predate this real public-open run. A genuine future
+        # spawn must also pass the production UUIDv7 run-time boundary.
+        future_events[0]["timestamp"] = datetime.now(timezone.utc).isoformat()
+        append(future_events + [future_delivery])
+        assert observe() == 0
+    assert [receipt["event"] for _, receipt in receipts] == ["started", "completed"]
+    assert receipts[-1][1]["verdict"] == "PASS"
+    assert {task for task, _ in receipts} == {data["task_dir"]}
+    assert all(receipt["task_run_id"] == data["run_id"] for _, receipt in receipts)
+
+
+def test_native_mcp_context_establishes_first_exact_workspace_binding(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, lib
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    args = {"task_id": "TASK__native_context", "workspace": str(lead)}
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    assert not _call(main, "task_start", args).get("isError")
+    assert not lib.resolve_session_task_binding(str(lead), LEAD)
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    result = _call(main, "task_context", args)
+    assert not result.get("isError"), result
+    assert lib.resolve_session_task_binding(str(lead), LEAD)
+    assert watcher.registrations(str(lead))[0]["session_cwd"] == str(main)
+
+
+def test_invalid_native_mcp_proof_cannot_publish_workspace_authority(tmp_path, monkeypatch, corruption):
+    from test_worktree_workspace import _call, lib
+    from test_codex_lifecycle_watcher import _write_jsonl
+    import codex_lifecycle_watcher as watcher
+    main, lead, (root_rollout, lead_rollout, _) = _native_mcp_workspace(tmp_path, monkeypatch)
+    events = [json.loads(line) for line in lead_rollout.read_text().splitlines()]
+    meta = events[0]["payload"]
+    if corruption == "depth":
+        meta["source"]["subagent"]["thread_spawn"]["depth"] = 2
+    elif corruption == "parent":
+        meta["parent_thread_id"] = LENS
+    elif corruption == "session":
+        meta["session_id"] = LEAD
+    elif corruption == "path":
+        meta["agent_path"] = "/root/sibling"
+    else:
+        parent = [json.loads(line) for line in root_rollout.read_text().splitlines()]
+        if corruption == "spawn_output":
+            parent[-1]["payload"]["output"] = {"agent_id": "/root/sibling"}
+        elif corruption == "missing_activity":
+            del parent[2]
+        else:
+            parent = parent[:1]
+        _write_jsonl(root_rollout, parent)
+    _write_jsonl(lead_rollout, events)
+    args = {"task_id": "TASK__invalid_native", "workspace": str(lead)}
+    for tool in ("task_start", "task_context"):
+        _call(main, tool, args)  # Refusal or ordinary deferred binding are safe.
+        for root in (main, lead):
+            assert not lib.resolve_session_task_binding(str(root), LEAD)
+            assert not (root / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json").exists()
+            assert watcher.registrations(str(root)) == []
+
+
+def test_native_mcp_rejects_cwd_mismatch_before_fresh_authority(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, lib
+    from test_codex_lifecycle_watcher import _write_jsonl
+    import codex_lifecycle_watcher as watcher
+    main, lead, (_, lead_rollout, _) = _native_mcp_workspace(tmp_path, monkeypatch)
+    events = [json.loads(line) for line in lead_rollout.read_text().splitlines()]
+    events[0]["payload"]["cwd"] = str(lead)
+    _write_jsonl(lead_rollout, events)
+    _call(main, "task_start", {"task_id": "TASK__bad_cwd", "workspace": str(lead)})
+    assert not lib.resolve_session_task_binding(str(lead), LEAD)
+    assert not (lead / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json").exists()
+    assert watcher.registrations(str(lead)) == []
+
+
+def test_native_mcp_unavailable_registration_preserves_valid_binding_without_receipts(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, _payload, lib
+    import codex_hook_registration as hook
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    args = {"task_id": "TASK__registration_unavailable", "workspace": str(lead)}
+    with mock.patch.object(hook, "_ensure_with_deadline", return_value=False):
+        opened = _call(main, "task_start", args)
+    assert not opened.get("isError"), opened
+    assert lib.resolve_session_task_binding(str(lead), LEAD)["run_id"] == _payload(opened)["run_id"]
+    assert watcher.registrations(str(lead)) == []
+    task = lead / "doc/harness/tasks/TASK__registration_unavailable"
+    assert not (task / lib.RECEIPTS_NAME).exists()
+    assert _call(main, "task_close", args).get("isError")
+    # A later context recovers from current EOF; unobserved history is not replayed.
+    assert not _call(main, "task_context", args).get("isError")
+    assert watcher.registrations(str(lead))
+
+
+def test_native_mcp_registration_interruption_does_not_grant_receipt_pass(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, lib
+    import codex_hook_registration as hook
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    args = {"task_id": "TASK__registration_interrupted", "workspace": str(lead)}
+    with mock.patch.object(hook, "_ensure_with_deadline", side_effect=RuntimeError("interrupted")):
+        _call(main, "task_start", args)
+    assert lib.resolve_session_task_binding(str(lead), LEAD)
+    assert watcher.registrations(str(lead)) == []
+    task = lead / "doc/harness/tasks/TASK__registration_interrupted"
+    assert not (task / lib.RECEIPTS_NAME).exists()
+    assert _call(main, "task_close", args).get("isError")
+
+
+def test_concurrent_native_main_and_workspace_open_cannot_steal_focus(tmp_path, monkeypatch):
+    import os
+    import sys
+    from pathlib import Path
+    from test_worktree_workspace import lib
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    requests = [(main, {"task_id": "TASK__concurrent_main"}),
+                (lead, {"task_id": "TASK__concurrent_lead", "workspace": str(lead)})]
+    script = """import json, sys
+sys.path.insert(0, sys.argv[1])
+from test_worktree_workspace import _call
+from pathlib import Path
+sys.stdin.readline()
+print(json.dumps(_call(Path(sys.argv[2]), 'task_start', json.loads(sys.argv[3]))))
+"""
+    processes = [subprocess.Popen(
+        [sys.executable, "-c", script, str(Path(__file__).resolve().parent), str(main), json.dumps(args)],
+        cwd=main, env=dict(os.environ), stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) for _, args in requests]
+    try:
+        for process in processes:
+            process.stdin.write("go\n")
+            process.stdin.flush()
+        results = []
+        for (root, _), process in zip(requests, processes):
+            stdout, stderr = process.communicate(timeout=30)
+            assert process.returncode == 0, stderr
+            results.append((root, json.loads(stdout)))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    bound = [root for root, _ in results if lib.resolve_session_task_binding(str(root), LEAD)]
+    assert len(bound) <= 1, results
+    if not bound:
+        assert any("conflicts" in lib.read_active_session_marker(str(root), LEAD)
+                   for root, _ in requests), results
+        assert all(watcher.registrations(str(root)) == [] for root, _ in requests)
+
+
+def test_native_workspace_focus_refuses_sibling_and_preserves_first_registration(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, lib
+    import codex_lifecycle_watcher as watcher
+    main, lead, sibling = worktrees(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    native_tree(home, main)
+    args = {"task_id": "TASK__first", "workspace": str(lead)}
+    assert not _call(main, "task_start", args).get("isError")
+    registered = watcher.registrations(str(lead))
+    rejected = _call(main, "task_start", {"task_id": "TASK__sibling", "workspace": str(sibling)})
+    assert rejected.get("isError"), rejected
+    assert lib.resolve_session_task_binding(str(lead), LEAD)
+    assert not lib.resolve_session_task_binding(str(sibling), LEAD)
+    assert watcher.registrations(str(lead)) == registered
+    assert not (sibling / "doc/harness/tasks/TASK__sibling").exists()
+
+
+def _assert_native_workspace_refuses_competing_task(tmp_path, monkeypatch, *, existing, tool):
+    from test_worktree_workspace import _call, _snapshot, lib
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    second = {"task_id": "TASK__second_focus", "workspace": str(lead)}
+    if existing:
+        # An existing open run need not hold focus. Seed only its ordinary
+        # task-control fixture; both competing operations use public WBS.
+        _conflict_task(lead, second["task_id"])
+    first = {"task_id": "TASK__first_focus", "workspace": str(lead)}
+    assert not _call(main, "task_start", first).get("isError")
+    before = _snapshot(lead)
+    binding = lib.resolve_session_task_binding(str(lead), LEAD)
+    registration = watcher.registrations(str(lead))
+    assert binding and registration
+    request = dict(second)
+    if existing and tool == "task_start":
+        request["fresh_run"] = True
+    result = _call(main, tool, request)
+    assert result.get("isError"), result
+    assert _snapshot(lead) == before
+    assert lib.resolve_session_task_binding(str(lead), LEAD) == binding
+    assert watcher.registrations(str(lead)) == registration
+    assert "conflicts" not in lib.read_active_session_marker(str(lead), LEAD)
+    return main, lead, first, second
+
+
+def test_native_workspace_open_refuses_new_competing_task_before_scaffold(tmp_path, monkeypatch):
+    from test_worktree_workspace import _call, lib
+    main, lead, first, second = _assert_native_workspace_refuses_competing_task(
+        tmp_path, monkeypatch, existing=False, tool="task_start")
+    assert not _call(main, "task_blocked", dict(first,
+        blocked_reason="park before switching focus", unblock_condition="resume separately")).get("isError")
+    result = _call(main, "task_start", second)
+    assert not result.get("isError"), result
+    assert lib.resolve_session_task_binding(str(lead), LEAD)["task_dir"].endswith("/TASK__second_focus")
+
+
+def test_native_workspace_open_refuses_competing_run_rotation(tmp_path, monkeypatch):
+    _assert_native_workspace_refuses_competing_task(
+        tmp_path, monkeypatch, existing=True, tool="task_start")
+
+
+def test_native_workspace_context_refuses_competing_exact_binding(tmp_path, monkeypatch):
+    _assert_native_workspace_refuses_competing_task(
+        tmp_path, monkeypatch, existing=True, tool="task_context")
+
+
+def test_native_workspace_cannot_bypass_existing_cross_root_fence(tmp_path, monkeypatch, fence_kind):
+    from test_worktree_workspace import _call, lib
+    import codex_lifecycle_watcher as watcher
+    main, lead, _ = _native_mcp_workspace(tmp_path, monkeypatch)
+    conflicts = [_conflict_task(main, "TASK__fenced_a"), _conflict_task(main, "TASK__fenced_b")]
+    fence = {"session_id": LEAD, "conflicts": conflicts}
+    if fence_kind == "overflow":
+        fence.update(conflicts=[], conflicts_overflow=True)
+    marker = main / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps(fence))
+    result = _call(main, "task_start", {"task_id": "TASK__fence_bypass", "workspace": str(lead)})
+    assert result.get("isError"), result
+    assert json.loads(marker.read_text()) == fence
+    assert not lib.resolve_session_task_binding(str(lead), LEAD)
+    assert watcher.registrations(str(lead)) == []
+    assert not (lead / "doc/harness/tasks/TASK__fence_bypass").exists()
 
 
 def test_nested_coordinator_and_lens_emit_only_bound_worktree_receipts(tmp_path, monkeypatch):

@@ -108,11 +108,15 @@ try:
         REGISTERED as _REGISTRATION_REGISTERED,
         restore_watcher_registration as _restore_watcher_registration,
         _live_conflicts as _codex_live_conflicts,
+        authenticate_native_session as _authenticate_native_session,
+        register_native_task as _register_native_task,
     )
 except Exception:  # pragma: no cover - reported as a positive Codex failure
     _REGISTRATION_REGISTERED = "registered"
     _restore_watcher_registration = None
     _codex_live_conflicts = None
+    _authenticate_native_session = None
+    _register_native_task = None
 
 
 def _control_root() -> str:
@@ -328,7 +332,10 @@ def _server_runtime() -> str:
 TASK_START_REGISTRATION_BUDGET_SECONDS = 0.5
 
 
-def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
+def _register_task_start_watcher(
+    repo_root: str, task_dir: str, control: dict, *, session_cwd: str = "",
+    diagnostics_root: str = "",
+):
     """Register directly only when this MCP process owns an exact Codex id.
 
     Ordinary Codex MCP hosts have no such id; their successful result is bound
@@ -344,7 +351,7 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
         # Ordinary Codex MCP calls have no root-session identity. The exact
         # binding is established by PostToolUse from the successful result.
         return None
-    payload_data = {"cwd": repo_root, "session_id": session_id}
+    payload_data = {"cwd": session_cwd or repo_root, "session_id": session_id}
     payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
     outcome: dict = {}
 
@@ -365,12 +372,20 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
         reason = "codex_hook_registration is unavailable in this plugin tree"
     else:
         try:
-            registered = bool(_restore_watcher_registration(
-                payload,
-                budget_seconds=TASK_START_REGISTRATION_BUDGET_SECONDS,
-                bind_fn=exact_bind,
-                status_out=outcome,
-            ))
+            if session_cwd:
+                registered = bool(_register_native_task and _register_native_task(
+                    session_cwd, session_id, repo_root, task_dir,
+                    os.path.basename(task_dir), str(control.get("run_id") or ""),
+                    budget_seconds=TASK_START_REGISTRATION_BUDGET_SECONDS,
+                    status_out=outcome,
+                ))
+            else:
+                registered = bool(_restore_watcher_registration(
+                    payload,
+                    budget_seconds=TASK_START_REGISTRATION_BUDGET_SECONDS,
+                    bind_fn=exact_bind,
+                    status_out=outcome,
+                ))
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
 
@@ -386,7 +401,7 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
             "last_registration_error": "",
             "last_registration_note": "",
             "root_thread_id": registered_thread_id or None,
-        }, repo_root)
+        }, diagnostics_root or repo_root)
         return {
             "registered": True,
             "reason": "",
@@ -407,18 +422,21 @@ def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
         "last_registration_error": reason,
         "last_registration_note": "",
         "root_thread_id": outcome.get("thread_id") or session_id or None,
-    }, repo_root)
+    }, diagnostics_root or repo_root)
     return {"registered": False, "reason": reason}
 
 
 def _apply_task_start_registration_status(
-    status: dict, registration, task_dir: str, run_id: str,
+    status: dict, registration, task_dir: str, run_id: str, *, snapshot=None,
 ) -> dict:
     """Keep the current response fail-closed if diagnostics persistence fails."""
     if (
         registration is None
         or registration["registered"]
-        or _run_has_receipts(task_dir, run_id)
+        or (
+            _run_has_receipts(task_dir, run_id) if snapshot is None
+            else _run_has_receipts(task_dir, run_id, snapshot)
+        )
     ):
         return status
     status = dict(status)
@@ -529,9 +547,8 @@ def _run_has_receipts(task_dir: str, run_id: str, snapshot=None) -> bool:
     # bytes, so the agent was sent to spend review and QA that could never
     # produce a PASS — the waste this REQ exists to prevent.
     # A caller that already holds a snapshot must pass it: handlers under the
-    # single-read invariant (task_context, task_verify, task_close) may not take
-    # a second view of the stream, and the suite enforces that. task_start holds
-    # no snapshot and is not under the invariant, so it reads here.
+    # single-read invariant may not take a second view of the stream, and the
+    # suite enforces that. Calls without an operation snapshot read here.
     if snapshot is None:
         try:
             snapshot = receipt_snapshot(task_dir)
@@ -1119,13 +1136,17 @@ def _task_resume_next_action(status: str) -> str:
 
 
 def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
-    """Serialize eager process-owned main focus with all worktree hook binds."""
-    if _server_runtime() != "codex" or args.get("workspace") is not None:
+    """Serialize exact process-owned focus with all worktree hook binds."""
+    if _server_runtime() != "codex":
         with active_session_transaction(_task_roots(args)[1]):
             return operation(args)
     control_root, repo_root = _task_roots(args)
     session_id = _current_session_identity(control_root)
-    if not session_id:
+    native_cwd = ""
+    workspace = args.get("workspace") is not None
+    if workspace and session_id and _authenticate_native_session is not None:
+        native_cwd = _authenticate_native_session(session_id, control_root)
+    if not session_id or (workspace and not native_cwd):
         with active_session_transaction(repo_root):
             return operation(args)
     if _codex_workspace_roots is None or _codex_live_conflicts is None:
@@ -1157,13 +1178,69 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
             if root == repo_root:
                 if unresolved:
                     return _err("task focus refused: unresolved coordinator task conflicts")
+                if workspace:
+                    requested = canonical_task_dir(
+                        task_id=args.get("task_id"), slug=args.get("slug"),
+                        task_dir=args.get("task_dir"), repo_root=repo_root,
+                    )
+                    if not _session_resumes(repo_root, requested, session_id):
+                        return _err(
+                            "task focus refused: another open task owns this Codex coordinator",
+                            data={"next_action": "Finish or park the focused task before activating another task."},
+                        )
                 continue
             if resolve_session_task_binding(root, session_id) or unresolved:
                 return _err(
                     "task focus refused: another worktree owns this Codex coordinator",
                     data={"next_action": "Finish or park the bound worktree task before activating another task."},
                 )
-        return operation(args, defer_binding=True) if fenced else operation(args)
+        # Workspace execution creates/reads the run without publishing exact
+        # authority. The shared binder rechecks it after these nonreentrant
+        # focus locks and the task receipt lock have been released.
+        binding_handoff = {} if workspace else None
+        if workspace:
+            result = operation(args, defer_binding=True, binding_handoff=binding_handoff)
+        else:
+            result = operation(args, defer_binding=True) if fenced else operation(args)
+    if not workspace or result.get("isError"):
+        return result
+    data = result.get("structuredContent", {})
+    task_dir = str(data.get("task_dir") or "")
+    control = read_task_control(task_dir)
+    if (
+        task_control_status(task_dir, control, snapshot=binding_handoff["snapshot"]) != "open"
+        or control.get("run_id") != data.get("run_id")
+    ):
+        return result
+    registration = _register_task_start_watcher(
+        repo_root, task_dir, control, session_cwd=native_cwd,
+        diagnostics_root=control_root,
+    )
+    status = _watcher_status(
+        task_dir=task_dir, task_id=str(data.get("task_id") or ""),
+        run_id=str(data.get("run_id") or ""), snapshot=binding_handoff["snapshot"],
+    )
+    status = _apply_task_start_registration_status(
+        status, registration, task_dir, str(data.get("run_id") or ""),
+        snapshot=binding_handoff["snapshot"],
+    )
+    data["watcher_status"] = status
+    if isinstance(data.get("task_context"), dict):
+        # Re-gate the original routing against refreshed registration readiness,
+        # keeping the operation's one immutable receipt view and minimal fallback.
+        data["task_context"] = _gate_next_action(binding_handoff["context"], status)
+        if "next_action" in data:
+            data["next_action"] = data["task_context"].get("next_action", "")
+    if registration is not None and not registration["registered"]:
+        data.setdefault("warnings", []).append({
+            "code": "RECEIPT_WATCHER_REGISTRATION_FAILED",
+            "stage": "watcher_registration",
+            "message": "Codex receipt watcher registration failed for this exact task run.",
+            "detail": registration["reason"],
+        })
+        if "start_status" in data:
+            data["start_status"] = "ready_with_warnings"
+    return _ok(data)
 
 
 def handle_task_start(args: dict) -> dict:
@@ -1188,7 +1265,9 @@ def handle_task_start(args: dict) -> dict:
     return _with_codex_main_focus(args, _handle_task_start)
 
 
-def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
+def _handle_task_start(
+    args: dict, *, defer_binding: bool = False, binding_handoff: dict | None = None,
+) -> dict:
     td = _selector_opt(args, "task_dir")
     ti = _selector_opt(args, "task_id")
     sl = _selector_opt(args, "slug")
@@ -1482,6 +1561,12 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
             transaction_stack.close()
         raise
 
+    if preserved_snapshot is None:
+        try:
+            preserved_snapshot = receipt_snapshot(task_dir)
+        except BaseException:
+            transaction_stack.close()
+            raise
     try:
         ctx = emit_compact_context(task_dir, preserved_snapshot)
         if "error" in ctx:
@@ -1587,7 +1672,10 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
     )
     status = _apply_task_start_registration_status(
         status, registration, task_dir, str(resumed.get("run_id") or ""),
+        snapshot=preserved_snapshot,
     )
+    if binding_handoff is not None:
+        binding_handoff.update({"context": ctx, "snapshot": preserved_snapshot})
     ctx = _gate_next_action(ctx, status)
 
     return _ok({
@@ -1647,7 +1735,9 @@ def handle_task_context(args: dict) -> dict:
     return _with_codex_main_focus(args, _handle_task_context)
 
 
-def _handle_task_context(args: dict, *, defer_binding: bool = False) -> dict:
+def _handle_task_context(
+    args: dict, *, defer_binding: bool = False, binding_handoff: dict | None = None,
+) -> dict:
     ti = _req(args, "task_id")
     control_root, repo_root = _task_roots(args)
     td = canonical_task_dir(task_id=ti, repo_root=repo_root)
@@ -1697,6 +1787,8 @@ def _handle_task_context(args: dict, *, defer_binding: bool = False) -> dict:
     status = _watcher_status(
         task_dir=td, task_id=ti, run_id=context_run_id, snapshot=snapshot,
     )
+    if binding_handoff is not None:
+        binding_handoff.update({"context": ctx, "snapshot": snapshot})
     ctx = _gate_next_action(ctx, status)
     return _ok({
         "task_dir": td,
@@ -1824,11 +1916,15 @@ def handle_task_close(args: dict) -> dict:
                 "task_dir": td, "status": locked_status,
             })
         preclose_control = dict(st)
-        preclose_marker_snapshot = active_marker_snapshot(control_root)
+        session_id = (
+            (_current_session_identity(control_root) or None)
+            if _server_runtime() == "codex" else None
+        )
+        preclose_marker_snapshot = active_marker_snapshot(control_root, session_id=session_id)
         try:
             publish_task_close(td, st, receipt_fingerprint=receipt_fingerprint)
-            clear_active_marker(control_root, td, strict=True)
-            if os.path.realpath(resolve_active_task_dir(control_root) or "") == os.path.realpath(td):
+            clear_active_marker(control_root, td, session_id=session_id, strict=True)
+            if os.path.realpath(resolve_active_task_dir(control_root, session_id=session_id) or "") == os.path.realpath(td):
                 raise RuntimeError("active task marker cleanup unavailable")
 
         except Exception as exc:
@@ -1896,13 +1992,17 @@ def _handle_task_blocked_locked(td: str, *, reason: str, unblock: str) -> dict:
     # Markers live in the checkout that owns the task (a batch lead's worktree
     # or the main checkout), exactly as task_close resolves them.
     task_root = find_harness_root(td) or find_repo_root(td)
-    marker_snapshot = active_marker_snapshot(task_root)
+    session_id = (
+        (_current_session_identity(task_root) or None)
+        if _server_runtime() == "codex" else None
+    )
+    marker_snapshot = active_marker_snapshot(task_root, session_id=session_id)
     blocked_snapshot = {
         blocked_path: _strict_regular_text_snapshot(blocked_path, max_size=256 * 1024)
     }
     try:
         _atomic_write_text(blocked_path, blocked_md)
-        clear_active_marker(task_root, td, strict=True)
+        clear_active_marker(task_root, td, session_id=session_id, strict=True)
     except Exception:
         _restore_text_snapshots(blocked_snapshot)
         restore_active_marker_snapshot(marker_snapshot)

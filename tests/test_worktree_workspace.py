@@ -323,7 +323,7 @@ def test_full_lifecycle_closes_in_worktree_and_leaves_main_untouched(tmp_path):
     assert not (main / "doc/harness/goals").exists()
 
 
-def test_codex_runtime_routes_workspace_without_eager_native_binding(tmp_path):
+def test_codex_runtime_routes_workspace_without_authenticated_native_binding(tmp_path):
     repo = _setup(tmp_path)
     main, wt = repo
     with mock.patch.dict(os.environ, {"HARNESS_RUNTIME": "codex", "CODEX_THREAD_ID": SID}):
@@ -338,6 +338,19 @@ def test_codex_runtime_routes_workspace_without_eager_native_binding(tmp_path):
         context = _payload(_call(main, "task_context", {"task_id": "TASK__lead", "workspace": str(wt)}))
     assert context["workspace"] == str(wt)
     assert not lib.resolve_session_task_binding(str(wt), SID)
+
+
+def test_codex_workspace_without_process_identity_does_not_promote_repo_hint(tmp_path, monkeypatch):
+    main, wt = _setup(tmp_path)
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
+    for tool in ("task_start", "task_context"):
+        result = _call(main, tool, {"task_id": "TASK__lead", "workspace": str(wt)})
+        assert not result.get("isError"), result
+        assert _payload(result)["workspace"] == str(wt)
+        assert not lib.resolve_session_task_binding(str(wt), SID)
+        assert f"{SID}.json" not in _markers(wt)
 
 
 def test_non_string_workspace_is_refused_before_resolution(tmp_path):

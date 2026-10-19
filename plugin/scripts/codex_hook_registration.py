@@ -14,7 +14,11 @@ from typing import Callable
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from codex_lifecycle_watcher import ensure, invalidate_registration, workspace_roots
+from codex_lifecycle_watcher import (
+    ensure, invalidate_registration, workspace_roots,
+    _find_rollout, _open_trusted_file, _sessions_root, _native_meta,
+    _path_matches_handle, _coordinator_identity, MAX_CHILD_BYTES,
+)
 from _lib import (
     active_session_transaction,
     MAX_BINDING_CONFLICTS, MAX_CONFLICT_BYTES,
@@ -152,6 +156,39 @@ def _registration_identity(payload: bytes) -> tuple[str, str]:
     else:
         thread_id = env_id if THREAD_RE.fullmatch(env_id) else ""
     return (cwd, thread_id) if thread_id else ("", "")
+
+
+def authenticate_native_session(thread_id: str, control_root: str) -> str:
+    """Return a process-owned actor's trusted native cwd in this repository.
+
+    The environment supplies only a candidate ID. Native descriptor metadata
+    and every parent spawn edge must authenticate it before fresh authority.
+    """
+    if not THREAD_RE.fullmatch(thread_id) or os.environ.get("CODEX_THREAD_ID") != thread_id:
+        return ""
+    try:
+        path = _find_rollout(thread_id)
+        opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_CHILD_BYTES) if path else None
+        if opened is None:
+            return ""
+        handle, _ = opened
+        try:
+            meta = _native_meta(handle)
+            raw_cwd = meta.get("cwd")
+            if not isinstance(raw_cwd, str) or not os.path.isabs(raw_cwd):
+                return ""
+            cwd = os.path.realpath(raw_cwd)
+            roots = workspace_roots(control_root)
+            native_root = find_harness_root(cwd)
+            if not roots or not native_root or os.path.realpath(native_root) not in roots:
+                return ""
+            if not _coordinator_identity(thread_id, cwd):
+                return ""
+            return cwd if _path_matches_handle(path, _sessions_root(), handle) else ""
+        finally:
+            handle.close()
+    except Exception:
+        return ""
 
 
 def _bound_workspace_roots(control_root: str, thread_id: str) -> list[str] | None:
@@ -304,6 +341,38 @@ def _register_task_result(payload: bytes, deadline: float, status_out: dict | No
             control_root = resolve_registered_worktree(roots[0], requested_workspace) or roots[0]
         except (ValueError, RuntimeError):
             return False
+    return _bind_task_session(cwd, thread_id, control_root, task_dir, task_id, run_id, deadline, status_out)
+
+
+def register_native_task(
+    session_cwd: str, thread_id: str, control_root: str,
+    task_dir: str, task_id: str, run_id: str,
+    *, budget_seconds: float = 0.5, status_out: dict | None = None,
+) -> bool:
+    """Bind an authenticated process-owned native actor through the hook owner."""
+    # Native ancestry discovery is separately bounded by the trusted rollout
+    # reader. It can exceed the watcher budget for a long-running coordinator;
+    # authenticate before starting that budget, and always before publication.
+    if authenticate_native_session(thread_id, control_root) != session_cwd:
+        if status_out is not None:
+            status_out.update({"status": NOT_APPLICABLE, "reason": "native session proof was unavailable"})
+        return False
+    deadline = time.monotonic() + max(0.0, float(budget_seconds))
+    return bool(_call_with_deadline(
+        lambda: _bind_task_session(
+            session_cwd, thread_id, control_root, task_dir, task_id, run_id, deadline, status_out,
+        ), deadline,
+    ))
+
+
+def _bind_task_session(
+    cwd: str, thread_id: str, control_root: str, task_dir: str,
+    task_id: str, run_id: str, deadline: float, status_out: dict | None,
+) -> bool:
+    """One cross-workspace lock/fence/marker owner for hooks and native MCP."""
+    roots = workspace_roots(control_root)
+    if not roots:
+        return False
     expected_parent = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
     canonical_task = os.path.realpath(task_dir)
     if (
@@ -394,7 +463,7 @@ def _register_task_result(payload: bytes, deadline: float, status_out: dict | No
                     publish_legacy=False,
                 )
                 return restore_watcher_registration(
-                    payload,
+                    json.dumps({"cwd": cwd, "session_id": thread_id}).encode("utf-8"),
                     budget_seconds=max(0.0, deadline - time.monotonic()),
                     status_out=status_out,
                 )
