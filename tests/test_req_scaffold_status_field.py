@@ -10,8 +10,6 @@ from pathlib import Path
 import json
 import subprocess
 
-import pytest
-
 
 REPO = Path(__file__).resolve().parents[1]
 SCAFFOLD = REPO / "plugin" / "scripts" / "req_scaffold.py"
@@ -97,6 +95,7 @@ def render(*, status="candidate", requirements=None, behavior=""):
 
 
 def test_blank_status_and_legacy_text_never_invent_user_acceptance():
+    import pytest
     body = render(status="", behavior="Assumed extra behavior")
     assert "status: candidate" in body
     assert "unattributed" in body and "candidate; non-binding" in body
@@ -105,14 +104,14 @@ def test_blank_status_and_legacy_text_never_invent_user_acceptance():
         render(status="accepted", behavior="Unattributed behavior")
 
 
-@pytest.mark.parametrize("origin", ["assumption", "proposal", "unattributed"])
 def test_non_user_claims_cannot_be_promoted_by_setting_accepted(origin):
+    import pytest
     with pytest.raises(ValueError, match="cannot become accepted"):
         render(status="accepted", requirements=[claim(origin)])
 
 
-@pytest.mark.parametrize("field", ["source", "evidence"])
 def test_source_label_without_relevant_evidence_is_not_grounding(field):
+    import pytest
     row = claim()
     row[field] = "  "
     with pytest.raises(ValueError, match="source and relevant"):
@@ -120,6 +119,7 @@ def test_source_label_without_relevant_evidence_is_not_grounding(field):
 
 
 def test_confirmation_names_what_was_approved_not_every_assumption():
+    import pytest
     with pytest.raises(ValueError, match="particular proposal"):
         render(status="accepted", requirements=[claim("user_confirmed")])
     body = render(status="accepted", requirements=[claim("user_confirmed", confirmed_scope="Use one WBS, as proposed in turn 2")])
@@ -138,6 +138,7 @@ def test_derived_constraints_stay_separate_from_user_requests():
 
 
 def test_mixed_candidate_claims_do_not_become_acceptance_criteria():
+    import pytest
     body = render(requirements=[claim(), claim("assumption"), claim("proposal")])
     assert "### User-sourced claims" in body
     assert "### Assumptions / proposals / unattributed claims (non-binding)" in body
@@ -161,6 +162,7 @@ def test_candidate_append_does_not_inherit_existing_acceptance(tmp_path):
 
 
 def test_invalid_accepted_write_preserves_existing_document(tmp_path):
+    import pytest
     mod = _load_req_scaffold()
     args = (str(tmp_path), "harness", "source", "Interpretation", "", "Check outcomes")
     rel = mod.create_req_doc(*args, status="accepted", requirements=[claim()])
@@ -191,3 +193,14 @@ def test_both_runtime_reviewers_check_source_entailment_not_only_labels():
         assert "authentic quote does not prove" in body
         assert "grounding is unverified" in body
         assert "candidate assumptions promoted into mandatory WBS/acceptance/close gates" in body
+
+
+def pytest_generate_tests(metafunc):
+    cases = {'test_non_user_claims_cannot_be_promoted_by_setting_accepted': [('origin',
+                                                                      ['assumption',
+                                                                       'proposal',
+                                                                       'unattributed'])],
+     'test_source_label_without_relevant_evidence_is_not_grounding': [('field',
+                                                                       ['source', 'evidence'])]}
+    for argument, values in cases.get(metafunc.function.__name__, []):
+        metafunc.parametrize(argument, values)

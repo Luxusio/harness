@@ -5113,7 +5113,7 @@ def emit_compact_context(task_dir, snapshot=None):
     from wbs import task_progress
     progress = task_progress(task_dir, find_repo_root(task_dir), st["run_id"])
     if progress.get("status") != "unbaselined" and (
-        progress.get("status") != "measured" or progress["verified_weight"] != progress["total_weight"]
+        progress.get("status") != "measured" or not all(row["verified"] for row in progress["outcomes"])
     ):
         missing_for_close.append("verified WBS outcomes")
     if progress.get("integration") and progress["integration"]["route"] != "integration":

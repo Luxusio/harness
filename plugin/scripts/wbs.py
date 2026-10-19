@@ -6,6 +6,7 @@ replacement for independent review, QA, task close or batch integration proof.
 """
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
 import hashlib
 import json
 import math
@@ -44,7 +45,8 @@ def validate(nodes):
         require(isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", key), "invalid node id")
         require(key not in index, "duplicate node id")
         require(isinstance(item.get("title"), str) and 0 < len(item["title"].strip()) <= 2000, "observable title required")
-        require(type(item.get("weight")) is int and 0 < item["weight"] <= 1000000, "positive integer weight required")
+        require(type(item.get("weight")) in (int, float) and 0 < item["weight"] <= 1000000
+                and math.isfinite(item["weight"]), "positive finite weight required")
         require(item["parent"] is None or isinstance(item["parent"], str), "invalid parent")
         deps = item["depends_on"]
         require(isinstance(deps, list) and all(isinstance(d, str) for d in deps)
@@ -77,13 +79,20 @@ def validate(nodes):
         inherited = {key: deps - ready for key, deps in inherited.items() if key not in ready}
     for key, item in index.items():
         if children[key]:
-            require(sum(index[c]["weight"] for c in children[key]) == item["weight"], "split must conserve parent weight")
+            require(weight_sum(index[c] for c in children[key]) == Decimal(str(item["weight"])), "split must conserve parent weight")
             require(not any(field in item for field in ("check", "task_id", "leaf_id")), "group cannot claim leaf verification")
         else:
             check = item.get("check")
             require(check is None or isinstance(check, list) and 0 < len(check) <= 128
                     and all(isinstance(s, str) and s and "\0" not in s for s in check), "check must be assertion argv when supplied")
     return list(index.values())
+
+
+def weight_sum(nodes):
+    """Conserve decimal weights exactly, including splits of a unit outcome."""
+    with localcontext() as context:
+        context.prec = 400  # Includes the smallest positive float and all 256 nodes.
+        return sum((Decimal(str(n["weight"])) for n in nodes), Decimal(0))
 
 
 def leaves(nodes):
@@ -165,7 +174,7 @@ def prepare(task_dir, plan, run_id, *, now=None):
         projection = task_progress(task_dir, find_repo_root(task_dir), run_id, now=stamp)
         transition(old["nodes"], nodes, [row["id"] for row in projection.get("outcomes", []) if row["verified"]])
         state = dict(old, nodes=nodes, run_id=run_id,
-                    scope_revision=old.get("scope_revision", 1) + (sum(n["weight"] for n in leaves(nodes)) != sum(n["weight"] for n in leaves(old["nodes"]))),
+                    scope_revision=old.get("scope_revision", 1) + (weight_sum(n for n in nodes if n["parent"] is None) != weight_sum(n for n in old["nodes"] if n["parent"] is None)),
                     checks=old["checks"] if old["run_id"] == run_id else {})
     else:
         state = dict(version=1, nodes=nodes, run_id=run_id, checks={}, started_at=stamp, last_progress_at=stamp)
@@ -233,15 +242,16 @@ def task_progress(task_dir, repo, run_id, *, now=None):
             row["verified"] = valid[row["id"]]
             if not row["verified"]:
                 row["checked_at"] = None
-        total = sum(n["weight"] for n in rows)
-        earned = sum(n["weight"] for n in rows if n["verified"])
+        total = float(weight_sum(rows))
+        earned = float(weight_sum(n for n in rows if n["verified"]))
+        complete = all(n["verified"] for n in rows)
         validate_history(task_dir, repo, state)
         integration = batch_route(task_dir, repo, state) if state.get("batch") else None
-        return dict(status="measured", percentage=round(100 * earned / total, 2),
+        return dict(status="measured", percentage=100 if complete else min(99.99, round(100 * earned / total, 2)),
                     scope_revision=state.get("scope_revision", 1),
                     verified_weight=earned, total_weight=total, outcomes=rows,
                     last_progress_at=state["last_progress_at"],
-                    refinement_due=earned < total and stamp - state["last_progress_at"] >= STALL_SECONDS,
+                    refinement_due=not complete and stamp - state["last_progress_at"] >= STALL_SECONDS,
                     integration=integration,
                     next_action="Refine only unclear unfinished outcomes; preserve weights. Report real external blockers instead of recursive splitting.")
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -330,8 +340,8 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     if success:
         state["checks"][leaf_id] = dict(previous) if leaf_id in verified else dict(
             passed=True, definition=digest(node), source=before, checked_at=stamp, result=result)
-    after = sum(n["weight"] for n in leaves(state["nodes"]) if n["id"] in (verified - {leaf_id}) | ({leaf_id} if success else set()))
-    if after > before_progress["verified_weight"]:
+    after = weight_sum(n for n in leaves(state["nodes"]) if n["id"] in (verified - {leaf_id}) | ({leaf_id} if success else set()))
+    if after > weight_sum(n for n in before_progress["outcomes"] if n["verified"]):
         state["last_progress_at"] = stamp
     _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
     return dict(leaf_id=leaf_id, passed=success, **result, progress=task_progress(task_dir, repo, run_id, now=now))

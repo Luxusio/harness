@@ -54,7 +54,7 @@ def test_positive_guidance_replacements_are_present():
         "When a user correction points at an agent mistake, extract only a reusable conditional behavior rule",
         "Stop on phase failures, report the failure, check task state, and ask how to proceed",
         "Auto-decide scope-partition choices",
-        "Present the selected next task as status",
+        "Use wbs context/next for measured progress and dependency-ready outcomes",
         "Complete every loaded sub-skill methodology section",
     ]
     for phrase in expected:

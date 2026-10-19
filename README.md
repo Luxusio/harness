@@ -169,6 +169,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `project_format_check.py` | Read-only SessionStart reminder for older Harness project file formats and missing operational ignores | stdout |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
+| `wbs.py` | Measure verified outcomes and preserve WBS refinement evidence | `WBS.json` |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `install_verified.py` | Stateless trusted post-QA delivery wrapper; compares canonical payloads from an isolated verified snapshot and refreshes only stale runtimes | stdout / exit status |
 | `batch_state.py` | Durable batch records, bounded pool claims, validated bootstrap retention, exact worker/result binding, serialized finish checkpoints, status/recovery, same-worktree resume and explicit retained abandonment; operational state never grants task PASS | `doc/harness/runtime/batches/` |

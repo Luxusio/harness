@@ -18,11 +18,11 @@ Include one `wbs` JSON fence in PLAN, with a small number of measurable leaves:
 [{"id":"AC-001","title":"Invalid input is rejected with an actionable error","weight":1}]
 ```
 
-Every leaf needs an observable outcome and positive integer weight. Add an
+Every leaf needs an observable outcome and positive finite weight. Add an
 assertion argv as `check` when ready to verify; do not freeze test commands or
 implementation layout at intake. WBS has no edited-file lists. Optional
 `parent` and `depends_on` name node IDs. A group has no `check`; its children's weights sum
-to its weight. Choose coarse, understandable weights, not invented effort
+to its weight (for example, split weight 1 into 0.5 and 0.5). Choose coarse, understandable weights, not invented effort
 precision. One leaf suffices for small work. `write_plan` atomically publishes
 the baseline and runtime WBS evidence without changing TASK's schema.
 Use `wbs(action="check", node_id=...)` only when an outcome is ready to

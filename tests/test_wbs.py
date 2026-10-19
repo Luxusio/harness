@@ -4,8 +4,6 @@ from pathlib import Path
 import sys
 import subprocess
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 import wbs
 
@@ -75,8 +73,8 @@ def test_exact_two_hour_clock_ignores_noop_rechecks_and_splits(tmp_path):
     assert progress(repo, td, 7401)["refinement_due"]
 
 
-@pytest.mark.parametrize("mutation", ["delete", "weight", "split_done"])
 def test_rewrites_cannot_manufacture_credit(tmp_path, mutation):
+    import pytest
     repo, td = baseline(tmp_path)
     check(repo, td)
     candidate = [node()]
@@ -93,8 +91,8 @@ def test_rewrites_cannot_manufacture_credit(tmp_path, mutation):
     assert before == (td / "WBS.json").read_bytes()
 
 
-@pytest.mark.parametrize("case", ["bool", "zero", "duplicate", "cycle", "parent_cycle", "file_instructions", "unknown", "split_weight"])
 def test_invalid_definitions_refuse(case):
+    import pytest
     nodes = [node()]
     if case == "bool": nodes[0]["weight"] = True
     if case == "zero": nodes[0]["weight"] = 0
@@ -119,6 +117,7 @@ def test_legacy_corrupt_and_foreign_run_do_not_claim_progress(tmp_path):
 
 
 def test_dependency_must_be_verified_and_work_pack_preserves_graph(tmp_path):
+    import pytest
     repo, td = baseline(tmp_path, [node("A"), node("B", depends_on=["A"])])
     with pytest.raises(ValueError, match="dependencies"):
         check(repo, td, "B")
@@ -140,7 +139,6 @@ def test_assertion_failure_timeout_and_input_mutation_earn_no_credit(tmp_path):
         repo, td = baseline(root, [item])
         assert not check(repo, td, timeout=1)["passed"]
         assert progress(repo, td)["percentage"] == 0
-
 
 
 def test_stale_verified_leaf_can_be_refined_without_freezing_implementation(tmp_path):
@@ -190,6 +188,7 @@ def test_oversized_state_refuses_before_publishing_or_losing_repairability(tmp_p
 
 
 def test_dispatch_bounds_combined_evidence_not_only_the_pack(tmp_path, monkeypatch):
+    import pytest
     repo, td = baseline(tmp_path, [node("A"), node("B")])
     import goal_batch
     import batch_state
@@ -202,6 +201,7 @@ def test_dispatch_bounds_combined_evidence_not_only_the_pack(tmp_path, monkeypat
 
 
 def test_successful_check_also_stops_redirected_children(tmp_path):
+    import pytest
     import os
     import time
     repo, td = baseline(tmp_path)
@@ -234,6 +234,7 @@ def test_scope_symlinks_fail_closed(tmp_path):
 
 
 def test_rolling_plan_needs_no_file_layout_or_initial_assertion(tmp_path):
+    import pytest
     rough = dict(id="A", title="Reader can recover a failed import", weight=10)
     repo, td = baseline(tmp_path, [rough])
     assert progress(repo, td)["percentage"] == 0
@@ -291,8 +292,6 @@ def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
     assert call("open")["structuredContent"]["run_id"] == run
 
 
-@pytest.mark.parametrize("name", ["wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"])
-@pytest.mark.parametrize("encoded", [False, True])
 def test_only_wbs_open_and_context_bind_hook_results(name, encoded):
     from codex_hook_registration import _task_result
     body = dict(task_dir="/tmp/fixture/TASK__x", task_id="TASK__x", run_id="run")
@@ -379,3 +378,57 @@ def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, mo
     assert not result.get("isError"), result
 
 
+
+def pytest_generate_tests(metafunc):
+    cases = {'test_rewrites_cannot_manufacture_credit': [('mutation', ['delete', 'weight', 'split_done'])],
+     'test_invalid_definitions_refuse': [('case',
+                                          ['bool',
+                                           'zero',
+                                           'duplicate',
+                                           'cycle',
+                                           'parent_cycle',
+                                           'file_instructions',
+                                           'unknown',
+                                           'split_weight'])],
+     'test_only_wbs_open_and_context_bind_hook_results': [('name',
+                                                           ['wbs',
+                                                            'mcp__harness__wbs',
+                                                            'mcp__plugin_harness_harness__wbs']),
+                                                          ('encoded', [False, True])]}
+    for argument, values in cases.get(metafunc.function.__name__, []):
+        metafunc.parametrize(argument, values)
+
+
+def test_unit_outcome_can_refine_after_two_hours_without_earning_credit(tmp_path):
+    repo, td = baseline(tmp_path, [node(weight=1)])
+    assert progress(repo, td, 7300)["refinement_due"]
+    publish(td, [dict(id="A", title="Result A", weight=1),
+                 node("A1", 0.1, parent="A"), node("A2", 0.2, parent="A"),
+                 node("A3", 0.7, parent="A")], now=7300)
+    pending = progress(repo, td, 7300)
+    assert pending["percentage"] == 0 and pending["refinement_due"]
+    assert pending["scope_revision"] == 1 and pending["total_weight"] == 1
+    assert check(repo, td, "A1", now=7301)["progress"]["percentage"] == 10
+    assert check(repo, td, "A2", now=7302)["progress"]["percentage"] == 30
+    final = check(repo, td, "A3", now=7303)["progress"]
+    assert final["percentage"] == 100
+    assert final["verified_weight"] == final["total_weight"] == 1
+
+
+def test_fractional_weights_reject_nonfinite_or_nonconserving_values():
+    import pytest
+    for weight in (float("nan"), float("inf"), -0.1, 0, True):
+        with pytest.raises(ValueError, match="positive finite"):
+            wbs.validate([node(weight=weight)])
+    with pytest.raises(ValueError, match="conserve"):
+        wbs.validate([dict(id="A", title="A", weight=1),
+                      node("B", 0.5, parent="A"), node("C", 0.5000000001, parent="A")])
+
+
+def test_tiny_pending_weight_never_rounds_to_completion_or_hides_stall(tmp_path):
+    repo, td = baseline(tmp_path, [node("A", 1), node("B", 1e-30)])
+    partial = check(repo, td, "A", now=200)["progress"]
+    assert partial["percentage"] < 100
+    assert progress(repo, td, 7400)["refinement_due"]
+    final = check(repo, td, "B", now=7401)["progress"]
+    assert final["percentage"] == 100 and final["last_progress_at"] == 7401
