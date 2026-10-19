@@ -940,8 +940,8 @@ def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple
     diverge — one stale `.pyc` is enough — the suite stays green while every
     receipt silently disappears, which is the state that survived a month twice
     over. `plugin/scripts/install_smoke.py` imports each installed hook module
-    and drives `background_hook.py` against a throwaway repository until a
-    receipt row appears; see
+    and drives the selected runtime owner in an isolated fixture repository
+    (including Codex native registration and completion); see
     `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 
     Run in a subprocess so a smoke crash is reported as a failed install rather

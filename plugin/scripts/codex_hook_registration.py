@@ -204,12 +204,33 @@ def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool
     return bool(resolve_session_task_binding(control_root, thread_id))
 
 
+
+def _task_arguments(data: dict) -> dict | None:
+    """Decode supported aliases once; malformed or conflicting inputs fail closed."""
+    values = []
+    for key in ("tool_input", "input", "arguments"):
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+        if not isinstance(value, dict):
+            return None
+        values.append(value)
+    if values and any(value != values[0] for value in values[1:]):
+        return None
+    return values[0] if values else {}
+
+
 def _task_result(payload: bytes) -> tuple[str, str, str]:
     """Extract one successful task result from known Codex hook envelopes."""
     data = _payload_data(payload)
     tool_name = str(data.get("tool_name") or data.get("tool") or "")
-    arguments = data.get("tool_input") or data.get("input") or data.get("arguments")
-    if not is_codex_task_binding_tool(tool_name, arguments):
+    arguments = _task_arguments(data)
+    if arguments is None or not is_codex_task_binding_tool(tool_name, arguments):
         return "", "", ""
     response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
     if (
@@ -257,13 +278,10 @@ def register_task_result(
     if not roots:
         return False
     data = _payload_data(payload)
-    tool_input = data.get("tool_input", {})
-    if isinstance(tool_input, str):
-        try:
-            tool_input = json.loads(tool_input)
-        except ValueError:
-            return False
-    requested_workspace = tool_input.get("workspace") if isinstance(tool_input, dict) else None
+    tool_input = _task_arguments(data)
+    if tool_input is None:
+        return False
+    requested_workspace = tool_input.get("workspace")
     if requested_workspace is not None:
         response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
         candidate = response.get("structuredContent", response)

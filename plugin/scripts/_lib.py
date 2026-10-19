@@ -46,7 +46,8 @@ def is_codex_task_binding_tool(tool_name, arguments=None):
             arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
         except (ValueError, TypeError):
             return False
-        return isinstance(arguments, dict) and arguments.get("action") in {"open", "context"}
+        return (isinstance(arguments, dict) and isinstance(arguments.get("action"), str)
+                and arguments["action"] in {"open", "context"})
     return True
 
 

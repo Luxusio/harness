@@ -356,3 +356,71 @@ def test_the_probe_environment_is_pinned_to_the_runtime_interpreter(monkeypatch)
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "PYTEST_CURRENT_TEST" not in env
     assert os.path.basename(install_smoke._runtime_python()).startswith("python")
+
+
+def _codex_tree(destination):
+    root = _installed_tree(destination)
+    (root / ".codex-plugin").mkdir()
+    (root / ".codex-plugin/plugin.json").write_text('{"name":"harness","version":"test"}')
+    return root
+
+
+def test_codex_smoke_drives_native_start_and_completed_identity_without_payload_writes(tmp_path):
+    import hashlib
+    root = _codex_tree(tmp_path)
+    smoke = _load("codex_native_smoke", SMOKE)
+    def inventory():
+        return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in root.rglob("*") if p.is_file()}
+    before = inventory()
+    ok, lines = smoke.smoke_installed_runtime(str(root), timeout=10)
+    assert ok, lines
+    assert any("isolated native fixture" in line and "completed PASS" in line for line in lines)
+    assert not any("ok receipt: bound subagent" in line for line in lines)
+    assert inventory() == before
+    assert not list(root.rglob("__pycache__"))
+
+
+def test_codex_smoke_rejects_broken_generation_manager_and_completion(tmp_path):
+    smoke = _load("codex_broken_native_smoke", SMOKE)
+    failures = {
+        "generation": ("codex_hook_registration.py", "generation_bound = ensure_fn is ensure", "generation_bound = False"),
+        "manager": ("codex_lifecycle_watcher.py", "def start(self)", "def start(self)"),
+        "post_tool": ("codex_hook_registration.py", '    """Bind a successful Harness task result to this exact Codex session."""',
+                      '    """Bind a successful Harness task result to this exact Codex session."""\n    return False'),
+        "completion": ("codex_lifecycle_watcher.py", 'payload.get("type") != "agent_message"', 'payload.get("type") != "disabled_fixture_delivery"'),
+    }
+    for name, (script, old, new) in failures.items():
+        root = _codex_tree(tmp_path / name)
+        path = root / "scripts" / script
+        text = path.read_text()
+        if name == "manager":
+            # Stop admission, without changing the parser or forging receipts.
+            old = 'def registrations(repo_root: str) -> list[dict[str, Any]]:'
+            new = old + '\n    return []'
+        assert old in text
+        path.write_text(text.replace(old, new, 1))
+        ok, lines = smoke.smoke_installed_runtime(str(root), timeout=4)
+        assert not ok, (name, lines)
+        assert any("FAIL codex receipt" in line for line in lines), (name, lines)
+
+
+def test_codex_probe_timeout_cleans_worker_owned_scratch_too(tmp_path, monkeypatch):
+    smoke = _load("codex_timeout_cleanup", SMOKE)
+    root = _codex_tree(tmp_path / "installed")
+    server = root / "mcp/harness_server.py"
+    child_pid = tmp_path / "helper.pid"
+    injected = ("from __future__ import annotations\nimport time, subprocess, sys\n"
+                "_helper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+                "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                f"open({str(child_pid)!r}, 'w').write(str(_helper.pid))\n"
+                "time.sleep(2)")
+    server.write_text(server.read_text().replace("from __future__ import annotations", injected, 1))
+    monkeypatch.setattr(smoke.tempfile, "tempdir", str(tmp_path))
+    ok, lines = smoke._codex_receipt_probe(str(root), timeout=0.5)
+    assert not ok and any("did not complete" in line for line in lines)
+    assert not list(tmp_path.glob("harness-codex-*")), "killed worker leaked fixture directories"
+    if child_pid.exists():
+        pid = int(child_pid.read_text())
+        stat = Path(f"/proc/{pid}/stat")
+        assert not stat.exists() or stat.read_text().split()[2] == "Z", "worker helper survived timeout"

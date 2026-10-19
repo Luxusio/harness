@@ -1271,3 +1271,29 @@ def test_installed_matcher_routes_only_bindable_public_wbs_results():
             body["tool_response"]["isError"] = True
             assert mod._task_result(json.dumps(body).encode()) == ("", "", "")
     assert not re.fullmatch(matcher, "mcp__foreign__wbs")
+
+
+def test_installed_binding_matcher_covers_canonical_tool_allowlist():
+    import re
+    spec = importlib.util.spec_from_file_location("install_binding_allowlist", REPO_ROOT / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = install
+    spec.loader.exec_module(install)
+    from _lib import CODEX_TASK_BINDING_TOOLS
+    matcher = install._codex_hooks_config(REPO_ROOT / "installed")["hooks"]["PostToolUse"][0]["matcher"]
+    for name in CODEX_TASK_BINDING_TOOLS:
+        assert re.fullmatch(matcher, name), name
+    for name in ("mcp__foreign__wbs", "mcp__foreign__task_start", "evil_wbs", "wbs_suffix"):
+        assert not re.fullmatch(matcher, name), name
+
+
+def test_malformed_wbs_action_never_crashes_posttool_hook():
+    mod = _load("codex_hook_registration")
+    for action in ([], {}, None, 1, True):
+        data = {"tool_name": "wbs", "arguments": {"action": action},
+                "tool_response": {"structuredContent": {"task_dir": "/repo/TASK__x", "task_id": "TASK__x", "run_id": "run"}}}
+        payload = json.dumps(data)
+        assert mod._task_result(payload.encode()) == ("", "", "")
+        result = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
+                                input=payload, text=True, capture_output=True, timeout=5)
+        assert result.returncode == 0 and not result.stdout and not result.stderr, result.stderr

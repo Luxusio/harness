@@ -683,3 +683,35 @@ def test_task_start_rollback_cannot_replace_a_new_conflict_fence(tmp_path, monke
         result = _call(main, "task_start", {"task_id": "TASK__rollback_fence"})
     assert result.get("isError"), result
     assert json.loads(marker.read_text()) == fence
+
+
+def test_supported_hook_argument_envelopes_keep_worktree_constraints(tmp_path, monkeypatch):
+    from test_codex_hook_wrappers import _load as load_hook
+    from test_codex_lifecycle_watcher import _write_exact_session_binding
+    hook = load_hook("codex_hook_registration")
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    main, lead, sibling = worktrees(tmp_path)
+    tid, run = _write_exact_session_binding(lead, LEAD)
+    marker = lead / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json"
+    marker.unlink()
+    base = {"cwd": str(main), "thread_id": LEAD, "tool_name": "wbs", "tool_response": {
+        "structuredContent": {"task_id": tid, "task_dir": str(lead / "doc/harness/tasks" / tid),
+                              "run_id": run, "workspace": str(lead)},
+    }}
+    with mock.patch.object(hook, "_ensure_with_deadline", return_value=True):
+        for alias in ("tool_input", "input", "arguments"):
+            for encoded in (False, True):
+                args = {"action": "open", "workspace": str(lead)}
+                payload = dict(base, **{alias: json.dumps(args) if encoded else args})
+                assert hook.register_task_result(json.dumps(payload).encode()), (alias, encoded)
+                wrong = dict(base["tool_response"]["structuredContent"], workspace=str(sibling))
+                payload["tool_response"] = {"structuredContent": wrong}
+                assert not hook.register_task_result(json.dumps(payload).encode())
+                for action in ("plan", "check", "dispatch", "verify", "close", "block", "next"):
+                    payload = dict(base, **{alias: dict(args, action=action)})
+                    assert not hook.register_task_result(json.dumps(payload).encode())
+        for bad in (None, [], "{", "null", "[]"):
+            payload = dict(base, tool_input=bad, arguments={"action": "open", "workspace": str(lead)})
+            assert not hook.register_task_result(json.dumps(payload).encode())
+        payload = dict(base, tool_input={"action": "open"}, arguments={"action": "open", "workspace": str(lead)})
+        assert not hook.register_task_result(json.dumps(payload).encode())
