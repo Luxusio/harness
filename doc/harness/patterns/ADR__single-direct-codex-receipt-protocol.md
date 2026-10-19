@@ -165,6 +165,21 @@ watcher that starts late may replay a child that has since completed when the
 entire correlated lifecycle follows that offset; registration after the spawn
 cannot see that spawn and cannot manufacture a missing start.
 
+## Operational acquisition repair
+
+The process-owned eager MCP binding and native PostToolUse binding publish the
+same exact task/run registration. An extra validation callback cannot opt the
+production registrar out of generation binding. The installed hook matcher
+routes public wbs open/context results to that existing owner.
+
+A shared MCP process may lack thread identity, and nested code-mode calls may
+not deliver its native PostToolUse hook. Explicit acquisition repair may use a
+real thread-scoped stdio MCP host inheriting the unchanged native
+CODEX_THREAD_ID. Keep the MCP manager alive for future native lifecycles; this
+uses the existing eager path and is not a second receipt protocol. Do not pass
+an invented hook payload or substitute inherited CODEX_SESSION_ID. Registration
+still begins at its immutable current offset; no historical backfill occurs.
+
 ## Verification
 
 - A direct structured spawn, exact activity, matching structured output, and

@@ -1211,7 +1211,8 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                         "Bash|.*create_goal|task_start|task_context|"
                         "mcp__harness__task_start|mcp__harness__task_context|"
                         "mcp__plugin_harness_harness__task_start|"
-                        "mcp__plugin_harness_harness__task_context"
+                        "mcp__plugin_harness_harness__task_context|"
+                        "wbs|mcp__harness__wbs|mcp__plugin_harness_harness__wbs"
                     ),
                     "hooks": [
                         {

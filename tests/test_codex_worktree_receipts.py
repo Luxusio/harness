@@ -255,8 +255,8 @@ def test_pre_spawn_host_check_routes_unique_binding_to_worktree(tmp_path, monkey
 def test_real_codex_handler_refuses_worktree_to_main_focus(tmp_path, monkeypatch):
     from test_worktree_workspace import _setup, _call, _payload
     from test_codex_hook_wrappers import _load as load_hook
-    import codex_lifecycle_watcher as watcher
     hook = load_hook("codex_hook_registration")
+    import codex_lifecycle_watcher as watcher
     main, lead = _setup(tmp_path)
     monkeypatch.setenv("HARNESS_RUNTIME", "codex")
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
@@ -289,8 +289,8 @@ def test_real_codex_handler_refuses_worktree_to_main_focus(tmp_path, monkeypatch
 def test_all_preexisting_workspace_bindings_are_fenced_and_revoked(tmp_path, monkeypatch):
     from test_codex_hook_wrappers import _load as load_hook
     from test_codex_lifecycle_watcher import _write_exact_session_binding
-    import codex_lifecycle_watcher as watcher
     hook = load_hook("codex_hook_registration")
+    import codex_lifecycle_watcher as watcher
     main, lead, sibling = worktrees(tmp_path)
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
@@ -471,8 +471,8 @@ def test_oversized_existing_conflict_fences_cannot_be_read_as_empty(tmp_path, mo
 def test_overflow_elsewhere_blocks_old_worktree_registration_recovery(tmp_path, monkeypatch):
     from test_codex_hook_wrappers import _load as load_hook
     from test_codex_lifecycle_watcher import _write_exact_session_binding
-    import codex_lifecycle_watcher as watcher
     hook = load_hook("codex_hook_registration")
+    import codex_lifecycle_watcher as watcher
     main, lead, _ = worktrees(tmp_path)
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
@@ -502,8 +502,8 @@ def test_partial_fence_recovery_discards_ambiguous_history_and_old_generation(tm
         _write_exact_session_binding, _spawn_events, _delivery, _child_events,
         _write_jsonl, _rollout_path, _snapshot,
     )
-    import codex_lifecycle_watcher as watcher
     hook = load_hook("codex_hook_registration")
+    import codex_lifecycle_watcher as watcher
     main, lead, _ = worktrees(tmp_path)
     home = tmp_path / "codex"
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)

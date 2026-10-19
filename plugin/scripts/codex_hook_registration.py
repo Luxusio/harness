@@ -427,7 +427,10 @@ def restore_watcher_registration(
         )
         _record(NOT_APPLICABLE, missing)
         return False
-    generation_bound = bind_fn is None and ensure_fn is ensure
+    # An extra binding validator must not erase the production generation.
+    # The MCP eager path supplies exact_bind, but the manager still requires
+    # the same task/run as the ordinary PostToolUse registration path.
+    generation_bound = ensure_fn is ensure
     bound_roots = (_call_with_deadline(
         lambda: _bound_workspace_roots(control_root, thread_id), deadline, None,
     ) if generation_bound else [])

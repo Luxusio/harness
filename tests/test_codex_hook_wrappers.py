@@ -824,7 +824,10 @@ class TestCodexHookWrappers(unittest.TestCase):
                     "cwd": repo,
                     "session_id": "019f834e-1e91-7662-9024-f548103d751e",
                 }).encode()
-                with mock.patch.dict("os.environ", {}, clear=True):
+                with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                    mod, "resolve_session_task_binding",
+                    return_value={"task_dir": str(Path(repo) / "doc/harness/tasks/TASK__alarm"), "run_id": "run"},
+                ):
                     with self.assertRaisesRegex(CallerDeadline, "caller deadline"):
                         mod.restore_watcher_registration(
                             payload,
@@ -1065,7 +1068,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             "Bash|.*create_goal|task_start|task_context|"
             "mcp__harness__task_start|mcp__harness__task_context|"
             "mcp__plugin_harness_harness__task_start|"
-            "mcp__plugin_harness_harness__task_context",
+            "mcp__plugin_harness_harness__task_context|"
+            "wbs|mcp__harness__wbs|mcp__plugin_harness_harness__wbs",
         )
         for event, name in (
             ("PreToolUse", "hook_pre_tool_use"),
@@ -1208,3 +1212,62 @@ class TestCodexHookWrappers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_production_registration_keeps_generation_with_extra_binding_validator(tmp_path, monkeypatch):
+    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
+    mod = _load("codex_hook_registration")
+    import codex_lifecycle_watcher as watcher
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    home = tmp_path / "codex"
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    manifest = repo / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("version: 5\ntype: library\n")
+    task_id, run_id = _write_exact_session_binding(repo, root_id)
+    rollout = _rollout_path(home, root_id)
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("CODEX_THREAD_ID", root_id)
+    payload = json.dumps({"cwd": str(repo), "session_id": root_id}).encode()
+    status = {}
+    assert mod.restore_watcher_registration(
+        payload, bind_fn=lambda root, thread: root == str(repo) and thread == root_id,
+        budget_seconds=2, status_out=status,
+    )
+    assert status["status"] == mod.REGISTERED
+    registrations = watcher.registrations(str(repo))
+    assert len(registrations) == 1
+    assert (registrations[0]["task_id"], registrations[0]["run_id"]) == (task_id, run_id)
+    offset = registrations[0]["offset"]
+    assert offset == rollout.stat().st_size
+    assert mod.restore_watcher_registration(payload, bind_fn=lambda *_: True, budget_seconds=2)
+    assert watcher.registrations(str(repo))[0]["offset"] == offset
+    assert not mod.restore_watcher_registration(payload, bind_fn=lambda *_: False, budget_seconds=2)
+    # Even a permissive extra callback cannot manufacture a missing generation.
+    (repo / "doc/harness/tasks/.active_sessions" / f"{root_id}.json").unlink()
+    assert not mod.restore_watcher_registration(payload, bind_fn=lambda *_: True, budget_seconds=2)
+
+
+def test_installed_matcher_routes_only_bindable_public_wbs_results():
+    import re
+    spec = importlib.util.spec_from_file_location("install_for_wbs_routing", REPO_ROOT / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = install
+    spec.loader.exec_module(install)
+    matcher = install._codex_hooks_config(REPO_ROOT / "installed")["hooks"]["PostToolUse"][0]["matcher"]
+    mod = _load("codex_hook_registration")
+    for name in ("wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"):
+        assert re.fullmatch(matcher, name)
+        for action in ("open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block"):
+            body = dict(tool_name=name, tool_input=dict(action=action), tool_response={
+                "structuredContent": dict(task_dir="/repo/doc/harness/tasks/TASK__x", task_id="TASK__x", run_id="run"),
+            })
+            result = mod._task_result(json.dumps(body).encode())
+            assert bool(result[0]) == (action in {"open", "context"})
+            body["tool_response"]["isError"] = True
+            assert mod._task_result(json.dumps(body).encode()) == ("", "", "")
+    assert not re.fullmatch(matcher, "mcp__foreign__wbs")
