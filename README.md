@@ -54,8 +54,8 @@ WBS open → plan → develop → QA → close
 | **QA** | Run the declared runtime QA lens and record its observed completion |
 | **close** | Internally run `wbs(action="verify")`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
 
-After every child close, the Goal executor performs self-improvement before
-selecting the next child: it may append friction signals to `learnings.jsonl`,
+After the same WBS root closes, the coordinator performs self-improvement
+before any separately authorized follow-up execution: it may append friction signals to `learnings.jsonl`,
 then reports recurring keys from distinct verified task runs as Tier 2
 candidates. The candidate-reporting step changes neither the raw ledger nor
 pattern files; durable pattern changes require a separately reviewed Harness
