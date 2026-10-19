@@ -3,8 +3,12 @@ import importlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from unittest import mock
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 
 
 def assert_guidance(value):
