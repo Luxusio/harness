@@ -24,7 +24,9 @@ These are engineering choices rather than additional user requirements.
 Decode supported tool_input/input/arguments once for action and workspace
 selection. Accept object and JSON-object strings consistently. An explicitly
 malformed envelope or non-string action, or conflicting aliases, cannot fall through to a more
-permissive interpretation. Existing namespace, result, task/run, workspace,
+permissive interpretation. Top-level arrays, null, numbers, strings and malformed JSON must not crash
+PostToolUse or UserPromptSubmit. Use each wrapper's shared dictionary decoder
+before accessing fields. Existing namespace, result, task/run, workspace,
 conflict-fence and immutable-offset checks remain authoritative.
 
 The installed PostToolUse matcher must cover the canonical binding-tool

@@ -21,12 +21,17 @@ CODEX_ROUTE = (
 )
 
 
-def _payload_cwd(payload: bytes) -> str | None:
+def _payload_data(payload: bytes) -> dict | None:
     try:
         data = json.loads(payload.decode("utf-8") or "{}")
     except Exception:
         return None
-    cwd = data.get("cwd")
+    return data if isinstance(data, dict) else None
+
+
+def _payload_cwd(payload: bytes) -> str | None:
+    data = _payload_data(payload)
+    cwd = data.get("cwd") if data is not None else None
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
 
@@ -59,6 +64,8 @@ def _is_harness_repo(cwd: str | None) -> bool:
 def main() -> int:
     deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
+    if _payload_data(payload) is None:
+        return 0
     cwd = _payload_cwd(payload)
     harness_repo = _is_harness_repo(cwd)
     context = ""

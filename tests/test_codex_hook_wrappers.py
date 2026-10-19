@@ -1297,3 +1297,14 @@ def test_malformed_wbs_action_never_crashes_posttool_hook():
         result = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
                                 input=payload, text=True, capture_output=True, timeout=5)
         assert result.returncode == 0 and not result.stdout and not result.stderr, result.stderr
+
+
+def test_codex_wrappers_safely_ignore_nonobject_and_malformed_json_payloads(tmp_path):
+    for name in ("hook_pre_tool_use", "hook_post_tool_use", "hook_user_prompt_submit", "hook_session_start"):
+        for payload in ("[]", "null", "1", '"x"', "false", "{"):
+            result = subprocess.run([sys.executable, str(SCRIPTS / (name + ".py"))],
+                                    cwd=tmp_path, input=payload, text=True,
+                                    capture_output=True, timeout=10)
+            assert result.returncode == 0, (name, payload, result.stderr)
+            assert not result.stdout and not result.stderr, (name, payload, result.stdout, result.stderr)
+            assert not list(tmp_path.iterdir()), (name, payload, "malformed hook changed scratch state")

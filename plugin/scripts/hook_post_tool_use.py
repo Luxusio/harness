@@ -62,19 +62,13 @@ def _receipt_control_root(cwd: str) -> str:
 
 
 def _payload_cwd(payload: bytes) -> str | None:
-    try:
-        data = json.loads(payload.decode("utf-8") or "{}")
-    except Exception:
-        return None
+    data = _json_payload(payload)
     cwd = data.get("cwd")
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
 
 def _tool_name(payload: bytes) -> str:
-    try:
-        data = json.loads(payload.decode("utf-8") or "{}")
-    except Exception:
-        return ""
+    data = _json_payload(payload)
     return str(data.get("tool_name") or data.get("tool") or "")
 
 
