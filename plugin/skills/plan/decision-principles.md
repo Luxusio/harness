@@ -67,6 +67,13 @@ When `auto_decide` is active:
 clarification, and explicit delegation may already authorize a decision; model
 agreement or a planning mode cannot create that authority.
 
+REQ provenance does not collapse these classes: cite actual user text for
+user_explicit, the specific approved scope for user_confirmed, and a grounded
+basis for derived constraints. Unverified interpretations remain non-binding
+assumptions/proposals. A quote must support the claimed detail, not merely
+mention its topic. Do not invent a requirement to justify an implementation
+choice; ordinary choices proceed in PLAN/ADR without asking for approval.
+
 **Spawned mode:** `spawned_session: true` (or `HARNESS_SPAWNED=1`) may reuse
 authority explicitly delegated by the parent context. If a material choice is
 not delegated, return or relay the unresolved decision bundle; do not select it

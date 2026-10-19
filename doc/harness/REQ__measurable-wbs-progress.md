@@ -1,5 +1,22 @@
 # Measurable WBS progress
 
+## Provenance
+
+User-sourced outcomes in this document come from this task's conversation:
+WBS measurement (“WBS기반으로 싹 바꿔줘”), two-hour refinement (“진행률이
+2시간동안 하나도 안 바뀌면 WBS를 세부적으로 더 쪼개서”), outcome-first
+scope (“주객이 전도되면 절대로 안돼”), isolated parallel development and
+verification (“서로 다른 worktree를 파고, worktree에서 개발, 검증 전부 다
+끝내고”), flexible implementation (“무슨 파일 무슨 파일 이렇게 건드려라
+그런거까지 적으면 안된다”), and one WBS/interface (“그냥 다 wbs안에
+묶어버리면 되지 않나?”, “harness mcp더 단순화 가능하지 않음?”).
+
+Specific API actions, weight/fingerprint/storage formats, clock boundaries,
+process limits and compatibility routing below are derived implementation
+choices. Their basis is the requested measurable progress plus the existing
+receipt/worktree safety contracts. They are not quoted user requirements.
+See [requirement provenance](REQ__requirement-provenance.md).
+
 One WBS tree contains any objective and its outcome breakdown. `wbs` is the
 only advertised Harness MCP entry point: open, context, plan, check, next,
 dispatch, verify, close and block operate on that same root. Native Goals

@@ -64,6 +64,20 @@ an approval field, ledger, or sidecar.
 
 ### Durable Docs Decision
 
+For each new or changed normative claim, preserve provenance in the same REQ:
+user_explicit/user_confirmed with identifiable source and relevant exact quote;
+derived with its existing requirement/constraint and reasoning; or non-binding
+assumption/proposal/unattributed. A source label alone does not prove the claim
+matches the user's intent. Compare each added detail with the actual source;
+do not turn a plausible interpretation into a user request. Confirmed claims
+name the particular approved proposal; “continue” never approves unrelated
+assumptions. Keep implementation choices in PLAN/ADR. Do not use candidate
+claims as mandatory WBS outcomes, acceptance or close criteria. Ask only for
+material unresolved intent/scope, not routine implementation choices.
+req_scaffold defaults candidate; accepted generation requires per-item evidence
+through --requirements-file. Direct edits follow the same provenance rule.
+See doc/harness/REQ__requirement-provenance.md; no extra approval ledger.
+
 Every PLAN.md must classify documentation impact before develop starts. This is
 a judgment step, not a blanket REQ requirement. Use one of these outcomes in the
 reason: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`.

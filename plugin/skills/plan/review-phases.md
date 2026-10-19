@@ -117,6 +117,14 @@ unresolved material premise into the Phase 5 consolidated decision bundle, and
 review the relevant alternatives provisionally. Premise extraction is always
 mandatory; a separate premise-confirmation interaction is not.
 
+For each proposed normative REQ/WBS outcome, compare its claimed origin with
+the actual user message or cited requirement, not another model summary.
+An authentic quote must support the added detail; a topic match is insufficient.
+Keep explicit/scoped-confirmed user intent separate from grounded derivation
+and non-binding assumptions/proposals. Missing access to a source is not proof
+of user approval. Unsupported changes to outcome/scope remain material questions
+before publication; routine implementation choices stay autonomous in PLAN/ADR.
+
 ### 1.2 Dimensions (10)
 
 1. Premises valid? — assumptions backed by evidence?

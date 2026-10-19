@@ -45,6 +45,25 @@ REQ quality checklist:
 
 ## Conversation requirement pass
 
+For every new/changed normative REQ claim, compare its source with the actual
+user message or cited document when accessible. Distinguish user_explicit,
+user_confirmed, derived, assumption, proposal and unattributed claims in the
+same document. A plausible source label or an authentic quote does not prove
+entailment: “make it faster” does not itself authorize Redis, a new service or
+a new user-facing constraint. Read the source and check each added detail.
+If the source is unavailable, grounding is unverified; never invent a quote
+or approve a user-origin assertion from its author's label alone. Confirmed
+interpretations name the proposal actually approved; a bare “continue” cannot
+authorize unrelated assumptions. Derived technical necessities cite their
+basis and remain labelled derived, never silently user-requested. Intent
+summaries, non-goals and verification cues cannot launder extra accepted scope.
+FAIL on invented/misread user requirements, missing provenance for new claims,
+or candidate assumptions promoted into mandatory WBS/acceptance/close gates.
+Check candidate append sections inside older accepted documents separately;
+earlier acceptance grants no authority to new candidate text. Do not bulk
+reclassify historical text as verified user intent. Routine implementation
+choices need no new user approval; surface only material unresolved choices.
+
 Use the user requirements supplied in your delegation context together with
 PLAN.md, REQUEST.md when present, and the changed durable docs. Fail when an
 observable standing requirement from that context is neither captured in a
