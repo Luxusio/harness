@@ -25,8 +25,8 @@ def test_c17_parking_clause_in_both_contract_copies():
         c17 = body[body.index("### C-17"):body.index("### C-18")]
         clause = c17[c17.index("**Parking clause:**"):]
         clause = clause[:clause.index("\n\n")]
-        assert "task_blocked" in clause, path
-        assert "task_start" in clause, path
+        assert 'wbs(action="block")' in clause, path
+        assert 'wbs(action="open")' in clause, path
         assert "C-04" in clause, path
 
 
@@ -51,7 +51,7 @@ def test_runtime_doc_names_park_as_not_completion():
     doc = _text(REPO / "plugin/CLAUDE.md")
     section = doc[doc.index("## 4a."):]
     section = section[:section.index("\n## ", 1)]
-    assert any("task_blocked" in line and "task_start" in line and "C-04" in line
+    assert any('wbs(action="block")' in line and 'wbs(action="open")' in line and "C-04" in line
                for line in section.splitlines())
 
 

@@ -92,7 +92,7 @@ def test_optional_plan_session_is_removed_after_publication():
     assert "malformed legacy scratch is equivalent to absent scratch" in intake
     assert "HARNESS_DISABLE_CROSS_MODEL" not in intake
     assert "remove task-local PLAN_SESSION.json" in writer
-    assert "Remove it after successful `write_plan`" in codex
+    assert "Remove it after successful `wbs(action=\"plan\")`" in codex
 
 
 def test_compact_review_report_never_claims_full_review():

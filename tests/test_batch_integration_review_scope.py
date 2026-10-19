@@ -144,7 +144,7 @@ def test_each_endpoint_names_its_source():
         "- `old_base`": ("coordinator head", "step b.5"),
         "- `old_tip`": (
             "the `commit` the lead returned",
-            "leads commit after `task_close`",
+            "leads commit after `wbs(action=\"close\")`",
             "tree their review and qa passed",
         ),
         "- `new_base`": (

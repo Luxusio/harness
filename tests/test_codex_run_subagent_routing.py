@@ -63,7 +63,7 @@ def test_run_and_develop_document_subagent_lifecycle_cleanup():
         body = _text(path)
         assert "`close_agent`" in body
         assert "final response" in body
-        assert "`task_close`" in body
+        assert "`wbs(action=\"close\")`" in body
         assert "Completed agents can" in body
         assert "concurrency" in body and "until closed" in body
 
@@ -105,8 +105,8 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "resume rather than creating a duplicate" in body or "resume instead of creating a duplicate" in body
         assert "PLAN.md missing → Phase 2 Plan" in body
         assert "runtime_verdict is not PASS → Phase 3 Develop/Verify" in body
-        assert "run `task_verify`" in body
-        assert "task_verify" in body
+        assert "run `wbs(action=\"verify\")`" in body
+        assert 'wbs(action="verify")' in body
         assert "PLAN.md" in body and "RECEIPTS.jsonl" in body
 
 
@@ -207,8 +207,8 @@ def test_run_and_develop_share_missing_receipt_policy():
         "actual FAIL",
         "actual BLOCKED_ENV",
         "actual review PASS",
-        "task_verify` once",
-        "task_blocked",
+        "wbs(action=\"verify\")` once",
+        'wbs(action="block")',
         "Direct finals never authorize PASS or close",
     )
     for path in (CODEX_RUN, CLAUDE_RUN, CODEX_DEVELOP, CLAUDE_DEVELOP):

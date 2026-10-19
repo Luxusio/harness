@@ -127,7 +127,7 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "link it from PLAN.md or the changed durable doc" in body
         assert "Durable docs are updated when the task changed user-visible behavior" in body
         assert "Durable docs or learning artifacts updated" in body
-        assert "Before `task_close`" in body
+        assert "Before `wbs(action=\"close\")`" in body
         assert "specific non-observable reason" in body
         assert "If the task touches observable UI/API/backoffice/admin screens" in body
         assert "keep `REQ: n/a`" in body

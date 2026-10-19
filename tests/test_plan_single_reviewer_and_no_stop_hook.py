@@ -109,7 +109,7 @@ def test_turn_end_contract_no_longer_claims_hook_enforcement():
         enforced = next(line for line in c17.splitlines()
                         if line.startswith("**Enforced by:**"))
         assert "stop_gate" not in enforced and "Stop gate" not in enforced
-        assert "task_close" in c17
+        assert 'wbs(action="close")' in c17
         assert "/goal" in c17
         assert "Bounded-yield" not in c17
         row = next(line for line in body.splitlines() if "[C-17](#c-17)" in line)
