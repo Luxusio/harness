@@ -76,6 +76,15 @@ claims as mandatory WBS outcomes, acceptance or close criteria. Ask only for
 material unresolved intent/scope, not routine implementation choices.
 req_scaffold defaults candidate; accepted generation requires per-item evidence
 through --requirements-file. Direct edits follow the same provenance rule.
+Only user_explicit/scoped user_confirmed rows may be accepted user requirements;
+an accepted document does not accept its derived or candidate rows. Separate
+source locators and exact excerpts from authored claims and confirmation scope.
+Derived source/basis links the existing requirement or standing constraint and
+explains necessary work. Supported implementation work may enter WBS and be
+tested to satisfy that accepted outcome autonomously; it cannot introduce a
+new product outcome, service, cost or user-facing constraint by being labelled
+derived. Missing grounding stays unverified/non-binding. Apply this distinction
+when user feedback or development discoveries revise WBS, not only at intake.
 See doc/harness/REQ__requirement-provenance.md; no extra approval ledger.
 
 Every PLAN.md must classify documentation impact before develop starts. This is

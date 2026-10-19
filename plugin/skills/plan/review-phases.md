@@ -124,6 +124,14 @@ Keep explicit/scoped-confirmed user intent separate from grounded derivation
 and non-binding assumptions/proposals. Missing access to a source is not proof
 of user approval. Unsupported changes to outcome/scope remain material questions
 before publication; routine implementation choices stay autonomous in PLAN/ADR.
+Only user_explicit/scoped user_confirmed rows can be accepted user requirements.
+Accepted document status does not accept derived work or candidates. Check a
+derived item's link to the existing requirement/standing constraint and its
+reasoning: necessary implementation can enter WBS and be verified autonomously,
+but a new product outcome, service, cost or user-facing constraint cannot be
+authorized by a derived label. Apply the same check to WBS revisions caused by
+new feedback or development discoveries. Keep exact excerpts separate from
+authored claims and confirmation interpretations; missing grounding is unverified.
 
 ### 1.2 Dimensions (10)
 

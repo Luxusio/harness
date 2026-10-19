@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from req_detector import detect_req_need
 
 ORIGINS = {"user_explicit", "user_confirmed", "derived", "assumption", "proposal", "unattributed"}
-GROUNDED = {"user_explicit", "user_confirmed", "derived"}
+USER_ORIGINS = {"user_explicit", "user_confirmed"}
 
 
 def _requirements(items, observable_behaviors, source, status):
@@ -36,13 +36,15 @@ def _requirements(items, observable_behaviors, source, status):
         row = {key: item.get(key, "").strip() for key in ("text", "origin", "source", "evidence", "confirmed_scope")}
         if not row["text"] or row["origin"] not in ORIGINS:
             raise ValueError("each requirement needs a claim and a recognized origin")
-        if row["origin"] in GROUNDED and (not row["source"] or not row["evidence"]):
-            raise ValueError("grounded claims require an identifiable source and relevant exact quote or derivation basis")
+        if row["origin"] in USER_ORIGINS | {"derived"} and (not row["source"] or not row["evidence"]):
+            if status == "accepted" and row["origin"] in USER_ORIGINS:
+                raise ValueError("accepted user claims require an identifiable source and relevant exact quote")
+            row["origin"] = "unattributed"
         if row["origin"] == "user_confirmed" and not row["confirmed_scope"]:
             raise ValueError("user_confirmed needs the particular proposal/scope confirmed; blanket approval is insufficient")
-        if status == "accepted" and row["origin"] not in GROUNDED:
-            raise ValueError("assumptions, proposals and unattributed claims cannot become accepted requirements")
         rows.append(row)
+    if status == "accepted" and not any(row["origin"] in USER_ORIGINS for row in rows):
+        raise ValueError("non-user claims cannot become accepted requirements; include at least one grounded user claim or publish candidate")
     return rows
 
 
@@ -53,16 +55,18 @@ def _cell(value):
 def _claim_table(rows, status):
     if not rows:
         return "- None."
-    lines = ["| Claim | Origin | Source / evidence | Disposition |",
-             "| --- | --- | --- | --- |"]
+    lines = ["| Claim (writer interpretation) | Origin | Source | Exact quote / derivation basis | Confirmed proposal (writer interpretation) | Disposition |",
+             "| --- | --- | --- | --- | --- | --- |"]
     for row in rows:
-        basis = row["source"] + (": " + row["evidence"] if row["evidence"] else "")
-        if row["confirmed_scope"]:
-            basis += " / confirmed scope: " + row["confirmed_scope"]
-        disposition = "accepted (derived)" if status == "accepted" and row["origin"] == "derived" else (
-            "accepted" if status == "accepted" else "candidate; non-binding")
+        if row["origin"] == "derived":
+            disposition = "implementation-only; not an acceptance requirement"
+        elif status == "accepted" and row["origin"] in USER_ORIGINS:
+            disposition = "accepted"
+        else:
+            disposition = "candidate; non-binding"
         lines.append("| " + " | ".join(_cell(value) for value in
-                     (row["text"], row["origin"], basis or "unverified", disposition)) + " |")
+                     (row["text"], row["origin"], row["source"] or "unverified",
+                      row["evidence"] or "unverified", row["confirmed_scope"] or "—", disposition)) + " |")
     return "\n".join(lines)
 
 
@@ -85,7 +89,7 @@ def render_req_doc(title: str, intent: str, observable_behaviors: str,
     status = status.strip() or "candidate"
     rows = _requirements(requirements, observable_behaviors, source, status)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    acceptance = ("Only the accepted rows above are binding; verification cues do not add requirements."
+    acceptance = ("Only accepted user-sourced rows are binding. Derived work and candidates do not add acceptance requirements; verification cues do not add requirements."
                   if status == "accepted" else
                   "None accepted by this scaffold. Candidate claims are not acceptance or close criteria.")
     return (
@@ -97,11 +101,13 @@ def render_req_doc(title: str, intent: str, observable_behaviors: str,
         "## Observable Behavior\n"
         "Source labels and quotes require semantic review against the actual source.\n\n"
         "### User-sourced claims\n"
-        f"{_claim_table([r for r in rows if r['origin'] in {'user_explicit', 'user_confirmed'}], status)}\n\n"
+        f"{_claim_table([r for r in rows if r['origin'] in USER_ORIGINS], status)}\n\n"
         "### Derived constraints (not user requests)\n"
+        "Source identifies the existing requirement/constraint; basis explains necessary implementation work.\n"
+        "Implement and check supported work to satisfy that outcome; do not introduce new product scope.\n\n"
         f"{_claim_table([r for r in rows if r['origin'] == 'derived'], status)}\n\n"
         "### Assumptions / proposals / unattributed claims (non-binding)\n"
-        f"{_claim_table([r for r in rows if r['origin'] not in GROUNDED], status)}\n\n"
+        f"{_claim_table([r for r in rows if r['origin'] not in USER_ORIGINS | {'derived'}], status)}\n\n"
         "## Acceptance Signals\n"
         f"{acceptance}\n\n"
         "## Verification Cues\n"
@@ -169,7 +175,7 @@ def main() -> int:
     parser.add_argument("--non-goals", default="")
     parser.add_argument("--source", default="")
     parser.add_argument("--status", default="candidate", choices=["accepted", "candidate"],
-                        help="candidate by default; accepted requires classified, grounded per-item evidence.")
+                        help="candidate by default; accepted requires grounded user claims and accepts only those rows, never derivations or candidates.")
     parser.add_argument("--path", action="append", default=[])
     args = parser.parse_args()
     requirements = None

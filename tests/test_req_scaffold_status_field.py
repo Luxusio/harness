@@ -123,7 +123,8 @@ def test_confirmation_names_what_was_approved_not_every_assumption():
     with pytest.raises(ValueError, match="particular proposal"):
         render(status="accepted", requirements=[claim("user_confirmed")])
     body = render(status="accepted", requirements=[claim("user_confirmed", confirmed_scope="Use one WBS, as proposed in turn 2")])
-    assert "confirmed scope: Use one WBS" in body
+    assert "Confirmed proposal (writer interpretation)" in body
+    assert "| WBS기반으로 싹 바꿔줘 | Use one WBS, as proposed in turn 2 | accepted |" in body
 
 
 def test_derived_constraints_stay_separate_from_user_requests():
@@ -134,7 +135,44 @@ def test_derived_constraints_stay_separate_from_user_requests():
     users, constraints = body.split("### Derived constraints", 1)
     assert explicit["evidence"] in users
     assert derived["text"] not in users
-    assert "accepted (derived)" in constraints and "CONTRACTS.md:C-04" in constraints
+    assert "implementation-only; not an acceptance requirement" in constraints
+    assert "accepted (derived)" not in body and "CONTRACTS.md:C-04" in constraints
+    assert "Only accepted user-sourced rows are binding" in body
+
+
+def test_accepted_document_can_keep_candidates_without_accepting_them():
+    body = render(status="accepted", requirements=[claim(), claim("assumption"), claim("proposal"), claim("unattributed")])
+    users, candidates = body.split("### Assumptions / proposals", 1)
+    assert users.count("| accepted |") == 1
+    assert candidates.count("candidate; non-binding") == 3
+    assert "| accepted |" not in candidates
+
+
+def test_derived_only_document_cannot_claim_accepted_requirements():
+    import pytest
+    with pytest.raises(ValueError, match="at least one grounded user claim"):
+        render(status="accepted", requirements=[claim("derived")])
+
+
+def test_missing_grounding_stays_unattributed_and_nonbinding(origin, field):
+    row = claim(origin)
+    row[field] = " "
+    body = render(requirements=[row])
+    assert "unattributed" in body and "candidate; non-binding" in body
+    assert "| " + origin + " |" not in body
+    assert "implementation-only" not in body
+    if origin == "derived":
+        accepted = render(status="accepted", requirements=[claim(), row])
+        assert accepted.count("| accepted |") == 1
+        assert "unattributed" in accepted and "candidate; non-binding" in accepted
+
+
+def test_source_quote_and_authored_interpretation_are_separate_escaped_cells():
+    row = dict(text="Claim|interpretation\nextra", origin="user_confirmed", source="turn|2\nlocation",
+               evidence="yes|go\non", confirmed_scope="Proposal|A\nonly")
+    body = render(status="accepted", requirements=[row])
+    assert "| Source | Exact quote / derivation basis | Confirmed proposal (writer interpretation) |" in body
+    assert "| Claim\\|interpretation<br>extra | user_confirmed | turn\\|2<br>location | yes\\|go<br>on | Proposal\\|A<br>only | accepted |" in body
 
 
 def test_mixed_candidate_claims_do_not_become_acceptance_criteria():
@@ -170,6 +208,20 @@ def test_invalid_accepted_write_preserves_existing_document(tmp_path):
     with pytest.raises(ValueError):
         mod.create_req_doc(str(tmp_path), "harness", "source", "Changed", "Invented behavior", "Check", status="accepted")
     assert (tmp_path / rel).read_bytes() == original
+    with pytest.raises(ValueError, match="at least one grounded user claim"):
+        mod.create_req_doc(*args, status="accepted", requirements=[claim("derived")])
+    assert (tmp_path / rel).read_bytes() == original
+
+
+def test_accepted_append_only_accepts_its_user_rows(tmp_path):
+    mod = _load_req_scaffold()
+    args = (str(tmp_path), "harness", "source", "Interpretation", "", "Check outcomes")
+    rel = mod.create_req_doc(*args, status="accepted", requirements=[claim()])
+    mod.create_req_doc(*args, status="accepted", requirements=[claim(), claim("derived"), claim("proposal")])
+    old, new = (tmp_path / rel).read_text().split("## Sourced Accepted Update", 1)
+    assert old.count("| accepted |") == new.count("| accepted |") == 1
+    assert "implementation-only; not an acceptance requirement" in new
+    assert "candidate; non-binding" in new
 
 
 def test_cli_requires_classification_before_accepted_publication(tmp_path):
@@ -178,11 +230,14 @@ def test_cli_requires_classification_before_accepted_publication(tmp_path):
     result = subprocess.run(common + ["--observable-behavior", "Invented behavior"], capture_output=True, text=True)
     assert result.returncode == 2 and not (tmp_path / "doc").exists()
     source = tmp_path / "requirements.json"
-    source.write_text(json.dumps([claim()]))
+    source.write_text(json.dumps([claim(), claim("derived"), claim("proposal")]))
     result = subprocess.run(common + ["--requirements-file", str(source)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     body = (tmp_path / result.stdout.strip()).read_text()
     assert "status: accepted" in body and "user_explicit" in body
+    assert body.count("| accepted |") == 1
+    assert "implementation-only; not an acceptance requirement" in body
+    assert "candidate; non-binding" in body
 
 
 def test_both_runtime_reviewers_check_source_entailment_not_only_labels():
@@ -193,6 +248,18 @@ def test_both_runtime_reviewers_check_source_entailment_not_only_labels():
         assert "authentic quote does not prove" in body
         assert "grounding is unverified" in body
         assert "candidate assumptions promoted into mandatory WBS/acceptance/close gates" in body
+        assert "An accepted document does not accept derived rows or candidate rows" in body
+        assert "Supported derived work may be implemented, tested and verified" in body
+        assert "cannot authorize a new product outcome, service, cost" in body
+
+
+def test_planning_keeps_derived_implementation_autonomous_without_expanding_scope():
+    for path in ("write-artifacts.md", "review-phases.md"):
+        body = (REPO / "plugin/skills/plan" / path).read_text()
+        assert "Only user_explicit/scoped user_confirmed rows" in body
+        assert "standing constraint" in body
+        assert "autonomously" in body and "user-facing constraint" in body
+        assert "development discoveries" in body
 
 
 def pytest_generate_tests(metafunc):
@@ -201,6 +268,8 @@ def pytest_generate_tests(metafunc):
                                                                        'proposal',
                                                                        'unattributed'])],
      'test_source_label_without_relevant_evidence_is_not_grounding': [('field',
-                                                                       ['source', 'evidence'])]}
+                                                                       ['source', 'evidence'])],
+     'test_missing_grounding_stays_unattributed_and_nonbinding': [
+         ('origin', ['user_explicit', 'derived']), ('field', ['source', 'evidence'])]}
     for argument, values in cases.get(metafunc.function.__name__, []):
         metafunc.parametrize(argument, values)

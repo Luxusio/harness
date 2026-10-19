@@ -57,6 +57,15 @@ interpretations name the proposal actually approved; a bare “continue” canno
 authorize unrelated assumptions. Derived technical necessities cite their
 basis and remain labelled derived, never silently user-requested. Intent
 summaries, non-goals and verification cues cannot launder extra accepted scope.
+Only user_explicit/scoped user_confirmed rows may be accepted user requirements.
+An accepted document does not accept derived rows or candidate rows within it.
+Keep source locators and exact quotes separate from the writer's claim and
+confirmation interpretation. A derived row links its existing requirement or
+standing constraint and explains why implementation work is necessary.
+Supported derived work may be implemented, tested and verified to satisfy that
+outcome autonomously; it is not a new acceptance requirement. A derived label
+cannot authorize a new product outcome, service, cost or user-facing constraint.
+Missing source/basis stays unverified and non-binding.
 FAIL on invented/misread user requirements, missing provenance for new claims,
 or candidate assumptions promoted into mandatory WBS/acceptance/close gates.
 Check candidate append sections inside older accepted documents separately;
