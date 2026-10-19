@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import base64
 import copy
-from contextlib import contextmanager
+import ctypes
+import errno
+from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from functools import wraps
 import secrets
@@ -200,10 +202,33 @@ def _read(repo, relative, limit=LIMIT):
         return None
 
 
-def _write(repo, relative, data):
+def _rename_new(parent, temporary, destination):
+    """Atomic no-replace rename on the supported Linux/macOS runtimes."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(libc, "renameat2", None)
+    flag = 1  # RENAME_NOREPLACE
+    if rename is None:
+        rename = getattr(libc, "renameatx_np", None)
+        flag = 4  # RENAME_EXCL on macOS
+    _require(rename is not None, "atomic no-replace publication is unavailable")
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(parent, os.fsencode(temporary), parent, os.fsencode(destination), flag) != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise FileExistsError(error, os.strerror(error), destination)
+        raise OSError(error, os.strerror(error), destination)
+
+
+_UNSPECIFIED = object()
+
+
+def _write(repo, relative, data, *, expected=_UNSPECIFIED):
     parts = _parts(relative)
     with _directory(repo, parts[:-1], create=True) as (parent, bound):
         before = _read_at(parent, parts[-1], relative, 16 * LIMIT)
+        if expected is not _UNSPECIFIED:
+            _require(_hash(before) == expected, "destination changed after preparation")
         temporary = ".migration-" + secrets.token_hex(16)
         fd = None
         try:
@@ -219,7 +244,13 @@ def _write(repo, relative, data):
             bound()
             _require(_read_at(parent, parts[-1], relative, 16 * LIMIT) == before,
                      "destination changed before publication")
-            os.replace(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent)
+            if before is None:
+                try:
+                    _rename_new(parent, temporary, parts[-1])
+                except FileExistsError as exc:
+                    raise ValueError("Goal migration: destination changed before publication") from exc
+            else:
+                os.replace(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent)
             os.fsync(parent)
             bound()
         finally:
@@ -534,6 +565,7 @@ def apply(repo_root):
     fd = _open_lock(repo, ARCHIVE + "/.lock")
     goal_fd = None
     batch_fd = None
+    task_locks = ExitStack()
     try:
         _require(stat.S_ISREG(os.fstat(fd).st_mode) and os.fstat(fd).st_nlink == 1, "unsafe migration lock")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -553,6 +585,15 @@ def apply(repo_root):
                 fcntl.flock(batch_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ValueError("Goal migration: batch writer active; retry after it exits") from exc
+        # WBS writers use the same task-directory flock for their receipt
+        # transaction. Hold it across hash recheck and metadata replacement.
+        for relative in sorted(planned_destinations):
+            if relative.endswith("/WBS.json"):
+                task_fd, _ = task_locks.enter_context(_directory(repo, _parts(relative)[:-1], create=True))
+                try:
+                    fcntl.flock(task_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise ValueError("Goal migration: WBS writer active; retry after it exits") from exc
         journal = _manifest(repo)
         if journal is None:
             current = _collect(repo)
@@ -584,7 +625,7 @@ def apply(repo_root):
         for relative, record in journal["destinations"].items():
             _require(_hash(_read(repo, relative)) in {record["before"], record["after"]}, "destination changed")
             if _hash(_read(repo, relative)) != record["after"]:
-                _write(repo, relative, base64.b64decode(record["data"], validate=True))
+                _write(repo, relative, base64.b64decode(record["data"], validate=True), expected=record["before"])
         _manifest(repo)
         for relative, record in journal["sources"].items():
             _retire(repo, relative, record["sha256"])
@@ -593,8 +634,11 @@ def apply(repo_root):
         _write(repo, MANIFEST, _encode(journal))
         return _report(journal["sources"], journal["destinations"], journal["recoveries"], "complete")
     finally:
-        if batch_fd is not None:
-            os.close(batch_fd)
-        if goal_fd is not None:
-            os.close(goal_fd)
-        os.close(fd)
+        try:
+            task_locks.close()
+        finally:
+            if batch_fd is not None:
+                os.close(batch_fd)
+            if goal_fd is not None:
+                os.close(goal_fd)
+            os.close(fd)

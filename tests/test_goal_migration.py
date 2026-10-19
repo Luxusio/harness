@@ -171,11 +171,11 @@ def test_interrupted_publication_resumes_exactly(tmp_path, monkeypatch, owner, f
     original_write = migration._write
     original_retire = migration._retire
     fired = []
-    def fail_write(repo, relative, data):
+    def fail_write(repo, relative, data, **kwargs):
         if relative.endswith("MIGRATION.md") and not fired:
             fired.append(True)
             raise OSError("interrupted publication")
-        return original_write(repo, relative, data)
+        return original_write(repo, relative, data, **kwargs)
     def fail_retire(repo, relative, expected):
         if relative.startswith(migration.GOALS + "/") and not fired:
             fired.append(True)
@@ -197,10 +197,10 @@ def test_interrupted_publication_resumes_exactly(tmp_path, monkeypatch, owner, f
 def test_interrupted_retry_refuses_external_changes(tmp_path, monkeypatch, owner, changed):
     source = row(tmp_path)
     original = migration._write
-    def interrupt(repo, relative, data):
+    def interrupt(repo, relative, data, **kwargs):
         if relative.endswith("MIGRATION.md"):
             raise OSError("stop")
-        return original(repo, relative, data)
+        return original(repo, relative, data, **kwargs)
     monkeypatch.setattr(migration, "_write", interrupt)
     with pytest.raises(OSError):
         migration.apply(tmp_path)
@@ -233,7 +233,7 @@ def test_durable_commit_stages_retry_without_loss(tmp_path, monkeypatch, owner, 
     original = source.read_bytes()
     original_write = migration._write
     fired = []
-    def interrupt(repo, relative, data):
+    def interrupt(repo, relative, data, **kwargs):
         matches = (failure_stage == "archive" and "/original/" in relative
                    or failure_stage == "prepare_manifest" and relative == migration.MANIFEST
                    and json.loads(data)["status"] == "prepared"
@@ -242,7 +242,7 @@ def test_durable_commit_stages_retry_without_loss(tmp_path, monkeypatch, owner, 
         if matches and not fired:
             fired.append(True)
             raise OSError("interrupted durable stage")
-        return original_write(repo, relative, data)
+        return original_write(repo, relative, data, **kwargs)
     monkeypatch.setattr(migration, "_write", interrupt)
     with pytest.raises(OSError):
         migration.apply(tmp_path)
@@ -338,7 +338,7 @@ def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative,
     marker = outside / Path(relative).name
     marker.write_bytes(b"outside remains untouched")
     moved = parent.with_name(parent.name + "-retained")
-    original_open, original_replace = os.open, os.replace
+    original_open, original_replace, original_new = os.open, os.replace, migration._rename_new
     fired = []
     def swap():
         if not fired:
@@ -353,6 +353,11 @@ def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative,
         if stage == "publication":
             swap()
         return original_replace(source, destination, **kwargs)
+    def publishing(parent_fd, temporary, destination):
+        if stage == "publication":
+            swap()
+        return original_new(parent_fd, temporary, destination)
+    monkeypatch.setattr(migration, "_rename_new", publishing)
     monkeypatch.setattr(os, "open", opening)
     monkeypatch.setattr(os, "replace", replacing)
     with pytest.raises(ValueError, match="binding changed"):
@@ -511,3 +516,75 @@ def test_fd_directory_enumeration_rebind_refuses_external_rows(tmp_path, monkeyp
     with pytest.raises(ValueError, match="binding changed"):
         migration._entries(tmp_path, migration.GOALS)
     assert (outside / "secret").read_text() == "untouched"
+
+
+def test_publication_uses_journal_baseline_and_preserves_late_user_note(tmp_path, monkeypatch, owner):
+    source = row(tmp_path)
+    original = migration._write
+    target = migration.preview(tmp_path)['destinations'][0]
+    fired = []
+    def publish(repo, relative, data, **kwargs):
+        if relative == target and not fired:
+            fired.append(True)
+            write(tmp_path, target, b'concurrent user content')
+        return original(repo, relative, data, **kwargs)
+    monkeypatch.setattr(migration, '_write', publish)
+    with pytest.raises(ValueError, match='destination changed'):
+        migration.apply(tmp_path)
+    assert (tmp_path / target).read_bytes() == b'concurrent user content'
+    assert source.exists()
+    assert json.loads((tmp_path / migration.MANIFEST).read_text())['status'] == 'prepared'
+
+
+def test_absent_publication_never_replaces_a_late_created_file(tmp_path, monkeypatch):
+    import os
+    original = migration._rename_new
+    def publish(parent, temporary, destination):
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600,
+                     dir_fd=parent)
+        try:
+            os.write(fd, b'late user content')
+        finally:
+            os.close(fd)
+        return original(parent, temporary, destination)
+    monkeypatch.setattr(migration, '_rename_new', publish)
+    with pytest.raises(ValueError, match='destination changed'):
+        migration._write(tmp_path, 'note.md', b'imported content', expected=None)
+    assert (tmp_path / 'note.md').read_bytes() == b'late user content'
+
+
+def test_wbs_destination_respects_its_existing_writer_lock(tmp_path, owner):
+    import fcntl
+    import os
+    value = spec('GOAL__wbs-old')
+    state = dict(version=1, nodes=[dict(id='A', title='Observed result', weight=1)],
+                 checks={}, run_id='old', started_at=1, last_progress_at=1,
+                 batch_goal_id='GOAL__wbs-old', batch=value)
+    path = write(tmp_path, 'doc/harness/tasks/TASK__integration/WBS.json', state)
+    before = path.read_bytes()
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(ValueError, match='WBS writer active'):
+            migration.apply(tmp_path)
+    finally:
+        os.close(fd)
+    assert path.read_bytes() == before
+
+
+def test_interruption_after_atomic_new_publication_retries_without_hardlinks(tmp_path, monkeypatch, owner):
+    source = row(tmp_path)
+    destination = migration.preview(tmp_path)["destinations"][0]
+    original = migration._rename_new
+    fired = []
+    def publish(parent, temporary, target):
+        original(parent, temporary, target)
+        if target == "MIGRATION.md" and not fired:
+            fired.append(True)
+            raise OSError("interrupted after atomic rename")
+    monkeypatch.setattr(migration, "_rename_new", publish)
+    with pytest.raises(ValueError, match="unsafe storage path"):
+        migration.apply(tmp_path)
+    assert source.exists() and (tmp_path / destination).stat().st_nlink == 1
+    monkeypatch.setattr(migration, "_rename_new", original)
+    assert migration.apply(tmp_path)["status"] == "complete"
