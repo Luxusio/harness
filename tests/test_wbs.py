@@ -349,7 +349,7 @@ def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, mo
     assert call("task_start", task_id="parent").get("isError")
     assert not call("task_blocked", task_id="parent", blocked_reason="Waiting for isolated WBS leads to complete their worktree handoff.",
                     unblock_condition="Integrate and close the exact bound batch, then resume parent for combined verification.").get("isError")
-    pool.init(pack["requests"])
+    pool.init(pack["requests"], owner="TASK__parent")
     pool.claim()
     for index, request in enumerate(pack["requests"]):
         slug, worker = request["slug"], "worker-" + str(index)
@@ -476,6 +476,8 @@ def test_public_migration_is_explicit_and_owner_authorized(tmp_path, monkeypatch
     from test_goal_migration import row
     path = row(tmp_path)
     owner = HarnessMcpServerTests()
+    from test_codex_hook_wrappers import _load
+    _load("_lib")  # Hook tests share the canonical writer authority, never reload it.
     blocked = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='open', wbs_id='sample'))
     assert blocked.get('isError') and 'migrate' in blocked['structuredContent']['error']
     preview = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='migrate'))

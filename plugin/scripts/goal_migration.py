@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import base64
 import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
+import secrets
 import fcntl
 import hashlib
 import json
@@ -51,29 +55,124 @@ def _encode(value):
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
 
 
-def _path(repo, relative):
+_ROOT = ContextVar("goal_migration_root", default=None)
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _safe_dir(fd):
+    info = os.fstat(fd)
+    _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+             and not stat.S_IMODE(info.st_mode) & 0o022, "unsafe storage directory")
+    return info
+
+
+def _same(left, right):
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _parts(relative):
     _require(isinstance(relative, str) and relative and not relative.startswith("/")
              and all(p not in ("", ".", "..") for p in relative.split("/")), "invalid relative path")
-    path = repo
-    for part in relative.split("/"):
-        path = path / part
-        if os.path.lexists(path):
-            info = path.lstat()
-            _require(not stat.S_ISLNK(info.st_mode), "symlink path refused: " + relative)
-            _require(stat.S_ISDIR(info.st_mode) or path == repo / relative,
-                     "non-directory ancestor: " + relative)
-    return path
+    return relative.split("/")
 
 
-def _read(repo, relative, limit=LIMIT):
-    path = _path(repo, relative)
+def _root_fd(repo):
+    binding = _ROOT.get()
+    if binding is not None:
+        _require(str(repo) == binding[0], "repository binding changed")
+        fd = os.dup(binding[1])
+    else:
+        fd = os.open(repo, _DIR_FLAGS)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = _safe_dir(fd)
+        _require(_same(info, os.stat(repo, follow_symlinks=False)), "repository path rebound")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _pinned(function):
+    @wraps(function)
+    def call(repo_root):
+        if function.__name__ == "apply":
+            from _lib import _trusted_control_writer
+            _require(_trusted_control_writer(), "apply requires the WBS MCP owner")
+        repo = Path(repo_root).absolute()
+        fd = _root_fd(repo)
+        token = _ROOT.set((str(repo), fd))
+        try:
+            return function(repo)
+        finally:
+            _ROOT.reset(token)
+            os.close(fd)
+    return call
+
+
+@contextmanager
+def _directory(repo, parts, *, create=False):
+    root = _root_fd(repo)
+    chain, opened = [], [root]
+    def bound():
+        try:
+            _require(_same(_safe_dir(root), os.stat(repo, follow_symlinks=False)), "repository path rebound")
+            for parent, name, child in chain:
+                _require(_same(_safe_dir(child), os.stat(name, dir_fd=parent, follow_symlinks=False)),
+                         "directory binding changed")
+        except FileNotFoundError as exc:
+            raise ValueError("Goal migration: directory binding disappeared") from exc
+    try:
+        for name in parts:
+            bound()
+            parent = opened[-1]
+            try:
+                child = os.open(name, _DIR_FLAGS, dir_fd=parent)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(name, 0o700, dir_fd=parent)
+                os.fsync(parent)
+                child = os.open(name, _DIR_FLAGS, dir_fd=parent)
+            opened.append(child)
+            chain.append((parent, name, child))
+            bound()
+        yield opened[-1], bound
+        bound()
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            raise
+        raise ValueError("Goal migration: unsafe storage path") from exc
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+
+
+def _path(repo, relative):
+    # Path is only a selector for non-I/O callers. All storage operations below
+    # independently use no-follow descriptors, never this returned path.
+    parts = _parts(relative)
+    try:
+        with _directory(repo, parts[:-1]) as (parent, bound):
+            try:
+                info = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+                _require(not stat.S_ISLNK(info.st_mode), "symlink path refused: " + relative)
+            except FileNotFoundError:
+                pass
+            bound()
+    except FileNotFoundError:
+        pass
+    return repo.joinpath(*parts)
+
+
+def _read_at(parent, name, relative, limit):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
     except FileNotFoundError:
         return None
     try:
         info = os.fstat(fd)
-        _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= limit,
+        _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+                 and not stat.S_IMODE(info.st_mode) & 0o022 and info.st_size <= limit,
                  "unsafe or oversized file: " + relative)
         data = b""
         while len(data) <= limit:
@@ -84,36 +183,125 @@ def _read(repo, relative, limit=LIMIT):
         after = os.fstat(fd)
         _require(len(data) <= limit and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
                  == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns), "file changed while reading")
-        _require(path.lstat().st_ino == info.st_ino, "file replaced while reading")
+        _require(_same(info, os.stat(name, dir_fd=parent, follow_symlinks=False)), "file replaced while reading")
         return data
     finally:
         os.close(fd)
 
 
+def _read(repo, relative, limit=LIMIT):
+    parts = _parts(relative)
+    try:
+        with _directory(repo, parts[:-1]) as (parent, bound):
+            data = _read_at(parent, parts[-1], relative, limit)
+            bound()
+            return data
+    except FileNotFoundError:
+        return None
+
+
 def _write(repo, relative, data):
-    from _lib import _atomic_text_write
-    path = _path(repo, relative)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    ancestor = path.parent
-    while ancestor != repo:
-        parent_fd = os.open(ancestor.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parts = _parts(relative)
+    with _directory(repo, parts[:-1], create=True) as (parent, bound):
+        before = _read_at(parent, parts[-1], relative, 16 * LIMIT)
+        temporary = ".migration-" + secrets.token_hex(16)
+        fd = None
         try:
-            os.fsync(parent_fd)
+            bound()
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=parent)
+            view = memoryview(data)
+            while view:
+                written = os.write(fd, view)
+                _require(written > 0, "short migration write")
+                view = view[written:]
+            os.fsync(fd)
+            bound()
+            _require(_read_at(parent, parts[-1], relative, 16 * LIMIT) == before,
+                     "destination changed before publication")
+            os.replace(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent)
+            os.fsync(parent)
+            bound()
         finally:
-            os.close(parent_fd)
-        ancestor = ancestor.parent
-    _path(repo, relative)
-    _atomic_text_write(str(path), data.decode("utf-8"))
-    file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            if fd is not None:
+                os.close(fd)
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+
+
+def _retire(repo, relative, expected):
+    if _read(repo, relative) is None:
+        return
+    parts = _parts(relative)
+    with _directory(repo, parts[:-1]) as (parent, bound):
+        current = _read_at(parent, parts[-1], relative, LIMIT)
+        if current is not None:
+            _require(_hash(current) == expected, "source changed before retirement")
+            bound()
+            os.unlink(parts[-1], dir_fd=parent)
+            os.fsync(parent)
+            bound()
+
+
+def _remove_empty(repo, relative):
+    parts = _parts(relative)
+    with _directory(repo, parts[:-1]) as (parent, bound):
+        try:
+            child = os.open(parts[-1], _DIR_FLAGS, dir_fd=parent)
+        except FileNotFoundError:
+            return
+        try:
+            info = _safe_dir(child)
+            _require(not os.listdir(child), "legacy directory acquired new files")
+            bound()
+            _require(_same(info, os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)),
+                     "legacy directory binding changed")
+            os.rmdir(parts[-1], dir_fd=parent)
+            os.fsync(parent)
+            bound()
+        finally:
+            os.close(child)
+
+
+def _entries(repo, relative):
+    """Bounded no-follow directory enumeration; absent directory returns None."""
     try:
-        os.fsync(file_fd)
-    finally:
-        os.close(file_fd)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        with _directory(repo, _parts(relative)) as (directory, bound):
+            names = os.listdir(directory)
+            _require(len(names) <= 4096, "too many directory entries")
+            entries = [(name, os.stat(name, dir_fd=directory, follow_symlinks=False)) for name in sorted(names)]
+            bound()
+            return entries
+    except FileNotFoundError:
+        return None
+
+
+def _control(repo, relative):
+    from _lib import _validate_task_control
+    raw = _read(repo, relative)
+    return _validate_task_control(_json(raw)) if raw is not None else {}
+
+
+def _open_lock(repo, relative, *, directory=False):
+    parts = _parts(relative)
+    fd = None
     try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        with _directory(repo, parts[:-1], create=not directory) as (parent, bound):
+            flags = _DIR_FLAGS if directory else os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+            fd = os.open(parts[-1], flags, 0o600, dir_fd=parent)
+            info = os.fstat(fd)
+            _require(info.st_uid == os.getuid() and not stat.S_IMODE(info.st_mode) & 0o022
+                     and (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode) and info.st_nlink == 1),
+                     "unsafe migration lock")
+            bound()
+            _require(_same(info, os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)), "lock binding changed")
+        return fd
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        raise
 
 
 def _legacy_spec(goal_id, task_id, value):
@@ -134,12 +322,26 @@ def _legacy_spec(goal_id, task_id, value):
     return dict(task_id=task_id, **expected)
 
 
-def _binding(repo, goal_id, task_id, spec, recoveries, *, require_pool):
+def _binding(repo, goal_id, task_id, spec, recoveries, destination, *, require_pool):
     import work_pack
     _require(isinstance(goal_id, str) and IDENT.fullmatch(goal_id) and goal_id.startswith("GOAL__"),
              "invalid legacy Goal identity")
     result = _legacy_spec(goal_id, task_id, spec)
-    route = work_pack.route(str(repo), task_id, result)
+    import batch_state as batch
+    relative = "doc/harness/runtime/batches/" + result["batch_id"] + ".json"
+    raw = _read(repo, relative)
+    if raw is None:
+        route = dict(batch_state="missing", next_action="Initialize this exact intake through batch_state with --owner-task-id " + task_id + ".")
+    else:
+        data = batch.validate(_json(raw), str(repo), result["batch_id"])
+        _require(data.get("owner_task_id") in (None, task_id), "conflicting pool owner")
+        staged = dict(data, owner_task_id=task_id)
+        try:
+            route = work_pack.inspect_pool(str(repo), task_id, result, staged)
+        except batch.Refusal as exc:
+            raise ValueError("Goal migration: invalid pool proof: " + str(exc)) from exc
+        if staged != data:
+            destination(relative, raw, _encode(staged))
     recovery = dict(wbs_id="WBS__" + task_id[6:], **result,
                     next_action=route.get("next_action", "Resume the retained pool through batch_state."))
     if route.get("batch_state") == "missing" and require_pool:
@@ -149,13 +351,12 @@ def _binding(repo, goal_id, task_id, spec, recoveries, *, require_pool):
 
 
 def _collect(repo):
-    from _lib import native_wbs_id, read_task_control
+    from _lib import native_wbs_id
     sources, destinations, recoveries = {}, {}, []
-    goals_path = _path(repo, GOALS)
+    goal_entries = _entries(repo, GOALS)
     rows = {}
-    if goals_path.exists():
-        _require(goals_path.is_dir(), "invalid Goal directory")
-        names = sorted(p.name for p in goals_path.iterdir())
+    if goal_entries is not None:
+        names = [name for name, _ in goal_entries]
         _require(len(names) <= MAX_RECORDS + 2, "too many Goal records")
         for name in names:
             _require(name == ".lock" or name == "current.json" or re.fullmatch(r"GOAL__[A-Za-z0-9_.-]{1,180}\.json", name),
@@ -202,14 +403,14 @@ def _collect(repo):
             _path(repo, directory)
             if "batch" not in child:
                 continue
-            spec = _binding(repo, gid, tid, child["batch"], recoveries, require_pool=True)
+            spec = _binding(repo, gid, tid, child["batch"], recoveries, destination, require_pool=True)
             for identity in [tid] + ["TASK__" + item["slug"] for item in spec["requests"]]:
                 _require(identity not in reserved, "duplicate legacy pack reservation")
                 reserved[identity] = gid
             relative = directory + "/WBS.json"
             raw = _read(repo, relative)
             if raw is None:
-                control = read_task_control(str(_path(repo, directory)))
+                control = _control(repo, directory + "/TASK.json")
                 _require(_read(repo, directory + "/TASK.json") is None or bool(control), "invalid existing task control")
                 value = dict(version=1, nodes=[], checks={}, run_id=(control or {}).get("run_id", ""),
                              started_at=0, last_progress_at=0, pack_only=True, batch=spec)
@@ -226,21 +427,17 @@ def _collect(repo):
                 "They do not create executable work, a WBS baseline, or measured progress.\n\n```json\n"
                 + json.dumps(records, ensure_ascii=False, sort_keys=True, indent=2) + "\n```\n")
         destination(relative, before, text.encode())
-    tasks = _path(repo, "doc/harness/tasks")
-    if tasks.exists():
-        _require(tasks.is_dir(), "invalid tasks directory")
-        entries = sorted(tasks.iterdir())
-        _require(len(entries) <= 4096, "too many task directories")
-        for directory in entries:
-            if not directory.name.startswith("TASK__"):
+    entries = _entries(repo, "doc/harness/tasks")
+    if entries is not None:
+        for name, info in entries:
+            if not name.startswith("TASK__"):
                 continue
-            _require(IDENT.fullmatch(directory.name), "invalid task directory")
-            if directory.is_symlink():
-                continue  # Never traverse unrelated directories outside migration ownership.
-            _path(repo, "doc/harness/tasks/" + directory.name)
-            if not directory.is_dir():
+            _require(IDENT.fullmatch(name), "invalid task directory")
+            if stat.S_ISLNK(info.st_mode):
+                continue  # Unrelated symlink directories never enter migration ownership.
+            if not stat.S_ISDIR(info.st_mode):
                 continue
-            relative = "doc/harness/tasks/" + directory.name + "/WBS.json"
+            relative = "doc/harness/tasks/" + name + "/WBS.json"
             raw = _read(repo, relative)
             if raw is None:
                 continue
@@ -256,8 +453,8 @@ def _collect(repo):
             for container in containers:
                 _require(isinstance(container, dict), "invalid WBS pack binding")
                 if "batch_goal_id" in container:
-                    container["batch"] = _binding(repo, container["batch_goal_id"], directory.name,
-                                                 container.get("batch"), recoveries, require_pool=False)
+                    container["batch"] = _binding(repo, container["batch_goal_id"], name,
+                                                 container.get("batch"), recoveries, destination, require_pool=False)
                     del container["batch_goal_id"]
                     changed = True
             if changed:
@@ -293,7 +490,7 @@ def _manifest(repo):
         if data["status"] == "complete":
             _require(current is None, "retired source recreated; explicit reconciliation required")
     for relative, record in data["destinations"].items():
-        _require(re.fullmatch(r"doc/harness/tasks/TASK__[A-Za-z0-9_.-]{1,180}/(?:WBS.json|MIGRATION.md)", relative),
+        _require(re.fullmatch(r"(?:doc/harness/tasks/TASK__[A-Za-z0-9_.-]{1,180}/(?:WBS.json|MIGRATION.md)|doc/harness/runtime/batches/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json)", relative),
                  "invalid migration destination")
         _require(isinstance(record, dict) and set(record) == {"before", "after", "data"}
                  and isinstance(record["after"], str) and re.fullmatch(r"[0-9a-f]{64}", record["after"])
@@ -307,13 +504,14 @@ def _manifest(repo):
         _require(_hash(_read(repo, relative)) in ({record["after"]} if data["status"] == "complete" else {record["before"], record["after"]}), "destination changed after preparation")
         original = _read(repo, ARCHIVE + "/original/" + relative)
         _require(_hash(original) == record["before"], "destination original archive changed")
-    directory = _path(repo, GOALS)
-    if directory.exists():
-        _require({GOALS + "/" + p.name for p in directory.iterdir()} <= data["sources"].keys(),
+    entries = _entries(repo, GOALS)
+    if entries is not None:
+        _require({GOALS + "/" + name for name, _ in entries} <= data["sources"].keys(),
                  "new legacy source after preparation")
     return data
 
 
+@_pinned
 def preview(repo_root):
     repo = Path(repo_root).resolve(strict=True)
     journal = _manifest(repo)
@@ -322,9 +520,8 @@ def preview(repo_root):
     return _report(*_collect(repo), "preview")
 
 
+@_pinned
 def apply(repo_root):
-    from _lib import _trusted_control_writer
-    _require(_trusted_control_writer(), "apply requires the WBS MCP owner")
     repo = Path(repo_root).resolve(strict=True)
     # Refuse all bad inputs before creating archive/lock state.
     initial = _manifest(repo)
@@ -334,21 +531,28 @@ def apply(repo_root):
         _require(not report["blockers"], "missing legacy pool; preview returns exact initialization intake")
         if not sources and not destinations:
             return dict(report, status="complete")
-    directory = _path(repo, ARCHIVE)
-    directory.mkdir(parents=True, exist_ok=True)
-    lock = _path(repo, ARCHIVE + "/.lock")
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    fd = _open_lock(repo, ARCHIVE + "/.lock")
     goal_fd = None
+    batch_fd = None
     try:
         _require(stat.S_ISREG(os.fstat(fd).st_mode) and os.fstat(fd).st_nlink == 1, "unsafe migration lock")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        goals = _path(repo, GOALS)
-        if goals.exists():
-            goal_fd = os.open(goals, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            goal_fd = _open_lock(repo, GOALS, directory=True)
+        except FileNotFoundError:
+            pass
+        if goal_fd is not None:
             try:
                 fcntl.flock(goal_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ValueError("Goal migration: legacy writer active; retry after it exits") from exc
+        planned_destinations = initial["destinations"] if initial is not None else destinations
+        if any(p.startswith("doc/harness/runtime/batches/") for p in planned_destinations):
+            batch_fd = _open_lock(repo, "doc/harness/runtime/batches/.lock")
+            try:
+                fcntl.flock(batch_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValueError("Goal migration: batch writer active; retry after it exits") from exc
         journal = _manifest(repo)
         if journal is None:
             current = _collect(repo)
@@ -383,22 +587,14 @@ def apply(repo_root):
                 _write(repo, relative, base64.b64decode(record["data"], validate=True))
         _manifest(repo)
         for relative, record in journal["sources"].items():
-            current = _read(repo, relative)
-            if current is not None:
-                _require(_hash(current) == record["sha256"], "source changed before retirement")
-                _path(repo, relative).unlink()
-        goals = _path(repo, GOALS)
-        if goals.exists():
-            goals.rmdir()
-            fd_parent = os.open(goals.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(fd_parent)
-            finally:
-                os.close(fd_parent)
+            _retire(repo, relative, record["sha256"])
+        _remove_empty(repo, GOALS)
         journal["status"] = "complete"
         _write(repo, MANIFEST, _encode(journal))
         return _report(journal["sources"], journal["destinations"], journal["recoveries"], "complete")
     finally:
+        if batch_fd is not None:
+            os.close(batch_fd)
         if goal_fd is not None:
             os.close(goal_fd)
         os.close(fd)

@@ -48,6 +48,7 @@ def make_spec(repo_root: str, task_id: str, requests: list) -> dict:
             records = batch.load_all(directory, repo)
         existing = records.get(spec["batch_id"])
         if existing is not None:
+            batch.require(existing.get("owner_task_id") == task_id, "work-pack pool owner mismatch")
             batch.require(batch.normalize_requests(existing["requests"]) == spec["requests"],
                           "work-pack batch intake differs from existing pool")
         else:
@@ -103,7 +104,7 @@ an existing pool keeps its reservation, recovery, and cleanup ownership.
         directory = os.path.join(repo, "doc/harness/runtime/batches")
         path = os.path.join(directory, expected["batch_id"] + ".json")
         result = {**copy.deepcopy(expected), "route": "batch", "batch_state": "missing",
-                  "next_action": "Initialize this exact batch intake, then dispatch ready reservations through batch_state."}
+                  "next_action": "Initialize this exact batch intake with --owner-task-id " + task_id + ", then dispatch ready reservations through batch_state."}
         if not os.path.lexists(directory):
             # Validate existing ancestors even when this is the first pool.
             existing = directory
@@ -115,29 +116,37 @@ an existing pool keeps its reservation, recovery, and cleanup ownership.
         if not os.path.lexists(path):
             return result
         data = batch.validate(batch.read_json(path), repo, expected["batch_id"])
-        batch.require(batch.normalize_requests(data["requests"]) == expected["requests"],
-                      "work-pack batch intake differs from existing pool")
-        result["batch_state"] = data["status"]
-        unfinished = {item["slug"]: item["status"] for item in data["requests"]
-                      if item["status"] != "integrated"}
-        if data["halted"] or unfinished:
-            result["unfinished"] = unfinished
-            if data["halted"] or any(status in {"integrating", "recovery-required", "kept"}
-                                     for status in unfinished.values()):
-                result["next_action"] = "Recover the retained batch integration through batch_state before dispatch or integration review."
-            elif any(status in {"abandoned", "blocked", "failed"} for status in unfinished.values()):
-                result["next_action"] = "Resolve unfinished batch work through its existing recovery or disposition workflow; this pack cannot complete the WBS."
-            else:
-                result["next_action"] = "Resume this exact batch, dispatch ready reservations, and integrate returned leads through batch_state."
-            return result
-        _integrated_proof(repo, data)
-        if data["status"] != "closed":
-            result["next_action"] = "Close the fully integrated batch through batch_state, then start the owning WBS execution."
-            return result
-        result.update(route="integration", next_action="Start or resume the owning WBS execution; independently review and verify the integrated result before closing it.")
-        return result
+        return inspect_pool(repo, task_id, expected, data)
     except (batch.Refusal, OSError, KeyError, TypeError) as exc:
         raise ValueError("work-pack batch proof refused: " + str(exc)) from exc
+
+
+def inspect_pool(repo, task_id, expected, data):
+    """Validate a neutral owner-bound pool, including staged importer metadata."""
+    data = batch.validate(data, repo, expected["batch_id"])
+    batch.require(data.get("owner_task_id") == task_id, "work-pack pool owner mismatch")
+    result = {**copy.deepcopy(expected), "route": "batch"}
+    batch.require(batch.normalize_requests(data["requests"]) == expected["requests"],
+                  "work-pack batch intake differs from existing pool")
+    result["batch_state"] = data["status"]
+    unfinished = {item["slug"]: item["status"] for item in data["requests"]
+                  if item["status"] != "integrated"}
+    if data["halted"] or unfinished:
+        result["unfinished"] = unfinished
+        if data["halted"] or any(status in {"integrating", "recovery-required", "kept"}
+                                 for status in unfinished.values()):
+            result["next_action"] = "Recover the retained batch integration through batch_state before dispatch or integration review."
+        elif any(status in {"abandoned", "blocked", "failed"} for status in unfinished.values()):
+            result["next_action"] = "Resolve unfinished batch work through its existing recovery or disposition workflow; this pack cannot complete the WBS."
+        else:
+            result["next_action"] = "Resume this exact batch, dispatch ready reservations, and integrate returned leads through batch_state."
+        return result
+    _integrated_proof(repo, data)
+    if data["status"] != "closed":
+        result["next_action"] = "Close the fully integrated batch through batch_state, then start the owning WBS execution."
+        return result
+    result.update(route="integration", next_action="Start or resume the owning WBS execution; independently review and verify the integrated result before closing it.")
+    return result
 
 
 def require_integrated(repo_root: str, task_id: str, spec: dict) -> None:

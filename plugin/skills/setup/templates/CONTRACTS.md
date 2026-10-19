@@ -104,7 +104,10 @@ edits and source-scope discipline remain the developer's responsibility.
 **Title:** Protected artifact ownership.
 **When:** Any direct `Write`/`Edit`/`MultiEdit`/`apply_patch` to PLAN.md,
 TASK.json, RECEIPTS.jsonl, task-local REVIEWS.jsonl, or
-retired `doc/harness/goals/*.json` (explicit WBS migration only).
+retired `doc/harness/goals/*.json` and the entire
+`doc/harness/archive/goal-migration/` tree (explicit WBS migration only).
+Batch control under `doc/harness/runtime/batches/` belongs to the batch runtime;
+use its lifecycle commands rather than direct edits.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
 Harness does not intercept Bash/shell file mutation.
 **On violation:** hard-block. Agent must route through the owning task MCP tool

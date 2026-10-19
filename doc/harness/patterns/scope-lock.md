@@ -1,5 +1,5 @@
 ---
-freshness: suspect
+freshness: current
 freshness_updated: 2026-10-19T06:06:14Z
 invalidated_by_paths:
   - plugin/scripts/prewrite_gate.py

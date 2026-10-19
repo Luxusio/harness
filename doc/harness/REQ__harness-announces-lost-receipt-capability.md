@@ -1,5 +1,5 @@
 ---
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/scripts/hook_tree_health.py
   - plugin/scripts/drift_warn.py

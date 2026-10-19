@@ -2,7 +2,7 @@
 tags: [harness, prewrite-gate, hooks, c-05, c-12]
 summary: C-05 checks read the whole payload instead of truncating at 64 KiB. Codex retries those checks after gate-child failure, subject to memory and outer-hook timeout limits; a killed hook can still allow the write.
 updated: 2026-09-28
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/scripts/prewrite_gate.py
   - plugin/scripts/hook_pre_tool_use.py
@@ -94,3 +94,19 @@ freshness_updated: 2026-10-19T06:06:13Z
   the outer Codex timeout.
 - Normative pattern docs: `doc/harness/patterns/prewrite-gate.md`,
   `doc/harness/patterns/scope-lock.md`.
+
+## Explicit migration control data
+
+Derived from the current user request to remove compatibility execution and
+retain migration only: the entire `doc/harness/archive/goal-migration/` tree,
+including originals, manifest and lock, is protected by C-05 under
+`legacy-data-migration`. Retired Goal records use that same owner. Route
+conversion through `wbs(action="migrate")`; direct edits must not alter the
+resumable transaction or fabricate evidence. The meaningful regression is
+`test_migration_manifest_and_originals_are_hook_protected`.
+
+Neutral batch pool metadata under `doc/harness/runtime/batches/` is protected
+under `batch-pool-runtime`; use `batch_state.py` lifecycle commands. This
+preserves the new immutable WBS owner association independently of a copied
+caller binding. The owner field is a derived proof mechanism, not an
+additional user requirement.

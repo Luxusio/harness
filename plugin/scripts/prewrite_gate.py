@@ -161,6 +161,13 @@ def _is_migration_artifact(path):
     return bool(suffix and os.sep not in suffix and suffix.endswith(".json"))
 
 
+def _is_pool_control_artifact(path):
+    normalized = os.path.normpath(str(path or ""))
+    marker = os.path.join("doc", "harness", "runtime", "batches")
+    return (normalized == marker or normalized.endswith(os.sep + marker)
+            or normalized.startswith(marker + os.sep) or os.sep + marker + os.sep in normalized)
+
+
 def _is_task_local_review_detail(path, repo_root=None):
     root = os.path.abspath(repo_root or find_repo_root())
     normalized = os.path.abspath(
@@ -192,6 +199,7 @@ def _is_protected_artifact(path, repo_root=None):
             )
         )
         or _is_migration_artifact(normalized)
+        or _is_pool_control_artifact(normalized)
         or normalized.endswith(os.path.join(TASK_DIR, ".active"))
         or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
     )
@@ -201,8 +209,9 @@ def _protected_denial(path):
     """Return ``(owner, human)`` for a C-05 protected-artifact deny of ``path``."""
     basename = os.path.basename(path)
     goal_control = _is_migration_artifact(path)
-    owner = "legacy-data-migration" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
-    owner_human = 'wbs(action="migrate")' if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
+    pool_control = _is_pool_control_artifact(path)
+    owner = "batch-pool-runtime" if pool_control else "legacy-data-migration" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
+    owner_human = "batch_state.py lifecycle commands" if pool_control else 'wbs(action="migrate")' if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
     human = (
         f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
         f"tool (e.g. wbs action=plan for PLAN.md)."

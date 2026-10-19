@@ -52,7 +52,7 @@ def route(pool, spec):
 
 def integrated(pool):
     from test_batch_state import complete
-    pool.init(requests())
+    pool.init(requests(), owner=CHILD)
     pool.claim()
     complete(pool)
     complete(pool, "b", "worker-b")
@@ -83,7 +83,7 @@ def test_new_pack_rejects_used_lead_identity(tmp_path, monkeypatch, used_identit
     from test_batch_state import Pool
     pool = Pool(tmp_path, monkeypatch)
     if used_identity == "pool":
-        pool.init(requests())
+        pool.init(requests(), owner=CHILD)
     else:
         parent = "tasks" if used_identity == "task" else "archive/batch"
         directory = pool.repo / "doc/harness" / parent / "TASK__a"
@@ -104,7 +104,7 @@ def test_submodule_intent_preserved_without_derived_fields():
 def test_pending_and_unrelated_pool_cannot_complete(tmp_path, monkeypatch):
     import pytest
     pool, spec = pack(tmp_path, monkeypatch)
-    pool.init(requests())
+    pool.init(requests(), owner=CHILD)
     assert route(pool, spec)["unfinished"] == {"a": "queued", "b": "queued"}
     with pytest.raises(ValueError, match="unfinished"):
         work_pack.require_integrated(str(pool.repo), CHILD, spec)
@@ -129,7 +129,7 @@ def test_integrated_pack_requires_archive_and_destination_proof(tmp_path, monkey
 def test_all_integrated_still_requires_batch_close(tmp_path, monkeypatch):
     from test_batch_state import complete
     pool, spec = pack(tmp_path, monkeypatch)
-    pool.init(requests())
+    pool.init(requests(), owner=CHILD)
     pool.claim()
     complete(pool)
     complete(pool, "b", "worker-b")
@@ -141,7 +141,7 @@ def test_all_integrated_still_requires_batch_close(tmp_path, monkeypatch):
 
 def test_abandoned_closed_pack_stays_unfinished(tmp_path, monkeypatch):
     pool, spec = pack(tmp_path, monkeypatch)
-    pool.init(requests())
+    pool.init(requests(), owner=CHILD)
     pool.cli("abandon", "--slug", "a", "--worker-stopped", "--reason", "not dispatched")
     pool.cli("abandon", "--slug", "b", "--worker-stopped", "--reason", "not dispatched")
     pool.cli("close")
@@ -152,7 +152,7 @@ def test_abandoned_closed_pack_stays_unfinished(tmp_path, monkeypatch):
 
 def test_halted_pool_routes_recovery(tmp_path, monkeypatch):
     pool, spec = pack(tmp_path, monkeypatch)
-    pool.init(requests())
+    pool.init(requests(), owner=CHILD)
     state = json.loads(pool.state.read_text())
     state["halted"] = True
     pool.state.write_text(json.dumps(state))
@@ -212,6 +212,14 @@ def mcp_integration(tmp_path, monkeypatch):
     planned = call("write_plan", {"task_id": CHILD, "plan": '# Integration\n```wbs\n[{"id":"A","title":"Combined result","weight":1,"check":["true"]}]\n```\n',
                                   "required_lenses": ["review-code", "qa-cli"]})
     assert not planned.get("isError"), planned
+    import wbs
+    directory = pool.repo / "doc/harness/tasks" / CHILD
+    state = wbs.read_state(str(directory))
+    assert state["started_at"] > 0 and state["last_progress_at"] == state["started_at"]
+    assert state["scope_revision"] == 1
+    before_due = wbs.task_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7199)
+    assert before_due["percentage"] == 0 and not before_due["refinement_due"]
+    assert wbs.task_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7200)["refinement_due"]
     directory = pool.repo / "doc/harness/tasks" / CHILD
     # Established isolated receipt fixture, never production attestation.
     HarnessMcpServerTests()._write_subagent_receipt(str(directory))
@@ -248,3 +256,20 @@ def test_mcp_close_refuses_damaged_pack_without_closing_child(tmp_path, monkeypa
     assert ((directory / "TASK.json").read_bytes(), goal_file.read_bytes()) == before
 
 
+
+
+def test_integrated_pool_cannot_be_replayed_under_another_owner(tmp_path, monkeypatch):
+    import pytest
+    pool, spec = pack(tmp_path, monkeypatch)
+    integrated(pool)
+    copied = dict(spec, task_id='TASK__other')
+    with pytest.raises(ValueError, match='pool owner mismatch'):
+        work_pack.route(str(pool.repo), 'TASK__other', copied)
+    assert route(pool, spec)['route'] == 'integration'
+
+
+def test_pool_owner_metadata_is_hook_protected():
+    import prewrite_gate
+    path = "doc/harness/runtime/batches/pool.json"
+    assert prewrite_gate._is_protected_artifact(path)
+    assert prewrite_gate._protected_denial(path)[0] == "batch-pool-runtime"

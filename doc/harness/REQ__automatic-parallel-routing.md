@@ -12,7 +12,9 @@ from progress planning: measurement does not prescribe implementation paths.
 Call `wbs(action="dispatch", wbs_id=..., ownership=...)` after planning the
 observable outcomes and their dependencies. Dispatch normalizes the exact
 request graph, validates path ownership and unused lead identities, binds its
-opaque pool ID to the owning task, and parks the parent. Resume that exact
+opaque pool ID to the owning task through immutable `owner_task_id` pool metadata, and parks the parent. Initialize WBS packs with the returned task_id as `--owner-task-id`;
+standalone batches may omit this field. Explicit migration adds it to existing
+pools without renaming them or changing their requests/checkpoints. Resume that exact
 pool; reads never spawn, merge, or replace it. Concrete writer scopes belong
 only to execution admission. The coordinator performs no source writes while
 leads run.

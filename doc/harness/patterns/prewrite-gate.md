@@ -1,6 +1,6 @@
 ---
 title: prewrite_gate — protected artifacts, plan-first, scope lock
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/scripts/prewrite_gate.py
   - plugin/scripts/hook_pre_tool_use.py
@@ -93,7 +93,7 @@ characters. Agents can parse the tail to route actions without scanning prose.
 
 The `PROTECTED_ARTIFACTS` dict maps basename → owner-role. Owners are space-free
 so the structured tail remains grep-stable; the deny sentence names the human
-tool to route through (for example `write_plan` for `PLAN.md`).
+tool to route through (for example `wbs(action="plan")` for `PLAN.md`).
 
 | Target | Match | `owner=` |
 |--------|-------|----------|
@@ -101,7 +101,9 @@ tool to route through (for example `write_plan` for `PLAN.md`).
 | `PLAN.md` | basename | `plan-skill` |
 | `RECEIPTS.jsonl` | basename | `receipt-lifecycle-hook` |
 | `REVIEWS.jsonl` | only `doc/harness/tasks/TASK__*/REVIEWS.jsonl` | `review-detail-writer` |
-| `doc/harness/goals/*.json` | direct children | `goal-control-mcp` |
+| `doc/harness/goals/*.json` | retired direct children | `legacy-data-migration` |
+| `doc/harness/runtime/batches/**` | pool metadata, immutable WBS owner and lock | `batch-pool-runtime` |
+| `doc/harness/archive/goal-migration/**` | entire archive, originals and manifest | `legacy-data-migration` |
 | `doc/harness/tasks/.active`, `doc/harness/tasks/.active_sessions/*` | path | `task-control-runtime` |
 | runtime transcripts and rollouts | rule 4 | `claude-runtime` |
 

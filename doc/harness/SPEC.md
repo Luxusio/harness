@@ -65,21 +65,19 @@ and resets review/QA receipts. A closed task refuses the default call and names
 that explicit fresh-run choice; invalid or unsafe control artifacts refuse in
 both modes.
 
-For each completed execution, post-close continuation is ordered as:
-`wbs(close) -> self-improvement/learning promotion -> wbs(next)`. Memory
+Within the open WBS, next selects ready outcomes for development/checks.
+After all required work and independent evidence pass, close the execution and
+then run self-improvement/learning promotion before separately authorized follow-ups. Memory
 and automatic learning are independent of orchestration; runbooks, staged
 learnings, promotion, and search remain active after every child.
 
-Harness lifecycle operations do not inspect Git state. `task_start` creates the
-task artifacts and active marker without capturing HEAD, dirty paths,
-submodules, gitlinks, worktree bindings, or a source baseline. `task_context`,
-`task_verify`, and `task_close` likewise do not run `git status`, `git diff`, or
-source fingerprinting. This keeps nested repositories, ignored checkouts,
-submodules, and linked worktrees outside the control plane. The one exception
-is the optional task-tool `workspace` argument (`harness:batch` leads): the
-server reads that linked worktree's gitfile and back-pointer files, without
-running Git, to validate it and use it as the task root
-(`doc/harness/REQ__parallel-tasks-via-worktree-leads.md`).
+Completion authority remains ordered review/QA receipts rather than a separate
+HEAD, dirty-tree or CHECKS receipt gate. WBS progress observes source fingerprints
+and explicit assertions; context may inspect Git while computing that
+measurement. A bound work pack additionally checks the destination branch,
+ancestry and archived integration proof before the parent resumes or closes.
+Workspace selection validates registered linked-worktree files. These checks
+serve progress, isolation and integration, separately from receipt authority.
 
 The plan declares the intended source scope in `PLAN.md`; `TASK.json` stores
 the applicable review/QA lenses. These declarations route work and verification; Harness does
@@ -97,8 +95,8 @@ environment facts are recomputed by the operation that needs them.
 
 | Artifact | Writer |
 |---|---|
-| `PLAN.md` | MCP `write_plan` |
-| `TASK.json` | task lifecycle MCP tools |
+| `PLAN.md` | WBS plan action |
+| `TASK.json` | WBS open/plan/close lifecycle owners |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `REVIEWS.jsonl` | shared review-detail writer reached only by formal review completion lifecycle hooks or `review-log` |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
@@ -108,15 +106,11 @@ promoted directly into `PLAN.md` or durable project documentation.
 
 ### Control-plane artifact integrity
 
-Task selectors accepted by MCP tools resolve to one immediate
-`doc/harness/tasks/TASK__<safe-id>` child. Bare IDs are normalized for
-compatibility through `task_id` and `slug`; canonical repository-relative and
-absolute task paths are accepted only through `task_dir`. A tool such as
-`task_blocked` that exposes only `task_id` therefore does not accept a path.
-Traversal, control characters, selector mismatches, outside paths, and symlink
-aliases are rejected before task artifacts are created or changed.
-Goal IDs use the same safe-name boundary, and Goal child entries persist the
-canonical repository-relative task path.
+Public WBS selectors normalize one root to its internal canonical
+`doc/harness/tasks/TASK__<safe-id>` execution directory. Traversal, selector
+mismatches, outside paths and symlink aliases refuse before mutation. Private
+execution helpers retain canonical task selectors, not public tool aliases.
+Goal IDs and child records are interpreted only as explicit migration input.
 
 `write_plan` validates the complete supplied PLAN and required-lens bundle
 before its first write, so invalid input cannot leave a new PLAN or lens update
@@ -271,7 +265,5 @@ candidates but does not satisfy the durable-memory requirement by itself.
 
 ## Runtime Boundaries
 
-harness does not require users to choose between Goal and direct-task modes. A
-Goal may remain small or expand child tasks dynamically; a focused plain request
-may remain one direct task. Hooks provide compact context
+Harness uses one rolling WBS for ordinary requests and native objectives. Hooks provide compact context
 and record subagent starts; MCP tools own explicit state transitions.

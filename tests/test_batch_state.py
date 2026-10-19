@@ -86,11 +86,12 @@ class Pool:
         assert isinstance(body, dict) and "status" in body, body
         return body
 
-    def init(self, requests=None, cap=None, ok=True):
+    def init(self, requests=None, cap=None, ok=True, owner=None):
         path = self.tmp / (self.batch + "-requests.json")
         path.write_text(json.dumps(requests if requests is not None else [request("a")]))
         return self.cli("init", "--requests-file", path,
-                        *([] if cap is None else ["--max-leads", cap]), ok=ok)
+                        *([] if cap is None else ["--max-leads", cap]),
+                        *([] if owner is None else ["--owner-task-id", owner]), ok=ok)
 
     def claim(self):
         return self.cli("claim")["claims"]
@@ -1293,3 +1294,12 @@ batch_state.main(sys.argv[1:])
     pool.cli("recover", "--slug", "a", "--worker-stopped")
     assert not _git("branch", "--list", branch, cwd=pool.repo)
     pool.cli("close")
+
+
+def test_pool_owner_is_immutable_on_reinitialization(tmp_path, monkeypatch):
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init(owner="TASK__parent")
+    before = pool.state.read_bytes()
+    refused = pool.init(owner="TASK__other", ok=False)
+    assert "owner" in refused["reason"] and pool.state.read_bytes() == before
+    assert pool.init(owner="TASK__parent")["batch"]["owner_task_id"] == "TASK__parent"

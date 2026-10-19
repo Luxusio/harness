@@ -39,13 +39,12 @@ def test_template_parking_clause_carries_no_repo_history():
     assert "doc/harness/" not in clause
 
 
-def test_task_blocked_tool_is_still_registered():
-    server = _text(REPO / "plugin/mcp/harness_server.py")
-    entry = re.search(
-        r'\{"name": "task_blocked".*?"handler": handle_task_blocked\}',
-        server, re.DOTALL)
-    assert entry, "task_blocked MCP tool registration disappeared"
-    assert "def handle_task_blocked(" in server
+def test_parking_remains_available_through_the_sole_wbs_tool():
+    from test_harness_mcp_server import harness_server
+    assert set(harness_server.TOOLS) == {"wbs"}
+    assert "block" in harness_server.TOOLS["wbs"]["inputSchema"]["properties"]["action"]["enum"]
+    assert harness_server._EXECUTION["task_blocked"] is harness_server.handle_task_blocked
+    assert harness_server.call_tool("task_blocked", {}).get("isError")
 
 
 def test_runtime_doc_names_park_as_not_completion():

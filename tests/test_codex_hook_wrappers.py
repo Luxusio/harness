@@ -21,12 +21,12 @@ _CANONICAL_MODULES = {}
 
 
 def _load(name: str):
-    if name == "codex_hook_registration" and name in _CANONICAL_MODULES:
+    if name in {"codex_hook_registration", "_lib"} and name in _CANONICAL_MODULES:
         return _CANONICAL_MODULES[name]
-    if name == "codex_hook_registration" and name in sys.modules:
+    if name in {"codex_hook_registration", "_lib"} and name in sys.modules:
         module = sys.modules[name]
         if Path(getattr(module, "__file__", "")).resolve() == (
-            SCRIPTS / "codex_hook_registration.py"
+            SCRIPTS / f"{name}.py"
         ).resolve():
             _CANONICAL_MODULES[name] = module
             return module
@@ -36,7 +36,7 @@ def _load(name: str):
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    if name == "codex_hook_registration":
+    if name in {"codex_hook_registration", "_lib"}:
         _CANONICAL_MODULES[name] = module
     if name == "hook_post_tool_use":
         module.RECEIPT_EVENT_MODE = "sync"

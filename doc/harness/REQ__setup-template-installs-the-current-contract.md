@@ -2,7 +2,7 @@
 tags: [harness, contracts, setup, template, lint]
 summary: setup이 설치하는 계약은 런타임이 강제하는 계약과 같은 규칙 집합이어야 하고, 그 일치는 기계가 검사해야 한다. 접미사 계약 id는 lint 사각지대였다.
 updated: 2026-09-04
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - CONTRACTS.md
   - plugin/skills/setup/templates/CONTRACTS.md

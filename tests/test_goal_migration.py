@@ -28,7 +28,7 @@ def row(repo, *, goal="GOAL__old", objective="Finish requested work", tasks=None
 
 @pytest.fixture
 def owner(monkeypatch):
-    monkeypatch.setattr(_lib, "_trusted_control_writer", lambda: True)
+    monkeypatch.setattr(sys.modules["_lib"], "_trusted_control_writer", lambda: True)
 
 
 def spec(goal="GOAL__old", task="TASK__integration"):
@@ -152,7 +152,7 @@ def test_wbs_metadata_only_preserves_evidence_and_opaque_pool(tmp_path, owner):
                  batch_history=[dict(batch_goal_id="GOAL__wbs-old", batch=value)])
     path = write(tmp_path, "doc/harness/tasks/TASK__integration/WBS.json", state)
     control = write(tmp_path, "doc/harness/tasks/TASK__integration/TASK.json", b'old exact control bytes')
-    receipt = write(tmp_path, "doc/harness/tasks/TASK__integration/RECEIPTS.json", b'old exact receipt bytes')
+    receipt = write(tmp_path, "doc/harness/tasks/TASK__integration/RECEIPTS.jsonl", b'old exact receipt bytes')
     originals = (path.read_bytes(), control.read_bytes(), receipt.read_bytes())
     migration.apply(tmp_path)
     expected = copy.deepcopy(state)
@@ -169,22 +169,22 @@ def test_wbs_metadata_only_preserves_evidence_and_opaque_pool(tmp_path, owner):
 def test_interrupted_publication_resumes_exactly(tmp_path, monkeypatch, owner, failure_stage):
     row(tmp_path)
     original_write = migration._write
-    original_unlink = Path.unlink
+    original_retire = migration._retire
     fired = []
     def fail_write(repo, relative, data):
         if relative.endswith("MIGRATION.md") and not fired:
             fired.append(True)
             raise OSError("interrupted publication")
         return original_write(repo, relative, data)
-    def fail_unlink(path, *args, **kwargs):
-        if path.parent.name == "goals" and not fired:
+    def fail_retire(repo, relative, expected):
+        if relative.startswith(migration.GOALS + "/") and not fired:
             fired.append(True)
             raise OSError("interrupted retirement")
-        return original_unlink(path, *args, **kwargs)
+        return original_retire(repo, relative, expected)
     if failure_stage == "publish":
         monkeypatch.setattr(migration, "_write", fail_write)
     else:
-        monkeypatch.setattr(Path, "unlink", fail_unlink)
+        monkeypatch.setattr(migration, "_retire", fail_retire)
     with pytest.raises(OSError):
         migration.apply(tmp_path)
     journal = json.loads((tmp_path / migration.MANIFEST).read_text())
@@ -324,3 +324,190 @@ def test_migration_manifest_and_originals_are_hook_protected():
                      migration.ARCHIVE + '/.lock'):
         assert prewrite_gate._is_protected_artifact(relative)
         assert prewrite_gate._protected_denial(relative)[0] == 'legacy-data-migration'
+
+
+@pytest.mark.parametrize("relative", ["doc/harness/tasks/TASK__native/MIGRATION.md",
+                                      "doc/harness/archive/goal-migration/original/doc/harness/goals/GOAL__old.json"])
+@pytest.mark.parametrize("stage", ["temporary", "publication"])
+def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative, stage):
+    import os
+    parent = (tmp_path / relative).parent
+    parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / Path(relative).name
+    marker.write_bytes(b"outside remains untouched")
+    moved = parent.with_name(parent.name + "-retained")
+    original_open, original_replace = os.open, os.replace
+    fired = []
+    def swap():
+        if not fired:
+            fired.append(True)
+            parent.rename(moved)
+            parent.symlink_to(outside, target_is_directory=True)
+    def opening(path, flags, *args, **kwargs):
+        if stage == "temporary" and isinstance(path, str) and path.startswith(".migration-"):
+            swap()
+        return original_open(path, flags, *args, **kwargs)
+    def replacing(source, destination, **kwargs):
+        if stage == "publication":
+            swap()
+        return original_replace(source, destination, **kwargs)
+    monkeypatch.setattr(os, "open", opening)
+    monkeypatch.setattr(os, "replace", replacing)
+    with pytest.raises(ValueError, match="binding changed"):
+        migration._write(tmp_path, relative, b"migration data")
+    assert marker.read_bytes() == b"outside remains untouched"
+    assert sorted(p.name for p in outside.iterdir()) == [marker.name]
+    assert not list(moved.glob(".migration-*"))
+
+
+def test_fd_read_rebind_never_reads_outside(tmp_path, monkeypatch):
+    import os
+    relative = "doc/harness/goals/GOAL__old.json"
+    source = write(tmp_path, relative, b"original")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / source.name).write_bytes(b"outside secret")
+    original_open, original_read = os.open, os.read
+    consumed, fired = [], []
+    def opening(path, flags, *args, **kwargs):
+        if path == source.name and kwargs.get("dir_fd") is not None and not fired:
+            fired.append(True)
+            source.parent.rename(source.parent.with_name("retained"))
+            source.parent.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+    def reading(fd, count):
+        result = original_read(fd, count)
+        consumed.append(result)
+        return result
+    monkeypatch.setattr(os, "open", opening)
+    monkeypatch.setattr(os, "read", reading)
+    with pytest.raises(ValueError, match="binding changed"):
+        migration._read(tmp_path, relative)
+    assert b"outside secret" not in b"".join(consumed)
+
+
+def test_fd_retire_rebind_never_deletes_outside(tmp_path, monkeypatch):
+    import os
+    relative = "doc/harness/goals/GOAL__old.json"
+    source = write(tmp_path, relative, b"original")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / source.name
+    marker.write_bytes(b"untouched")
+    original_unlink = os.unlink
+    fired = []
+    def unlinking(path, *args, **kwargs):
+        if path == source.name and kwargs.get("dir_fd") is not None and not fired:
+            fired.append(True)
+            source.parent.rename(source.parent.with_name("retained"))
+            source.parent.symlink_to(outside, target_is_directory=True)
+        return original_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(os, "unlink", unlinking)
+    with pytest.raises(ValueError, match="binding changed"):
+        migration._retire(tmp_path, relative, migration._hash(b"original"))
+    assert marker.read_bytes() == b"untouched"
+
+
+def test_fd_directory_cleanup_refuses_rebound_goal_dir(tmp_path, monkeypatch):
+    import os
+    goals = tmp_path / migration.GOALS
+    goals.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "untouched"
+    marker.write_text("preserved")
+    original_rmdir = os.rmdir
+    fired = []
+    def removing(path, *args, **kwargs):
+        if path == "goals" and kwargs.get("dir_fd") is not None and not fired:
+            fired.append(True)
+            goals.rename(goals.with_name("retained"))
+            goals.symlink_to(outside, target_is_directory=True)
+        return original_rmdir(path, *args, **kwargs)
+    monkeypatch.setattr(os, "rmdir", removing)
+    with pytest.raises(ValueError):
+        migration._remove_empty(tmp_path, migration.GOALS)
+    assert marker.read_text() == "preserved"
+
+
+@pytest.mark.parametrize("operation", ["read", "write", "retire"])
+def test_fd_io_refuses_writable_storage_directory(tmp_path, operation):
+    relative = "doc/harness/goals/GOAL__old.json"
+    source = write(tmp_path, relative, b"original")
+    source.parent.chmod(0o777)
+    try:
+        with pytest.raises(ValueError, match="unsafe storage directory"):
+            if operation == "read":
+                migration._read(tmp_path, relative)
+            elif operation == "write":
+                migration._write(tmp_path, relative, b"new")
+            else:
+                migration._retire(tmp_path, relative, migration._hash(b"original"))
+        assert source.read_bytes() == b"original"
+    finally:
+        source.parent.chmod(0o700)
+
+
+def test_pool_destination_holds_shared_batch_writer_lock(tmp_path, monkeypatch, owner):
+    import fcntl
+    import os
+    source = row(tmp_path)
+    pool_path = "doc/harness/runtime/batches/retained.json"
+    write(tmp_path, pool_path, b"original pool")
+    monkeypatch.setattr(migration, "_collect", lambda repo: (
+        {migration.GOALS + "/" + source.name: source.read_bytes()},
+        {pool_path: (b"original pool", b"owned pool")}, []))
+    lock = write(tmp_path, "doc/harness/runtime/batches/.lock", b"")
+    fd = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(ValueError, match="batch writer active"):
+            migration.apply(tmp_path)
+        assert not (tmp_path / migration.MANIFEST).exists()
+        assert (tmp_path / pool_path).read_bytes() == b"original pool"
+    finally:
+        os.close(fd)
+
+
+def test_fd_archive_directory_creation_rebind_does_not_escape(tmp_path, monkeypatch):
+    import os
+    parent = tmp_path / "doc/harness"
+    parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_mkdir = os.mkdir
+    fired = []
+    def making(path, *args, **kwargs):
+        if path == "archive" and kwargs.get("dir_fd") is not None and not fired:
+            fired.append(True)
+            parent.rename(parent.with_name("retained"))
+            parent.symlink_to(outside, target_is_directory=True)
+        return original_mkdir(path, *args, **kwargs)
+    monkeypatch.setattr(os, "mkdir", making)
+    with pytest.raises(ValueError, match="binding changed"):
+        migration._write(tmp_path, migration.ARCHIVE + "/original/source.json", b"archive")
+    assert not list(outside.iterdir())
+
+
+def test_fd_directory_enumeration_rebind_refuses_external_rows(tmp_path, monkeypatch):
+    import os
+    goals = tmp_path / migration.GOALS
+    goals.mkdir(parents=True)
+    write(tmp_path, migration.GOALS + "/GOAL__old.json", b"original")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_text("untouched")
+    original_listdir = os.listdir
+    fired = []
+    def listing(path):
+        if isinstance(path, int) and not fired:
+            fired.append(True)
+            goals.rename(goals.with_name("retained"))
+            goals.symlink_to(outside, target_is_directory=True)
+        return original_listdir(path)
+    monkeypatch.setattr(os, "listdir", listing)
+    with pytest.raises(ValueError, match="binding changed"):
+        migration._entries(tmp_path, migration.GOALS)
+    assert (outside / "secret").read_text() == "untouched"

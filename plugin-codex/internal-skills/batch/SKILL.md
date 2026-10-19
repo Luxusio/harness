@@ -21,6 +21,11 @@ the later integration task, not a lead. No main-checkout task may be open
 while leads run. Independent declared requests automatically use this route
 when the host exposes spawn and same-agent continuation capabilities.
 
+For a WBS-owned pack, pass its returned task_id as `--owner-task-id <task_id>`
+when initializing the exact batch. This immutable pool owner must match the
+parent binding. Standalone batches may omit it. Preserve it on every retry;
+never attach a different root to an initialized pool.
+
 ## Capacity and capability
 
 Use the exposed `spawn_agent`, same-agent continuation (`followup_task` or the

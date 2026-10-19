@@ -161,6 +161,7 @@ def requests_valid(items):
 def validate(data, repo, batch_id):
     require(isinstance(data, dict) and type(data.get('schema_version')) is int and data['schema_version'] in (1, 2), 'unknown state schema')
     require(data.get('repo') == repo and data.get('batch_id') == batch_id, 'state identity mismatch')
+    require(data.get('owner_task_id') is None or isinstance(data['owner_task_id'], str) and batch_harvest.TASK_ID_RE.fullmatch(data['owner_task_id']), 'invalid pool owner')
     require(type(data.get('max_leads')) is int and 1 <= data['max_leads'] <= 8, 'invalid capacity')
     require(isinstance(data.get('destination_ref'), str) and data['destination_ref'].startswith('refs/heads/'), 'invalid destination')
     require(data.get('status') in {'open', 'closed'} and type(data.get('halted')) is bool, 'invalid batch status')
@@ -469,12 +470,15 @@ def execute(args, directory, records):
     repo, batch_id = args.repo, args.batch_id
     path = os.path.join(directory, batch_id + '.json')
     if args.command == 'init':
+        owner_task_id = getattr(args, 'owner_task_id', None)
+        require(owner_task_id is None or batch_harvest.TASK_ID_RE.fullmatch(owner_task_id), 'invalid pool owner')
         requests = read_json(args.requests_file)
         requests_valid(requests)
         maximum, source = cap(repo, args.max_leads)
         normalized = normalize_requests(requests)
         if batch_id in records:
             old = records[batch_id]
+            require(old.get('owner_task_id') == owner_task_id, 'conflicting pool owner')
             require(normalize_requests(old['requests']) == normalized
                     and old['max_leads'] == maximum, 'conflicting existing batch')
             return {'status': 'ok', 'batch': old}
@@ -487,6 +491,8 @@ def execute(args, directory, records):
             item.update(status='queued', task_id=task_id, resolved_scopes=resolved)
         data = dict(schema_version=2 if any(x.get('submodules') for x in normalized) else 1, batch_id=batch_id, repo=repo, destination_ref=ref, initial_head=head,
                     max_leads=maximum, cap_source=source, created_at=now(), updated_at=now(), status='open', halted=False, requests=normalized)
+        if owner_task_id is not None:
+            data['owner_task_id'] = owner_task_id
         write_json(path, data)
         return {'status': 'ok', 'batch': data}
     require(batch_id in records, 'batch does not exist')
@@ -803,6 +809,7 @@ def main(argv=None):
     init = commands.add_parser('init')
     init.add_argument('--requests-file', required=True)
     init.add_argument('--max-leads')
+    init.add_argument('--owner-task-id', help='Owning WBS execution task; immutable when supplied')
     for name in ('status', 'close'):
         commands.add_parser(name)
     claim = commands.add_parser('claim')

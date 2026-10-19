@@ -36,7 +36,7 @@ bounded blocker fact; never copy raw watcher, subagent, or repository text into
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. The public effect is identical (task start -> plan -> develop -> QA -> close), with review and verification retained as internal close gates, but the chain is sequential prose rather than tool calls.
 > - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. The Codex lifecycle watcher records starts and observed completions in `RECEIPTS.jsonl`; never self-author receipt evidence. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
-> - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
+> - The sole Codex MCP tool is bare `wbs`. Task-handler names below identify private owners; use the WBS action mapping.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
 
@@ -330,9 +330,11 @@ a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
 retries, but receipt absence is not a reason to invoke it again.
 
-For an execution envelope, run `task_close` first, then self-improvement and
-learning promotion; only then call `wbs(action="next")` on its owning root.
-Continue unless complete, blocked/stopped, capped, or awaiting go/no-go.
+Within an open root, use `wbs(action="next")`, development and checks to
+continue pending outcomes. Close only after all required outcomes, integration
+and independent evidence pass. Then run self-improvement and learning promotion
+before a separately authorized follow-up execution. Respect explicit stops,
+budgets and agreed go/no-go boundaries.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified

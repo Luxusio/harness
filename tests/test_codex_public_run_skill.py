@@ -91,14 +91,15 @@ def test_run_skills_use_only_native_goal_and_learn_before_next_child():
         assert "### Native Goal continuation" in body
         assert "goal_add_task" not in body
         assert 'wbs(action="next")' in body
-        assert body.index("`task_close` first") < body.index('only then call `wbs(action="next")`')
+        assert "Within an open root" in body
+        assert "Close only after all required outcomes" in body
         assert "learning promotion" in body
         assert "task_pack_runner.py" not in body
         assert "goal_queue_runner.py" not in body
 
     assert "## Explicit migration" in native
     assert "confirmed user requirements" in native
-    assert "ordered outcomes to one WBS" in requirement
+    assert "Open one WBS" in requirement
     assert "wbs(action=\"next\")" in requirement
     assert not (REPO / "plugin/skills/goal-queue/SKILL.md").exists()
     assert not (REPO / "plugin-codex/internal-skills/goal-queue/SKILL.md").exists()

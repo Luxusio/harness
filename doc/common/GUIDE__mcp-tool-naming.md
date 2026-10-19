@@ -2,7 +2,7 @@
 type: GUIDE
 area: common
 title: Harness MCP tool naming across runtimes
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/.mcp.json
   - tests/test_mcp_tool_name_contracts.py
@@ -21,9 +21,9 @@ available") but is usually a runtime-naming mismatch. Read this before
 
 | Runtime | Tool name shape | Example | Where |
 |---------|-----------------|---------|-------|
-| Claude plugin (marketplace) | `mcp__plugin_<plugin>_<server>__<tool>` | `mcp__plugin_harness_harness__task_verify` | `plugin/` agent grants + skill prose |
-| Codex | bare name, no prefix | `task_verify` | `plugin-codex/skills/` |
-| Legacy / banned in `plugin/` | `mcp__harness__<tool>` | `mcp__harness__task_verify` | must not appear under `plugin/` |
+| Claude plugin (marketplace) | `mcp__plugin_<plugin>_<server>__<tool>` | `mcp__plugin_harness_harness__wbs` | `plugin/` agent grants + skill prose |
+| Codex | bare name, no prefix | `wbs` | `plugin-codex/skills/` |
+| Legacy / banned in `plugin/` | `mcp__harness__<tool>` | `mcp__harness__wbs` | must not appear under `plugin/` |
 
 - The Claude plugin tree (`plugin/`) uses `mcp__plugin_harness_harness__<tool>`
   exclusively. The plugin is named `harness` and its MCP server (in
@@ -55,7 +55,7 @@ the agent grants resolve correctly.
 - For QA/review proof, spawn the required subagent. Codex/Claude lifecycle hooks
   record ordered start and completion events in `RECEIPTS.jsonl`; do not call a
   receipt writer or critic writer yourself.
-- For task-local plan artifacts, call `write_plan`. For REQ docs, edit the
+- For task-local plan artifacts, call `wbs(action="plan")`. For REQ docs, edit the
   committed `doc/<area>/REQ__*.md` directly or use `plugin/scripts/req_scaffold.py`.
 - Do NOT "fix" the dev artifact by adding `mcp__harness__` to `plugin/` agent
   grants. That violates the contract above and breaks the guard test, and it does

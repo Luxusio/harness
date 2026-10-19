@@ -2,7 +2,7 @@
 tags: [harness, guide, architecture, lifecycle, onboarding]
 summary: 하네스 전체 동작 안내 — 과제 수명주기, MCP 제어면, 훅과 prewrite gate, 영수증과 마감 게이트, 스킬 단계, 에이전트와 lens, Goal, batch 병렬 모드, 설치·setup·manifest, 계약, 메모리·학습, Claude/Codex 차이.
 updated: 2026-09-28
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - .claude-plugin/marketplace.json
   - .claude/settings.json
@@ -163,7 +163,7 @@ freshness_updated: 2026-10-19T06:06:13Z
  (harness 소스 저장소만) install_verified.py  — Phase 7.8
    │
    ▼
- task_close ──▶ TASK.json.close_receipt_fingerprint 기록, 마커 삭제, Goal child closed
+ task_close ──▶ TASK.json.close_receipt_fingerprint 기록, 마커 삭제
    │
    ▼
  self-improvement: learnings.jsonl, promote_learnings.py(보고만), retro, 커밋
@@ -191,7 +191,7 @@ freshness_updated: 2026-10-19T06:06:13Z
 | session marker | `doc/harness/tasks/.active_sessions/<sid>.json`. 영수증을 묶는 유일한 권위 | `_lib.py:2102-2114, 2389-2411` |
 | legacy `.active` | `doc/harness/tasks/.active`. task_dir 문자열 하나만 담은 공유 마커(MCP가 쓰면 절대경로) | `_lib.py:2105-2106, 2267-2268, 2343-2350` |
 | session hint | `.active_sessions/.session-hint`. UserPromptSubmit 훅(Claude는 `prompt_memory.py`, Codex는 `hook_user_prompt_submit.py` → `prompt_memory.py`)이 매 프롬프트마다 쓰는 세션 ID. 읽는 쪽은 Claude(및 generic) 런타임 MCP의 세션 식별(`_current_session_identity`), 실제 세션 ID가 `default`일 때 대체값으로 쓰는 `install_verified.py`, 그리고 `CODEX_THREAD_ID`가 없을 때 대체값으로 쓰는 `hook_tree_health.py`의 Codex 등록 확인이다 | `_lib.py:2117-2162`, `prompt_memory.py:222-235`, `hook_user_prompt_submit.py:63-74`, `harness_server.py:203-215` |
-| Goal | 여러 child 과제를 순서대로 담는 컨테이너. `doc/harness/goals/<GOAL__id>.json` | `_lib.py:272-273, 319-412` |
+| Native Goal | objective와 지속 실행 문맥; 일반 요청과 같은 WBS를 사용 | §9 |
 | coordinator / lead | batch에서 main checkout에 있는 세션이 coordinator, worktree 하나를 맡는 `harness:task-lead` 서브에이전트가 lead | `plugin/skills/batch/SKILL.md`, `plugin/agents/task-lead.md` |
 | workspace | task 도구에 넘기는 linked git worktree 절대 경로. 생략하면 main checkout | `harness_server.py:1057-1087` |
 | control root / task root | MCP 프로세스가 속한 checkout / 과제가 실제로 있는 checkout | 같은 곳 |
@@ -627,7 +627,7 @@ task dir, scaffold, request_file, focus 마커는 task root에 쓰인다. Claude
    - `[harness-context] task=… status=… recorded_verdict=…`
    - `[harness-restore]` 블록. 훅이 이 블록을 직접 `system-reminder` 태그로 감싼다. "latest artifacts"라는 이름이 붙어 있지만 RECEIPTS.jsonl 조각은 **첫 번째** 의미 있는 행이다(BLOCKED.md도 첫 줄).
    - runbooks 블록.
-   - 활성 과제가 없을 때만 `[harness-goal]`. Goal 동기화 절차를 알려 주고, 현재 Goal이 있으면 `active=<goal_id> tasks=<개수> next=<다음 과제> objective=<앞 80자>`를 덧붙인다. Goal 파일에 쓰지는 않는다(`prompt_memory.py:73-106`).
+   - 활성 과제가 없을 때만 `[harness-goal]`: native objective 또는 일반 요청의 같은 WBS를 열도록 안내한다. 구형 장부를 읽지 않는다.
 4. 제어 문자 제거와 `system-reminder` 태그 조각의 `[SANITIZED]` 치환은 Goal objective와 restore 조각에만 적용된다(`_sanitize_prompt_text`). 출력 전체에 적용되는 것은 아니다. `_sanitize_path`는 정의만 되어 있고 호출하는 곳이 없다(`prompt_memory.py:85, 163-219`).
 5. **전체 출력을 400자로 자른다**(`MAX_OUTPUT_CHARS`). 측정 길이는 DOC_GATE 135자, REVIEW_GATE 158자다. 그래서 활성 과제가 있으면 restore 블록과 runbook 블록은 대개 잘린다. 잘리면서 reminder 블록의 닫는 태그가 없어질 수도 있다(`prompt_memory.py:48-49, 268`).
 
@@ -682,13 +682,13 @@ Codex 훅은 `hooks.json`이 아니라 `install.py`의 `_codex_hooks_config`가 
 | SessionStart | — | `hook_session_start.py` | 20 |
 | PreToolUse | `Write\|Edit\|MultiEdit\|apply_patch\|collaboration\.spawn_agent` | `hook_pre_tool_use.py` | 5 |
 | UserPromptSubmit | — | `hook_user_prompt_submit.py` | 8 |
-| PostToolUse | `Bash`, `create_goal`, `task_start`/`task_context` | `hook_post_tool_use.py` | 3 |
+| PostToolUse | `Bash`, `create_goal`, canonical `wbs` forms (open/context only) | `hook_post_tool_use.py` | 3 |
 
 - 이 명령들에는 `|| true`가 없고 SessionStart timeout은 10을 넘는다. C-12의 적용 범위가 `hooks.json`이라서 계약 위반은 아니다. 대신 내부 try/except와 자식 프로세스 timeout에 의존한다.
 - `hook_pre_tool_use.py`는 쓰기 도구에서 gate 자식에 3.0초를 준다. timeout, spawn 실패, 출력 없는 nonzero 종료면 `prewrite_gate.protected_artifact_decision`을 프로세스 안에서 실행하여 C-05 대상만 거부한다. 다른 쓰기와 fallback 자체 오류는 fail-open이다. wrapper 전체가 바깥 5초 제한으로 죽으면 이 보장도 없다. `spawn_agent`에서는 bind할 수 없는 review 이름을 거부하고 0.5초 예산으로 watcher 등록을 복구한다(`hook_pre_tool_use.py`의 `CHILD_TIMEOUT_SECONDS`, `_run`, `_protected_artifact_fallback`, `main`).
 - `hook_user_prompt_submit.py`는 harness 저장소에서 항상 `[harness-route] Repository mutation: invoke $harness:run before edits`를 앞에 붙인다. 그다음 `session_id`를 담은 payload를 `HARNESS_RUNTIME=codex` 환경의 `prompt_memory.py`로 넘긴다(자식 6초, 전체 7초). 그래서 Codex에서도 session hint가 기록된다(`hook_user_prompt_submit.py:14-89`).
 - `hook_session_start.py`는 먼저 `restore_watcher_registration(payload, retry_seconds=1.0, budget_seconds=1.25)`를 부른다. 이 호출은 try/except로 감싸져 있지 않다(import만 보호된다). 그다음 `verification_gap_check`와 `project_format_check`를 8초 자식 프로세스로 실행하고, 결과를 additionalContext로 돌려준다. 배너와 drift_warn은 없다(`hook_session_start.py:13-16, 33-69`).
-- `hook_post_tool_use.py`는 세 가지 일을 한다. `task_start`/`task_context` 결과를 thread에 바인딩하고, `create_goal` 뒤에 `[harness-goal]` 힌트를 주고, Bash 결과를 `tool_routing.py`로 넘겨 additionalContext로 감싼다(`hook_post_tool_use.py:149-210`).
+- `hook_post_tool_use.py`는 세 가지 일을 한다. WBS open/context 결과만 thread에 바인딩하고, `create_goal` 뒤에 `[harness-goal]` 힌트를 주고, Bash 결과를 `tool_routing.py`로 넘겨 additionalContext로 감싼다(`hook_post_tool_use.py:149-210`).
 
 ### 4.8 일부러 없는 훅
 
@@ -1066,7 +1066,7 @@ PENDING이고 `receipts_recordable`이 False가 아니면 next_action은 다음 
 
 ```
 1. control 유효 & status == open  (아니면 status별 재개 안내와 함께 거부)
-2. goal_transaction(task checkout root) + receipt_stream_transaction(td)
+2. close는 세션 및 receipt 트랜잭션 안에서 WBS 통합 증거를 재검증한다.
 3. 스냅샷 1개 → emit_compact_context → missing_for_close 비어 있어야 함
 4. 같은 스냅샷의 fingerprint 계산
 5. control 재확인 (여전히 open)
@@ -1075,12 +1075,11 @@ PENDING이고 `receipts_recordable`이 False가 아니면 next_action은 다음 
      → <current_session_id()>.json(Claude 에서는 대개 default.json) 삭제
      → legacy .active 는 td 를 가리킬 때만 삭제
      → resolve_active_task_dir 가 더 이상 td 를 가리키지 않음을 확인
-8. 활성 Goal 이 이 과제를 담고 있으면 child status = closed
-9. 도중 오류 → TASK.json 과 마커 복원
+8. 도중 오류 → TASK.json 과 마커 복원
 → closed: true
 ```
 
-`task_close`는 Git을 보지 않는다. CHECKS, HEAD, dirty 경로도 읽지 않는다(C-04). `doc/harness/patterns/ADR__single-pass-task-close.md`(Status: accepted)는 close가 Git·CHECKS·HEAD를 읽는다고 설명한다. 현재 코드와의 이 어긋남은 §17.2에 관찰로 기록했다. install이 실행됐는지도 확인하지 않는다(§11.2).
+close의 완료 권위는 순서가 맞는 review/QA 영수증이다. 별도의 HEAD·dirty·CHECKS 영수증 게이트는 없다. 다만 WBS progress는 소스 fingerprint를 읽고, 연결된 work pack이 있으면 close 전에 destination branch·ancestry·보관 증거를 검증한다. 설치는 검증된 delivery 절차가 별도로 수행한다(§11.2).
 
 ### 6.11 `task_blocked`와 두 고정 쌍
 
@@ -1395,7 +1394,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 - `self-improvement.md:61-71`의 manifest 자동 수정은 close 뒤에 실행되지만, prewrite gate가 막는다(§7.8). 실제로 하려면 MAINTENANCE 마커가 있는 활성 과제 안에서 쓰거나 후속 과제로 넘겨야 한다. Bash로 gate를 우회하는 것은 CONTRACTS.md § 0이 hard failure로 규정한다.
 - route 어휘가 다르다. `develop/SKILL.md:151`에는 `sequential-small-task`가 없고 `parallel-fanout.md`에는 있다(§7.4). `parallel-fanout.md`의 Phase 4.5 행은 "security" 조건부 specialist를 나열하지만 `quality-audit-pipeline.md` § 4.5에는 그것이 없다(`quality-audit-pipeline.md:7-21`).
 - `develop/SKILL.md:188`의 "forbidden → BLOCK"은 소스 확장자 파일에만 강제된다(§5.6).
-- **allowed-tools 누락.** develop의 allowed-tools에는 harness 도구 중 `task_start`와 `task_context`만 있는데, develop은 `task_verify`(8.6), `task_close`(Phase 8)를 부르고 `task_blocked`도 지시한다. run의 allowed-tools에는 지시하는 `task_blocked`와 `goal_*`가 빠져 있다. 허용 목록 밖이라 권한 확인이 뜰 수 있다(`develop/SKILL.md:6, 434, 483`, `run/SKILL.md:6, 80, 93, 205-217`).
+- **도구 허용 목록.** run/develop/plan과 developer는 단일 WBS 도구를 허용한다. 추가 task/Goal MCP 별칭이 필요하지 않다.
 - **도구 이름 하드코딩.** 스킬 본문은 `mcp__plugin_harness_harness__*`를 하드코딩한다. 사용자 수준 서버만 등록된 환경(도구 이름 `mcp__harness__*`)에서는 이름이 맞지 않는다(`plan/intake.md:57`).
 - Codex SKILL.md는 손으로 관리하는 별도 포트다. 예: Codex develop에만 `## Model Routing`, `Phase 9`, qa_codifier 단계가 있다(§2.2).
 - `qa_codifier.py`는 사실상 실행되지 않는다(§8.2).
@@ -1412,7 +1411,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 
 | 에이전트(파일) | model | tools | 역할 | lens / 영수증 | 출력 계약 |
 |---|---|---|---|---|---|
-| developer | sonnet | Read, Write, Bash, Glob, Grep, LS + `mcp__plugin_harness_harness__task_start/task_context` | 코디네이터를 대신한 최소 충분 구현. PLAN과 영수증은 쓰지 않음 | 없음 | `Status: implemented/blocked/needs-coordinator-review`, `Changed:`, `Verification:`, 선택 `Known ceiling:`/`Assumption:` |
+| developer | sonnet | Read, Write, Bash, Glob, Grep, LS + `mcp__plugin_harness_harness__wbs` | 코디네이터를 대신한 최소 충분 구현. PLAN과 영수증은 쓰지 않음 | 없음 | `Status: implemented/blocked/needs-coordinator-review`, `Changed:`, `Verification:`, 선택 `Known ceiling:`/`Assumption:` |
 | ac-worker | sonnet | Read, Write, Bash, Glob, Grep, LS, Agent | AC 하나 구현. 오직 ac-worker를 최대 3개, 한 단계만 sub-split. MCP writer·보호 증거 쓰기 금지 | 없음 | `AC-NNN: implemented/blocked/needs-coordinator-review` + Changed/Tests/Blockers |
 | test-author | sonnet | Read, Write, Bash, Glob, Grep, LS | PLAN 의도에서 한 AC의 Tests 경로만 작성. 스폰 금지 | 없음 | `AC-NNN tests: written/blocked/needs-coordinator-review` + Expected red/green/Interface |
 | defect-hunter | sonnet | Read, Bash, Glob, Grep, LS | 결함 후보 발굴. focus는 Correctness 또는 Contracts and tests 하나 | 없음(non-attesting) | JSON 배열만(0~20개, `{anchor, issue, evidence}`). VERDICT 금지, 수정 제안 금지 |
@@ -1591,9 +1590,9 @@ C-09 batch 조항: linked git worktree는 각각 별도 checkout이므로 write 
 
 ```
 W = realpath(pwd); git rev-parse HEAD == coordinator HEAD ?  (다르면 blocked, 쓰기 없음)
-task_start(workspace=W) → write_plan(workspace=W) → develop (pytest -n 4,
+wbs(open,workspace=W) → wbs(plan,workspace=W) → develop (pytest -n 4,
   중첩 review/QA 는 W 에서 스폰 → 영수증이 W 의 과제에 바인딩)
-→ task_verify(workspace=W) → task_close(workspace=W)
+→ wbs(verify,workspace=W) → wbs(close,workspace=W)
 → git add / git commit 한 번, trailer "Harness-Task: <task_id>" (push, merge, --amend 금지)
 → fenced JSON {task_id, worktree, branch, commit, verdict, blocked_reason}
 ```
@@ -1846,7 +1845,7 @@ manifest의 `ux_review_supported` 주석은 ux-* 영수증이 close를 막는다
 | C-06 | note freshness는 명시적 점검 | `note_freshness.py --paths`(수동) | — |
 | C-07 | 짧은 승인은 마지막 제안 전환만 승인 | **강제 없음(산문뿐)** | 계약이 가리키는 "Harness agent system prompt"(`plugin/agents/harness.md`)는 삭제됐다. `.claude/settings.json`은 여전히 그 에이전트를 main-thread agent로 지정한다 |
 | C-08 | 답변 → 변경 lane 전환은 명시적으로 | **강제 없음(산문뿐)** | 같음 |
-| C-09 | 세션별 write focus는 한 번에 하나(+ worktree 조항) | MCP task_start, Codex PostToolUse binding | 충돌은 거부 또는 fence. queue는 Goal child만(§3.7) |
+| C-09 | 세션 write focus는 하나이며 후속 성과는 WBS 의존 관계로 고른다 | MCP와 native PostToolUse | 별도 Goal 큐 없음 |
 | C-10 | CLAUDE.md는 maintenance로 자기 관리 | MAINTENANCE 과제(산문) | 산문은 contract_lint 경고를 말하지만 lint는 CLAUDE.md를 읽지 않는다. **쓰기 gate도 없다**: CLAUDE.md는 WFCS도 소스 파일도 아니라서 Write/Edit가 항상 허용된다 |
 | C-11 | managed block 손편집 금지 | `contract_lint.py`(마커 구조), `setup_finalize.py --check`(본문 drift, 사후) | 마커 변조(누락·중복·역순) 감지는 정확하다. 온전한 마커 **안쪽**의 편집은 lint가 잡지 못하고, 어떤 gate도 쓰기를 막지 않는다. "MAINTENANCE 과제만 additive Edit" 인가와 matrix의 "`CLAUDE.md` 편집 필요 … hard"는 산문뿐이다 |
 | C-12 | 훅 fail-safe(`\|\| true`, timeout ≤10) | 관례 + `tests/test_hooks_json.py` | hooks.json에만 적용(Codex 생성 훅은 예외) |
@@ -2012,7 +2011,7 @@ harness 소스 저장소에서 standard 과제 `fix-parser-crash` 하나를 Clau
 **1. 시작 — run Phase 1.**
 
 ```json
-task_start {"slug": "fix-parser-crash"}
+wbs {"action": "open", "wbs_id": "fix-parser-crash"}
 ```
 
 - `doc/harness/tasks/TASK__fix-parser-crash/TASK.json`
@@ -2028,8 +2027,8 @@ task_start {"slug": "fix-parser-crash"}
 **2. 계획 — plan(compact).** plan Phase 0.2가 `task_start`를 다시 부른다. 같은 과제를 재개하므로 `run_action: "preserved"`와 `TASK_START_RUN_PRESERVED` 경고가 나오는데, 이것은 정상이다. 경계가 분명하고 위험이 낮아 compact로 간다. 서브에이전트는 없다.
 
 ```json
-write_plan {"task_id": "TASK__fix-parser-crash",
-            "plan": "# PLAN …(objective, AC-001, verification contract, Durable Docs Decision, …)",
+wbs {"action": "plan", "wbs_id": "WBS__fix-parser-crash",
+            "plan": "# PLAN\nObjective: parser handles the reported input.\n```wbs\n[{\"id\":\"PARSER\",\"title\":\"Reported input parses successfully\",\"weight\":1}]\n```\n",
             "required_lenses": ["review-code", "qa-cli"]}
 ```
 
@@ -2065,7 +2064,7 @@ write_plan {"task_id": "TASK__fix-parser-crash",
 **6. 판정.**
 
 ```json
-task_verify {"task_id": "TASK__fix-parser-crash"}
+wbs {"action": "verify", "wbs_id": "TASK__fix-parser-crash"}
 ```
 
 → `review_verdict: "PASS"`, `runtime_verdict: "PASS"`, `missing_for_close: []`, next_action `Completed QA verdicts present — run task_close.`
@@ -2085,10 +2084,10 @@ python3 plugin/scripts/install_verified.py --task-dir doc/harness/tasks/TASK__fi
 - run Phase 4.5: `health.py --dry-run`. 이 저장소에는 `health_components`가 없으므로 test_command로 full suite를 한 번 더 돈다.
 
 ```json
-task_close {"task_id": "TASK__fix-parser-crash"}
+wbs {"action": "close", "wbs_id": "TASK__fix-parser-crash"}
 ```
 
-→ TASK.json에 `close_receipt_fingerprint: "sha256:<RECEIPTS.jsonl fingerprint>"`가 기록된다. legacy `.active`가 지워진다. MCP 프로세스의 세션 ID(Claude에서는 대개 `default`)로 `default.json` 삭제도 시도하지만, 이 예에는 그 파일이 없다. 1단계에서 만든 `S.json`은 closed 과제를 가리킨 채 남는다. 과제가 열려 있지 않은 동안은 무해하다(§3.7). 활성 Goal이 이 과제를 담고 있으면 child를 `closed`로 바꾼다. 이후 status는 `closed`다. 단, RECEIPTS.jsonl이 바뀌면 `invalid`가 된다.
+→ TASK.json에 `close_receipt_fingerprint: "sha256:<RECEIPTS.jsonl fingerprint>"`가 기록된다. legacy `.active`가 지워진다. MCP 프로세스의 세션 ID(Claude에서는 대개 `default`)로 `default.json` 삭제도 시도하지만, 이 예에는 그 파일이 없다. 1단계에서 만든 `S.json`은 closed 과제를 가리킨 채 남는다. 과제가 열려 있지 않은 동안은 무해하다(§3.7). 이후 status는 `closed`다. 단, RECEIPTS.jsonl이 바뀌면 `invalid`가 된다.
 
 **9. close 이후.** `learnings.jsonl`에 append → `promote_learnings.py --task TASK__fix-parser-crash --task-run-id R`(보고) → 조건이 되면 `retro.py --save` → 완료된 diff 커밋 → 완료 보고(커밋 해시와 설치 결과 포함).
 
@@ -2106,7 +2105,7 @@ task_close {"task_id": "TASK__fix-parser-crash"}
 `plugin/CLAUDE.md`, `hooks.json`, `harness_server.py`, `prewrite_gate.py`, `_lib.py`, `manifest.yaml`을 고치려 했다. 활성 과제 디렉터리에 `MAINTENANCE` 파일이 필요하다. 메시지의 owner인 `maintain-skill`이라는 스킬은 없다. close 뒤의 manifest 자동 수정도 여기서 막힌다(§7.8).
 
 **`rule=C-05-protected-artifact`**
-TASK.json, PLAN.md, RECEIPTS.jsonl, 과제의 REVIEWS.jsonl, goal JSON, 마커, 런타임 transcript/rollout을 직접 쓰려 했다. 해당 MCP 도구나 훅 경로를 쓴다. batch 보관본의 파일도 basename 판정 때문에 여기에 걸린다.
+TASK.json, PLAN.md, WBS.json, RECEIPTS.jsonl, 과제의 REVIEWS.jsonl, retired Goal JSON, migration archive, batch pool metadata, 마커, 런타임 transcript/rollout을 직접 쓰려 했다. 해당 MCP 도구나 훅 경로를 쓴다. batch 보관본의 파일도 basename 판정 때문에 여기에 걸린다.
 
 **`rule=invalid-harness-workspace` / `symlink-outside-control` / `invalid-active`**
 manifest나 경로에 symlink가 있거나, 마커가 가리키는 디렉터리가 잘못됐다. manifest 문제는 setup으로 복구한다. `invalid-active`라면 작업할 과제로 `task_start`나 `task_context`를 부른다. `_session_resumes`는 열려 있지 않은 과제를 가리키는 마커를 focus 없음으로 취급하므로 MCP 도구가 마커를 다시 쓴다. 마커 파일을 Write/Edit로 고치지 않는다. C-05 보호 대상이라 거부된다(`prewrite_gate.py:483-485, 774-781`, `harness_server.py:1612-1647`).
@@ -2177,8 +2176,8 @@ close 뒤에 RECEIPTS.jsonl 바이트가 바뀌었거나, 이 행들을 거부�
 **`WORKSPACE_NOT_REGISTERED_WORKTREE` / `wrong_type`**
 workspace가 정규 절대경로가 아니거나, 등록된 같은 저장소 worktree가 아니거나, worktree에 manifest가 없다. Codex도 workspace를 지원하지만 정확한 task/run 바인딩은 native PostToolUse 신원 검증이 맡는다.
 
-**goal 도구 오류에 `field: selector`가 붙어 있다**
-포장 방식 때문이다(§3.5). message의 실제 원인(`no active goal`, `goal is terminal`, `no child tasks`, `unfinished or unverified child tasks`)을 읽는다.
+**구형 Goal 데이터가 남아 있다**
+`wbs(action="migrate")`로 미리 확인한 뒤 명시적으로 apply한다. 구형 API를 호출하거나 완료 상태를 수동으로 만들지 않는다.
 
 **주차한 WBS를 다시 진행해야 한다**
 실제 unblock 조건을 충족한 다음 같은 WBS를 open으로 재개한다. 진행 중인 pool이 있으면 먼저 정확한 pool을 통합한다.

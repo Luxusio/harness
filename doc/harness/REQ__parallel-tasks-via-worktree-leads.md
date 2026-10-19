@@ -2,7 +2,7 @@
 tags: [harness, lifecycle, worktree, batch, mcp, contracts]
 summary: 한 세션이 과제마다 worktree 리드를 띄워 병렬로 진행한다. Claude는 native isolation을, Codex는 검증된 workspace와 native coordinator 신원 연결을 사용한다. 병합 후 통합 과제가 전체 검증과 설치를 맡는다.
 updated: 2026-09-29
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/scripts/prewrite_gate.py
@@ -238,8 +238,8 @@ freshness_updated: 2026-10-19T06:06:13Z
 
 ## MCP `workspace` argument
 
-`task_start`, `task_context`, `write_plan`, `task_verify`, `task_close`, and
-`task_blocked` accept an optional `workspace` string. It must name a registered
+`wbs` open/context/plan/check/dispatch/verify/close/block actions accept an
+optional `workspace` string. It must name a registered
 linked worktree of the repository the MCP server controls:
 
 - absolute and already canonical (`realpath(workspace) == workspace`);
@@ -568,12 +568,10 @@ remain outside S1 and use the ordinary sequential route.
 - Claude uses native isolated leads; Codex uses registered worktrees and
   authenticated native coordinator ancestry with explicit workspace binding.
   The Codex internal batch workflow requires actual spawn/continuation
-  capabilities and reserves room for independent review/QA. Goal tools stay on the control root; batch leads are not
-  Goal children. `task_close` links a closed task only to the Goal of the
-  checkout that owns it, and a lead's worktree has no Goal, so closing a lead
-  never changes the coordinator's Goal. Goal work packs link to one canonical
-  integration child; it opens only after all requests integrate and the pool
-  closes. Codex MCP returns canonical workspace without eagerly binding its
+  capabilities and reserves room for independent review/QA. Leads operate
+  only their worktree WBS; close never updates a coordinator Goal ledger.
+  A task-owned work pack releases its parent only after all requests integrate
+  and the exact pool closes. Codex MCP returns canonical workspace without eagerly binding its
   own process identity; exact PostToolUse/native rollout validation owns that
   binding. Missing identity never grants a receipt or successful close.
 - Cross-checkout protection: when a lead's Edit/Write target lies outside its
@@ -643,10 +641,10 @@ and blocker.
   forged back-pointer and non-string value; Codex routing defers exact binding; control root
   treated as omitted; marker file named after the control-root session hint;
   `task_blocked` and full-lifecycle `task_close` leave the main checkout
-  byte-identical; a lead close never touches the coordinator Goal; hook
+  byte-identical; a lead close never touches coordinator state; hook
   start and stop receipts from `cwd=<worktree>` land in the worktree task.
-- `tests/test_mcp_tool_name_contracts.py`: the six task tools declare optional
-  `workspace`; goal tools do not.
+- `tests/test_mcp_tool_name_contracts.py`: the sole WBS tool declares optional
+  `workspace`; retired tool aliases are rejected.
 - `tests/test_batch_finish.py` (scratch repos, lead worktrees under
   `<main>/.claude/worktrees/`): two leads integrated in order onto a linear
   history (the second rebased, the first unchanged), harvested, unlocked,

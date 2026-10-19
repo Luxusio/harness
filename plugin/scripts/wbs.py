@@ -176,6 +176,7 @@ def prepare(task_dir, plan, run_id, *, now=None):
     stamp = time.time() if now is None else now
     if old:
         from _lib import find_repo_root
+        first_baseline = old.get("pack_only") is True
         if old.get("batch") and nodes != old["nodes"]:
             require(batch_route(task_dir, find_repo_root(task_dir), old)["route"] == "integration",
                     "finish the active work pack before refinement")
@@ -186,8 +187,10 @@ def prepare(task_dir, plan, run_id, *, now=None):
             old.pop("pack_only", None)
         projection = task_progress(task_dir, find_repo_root(task_dir), run_id, now=stamp)
         transition(old["nodes"], nodes, [row["id"] for row in projection.get("outcomes", []) if row["verified"]])
+        if first_baseline:
+            old = dict(old, started_at=stamp, last_progress_at=stamp, scope_revision=1)
         state = dict(old, nodes=nodes, run_id=run_id,
-                    scope_revision=old.get("scope_revision", 1) + (weight_sum(n for n in nodes if n["parent"] is None) != weight_sum(n for n in old["nodes"] if n["parent"] is None)),
+                    scope_revision=old.get("scope_revision", 1) + (not first_baseline and weight_sum(n for n in nodes if n["parent"] is None) != weight_sum(n for n in old["nodes"] if n["parent"] is None)),
                     checks=old["checks"] if old["run_id"] == run_id else {})
     else:
         state = dict(version=1, nodes=nodes, run_id=run_id, checks={}, started_at=stamp, last_progress_at=stamp)
@@ -416,7 +419,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
     import batch_state
     batch_state.requests_valid(requests)
     result = dict(batch_id=prefix, requests=requests,
-                next_action="Before dispatch park this open parent through task_blocked for the worktree handoff. Run the existing batch workflow with these exact requests. No parent source writes while leads run. Resume parent only after the pool is integrated; recheck outcomes and run combined review/QA.")
+                next_action="Before dispatch park this open parent through task_blocked for the worktree handoff. Run the existing batch workflow with these exact requests and --owner-task-id " + Path(task_dir).name + ". No parent source writes while leads run. Resume parent only after the pool is integrated; recheck outcomes and run combined review/QA.")
     if bind:
         import work_pack
         from _lib import _atomic_text_write
@@ -424,7 +427,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
         spec = work_pack.make_spec(repo, Path(task_dir).name, requests)
         state.update(batch=spec)
         _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
-        result.update(batch_id=spec["batch_id"])
+        result.update(task_id=spec["task_id"], batch_id=spec["batch_id"])
     return result
 
 

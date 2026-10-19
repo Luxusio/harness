@@ -246,9 +246,11 @@ rerun a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
 retries, but receipt absence is not a reason to invoke it again.
 
-For an execution envelope, run `task_close` first, then self-improvement and
-learning promotion; only then call `wbs(action="next")` on its owning root.
-Continue unless complete, blocked/stopped, capped, or awaiting go/no-go.
+Within an open root, use `wbs(action="next")`, development and checks to
+continue pending outcomes. Close only after all required outcomes, integration
+and independent evidence pass. Then run self-improvement and learning promotion
+before a separately authorized follow-up execution. Respect explicit stops,
+budgets and agreed go/no-go boundaries.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified

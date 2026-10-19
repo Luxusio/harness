@@ -2,7 +2,7 @@
 tags: [harness, qa, knowledge, freshness]
 summary: qa_notes 항목은 자기 주장이 의존하는 소스 경로를 선언하고, note_freshness.py 가 그 경로를 건드린 diff 에 대해 항목을 suspect 로 뒤집는다. 표시할 뿐 판정하지 않는다.
 updated: 2026-09-18
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/scripts/note_freshness.py
   - tests/test_note_freshness_qa_notes.py

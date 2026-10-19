@@ -2,7 +2,7 @@
 tags: [harness, verification, guards, install, contracts, testing]
 summary: 가드는 그것이 실행되는 환경에서 실행되어 검증되기 전까지 가드가 아니다. 그리고 커버리지 주장 자체도 기계로 확인된다 — 설치 트리 삭제 감지, 설치 후 런타임 스모크, 문서가 지목한 테스트 id 검증.
 updated: 2026-09-26
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - tests/conftest.py
   - tests/test_install_tree_removal_guard.py

@@ -348,7 +348,7 @@ qa_notes:
       - "RESOLVED 2026-09-03: the dominant cause was importlib.reload(_lib) in tests/test_promote_learnings_current_run.py, which emptied the control-writer bindings closure. Full analysis in doc/harness/REQ__test-suite-determinism-under-xdist.md. Do not re-open a HarnessMcpServerPR2CloseGate PermissionError from this note; the >=10-run guidance above remains durable."
   preexisting_single_worker_order_dependency:
     discovered: 2026-09-03
-    freshness: suspect
+    freshness: current
     freshness_updated: 2026-10-19T06:06:24Z
     invalidated_by_paths:
       - tests/test_harness_mcp_server.py
@@ -373,7 +373,7 @@ qa_notes:
       - "Trimming plugin-codex/internal-skills/develop/SKILL.md to 450 lines keeps test_contract_lint_real_tree.py fully green (5 passed when measured 2026-09-03; the file collects 11 at 66e0fa3 -- check the exit code, not the count) -- the cap-boundary test derives its threshold from the file length, not from SKILL_WEIGHT_LIMIT."
   suite_isolation_ab_recipes:
     discovered: 2026-09-03
-    freshness: suspect
+    freshness: current
     freshness_updated: 2026-10-19T06:06:24Z
     invalidated_by_paths:
       - tests/conftest.py
@@ -429,7 +429,7 @@ qa_notes:
       - "Full suite is fast and stable here: ~15s with xdist worksteal, ~60s with -n0. Four repeated runs plus one -n0 run on 2026-09-04 were all green; no flakiness observed. Test counts are deliberately omitted — a recorded total is stale the next time anyone adds a test, and this note is about timing and stability."
   setup_template_contract_drift_qa:
     discovered: 2026-09-04
-    freshness: suspect
+    freshness: current
     freshness_updated: 2026-10-19T06:06:24Z
     invalidated_by_paths:
       - plugin/scripts/note_freshness.py
@@ -471,7 +471,7 @@ qa_notes:
       - "plugin/scripts/subagent_lifecycle.py is not a standalone CLI: running it directly raises PermissionError('unsupported receipt lifecycle adapter') and exits 1 at HEAD as well as in the worktree. Do not report that as a regression."
   install_writable_payload_qa:
     discovered: 2026-09-17
-    freshness: suspect
+    freshness: current
     freshness_updated: 2026-10-19T06:06:24Z
     invalidated_by_paths:
       - install.py
@@ -484,7 +484,7 @@ qa_notes:
       - "pytest is not importable via `python3 -m pytest` here; use /project/harness-5265216677d3/.venv/bin/python -m pytest (full suite ~15s, xdist)."
   install_comparison_names_the_writable_component_qa:
     discovered: 2026-09-17
-    freshness: suspect
+    freshness: current
     freshness_updated: 2026-10-19T06:06:24Z
     invalidated_by_paths:
       - install.py

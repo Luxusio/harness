@@ -2,7 +2,7 @@
 tags: [harness, lifecycle, task_blocked, turn-end, contracts]
 summary: task_blocked 와 BLOCKED.md 는 미완료 태스크의 durable park 기록으로 유지한다. park 는 종결이 아니며 close 는 여전히 C-04 PASS 만 인정한다. "PASS 만 턴을 끝낸다" 방향(2026-09-02)은 Stop 훅 제거(2026-09-23)로 소멸했고 복원하지 않는다.
 updated: 2026-09-25
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/hooks/hooks.json
@@ -15,7 +15,7 @@ freshness_updated: 2026-10-19T06:06:13Z
 
 ## Requirement
 
-- The `task_blocked` MCP tool and the `BLOCKED.md` it writes stay in the
+- The `wbs(action="block")` operation and the `BLOCKED.md` it writes stay in the
   runtime. They are the durable record of *why* an open task stopped and *what*
   unblocks it.
 - Parking is not completion. A parked task grants no PASS, does not satisfy or
@@ -30,6 +30,10 @@ freshness_updated: 2026-10-19T06:06:13Z
 
 The normative text is the C-17 **Parking clause** in `CONTRACTS.md` and the
 setup template. This note records how the decision was reached.
+
+The current WBS API replaces the historical public task alias; the private
+parking handler and unchanged blocked-state semantics remain implementation
+details. This API conversion derives from the current explicit WBS request.
 
 ## History
 
@@ -64,7 +68,7 @@ close.
 - `tests/test_task_blocked_is_retained.py` checks five things:
   - the C-17 Parking clause is in both CONTRACTS copies;
   - the template copy of the clause carries no dates or repo doc paths;
-  - `task_blocked` is registered in `plugin/mcp/harness_server.py`;
+  - the WBS block action routes to the private parking owner in `plugin/mcp/harness_server.py`;
   - the `plugin/CLAUDE.md` §4a park line is present;
   - the stop-gate sentences that read as live are gone.
 - `tests/test_plan_single_reviewer_and_no_stop_hook.py` pins that no Claude

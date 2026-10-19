@@ -18,6 +18,11 @@ ID and requests; reuse them and run its integration child after all leads land.
 Persistent records under `doc/harness/runtime/batches/<id>.json` are operational
 metadata, never task authority or review/QA evidence. Never edit them by hand.
 
+For a WBS-owned pack, pass its returned task_id as `--owner-task-id <task_id>`
+when initializing the exact batch. This immutable pool owner must match the
+parent binding. Standalone batches may omit it. Preserve it on every retry;
+never attach a different root to an initialized pool.
+
 ## a) Intake
 
 Collect N requests. Each needs a slug and a declared path scope (the files or

@@ -460,6 +460,56 @@ def _restore_text_snapshots(snapshots):
         raise first_error
 
 
+def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        before = os.lstat(path)
+        fd = os.open(path, flags)
+    except OSError:
+        return {}
+    try:
+        opened = os.fstat(fd)
+        identity = (opened.st_dev, opened.st_ino)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or identity != (before.st_dev, before.st_ino)
+            or opened.st_uid != os.getuid()
+            or opened.st_nlink != 1
+            or opened.st_mode & 0o022
+            or opened.st_size > max_size
+        ):
+            return {}
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            fd = -1
+            text = handle.read(max_size + 1)
+        if len(text.encode("utf-8")) > max_size:
+            return {}
+        after = os.lstat(path)
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or (after.st_dev, after.st_ino) != identity
+            or after.st_nlink != 1
+            or after.st_mtime_ns != opened.st_mtime_ns
+            or after.st_ctime_ns != opened.st_ctime_ns
+            or after.st_size != opened.st_size
+        ):
+            return {}
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate state key: {key}")
+                result[key] = value
+            return result
+        data = json.loads(text, object_pairs_hook=unique_object)
+    except (OSError, TypeError, UnicodeError, ValueError):
+        return {}
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return data if isinstance(data, dict) else {}
+
+
 def _atomic_text_write(path: str, text: str) -> None:
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
