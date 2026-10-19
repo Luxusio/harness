@@ -432,3 +432,21 @@ def test_tiny_pending_weight_never_rounds_to_completion_or_hides_stall(tmp_path)
     assert progress(repo, td, 7400)["refinement_due"]
     final = check(repo, td, "B", now=7401)["progress"]
     assert final["percentage"] == 100 and final["last_progress_at"] == 7401
+
+
+def test_ambient_git_index_cannot_hide_changes_to_ignored_tracked_source(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    (repo / ".gitignore").write_text("doc/harness/tasks/\nsrc.txt\n")
+    subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-f", "src.txt"], cwd=repo, check=True)
+    real_source = wbs.fingerprint(str(repo))
+    alternate = tmp_path / "alternate-index"
+    monkeypatch.setenv("GIT_INDEX_FILE", str(alternate))
+    subprocess.run(["git", "read-tree", "--empty"], cwd=repo, check=True)
+    subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
+    assert wbs.fingerprint(str(repo)) == real_source
+    assert check(repo, td)["progress"]["percentage"] == 100
+    (repo / "src.txt").write_text("broken")
+    assert wbs.fingerprint(str(repo)) != real_source
+    assert progress(repo, td)["percentage"] == 0
+    assert not check(repo, td)["passed"]

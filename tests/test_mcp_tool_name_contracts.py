@@ -80,3 +80,12 @@ def test_task_tools_declare_optional_workspace_and_goal_tools_do_not():
         assert "workspace" not in schemas[name].get("required", []), name
     for name in ("goal_start", "goal_context", "goal_add_task", "goal_next_task", "goal_finish"):
         assert "workspace" not in schemas[name]["properties"], name
+
+
+def test_deeply_nested_encoded_binding_arguments_are_not_applicable():
+    import sys
+    sys.path.insert(0, str(REPO_ROOT / "plugin/scripts"))
+    from _lib import is_codex_task_binding_tool
+    nested = "[" * 10000 + "0" + "]" * 10000
+    for name in ("wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"):
+        assert not is_codex_task_binding_tool(name, nested)

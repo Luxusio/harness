@@ -93,3 +93,12 @@ old current evidence until assertions are rerun. Reads execute no assertion.
 Fingerprint scanning is bounded to 4,096 files and 32 MiB; above that budget
 progress is explicitly unavailable rather than estimated. This avoids making
 progress calculation an unbounded repository traversal.
+
+Follow-up user confirmation “수정ㄱ” applies to the immediately preceding review
+finding that an ambient alternate Git index can hide changes to real-index
+tracked files. As a derived implementation constraint, source enumeration uses
+the checkout's own Git identity and strips ambient Git repository, index and
+configuration overrides through the existing trusted environment helper. A file
+tracked by the real checkout remains measured even when it matches ignore rules
+and an alternate index omits it. A subsequent change invalidates its prior
+assertion proof; inherited Git settings cannot keep stale progress at100%.

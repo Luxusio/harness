@@ -1309,3 +1309,129 @@ def test_codex_wrappers_safely_ignore_nonobject_and_malformed_json_payloads(tmp_
             assert result.returncode == 0, (name, payload, result.stderr)
             assert not result.stdout and not result.stderr, (name, payload, result.stdout, result.stderr)
             assert not list(tmp_path.iterdir()), (name, payload, "malformed hook changed scratch state")
+
+
+def test_posttool_binding_budget_includes_session_and_receipt_lock_admission(tmp_path, monkeypatch):
+    mod = _load("codex_hook_registration")
+    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
+    import codex_lifecycle_watcher as watcher
+    import select
+
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    for kind in ("session", "receipt"):
+        repo, home = tmp_path / kind / "repo", tmp_path / kind / "codex"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        manifest = repo / "doc/harness/manifest.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("type: library\n")
+        task_id, run_id = _write_exact_session_binding(repo, root_id)
+        task = repo / "doc/harness/tasks" / task_id
+        rollout = _rollout_path(home, root_id)
+        _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+            "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
+        }}])
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        payload = json.dumps({"cwd": str(repo), "session_id": root_id, "tool_name": "wbs",
+                              "arguments": {"action": "context", "wbs_id": task_id},
+                              "tool_response": {"structuredContent": {
+                                  "task_dir": str(task), "task_id": task_id, "run_id": run_id,
+                              }}}).encode()
+        assert mod.register_task_result(payload, budget_seconds=2)
+        marker = repo / "doc/harness/tasks/.active_sessions" / (root_id + ".json")
+        before_marker, before_registration = marker.read_bytes(), watcher.registrations(str(repo))
+        locked = marker.parent if kind == "session" else task
+        locker = subprocess.Popen([
+            sys.executable, "-u", "-c",
+            "import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDONLY); "
+            "fcntl.flock(fd,fcntl.LOCK_EX); print('ready',flush=True); sys.stdin.readline(); os.close(fd)",
+            str(locked),
+        ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            assert select.select([locker.stdout], [], [], 5)[0], "lock holder did not start"
+            assert locker.stdout.readline().strip() == b"ready"
+            status = {}
+            started = time.monotonic()
+            assert not mod.register_task_result(payload, budget_seconds=0.1, status_out=status)
+            assert time.monotonic() - started < 1
+            assert status["status"] == mod.REGISTRATION_FAILED
+            actual_hook = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
+                                         input=payload, cwd=repo, capture_output=True, timeout=2.5)
+            assert actual_hook.returncode == 0 and not actual_hook.stdout and not actual_hook.stderr
+            assert marker.read_bytes() == before_marker
+            assert watcher.registrations(str(repo)) == before_registration
+            assert not (task / "RECEIPTS.jsonl").exists()
+        finally:
+            locker.communicate(b"release\n", timeout=5)
+        assert locker.returncode == 0
+        assert mod.register_task_result(payload, budget_seconds=2)
+        assert watcher.registrations(str(repo)) == before_registration
+
+
+def test_posttool_binding_discovery_shares_hard_budget_and_preserves_caller_alarm(tmp_path):
+    mod = _load("codex_hook_registration")
+    payload = json.dumps({"cwd": str(tmp_path), "session_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42"}).encode()
+    with mock.patch.object(mod, "_registration_identity", side_effect=lambda _: time.sleep(1)):
+        started, status = time.monotonic(), {}
+        assert not mod.register_task_result(payload, budget_seconds=0.05, status_out=status)
+        assert time.monotonic() - started < 0.5
+        assert status["status"] == mod.REGISTRATION_FAILED
+        delivered = []
+        def caller_alarm(signum, _frame):
+            delivered.append(signum)
+        previous = signal.signal(signal.SIGALRM, caller_alarm)
+        signal.setitimer(signal.ITIMER_REAL, 0.05)
+        try:
+            assert not mod.register_task_result(payload, budget_seconds=0.5)
+            assert delivered == [signal.SIGALRM]
+            assert signal.getsignal(signal.SIGALRM) is caller_alarm
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+
+
+def test_deeply_nested_encoded_arguments_are_rejected_before_binding(tmp_path):
+    mod = _load("codex_hook_registration")
+    nested = "[" * 10000 + "0" + "]" * 10000
+    for alias in ("tool_input", "input", "arguments"):
+        body = {"tool_name": "wbs", alias: nested}
+        assert mod._task_arguments(body) is None
+        assert mod._task_result(json.dumps(body).encode()) == ("", "", "")
+        result = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
+                                input=json.dumps(body), text=True, cwd=tmp_path,
+                                capture_output=True, timeout=3)
+        assert result.returncode == 0 and not result.stdout and not result.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_registration_timeout_closes_partially_opened_receipt_directory_fds(tmp_path):
+    mod = _load("codex_hook_registration")
+    import errno
+    import _lib as lib
+    task = tmp_path / "doc/harness/tasks/TASK__interrupted"
+    task.mkdir(parents=True)
+    original_open, original_fstat = os.open, os.fstat
+    opened = []
+    def track_open(*args, **kwargs):
+        fd = original_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+    def slow_metadata(fd):
+        if os.readlink("/proc/self/fd/" + str(fd)) == str(task):
+            time.sleep(1)
+        return original_fstat(fd)
+    def admission():
+        with lib.receipt_stream_transaction(str(task)):
+            return True
+    with mock.patch.object(os, "open", side_effect=track_open), \
+            mock.patch.object(os, "fstat", side_effect=slow_metadata):
+        assert not mod._call_with_deadline(admission, time.monotonic() + 0.05)
+    assert len(opened) == 4
+    for fd in opened:
+        try:
+            original_fstat(fd)
+        except OSError as exc:
+            assert exc.errno == errno.EBADF
+        else:
+            os.close(fd)
+            raise AssertionError("interrupted receipt admission leaked a descriptor")

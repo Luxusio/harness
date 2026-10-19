@@ -44,7 +44,7 @@ def is_codex_task_binding_tool(tool_name, arguments=None):
     if tool_name.lower() in {"wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"}:
         try:
             arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return False
         return (isinstance(arguments, dict) and isinstance(arguments.get("action"), str)
                 and arguments["action"] in {"open", "context"})
@@ -2812,6 +2812,9 @@ def _receipt_stream_lock(task_dir):
     try:
         for path in reversed(component_paths):
             component_fd = os.open(path, flags)
+            # Admission can be interrupted by the registration hard deadline.
+            # Own the descriptor before any subsequent metadata operation.
+            components.append((path, component_fd, None))
             component_info = os.fstat(component_fd)
             current_info = os.lstat(path)
             if (
@@ -2821,17 +2824,16 @@ def _receipt_stream_lock(task_dir):
                 or (component_info.st_dev, component_info.st_ino)
                 != (current_info.st_dev, current_info.st_ino)
             ):
-                os.close(component_fd)
                 raise RuntimeError("receipt storage integrity unavailable")
-            components.append((
+            components[-1] = (
                 path, component_fd, (component_info.st_dev, component_info.st_ino),
-            ))
-    except (OSError, RuntimeError) as exc:
+            )
+    except BaseException as exc:
         for _, component_fd, _ in components:
             os.close(component_fd)
-        if isinstance(exc, RuntimeError):
-            raise
-        raise RuntimeError("receipt storage integrity unavailable") from exc
+        if isinstance(exc, OSError):
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        raise
     fd = components[-1][1]
     try:
         info = os.fstat(fd)

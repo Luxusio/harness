@@ -184,9 +184,10 @@ def prepare(task_dir, plan, run_id, *, now=None):
 
 def fingerprint(repo):
     """Observe checkout contents internally, without prescribing edited files."""
+    from _lib import _trusted_git_env
     root, result = Path(repo).resolve(), []
     listing = subprocess.run(["git", "ls-files", "-c", "-o", "--exclude-standard", "-z"],
-                             cwd=root, capture_output=True, timeout=10, check=True)
+                             cwd=root, env=_trusted_git_env(), capture_output=True, timeout=10, check=True)
     scopes = sorted(set(os.fsdecode(s) for s in listing.stdout.split(b"\0") if s))
     total = 0
     for scope in scopes:

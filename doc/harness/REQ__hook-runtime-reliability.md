@@ -8,6 +8,11 @@ Review the broader change for remaining failures, with emphasis on repeated
 hook failures. The preceding explicit request “증거수집도 버그 고쳐” authorizes
 repair of confirmed collection defects.
 
+The later user reply “수정ㄱ” confirms the immediately preceding three-finding
+review: fix registration lock-budget overruns, ambient Git measurement overrides,
+and deeply nested encoded argument crashes. The Git measurement constraint is
+owned by [measurable WBS progress](REQ__measurable-wbs-progress.md).
+
 ## Confirmed failures
 
 At225ddbb, a scratch linked-worktree experiment parsed all three supported
@@ -28,6 +33,16 @@ permissive interpretation. Top-level arrays, null, numbers, strings and malforme
 PostToolUse or UserPromptSubmit. Use each wrapper's shared dictionary decoder
 before accessing fields. Existing namespace, result, task/run, workspace,
 conflict-fence and immutable-offset checks remain authoritative.
+
+The registration budget covers the whole task-result callback, starting before
+input decoding and repository discovery, including session/receipt lock admission.
+Contention must return within the budget rather than leave the hook waiting for
+its external timeout. Actual expiry reports registration failure, grants no new
+receipt authority and releases acquired locks; a later successful call may bind
+future work through the unchanged registration protocol. Preserve existing caller
+alarms and exact bindings. The watcher restoration step receives only the
+remaining budget. Deeply nested encoded arguments that exceed the JSON decoder's
+recursion limit are invalid inputs and must be rejected without a traceback.
 
 The installed PostToolUse matcher must cover the canonical binding-tool
 allowlist. Contract tests compare those surfaces directly so a new public tool
@@ -53,3 +68,7 @@ and workspace mismatches. Compare exact matcher coverage with canonical tool
 IDs. Verify a clean Codex projection self-test passes and that broken registrar,
 manager or completion fails. Run existing hook/watcher/worktree/install
 contracts and full independent QA, then inspect actual current-task receipts.
+Exercise both session and receipt lock contention with real subprocesses,
+unchanged existing binding/registration, bounded return and recovery after release.
+Check deeply nested string arguments through the classifier, registrar and actual
+PostToolUse wrapper, alongside the existing caller-alarm regressions.

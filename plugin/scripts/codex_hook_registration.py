@@ -215,7 +215,7 @@ def _task_arguments(data: dict) -> dict | None:
         if isinstance(value, str):
             try:
                 value = json.loads(value)
-            except ValueError:
+            except (ValueError, RecursionError):
                 return None
         if not isinstance(value, dict):
             return None
@@ -263,6 +263,19 @@ def register_task_result(
     status_out: dict | None = None,
 ) -> bool:
     """Bind a successful Harness task result to this exact Codex session."""
+    deadline = time.monotonic() + max(0.0, float(budget_seconds))
+    result = bool(_call_with_deadline(
+        lambda: _register_task_result(payload, deadline, status_out), deadline,
+    ))
+    if not result and time.monotonic() >= deadline and status_out is not None:
+        status_out.update({
+            "status": REGISTRATION_FAILED,
+            "reason": "task binding did not complete within its registration budget",
+        })
+    return result
+
+
+def _register_task_result(payload: bytes, deadline: float, status_out: dict | None) -> bool:
     cwd, thread_id = _registration_identity(payload)
     task_dir, task_id, run_id = _task_result(payload)
     if status_out is not None:
@@ -382,7 +395,7 @@ def register_task_result(
                 )
                 return restore_watcher_registration(
                     payload,
-                    budget_seconds=budget_seconds,
+                    budget_seconds=max(0.0, deadline - time.monotonic()),
                     status_out=status_out,
                 )
     except Exception:
