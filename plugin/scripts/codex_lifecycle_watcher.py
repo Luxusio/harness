@@ -161,6 +161,7 @@ def _open_trusted_file(
     if not _trusted_parent_tree(path, root):
         return None
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = None
     try:
         fd = os.open(path, flags)
         info = os.fstat(fd)
@@ -174,15 +175,15 @@ def _open_trusted_file(
             or (path_info.st_dev, path_info.st_ino) != (info.st_dev, info.st_ino)
             or (max_size is not None and info.st_size > max_size)
         ):
-            os.close(fd)
             return None
-        return os.fdopen(fd, "rb"), info
+        handle = os.fdopen(fd, "rb")
+        fd = None  # The file object now owns cleanup, including interruption.
+        return handle, info
     except OSError:
-        try:
-            os.close(fd)
-        except (OSError, UnboundLocalError):
-            pass
         return None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _path_matches_handle(
@@ -662,6 +663,7 @@ def invalidate_registration(repo_root: str, thread_id: str) -> bool:
         return True
     lock_path = _lock_path(repo_root, thread_id)
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    lock_fd = None
     try:
         lock_fd = os.open(lock_path, flags, 0o600)
         lock_info = os.fstat(lock_fd)
@@ -675,12 +677,16 @@ def invalidate_registration(repo_root: str, thread_id: str) -> bool:
             or (lock_path_info.st_dev, lock_path_info.st_ino)
             != (lock_info.st_dev, lock_info.st_ino)
         ):
-            os.close(lock_fd)
             return False
         os.fchmod(lock_fd, 0o600)
+        lock = os.fdopen(lock_fd, "a+", encoding="utf-8")
+        lock_fd = None
     except OSError:
         return False
-    with os.fdopen(lock_fd, "a+", encoding="utf-8") as lock:
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+    with lock:
         if fcntl is None:
             return False
         try:
@@ -756,6 +762,7 @@ def ensure(
         return False
     lock_path = _lock_path(repo_root, thread_id)
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    lock_fd = None
     try:
         lock_fd = os.open(lock_path, flags, 0o600)
         lock_info = os.fstat(lock_fd)
@@ -763,12 +770,16 @@ def ensure(
             not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.getuid()
             or lock_info.st_nlink != 1 or lock_info.st_mode & 0o022
         ):
-            os.close(lock_fd)
             return False
         os.fchmod(lock_fd, 0o600)
+        lock = os.fdopen(lock_fd, "a+", encoding="utf-8")
+        lock_fd = None
     except OSError:
         return False
-    with os.fdopen(lock_fd, "a+", encoding="utf-8") as lock:
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+    with lock:
         if fcntl is not None:
             try:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

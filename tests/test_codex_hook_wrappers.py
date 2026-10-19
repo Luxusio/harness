@@ -1435,3 +1435,59 @@ def test_registration_timeout_closes_partially_opened_receipt_directory_fds(tmp_
         else:
             os.close(fd)
             raise AssertionError("interrupted receipt admission leaked a descriptor")
+
+
+def test_binding_deadline_closes_watcher_admission_descriptors_and_can_retry(tmp_path, monkeypatch):
+    mod = _load("codex_hook_registration")
+    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
+    import codex_lifecycle_watcher as watcher
+    import errno
+
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    for stage in ("invalidate_lock", "ensure_lock", "trusted_rollout"):
+        repo, home = tmp_path / stage / "repo", tmp_path / stage / "codex"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        manifest = repo / "doc/harness/manifest.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("type: library\n")
+        task_id, run_id = _write_exact_session_binding(repo, root_id)
+        task = repo / "doc/harness/tasks" / task_id
+        rollout = _rollout_path(home, root_id)
+        _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+            "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
+        }}])
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        payload = json.dumps({"cwd": str(repo), "session_id": root_id, "tool_name": "wbs",
+                              "arguments": {"action": "context", "wbs_id": task_id},
+                              "tool_response": {"structuredContent": {
+                                  "task_dir": str(task), "task_id": task_id, "run_id": run_id,
+                              }}}).encode()
+        assert mod.register_task_result(payload, budget_seconds=2)
+        if stage == "invalidate_lock":
+            (repo / "doc/harness/tasks/.active_sessions" / (root_id + ".json")).unlink()
+        elif stage == "ensure_lock":
+            watcher._state_path(str(repo), root_id).unlink()
+        target = rollout if stage == "trusted_rollout" else watcher._lock_path(str(repo), root_id)
+        interrupted, original_fstat = [], os.fstat
+        def slow_metadata(fd):
+            if os.readlink("/proc/self/fd/" + str(fd)) == str(target):
+                interrupted.append(fd)
+                time.sleep(1)
+            return original_fstat(fd)
+        status = {}
+        with mock.patch.object(os, "fstat", side_effect=slow_metadata):
+            assert not mod.register_task_result(payload, budget_seconds=0.1, status_out=status)
+        assert status["status"] == mod.REGISTRATION_FAILED, stage
+        assert interrupted, stage
+        for fd in interrupted:
+            try:
+                original_fstat(fd)
+            except OSError as exc:
+                assert exc.errno == errno.EBADF
+            else:
+                os.close(fd)
+                raise AssertionError("watcher admission leaked a descriptor: " + stage)
+        assert not (task / "RECEIPTS.jsonl").exists()
+        assert mod.register_task_result(payload, budget_seconds=2), stage
+        assert watcher.registrations(str(repo))[0]["run_id"] == run_id
