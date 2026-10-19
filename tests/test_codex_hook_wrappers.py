@@ -1279,6 +1279,7 @@ def test_installed_binding_matcher_covers_canonical_tool_allowlist():
     install = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = install
     spec.loader.exec_module(install)
+    sys.path.insert(0, str(SCRIPTS))
     from _lib import CODEX_TASK_BINDING_TOOLS
     matcher = install._codex_hooks_config(REPO_ROOT / "installed")["hooks"]["PostToolUse"][0]["matcher"]
     for name in CODEX_TASK_BINDING_TOOLS:
