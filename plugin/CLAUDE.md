@@ -15,32 +15,42 @@ Every repo-mutating task exposes this public lifecycle:
 ```
 task start → plan → minimum-sufficient develop → runtime QA → close
 ```
-Independent review and `task_verify` are mandatory internal close gates. No
+Independent review and `wbs(action="verify")` are mandatory internal close gates. No
 step is skipped. Smallest coherent diff per step.
 
 ## 2. MCP tools
 
-**Core (task driver — main session or run skill):**
-- `task_start` — create/resume task, return task context; an existing open or
-  blocked task preserves its run and receipts by default, while only explicit
-  `fresh_run: true` starts a new generation and discards current evidence
-- `task_context` — refresh task state (only when needed)
-- `task_verify` — compute verification from ordered review completions followed by QA completions
-- `task_close` — gate: runtime verdict PASS → close
-- `task_blocked` — park unfinished work on a real environment blocker; writes
-  BLOCKED.md, clears this session's active marker, and reports both the
-  evidence-preserving plain `task_start` resume and destructive
-  `task_start(..., fresh_run=true)` choice
+The sole public MCP tool is `wbs`. One outcome tree owns planning and measured
+progress for ordinary requests and native Goal continuation alike.
 
-The task tools and `write_plan` take an optional `workspace`: a validated,
-registered linked worktree whose task the call targets (`harness:batch` leads,
-Claude only). Task paths and focus markers resolve there; session identity
-stays on the main checkout. See
+- `wbs(action="open")` creates or resumes the root; existing open/blocked work
+  preserves its run and receipts. Only explicit `fresh_run: true` starts a new
+  generation and discards that evidence.
+- `wbs(action="context")` refreshes state; `wbs(action="next")` returns ready outcomes.
+- `wbs(action="plan")` publishes PLAN.md, the outcome tree and required lenses.
+- `wbs(action="check")` executes one declared outcome assertion; planning alone
+  earns no progress.
+- `wbs(action="dispatch")` hands independent work to the isolated worktree pool
+  and parks the parent until its exact pool integrates.
+- `wbs(action="verify")` derives ordered independent review/QA verification;
+  `wbs(action="close")` still requires that evidence and verified outcomes.
+- `wbs(action="block")` parks unfinished work with a real blocker and actionable
+  unblock condition. Resume with open while preserving the same run.
+- `wbs(action="migrate")` previews retired records; only explicit `apply: true`
+  converts them. Retired tool names are unavailable.
+
+Pass the known root as `wbs_id`. An optional `workspace` targets a validated,
+registered linked worktree; task paths and focus resolve there while session
+identity stays on the control checkout. See
 `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`.
 
-**Artifact writes (role-owned):**
-- `write_plan` → PLAN.md + TASK.json required-lens declaration (plan-skill)
-- durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
+Durable docs such as `doc/<area>/REQ__*.md` are ordinary repository documents.
+Distinguish quoted user intent from derived engineering decisions and unconfirmed
+assumptions. Keep WBS outcomes coarse and observable, update them for new user
+requests or necessary discoveries, and choose assertions when ready. Never
+prescribe edited files to calculate progress. Refine unclear unfinished work
+after two hours without earned progress; report real external blockers instead
+of recursively splitting them.
 
 Static review and runtime QA provenance share compact `RECEIPTS.jsonl`.
 Codex/Claude lifecycle hooks own it. Exact formal review finals are stored in
@@ -73,8 +83,9 @@ read or migrated.
 Do not mutate source before PLAN.md exists.
 Short approvals only authorize the last explicit transition proposed.
 
-`execution_mode: micro` (passed to `task_start`) exempts the PLAN.md rule for
-one-shot bugfix/maintenance edits; the REQ durable-doc gate still applies.
+Existing internal `execution_mode: micro` records exempt the PLAN.md gate;
+the public WBS planning flow still requires an outcome tree and the durable-doc
+gate still applies. Do not pass execution_mode to the public open action.
 
 ## 4a. Turn-end rule
 
@@ -87,8 +98,8 @@ Task in_progress (`.active` marker exists) 동안:
 - 자가 판단으로 task 를 끝내지 않는다 (아래 Task 종결 사유만).
 - Turn-end 는 Claude 에서 hook 으로 게이트되지 않는다 (Stop 훅 등록이
   2026-09-23 제거됨). Task 는 열린 채로 남고, close 는 여전히
-  `task_close` 의 receipt-backed PASS 만 인정한다. Turn 간 지속(continuation)
-  은 native `/goal` 이 담당한다 — close 조건(예: "task_close PASS")을 goal
+  `wbs(action="close")` 의 receipt-backed PASS 만 인정한다. Turn 간 지속(continuation)
+  은 native `/goal` 이 담당한다 — close 조건(예: "WBS close PASS")을 goal
   condition 에 넣는다.
 - 대기는 종결이 아니다: 실행 중인 lens 서브에이전트를 기다릴 때는 turn 을
   끝낸다 — 폴링하지 않는다. 태스크는 `in_progress` 로, `.active` 마커도
@@ -96,24 +107,24 @@ Task in_progress (`.active` marker exists) 동안:
 
 Task 종결 사유 (runtime_verdict 기반, turn 대기와 무관):
 
-1. **PASS** — 모든 AC 가 `passed`/`deferred` → `task_close`.
-2. **BLOCKED_ENV** — 진짜 blocker 확인 → `task_blocked(blocked_reason, unblock_condition)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
-   `task_blocked` 는 park 기록일 뿐 종결이 아니다 — PASS 를 주지 않고 C-04 close gate 를 우회하지 않으며, 태스크는 plain `task_start` 로 재개한다.
+1. **PASS** — 모든 필수 outcome 검증 및 ordered review/QA PASS → `wbs(action="close")`.
+2. **BLOCKED_ENV** — 진짜 blocker 확인 → `wbs(action="block", blocked_reason=..., unblock_condition=...)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
+   `wbs(action="block")` 는 park 기록일 뿐 종결이 아니다 — PASS 를 주지 않고 C-04 close gate 를 우회하지 않으며, 태스크는 plain `wbs(action="open")` 로 재개한다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
-BLOCKED_ENV로 멈출 때는 `task_blocked`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `task_verify` 1회 후에도 남은 필수 attestation 누락이다. 렌즈가 실제로 돌아 결과를 냈는데 필수 증거가 없는 경우에는 고정 쌍만 쓴다. 단 기록 능력 상실이 **관측된** 경우(`doc/harness/.receipt-capability-broken` 존재)는 외부 환경 blocker 분기가 우선하며 고정 쌍을 쓰지 않는다 — 두 쌍 모두 "렌즈가 돌아 결과를 냈다"를 단언하는데 그 상태에서는 그게 미지이기 때문이다. 근거는 `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. 쌍은 **둘**이고 어느 쪽인지는 영수증 스트림이 정한다 — 이 run 에 아무 영수증도 기록되지 않았으면 empty-stream 쌍, 영수증은 있는데 필수 completion 이 없으면 missing-attestation 쌍. 두 `blocked_reason`/`unblock_condition` 문자열 모두 `plugin/scripts/_lib.py`가 소유하며, 방금 돌린 `task_verify` 응답의 `next_action`에서 **그대로 복사**한다. 기억에 의존해 다시 타이핑하거나, 바꿔 쓰거나, 진단 문구를 끼워 넣지 않는다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 기존 task_verify+task_close.
+BLOCKED_ENV로 멈출 때는 `wbs(action="block")`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `wbs(action="verify")` 1회 후에도 남은 필수 attestation 누락이다. 렌즈가 실제로 돌아 결과를 냈는데 필수 증거가 없는 경우에는 고정 쌍만 쓴다. 단 기록 능력 상실이 **관측된** 경우(`doc/harness/.receipt-capability-broken` 존재)는 외부 환경 blocker 분기가 우선하며 고정 쌍을 쓰지 않는다 — 두 쌍 모두 "렌즈가 돌아 결과를 냈다"를 단언하는데 그 상태에서는 그게 미지이기 때문이다. 근거는 `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. 쌍은 **둘**이고 어느 쪽인지는 영수증 스트림이 정한다 — 이 run 에 아무 영수증도 기록되지 않았으면 empty-stream 쌍, 영수증은 있는데 필수 completion 이 없으면 missing-attestation 쌍. 두 `blocked_reason`/`unblock_condition` 문자열 모두 `plugin/scripts/_lib.py`가 소유하며, 방금 돌린 `wbs(action="verify")` 응답의 `next_action`에서 **그대로 복사**한다. 기억에 의존해 다시 타이핑하거나, 바꿔 쓰거나, 진단 문구를 끼워 넣지 않는다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 `wbs(action="verify")` + `wbs(action="close")`.
 
-파킹 뒤에는 별도 resume 도구가 없다. plain `task_start`가 같은 run과
+파킹 뒤에는 별도 resume 도구가 없다. plain `wbs(action="open")`가 같은 run과
 review/QA 영수증을 보존해 재개한다. 이미 끝난 증거를 의도적으로 버리고 새
 generation을 시작할 때만 `fresh_run: true`를 쓴다. closed task의 plain
-`task_start`는 거부되며 같은 명시적 선택을 안내한다.
+`wbs(action="open")`는 거부되며 같은 명시적 선택을 안내한다.
 
 ## 5. Artifact ownership
 
 | Artifact | Owner |
 |----------|-------|
-| PLAN.md | plan-skill via `write_plan` MCP |
-| TASK.json | task lifecycle MCP tools (`write_plan` may update lens declarations) |
+| PLAN.md | plan-skill via `wbs(action="plan")` MCP |
+| TASK.json | WBS execution owner (`wbs(action="plan")` may update lens declarations) |
 | source + durable docs | developer |
 | RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |
 | REVIEWS.jsonl | shared formal-review detail writer used by lifecycle hooks or `review-log` |
@@ -138,17 +149,17 @@ apply to read-only answers or ordinary non-harness work.
 |--------|----------|
 | Set up harness | `Skill(setup)` |
 | Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
-| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | On Codex invoke `$harness:run`; it syncs the native Goal when present and otherwise opens/resumes a task with `task_start` / `task_context` |
-| User explicitly says "plan only" / "just plan" | Sync/create Goal, run the internal plan phase, then stop after plan |
-| User explicitly says "implement PLAN.md" / "develop only" | Resume the active Goal child task through the internal develop path |
-| Multi-component or API↔frontend change in one task | Goal child task with develop Phase 3.0 auto-fanout |
-| CEO / Architecture / Design / DX review | Goal child task plan phase; review lenses are internal sub-skills |
+| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | On Codex invoke `$harness:run`; it opens/resumes one WBS with `wbs(action="open")` / `wbs(action="context")`; a native Goal supplies only the objective |
+| User explicitly says "plan only" / "just plan" | Open/resume the WBS, run the internal plan phase, then stop after plan |
+| User explicitly says "implement PLAN.md" / "develop only" | Resume the active WBS through the internal develop path |
+| Multi-component or API↔frontend change in one task | Same WBS with develop Phase 3.0 auto-fanout |
+| CEO / Architecture / Design / DX review | Same WBS plan phase; review lenses are internal sub-skills |
 | Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Schedule cleanup as a separate follow-up task |
 | Explanation | Direct answer |
 
 ## 7. Verification
 
-`task_verify` checks hook-recorded review and QA lifecycles.
+`wbs(action="verify")` checks hook-recorded review and QA lifecycles.
 Do not claim success from static inspection when runtime verification is required.
 
 ## 8. Finish cleanly
@@ -156,7 +167,7 @@ Do not claim success from static inspection when runtime verification is require
 The plan declares required review and QA lenses. Required review evidence must
 PASS before QA starts, and every applicable QA lens must then PASS. Post-QA
 edits and scope drift are developer-owned.
-Use `task_close`. If blocked, fix the stated gate.
+Use `wbs(action="close")`. If blocked, fix the stated gate.
 Promote user corrections directly into PLAN.md or durable project
 documentation before close.
 
@@ -197,14 +208,14 @@ can add thousands of structured tokens to the caller's context, so an isolated
 lane is usually cheaper for multi-step QA.
 
 Why: qa-browser runs browser verification in an isolated context. The
-orchestrator reads its final response for findings and uses `task_verify` for
+orchestrator reads its final response for findings and uses `wbs(action="verify")` for
 the authoritative close signal.
 
 This is workflow guidance, not a PreToolUse gate. Short diagnostics and browser
 verification may run inline when delegation is unavailable or the inline path
 is materially simpler. Harness accepts the resulting context-growth risk; the
 caller still owns complete ordered review/QA receipts required by
-`task_verify`.
+`wbs(action="verify")`.
 
 Allowed inline:
 - **Bash test runners** (`pytest`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `vitest`, `jest`, `mocha`, `cargo test`, `go test`, `mvn test`, `gradle test`, `rspec`, `phpunit`, `rake test`) — single PASS/FAIL lines do not bloat context; inline use is legitimate. For heavy full-suite runs, spawning `harness:qa-cli` (or `qa-api` / `qa-desktop` per project) keeps the main lane clean as a convention, not a gate.

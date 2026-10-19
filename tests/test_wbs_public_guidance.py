@@ -100,3 +100,15 @@ def test_recovery_outputs_from_gate_registration_and_checkpoint(tmp_path, monkey
     assert "runtime_verdict PASS" in saved
     assert "wbs(action='close')" in saved
     assert "run task_close" not in saved
+
+
+def test_shipped_runtime_rules_expose_only_current_wbs_actions():
+    rules = (Path(__file__).resolve().parents[1] / "plugin/CLAUDE.md").read_text()
+    tool_section = rules.split("## 2. MCP tools\n", 1)[1].split("## 3.", 1)[0]
+    assert "sole public MCP tool is `wbs`" in tool_section
+    for action in ("open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate"):
+        assert f'wbs(action="{action}")' in tool_section
+    assert not re.search(r"\b(?:task_(?:start|context|verify|close|blocked)|write_plan)\b", rules)
+    assert "Goal child" not in rules
+    assert "fresh_run" in rules and "empty-stream" in rules
+    assert "plugin/scripts/_lib.py" in rules
