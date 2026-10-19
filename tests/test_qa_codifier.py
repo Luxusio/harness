@@ -386,16 +386,18 @@ class TestCodifiableContractInAgentDocs(unittest.TestCase):
         required = [
             "Desktop verification depth is mandatory",
             "Desktop verification depth: interactive-desktop | window-rendered | launch-only | static-only | blocked-env",
-            "Display: <DISPLAY value, Xvfb, real display, or none>",
+            "Device: <deviceId, backend, platform, readiness and effective capabilities>",
             "Windows inspected: <title/id list, or none>",
-            "Interactions performed: <click/type/keypress/resize/focus list, or none>",
+            "Interactions performed: <actual supported action list, or none>",
             "Screenshots: <paths, or redaction notes, or none>",
             "Keyboard path checked: yes | no | not-applicable",
-            "Treat `interactive-desktop` as the default expectation for desktop GUI changes.",
-            "Launch the app, inspect the visible window, perform the user actions implied by",
+            "Treat `interactive-desktop` as the default expectation for required native GUI",
+            "Launch the app, inspect the visible window or mobile screen, perform",
             "Build success, launch-only checks, and",
-            "screenshots without interaction are lower tiers",
-            "A PASS below `interactive-desktop` must say",
+            "screenshots without interaction are lower",
+            "Lower-tier PASS covers non-GUI checks only.",
+            "Required unexercised GUI ACs",
+            "a lower tier cannot make the overall required GUI path PASS",
         ]
         for path, content in self._read_qa_lens_docs("desktop"):
             with self.subTest(path=path):

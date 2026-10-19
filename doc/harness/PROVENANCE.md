@@ -31,7 +31,7 @@ re-indexes that record by flow part and adds the planning, fanout, and script
 lineage around it.
 
 Runtime QA additionally depends on two external MCP servers — **chrome-devtools
-MCP** (`plugin/agents/qa-browser.md`) and **x11-mcp**
+MCP** (`plugin/agents/qa-browser.md`) and **Device Lab MCP**
 (`plugin/agents/qa-desktop.md`) — which are integrations, not imports.
 
 ---
@@ -302,7 +302,9 @@ harness's answer to the self-authored-verdict problem and were designed here.
 ## QA lenses
 
 **Source:** integration, not import. `qa-browser` drives chrome-devtools MCP;
-`qa-desktop` drives an x11-mcp server. `qa-api` and `qa-cli` use ordinary
+`qa-desktop` drives Device Lab across X11, macOS, Windows, Android and iOS,
+using selected owner-scoped device readiness/capabilities for desktop-window
+or mobile-app interaction and screenshot evidence. `qa-api` and `qa-cli` use ordinary
 tooling.
 
 **Harness-specific:** QA agents never hold `Edit`/`Write` on source files, and

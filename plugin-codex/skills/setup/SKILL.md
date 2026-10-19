@@ -340,7 +340,26 @@ Branch by project type. Check prerequisites before asking. If all met, auto-enab
 
 **Web frontend (`qa.browser_qa_supported`):** On Codex side, route MCP availability from current session tools or Codex/global runtime config. Keep project `.mcp.json` as user-owned configuration. Default to `qa.browser_qa_supported: false` in manifest unless browser tools are already available and the user explicitly wants browser QA.
 
-**Desktop / native GUI (desktop_qa_supported):** Same config ownership on Codex side: setup reports missing desktop MCP tools and preserves project `.mcp.json` as user-owned configuration. Default to `desktop_qa_supported: false` unless the required desktop tools are already available and the user explicitly wants desktop QA.
+**Desktop / native GUI (desktop_qa_supported):** Discover current session
+Device Lab tools, then call `devices` with `view: backends`, `view: owned`,
+and `view: available`. Select an actual owner-scoped `deviceId` suitable for
+the project and inspect `status` for readiness and effective capabilities.
+An available backend/candidate is not an owned, running app target.
+
+Device Lab covers X11, macOS, Windows, Android and iOS according to backend
+prerequisites. Do not gate remote targets on local OS or `$DISPLAY`, bootstrap
+Xvfb/sudo, edit project `.mcp.json`, or require standalone x11 tool registration.
+Preserve existing manifest fields: `desktop_qa_supported`,
+`app_launch_command`, and optional `display_command`.
+
+When native QA is requested and the selected target has the required tools,
+enable it and report the target. Otherwise default to false and report the
+exact missing connection/backend/device/capability/app prerequisite; do not
+require unrelated platforms. Provision/attach/start only within actual task
+authority; no destructive reset/clear or new paid resources without authority.
+Readiness alone cannot pass a GUI AC. The runtime roles select supported desktop
+window/input or mobile app/UI/touch flows and require real action plus inspected
+screenshot/result. Required unexercised GUI ACs remain `BLOCKED_ENV`.
 
 **API project:** Ask `A) Enable API QA (recommended). B) Skip — tests only`. curl/httpie assumed present.
 

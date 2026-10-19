@@ -106,7 +106,7 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-browser` | Browser-first runtime QA via Chrome DevTools MCP |
 | `qa-api` | API runtime QA via curl / httpie |
 | `qa-cli` | CLI / library runtime QA |
-| `qa-desktop` | Native GUI runtime QA via X11 tooling |
+| `qa-desktop` | Native GUI runtime QA via Device Lab for X11, macOS, Windows, Android and iOS; selected-device capabilities determine actions |
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
 Review discovery is deterministic and ephemeral: LIGHT runs no hunters,

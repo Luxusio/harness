@@ -329,13 +329,26 @@ If browser missing: `A) Install and come back | B) Skip | C) Install now via apt
 If Chrome MCP missing: `A) Already configured globally/session tools available | B) I'll configure it outside setup | C) Skip browser QA`.
 If dev_command missing: `A) Specify command | B) Skip | C) Auto-detect later`.
 
-**Desktop / native GUI (desktop_qa_supported):** Probe `uname -s`, `command -v Xvfb`,
-and `.mcp.json` for an `x11-mcp` entry before asking. v1 is Linux-only.
+**Desktop / native GUI (desktop_qa_supported):** Discover current session
+Device Lab tools, then call `devices` with `view: backends`, `view: owned`,
+and `view: available`. Select an actual owner-scoped `deviceId` suitable for
+the project and inspect `status` for readiness and effective capabilities.
+An available backend/candidate is not an owned, running app target.
 
-If Linux + Xvfb + x11-mcp present: `A) Enable desktop QA (recommended) | B) Skip — tests only`.
-If Linux + Xvfb missing: `A) Install xvfb via sudo apt-get | B) Skip | C) I'll install manually`.
-If Linux + x11-mcp entry missing: `A) Already configured globally/session tools available | B) I'll configure it outside setup | C) Skip desktop QA`.
-If non-Linux host: inform that qa-desktop v1 is Linux-only and offer `A) Skip — tests only | B) Enable anyway (BLOCKED_ENV at runtime)`.
+Device Lab covers X11, macOS, Windows, Android and iOS according to backend
+prerequisites. Do not gate remote targets on local OS or `$DISPLAY`, bootstrap
+Xvfb/sudo, edit project `.mcp.json`, or require standalone x11 tool registration.
+Preserve existing manifest fields: `desktop_qa_supported`,
+`app_launch_command`, and optional `display_command`.
+
+When native QA is requested and the selected target has the required tools,
+enable it and report the target. Otherwise default to false and report the
+exact missing connection/backend/device/capability/app prerequisite; do not
+require unrelated platforms. Provision/attach/start only within actual task
+authority; no destructive reset/clear or new paid resources without authority.
+Readiness alone cannot pass a GUI AC. The runtime roles select supported desktop
+window/input or mobile app/UI/touch flows and require real action plus inspected
+screenshot/result. Required unexercised GUI ACs remain `BLOCKED_ENV`.
 
 **API project:** `A) Enable API QA (recommended) | B) Skip — tests only`. curl assumed present.
 

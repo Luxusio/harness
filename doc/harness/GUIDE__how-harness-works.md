@@ -1456,7 +1456,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 | qa-cli | opus | Read, Glob, Grep, Bash | CLI, 테스트 QA | **qa-cli** | 1행 VERDICT, AC별 1:1 증거, depth tier, `codifiable:` |
 | qa-api | opus | Read, Glob, Grep, Bash | API QA | **qa-api** | 같음 |
 | qa-browser | opus | + `mcp__chrome-devtools__*` 14개 | 브라우저 QA | **qa-browser** | 같음 |
-| qa-desktop | opus | + `mcp__x11__*` 7개(접두사는 placeholder) | 데스크톱 QA(v1은 Linux 전용) | **qa-desktop** | 같음. tool_not_found면 BLOCKED_ENV |
+| qa-desktop | opus | 세션의 Device Lab MCP 도구를 탐색 | X11/macOS/Windows/Android/iOS native QA, 선택 기기의 capability 기준 | **qa-desktop** | 같음. 필요한 기기/도구/기능이 없으면 BLOCKED_ENV |
 | ux-cli / ux-api / ux-browser / ux-desktop | opus | QA와 같은 계열 | UX 리뷰(보완 역할, qa-*를 대체하지 않음) | 없음(ux-*는 지원 lens가 아님) | FAIL/BACKLOG/PASS 분류, `UX review depth:`. 1행 VERDICT 요구 없음 |
 | dogfooder | opus | Read, Glob, Grep, Bash | 사용자 관점 마찰 탐색. verdict도 gate도 아님 | 없음 | `[FRICTION/GAP/DEAD_END/MISSING_AFFORDANCE/WORKFLOW_BREAK]` 목록 + 우선순위 backlog |
 | documentation-review (`critic-document.md`) | (지정 없음) | Read, Bash, Glob, Grep, LS | REQ/GUIDE/ADR/POLICY 변경 검토. 문서 수정 금지 | 없음 | PASS/FAIL findings. VERDICT 줄 없음, BLOCKED_ENV 없음 |
@@ -1478,6 +1478,20 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 | qa-browser | interactive-browser, render-only-browser, server-only, static-only, blocked-env |
 | qa-desktop | interactive-desktop, window-rendered, launch-only, static-only, blocked-env |
 
+Native QA/UX는 Device Lab `devices(view: backends/owned/available)`를 구분하고,
+실제 owner-scoped `deviceId`를 선택한 뒤 `status`의 readiness/capabilities를
+확인한다. 로컬 OS/`$DISPLAY`는 원격 기기의 gate가 아니다. 데스크톱은 지원되는
+window_list/focus_window와 screenshot/input, 모바일은 appId/launch_app과 선택적
+ui 및 touch/input을 사용한다. X11에는 exec/ui가 없으며, 모바일과 container-QEMU에는
+window 도구가 없다. wait_for_app/wait_for_text는 모바일 전용, back은 Android 전용이다.
+GUI AC마다 deviceId/backend/platform, window 또는 appId, 실제 동작, 직접 확인한
+스크린샷과 결과를 남긴다. 좌표는 crop 이후에도 반환된 전체 이미지 크기를 기준으로 한다.
+낮은 tier의 PASS는 비GUI 검사만 의미하며, 필수 GUI 동작을 못 했으면 BLOCKED_ENV다.
+기존 lens/manifest schema를 유지하고, 관련 없는 플랫폼 부재로 전체 프로젝트를 막지 않는다.
+setup은 같은 탐색으로 필요한 prerequisite을 보고하며 자동 Xvfb/sudo bootstrap이나
+프로젝트 MCP 설정 복구를 하지 않는다. 소유권/기존 기기 상태와 스크린샷 개인정보를 보존한다.
+실행 계약과 출처는 [Device Lab native QA](REQ__device-lab-native-qa.md)를 따른다.
+
 `codifiable:` YAML 블록의 필수 필드는 behavior, ac_id, command, expected_exit, expected_stdout_contains, expected_stderr_contains다(`qa-cli.md:158-193`).
 
 **이 블록은 현재 테스트로 바뀌지 않는다.** 블록을 테스트로 만드는 것은 `qa_codifier.py --transcript <path>`뿐이다. 동작하면 `<task>/audit/regression-draft/`에 staging한 뒤 `tests/regression/<task>/`로 옮긴다. 그러나 Claude 스킬은 이 스크립트를 부르지 않는다. `develop/SKILL.md:241-242`은 이 블록이 "future regression-test extraction"용이라고만 한다. Codex develop은 `--task-dir`만 넘겨 호출하는데, transcript 경로가 없으면 `codify()`는 `codifier-empty: no transcript path provided` learnings 행을 남기고 바로 0으로 끝난다(`doc/harness/patterns/general.md:1-10`에도 기록). ac_id가 없거나 `echo hello` 같은 사소한 명령을 거부하는 규칙은 누군가 `--transcript`로 수동 실행할 때만 적용된다(`qa_codifier.py:319-356, 447-460`, `plugin-codex/internal-skills/develop/SKILL.md:202-206`).
@@ -1492,7 +1506,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 
 ### 8.4 Codex 에이전트
 
-- `plugin-codex/agents/` 16개는 방법론 참고용이다. test-author는 `test_author_ac_<NNN>` task_name으로 스폰하는 lens 없는 역할이다. frontmatter는 모두 name과 description뿐이다. reviewer·developer·dogfooder·qa-* 파일에는 "MCP-hosted lifecycle watcher가 영수증을 소유한다"는 overlay 머리말이 있다. critic-document, defect-hunter, ux-api/-browser/-cli/-desktop 여섯 파일에는 이 문구가 없다. defect-hunter는 대신 이 역할이 "never owns review or QA lifecycle evidence"라고 쓴다(`plugin-codex/agents/code-reviewer.md:1-8`, `defect-hunter.md:1-8`).
+- `plugin-codex/agents/` 16개는 방법론 참고용이다. test-author는 `test_author_ac_<NNN>` task_name으로 스폰하는 lens 없는 역할이다. frontmatter는 모두 name과 description뿐이다. reviewer·developer·dogfooder·qa-*·ux-desktop 파일에는 "MCP-hosted lifecycle watcher가 영수증을 소유한다"는 overlay 머리말이 있다. critic-document, defect-hunter, ux-api/-browser/-cli 다섯 파일에는 이 문구가 없다. defect-hunter는 대신 이 역할이 "never owns review or QA lifecycle evidence"라고 쓴다(`plugin-codex/agents/code-reviewer.md:1-8`, `defect-hunter.md:1-8`).
 - developer, defect-hunter, code-reviewer, security-reviewer의 `harness:role-core` 블록은 Claude 쪽과 바이트 단위로 같고, 테스트가 이를 확인한다(`tests/test_review_agent_contracts.py`). QA/UX 파일은 손으로 관리하는 축약본이다.
 - Codex에서 lens는 `spawn_agent`의 `task_name`으로 정해진다. 이름 규칙(`plugin-codex/internal-skills/develop/SKILL.md:273-337`):
   - `code_review_*` / `review_code_*`

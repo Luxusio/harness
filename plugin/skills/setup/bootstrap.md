@@ -123,33 +123,33 @@ user-owned configuration. If browser QA is desired, enable it when the browser
 MCP surface is available; otherwise record the missing dependency and set
 `browser_qa_supported: false` until the user configures it outside setup.
 
-### x11-mcp prereq check (when desktop_qa_supported: true)
+### Device Lab prereq check (when desktop_qa_supported: true)
 
-v1 is Linux-only. The x11-mcp server itself is NOT shipped by harness. The user
-installs and registers it through their runtime/global MCP configuration outside
-setup. Setup reports the missing dependency and keeps `desktop_qa_supported:
-false` until the server is available.
+Device Lab is an external MCP integration, not a server shipped by Harness.
+Discover tools from the current session/runtime configuration; preserve
+project-root `.mcp.json` as user-owned configuration.
 
-```bash
-# Platform gate — warn on non-Linux
-_OS=$(uname -s 2>/dev/null || echo unknown)
-if [ "$_OS" != "Linux" ]; then
-  echo "WARN: desktop_qa_supported=true on $_OS — qa-desktop v1 is Linux-only."
-  echo "      macOS (XQuartz) / Windows (WSLg) are deferred to v2."
-fi
+Call `devices` with `view: backends` for prerequisites, `view: owned` for
+owner-scoped IDs, and `view: available` for candidates. Select an actual
+returned owner-scoped `deviceId`; inspect `status`, backend/platform,
+readiness and effective capabilities. Availability is not proof of an owned,
+running target or app readiness.
 
-# Xvfb availability (for headless CI / WSL without WSLg)
-command -v Xvfb >/dev/null 2>&1 || {
-  echo "MISSING: Xvfb — install with: sudo apt-get install -y xvfb"
-  echo "        The qa-desktop agent can also install it on-demand via sudo -n apt-get,"
-  echo "        but pre-installing avoids BLOCKED_ENV on first run."
-}
+X11, macOS, Windows, Android and iOS use Device Lab as their backends allow.
+A remote target must not be blocked by local OS/`$DISPLAY` checks. Do not
+bootstrap Xvfb/sudo or modify role tool allowlists for standalone x11 tooling.
+Missing unrelated platforms do not block the selected project target.
 
-```
-
-If your x11-mcp server publishes tools under a different MCP name (e.g.
-`mcp__x11-mcp__*`, `mcp__xdotool__*`), update the `tools:` list in
-`${_PLUGIN_ROOT}/agents/qa-desktop.md` frontmatter to match.
+Preserve `desktop_qa_supported`, `app_launch_command` and optional
+`display_command`; no new schema. Enable requested native QA when its selected
+target supports required actions; otherwise report the exact missing backend,
+device, capability or app prerequisite and keep the default false. GUI ACs stay
+`BLOCKED_ENV` until actual required interaction and inspected screenshot
+evidence exist. Runtime roles branch desktop windows versus mobile app/UI/touch
+by capability; X11 lacks remote exec/UI, mobile lacks desktop window tools.
+Create/attach/start only within actual task authority; preserve existing device
+state and clean up only task-created resources. Do not reset/clear/delete devices
+or create paid resources without actual authority.
 
 ## 3.3 Smart defaults
 
