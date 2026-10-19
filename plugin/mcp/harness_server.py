@@ -2205,7 +2205,7 @@ def _publish_write_plan(args, td, control, preflight):
         _record_write(plan_path, checked_plan, written, bytes_written)
         write_task_control(td, candidate_control)
         if wbs_state is not None:
-            _record_write(state_path, json.dumps(wbs_state, sort_keys=True) + "\n", written, bytes_written)
+            _record_write(state_path, wbs.encode_state(wbs_state), written, bytes_written)
         written.append("TASK.json")
         bytes_written["TASK.json"] = len(
             json.dumps(candidate_control, indent=2, sort_keys=True).encode("utf-8")

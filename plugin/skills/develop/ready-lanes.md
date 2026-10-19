@@ -23,8 +23,10 @@ integrated and closed. Then resume the same parent, verify WBS assertions in
 the integrated checkout and run combined review/QA. Never treat a proposed
 pack or a lead's narrative PASS as integrated progress.
 
-When independence is known at intake, prefer declaring/running the work pack
-before opening its integration task. Native Goals use the same WBS root and dispatch; keep no second Goal queue. Use the shared pool's capacity,
+When independence is known at intake, open the WBS root and plan coarse
+outcomes first, then dispatch with current ownership. Dispatch parks that
+parent; reopen it only after integration. Native Goals use the same root and
+dispatch, with no second Goal queue. Use the shared pool's capacity,
 scope reservations, dependency-after-integration rule and serialized finish;
 do not run concurrent merges into one target branch. Refill as leads finish.
 Do not create worktrees for tiny or dependent work merely to satisfy a count.

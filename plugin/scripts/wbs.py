@@ -139,6 +139,13 @@ def read_state(task_dir):
     return state
 
 
+def encode_state(state):
+    """Every writer must fit the same bound as the next owner's read."""
+    encoded = json.dumps(state, sort_keys=True) + "\n"
+    require(len(encoded.encode()) <= 1024 * 1024, "evidence exceeds storage budget")
+    return encoded
+
+
 def prepare(task_dir, plan, run_id, *, now=None):
     nodes, old = from_plan(plan), read_state(task_dir)
     if nodes is None:
@@ -157,10 +164,13 @@ def prepare(task_dir, plan, run_id, *, now=None):
             old.pop("batch_goal_id")
         projection = task_progress(task_dir, find_repo_root(task_dir), run_id, now=stamp)
         transition(old["nodes"], nodes, [row["id"] for row in projection.get("outcomes", []) if row["verified"]])
-        return dict(old, nodes=nodes, run_id=run_id,
+        state = dict(old, nodes=nodes, run_id=run_id,
                     scope_revision=old.get("scope_revision", 1) + (sum(n["weight"] for n in leaves(nodes)) != sum(n["weight"] for n in leaves(old["nodes"]))),
                     checks=old["checks"] if old["run_id"] == run_id else {})
-    return dict(version=1, nodes=nodes, run_id=run_id, checks={}, started_at=stamp, last_progress_at=stamp)
+    else:
+        state = dict(version=1, nodes=nodes, run_id=run_id, checks={}, started_at=stamp, last_progress_at=stamp)
+    encode_state(state)
+    return state
 
 
 def fingerprint(repo):
@@ -323,9 +333,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     after = sum(n["weight"] for n in leaves(state["nodes"]) if n["id"] in (verified - {leaf_id}) | ({leaf_id} if success else set()))
     if after > before_progress["verified_weight"]:
         state["last_progress_at"] = stamp
-    encoded = json.dumps(state, sort_keys=True) + "\n"
-    require(len(encoded.encode()) <= 1024 * 1024, "evidence exceeds storage budget")
-    _atomic_text_write(os.path.join(task_dir, STATE), encoded)
+    _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
     return dict(leaf_id=leaf_id, passed=success, **result, progress=task_progress(task_dir, repo, run_id, now=now))
 
 
@@ -388,7 +396,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
         goal_id = "GOAL__wbs-" + digest([Path(task_dir).name, state["nodes"]])[:16]
         spec = goal_batch.make_spec(repo, goal_id, Path(task_dir).name, requests)
         state.update(batch_goal_id=goal_id, batch=spec)
-        _atomic_text_write(os.path.join(task_dir, STATE), json.dumps(state, sort_keys=True) + "\n")
+        _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
         result.update(batch_id=spec["batch_id"])
     return result
 

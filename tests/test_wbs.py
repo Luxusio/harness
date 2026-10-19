@@ -168,6 +168,39 @@ def test_invalid_measurement_never_releases_ready_outcomes(tmp_path):
     assert wbs.ready_outcomes(state, dict(status="invalid", percentage=None)) == []
 
 
+def test_oversized_state_refuses_before_publishing_or_losing_repairability(tmp_path):
+    from test_harness_mcp_server import HarnessMcpServerTests
+    server = HarnessMcpServerTests()
+    repo, td = baseline(tmp_path)
+    (td / "WBS.json").unlink()
+    def call(action, **extra):
+        return server._call_in_repo(str(repo), "wbs", dict(action=action, wbs_id="sample", **extra))
+    assert not call("open").get("isError")
+    assert not call("plan", plan=plan([node()])).get("isError")
+    before = {name: (td / name).read_bytes() for name in ("WBS.json", "PLAN.md", "TASK.json")}
+    large = node()
+    large["check"] = [sys.executable, "-c", "#" + "x" * 1048300]
+    assert len(plan([large]).encode()) < 1024 * 1024  # PLAN fits while combined WBS state does not.
+    rejected = call("plan", plan=plan([large]))
+    assert rejected.get("isError"), rejected
+    assert "storage budget" in rejected["structuredContent"]["error"]
+    assert before == {name: (td / name).read_bytes() for name in before}
+    assert call("context")["structuredContent"]["progress"]["status"] == "measured"
+    assert not call("plan", plan=plan([node()])).get("isError")
+
+
+def test_dispatch_bounds_combined_evidence_not_only_the_pack(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path, [node("A"), node("B")])
+    import goal_batch
+    import batch_state
+    monkeypatch.setattr(batch_state, "main_boundary", lambda repo: None)
+    monkeypatch.setattr(goal_batch, "make_spec", lambda *args: dict(batch_id="test", requests=[], padding="x" * 1050000))
+    before = (td / "WBS.json").read_bytes()
+    with pytest.raises(ValueError, match="storage budget"):
+        wbs.work_pack(str(td), str(repo), "run", bind=True, ownership={"A": ["a.txt"], "B": ["b.txt"]})
+    assert (td / "WBS.json").read_bytes() == before
+
+
 def test_successful_check_also_stops_redirected_children(tmp_path):
     import os
     import time

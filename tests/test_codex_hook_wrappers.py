@@ -75,10 +75,9 @@ class TestCodexHookWrappers(unittest.TestCase):
         self.assertIn("[harness-goal]", context)
         self.assertIn("$harness:run", context)
         self.assertIn("get_goal", context)
-        self.assertIn("goal_start", context)
-        self.assertIn("task_start", context)
-        self.assertIn("goal_add_task", context)
-        self.assertIn("goal_add_task with batch_requests before task_start", context)
+        self.assertIn("wbs(action=open, objective=...)", context)
+        self.assertIn("one outcome tree", context)
+        self.assertIn("Do not create a separate Goal/task planning ledger", context)
 
     def test_post_tool_use_create_goal_is_silent_outside_harness_repo(self):
         mod = _load("hook_post_tool_use")

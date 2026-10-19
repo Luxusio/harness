@@ -99,9 +99,9 @@ def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
         if objective:
             status += f" objective={objective[:80]}"
     return (
-        "[harness-goal] native goal? get_goal->goal_start; "
-        "plain mutating request? task_start; no child: task_start->goal_add_task; "
-        "next: goal_next_task."
+        "[harness-goal] native goal? get_goal->wbs(open); "
+        "plain mutating request? wbs(open); plan/check/verify/close on the same root; "
+        "next: wbs(next), same outcome tree."
         + status
     )
 

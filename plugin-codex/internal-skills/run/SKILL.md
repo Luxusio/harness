@@ -330,8 +330,8 @@ a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
 retries, but receipt absence is not a reason to invoke it again.
 
-For a Goal child, run `task_close` first, then self-improvement including
-learning promotion; only then call `goal_next_task`.
+For an execution envelope, run `task_close` first, then self-improvement and
+learning promotion; only then call `wbs(action="next")` on its owning root.
 Continue unless complete, blocked/stopped, capped, or awaiting go/no-go.
 
 For this harness plugin source repo, successful repo-mutating development is
@@ -348,7 +348,7 @@ Before writing DONE, assert:
 - owned temporary worktree disposition is complete under the shared rule
 - runtime_verdict is PASS or task is BLOCKED
 - post-close self-improvement has run
-- if this was a native Goal child task, the Goal is done/blocked/stopped/budgeted
+- if this WBS belongs to a native Goal, that objective is done/blocked/stopped/budgeted
   or the next slice is already active/queued
 - for this harness plugin source repo, the completed diff has been committed
   and verified delivery has confirmed synchronized runtime payloads, unless the user explicitly opted out

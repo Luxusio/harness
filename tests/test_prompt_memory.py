@@ -142,8 +142,8 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("Durable decisions require doc/ update before final", r.stdout)
         self.assertIn("PLAN durable-doc rationale", r.stdout)
         self.assertIn("[harness-goal]", r.stdout)
-        self.assertIn("get_goal->goal_start", r.stdout)
-        self.assertIn("plain mutating request? task_start", r.stdout)
+        self.assertIn("get_goal->wbs(open)", r.stdout)
+        self.assertIn("plain mutating request? wbs(open)", r.stdout)
 
     def test_non_harness_repo_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -411,7 +411,7 @@ class TestPromptMemory(unittest.TestCase):
             debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
         self.assertEqual(r.returncode, 0)
         self.assertFalse(debug_dir.exists())
-        self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertIn("get_goal->wbs(open)", r.stdout)
         self.assertFalse((base / "doc/harness/goals/current.json").exists())
 
     def test_removed_capture_marker_is_ignored(self):
@@ -479,8 +479,8 @@ class TestPromptMemory(unittest.TestCase):
             current = base / "doc" / "harness" / "goals" / "current.json"
         self.assertEqual(r.returncode, 0)
         self.assertIn("[harness-goal]", r.stdout)
-        self.assertIn("get_goal->goal_start", r.stdout)
-        self.assertIn("goal_next_task", r.stdout)
+        self.assertIn("get_goal->wbs(open)", r.stdout)
+        self.assertIn("wbs(next)", r.stdout)
         self.assertFalse(current.exists())
 
     def test_codex_goal_prompt_routes_without_writing_runtime_state(self):
@@ -498,7 +498,7 @@ class TestPromptMemory(unittest.TestCase):
                 cwd=str(base), timeout=5,
             )
         self.assertEqual(r.returncode, 0)
-        self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertIn("get_goal->wbs(open)", r.stdout)
         self.assertFalse((base / "doc/harness/goals/current.json").exists())
 
     def test_claude_korean_goal_prompt_routes_without_writing(self):
@@ -514,7 +514,7 @@ class TestPromptMemory(unittest.TestCase):
                 },
             )
         self.assertEqual(r.returncode, 0)
-        self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertIn("get_goal->wbs(open)", r.stdout)
         self.assertFalse((base / "doc/harness/goals/current.json").exists())
 
     # ---- AC-005: suspect note listing suppressed ----
