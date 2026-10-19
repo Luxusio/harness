@@ -43,7 +43,7 @@ def test_critic_document_conversation_pass_uses_delegated_context_without_sideca
     text = _read_agent()
     rsec_idx = text.find("Conversation requirement pass")
     assert rsec_idx >= 0
-    section = text[rsec_idx : rsec_idx + 1200]
+    section = text[rsec_idx:].split("\n## ", 1)[0]
     assert "delegation context" in section
     assert "separate prompt-capture artifact" in section
     assert "write_req_doc" not in section

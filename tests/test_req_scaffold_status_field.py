@@ -181,3 +181,13 @@ def test_cli_requires_classification_before_accepted_publication(tmp_path):
     assert result.returncode == 0, result.stderr
     body = (tmp_path / result.stdout.strip()).read_text()
     assert "status: accepted" in body and "user_explicit" in body
+
+
+def test_both_runtime_reviewers_check_source_entailment_not_only_labels():
+    for runtime in ("plugin", "plugin-codex"):
+        body = (REPO / runtime / "agents/critic-document.md").read_text()
+        assert "## Conversation requirement pass" in body
+        assert "compare its source with the actual" in body
+        assert "authentic quote does not prove" in body
+        assert "grounding is unverified" in body
+        assert "candidate assumptions promoted into mandatory WBS/acceptance/close gates" in body
