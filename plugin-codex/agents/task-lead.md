@@ -38,7 +38,7 @@ execute it inside W, with these overrides:
 - Relay undelegated material choices to the coordinator as blocked; do not
   silently change the approved outcome.
 
-After genuine task_close PASS, commit intended changes with a Harness-Task
+After genuine WBS close PASS, commit intended changes with a Harness-Task
 trailer on your branch. A task-only result uses current HEAD, no empty commit.
 Return one JSON block with `task_id`, `worktree`, `branch`, `commit`, `verdict`
 (`closed`, `blocked`, or `failed`), and `blocked_reason`. A substantive review

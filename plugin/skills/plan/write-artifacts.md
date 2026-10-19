@@ -6,7 +6,7 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ## 6.1 Artifact writer
 
-PLAN.md is written through `wbs(action="plan", wbs_id=...)`; `write_plan` is its internal owner. The same call
+PLAN.md is written through `wbs(action="plan", wbs_id=...)`; the private `write_plan` handler is its internal owner. The same call
 stores the canonical required lens set in `TASK.json`.
 
 ### Measured WBS
@@ -23,7 +23,7 @@ assertion argv as `check` when ready to verify; do not freeze test commands or
 implementation layout at intake. WBS has no edited-file lists. Optional
 `parent` and `depends_on` name node IDs. A group has no `check`; its children's weights sum
 to its weight (for example, split weight 1 into 0.5 and 0.5). Choose coarse, understandable weights, not invented effort
-precision. One leaf suffices for small work. `write_plan` atomically publishes
+precision. One leaf suffices for small work. `wbs(action="plan")` atomically publishes
 the baseline and runtime WBS evidence without changing TASK's schema.
 Use `wbs(action="check", node_id=...)` only when an outcome is ready to
 check. Read `task_context.progress`; never author a percentage or count task
@@ -269,7 +269,7 @@ mkdir -p doc/harness 2>/dev/null || true
 
 ## 6.9 Remove optional planning scratch
 
-After every successful `write_plan`, remove task-local PLAN_SESSION.json when it
+After every successful `wbs(action="plan")`, remove task-local PLAN_SESSION.json when it
 exists. PLAN.md and TASK.json are sufficient for resume. Leave scratch in place
 only when publication failed and it carries recovery value.
 

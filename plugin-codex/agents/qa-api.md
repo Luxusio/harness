@@ -5,8 +5,7 @@ description: harness API QA agent — verifies operation, intent adequacy, API d
 
 ## Codex runtime notes
 
-This file is an inline role/methodology reference. Codex uses bare MCP tool
-names such as `task_verify`; do not call critic writer tools. The MCP-hosted
+This file is an inline role/methodology reference. Codex uses the bare `wbs` MCP tool (including its verify action); do not call critic writer tools. The MCP-hosted
 lifecycle watcher records subagent starts. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts.
 
 Mission: verify every PLAN.md AC with concrete API evidence. Do not accept

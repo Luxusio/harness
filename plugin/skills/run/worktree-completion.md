@@ -3,7 +3,7 @@
 Read this at normal completion and interrupted-work recovery. A temporary
 worktree is not a permanent deliverable: integrate its intended changes and
 remove it and its disposable branch before reporting the overall work done.
-This is coordinator procedure, not a Git-state gate in `task_close`.
+This is coordinator procedure, not a Git-state gate in `wbs(action="close")`.
 
 ## Ownership and timing
 

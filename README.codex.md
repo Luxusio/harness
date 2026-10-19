@@ -22,7 +22,7 @@ python3 install.py --codex-only
 
 # 3. Verify the install
 codex exec "list harness mcp tools" < /dev/null
-# Expected output mentions task_start, task_verify, task_close, etc.
+# Expected output exposes the sole wbs tool and its action schema.
 ```
 
 If step 2 fails, re-run with `python3 install.py --codex-only --force`. The installer copies `plugin/` plus the Codex plugin manifest tree into `~/.codex/harness/`, writes `.agents/plugins/marketplace.json`, writes plugin-local `hooks.json`, then writes only plugin enablement and MCP registration into `~/.codex/config.toml`.
@@ -37,10 +37,10 @@ This is partial parity. **What's NOT in v1 on Codex:**
 See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the full row-by-row support table.
 
 **What DOES work on Codex:**
-- Public loop: `task_start → plan → develop → QA → close` (independent review and `task_verify` are internal close gates)
+- Public loop: `WBS open → plan → develop → QA → close` (independent review and `wbs(action="verify")` are internal close gates)
 - Shared MCP server (same `harness_server.py` as Claude)
 - Shared Python scripts via `HARNESS_PLUGIN_ROOT` env
-- `setup`, plain repo-mutating request routing, native `/goal` orchestration, Goal child-task queues, capability-routed `plan` and `develop`, `qa-cli`, and `qa-api`
+- `setup`, plain repo-mutating request routing, native `/goal` continuation through the same WBS, capability-routed `plan` and `develop`, `qa-cli`, and `qa-api`
 - Hooks (prompt/context/safety only; Codex does not use Stop hooks for loop control)
 
 ## First-run walkthrough
@@ -51,12 +51,12 @@ cd <your project>
 # Plain request: the agent recognizes repo mutation and opens/resumes a task.
 codex exec 'fix the flaky test in tests/auth/' < /dev/null
 
-# Or start an explicit Goal. Codex reads native goal context, then syncs it through harness goal_start.
+# Or start an explicit native Goal. Codex opens the same objective’s WBS.
 codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 
 # Watch it walk task start -> plan -> develop -> QA -> close.
 # Verify with:
-codex exec 'show the active harness goal and next child task' < /dev/null
+codex exec 'show the current harness WBS progress and ready outcomes' < /dev/null
 ```
 
 Formal code review deterministically selects ephemeral LIGHT (no hunters),
@@ -93,7 +93,7 @@ hot-reload replaced plugin files.
 - **Existing `[mcp_servers.harness]` block in `~/.codex/config.toml`** — not an error. `python3 install.py` replaces the harness sections when it refreshes a stale runtime, keeping the old file as `config.toml.bak.<timestamp>`; run `python3 install.py --codex-only --force` to rewrite them while the payload is already synchronized.
 - **Hooks don't fire** — plugin-local `~/.codex/harness/plugins/harness/hooks.json` or the plugin cache is stale. Re-run `python3 install.py --codex-only --force`.
 - **Skill returns "tool not found"** — MCP server didn't register. Run `codex mcp test harness`. Check `command =` path in your `[mcp_servers.harness]` block.
-- **Skill output references `mcp__harness__task_start`** — skill prose still uses the Claude-prefixed name; Codex skills are hand-maintained, so change it to the bare name (`task_start`) where it is written. See the troubleshooting entry below.
+- **Skill output references a Claude-prefixed MCP name** — Codex exposes the sole bare `wbs` tool; use its open/context/plan/check/verify/close/block actions and retain the same WBS root. See the troubleshooting entry below.
 - Full troubleshooting: [`doc/harness/codex-troubleshooting.md`](doc/harness/codex-troubleshooting.md).
 
 ## Opting out

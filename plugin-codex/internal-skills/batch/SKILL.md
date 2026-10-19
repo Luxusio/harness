@@ -15,9 +15,9 @@ Claude settings/baseRef requirement does not apply: explicit worktree creation
 below pins the exact spawn HEAD. Do not execute Claude
 `Agent`, `SendMessage` or `Skill` examples on Codex.
 
-For Goal dispatch use the exact returned batch ID and request list; existing
-state is resumed, never replaced with another ID. The canonical Goal child is
-the later integration task, not a lead. No main-checkout task may be open
+For WBS dispatch use the exact returned batch ID and request list; existing
+state is resumed, never replaced with another ID. Reopen the same owning WBS
+for combined verification only after the whole pool integrates and closes. No main-checkout task may be open
 while leads run. Independent declared requests automatically use this route
 when the host exposes spawn and same-agent continuation capabilities.
 

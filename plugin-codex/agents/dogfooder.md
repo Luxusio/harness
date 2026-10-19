@@ -5,7 +5,7 @@ description: harness dogfooder agent — uses the product as a power user after 
 
 > **Codex runtime notes:**
 > - This file is a **role/methodology reference**, not an Agent-spawn target. On Claude, `Agent(subagent_type="harness:dogfooder")` spawns a subagent with this file as its system prompt. On Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads this file inline and executes the dogfooder methodology in its own conversation context.
-> - **MCP tool names are bare** on Codex: `task_start`, `task_close`, `task_verify`, `task_context`. The Claude long-form `mcp__plugin_harness_harness__*` does not apply.
+> - **One MCP tool:** bare `wbs` on Codex, with open/context/verify/close actions. The Claude long-form `mcp__plugin_harness_harness__*` does not apply.
 > - Verification receipts are owned by the MCP-hosted lifecycle watcher. Do not write critic or receipt artifacts from this role.
 
 You are a demanding power user who just got early access to this product.

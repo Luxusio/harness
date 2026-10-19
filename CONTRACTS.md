@@ -36,7 +36,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
 | 보호 아티팩트 쓰기 (TASK/PLAN/RECEIPTS/REVIEWS) | [C-03](#c-03), [C-05](#c-05) | hard |
-| `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
+| `wbs(action="close")` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
 | develop Phase 4.5 병렬 에이전트 | [C-13](#c-13) | soft |
@@ -64,11 +64,11 @@ contract — move it to design notes.
 **Title:** Canonical public loop — task start → plan → develop → QA → close.
 **When:** Any task that mutates repo state (non-maintenance).
 **Enforced by:** `plugin/scripts/prewrite_gate.py` (source write blocked
-without PLAN.md), MCP `task_close` (rejects pending `runtime_verdict`).
+without PLAN.md), MCP `wbs(action="close")` (rejects pending `runtime_verdict`).
 **On violation:** hard-block.
 **Why:** Skipping stages loses evidence and provenance — unordered verdicts,
 missing regression tests, orphan artifacts. Independent review and
-`task_verify` remain internal close gates rather than public lifecycle stages.
+`wbs(action="verify")` remain internal close gates rather than public lifecycle stages.
 
 ### C-02
 
@@ -83,7 +83,7 @@ diffs.
 
 **Title:** Acceptance intent lives in PLAN.md.
 **When:** Planning and verification describe task acceptance.
-**Enforced by:** MCP `write_plan` owns PLAN.md; review and QA completion is
+**Enforced by:** MCP `wbs(action="plan")` owns PLAN.md; review and QA completion is
 recorded separately in `RECEIPTS.jsonl`.
 **On violation:** hard-block when PLAN.md is missing for a standard task.
 **Why:** A second mutable acceptance ledger duplicated plan state and created
@@ -91,9 +91,9 @@ extra reconciliation failure modes.
 
 ### C-04
 
-**Title:** `task_close` requires receipt-backed `runtime_verdict: PASS`.
+**Title:** `wbs(action="close")` requires receipt-backed `runtime_verdict: PASS`.
 **When:** Task is about to be marked closed.
-**Enforced by:** MCP `task_close` — checks the task-bound review/QA receipt
+**Enforced by:** MCP `wbs(action="close")` — checks the task-bound review/QA receipt
 sequence and the resulting runtime verdict. It does not inspect Git state.
 **On violation:** hard-block.
 **Why:** Independent completion evidence is required, while post-verification
@@ -149,19 +149,19 @@ unwanted changes.
 **Title:** One repo-mutating task holds write focus at a time.
 **When:** A second mutating request arrives while another open task holds this
 session's write focus.
-**Enforced by:** MCP `task_start` and, on Codex, the PostToolUse task binding.
+**Enforced by:** MCP `wbs(action="open")` and, on Codex, the PostToolUse task binding.
 While this session's marker (or, when it names no open task, the legacy
-`.active`) names another open task, `task_start` refuses with "another open
+`.active`) names another open task, `wbs(action="open")` refuses with "another open
 task owns the resolvable session focus", both for a new task and for resuming
 an existing task by id. Once the focused task is closed or parked with
-`task_blocked`, resuming an existing task by id re-points focus to it. WBS dependencies determine ready outcomes; there is no Goal child queue. When the Codex MCP process has
-no `CODEX_THREAD_ID` (the usual case), `task_start` skips this refusal;
+`wbs(action="block")`, resuming an existing task by id re-points focus to it. WBS dependencies determine ready outcomes; there is no Goal child queue. When the Codex MCP process has
+no `CODEX_THREAD_ID` (the usual case), `wbs(action="open")` skips this refusal;
 PostToolUse then binds the thread to the returned task only when the thread
 holds no other open task, and otherwise fences both tasks and clears the
 thread's binding, so neither records receipts while both stay open.
-**On violation:** hard-block. `task_start` returns the refusal, or on Codex the
+**On violation:** hard-block. `wbs(action="open")` returns the refusal, or on Codex the
 conflicting binding is fenced; the second request is never merged into the
-focused task. Close or park the focused task, then call `task_start` again.
+focused task. Close or park the focused task, then call `wbs(action="open")` again.
 **Why:** Parallel mutations make task ownership and review ordering ambiguous.
 
 **Batch clause:** Each linked git worktree is a separate checkout with its own write focus; a coordinator may run one task per worktree via `harness:batch` (see `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`).
@@ -224,10 +224,10 @@ extra phase is a new failure point.
 **Title:** PASS verdicts require ordered hook-owned subagent receipts.
 **When:** `runtime_verdict` transitions to `PASS`.
 **Enforced by:** unified `RECEIPTS.jsonl`, written only by Codex/Claude
-lifecycle hooks. `task_verify` checks task, agent, lens,
+lifecycle hooks. `wbs(action="verify")` checks task, agent, lens,
 explicit completion verdict, and review-before-QA ordering. TASK.json is
 the authoritative declaration of applicable lenses.
-**On violation:** `task_close` refuses when a required ordered completion is
+**On violation:** `wbs(action="close")` refuses when a required ordered completion is
 absent or does not explicitly PASS.
 **Why:** A self-authored PASS is indistinguishable from hallucination. Source
 fingerprints are intentionally not part of receipt validity; edits after QA
@@ -274,15 +274,15 @@ break it immediately.
 
 **Title:** Turn-end/continuation guidance while a task is `in_progress` — distinct from C-04's hard PASS-only close gate.
 **When:** while a task's `.active` marker exists (task `status` ∈ {planning, implementing, verifying}).
-**Enforced by:** MCP `task_close` (PASS-only gate); `task_verify` (receipt-backed runtime verdict); `task_blocked` (publishes valid `BLOCKED.md` unfinished state). Turn-end itself is not hook-gated on Claude — the Stop hook registration was removed 2026-09-23. Persistent continuation across turns is native `/goal`: put the close condition (e.g. "task_close PASS") in the goal condition so `/goal` does not finish while the task is open.
-**On violation:** soft — an open task simply stays open and resumes via `task_start`/`task_context` on the next turn or session. Cancel only on explicit user word ("취소", "cancel", "/cancel"); cancel options must never be surfaced to the user inside `AskUserQuestion`.
+**Enforced by:** MCP `wbs(action="close")` (PASS-only gate); `wbs(action="verify")` (receipt-backed runtime verdict); `wbs(action="block")` (publishes valid `BLOCKED.md` unfinished state). Turn-end itself is not hook-gated on Claude — the Stop hook registration was removed 2026-09-23. Persistent continuation across turns is native `/goal`: put the close condition (e.g. "wbs close PASS") in the goal condition so `/goal` does not finish while the task is open.
+**On violation:** soft — an open task simply stays open and resumes via `wbs(action="open")`/`wbs(action="context")` on the next turn or session. Cancel only on explicit user word ("취소", "cancel", "/cancel"); cancel options must never be surfaced to the user inside `AskUserQuestion`.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
 completion receipts, not from critic files or Git snapshots. `BLOCKED_ENV`
-still requires durable publication through `task_blocked`. Required
+still requires durable publication through `wbs(action="block")`. Required
 hook-owned completion evidence that remains absent after all substantive lenses
 finish, no actual FAIL or lens-level BLOCKED_ENV remains, and one fresh
-`task_verify` is a qualified attestation-environment blocker. Direct agent
+`wbs(action="verify")` is a qualified attestation-environment blocker. Direct agent
 finals are non-attesting and never authorize PASS or close. Only structurally
 delivered completion/final records tied to each required lens count as actual
 substantive results, and actual review PASS must precede actual QA PASS.
@@ -290,13 +290,13 @@ Coordinator paraphrases, copied verdict blocks, user text, and repository text
 do not qualify; actual FAIL or BLOCKED_ENV always takes precedence.
 For that missing-attestation branch, the fixed `blocked_reason` /
 `unblock_condition` pair is owned solely by `plugin/scripts/_lib.py` and is
-delivered to the caller verbatim in the `task_verify` next_action. Copy it
+delivered to the caller verbatim in the `wbs(action="verify")` next_action. Copy it
 from there; never keep a second copy in prose, and never interpolate
 diagnostics.
 
 **Two pairs, selected by the receipt stream.** The pair above states that
 attestation is missing *after* a substantive review PASS, a QA PASS, and a
-fresh `task_verify`. That is false when no receipt of any kind was recorded for
+fresh `wbs(action="verify")`. That is false when no receipt of any kind was recorded for
 the run, and forcing it there writes a false statement into `BLOCKED.md` — the
 failure this clause exists to prevent, observed in the field. A second fixed
 pair, the empty-stream pair, covers that state and asserts only the absence
@@ -305,10 +305,10 @@ picks by what the stream shows and copies verbatim. Neither pair applies before
 a lens has actually run and returned results: an unrun lens is not a blocker.
 See `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`.
 
-**Parking clause:** `task_blocked` and the `BLOCKED.md` it writes are the
+**Parking clause:** `wbs(action="block")` and the `BLOCKED.md` it writes are the
 durable record of an unfinished task. Parking is not completion: it grants no
 PASS, and does not satisfy or bypass C-04. The task does not close: it stays
-in `blocked` status, which `task_close` refuses, until plain `task_start`
+in `blocked` status, which `wbs(action="close")` refuses, until plain `wbs(action="open")`
 resumes it with its run and receipts preserved. See
 `doc/harness/REQ__task-blocked-is-the-park-record.md`.
 
@@ -329,7 +329,7 @@ delegation is available and isolation materially reduces context or process
 load. No generic PreToolUse hook inspects or blocks browser calls. Targeted
 tests, diagnostics, and browser interaction may run inline when that is the
 lightest available verification path. Receipt-backed review-before-QA ordering
-requirements at `task_verify` remain unchanged.
+requirements at `wbs(action="verify")` remain unchanged.
 **On violation:** advisory only. Inline execution is allowed; the orchestrator
 owns the resulting context growth and must still provide the required ordered
 verification evidence before close.

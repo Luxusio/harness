@@ -85,7 +85,7 @@ Before initializing or spawning anything:
    names to `.gitignore`.
 4. No harness task may be open in the main checkout for this session while a
    pool runs: if the session's `[harness-context]` names an open task, park it
-   with `task_blocked` or close it first. A lead's late lens stop that
+   with `wbs(action="block")` or close it first. A lead's late lens stop that
    outlives its removed worktree resolves to the main checkout and must find
    nothing to bind to there.
 5. Initialize the durable record before any dispatch:
@@ -301,7 +301,7 @@ means retain and report, never unlock or expire a reservation.
   absent/present identity at bind. Main must have no open task at both resume
   and bind. A failed resumed bootstrap keeps W and its reservation: confirm it
   stopped and re-dispatch in that same W, never release bound work. Preserve existing task evidence via
-  `task_start(workspace=W, task_id=existing_id)` without `fresh_run`.
+  `wbs(action="open", workspace=W, wbs_id=existing_id)` without `fresh_run`.
 - Only after an explicit user choice to abandon, record
   `PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/batch_state.py --repo <main checkout> --batch-id <id> abandon --slug <slug> --worker-stopped --reason <decision>`.
   Queued requests, including descendants of an abandoned dependency, may be
@@ -326,7 +326,7 @@ integration stopped at a conflict carried from step d.2 — first confirm every
 lead and nested writer has stopped. Do not open a main-checkout task while any
 lead remains live or unknown. Keep queued work durable while halted. Then open
 `TASK__batch-integrate-<slug>` in the **main checkout** through the normal
-`harness:run` lifecycle (`task_start` → plan → develop → QA → close). Under
+`harness:run` lifecycle (`wbs(action="open")` → plan → develop → QA → close). Under
 that task:
 
 For a WBS-owned pack, reopen the owning WBS after the whole pool is
@@ -354,7 +354,7 @@ return to the exact pool and finish it before opening the integration child.
    review scope in `plugin/skills/develop/quality-audit-pipeline.md`: give the
    reviewer each lead's `old_base`, `old_tip`, `new_base`, and `new_tip`, its
    patch-id result, and carried or residual status.
-4. In this plugin source repo, before `task_close`, run
+4. In this plugin source repo, before `wbs(action="close")`, run
    `python3 plugin/scripts/install_verified.py --task-dir <integration task dir>`
    — this is the only place `install_verified.py` runs in batch mode; leads
    skip it.

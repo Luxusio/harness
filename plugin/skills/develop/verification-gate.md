@@ -355,7 +355,7 @@ Bounded: retry at most once per failure. No infinite retry loop.
 ## Step 3.6: Severity × confidence close gate
 
 After the quality synthesis agent produces its findings table, apply this
-close-gate rule before task_close is allowed:
+close-gate rule before WBS close is allowed:
 
 | Severity | Confidence | Action |
 |----------|-----------|--------|
@@ -374,4 +374,4 @@ deferral is not permitted.
 Keep acceptance intent in PLAN.md and verification evidence in the ordered
 review/QA entries of `RECEIPTS.jsonl`. A failed AC loops back to the fix cycle;
 an explicitly deferred AC is named with its reason in the final response.
-`task_close` relies on the current task-run receipt verdict, not a second AC ledger.
+`wbs(action="close")` relies on the current task-run receipt verdict, not a second AC ledger.

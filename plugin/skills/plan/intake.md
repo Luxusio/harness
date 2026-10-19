@@ -51,7 +51,7 @@ anything.
 
 `tail -5 doc/harness/learnings.jsonl` — incorporate relevant operational knowledge. Log count.
 
-## Phase 0.2: task_start
+## Phase 0.2: WBS open
 
 ```
 wbs { action: "open", wbs_id: "<ARGUMENTS>" }

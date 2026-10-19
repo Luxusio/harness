@@ -1,6 +1,6 @@
 ---
 name: run
-description: Orchestrate the public task_start → plan → develop → QA → close lifecycle.
+description: Orchestrate the public WBS open → plan → develop → QA → close lifecycle.
 argument-hint: <task-slug-or-description>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs
@@ -15,13 +15,13 @@ Orchestrate the full harness development cycle for a task.
 
 Receipt absence never immediately fails or suppresses a substantive lens. Await
 the actual result and label an unreceipted final **NON-ATTESTING**: actual FAIL
-is remediated, actual BLOCKED_ENV is published directly through `task_blocked`, and only an
+is remediated, actual BLOCKED_ENV is published directly through `wbs(action="block")`, and only an
 actual review PASS advances to substantive QA. Do not repair, restart, resume,
 recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
-call `task_verify` once; close on ordered receipt PASS, otherwise call
-`task_blocked` with the fixed park
+call `wbs(action="verify")` once; close on ordered receipt PASS, otherwise call
+`wbs(action="block")` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`task_verify` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
+`wbs(action="verify")` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
 stream picks which one: use the empty-stream pair when no receipt of any kind
 was recorded for the run, and the missing-attestation pair when receipts exist
 but a required completion is absent. Both are owned by
@@ -48,7 +48,7 @@ authorization does not apply to read-only answers or ordinary non-harness work.
 When the runtime exposes explicit close tools such as `close_agent`, track each
 spawned agent id and close it after the result is consumed, the agent completes
 or fails, it is cancelled, or it is no longer needed. Before final response,
-`task_close`, or handoff, do not leave completed agents open unless the user
+`wbs(action="close")`, or handoff, do not leave completed agents open unless the user
 explicitly asked to keep a still-running agent alive. Completed agents can
 continue to count toward the concurrency limit until closed.
 
@@ -108,14 +108,14 @@ Resume routing:
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
 
-Only call `task_start` when no active task can be resolved, or when the user
+Only call `wbs(action="open")` when no active task can be resolved, or when the user
 explicitly asks for a new task.
 
 If only a native Goal is active, open/resume its one WBS root; never attach a second planning ledger.
 
 ### Phase 1: Start task
 
-`task_start` is also the only resume operation. On an existing valid open or
+`wbs(action="open")` is also the only resume operation. On an existing valid open or
 blocked task, omit `fresh_run` to preserve the same run and review/QA receipts.
 Use `fresh_run: true` only when deliberately starting a new generation and
 discarding that evidence; a closed task refuses the default call.
@@ -143,7 +143,7 @@ completion: PLAN.md exists in task_dir. If BLOCKED: stop and report.
 Skill("harness:develop", "<task_id>")
 ```
 
-The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, fresh hook-owned QA completion receipts exist and `task_verify` reports PASS. If BLOCKED: stop, report, ask user.
+The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, fresh hook-owned QA completion receipts exist and `wbs(action="verify")` reports PASS. If BLOCKED: stop, report, ask user.
 
 Before entering develop, re-entering after QA/UX FAIL, verifying, or closing,
 incorporate explicit user corrections from the conversation. Promote durable
@@ -156,8 +156,8 @@ Skip this phase when Phase 3 closed the task. Develop Phase 7 owns QA lens
 selection and spawning, and develop Phase 6.6 owns review; this phase is a
 recovery path for an interrupted or older develop flow, not a second QA pass.
 
-First call `task_context`. When the required review and QA lenses already have
-completed PASS receipts for the current run, call `task_verify` only. Spawn a
+First call `wbs(action="context")`. When the required review and QA lenses already have
+completed PASS receipts for the current run, call `wbs(action="verify")` only. Spawn a
 lens here for one that is actually unrun, failed, or stale. A missing receipt
 after an awaited substantive final is not an unrun lens and never justifies a
 receipt-only rerun; apply the Missing receipt policy instead.
@@ -177,7 +177,7 @@ here and not delegated:
 - You **MUST spawn qa-browser** when `manifest.qa.browser_qa_supported: true`
   AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss`
   or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments).
-  Skipping leaves no completed qa-browser receipt, and `task_close` blocks on it.
+  Skipping leaves no completed qa-browser receipt, and `wbs(action="close")` blocks on it.
 - Spawn the applicable UX lens alongside QA for user-facing surfaces:
   `ux-browser` for browser UI, `ux-cli` for command/help/output/error changes,
   `ux-api` for route/schema/error/docs changes, `ux-desktop` for desktop GUI —
@@ -188,7 +188,7 @@ here and not delegated:
 Agents return PASS/FAIL/BLOCKED_ENV findings in their final response; do not ask
 them to write critic artifacts.
 
-Then run `task_verify`. It computes the verdict from required ordered review and
+Then run `wbs(action="verify")`. It computes the verdict from required ordered review and
 QA completions in `RECEIPTS.jsonl`; PLAN.md remains the sole acceptance
 document. It exposes required lenses, verdicts, and `missing_for_close`, not raw
 receipt records.
@@ -223,7 +223,7 @@ Store the printed score for inclusion in the completion report.
 ### Phase 5: Close
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/run/worktree-completion.md`. Skip
-`task_close` when develop already closed the task; finish any outstanding
+`wbs(action="close")` when develop already closed the task; finish any outstanding
 coordinator disposal under that procedure without repeating review solely for
 cleanup. Otherwise close once after Phase 4 restores PASS, then complete the
 procedure before claiming overall completion. Batch leads return to their
@@ -240,7 +240,7 @@ emitting the completion report.
 For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
 already-running MCP/hook process still reports missing required lifecycle
-evidence after substantive QA and one fresh `task_verify`, call `task_blocked`
+evidence after substantive QA and one fresh `wbs(action="verify")`, call `wbs(action="block")`
 directly with the applicable fixed park pair above; do not request a new session or
 rerun a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
@@ -278,7 +278,7 @@ Task:    <task_id>
 Status:  closed
 Dir:     <task_dir>
 
-Phases completed: task_start, plan, develop, QA, close
+Phases completed: WBS open, plan, develop, QA, close
 Runtime verdict:  PASS
 Health score:     <score>/10
 Files changed:    <count>
@@ -293,7 +293,7 @@ Phase 3 (develop): max 3 retries after runtime FAIL. After max: stop, emit DONE_
 
 On any agent timeout or crash:
 1. Report what happened
-2. Check state via `task_context`
+2. Check state via `wbs(action="context")`
 3. Ask user: retry / skip / abort
 
 Stop on phase failures, report the failure, check task state, and ask how to proceed.

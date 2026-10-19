@@ -8,7 +8,7 @@ allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harne
 
 Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish the final task contract through the protected-artifact MCP.
 
-> Current artifact model: acceptance criteria live in `PLAN.md`; `write_plan`
+> Current artifact model: acceptance criteria live in `PLAN.md`; `wbs(action="plan")`
 > publishes it with required lens declarations in `TASK.json`.
 
 ## Sub-files
@@ -32,7 +32,7 @@ Phase 5 (procedure-aware user gate) stays inline below.
 - **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
-- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `write_plan`. Never Write/Edit them directly.
+- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
 - **Zero browser-flag participation.** Does not invent or inspect undeclared browser verification flags.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
@@ -126,7 +126,7 @@ It is scratch only and never controls task routing or artifact ownership.
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
 | `closed` | post-6 | Transitional state immediately before scratch removal |
 
-When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after a successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
+When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after a successful `wbs(action="plan")`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
 
 
 ---

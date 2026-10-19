@@ -6,7 +6,7 @@ user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
 ---
 
-Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
+Implement PLAN.md through the public WBS actions. Private task_verify/task_close handlers enforce receipt-backed verification and close; they are not callable tools.
 
 > Current artifact model: acceptance intent lives in `PLAN.md`; independent
 > review and QA evidence lives in the unified `RECEIPTS.jsonl`.
@@ -20,7 +20,7 @@ authorization does not apply to read-only answers or ordinary non-harness work.
 When the runtime exposes explicit close tools such as `close_agent`, track each
 spawned agent id and close it after the result is consumed, the agent completes
 or fails, it is cancelled, or it is no longer needed. Before final response,
-`task_close`, or handoff, do not leave completed agents open unless the user
+`wbs(action="close")`, or handoff, do not leave completed agents open unless the user
 explicitly asked to keep a still-running agent alive. Completed agents can
 continue to count toward the concurrency limit until closed.
 
@@ -36,12 +36,12 @@ PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance in
 **Missing receipt policy.** Receipt absence never immediately fails or
 suppresses a substantive lens. Await the actual result and label an unreceipted
 final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV is
-published directly through `task_blocked`, and only actual review PASS advances to substantive QA.
+published directly through `wbs(action="block")`, and only actual review PASS advances to substantive QA.
 Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
-receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
-PASS, otherwise call `task_blocked` with the fixed park
+receipt. After actual QA PASS, call `wbs(action="verify")` once; close on ordered receipt
+PASS, otherwise call `wbs(action="block")` with the fixed park
 `blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`task_verify` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
+`wbs(action="verify")` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
 stream picks which one: use the empty-stream pair when no receipt of any kind
 was recorded for the run, and the missing-attestation pair when receipts exist
 but a required completion is absent. Both are owned by
@@ -210,7 +210,7 @@ adding PROGRESS keys. A completed AC needs its happy path, important
 negative/edge paths and regression evidence; partial work remains explicit.
 Each worker runs its own targeted tests. Full-suite verification
 belongs to the required qa-* agents; hooks record their lifecycle and
-`task_verify` requires completed explicit PASS verdicts.
+`wbs(action="verify")` requires completed explicit PASS verdicts.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -258,7 +258,7 @@ Read `quality-audit-pipeline.md` in full. Phase 4.5 gathers coverage, visual,
 migration/contract, LLM-trust, and proportional performance inputs before the
 final checkpoint. The old generic adversarial, line-count Red Team, and quality
 synthesis agents are replaced by the mandatory balanced review gate in Phase
-6.6. Canonical code/security routing comes from `task_context`
+6.6. Canonical code/security routing comes from `wbs(action="context")`
 `required_review_lenses`, derived from the canonical `TASK.json.required_lenses`
 set without inspecting paths or diff content.
 
@@ -301,7 +301,7 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
   stats series for per-task scores.
 
 ### Phase 6.6: Independent Code Review Gate
-Read `quality-audit-pipeline.md` § Phase 6.6 and call `task_context`. For
+Read `quality-audit-pipeline.md` § Phase 6.6 and call `wbs(action="context")`. For
 `review-code`, classify the complete current evidence with the canonical
 LIGHT/STANDARD/DEEP decision table there. LIGHT spawns zero hunters, STANDARD
 spawns exactly the selected correctness or contract/test hunter, and DEEP
@@ -334,7 +334,7 @@ only lead to the generic blocked path unless ordered receipts arrive.
 ### Phase 7: Verification Gate
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with `hypothesis-driven-debugging.md` root-cause escalation on cycle 3.
 
-**Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.
+**Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `wbs(action="verify")`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.
 
 QA must be spawned after actual Phase 6.6 reviewer PASS finals. A QA run started
 before those finals is invalid substantive sequencing. Without a receipt-backed
@@ -404,7 +404,7 @@ python3 plugin/scripts/install_verified.py \
 ```
 
 This is part of completion, not a suggestion. Run it after the last source
-edit and verification, before `task_close`, so stale installed hooks cannot
+edit and verification, before `wbs(action="close")`, so stale installed hooks cannot
 prevent the task from reaching the close gate. A `harness:batch` lead (`plugin/agents/task-lead.md`) skips this step; the coordinator's integration task installs once after all leads merge. Capture the installer exit code
 and runtime summaries. The trusted helper verifies canonical harness identity,
 current-run review+QA receipts, and a byte-stable install-payload snapshot
@@ -424,15 +424,15 @@ equality from a fresh verified snapshot.
 
 **Concreteness standard:** every user-facing claim must locate without searching — name file, function, line, test, command, or subagent lens. "Fixed auth bug" is not acceptable; `auth.ts:47 — added null check on session.token` is.
 
-Before `task_close`, verify these are true:
+Before `wbs(action="close")`, verify these are true:
 
 1. PLAN.md acceptance criteria are addressed or explicitly deferred.
-2. `task_verify` reports PASS from ordered receipts in the current TASK.json generation.
+2. `wbs(action="verify")` reports PASS from ordered receipts in the current TASK.json generation.
 3. Required QA/UX subagents were spawned when available; hook-owned `RECEIPTS.jsonl` proves their lifecycle.
 4. User corrections are reflected in PLAN.md or durable documentation.
 5. Durable docs are updated when the task changed user-visible behavior, external contracts, or reusable guidance.
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/run/worktree-completion.md`; after `task_close`, complete its coordinator disposal before claiming overall completion. Batch leads return to the coordinator without self-removal. If already closed, finish outstanding disposal without repeating close or review solely for cleanup.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/run/worktree-completion.md`; after `wbs(action="close")`, complete its coordinator disposal before claiming overall completion. Batch leads return to the coordinator without self-removal. If already closed, finish outstanding disposal without repeating close or review solely for cleanup.
 
 Then provide a concise final response with:
 
@@ -483,7 +483,7 @@ committed artifact. Deferred requires an `AskUserQuestion` decision and records
 `doc/harness/runbooks.yaml` or another committed artifact; reject one-off noise.
 
 ### Phase 8.6: durable docs
-Mechanical. Read the task's changed paths and `doc/CLAUDE.md` registered roots. For each file, map to doc root. Copy every reported `Known ceiling:` line under a `Known ceiling` heading in the durable doc that owns the behavior, or else into the Phase 8.7 change doc written now, so `grep -rn "Known ceiling" doc/` stays the ledger; never copy an absent ceiling. Call `task_verify`.
+Mechanical. Read the task's changed paths and `doc/CLAUDE.md` registered roots. For each file, map to doc root. Copy every reported `Known ceiling:` line under a `Known ceiling` heading in the durable doc that owns the behavior, or else into the Phase 8.7 change doc written now, so `grep -rn "Known ceiling" doc/` stays the ledger; never copy an absent ceiling. Call `wbs(action="verify")`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md` OR the current task contains explicit durable user corrections,

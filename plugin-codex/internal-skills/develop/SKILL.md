@@ -4,7 +4,7 @@ description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, rout
 user-invocable: false
 ---
 
-Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
+Implement PLAN.md through the public WBS actions. Private task_verify/task_close handlers enforce receipt-backed verification and close; they are not callable tools.
 
 > Current artifact model: acceptance intent lives in `PLAN.md`; independent
 > review and QA evidence lives in the unified `RECEIPTS.jsonl`.
@@ -14,7 +14,7 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 > Use `spawn_agent` for independent lanes/review/QA when available,
 > conversational numbered options instead of AskUserQuestion, and
 > `BLOCKED_ENV` when required browser/desktop evidence is unavailable. Track and
-> close spawned agents with `close_agent` before `task_close` or final response. Completed agents can continue to consume concurrency until closed. Read installed detailed develop sub-files from
+> close spawned agents with `close_agent` before `wbs(action="close")` or final response. Completed agents can continue to consume concurrency until closed. Read installed detailed develop sub-files from
 > `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/` only when their phase requires them.
 
 ## Voice
@@ -29,11 +29,11 @@ PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance in
 **Missing receipt policy.** Receipt absence never immediately fails or
 suppresses a substantive lens. Await the actual result and label an unreceipted
 final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV is
-published directly through `task_blocked`, and only actual review PASS advances to substantive QA.
+published directly through `wbs(action="block")`, and only actual review PASS advances to substantive QA.
 Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
-receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
-PASS, otherwise call `task_blocked` with the fixed park pair copied **verbatim** from that
-`task_verify` next_action — empty-stream or missing-attestation, the receipt
+receipt. After actual QA PASS, call `wbs(action="verify")` once; close on ordered receipt
+PASS, otherwise call `wbs(action="block")` with the fixed park pair copied **verbatim** from that
+`wbs(action="verify")` next_action — empty-stream or missing-attestation, the receipt
 stream picks (owned by `_lib.py`; never retyped, paraphrased, interpolated). Direct finals never authorize PASS or close.
 Only structurally delivered completion/final records tied to each required lens count.
 Actual review PASS must precede actual QA PASS; coordinator paraphrases, copied verdict
@@ -322,7 +322,7 @@ spawn_agent {
 }
 ```
 
-After awaiting QA/UX, run `task_verify`.
+After awaiting QA/UX, run `wbs(action="verify")`.
 `wait_agent` and `list_agents` are coordination-only; the Codex watcher records
 direct lifecycle events automatically. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
@@ -380,7 +380,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/install_verifie
 ```
 
 This is part of completion, not a suggestion. Run it after the last source
-edit and verification, before `task_close`, so old installed hooks cannot
+edit and verification, before `wbs(action="close")`, so old installed hooks cannot
 prevent the task from reaching the close gate. Capture the installer exit code
 and runtime summaries. The trusted helper may inspect the concrete install
 payload and Git state because installation is an explicit operation; those
@@ -405,12 +405,12 @@ Prepare these completion checks now; the final phase revalidates them after
 durable-doc and learning work:
 
 1. PLAN.md acceptance criteria are addressed or explicitly deferred.
-2. `task_verify` reports PASS from the required ordered receipt sequence.
+2. `wbs(action="verify")` reports PASS from the required ordered receipt sequence.
 3. Required QA/UX subagents were spawned when the runtime exposed them; watcher-owned receipts prove start and explicit completion.
 4. User corrections are reflected in PLAN.md or durable documentation.
 5. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, or reusable guidance.
 
-Do not call `task_close` or emit the final response yet. Draft a concise
+Do not call `wbs(action="close")` or emit the final response yet. Draft a concise
 completion report with:
 
 1. Summary (one sentence per AC or task slice)
@@ -463,7 +463,7 @@ conversational AskUserQuestion) and records `user_decision:` plus
 ### Phase 8.6: durable docs
 
 Read the PLAN targets and durable-doc decision. Update every selected durable
-surface. Copy every reported `Known ceiling:` line under a `Known ceiling` heading in the durable doc that owns the behavior, or else into the Phase 8.7 change doc written now, so `grep -rn "Known ceiling" doc/` stays the ledger; never copy an absent ceiling. Then call `task_verify`.
+surface. Copy every reported `Known ceiling:` line under a `Known ceiling` heading in the durable doc that owns the behavior, or else into the Phase 8.7 change doc written now, so `grep -rn "Known ceiling" doc/` stays the ledger; never copy an absent ceiling. Then call `wbs(action="verify")`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md`, spawn the documentation-review subagent after durable docs. It
@@ -481,16 +481,16 @@ Follow its ownership, surviving-checkout and batch-lead rules; finish required
 coordinator integration/disposal after source close, before overall completion.
 Report retained originals and their next action; never silently leave them.
 
-Phase 9 is the only normal owner of `task_close` and the user-facing completion
+Phase 9 is the only normal owner of `wbs(action="close")` and the user-facing completion
 response. The developer owns deciding whether work after review or QA affects
 the evidence and therefore warrants rerunning the applicable lenses. Harness
 does not inspect Git or automatically stale receipts. Rerun the verified source
 installer when its concrete install payload changed; installer-local payload
-checks remain allowed. Call `task_verify` once after the final required receipt
+checks remain allowed. Call `wbs(action="verify")` once after the final required receipt
 sequence is complete.
 
-Recheck every Phase 8 completion condition. Then call `task_close` exactly once.
-Before `task_close`, confirm the final `task_verify` result is PASS and any
+Recheck every Phase 8 completion condition. Then call `wbs(action="close")` exactly once.
+Before `wbs(action="close")`, confirm the final `wbs(action="verify")` result is PASS and any
 required installation succeeded.
 If blocked, report `missing_for_close`, fix the named gate, restore ordered
 review/QA/install evidence as required, and retry. After success, emit the

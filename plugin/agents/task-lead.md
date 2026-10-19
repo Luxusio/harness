@@ -38,7 +38,7 @@ actual native worker identity, worktree and branch.
    report the blocker; never create an arbitrary substitute or start work.
    Return bootstrap JSON
    `{"worktree":"<W>","branch":"<branch>","head":"<sha>","bootstrap":true}`
-   and stop. Do not call `task_start`, create task artifacts, edit source or
+   and stop. Do not call `wbs(action="open")`, create task artifacts, edit source or
    commit. This bootstrap response is not a lifecycle result.
 4. Only when the coordinator continues this same native agent with confirmed
    `batch_state.py bind` success and explicit permission to mutate through
@@ -58,8 +58,8 @@ worktree or rotate the existing run.
 ## Rules for the rest of the run
 
 - Pass `workspace: W` on **every** harness task MCP call
-  (`task_start`, `task_context`, `write_plan`, `task_verify`, `task_close`,
-  `task_blocked`). Omitting it targets the main checkout, not your worktree.
+  (`wbs(action="open")`, `wbs(action="context")`, `wbs(action="plan")`, `wbs(action="verify")`, `wbs(action="close")`,
+  `wbs(action="block")`). Omitting it targets the main checkout, not your worktree.
 - Never `cd` out of `W` and never write outside `W`.
 - Keep `.harness-batch-bootstrap` through all final returns, including blocked,
   failed and task-only/zero-source closed results. Never stage, edit or remove
@@ -89,7 +89,7 @@ worktree or rotate the existing run.
   `git -C <W/module>` for its scoped staging/commit commands and return to the
   outer task for evidence and the superproject gitlink commit.
 - Run the normal lifecycle exactly as documented: `Skill("harness:run", ...)` (the Claude plugin ships this skill too)
-  or the `task_start` → plan → develop → review/QA → `task_close` sequence,
+  or the `wbs(action="open")` → plan → develop → review/QA → `wbs(action="close")` sequence,
   with these batch-lead carve-outs:
   - Never call `AskUserQuestion`. When the workflow would ask the user a
     material question, stop without guessing, return `verdict: "blocked"`, and
@@ -108,7 +108,7 @@ worktree or rotate the existing run.
     `W/plugin/` is ordinary work, but it does not change the harness runtime
     driving your lifecycle.
 
-## After `task_close` reports PASS
+## After `wbs(action="close")` reports PASS
 
 Selected module changes must already be committed on their supplied named
 branches; stage their gitlinks in W with the intended outer paths.
@@ -128,10 +128,10 @@ not merge or push.
 
 ## Final response
 
-`verdict` is `closed` after `task_close` PASS with all implementation committed
+`verdict` is `closed` after `wbs(action="close")` PASS with all implementation committed
 (or current HEAD for a task-only/zero-source result); `blocked` when you
 stopped for a coordinator decision or a real blocker (task left open or parked
-with `task_blocked`); `failed` when the lifecycle could not reach PASS within
+with `wbs(action="block")`); `failed` when the lifecycle could not reach PASS within
 its retry limit or an unexpected error stopped you.
 
 After an authorized lifecycle run, end with a fenced JSON block, followed by a short summary (bootstrap uses only the handshake above):

@@ -5,7 +5,7 @@ description: harness developer — implements source changes within PLAN.md scop
 
 > **Codex runtime overlay:**
 > - This methodology is read by the coordinator and every spawned implementation worker; parent context alone is not sufficient propagation.
-> - Codex uses bare Harness MCP names such as `task_context` and `task_verify`.
+> - Codex uses the bare `wbs` MCP tool, with context and verify actions.
 > - Verification receipts are owned by the MCP-hosted lifecycle watcher. This role never writes receipt artifacts.
 
 <!-- harness:role-core:start -->

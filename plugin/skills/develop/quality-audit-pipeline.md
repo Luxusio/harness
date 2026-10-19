@@ -28,7 +28,7 @@ reviewers, so the formal reviewer still owns every finding and verdict.
 
 ## Phase 6.6: Mandatory independent review
 
-After Phase 6 commits and the Phase 6.5 checkpoint, read `task_context` and use
+After Phase 6 commits and the Phase 6.5 checkpoint, read `wbs(action="context")` and use
 its canonical `required_review_lenses` routing.
 
 - `review-code`: spawn `harness:code-reviewer` whenever routed; mutating tasks
@@ -109,7 +109,7 @@ A carry inherits the trust of that lead's close; receipts bind no tree. For
 every integrated lead, in integration order, the endpoints are:
 
 - `old_base`: the coordinator HEAD recorded in batch step b.5;
-- `old_tip`: the `commit` the lead returned. Leads commit after `task_close`,
+- `old_tip`: the `commit` the lead returned. Leads commit after `wbs(action="close")`,
   so this is the tree their review and QA passed;
 - `new_base`: the main HEAD before that lead's rebase, which is the previous
   lead's `new_tip`, or `old_base` for the first lead;

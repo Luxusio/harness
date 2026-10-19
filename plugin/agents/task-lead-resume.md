@@ -55,15 +55,15 @@ an identity mismatch, not permission to adopt it.
 ## Existing task and evidence
 
 For an existing open/blocked task, call
-`task_start(workspace=W, task_id=existing_id)` without `fresh_run`, then
-`task_context(workspace=W, task_id=existing_id)`. Require the same run id as
+`wbs(action="open", workspace=W, wbs_id=existing_id)` without `fresh_run`, then
+`wbs(action="context", workspace=W, wbs_id=existing_id)`. Require the same run id as
 recorded before continuing the normal lifecycle at its pending phase. Preserve
 receipts and evidence; never restart solely to manufacture a PASS. If no task
 existed at bootstrap, start only the expected task slug in W after binding.
 A closed task goes back to the coordinator for integration/recovery: do not
 repeat close or review/QA solely for cleanup.
 
-After normal required review/QA and `task_close` PASS, commit as defined in
+After normal required review/QA and `wbs(action="close")` PASS, commit as defined in
 `task-lead.md` and return its exact lifecycle JSON result. If blocked, retain
 all source/evidence and return the concrete reason. Never clean up your own
 worktree, force-delete a branch, or claim abandoned work is complete.

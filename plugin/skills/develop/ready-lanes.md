@@ -4,7 +4,7 @@
 
 At active phase boundaries read `wbs(action="context").progress`. After two hours
 without earned weight, refine only unclear unfinished WBS outcomes through
-`write_plan`, preserving weight while adapting actual next steps. Report real external blockers
+`wbs(action="plan")`, preserving weight while adapting actual next steps. Report real external blockers
 instead of recursively splitting waits. Use `wbs(action="check", node_id=...)` for ready outcomes. Report measured weight and concrete remaining
 outcomes with integration/review/QA separately; task additions, plan rewrites
 and splits earn nothing. One leaf is enough for small work. WBS exists to help
@@ -18,7 +18,7 @@ development, independent review, QA and task close inside each lead. Use
 to bind the exact work pack for an already-open
 ordinary execution envelope. Dispatch parks the parent for the actual
 worktree handoff before pool admission; do no parent source writes
-while leads run. `task_start` refuses resumption until that exact pool is
+while leads run. `wbs(action="open")` refuses resumption until that exact pool is
 integrated and closed. Then resume the same parent, verify WBS assertions in
 the integrated checkout and run combined review/QA. Never treat a proposed
 pack or a lead's narrative PASS as integrated progress.

@@ -1,6 +1,6 @@
 # harness
 
-Execution harness for AI-assisted repository work. Enforces a **task_start → plan → develop → QA → close** loop on every repo-mutating task. Internal review and verification gates remain mandatory.
+Execution harness for AI-assisted repository work. Enforces a **WBS open → plan → develop → QA → close** loop on every repo-mutating task. Internal review and verification gates remain mandatory.
 
 ## Install
 
@@ -43,16 +43,16 @@ doc/harness/critics/             # plan.md, runtime.md, document.md playbooks
 Every repo-mutating task follows this public sequence:
 
 ```
-task_start → plan → develop → QA → close
+WBS open → plan → develop → QA → close
 ```
 
 | Step | What happens |
 |------|-------------|
-| **task_start** | Create or resume one exact task generation and bind it to the current runtime session |
+| **WBS open** | Create or resume one exact task generation and bind it to the current runtime session |
 | **plan** | Review the request, write PLAN.md, and declare required lenses in TASK.json |
 | **develop** | Implement per-AC; independent review runs as an internal end-of-develop gate |
 | **QA** | Run the declared runtime QA lens and record its observed completion |
-| **close** | Internally run `task_verify`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
+| **close** | Internally run `wbs(action="verify")`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
 
 After every child close, the Goal executor performs self-improvement before
 selecting the next child: it may append friction signals to `learnings.jsonl`,
@@ -123,7 +123,7 @@ retries use contract/test only, narrative corrections use deterministic checks,
 and an exhausted budget proceeds to one fresh formal reviewer.
 
 QA/UX agents return findings in their final response. Lifecycle hooks own the
-unified `RECEIPTS.jsonl`; `task_verify` enforces plan-declared lenses and
+unified `RECEIPTS.jsonl`; `wbs(action="verify")` enforces plan-declared lenses and
 review-before-QA ordering. See
 [the Codex lifecycle ADR](doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md)
 for acquisition/identity/completion and
@@ -173,7 +173,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `install_verified.py` | Stateless trusted post-QA delivery wrapper; compares canonical payloads from an isolated verified snapshot and refreshes only stale runtimes | stdout / exit status |
 | `batch_state.py` | Durable batch records, bounded pool claims, validated bootstrap retention, exact worker/result binding, serialized finish checkpoints, status/recovery, same-worktree resume and explicit retained abandonment; operational state never grants task PASS | `doc/harness/runtime/batches/` |
-| `goal_batch.py` | Routes declared Goal work packs through existing batch pools and validates integration evidence before completion | Library routing result |
+| `work_pack.py` | Validates task-owned isolated work packs and integration evidence before completion | Library routing result |
+| `goal_migration.py` | Explicitly previews/imports retired Goal records and pack bindings, preserving historical identities and evidence | WBS migrate report |
 | `parallel_dispatch.py` | Proposes ready AC lanes from dependencies, path ownership and observed host capacity; the coordinator reserves actual slots | stdout (JSON) |
 | `batch_submodules.py` | Shared S1 selection, private named-branch preparation, durable local object pins, exact checkout reconciliation and module-removal proof; used by the existing batch owners | Embedded batch manifest and private/main Git stores |
 | `batch_preflight.py` | `harness:batch` intake/preflight: read-only repo-shape report — control-root shape, submodules, ignored nested repos, a post-checkout hook whose text mentions `submodule`, per-scope class, explicit selected-module validation and whole-gitlink ownership, cleanliness of the main checkout plus every populated submodule and nested repo, whether `.claude/worktrees/` is gitignored at the path git sees (a `.claude` symlink leaving the repository passes), and scope overlap between requests; exits 0 only when those checks allow the requested set | stdout (JSON) |
@@ -188,7 +189,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: compares source against the scripts dir it is executing from, so a session loading a different tree is visible (silent in non-dev / non-harness repos) | — |
-| `hook_tree_health.py` | Reports when the registered hook tree lacks the `SubagentStart`/`SubagentStop` receipt subsystem, so `task_start` can warn that receipts cannot be recorded | — |
+| `hook_tree_health.py` | Reports when the registered hook tree lacks the `SubagentStart`/`SubagentStop` receipt subsystem, so `wbs(action="open")` can warn that receipts cannot be recorded | — |
 
 `health.py` is activated through the optional `health_components` manifest key.
 It prints its result; durable follow-up belongs in REQ/GUIDE/ADR/POLICY,
@@ -206,7 +207,7 @@ Within the post-close self-improvement pass, candidate reporting identifies keys
 repeated across 2+ receipt-verified task runs for a separately reviewed Tier 2
 change. That reporting step performs no durable writes; other self-improvement
 steps may append signals or save a due retro. The pass completes before
-`goal_next_task`, so every child contributes to subsequent work.
+any separately authorized follow-up execution, so each completed run contributes to subsequent work.
 `qa_codifier.py` separately turns validated QA failures into regression tests.
 
 ## Hooks
@@ -220,7 +221,7 @@ steps may append signals or save a due retro. The pass completes before
 | UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
-| PostToolUse (Bash/Goal/Harness task) | `hook_post_tool_use.py` | Route Bash failures and native `create_goal`; bind successful `task_start`/`task_context` results to the exact Codex session |
+| PostToolUse (Bash/native Goal/WBS) | `hook_post_tool_use.py` | Route Bash failures and native `create_goal`; bind successful WBS open/context results to the exact Codex session |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
 | Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
 | Codex task PostToolUse/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Bind the exact task/run returned to each root session, register or repair its rollout checkpoint before spawn, then replay real subagent starts and completions from MCP-hosted daemon threads without a detached process |
@@ -238,25 +239,21 @@ PostToolUse routing hints.
 
 ## MCP tools
 
-11 tools via `plugin/mcp/harness_server.py`:
+One callable tool, `wbs`, via `plugin/mcp/harness_server.py`:
 
-| Tool | Purpose |
-|------|---------|
-| `task_start` | Create/resume task, return context |
-| `task_context` | Refresh task state |
-| `task_verify` | Compute verification from ordered review/QA completion receipts, optionally reconcile ACs |
-| `task_close` | Gate: all verdicts PASS → close |
-| `task_blocked` | Park a task on a genuine environment blocker |
-| `goal_start` | Start/sync native goal state |
-| `goal_context` | Read active Goal and ordered children |
-| `goal_add_task` | Attach or update a child task under the goal |
-| `goal_next_task` | Return the next queued/active child task |
-| `goal_finish` | Mark the active goal complete or blocked |
-| `write_plan` | Write PLAN.md and update TASK.json required lenses |
+| Action | Purpose |
+|--------|---------|
+| `open` / `context` | Create/resume one WBS execution or refresh its context |
+| `plan` / `check` / `next` | Maintain rolling outcomes, run a declared assertion, or select ready outcomes |
+| `dispatch` | Bind an isolated work pack and park its parent |
+| `verify` / `close` / `block` | Compute the ordered receipt verdict, close on PASS, or record a blocker |
+| `migrate` | Preview retired Goal data; convert only with explicit `apply=true` |
 
-The six task tools (`task_*`, `write_plan`) accept an optional `workspace`: the
-absolute path of a registered linked worktree whose task the call targets
-(Claude `harness:batch` leads; refused on Codex).
+Retired Goal/task tool aliases are unavailable. Native Goals provide their
+objective and continuation to the same WBS. All execution actions accept an
+optional `workspace` naming a registered linked worktree; Claude and Codex
+preserve that checkout's execution and receipt ownership. Migration runs at the
+control root without a workspace argument.
 
 ## Skills
 
@@ -269,11 +266,12 @@ absolute path of a registered linked worktree whose task the call targets
 Normal usage is `/harness:setup` once per repository. On Codex, `$harness:run`
 is implicitly selected for plain repository mutation and may also be invoked
 explicitly; it loads the internal canonical workflow. Native `/goal` remains
-the explicit/broad objective container and the run skill attaches ordered child
-tasks through `goal_add_task` and continues them through `goal_next_task`. On
-Claude Code, native Goal/task routing remains the entry. `plan`, `develop`, and
-the four plan-review sub-skills remain internal. Pre-native orchestration state
-is unsupported and is neither read nor migrated.
+the native objective and continuation context; the run skill opens that same
+objective's WBS and continues dependency-ready outcomes. Claude Code uses the
+same WBS control plane. `plan`, `develop`, and the four plan-review sub-skills
+remain internal. Retired Goal records and old pack bindings require explicit
+`wbs(action="migrate")` preview followed by `apply=true`; there is no live child
+queue or compatibility execution path.
 
 ## Plugin structure
 

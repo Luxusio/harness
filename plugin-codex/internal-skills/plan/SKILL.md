@@ -6,15 +6,15 @@ user-invocable: false
 
 Codex planning pipeline with compact and full procedures. Conservatively eligible low-risk work uses a bounded assessment; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish through the protected-artifact MCP.
 
-> Current artifact model: acceptance criteria live in `PLAN.md`; `write_plan`
+> Current artifact model: acceptance criteria live in `PLAN.md`; `wbs(action="plan")`
 > publishes it with required lens declarations in `TASK.json`.
 
 > **Codex runtime notes** (delta from Claude):
 > - **One independent reviewer, capability-mapped.** Discover deferred tools before deciding. When `spawn_agent` is available, run exactly one independent reviewer subagent per phase. Use one inline critical-reviewer pass only when no independent route exists, and record that phase as `coordinator-only` in PLAN.md's Review Status section.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Both procedures collect unresolved material premises and User Challenges into one Phase 5.3 interaction. Phase 5.4.1 runs only for explicit pre-code approval; a later new delta returns to the specific Phase 5.3 format.
-> - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `write_plan`.
-> - **MCP tool names** bare (`task_start`, `task_context`, `write_plan`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
+> - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `wbs(action="plan")`.
+> - **One MCP tool:** bare `wbs`; use open/context/plan actions. Claude uses the runtime-qualified name of this same tool.
 
 ## Sub-files
 
@@ -37,7 +37,7 @@ Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${H
 - **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
-- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `write_plan`. Never Write/Edit them directly.
+- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
 - **Never abort.** Full planning surfaces review failures and never silently shortens. Compact may escalate to full after inspection, but never bypasses its fail-closed assessment.
@@ -109,7 +109,7 @@ turn. It is never task control or artifact authority.
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
 | `closed` | post-6 | Transitional state immediately before scratch removal |
 
-When used, it contains `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after successful `write_plan`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
+When used, it contains `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after successful `wbs(action="plan")`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
 
 ---
 
@@ -141,7 +141,7 @@ Full protocol, dimensions, checklists, and findings table: `review-phases.md` (C
 2. **Compact branch** — conservatively classified low-risk standard work gets one bounded assessment, unresolved material decisions only, then canonical publication.
 3. **Full branch Phase 1 — Plan Review** — premise extraction and authorization classification are mandatory analysis. One reviewer subagent (when available) merges CEO (premise/scope) and Engineering (architecture/tests/failure) methodology; adds a UI checklist when `ui_scope=true`.
 4. **Phase 5 — Consolidated Decision Gate** — either procedure asks once only when unresolved material decisions remain.
-5. **Phase 6 — Write artefacts** — always writes through `write_plan`; then removes optional PLAN_SESSION.json scratch.
+5. **Phase 6 — Write artefacts** — always writes through `wbs(action="plan")`; then removes optional PLAN_SESSION.json scratch.
 
 The compact assessment must inspect the named code/docs and recheck every
 escalation family against discovered dependencies, callers, data flows,
