@@ -61,3 +61,42 @@ def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
     invalid = call("context", root="WBS__missing")
     assert invalid.get("isError")
     assert "wbs(action='open')" in invalid["structuredContent"]["next_action"]
+
+
+def test_recovery_outputs_from_gate_registration_and_checkpoint(tmp_path, monkeypatch, capsys):
+    gate = importlib.import_module("prewrite_gate")
+    for runtime in ("codex", "claude"):
+        monkeypatch.setenv("HARNESS_RUNTIME", runtime)
+        # Exercise the actual protected-plan deny renderer, including the
+        # runtime-qualified tool spelling, rather than only its mapping helper.
+        gate._deny("C-05-protected-artifact", str(tmp_path / "PLAN.md"),
+                   "plan-skill", "Use the plan owner", str(tmp_path))
+        output = capsys.readouterr().out
+        assert "write_plan" not in output
+        assert "wbs" in output and "wbs_id" in output
+        reason = json.loads(output)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert 'action="plan", wbs_id=' in reason
+        expected = "wbs {" if runtime == "codex" else "mcp__plugin_harness_harness__wbs("
+        assert expected in reason
+
+    hook = importlib.import_module("hook_pre_tool_use")
+    with mock.patch.object(hook, "_update_diagnostics"):
+        hook._report_registration_failure(b"{}", "Registration failed")
+    warning = capsys.readouterr().err
+    assert "wbs(action='verify') once" in warning
+    assert "wbs(action='block') if required evidence is missing" in warning
+    assert "task_blocked" not in warning
+
+    fixture = importlib.import_module("test_harness_mcp_server")
+    helper = fixture.HarnessMcpServerTests()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    td = helper._make_task(str(repo), "TASK__checkpoint")
+    helper._write_subagent_receipt(td)
+    checkpoint = importlib.import_module("write_checkpoint")
+    path = checkpoint.write_checkpoint(td)
+    saved = Path(path).read_text()
+    assert "runtime_verdict PASS" in saved
+    assert "wbs(action='close')" in saved
+    assert "run task_close" not in saved

@@ -60,7 +60,7 @@ def _next_action(task_dir: str, control: dict) -> str:
         return "Open plan skill — PLAN.md not yet created."
     if verdict != "PASS":
         return "Resume the current PROGRESS.md step, then run ordered review and QA verification."
-    return "runtime_verdict PASS — run task_close."
+    return "runtime_verdict PASS — run wbs(action='close') with this task's wbs_id."
 
 
 def _progress_summary(task_dir: str) -> list[str]:

@@ -229,7 +229,7 @@ def _report_registration_failure(payload: bytes, reason: str) -> None:
         f"{reason}. This subagent's start and completion will NOT be recorded "
         "in RECEIPTS.jsonl, so task_verify cannot reach PASS from it. Continue "
         "substantive review and QA, label unreceipted results non-attesting, "
-        "then verify once and use task_blocked if required evidence is missing; "
+        "then call wbs(action='verify') once and use wbs(action='block') if required evidence is missing; "
         "do not hand-author receipts.\n"
     )
 

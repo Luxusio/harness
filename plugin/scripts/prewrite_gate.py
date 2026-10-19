@@ -514,7 +514,10 @@ def _owner_to_next_action(owner: str) -> str:
         return ""
     o = owner.lower()
     if "plan-skill" in o:
-        return _tool_hint("write_plan", _runtime_name())
+        args = 'action="plan", wbs_id=..., plan=..., required_lenses=[...]'
+        if runtime == "codex":
+            return f"wbs {{ {args} }}"
+        return f"mcp__plugin_harness_harness__wbs({args})"
     if "receipt-lifecycle-hook" in o:
         return "Spawn and await the required reviewer or QA agent; lifecycle hooks record RECEIPTS.jsonl"
     if "review-detail-writer" in o:
@@ -530,16 +533,6 @@ def _runtime_name() -> str:
     if payload.get("session_id") or os.environ.get("CODEX_HOME"):
         return "codex"
     return "claude"
-
-
-def _tool_hint(tool: str, runtime: str | None = None) -> str:
-    runtime = runtime or _runtime_name()
-    args = {
-        "write_plan": "task_id=..., plan=..., required_lenses=[...]",
-    }.get(tool, "...")
-    if runtime == "codex":
-        return f"{tool} {{ {args} }}"
-    return f"mcp__plugin_harness_harness__{tool}({args})"
 
 
 def _deny(rule_id, file_path, owner, human_text, repo_root):
