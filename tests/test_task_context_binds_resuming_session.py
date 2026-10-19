@@ -15,6 +15,8 @@ nothing else about the run moves.
 """
 from __future__ import annotations
 
+from test_harness_mcp_server import call_execution
+
 import importlib.util
 import json
 import os
@@ -103,7 +105,7 @@ def _open_task(tmp_path: Path, session_id: str | None) -> tuple[str, str]:
     if session_id is not None:
         assert _lib.write_session_hint(str(repo), session_id)
     with mock.patch.object(server, "find_repo_root", return_value=str(repo)):
-        result = server.call_tool("task_start", {"task_id": TASK_ID})
+        result = call_execution(server, "task_start", {"task_id": TASK_ID})
     assert "isError" not in result, result
     return str(repo), str(repo / "doc/harness/tasks" / TASK_ID)
 
@@ -141,7 +143,7 @@ def test_resume_binds_the_new_session_and_receipts_flow_again(tmp_path, monkeypa
 
     _lib.write_session_hint(repo, SESSION_B)
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        context = server.call_tool("task_context", {"task_id": TASK_ID})
+        context = call_execution(server, "task_context", {"task_id": TASK_ID})
     assert "isError" not in context, context
 
     # The whole reason this is task_context and not task_start.
@@ -206,7 +208,7 @@ def test_reading_a_parked_task_does_not_steal_write_focus(tmp_path):
     repo, parked = _open_task(tmp_path, SESSION_A)
     active = Path(repo) / "doc/harness/tasks/.active"
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_blocked", {
+        assert "isError" not in call_execution(server, "task_blocked", {
             "task_id": TASK_ID,
             "blocked_reason": "external service unavailable",
             "unblock_condition": "service reachable again",
@@ -217,7 +219,7 @@ def test_reading_a_parked_task_does_not_steal_write_focus(tmp_path):
     _lib.write_session_hint(repo, SESSION_B)
     assert _lib.resolve_active_task_dir(repo, session_id=SESSION_B) == ""
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        context = server.call_tool("task_context", {"task_id": TASK_ID})
+        context = call_execution(server, "task_context", {"task_id": TASK_ID})
     assert "isError" not in context, context
     assert not _marker_path(repo, SESSION_B).exists()
     assert not active.exists()
@@ -243,7 +245,7 @@ def test_a_session_holding_nothing_at_all_binds_on_resume(tmp_path):
     assert _lib.resolve_active_task_dir(repo, session_id=SESSION_B) == ""
 
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_context", {"task_id": TASK_ID})
+        assert "isError" not in call_execution(server, "task_context", {"task_id": TASK_ID})
 
     bound = _lib.resolve_session_task_binding(repo, SESSION_B)
     assert os.path.realpath(str(bound.get("task_dir") or "")) == os.path.realpath(
@@ -264,7 +266,7 @@ def test_a_refused_marker_write_is_reported_not_swallowed(tmp_path):
     refusal = PermissionError("active task binding requires the task-control runtime")
     with mock.patch.object(server, "find_repo_root", return_value=repo), \
             mock.patch.object(server, "write_active_marker", side_effect=refusal):
-        context = server.call_tool("task_context", {"task_id": TASK_ID})
+        context = call_execution(server, "task_context", {"task_id": TASK_ID})
     assert context.get("isError") is True, context
     assert "task-control runtime" in str(context)
 
@@ -298,7 +300,7 @@ def test_reading_another_open_task_does_not_steal_write_focus(tmp_path, monkeypa
     _lib.write_session_hint(repo, SESSION_B)
     assert not _marker_path(repo, SESSION_B).exists()
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        context = server.call_tool("task_context", {"task_id": TASK_ID})
+        context = call_execution(server, "task_context", {"task_id": TASK_ID})
     assert "isError" not in context, context
 
     # The peek changed nothing: focus, binding, and the legacy marker all hold.
@@ -354,7 +356,7 @@ def test_a_peek_without_a_session_hint_does_not_steal_write_focus(
     assert _lib.resolve_active_task_dir(repo, session_id="default") == live
 
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        context = server.call_tool("task_context", {"task_id": TASK_ID})
+        context = call_execution(server, "task_context", {"task_id": TASK_ID})
     assert "isError" not in context, context
 
     # Both markers still name the live task — including the one the Codex
@@ -380,7 +382,7 @@ def test_resuming_the_same_task_refreshes_a_rotated_run_id(tmp_path):
 
     _lib.write_session_hint(repo, SESSION_B)
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool(
+        assert "isError" not in call_execution(server,
             "task_start", {"task_id": TASK_ID, "fresh_run": True},
         )
     second_run = _lib.read_task_control(task_dir)["run_id"]
@@ -389,7 +391,7 @@ def test_resuming_the_same_task_refreshes_a_rotated_run_id(tmp_path):
     assert _lib.resolve_session_task_binding(repo, SESSION_A) == {}
 
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_context", {"task_id": TASK_ID})
+        assert "isError" not in call_execution(server, "task_context", {"task_id": TASK_ID})
 
     bound = _lib.resolve_session_task_binding(repo, SESSION_A)
     assert bound.get("run_id") == second_run
@@ -431,7 +433,7 @@ def test_a_legacy_pointer_to_an_unvalidatable_task_does_not_block_a_resume(tmp_p
 
     _lib.write_session_hint(repo, SESSION_B)
     with mock.patch.object(server, "find_repo_root", return_value=repo):
-        assert "isError" not in server.call_tool("task_context", {"task_id": TASK_ID})
+        assert "isError" not in call_execution(server, "task_context", {"task_id": TASK_ID})
 
     bound = _lib.resolve_session_task_binding(repo, SESSION_B)
     assert os.path.realpath(str(bound.get("task_dir") or "")) == os.path.realpath(

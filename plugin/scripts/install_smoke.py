@@ -244,7 +244,7 @@ def _receipt_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
             "module = importlib.util.module_from_spec(spec)\n"
             "sys.modules['harness_server'] = module\n"
             "spec.loader.exec_module(module)\n"
-            f"result = module.call_tool('task_start', {{'task_id': {SMOKE_TASK_ID!r}}})\n"
+            f"result = module.call_tool('wbs', {{'action': 'open', 'wbs_id': {SMOKE_TASK_ID!r}}})\n"
             "sys.exit(1 if result.get('isError') else 0)\n"
         )
         try:

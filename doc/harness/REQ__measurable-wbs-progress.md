@@ -12,17 +12,23 @@ verification (“서로 다른 worktree를 파고, worktree에서 개발, 검증
 묶어버리면 되지 않나?”, “harness mcp더 단순화 가능하지 않음?”).
 
 Specific API actions, weight/fingerprint/storage formats, clock boundaries,
-process limits and compatibility routing below are derived implementation
+process limits and migration formats below are derived implementation
 choices. Their basis is the requested measurable progress plus the existing
 receipt/worktree safety contracts. They are not quoted user requirements.
 See [requirement provenance](REQ__requirement-provenance.md).
 
 One WBS tree contains any objective and its outcome breakdown. `wbs` is the
-only advertised Harness MCP entry point: open, context, plan, check, next,
+only callable Harness MCP entry point: open, context, plan, check, next,
 dispatch, verify, close and block operate on that same root. Native Goals
 provide the objective and continuation context, not a second planning ledger.
-Internal tasks retain execution identity, receipt ownership and compatibility
-with existing runs; their old handlers remain callable but are not advertised.
+Internal tasks retain execution identity and receipt ownership for existing runs.
+Retired Goal/task tool names are rejected. The user explicitly requested removal
+of compatibility code with “호환성용 코드는 최대한 버리고싶은데... 기존꺼는
+마이그레이션 하는 방향만 남겨두고.” Existing Goal records and old work-pack
+bindings move only through explicit `wbs(action="migrate")` preview/apply.
+Migration preserves execution/evidence identities and archives original records;
+it never converts historical status labels into measured credit. Transaction
+formats and recovery behavior are derived implementation choices.
 
 All work reports verified outcome weight from the declared WBS,
 never an agent's percentage, elapsed time, task count or scheduling status.
@@ -61,7 +67,7 @@ After 7,200 seconds without an increase in verified weight, the next active
 workflow boundary identifies unfinished work for useful decomposition. Plan
 rewrites, retries, polling and splits do not reset this clock or earn credit.
 The agent refines only work whose next action or check is too coarse, using
-`write_plan`; externally blocked work instead names its blocker and unblock
+`wbs(action="plan")`; externally blocked work instead names its blocker and unblock
 condition. This is activity-driven, with no background daemon, forced idle
 updates or recursive bookkeeping splits. Preserve the user's actual goal.
 

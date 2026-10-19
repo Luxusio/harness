@@ -98,9 +98,8 @@ worktree or rotate the existing run.
   - Skip `python3 plugin/scripts/install_verified.py` even if you are working
     in the harness source repo — the coordinator's integration task installs
     once after all leads merge.
-  - Never call the `goal_*` tools, and skip any Goal step in the lifecycle
-    (e.g. run Phase 0's `goal_next_task` / `goal_add_task`). Goal tools act on
-    the coordinator's main checkout, and batch leads are not Goal children.
+  - Operate only the lead WBS in your worktree. The coordinator owns its
+    parent WBS and resumes it after the exact pool integrates.
   - Pass `-n 4` (or the cap given in your prompt) to any `pytest` invocation.
   - Spawn nested review/QA subagents normally from `W`; their receipts bind to
     the task in your worktree because they inherit your cwd.

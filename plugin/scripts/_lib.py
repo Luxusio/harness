@@ -28,27 +28,19 @@ TASK_CONTROL_NAME = "TASK.json"
 
 CODEX_TASK_BINDING_TOOLS = frozenset({
     "wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs",
-    "task_start",
-    "task_context",
-    "mcp__harness__task_start",
-    "mcp__harness__task_context",
-    "mcp__plugin_harness_harness__task_start",
-    "mcp__plugin_harness_harness__task_context",
 })
 
 
 def is_codex_task_binding_tool(tool_name, arguments=None):
-    """Accept only the bare and Harness-qualified Codex task tool ids."""
+    """Bind only successful public WBS open/context operations."""
     if not isinstance(tool_name, str) or tool_name.lower() not in CODEX_TASK_BINDING_TOOLS:
         return False
-    if tool_name.lower() in {"wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"}:
-        try:
-            arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
-        except (ValueError, TypeError, RecursionError):
-            return False
-        return (isinstance(arguments, dict) and isinstance(arguments.get("action"), str)
-                and arguments["action"] in {"open", "context"})
-    return True
+    try:
+        arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
+    except (ValueError, TypeError, RecursionError):
+        return False
+    return (isinstance(arguments, dict) and isinstance(arguments.get("action"), str)
+            and arguments["action"] in {"open", "context"})
 
 
 def native_wbs_id(objective):
@@ -293,23 +285,6 @@ import sys as _sys    # noqa: E402
 _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 
 _LAST_HOOK_INPUT: dict = {}
-GOALS_DIR = os.path.join("doc", "harness", "goals")
-GOAL_CURRENT_FILE = os.path.join(GOALS_DIR, "current.json")
-_GOAL_LOCK_HELD = ContextVar("harness_goal_lock_held", default=())
-_GOAL_DIR_BINDING = ContextVar("harness_goal_dir_binding", default=())
-
-
-def _goal_dir_fd(parent: str):
-    return next((fd for path, fd in reversed(_GOAL_DIR_BINDING.get()) if parent == path), None)
-
-
-def _validate_goal_dir_binding(repo_root: str):
-    goals_dir = os.path.join(os.path.realpath(repo_root), GOALS_DIR)
-    fd = _goal_dir_fd(goals_dir)
-    if fd is None: raise RuntimeError("goal storage binding unavailable")
-    opened, current = os.fstat(fd), os.lstat(goals_dir)
-    if stat.S_ISLNK(current.st_mode) or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
-        raise RuntimeError("goal storage identity changed")
 
 
 def read_hook_input(max_chars=_STDIN_CAP_BYTES):
@@ -340,33 +315,6 @@ def last_hook_input() -> dict:
     return _LAST_HOOK_INPUT
 
 
-def _goal_probe_text(value: object) -> str:
-    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
-    cleaned = re.sub(r"</?system-reminder[^>]*>", "[SANITIZED]", cleaned, flags=re.IGNORECASE)
-    return " ".join(cleaned.split()).strip()
-
-
-def _goal_slug(value: str) -> str:
-    import hashlib
-    words = re.findall(r"[A-Za-z0-9]+", value.lower())
-    slug = "-".join(words[:6]) or "goal"
-    digest = hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:8]
-    return f"{slug}-{digest}"
-
-
-def _goal_id(goal_id: str | None = None, objective: str = "") -> str:
-    if goal_id:
-        if goal_id.startswith("GOAL__"):
-            if not re.fullmatch(r"GOAL__[A-Za-z0-9_.-]{1,180}", goal_id):
-                raise ValueError(
-                    "invalid goal_id; expected GOAL__ followed by 1-180 letters, "
-                    "digits, dot, underscore, or hyphen. Omit goal_id to derive one safely."
-                )
-            return goal_id
-        return f"GOAL__{_goal_slug(goal_id)}"
-    return f"GOAL__{_goal_slug(objective or 'goal')}"
-
-
 def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str:
     root = os.path.abspath(repo_root)
     current = root
@@ -382,58 +330,6 @@ def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str
         except ValueError:
             raise ValueError(f"invalid {label}; {relative_dir} resolves outside the repository") from None
     return os.path.join(root, *relative_dir.split("/"))
-
-
-def _goal_path(repo_root: str, goal_id: str) -> str:
-    safe_goal_id = _goal_id(goal_id)
-    goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
-    return os.path.join(goals_dir, f"{safe_goal_id}.json")
-
-
-def _current_goal_path(repo_root: str) -> str:
-    goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
-    return os.path.join(goals_dir, "current.json")
-
-
-@contextmanager
-def goal_transaction(repo_root: str):
-    root = os.path.realpath(repo_root)
-    held = _GOAL_LOCK_HELD.get()
-    if root in held:
-        yield
-        return
-    goals_dir = os.path.join(root, GOALS_DIR)
-    os.makedirs(goals_dir, mode=0o700, exist_ok=True)
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    component_fds = []
-    try:
-        fd = os.open(root, flags)
-    except OSError as exc:
-        raise ValueError("invalid goal storage root; repository root must be a real directory") from exc
-    try:
-        component_fds.append(fd)
-        try:
-            for part in GOALS_DIR.split(os.sep):
-                fd = os.open(part, flags, dir_fd=fd)
-                component_fds.append(fd)
-        except OSError as exc:
-            raise ValueError("invalid goal storage root; doc/harness/goals must be real directories") from exc
-        info = os.fstat(fd)
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
-            raise RuntimeError("goal storage integrity unavailable")
-        import fcntl
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        token = _GOAL_LOCK_HELD.set(held + (root,))
-        binding_token = _GOAL_DIR_BINDING.set(_GOAL_DIR_BINDING.get() + ((goals_dir, fd),))
-        try:
-            yield
-            after = os.lstat(goals_dir)
-            if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino): raise RuntimeError("goal storage identity changed")
-        finally:
-            _GOAL_DIR_BINDING.reset(binding_token)
-            _GOAL_LOCK_HELD.reset(token)
-    finally:
-        for component_fd in reversed(component_fds): os.close(component_fd)
 
 
 def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
@@ -467,10 +363,9 @@ def _strict_regular_text_snapshot(
 ):
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
-    goal_fd = _goal_dir_fd(parent)
     binding_fn = globals().get("_receipt_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
-    dir_fd = goal_fd if goal_fd is not None else binding[1] if binding is not None else None
+    dir_fd = binding[1] if binding is not None else None
     if binding is not None:
         _validate_receipt_dir_binding(binding)
 
@@ -539,12 +434,9 @@ def _restore_text_snapshots(snapshots):
             if not snapshot["exists"]:
                 parent = os.path.abspath(os.path.dirname(path) or ".")
                 leaf = os.path.basename(path)
-                goal_fd = _goal_dir_fd(parent)
                 binding = _receipt_lock_binding(parent) if "_receipt_lock_binding" in globals() else None
                 try:
-                    if goal_fd is not None:
-                        os.unlink(leaf, dir_fd=goal_fd)
-                    elif binding is not None:
+                    if binding is not None:
                         _validate_receipt_dir_binding(binding)
                         os.unlink(leaf, dir_fd=binding[1])
                     else:
@@ -553,12 +445,11 @@ def _restore_text_snapshots(snapshots):
                     pass
             elif snapshot.get("kind") == "symlink":
                 parent, leaf = os.path.abspath(os.path.dirname(path) or "."), os.path.basename(path)
-                goal_fd = _goal_dir_fd(parent)
                 try:
-                    os.unlink(leaf, dir_fd=goal_fd) if goal_fd is not None else os.unlink(path)
+                    os.unlink(path)
                 except FileNotFoundError:
                     pass
-                os.symlink(snapshot["target"], leaf, dir_fd=goal_fd) if goal_fd is not None else os.symlink(snapshot["target"], path)
+                os.symlink(snapshot["target"], path)
             else:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 _atomic_text_write(path, snapshot["text"])
@@ -569,67 +460,14 @@ def _restore_text_snapshots(snapshots):
         raise first_error
 
 
-def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    binding = next((item for item in reversed(_GOAL_DIR_BINDING.get()) if os.path.dirname(path) == item[0]), None)
-    leaf, dir_fd = os.path.basename(path), binding[1] if binding else None
-    try:
-        before = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False) if dir_fd is not None else os.lstat(path)
-        fd = os.open(leaf, flags, dir_fd=dir_fd) if dir_fd is not None else os.open(path, flags)
-    except OSError:
-        return {}
-    try:
-        opened = os.fstat(fd)
-        identity = (opened.st_dev, opened.st_ino)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or identity != (before.st_dev, before.st_ino)
-            or opened.st_uid != os.getuid()
-            or opened.st_nlink != 1
-            or opened.st_mode & 0o022
-            or opened.st_size > max_size
-        ):
-            return {}
-        with os.fdopen(fd, encoding="utf-8") as handle:
-            fd = -1
-            text = handle.read(max_size + 1)
-        if len(text.encode("utf-8")) > max_size:
-            return {}
-        after = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False) if dir_fd is not None else os.lstat(path)
-        if (
-            stat.S_ISLNK(after.st_mode)
-            or (after.st_dev, after.st_ino) != identity
-            or after.st_nlink != 1
-            or after.st_mtime_ns != opened.st_mtime_ns
-            or after.st_ctime_ns != opened.st_ctime_ns
-            or after.st_size != opened.st_size
-        ):
-            return {}
-        def unique_object(pairs):
-            result = {}
-            for key, value in pairs:
-                if key in result:
-                    raise ValueError(f"duplicate Goal state key: {key}")
-                result[key] = value
-            return result
-        data = json.loads(text, object_pairs_hook=unique_object)
-    except (OSError, TypeError, UnicodeError, ValueError):
-        return {}
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    return data if isinstance(data, dict) else {}
-
-
 def _atomic_text_write(path: str, text: str) -> None:
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
-    goal_fd = _goal_dir_fd(parent)
     binding_fn = globals().get("_receipt_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
-    if goal_fd is not None or binding is not None:
+    if binding is not None:
         if binding is not None: _validate_receipt_dir_binding(binding)
-        dir_fd = goal_fd if goal_fd is not None else binding[1]
+        dir_fd = binding[1]
         tmp = f".text.{secrets.token_hex(8)}.tmp"
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -783,202 +621,6 @@ def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
                 os.close(dir_fd)
             except OSError:
                 pass
-
-
-def read_current_goal(repo_root: str | None = None) -> dict:
-    root = repo_root or find_repo_root()
-    current = _read_json_file(_current_goal_path(root))
-    if current.get("goal_id"):
-        return current
-    return {}
-
-
-def write_goal_state(repo_root: str, state: dict) -> dict:
-    if not _trusted_control_writer():
-        raise _control_writer_error("Goal mutation requires the native Goal MCP")
-    with goal_transaction(repo_root):
-        raw_goal_id = str(state.get("goal_id") or "")
-        goal_id = _goal_id(raw_goal_id, str(state.get("objective") or ""))
-        state = dict(state)
-        state["goal_id"] = goal_id
-        state["updated_at"] = now_iso()
-        text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        paths = (_goal_path(repo_root, goal_id), _current_goal_path(repo_root))
-        snapshots = {path: _strict_regular_text_snapshot(path, allow_symlink=True) for path in paths}
-        try:
-            for path in paths: _atomic_text_write(path, text)
-            _validate_goal_dir_binding(repo_root)
-        except Exception:
-            _restore_text_snapshots(snapshots)
-            raise
-        return state
-
-
-def start_harness_goal(
-    repo_root: str,
-    objective: str,
-    *,
-    goal_id: str | None = None,
-    source: dict | None = None,
-) -> dict:
-    with goal_transaction(repo_root):
-        objective = _goal_probe_text(objective)
-        if not objective: raise ValueError("objective required")
-        gid = _goal_id(goal_id, objective)
-        existing = _read_json_file(_goal_path(repo_root, gid))
-        current = read_current_goal(repo_root)
-        if current.get("status") == "active" and current.get("goal_id") == gid: existing = current
-        return write_goal_state(repo_root, {
-            "goal_id": gid, "objective": objective, "status": "active",
-            "created_at": existing.get("created_at") or now_iso(), "updated_at": now_iso(),
-            "source": source or existing.get("source") or {},
-            "tasks": existing.get("tasks") if isinstance(existing.get("tasks"), list) else [],
-        })
-
-
-def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str = "queued", task_dir: str = "", batch_requests: list | None = None) -> dict:
-  with goal_transaction(repo_root):
-    current = read_current_goal(repo_root)
-    if not current:
-        raise ValueError("no active goal")
-    if current.get("status") != "active":
-        raise ValueError("goal is terminal; call goal_start explicitly before changing child tasks")
-    canonical_dir = canonical_task_dir(
-        task_id=task_id,
-        task_dir=task_dir or None,
-        repo_root=repo_root,
-    )
-    tid = os.path.basename(canonical_dir)
-    stored_task_dir = os.path.relpath(canonical_dir, repo_root).replace(os.sep, "/")
-    tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
-    batch_spec = None
-    if batch_requests is not None:
-        from goal_batch import make_spec
-        batch_spec = make_spec(repo_root, current["goal_id"], tid, batch_requests)
-        existing = next((task for task in tasks if isinstance(task, dict)
-                         and task.get("task_id") == tid), {})
-        if existing.get("batch") not in (None, batch_spec):
-            raise ValueError("Goal batch intake is immutable; use a new integration child")
-        if not existing.get("batch") and os.path.lexists(canonical_dir):
-            raise ValueError("declare the Goal work pack before creating its integration task")
-    new_ids = {tid}
-    if batch_spec is not None:
-        new_ids.update("TASK__" + item["slug"] for item in batch_spec["requests"])
-    for other in tasks:
-        if not isinstance(other, dict) or other.get("task_id") == tid:
-            continue
-        other_ids = {other.get("task_id")}
-        other_ids.update("TASK__" + item["slug"]
-                         for item in other.get("batch", {}).get("requests", []))
-        if new_ids & other_ids:
-            raise ValueError("Goal task identity already reserved by another child")
-    updated = False
-    for task in tasks:
-        if isinstance(task, dict) and task.get("task_id") == tid:
-            if title:
-                task["title"] = title
-            if status:
-                task["status"] = status
-            task["task_dir"] = stored_task_dir
-            if batch_spec is not None:
-                task["batch"] = batch_spec
-            updated = True
-            break
-    if not updated:
-        tasks.append({
-            "task_id": tid,
-            "title": title or tid,
-            "status": status or "queued",
-            "task_dir": stored_task_dir,
-            **({"batch": batch_spec} if batch_spec is not None else {}),
-        })
-    current["tasks"] = tasks
-    return write_goal_state(repo_root, current)
-
-
-def next_goal_task(repo_root: str) -> dict:
-    current = read_current_goal(repo_root)
-    if current.get("status") != "active":
-        return {"goal": current, "task": None}
-    tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
-    for task in tasks:
-        if isinstance(task, dict) and task.get("status") in {"queued", "active"}:
-            result = {"goal": current, "task": task}
-            if "batch" in task:
-                from goal_batch import route
-                result["dispatch"] = route(repo_root, current["goal_id"], task["task_id"], task["batch"])
-            return result
-    return {"goal": current, "task": None}
-
-
-def require_goal_batch_integrated(repo_root: str, task_id: str) -> None:
-    """Do not open or close an integration child before its work pack lands."""
-    from wbs import require_integrated_for_task
-    require_integrated_for_task(repo_root, task_id)
-    current = read_current_goal(repo_root)
-    if current.get("status") != "active":
-        return
-    for task in current.get("tasks", []):
-        if isinstance(task, dict) and task.get("task_id") == task_id and "batch" in task:
-            from goal_batch import require_integrated
-            require_integrated(repo_root, current["goal_id"], task_id, task["batch"])
-
-
-def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
-  with goal_transaction(repo_root):
-    current = read_current_goal(repo_root)
-    if not current:
-        raise ValueError("no active goal")
-    if current.get("status") != "active":
-        raise ValueError("goal is terminal; call goal_start explicitly before finishing it again")
-    final_status = status if status in {"complete", "blocked"} else "complete"
-    if final_status == "complete":
-        tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
-        blockers = []
-        validated = []
-        if not tasks:
-            blockers.append("no child tasks")
-        for task in tasks:
-            if not isinstance(task, dict):
-                blockers.append("invalid child task entry")
-                continue
-            task_id = str(task.get("task_id") or "")
-            task_dir = ""
-            try:
-                task_dir = canonical_task_dir(
-                    task_id=task_id,
-                    task_dir=str(task.get("task_dir") or "") or None,
-                    repo_root=repo_root,
-                )
-                state = read_task_control(task_dir)
-            except (OSError, ValueError):
-                state = {}
-            if (
-                task.get("status") != "closed"
-                or task_control_status(task_dir, state) != "closed"
-            ):
-                blockers.append(task_id or "<missing task_id>")
-            else:
-                if "batch" in task:
-                    from goal_batch import require_integrated
-                    require_integrated(repo_root, current["goal_id"], task_id, task["batch"])
-                validated.append((task_id, task_dir))
-        if not blockers:
-            for task_id, task_dir in validated:
-                final_state = read_task_control(task_dir)
-                if (
-                    not final_state
-                    or task_control_status(task_dir, final_state) != "closed"
-                ):
-                    blockers.append(task_id)
-        if blockers:
-            raise ValueError(
-                "goal completion blocked by unfinished or unverified child tasks: "
-                + ", ".join(blockers)
-            )
-    current["status"] = final_status
-    current["finished_at"] = now_iso()
-    return write_goal_state(repo_root, current)
 
 
 def _hook_payload_cwd():
@@ -1524,8 +1166,7 @@ def _make_control_writer_authority():
     allowed = {
         "harness_server": {
             "handle_task_start", "handle_task_context", "handle_task_close",
-            "handle_task_blocked", "handle_write_plan", "handle_goal_start",
-            "handle_goal_add_task", "handle_goal_finish",
+            "handle_task_blocked", "handle_write_plan", "handle_wbs_migrate",
             "handle_task_wbs",
         },
         "codex_hook_registration": {
@@ -1565,8 +1206,6 @@ def _make_control_writer_authority():
         "write_task_control", "begin_task_run", "restore_task_control",
         "write_active_marker", "clear_active_marker",
         "restore_active_marker_snapshot", "publish_task_close",
-        "start_harness_goal", "add_goal_task", "finish_harness_goal",
-        "write_goal_state",
     }
     def bind(function):
         module_name = function.__module__

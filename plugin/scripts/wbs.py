@@ -132,8 +132,21 @@ def read_state(task_dir):
     if not snapshot["exists"]:
         return None
     state = json.loads(snapshot["text"])
+    state = validate_state(state)
+    require("batch_goal_id" not in state and all("batch_goal_id" not in row for row in state.get("batch_history", [])),
+            'retired WBS binding; use wbs(action="migrate")')
+    return state
+
+
+def validate_state(state):
+    """Validate evidence independently from storage-format migration."""
     require(isinstance(state, dict) and state.get("version") == 1, "invalid evidence state")
-    validate(state.get("nodes"))
+    if state.get("pack_only") is True:
+        require(state.get("nodes") == [] and state.get("checks") == {} and bool(state.get("batch")),
+                "invalid unbaselined pack binding")
+    else:
+        require("pack_only" not in state, "unknown baseline mode")
+        validate(state.get("nodes"))
     require(isinstance(state.get("run_id"), str) and isinstance(state.get("checks"), dict), "invalid check evidence")
     for proof in state["checks"].values():
         require(isinstance(proof, dict) and type(proof.get("passed")) is bool, "invalid assertion evidence")
@@ -167,10 +180,10 @@ def prepare(task_dir, plan, run_id, *, now=None):
             require(batch_route(task_dir, find_repo_root(task_dir), old)["route"] == "integration",
                     "finish the active work pack before refinement")
             old = dict(old, batch_history=old.get("batch_history", []) + [
-                dict(batch=old["batch"], batch_goal_id=old["batch_goal_id"])])
+                dict(batch=old["batch"])])
             require(len(old["batch_history"]) <= 32, "work pack history limit reached")
             old.pop("batch")
-            old.pop("batch_goal_id")
+            old.pop("pack_only", None)
         projection = task_progress(task_dir, find_repo_root(task_dir), run_id, now=stamp)
         transition(old["nodes"], nodes, [row["id"] for row in projection.get("outcomes", []) if row["verified"]])
         state = dict(old, nodes=nodes, run_id=run_id,
@@ -214,6 +227,10 @@ def task_progress(task_dir, repo, run_id, *, now=None):
         state = read_state(task_dir)
         if state is None:
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None)
+        if state.get("pack_only"):
+            validate_history(task_dir, repo, state)
+            return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None,
+                        integration=batch_route(task_dir, repo, state))
         plan_nodes = from_plan(Path(task_dir, "PLAN.md").read_text())
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
         rows = []
@@ -349,8 +366,8 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
 
 
 def batch_route(task_dir, repo, state):
-    import goal_batch
-    return goal_batch.route(repo, state["batch_goal_id"], Path(task_dir).name, state["batch"])
+    import work_pack
+    return work_pack.route(repo, Path(task_dir).name, state["batch"])
 
 
 def validate_history(task_dir, repo, state):
@@ -401,12 +418,11 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
     result = dict(batch_id=prefix, requests=requests,
                 next_action="Before dispatch park this open parent through task_blocked for the worktree handoff. Run the existing batch workflow with these exact requests. No parent source writes while leads run. Resume parent only after the pool is integrated; recheck outcomes and run combined review/QA.")
     if bind:
-        import goal_batch
+        import work_pack
         from _lib import _atomic_text_write
         batch_state.main_boundary(repo)
-        goal_id = "GOAL__wbs-" + digest([Path(task_dir).name, state["nodes"]])[:16]
-        spec = goal_batch.make_spec(repo, goal_id, Path(task_dir).name, requests)
-        state.update(batch_goal_id=goal_id, batch=spec)
+        spec = work_pack.make_spec(repo, Path(task_dir).name, requests)
+        state.update(batch=spec)
         _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
         result.update(batch_id=spec["batch_id"])
     return result

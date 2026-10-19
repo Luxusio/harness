@@ -10,40 +10,25 @@ task_ref: TASK__harness-architecture
 
 ## Overview
 
-harness is a goal-oriented control plane for repo-mutating agent work. Users
-state work as a native Goal. Harness hooks and MCP tools sync that Goal into a
-harness Goal, then create child tasks only as needed. Small requests may stay as
-one child task; broad requests may grow additional child tasks as bugs, pages,
-domains, or follow-up gaps are discovered.
+Harness uses one WBS for any repo-mutating request. A native Goal supplies
+only its objective and continuation. PLAN owns rolling outcomes, explicit
+checks report verified weight, and internal task/run identities own ordered
+review/QA receipts and completion. `wbs` is the sole callable MCP tool.
 
-The design goal is simple runtime behavior:
-
-- one public Goal owns the user request
-- child tasks hold scoped implementation work
-- task-local planning is written through `write_plan`
-- verification is receipt-backed through hook-observed subagent starts
-- durable knowledge lands in committed docs, skills, patterns, scripts, or tests
-
-## Goal Flow
+## WBS Flow
 
 ```text
-native Goal -> harness Goal -> child task(s) -> verify -> close task -> next task or finish Goal
+request / native objective -> WBS open -> rolling plan -> develop/check
+-> isolated work packs when independent -> integrated review/QA -> close
 ```
 
-The Goal is not a skill. Hooks inject the synchronization instruction and MCP
-tools maintain the only ordered Goal child list. Known future children may be recorded
-before their task directories exist and retain list order. The agent chooses
-whether the Goal needs another thin vertical child by inspecting the current
-task result, discovered gaps, pending user feedback, and durable learnings.
-
-Closing a task also marks the matching child entry closed in the active
-Goal. A Goal can become `complete` only when it has at least one child and every
-child's canonical task state is both closed and receipt-verified PASS. Starting
-the same terminal Goal is an explicit resume operation: it preserves its task
-queue and creation history while returning the Goal to `active` and clearing
-the prior terminal timestamp.
-Terminal Goals reject child mutation and repeat finish calls until that explicit
-`goal_start`, so blocked or complete state cannot accumulate unfinished work.
+Refine useful unfinished outcomes when progress stalls for two hours. New
+user requirements and necessary discoveries update the same tree without
+inventing user requirements or freezing implementation paths. Dispatch carries
+current worktree ownership separately from progress measurement. Retired Goal
+records and old pack bindings require explicit migration preview/apply; no
+compatibility queue remains. See [measured progress](REQ__measurable-wbs-progress.md)
+and [migration](patterns/native-goals.md).
 
 ## Task Loop
 
@@ -80,8 +65,8 @@ and resets review/QA receipts. A closed task refuses the default call and names
 that explicit fresh-run choice; invalid or unsafe control artifacts refuse in
 both modes.
 
-For each Goal child, post-close continuation is ordered as:
-`task_close -> self-improvement/learning promotion -> goal_next_task`. Memory
+For each completed execution, post-close continuation is ordered as:
+`wbs(close) -> self-improvement/learning promotion -> wbs(next)`. Memory
 and automatic learning are independent of orchestration; runbooks, staged
 learnings, promotion, and search remain active after every child.
 

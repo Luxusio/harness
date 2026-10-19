@@ -316,3 +316,11 @@ def test_active_legacy_writer_refuses_without_retiring_sources(tmp_path, owner):
         assert path.exists() and not (tmp_path / migration.MANIFEST).exists()
     finally:
         os.close(fd)
+
+
+def test_migration_manifest_and_originals_are_hook_protected():
+    import prewrite_gate
+    for relative in (migration.MANIFEST, migration.ARCHIVE + '/original/doc/harness/goals/GOAL__old.json',
+                     migration.ARCHIVE + '/.lock'):
+        assert prewrite_gate._is_protected_artifact(relative)
+        assert prewrite_gate._protected_denial(relative)[0] == 'legacy-data-migration'

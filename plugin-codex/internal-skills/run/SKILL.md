@@ -158,7 +158,7 @@ the existing batch skill. Leads develop, independently review, test and close
 inside their own worktrees. The pool serializes integration and preserves
 proof. Reopen the same root after pool completion, check integrated outcomes,
 then run combined review/QA and close. Native Goal completion uses that root's
-receipt-backed completion, not a second goal_start/goal_add_task ledger.
+receipt-backed completion, without a second Goal ledger.
 
 ### Phase 0: Resume detection
 
@@ -188,7 +188,7 @@ Use `fresh_run: true` only when deliberately starting a new generation and
 discarding that evidence; a closed task refuses the default call.
 
 ```
-task_start { slug: "<ARGUMENTS>" }
+wbs { action: "open", wbs_id: "<ARGUMENTS>" }
 ```
 
 (On Codex MCP this is the bare tool name; Claude uses a runtime-prefixed form.) Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
@@ -314,7 +314,7 @@ attempt after Phase 4 has restored fresh PASS
 evidence.
 
 ```
-task_close { task_id: "<task_id>" }
+wbs { action: "close", wbs_id: "<task_id>" }
 ```
 
 If blocked: report `missing_for_close`, fix the stated gate, retry.

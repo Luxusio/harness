@@ -2,7 +2,7 @@
 tags: [harness, receipts, hooks, bytecode-cache, observability]
 summary: 스테일 bytecode 캐시는 영수증 서브시스템을 무력화할 수 없다. 훅은 설치 트리에 바이트코드를 쓰지 않고, 가드는 캐시 불일치를 변조와 구분해 이름 붙이며, 훅은 스스로 캐시를 제거해 복구하고, MCP 는 추론이 아니라 관측으로 능력 상실을 보고한다.
 updated: 2026-09-26
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/background_hook.py
   - plugin/scripts/_lib.py
@@ -12,7 +12,7 @@ invalidated_by_paths:
   - tests/test_bytecode_cache_cannot_disable_receipts.py
   - tests/conftest.py
   - tests/test_source_checkout_bytecode.py
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # Bytecode cache cannot disable receipts

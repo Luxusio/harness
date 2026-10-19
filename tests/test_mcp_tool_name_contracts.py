@@ -74,12 +74,10 @@ def test_task_tools_declare_optional_workspace_and_goal_tools_do_not():
     schemas = {tool["name"]: tool["inputSchema"] for tool in server.TOOL_DEFS}
     assert {tool["name"] for tool in server.list_tools()} == {"wbs"}
     assert schemas["wbs"]["properties"]["workspace"]["type"] == "string"
-    for name in ("task_start", "task_context", "write_plan", "task_verify", "task_close", "task_blocked"):
-        props = schemas[name]["properties"]
-        assert props.get("workspace", {}).get("type") == "string", name
-        assert "workspace" not in schemas[name].get("required", []), name
-    for name in ("goal_start", "goal_context", "goal_add_task", "goal_next_task", "goal_finish"):
-        assert "workspace" not in schemas[name]["properties"], name
+    assert set(schemas) == set(server.TOOLS) == {"wbs"}
+    for name in ("task_start", "task_context", "write_plan", "task_verify", "task_close", "task_blocked",
+                 "goal_start", "goal_context", "goal_add_task", "goal_next_task", "goal_finish"):
+        assert server.call_tool(name, {}).get("isError"), name
 
 
 def test_deeply_nested_encoded_binding_arguments_are_not_applicable():

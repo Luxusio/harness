@@ -2,9 +2,7 @@
 """Harness MCP server — self-contained, exact four-field TASK.json.
 
 No plugin-legacy dependency. All operations are direct file I/O.
-MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
-           task_start, task_context, task_verify, task_close, task_blocked,
-           write_plan.
+MCP tool: wbs. Task execution handlers are private implementation details.
 """
 
 from __future__ import annotations
@@ -51,7 +49,7 @@ def _initialize_instructions(runtime: str) -> str:
         "dispatch hands independently owned work to the existing isolated-worktree pool and parks its parent until integration. "
         "File ownership is supplied only at this actual concurrent execution handoff. "
         "Internally task_start preserves the execution run and receipts; fresh_run=true deliberately discards evidence. "
-        "write_plan and legacy goal_start/goal_context handlers remain compatibility machinery, not separate progress ledgers. "
+        "Use wbs(action=migrate) to preview retired records; apply=true explicitly converts them. Retired tool names are unavailable. "
     )
     if runtime == "codex":
         return base + (
@@ -64,6 +62,7 @@ def _initialize_instructions(runtime: str) -> str:
 
 
 sys.path.insert(0, str(SCRIPTS_DIR))
+import wbs
 from _lib import (  # type: ignore
     GitBindingError,
     now_iso, read_task_control, write_task_control, task_control_file,
@@ -72,7 +71,6 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
     resolve_registered_worktree,
-    require_goal_batch_integrated,
     write_active_marker, clear_active_marker, read_session_hint,
     current_session_id,
     active_task_binding_matches,
@@ -86,7 +84,6 @@ from _lib import (  # type: ignore
     reset_receipt_streams_for_new_run, restore_receipt_streams,
     release_receipt_stream_reset,
     receipt_stream_transaction,
-    goal_transaction,
     begin_task_run, restore_task_control,
     _bind_control_writer,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
@@ -98,8 +95,6 @@ from _lib import (  # type: ignore
     TRUST_BOUNDARY, attestation_endgame,
     RECEIPT_RECORDING_UNAVAILABLE, is_spawn_instruction,
     nonparsing_completion_lenses, nonparsing_completion_note,
-    read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
-    finish_harness_goal,
 )
 
 try:
@@ -871,7 +866,6 @@ _FIELD_EXPECTED = {
         "TASK__<safe-id> or <safe-id>, where safe-id is 1-180 ASCII letters, "
         "digits, dots, underscores, or hyphens"
     ),
-    "goal_id": "GOAL__<safe-id>, free-form goal text, or omit goal_id",
     "objective": "a nonblank string describing the goal",
     "blocked_reason": (
         f"a nonblank string no larger than {BLOCKER_FIELD_MAX_UTF8_BYTES} UTF-8 bytes"
@@ -1239,7 +1233,7 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
     control_root, repo_root = _task_roots(args)
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
-    require_goal_batch_integrated(repo_root, tid)
+    wbs.require_integrated_for_task(repo_root, tid)
     existing_control_path = task_control_file(task_dir)
     resumed_existing = os.path.lexists(existing_control_path)
     exact_session_id = _current_session_identity(control_root)
@@ -1612,65 +1606,6 @@ def _handle_task_start(args: dict, *, defer_binding: bool = False) -> dict:
     })
 
 
-def handle_goal_start(args: dict) -> dict:
-    objective = _req(args, "objective")
-    repo_root = _control_root()
-    source_raw = args.get("source")
-    source = source_raw if isinstance(source_raw, dict) else {}
-    state = start_harness_goal(
-        repo_root,
-        objective,
-        goal_id=_selector_opt(args, "goal_id"),
-        source=source,
-    )
-    return _ok({"goal": state, "next_action": "Use goal_context. Declare independent work packs with goal_add_task(batch_requests) before task_start; otherwise task_start then goal_add_task. Follow goal_next_task dispatch."})
-
-
-def handle_goal_context(args: dict) -> dict:
-    repo_root = _control_root()
-    goal = read_current_goal(repo_root)
-    if not goal:
-        return _ok({"goal": None, "active": False, "next_action": "No active harness goal. Call goal_start."})
-    return _ok({"goal": goal, "active": goal.get("status") == "active"})
-
-
-def handle_goal_add_task(args: dict) -> dict:
-    task_id = _req(args, "task_id")
-    if "batch_requests" in args and not isinstance(args["batch_requests"], list):
-        raise ValueError("batch_requests must be an array of declared requests")
-    repo_root = _control_root()
-    state = add_goal_task(
-        repo_root,
-        task_id,
-        title=_opt(args, "title") or "",
-        status=_opt(args, "status") or "queued",
-        task_dir=_selector_opt(args, "task_dir") or "",
-        batch_requests=args.get("batch_requests"),
-    )
-    return _ok({"goal": state})
-
-
-def handle_goal_next_task(args: dict) -> dict:
-    repo_root = _control_root()
-    result = next_goal_task(repo_root)
-    return _ok({
-        "goal": result.get("goal") or None,
-        "task": result.get("task"),
-        **({"dispatch": result["dispatch"]} if "dispatch" in result else {}),
-        "next_action": (
-            result.get("dispatch", {}).get("next_action", "Start or resume the returned child task.")
-            if result.get("task")
-            else "No queued goal tasks. If the objective is not proven, create the next child task with task_start then goal_add_task; otherwise call goal_finish."
-        ),
-    })
-
-
-def handle_goal_finish(args: dict) -> dict:
-    repo_root = _control_root()
-    state = finish_harness_goal(repo_root, status=_opt(args, "status") or "complete")
-    return _ok({"goal": state})
-
-
 def _session_resumes(repo_root: str, task_dir: str, session_id: str) -> bool:
     """True when writing this session's marker for `task_dir` steals nothing.
 
@@ -1859,8 +1794,8 @@ def handle_task_close(args: dict) -> dict:
                   "next_action": _task_resume_next_action(initial_status)},
         )
     control_root = find_harness_root(td) or find_repo_root(td)
-    with active_session_transaction(control_root), goal_transaction(control_root), receipt_stream_transaction(td):
-        require_goal_batch_integrated(control_root, os.path.basename(td))
+    with active_session_transaction(control_root), receipt_stream_transaction(td):
+        wbs.require_integrated_for_task(control_root, os.path.basename(td))
         snapshot = receipt_snapshot(td)
         def close_error(message, data):
             return _err(message, data=dict(data))
@@ -1896,14 +1831,6 @@ def handle_task_close(args: dict) -> dict:
             if os.path.realpath(resolve_active_task_dir(control_root) or "") == os.path.realpath(td):
                 raise RuntimeError("active task marker cleanup unavailable")
 
-            goal = read_current_goal(control_root)
-            if goal.get("status") == "active" and any(
-                isinstance(task, dict) and task.get("task_id") == os.path.basename(td)
-                for task in goal.get("tasks", [])
-            ):
-                add_goal_task(
-                    control_root, os.path.basename(td), status="closed", task_dir=td,
-                )
         except Exception as exc:
             write_task_control(td, preclose_control)
             restore_active_marker_snapshot(preclose_marker_snapshot)
@@ -2041,6 +1968,10 @@ def handle_wbs(args: dict) -> dict:
     """One public outcome tree; existing handlers retain execution authority."""
     import wbs
     action = _req(args, "action")
+    if action == "migrate":
+        return handle_wbs_migrate(args)
+    _, repo = _task_roots(args)
+    _require_migrated(repo)
     if action == "open" and not args.get("wbs_id"):
         from _lib import native_wbs_id
         selector = native_wbs_id(_req(args, "objective"))
@@ -2078,12 +2009,12 @@ def handle_wbs(args: dict) -> dict:
         call_args.update(action="verify", leaf_id=_req(args, "node_id"))
     elif action == "dispatch":
         call_args["action"] = "dispatch"
-    result = call_tool(operation, call_args)
+    result = _invoke(operation, _EXECUTION[operation], call_args)
     if result.get("isError"):
         return result
     body = dict(result["structuredContent"], wbs_id="WBS__" + task_id[6:])
     if action == "dispatch":
-        parked = call_tool("task_blocked", dict(common,
+        parked = _invoke("task_blocked", handle_task_blocked, dict(common,
             blocked_reason="WBS execution is handed off to its bound isolated worktree pool.",
             unblock_condition="Integrate and close the exact bound work pack, then reopen this WBS for combined verification."))
         if parked.get("isError"):
@@ -2226,10 +2157,33 @@ def _publish_write_plan(args, td, control, preflight):
     })
 
 
+_EXECUTION = {
+    "task_start": handle_task_start, "task_context": handle_task_context,
+    "write_plan": handle_write_plan, "task_wbs": handle_task_wbs,
+    "task_verify": handle_task_verify, "task_close": handle_task_close,
+    "task_blocked": handle_task_blocked,
+}
+
+
+def _require_migrated(repo):
+    legacy = Path(repo, "doc/harness/goals")
+    if legacy.is_symlink() or (legacy.exists() and any(legacy.glob("*.json"))):
+        raise ValueError('Retired Goal records require explicit wbs(action="migrate") preview and apply=true before continuing.')
+
+
+def handle_wbs_migrate(args):
+    unknown = set(args) - {"action", "apply"}
+    if unknown or type(args.get("apply", False)) is not bool:
+        raise ValueError("migrate accepts only action and boolean apply")
+    import goal_migration
+    repo = _control_root()
+    return _ok(goal_migration.apply(repo) if args.get("apply", False) else goal_migration.preview(repo))
+
+
 for _control_writer in (
     handle_task_start, handle_task_context, handle_task_close,
     handle_task_blocked, handle_write_plan, handle_task_wbs,
-    handle_goal_start, handle_goal_add_task, handle_goal_finish,
+    handle_wbs_migrate,
 ):
     _bind_control_writer(_control_writer)
 del _control_writer
@@ -2242,155 +2196,53 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "wbs", "title": "Work through one WBS outcome tree",
      "description": "One entry point for opening/resuming a WBS, rolling outcome planning, measured progress, explicit outcome checks, isolated worktree dispatch, independent verification and receipt-backed completion. Implementation tasks are internal execution envelopes.",
      "inputSchema": {"type": "object", "properties": {
-         "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block"]},
+         "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate"]},
          "wbs_id": {"type": "string", "description": "Stable root ID; WBS__<id>, legacy TASK__<id>, or a bare safe ID."},
          "objective": {"type": "string", "description": "For open without an ID, derive one stable root for this objective, including native Goals."},
          "node_id": {"type": "string"}, "plan": {"type": "string"},
          "required_lenses": {"type": "array", "items": {"type": "string"}},
          "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
          "timeout": {"type": "integer", "minimum": 1, "maximum": 60},
+         "apply": {"type": "boolean", "default": False, "description": "Explicitly apply previewed legacy-data migration."},
          "fresh_run": {"type": "boolean"}, "blocked_reason": {"type": "string"},
          "unblock_condition": {"type": "string"},
          "workspace": {"type": "string", "description": "Registered linked worktree for an execution envelope."}},
          "required": ["action"], "additionalProperties": False},
      "handler": handle_wbs},
-    {"name": "goal_start", "title": "Start or sync a native goal",
-     "description": "Create or update the active harness Goal from a native /goal objective. Goal is the public orchestration container and owns child harness tasks.",
-     "inputSchema": {"type": "object", "properties": {
-         "objective": {"type": "string"},
-         "goal_id": {"type": "string"},
-         "source": {"type": "object"}},
-         "required": ["objective"], "additionalProperties": False},
-     "handler": handle_goal_start},
-    {"name": "goal_context", "title": "Read active goal",
-     "description": "Return the active harness Goal and its child task queue.",
-     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-     "handler": handle_goal_context},
-    {"name": "goal_add_task", "title": "Add or update a goal child task",
-     "description": "Attach a task or declare an integration child with batch_requests before task_start. goal_next_task routes its work pack through the batch pool first. Ordinary children remain sequential.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "title": {"type": "string"},
-         "status": {"type": "string", "enum": ["queued", "active", "closed", "blocked"]},
-         "task_dir": {"type": "string"},
-         "batch_requests": {"type": "array", "minItems": 2, "items": {
-             "type": "object", "properties": {
-                 "slug": {"type": "string"}, "request": {"type": "string"},
-                 "scopes": {"type": "array", "items": {"type": "string"}},
-                 "depends_on": {"type": "array", "items": {"type": "string"}},
-                 "submodules": {"type": "array", "items": {"type": "string"}}},
-             "required": ["slug", "request", "scopes"], "additionalProperties": False}}},
-         "required": ["task_id"], "additionalProperties": False},
-     "handler": handle_goal_add_task},
-    {"name": "goal_next_task", "title": "Return next goal child task",
-     "description": "Return the next queued or active child task for the active Goal, or indicate that none remain.",
-     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-     "handler": handle_goal_next_task},
-    {"name": "goal_finish", "title": "Finish active goal",
-     "description": "Mark the active Goal complete or blocked after child tasks prove the objective is satisfied or genuinely blocked.",
-     "inputSchema": {"type": "object", "properties": {
-         "status": {"type": "string", "enum": ["complete", "blocked"]}},
-         "additionalProperties": False},
-     "handler": handle_goal_finish},
-    {"name": "task_start", "title": "Create or continue a task",
-     "description": "Create a task or continue an existing open/blocked task while preserving its run and review/QA receipts. Pass fresh_run=true only to deliberately rotate an existing run and discard that evidence. The public lifecycle is task start -> plan -> develop -> QA -> close; review and task_verify are internal close gates. Pass execution_mode='micro' for an explicitly shortened no-plan develop -> QA -> close path; internal verification remains mandatory.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_dir": {"type": "string"}, "task_id": {"type": "string"},
-         "slug": {"type": "string"}, "request_file": {"type": "string"},
-         "fresh_run": {"type": "boolean", "description": "For an existing task, deliberately rotate run_id and discard current review/QA receipts."},
-         "execution_mode": {"type": "string", "enum": ["standard", "micro"]},
-         "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
-         "additionalProperties": False},
-     "handler": handle_task_start},
-    {"name": "task_context", "title": "Read the task pack",
-     "description": "Return compact task context with on-the-fly routing.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
-         "required": ["task_id"], "additionalProperties": False},
-     "handler": handle_task_context},
-    {"name": "task_wbs", "title": "Measure task WBS outcomes",
-     "description": "Read measured progress, execute one declared leaf assertion, or propose a work pack for the existing isolated-worktree batch workflow. Never supplies a task-close verdict. Define WBS in PLAN.md through write_plan first.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "action": {"type": "string", "enum": ["context", "verify", "dispatch"]},
-         "leaf_id": {"type": "string"},
-         "timeout": {"type": "integer", "minimum": 1, "maximum": 60},
-         "ownership": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
-         "workspace": {"type": "string"}},
-         "required": ["task_id"], "additionalProperties": False},
-     "handler": handle_task_wbs},
-    {"name": "task_verify", "title": "Run task verification",
-     "description": "Compute verification state from ordered hook-owned review and QA completion receipts. After substantive QA, use one fresh call before closing or entering the blocked path.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "run_commands": {"type": "boolean"},
-         "parallel": {"type": "boolean"},
-         "max_workers": {"type": "integer"},
-         "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
-         "required": ["task_id"], "additionalProperties": False},
-     "handler": handle_task_verify},
-    {"name": "task_close", "title": "Run the completion gate",
-     "description": "Check all verdicts PASS, then close the task.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
-         "required": ["task_id"], "additionalProperties": False},
-     "handler": handle_task_close},
-    {"name": "task_blocked", "title": "Park a task on a real environment or attestation blocker",
-     "description": "Record BLOCKED_ENV in BLOCKED.md and clear this session's active marker. Valid blocker text is stored verbatim; each field must be nonblank and no larger than 122880 UTF-8 bytes. This is not completion.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string", "description": "A bare safe ID or TASK__<safe-id>; safe-id is 1-180 ASCII letters, digits, dots, underscores, or hyphens. Paths are not accepted in task_id."},
-         "blocked_reason": {"type": "string", "description": "Nonblank text stored verbatim, up to and including 122880 UTF-8 bytes."},
-         "unblock_condition": {"type": "string", "description": "Nonblank text stored verbatim, up to and including 122880 UTF-8 bytes."},
-         "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
-         "required": ["task_id", "blocked_reason", "unblock_condition"],
-         "additionalProperties": False},
-     "handler": handle_task_blocked},
-    {"name": "write_plan", "title": "Write task plan",
-     "description": "Write PLAN.md and the exact required_lenses declaration in TASK.json.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "plan": {"type": "string"},
-         "required_lenses": {"type": "array", "items": {"type": "string"}},
-         "workspace": {"type": "string", "description": "Absolute path of a linked git worktree of this repository whose task this call targets (harness:batch leads). Omit for the main checkout."}},
-         "required": ["plan"],
-         "additionalProperties": False},
-     "handler": handle_write_plan},
+
 ]
 
 TOOLS = {t["name"]: t for t in TOOL_DEFS}
 
 
 def list_tools() -> list[dict]:
-    # Preserve internal/legacy calls for existing clients; advertise one model.
     return [{k: v for k, v in TOOLS["wbs"].items() if k != "handler"}]
 
 
 def call_tool(name: str, args: dict | None) -> dict:
     if name not in TOOLS:
         return _err(f"Unknown tool: {name}")
+    return _invoke(name, TOOLS[name]["handler"], args)
+
+
+def _invoke(name, handler, args):
+    """Shared error framing for public WBS and private execution owners."""
     try:
-        return TOOLS[name]["handler"](args or {})
+        return handler(args or {})
     except _ToolArgumentError as e:
         return _err(str(e), data=e.data)
     except ValueError as e:
         message = str(e)
         supplied = args or {}
-        if "goal storage root" in message:
-            field = "goal_storage_root"
-            raw = "doc/harness/goals"
-            expected = "a real, non-symlink doc/harness/goals directory inside the repository"
-            next_action = "Restore doc/harness/goals and its existing parents as real repository directories, then retry."
-        elif "canonical task root" in message:
+        if "canonical task root" in message:
             field = "task_storage_root"
             raw = "doc/harness/tasks"
             expected = "a real, non-symlink doc/harness/tasks directory inside the repository"
             next_action = "Restore doc/harness/tasks and its existing parents as real repository directories, then retry."
         else:
             field = next(
-                (key for key in ("task_dir", "task_id", "slug", "goal_id") if key in message),
-                next((key for key in ("goal_id", "task_dir", "task_id", "slug") if key in supplied), "selector"),
+                (key for key in ("task_dir", "task_id", "slug") if key in message),
+                next((key for key in ("task_dir", "task_id", "slug") if key in supplied), "selector"),
             )
             raw = supplied.get(field) if field != "selector" else None
             expected = _FIELD_EXPECTED.get(field, "a valid selector")

@@ -29,7 +29,6 @@ try:
         find_harness_root,
         find_repo_root,
         is_harness_enabled_repo,
-        read_current_goal,
         MANIFEST_PATH,
         _log_gate_error,
     )
@@ -91,14 +90,6 @@ def goal_hint_main() -> int:
         )
         from _lib import native_wbs_is_synced
         if native_wbs_is_synced(repo_root, objective):
-            return 0
-        current = read_current_goal(repo_root)
-        if (
-            objective
-            and current.get("status") == "active"
-            and objective
-            == " ".join(str(current.get("objective") or "").split())
-        ):
             return 0
     except Exception:
         return 0

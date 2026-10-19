@@ -8,6 +8,8 @@ See doc/harness/REQ__parallel-tasks-via-worktree-leads.md.
 """
 from __future__ import annotations
 
+from test_harness_mcp_server import call_execution
+
 import importlib.util
 import json
 import os
@@ -74,7 +76,7 @@ def _setup(tmp_path):
 
 def _call(main: Path, name: str, args: dict) -> dict:
     with mock.patch.object(harness_server, "find_repo_root", return_value=str(main)):
-        return harness_server.call_tool(name, args)
+        return call_execution(harness_server, name, args)
 
 
 def _payload(result: dict) -> dict:
@@ -352,7 +354,9 @@ def test_lead_close_never_touches_the_coordinator_goal(tmp_path):
     from test_harness_mcp_server import _record_receipt_fixture
 
     main, wt = repo
-    assert not _call(main, "goal_start", {"objective": "coordinator goal"}).get("isError")
+    goal_dir = main / "doc/harness/goals"
+    goal_dir.mkdir(parents=True, exist_ok=True)
+    (goal_dir / "GOAL__old.json").write_text('{"historical":true}\n')
     goal_before = (main / "doc/harness/goals").glob("*.json")
     goal_before = {p.name: p.read_bytes() for p in goal_before}
     assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
@@ -376,8 +380,6 @@ def test_lead_close_never_touches_the_coordinator_goal(tmp_path):
     assert not _call(main, "task_close", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
     goal_after = {p.name: p.read_bytes() for p in (main / "doc/harness/goals").glob("*.json")}
     assert goal_after == goal_before
-    goal = _payload(_call(main, "goal_context", {}))["goal"]
-    assert all(t.get("task_id") != "TASK__lead" for t in goal.get("tasks", []))
 
 
 def test_nested_lens_start_and_stop_in_worktree_bind_to_worktree_task(tmp_path, monkeypatch):

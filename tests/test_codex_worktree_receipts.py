@@ -141,7 +141,7 @@ def test_task_result_workspace_echo_and_one_binding(tmp_path, monkeypatch):
     task_id, run_id = _write_exact_session_binding(lead, LEAD)
     # Existing helper creates a marker: remove it so PostToolUse owns first bind.
     (lead / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json").unlink()
-    payload = {"cwd": str(main), "thread_id": LEAD, "tool_name": "mcp__harness__task_start", "tool_input": {"workspace": str(lead)}, "tool_response": {"structuredContent": {"task_id": task_id, "task_dir": str(lead / "doc/harness/tasks" / task_id), "run_id": run_id, "workspace": str(sibling)}}}
+    payload = {"cwd": str(main), "thread_id": LEAD, "tool_name": 'mcp__harness__wbs', "tool_input": {"action": "open", "workspace": str(lead)}, "tool_response": {"structuredContent": {"task_id": task_id, "task_dir": str(lead / "doc/harness/tasks" / task_id), "run_id": run_id, "workspace": str(sibling)}}}
     with mock.patch.object(mod, "_ensure_with_deadline", return_value=True):
         assert not mod.register_task_result(json.dumps(payload).encode())
         payload["tool_response"]["structuredContent"]["workspace"] = str(lead)
@@ -265,7 +265,7 @@ def test_real_codex_handler_refuses_worktree_to_main_focus(tmp_path, monkeypatch
 
     def result_payload(args, result):
         return json.dumps({"cwd": str(main), "thread_id": LEAD,
-            "tool_name": "mcp__harness__task_start", "tool_input": args,
+            "tool_name": 'mcp__harness__wbs', "tool_input": dict(args, action="context"),
             "tool_response": {"structuredContent": _payload(result)}}).encode()
 
     args = {"task_id": "TASK__lead", "workspace": str(lead)}
@@ -306,7 +306,7 @@ def test_all_preexisting_workspace_bindings_are_fenced_and_revoked(tmp_path, mon
     else:
         raise AssertionError("conflicting workspace binding retained receipt authority")
     payload = json.dumps({"cwd": str(main), "thread_id": LEAD,
-        "tool_name": "mcp__harness__task_start", "tool_input": {"workspace": str(lead)},
+        "tool_name": 'mcp__harness__wbs', "tool_input": {"action": "open", "workspace": str(lead)},
         "tool_response": {"structuredContent": {"task_dir": str(lead / "doc/harness/tasks" / task_id),
             "task_id": task_id, "run_id": run_id, "workspace": str(lead)}}}).encode()
     assert not hook.register_task_result(payload)
@@ -386,8 +386,8 @@ def _conflict_task(root, name):
 
 
 def _task_hook_payload(root, task):
-    return json.dumps({"cwd": str(root), "thread_id": LEAD,
-        "tool_name": "mcp__harness__task_start",
+    return json.dumps({"tool_input": {"action": "open"}, "cwd": str(root), "thread_id": LEAD,
+        "tool_name": 'mcp__harness__wbs',
         "tool_response": {"structuredContent": task}}).encode()
 
 
@@ -546,7 +546,7 @@ def test_partial_fence_recovery_discards_ambiguous_history_and_old_generation(tm
     else:
         raise AssertionError("parked conflict revived a surviving registration")
     recovery = json.loads(_task_hook_payload(main, current))
-    recovery["tool_input"] = {"workspace": str(lead)}
+    recovery["tool_input"] = {"action": "context", "workspace": str(lead)}
     recovery = json.dumps(recovery).encode()
     real_invalidate = hook.invalidate_registration
     with mock.patch.object(hook, "invalidate_registration", side_effect=lambda root, thread: False if root == str(lead) else real_invalidate(root, thread)), mock.patch.object(hook, "clear_binding_conflict_fence", wraps=hook.clear_binding_conflict_fence) as clear:

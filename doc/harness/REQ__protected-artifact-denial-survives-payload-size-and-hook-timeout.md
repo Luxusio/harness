@@ -2,13 +2,13 @@
 tags: [harness, prewrite-gate, hooks, c-05, c-12]
 summary: C-05 checks read the whole payload instead of truncating at 64 KiB. Codex retries those checks after gate-child failure, subject to memory and outer-hook timeout limits; a killed hook can still allow the write.
 updated: 2026-09-28
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/prewrite_gate.py
   - plugin/scripts/hook_pre_tool_use.py
   - plugin/hooks/hooks.json
 source: task: TASK__prewrite-gate-hardening
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — protected-artifact denial survives payload size and hook timeout

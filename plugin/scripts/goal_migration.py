@@ -104,6 +104,11 @@ def _write(repo, relative, data):
         ancestor = ancestor.parent
     _path(repo, relative)
     _atomic_text_write(str(path), data.decode("utf-8"))
+    file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(file_fd)
+    finally:
+        os.close(file_fd)
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
@@ -241,8 +246,8 @@ def _collect(repo):
                 continue
             value = _json(raw)
             _require(isinstance(value, dict), "invalid WBS state")
-            from wbs import read_state
-            read_state(str(directory))
+            from wbs import validate_state
+            validate_state(value)
             changed = False
             _require(isinstance(value.get("batch_history", []), list), "invalid WBS batch history")
             containers = [value] + value.get("batch_history", [])
@@ -336,7 +341,7 @@ def apply(repo_root):
     goal_fd = None
     try:
         _require(stat.S_ISREG(os.fstat(fd).st_mode) and os.fstat(fd).st_nlink == 1, "unsafe migration lock")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         goals = _path(repo, GOALS)
         if goals.exists():
             goal_fd = os.open(goals, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

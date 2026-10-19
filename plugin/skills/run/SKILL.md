@@ -3,7 +3,7 @@ name: run
 description: Orchestrate the public task_start → plan → develop → QA → close lifecycle.
 argument-hint: <task-slug-or-description>
 user-invocable: false
-allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
+allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs
 ---
 
 Orchestrate the full harness development cycle for a task.
@@ -91,12 +91,12 @@ the existing batch skill. Leads develop, independently review, test and close
 inside their own worktrees. The pool serializes integration and preserves
 proof. Reopen the same root after pool completion, check integrated outcomes,
 then run combined review/QA and close. Native Goal completion uses that root's
-receipt-backed completion, not a second goal_start/goal_add_task ledger.
+receipt-backed completion, without a second Goal ledger.
 
 ### Phase 0: Resume detection
 
 Before creating a new task, check whether this session already has an active
-harness task. If one exists, call `mcp__plugin_harness_harness__task_context`
+harness task. If one exists, call `wbs(action="context")`
 and resume rather than creating a duplicate.
 
 Resume routing:
@@ -121,7 +121,7 @@ Use `fresh_run: true` only when deliberately starting a new generation and
 discarding that evidence; a closed task refuses the default call.
 
 ```
-mcp__plugin_harness_harness__task_start { slug: "<ARGUMENTS>" }
+wbs { action: "open", wbs_id: "<ARGUMENTS>" }
 ```
 
 Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
@@ -230,7 +230,7 @@ procedure before claiming overall completion. Batch leads return to their
 coordinator without integrating or removing their own worktree.
 
 ```
-mcp__plugin_harness_harness__task_close { task_id: "<task_id>" }
+wbs { action: "close", wbs_id: "<task_id>" }
 ```
 
 If blocked: report `missing_for_close`, fix the stated gate, retry.

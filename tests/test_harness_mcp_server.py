@@ -37,6 +37,12 @@ else:
 import _lib as harness_lib  # type: ignore
 
 
+def call_execution(server, name, args):
+    """Unit-test private execution owners without restoring public aliases."""
+    handler = server._EXECUTION.get(name)
+    return server._invoke(name, handler, args) if handler else server.call_tool(name, args)
+
+
 EXPECTED_TOOLS = {"wbs"}
 
 
@@ -114,7 +120,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
         with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
-            return harness_server.call_tool(name, args)
+            return call_execution(harness_server, name, args)
 
     def _write_control_fixture(self, task_dir: str, control: dict) -> None:
         Path(task_dir, "TASK.json").write_text(
@@ -257,16 +263,6 @@ class HarnessMcpServerTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "canonical module import"):
             harness_lib._bind_control_writer(harness_server.handle_task_start)
 
-    def test_goal_writers_reject_arbitrary_python_callers(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(PermissionError, "native Goal MCP"):
-                harness_lib.start_harness_goal(tmp, "forged goal")
-            with self.assertRaisesRegex(PermissionError, "native Goal MCP"):
-                harness_lib.write_goal_state(tmp, {
-                    "goal_id": "GOAL__forged", "objective": "forged",
-                    "status": "active", "tasks": [],
-                })
-            self.assertFalse((Path(tmp) / "doc/harness/goals/current.json").exists())
 
     def test_lifecycle_handlers_never_enter_git_snapshot_helpers(self):
         def forbidden(*_args, **_kwargs):
@@ -353,23 +349,11 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("inputSchema", tool)
             self.assertTrue(tool["description"], f"{tool['name']} missing description")
 
-        task_start = next(tool for tool in harness_server.TOOL_DEFS if tool["name"] == "task_start")
-        fresh_run = task_start["inputSchema"]["properties"]["fresh_run"]
-        self.assertEqual(fresh_run["type"], "boolean")
-        self.assertIn("discard", fresh_run["description"].lower())
-        self.assertIn("preserv", task_start["description"].lower())
-
-        task_blocked = next(
-            tool for tool in harness_server.TOOL_DEFS if tool["name"] == "task_blocked"
-        )
-        properties = task_blocked["inputSchema"]["properties"]
-        self.assertIn("bare safe ID", properties["task_id"]["description"])
-        self.assertIn(
-            "paths are not accepted", properties["task_id"]["description"].lower(),
-        )
-        for field in ("blocked_reason", "unblock_condition"):
-            self.assertIn("stored verbatim", properties[field]["description"])
-            self.assertIn("122880 UTF-8 bytes", properties[field]["description"])
+        tool = harness_server.TOOLS["wbs"]
+        properties = tool["inputSchema"]["properties"]
+        self.assertEqual(properties["fresh_run"]["type"], "boolean")
+        self.assertEqual(properties["apply"]["default"], False)
+        self.assertEqual(set(harness_server.TOOLS), {"wbs"})
 
     def test_start_only_receipt_does_not_produce_runtime_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -436,12 +420,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
 
     def test_unknown_tool_returns_error_payload(self):
-        result = harness_server.call_tool("does_not_exist", {})
+        result = call_execution(harness_server, "does_not_exist", {})
         self.assertTrue(result.get("isError"))
         self.assertIn("Unknown tool", result["structuredContent"]["error"])
 
     def test_git_binding_error_returns_structured_recovery_details(self):
-        original = harness_server.TOOLS["task_context"]["handler"]
+        original = harness_server.TOOLS["wbs"]["handler"]
 
         def fail(_args):
             raise harness_lib.GitBindingError(
@@ -452,11 +436,11 @@ class HarnessMcpServerTests(unittest.TestCase):
                 next_action="Repair the worktree and retry.",
             )
 
-        harness_server.TOOLS["task_context"]["handler"] = fail
+        harness_server.TOOLS["wbs"]["handler"] = fail
         try:
-            result = harness_server.call_tool("task_context", {"task_id": "TASK__x"})
+            result = harness_server.call_tool("wbs", {"action": "context", "wbs_id": "x"})
         finally:
-            harness_server.TOOLS["task_context"]["handler"] = original
+            harness_server.TOOLS["wbs"]["handler"] = original
 
         self.assertTrue(result["isError"])
         self.assertEqual(
@@ -468,272 +452,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             result["structuredContent"]["invariant"], "admin_gitdir_backreference"
         )
 
-    def test_goal_tools_manage_active_goal_state(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            original_find_repo_root = harness_server.find_repo_root
-            harness_server.find_repo_root = lambda *a, **kw: tmp
-            try:
-                start = harness_server.call_tool(
-                    "goal_start",
-                    {
-                        "objective": "Fix every bug on the login page",
-                        "source": {"runtime": "codex"},
-                    },
-                )
-                self.assertNotIn("isError", start)
-                goal = start["structuredContent"]["goal"]
-                self.assertEqual(goal["status"], "active")
-                self.assertNotIn("strategy", goal)
-
-                add = harness_server.call_tool(
-                    "goal_add_task",
-                    {
-                        "task_id": "TASK__login-bugs",
-                        "title": "Audit and fix login bugs",
-                        "status": "closed",
-                    },
-                )
-                self.assertNotIn("isError", add)
-
-                task_dir = Path(tmp) / "doc/harness/tasks/TASK__login-bugs"
-                task_dir.mkdir(parents=True, exist_ok=True)
-                self._write_control_fixture(str(task_dir), {
-                        "run_id": harness_lib.new_uuid7(),
-                        "execution_mode": "standard",
-                        "required_lenses": ["review-code", "qa-cli"],
-                        "close_receipt_fingerprint": None,
-                    })
-                self._write_subagent_receipt(str(task_dir))
-                self._close_fixture(str(task_dir))
-
-                nxt = harness_server.call_tool("goal_next_task", {})
-                self.assertIsNone(nxt["structuredContent"]["task"])
-
-                finish = harness_server.call_tool("goal_finish", {"status": "complete"})
-                self.assertEqual(finish["structuredContent"]["goal"]["status"], "complete")
-                self.assertTrue((Path(tmp) / "doc" / "harness" / "goals" / "current.json").is_file())
-            finally:
-                harness_server.find_repo_root = original_find_repo_root
-
-    def test_native_goal_preserves_future_child_order_without_task_directories(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._call_in_repo(tmp, "goal_start", {"objective": "ship three ordered stages"})
-            for task_id in ("TASK__stage-one", "TASK__stage-two", "TASK__stage-three"):
-                added = self._call_in_repo(tmp, "goal_add_task", {
-                    "task_id": task_id,
-                    "status": "queued",
-                })
-                self.assertNotIn("isError", added)
-                self.assertFalse((Path(tmp) / "doc/harness/tasks" / task_id).exists())
-
-            current = self._call_in_repo(tmp, "goal_context", {})["structuredContent"]["goal"]
-            self.assertEqual(
-                [task["task_id"] for task in current["tasks"]],
-                ["TASK__stage-one", "TASK__stage-two", "TASK__stage-three"],
-            )
-            next_task = self._call_in_repo(tmp, "goal_next_task", {})["structuredContent"]["task"]
-            self.assertEqual(next_task["task_id"], "TASK__stage-one")
-
-    def test_goal_completion_rejects_unfinished_child_and_restart_reactivates(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__goal-child"))
-            self._call_in_repo(tmp, "goal_start", {
-                "objective": "finish safely", "goal_id": "GOAL__finish-safely",
-            })
-            self._call_in_repo(tmp, "goal_add_task", {
-                "task_id": "TASK__goal-child", "status": "active",
-            })
-
-            blocked = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
-            self.assertTrue(blocked.get("isError"))
-            self.assertIn("TASK__goal-child", blocked["structuredContent"]["error"])
-
-            control = harness_server.read_task_control(str(task_dir))
-            control["close_receipt_fingerprint"] = "sha256:" + "f" * 64
-            self._write_control_fixture(str(task_dir), control)
-            missing_receipt = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
-            self.assertTrue(missing_receipt.get("isError"))
-            control["close_receipt_fingerprint"] = None
-            self._write_control_fixture(str(task_dir), control)
-            self._write_subagent_receipt(str(task_dir))
-            self._close_fixture(str(task_dir))
-            self._call_in_repo(tmp, "goal_add_task", {
-                "task_id": "TASK__goal-child", "status": "closed",
-            })
-            finished = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
-            self.assertEqual(finished["structuredContent"]["goal"]["status"], "complete")
-
-            restarted = self._call_in_repo(tmp, "goal_start", {
-                "objective": "finish safely", "goal_id": "GOAL__finish-safely",
-            })
-            goal = restarted["structuredContent"]["goal"]
-            self.assertEqual(goal["status"], "active")
-            self.assertNotIn("finished_at", goal)
-
-    def test_goal_completion_rejects_hand_labeled_closed_state(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__closed-child"))
-            self._call_in_repo(tmp, "goal_start", {"objective": "finish multiple children"})
-            self._call_in_repo(tmp, "goal_add_task", {
-                "task_id": "TASK__closed-child", "status": "closed",
-            })
-            control = harness_server.read_task_control(str(task_dir))
-            control["close_receipt_fingerprint"] = "sha256:" + "f" * 64
-            self._write_control_fixture(str(task_dir), control)
-
-            finished = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
-
-            self.assertTrue(finished.get("isError"))
-            self.assertIn("TASK__closed-child", finished["structuredContent"]["error"])
-
-    def test_goal_completion_requires_at_least_one_child(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._call_in_repo(tmp, "goal_start", {"objective": "empty goal"})
-            result = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
-            self.assertTrue(result.get("isError"))
-            self.assertIn("no child tasks", result["structuredContent"]["error"])
-
-    def test_terminal_goal_rejects_child_mutation_and_repeat_finish_until_restart(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._call_in_repo(tmp, "goal_start", {
-                "objective": "terminal guard", "goal_id": "GOAL__terminal-guard",
-            })
-            blocked = self._call_in_repo(tmp, "goal_finish", {"status": "blocked"})
-            self.assertEqual(blocked["structuredContent"]["goal"]["status"], "blocked")
-
-            add = self._call_in_repo(tmp, "goal_add_task", {
-                "task_id": "TASK__must-restart", "status": "queued",
-            })
-            self.assertTrue(add.get("isError"))
-            self.assertIn("call goal_start explicitly", add["structuredContent"]["error"])
-
-            finish = self._call_in_repo(tmp, "goal_finish", {"status": "blocked"})
-            self.assertTrue(finish.get("isError"))
-            self.assertIn("call goal_start explicitly", finish["structuredContent"]["error"])
-
-            restarted = self._call_in_repo(tmp, "goal_start", {
-                "objective": "terminal guard", "goal_id": "GOAL__terminal-guard",
-            })
-            self.assertEqual(restarted["structuredContent"]["goal"]["status"], "active")
-            add_after_restart = self._call_in_repo(tmp, "goal_add_task", {
-                "task_id": "TASK__must-restart", "status": "queued",
-            })
-            self.assertNotIn("isError", add_after_restart)
-
-    def test_goal_start_rejects_prefixed_traversal_before_writing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self._call_in_repo(
-                tmp,
-                "goal_start",
-                {"objective": "safe objective", "goal_id": "GOAL__/../../../escaped"},
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("goal_id", result["structuredContent"]["error"])
-            self.assertFalse((Path(tmp) / "escaped.json").exists())
-
-    def test_goal_start_rejects_symlinked_storage_roots(self):
-        for symlink_parent in (False, True):
-            with self.subTest(symlink_parent=symlink_parent), tempfile.TemporaryDirectory() as tmp:
-                outside = Path(tmp) / "outside-goals"
-                outside.mkdir()
-                if symlink_parent:
-                    (Path(tmp) / "doc").symlink_to(outside, target_is_directory=True)
-                else:
-                    harness_dir = Path(tmp) / "doc" / "harness"
-                    harness_dir.mkdir(parents=True)
-                    (harness_dir / "goals").symlink_to(outside, target_is_directory=True)
-                result = self._call_in_repo(
-                    tmp,
-                    "goal_start",
-                    {"objective": "safe objective", "goal_id": "GOAL__safe"},
-                )
-                self.assertTrue(result.get("isError"))
-                self.assertEqual(result["structuredContent"]["field"], "goal_storage_root")
-                self.assertEqual(result["structuredContent"]["rejected_value"], repr("doc/harness/goals"))
-                self.assertIn("non-symlink", result["structuredContent"]["expected"])
-                self.assertIn("Restore", result["structuredContent"]["next_action"])
-                self.assertFalse((outside / "GOAL__safe.json").exists())
-                self.assertFalse((outside / "current.json").exists())
-
-    def test_goal_state_replaces_leaf_symlinks_without_touching_targets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            goals = Path(tmp) / "doc" / "harness" / "goals"
-            goals.mkdir(parents=True)
-            sentinel = Path(tmp) / "goal-sentinel"
-            sentinel.write_text("keep", encoding="utf-8")
-            for name in ("GOAL__safe.json", "GOAL__safe.json.tmp", "current.json"):
-                (goals / name).symlink_to(sentinel)
-            result = self._call_in_repo(
-                tmp,
-                "goal_start",
-                {"objective": "safe objective", "goal_id": "GOAL__safe"},
-            )
-            self.assertNotIn("isError", result)
-            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
-            self.assertFalse((goals / "GOAL__safe.json").is_symlink())
-            self.assertFalse((goals / "current.json").is_symlink())
-
-    def test_goal_readers_ignore_valid_json_leaf_symlinks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            goals = Path(tmp) / "doc" / "harness" / "goals"
-            goals.mkdir(parents=True)
-            external = Path(tmp) / "external-goal.json"
-            external.write_text(
-                json.dumps({
-                    "goal_id": "GOAL__safe",
-                    "objective": "SENSITIVE_VALUE",
-                    "status": "active",
-                    "source": {"secret": "SENSITIVE_VALUE"},
-                    "tasks": [{"task_id": "TASK__foreign"}],
-                }),
-                encoding="utf-8",
-            )
-
-            (goals / "current.json").symlink_to(external)
-            context = self._call_in_repo(tmp, "goal_context", {})
-            self.assertNotIn("SENSITIVE_VALUE", json.dumps(context))
-
-            (goals / "current.json").unlink()
-            (goals / "GOAL__safe.json").symlink_to(external)
-            started = self._call_in_repo(
-                tmp,
-                "goal_start",
-                {"objective": "safe objective", "goal_id": "GOAL__safe"},
-            )
-            self.assertNotIn("isError", started)
-            self.assertNotIn("SENSITIVE_VALUE", json.dumps(started))
-            self.assertFalse((goals / "GOAL__safe.json").is_symlink())
-
-    def test_goal_reader_rejects_hardlinked_or_unsafe_authority(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._call_in_repo(tmp, "goal_start", {"objective": "safe objective"})
-            current = Path(tmp) / "doc/harness/goals/current.json"
-            alias = Path(tmp) / "outside-goal-alias.json"
-            os.link(current, alias)
-            alias.write_text(json.dumps({
-                "goal_id": "GOAL__forged", "objective": "forged",
-                "status": "complete", "tasks": [],
-            }), encoding="utf-8")
-            context = self._call_in_repo(tmp, "goal_context", {})
-            self.assertIsNone(context["structuredContent"]["goal"])
-
-            alias.unlink()
-            current.chmod(0o666)
-            context = self._call_in_repo(tmp, "goal_context", {})
-            self.assertIsNone(context["structuredContent"]["goal"])
-
-    def test_goal_add_task_rejects_outside_task_dir_before_persisting(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._call_in_repo(tmp, "goal_start", {"objective": "safe objective"})
-            current = Path(tmp) / "doc" / "harness" / "goals" / "current.json"
-            before = current.read_bytes()
-            result = self._call_in_repo(
-                tmp,
-                "goal_add_task",
-                {"task_id": "TASK__safe", "task_dir": str(Path(tmp) / "outside")},
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertEqual(current.read_bytes(), before)
 
     def test_task_start_rejects_traversal_and_outside_paths_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -962,7 +680,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         server.close()
         instructions = response["result"]["instructions"]
         self.assertIn("WBS-first control plane", instructions)
-        self.assertIn("goal_start", instructions)
+        self.assertIn("wbs", instructions)
         self.assertIn("plain repo-mutating request", instructions)
         self.assertIn("hooks do not create tasks automatically", instructions)
         self.assertIn("task_start preserves", instructions)
@@ -971,7 +689,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
         self.assertIn("get_goal", instructions)
-        self.assertIn("write_plan", instructions)
+        self.assertIn("plan", instructions)
         self.assertNotIn("write_plan_artifact", instructions)
         self.assertNotIn("write_handoff", instructions)
         self.assertNotIn("write_doc_sync", instructions)
@@ -1041,7 +759,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         response = json.loads(stdout_bytes.getvalue().decode())
         instructions = response["result"]["instructions"]
         self.assertIn("WBS-first control plane", instructions)
-        self.assertIn("goal_context", instructions)
+        self.assertIn("wbs", instructions)
         self.assertIn("plain repo-mutating request", instructions)
         self.assertIn("Protocol tool names are bare", instructions)
         self.assertIn("Claude Code may display callable tools with a runtime prefix", instructions)
@@ -1262,7 +980,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_critic_tools_are_not_exposed(self):
         for tool in ("write_critic_document", "write_critic_qa", "write_critic_ux"):
-            result = harness_server.call_tool(
+            result = call_execution(harness_server,
                 tool,
                 {
                     "task_id": "TASK__removed",
@@ -1275,7 +993,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("Unknown tool", result["structuredContent"]["error"], tool)
 
     def test_record_ac_evidence_is_not_exposed(self):
-        result = harness_server.call_tool(
+        result = call_execution(harness_server,
             "record_ac_evidence",
             {
                 "task_id": "TASK__removed",
@@ -1297,7 +1015,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             original_ctd = harness_server.canonical_task_dir
             harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "record_subagent_receipt",
                     {
                         "task_id": "TASK__subagentreceipt",
@@ -1308,7 +1026,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                         "summary": "qa-cli passed focused checks",
                     },
                 )
-                verify = harness_server.call_tool(
+                verify = call_execution(harness_server,
                     "task_verify",
                     {"task_id": "TASK__subagentreceipt"},
                 )
@@ -1356,11 +1074,11 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: str(task_dir)
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
-                start = harness_server.call_tool(
+                start = call_execution(harness_server,
                     "task_start",
                     {"task_id": "TASK__micro", "execution_mode": "micro"},
                 )
-                close = harness_server.call_tool("task_close", {"task_id": "TASK__micro"})
+                close = call_execution(harness_server, "task_close", {"task_id": "TASK__micro"})
             finally:
                 harness_server.canonical_task_dir = original_ctd
                 harness_server.find_repo_root = original_root
@@ -1380,7 +1098,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "task_blocked",
                     {
                         "task_id": "TASK__blocked",
@@ -1474,7 +1192,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                         "jsonrpc": "2.0",
                         "id": 41,
                         "method": "tools/call",
-                        "params": {"name": "task_blocked", "arguments": args},
+                        "params": {"name": "wbs", "arguments": {"action": "block", "wbs_id": args["task_id"], **{k: v for k, v in args.items() if k != "task_id"}}},
                     }
                     following = {
                         "jsonrpc": "2.0", "id": 42, "method": "ping", "params": {},
@@ -1607,7 +1325,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                         "jsonrpc": "2.0",
                         "id": 73,
                         "method": "tools/call",
-                        "params": {"name": "task_blocked", "arguments": args},
+                        "params": {"name": "wbs", "arguments": {"action": "block", "wbs_id": args["task_id"], **{k: v for k, v in args.items() if k != "task_id"}}},
                     }
                     body = json.dumps(request).encode("utf-8")
                     raw_input = (
@@ -1707,12 +1425,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "doc/harness/tasks/TASK__<safe-id>",
             ),
             ("task_start", {"slug": "bad/path"}, "slug", "1-180 ASCII"),
-            (
-                "goal_start",
-                {"objective": "goal", "goal_id": "GOAL__/bad"},
-                "goal_id",
-                "free-form goal text",
-            ),
         )
         for tool, args, field, expected_fragment in cases:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
@@ -1736,7 +1448,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     side_effect=OSError("marker cleanup unavailable"),
                 ),
             ):
-                result = harness_server.call_tool("task_blocked", {
+                result = call_execution(harness_server, "task_blocked", {
                     "task_id": "TASK__blocked-marker-failure",
                     "blocked_reason": "pause",
                     "unblock_condition": "resume",
@@ -1872,7 +1584,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "task_start", {"task_id": "TASK__resume-blocked"}
                 )
             finally:
@@ -1906,7 +1618,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "task_start", {"task_id": "TASK__resume-closed"}
                 )
             finally:
@@ -2648,40 +2360,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(marker.read_text(encoding="utf-8"), "replacement\n")
             self.assertEqual(outside.read_text(encoding="utf-8"), "preserve\n")
 
-    def test_goal_state_two_file_write_rolls_back_on_second_failure(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            goal = self._call_in_repo(
-                tmp, "goal_start", {"objective": "transactional goal"},
-            )["structuredContent"]["goal"]
-            goal_id = goal["goal_id"]
-            goal_path = Path(tmp) / f"doc/harness/goals/{goal_id}.json"
-            current_path = Path(tmp) / "doc/harness/goals/current.json"
-            before_goal = goal_path.read_text(encoding="utf-8")
-            before_current = current_path.read_text(encoding="utf-8")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__goal-child"
-            task_dir.mkdir(parents=True)
-            goal_globals = harness_server.add_goal_task.__globals__
-            original_write = goal_globals["_atomic_text_write"]
-            failed = False
-
-            def fail_current_once(path, text):
-                nonlocal failed
-                if Path(path) == current_path and not failed:
-                    failed = True
-                    raise OSError("current goal publication unavailable")
-                return original_write(path, text)
-
-            with mock.patch.dict(
-                goal_globals, {"_atomic_text_write": fail_current_once}
-            ):
-                result = self._call_in_repo(tmp, "goal_add_task", {
-                    "task_id": "TASK__goal-child", "task_dir": str(task_dir),
-                    "status": "closed",
-                })
-                self.assertTrue(result.get("isError"))
-                self.assertIn("current goal publication", result["structuredContent"]["error"])
-            self.assertEqual(goal_path.read_text(encoding="utf-8"), before_goal)
-            self.assertEqual(current_path.read_text(encoding="utf-8"), before_current)
 
     def test_new_task_rolls_back_when_active_marker_write_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2834,7 +2512,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
     def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
         with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
-            return harness_server.call_tool(name, args)
+            return call_execution(harness_server, name, args)
 
     def _prepare_task(self, base: str, task_id: str, *, checks_yaml: str | None,
                       write_receipt: bool = True, write_handoff: bool = True,
@@ -2971,7 +2649,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             )
             self._patch(td)
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "task_close", {"task_id": "TASK__conversation-open"}
                 )
             finally:
@@ -2990,7 +2668,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             )
             self._patch(td)
             try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-002"})
+                result = call_execution(harness_server, "task_close", {"task_id": "TASK__pr2-002"})
             finally:
                 self._unpatch()
         self.assertNotIn("isError", result)
@@ -3015,7 +2693,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._patch(td)
             self._patch_repo_root_for_context(tmp)
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "task_close", {"task_id": "TASK__ux-cli-required"}
                 )
             finally:
@@ -3043,7 +2721,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._patch(td)
             self._patch_repo_root_for_context(tmp)
             try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__ux-cli-pass"})
+                result = call_execution(harness_server, "task_close", {"task_id": "TASK__ux-cli-pass"})
             finally:
                 self._unpatch_repo_root_for_context()
                 self._unpatch()
@@ -3073,7 +2751,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._patch(td)
             self._patch_repo_root_for_context(tmp)
             try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__ux-cli-stale"})
+                result = call_execution(harness_server, "task_close", {"task_id": "TASK__ux-cli-stale"})
             finally:
                 self._unpatch_repo_root_for_context()
                 self._unpatch()
@@ -3096,7 +2774,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._patch(td)
             self._patch_repo_root_for_context(tmp)
             try:
-                result = harness_server.call_tool(
+                result = call_execution(harness_server,
                     "task_close", {"task_id": "TASK__ux-not-applicable"}
                 )
             finally:
@@ -3110,7 +2788,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             td = self._prepare_task(tmp, "TASK__pr2-003", checks_yaml=None)
             self._patch(td)
             try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-003"})
+                result = call_execution(harness_server, "task_close", {"task_id": "TASK__pr2-003"})
             finally:
                 self._unpatch()
         self.assertNotIn("isError", result)
@@ -3126,7 +2804,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             )
             self._patch(td)
             try:
-                result = harness_server.call_tool("task_verify", {"task_id": "TASK__pr2-006"})
+                result = call_execution(harness_server, "task_verify", {"task_id": "TASK__pr2-006"})
             finally:
                 self._unpatch()
         s = result["structuredContent"]
@@ -3135,84 +2813,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("stale_path", s)
         self.assertNotIn("touched_paths", s)
 
-    def test_close_marks_active_goal_child_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__goal-close-sync",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            repo = Path(tmp)
-            canonical = repo / "doc/harness/tasks/TASK__goal-close-sync"
-            canonical.parent.mkdir(parents=True)
-            Path(td).rename(canonical)
-            td = str(canonical)
-            self._call_in_repo(tmp, "goal_start", {
-                "objective": "close child", "goal_id": "GOAL__close-child",
-            })
-            self._call_in_repo(tmp, "goal_add_task", {
-                "task_id": "TASK__goal-close-sync", "status": "active",
-            })
-            clean = {"missing_for_close": [], "next_action": "close"}
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__goal-close-sync"})
-
-            self.assertNotIn("isError", result)
-            current = json.loads(
-                (repo / "doc/harness/goals/current.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(current["tasks"][0]["status"], "closed")
-            self.assertEqual(
-                harness_server.task_control_status(
-                    str(canonical), harness_server.read_task_control(str(canonical))
-                ), "closed",
-            )
-            self.assertFalse((canonical / "TASK_CLOSE_RECEIPT.json").exists())
-
-    def test_goal_completion_preserves_closed_child_after_later_child_work(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp)
-            tasks_root = repo / "doc/harness/tasks"
-            tasks_root.mkdir(parents=True)
-            task_dirs = {}
-            for task_id in ("TASK__first-child", "TASK__second-child"):
-                prepared = Path(self._prepare_task(
-                    tmp,
-                    task_id,
-                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                ))
-                canonical = tasks_root / task_id
-                prepared.rename(canonical)
-                task_dirs[task_id] = str(canonical)
-
-            self._call_in_repo(tmp, "goal_start", {
-                "objective": "two children", "goal_id": "GOAL__two-children",
-            })
-            for task_id in task_dirs:
-                self._call_in_repo(tmp, "goal_add_task", {
-                    "task_id": task_id, "status": "active",
-                })
-
-            clean = {"missing_for_close": [], "next_action": "close"}
-            for index, (task_id, task_dir) in enumerate(task_dirs.items()):
-                with (
-                    mock.patch.object(harness_server, "canonical_task_dir", return_value=task_dir),
-                    mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                    mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
-                ):
-                    closed = harness_server.handle_task_close({"task_id": task_id})
-                self.assertNotIn("isError", closed)
-                if index == 0:
-                    (repo / "later-child.py").write_text("changed later\n", encoding="utf-8")
-
-            finished = self._call_in_repo(
-                tmp, "goal_finish", {"status": "complete"},
-            )["structuredContent"]["goal"]
-            self.assertEqual(finished["status"], "complete")
 
     def test_close_rolls_back_when_control_publication_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3227,7 +2827,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     harness_server, "publish_task_close",
                     side_effect=OSError("control publication unavailable"),
                 ):
-                    result = harness_server.call_tool(
+                    result = call_execution(harness_server,
                         "task_close",
                         {"task_id": "TASK__close-attestation-failure"},
                     )
@@ -3254,7 +2854,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     "clear_active_marker",
                     side_effect=OSError("marker cleanup unavailable"),
                 ):
-                    result = harness_server.call_tool(
+                    result = call_execution(harness_server,
                         "task_close", {"task_id": "TASK__close-marker-io"}
                     )
             finally:
@@ -3269,85 +2869,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 Path(td).resolve(),
             )
 
-    def test_close_rolls_back_goal_sync_and_marker_cleanup_failures(self):
-        for failure_kind in ("goal", "marker"):
-            with self.subTest(failure=failure_kind), tempfile.TemporaryDirectory() as tmp:
-                td = self._prepare_task(
-                    tmp, f"TASK__close-{failure_kind}-failure",
-                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                )
-                before = harness_server.read_task_control(td)
-                _write_marker_fixture(tmp, td)
-                self._patch(td)
-                try:
-                    patches = [
-                        mock.patch.object(
-                            harness_server,
-                            "read_current_goal",
-                            return_value={
-                                "status": "active",
-                                "tasks": [{"task_id": os.path.basename(td)}],
-                            },
-                        )
-                    ]
-                    if failure_kind == "goal":
-                        patches.append(mock.patch.object(
-                            harness_server, "add_goal_task",
-                            side_effect=OSError("goal sync unavailable"),
-                        ))
-                    else:
-                        patches.append(mock.patch.object(
-                            harness_server, "clear_active_marker", return_value=None,
-                        ))
-                    with patches[0], patches[1]:
-                        result = harness_server.call_tool(
-                            "task_close",
-                            {"task_id": f"TASK__close-{failure_kind}-failure"},
-                        )
-                finally:
-                    self._unpatch()
-                self.assertTrue(result.get("isError"))
-                restored = harness_server.read_task_control(td)
-                self.assertEqual(restored, before)
-                self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
-                legacy_marker = Path(tmp, "doc/harness/tasks/.active")
-                self.assertEqual(
-                    Path(legacy_marker.read_text(encoding="utf-8").strip()).resolve(),
-                    Path(td).resolve(),
-                )
-
-    def test_concurrent_goal_add_task_preserves_both_children(self):
-        import concurrent.futures
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(harness_server, "find_repo_root", return_value=tmp):
-                started = harness_server.call_tool("goal_start", {"objective": "concurrency"})
-                self.assertFalse(started.get("isError"))
-                def add(index):
-                    return harness_server.call_tool(
-                        "goal_add_task", {"task_id": f"TASK__goal-child-{index}"},
-                    )
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                    results = list(pool.map(add, (1, 2)))
-                self.assertTrue(all(not result.get("isError") for result in results))
-                goal = harness_server.read_current_goal(tmp)
-                self.assertEqual(
-                    {task["task_id"] for task in goal["tasks"]},
-                    {"TASK__goal-child-1", "TASK__goal-child-2"},
-                )
-
-    def test_goal_transaction_writes_through_pinned_directory(self):
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
-            with mock.patch.object(harness_server, "find_repo_root", return_value=tmp):
-                started = harness_server.call_tool("goal_start", {"objective": "pinned"})
-                self.assertFalse(started.get("isError"))
-                goals = Path(tmp, "doc/harness/goals")
-                moved = goals.with_name("goals-original")
-                with self.assertRaises((RuntimeError, ValueError)):
-                    with harness_server.goal_transaction(tmp):
-                        goals.rename(moved)
-                        goals.symlink_to(outside, target_is_directory=True)
-                        harness_server.add_goal_task(tmp, "TASK__pinned-child")
-                self.assertFalse(any(Path(outside).iterdir()))
 
     def test_close_evaluates_each_success_gate_once(self):
         with tempfile.TemporaryDirectory() as tmp:

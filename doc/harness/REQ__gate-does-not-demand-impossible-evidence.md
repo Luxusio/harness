@@ -2,7 +2,7 @@
 tags: [harness, receipts, attestation, task-blocked, c-17]
 summary: park 사유는 관측되지 않은 전제를 단언하지 않는다. 그리고 하네스는 "렌즈를 안 돌렸다"와 "돌렸는데 기록이 안 됐다"를 구별할 수 없다 — 그 판단은 조정자 몫이다.
 updated: 2026-09-18
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/mcp/harness_server.py
@@ -13,7 +13,7 @@ invalidated_by_paths:
   - plugin/skills/develop/SKILL.md
   - plugin/skills/run/SKILL.md
   - CONTRACTS.md
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — park 사유는 관측되지 않은 전제를 단언하지 않는다

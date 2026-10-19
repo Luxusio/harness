@@ -508,9 +508,9 @@ class TestTaskVerifyKeepsThePrerequisiteBlocker(unittest.TestCase):
             cwd = os.getcwd()
             os.chdir(root)
             try:
-                harness_server.TOOLS["task_start"]["handler"]({"slug": "noplan"})
+                harness_server._EXECUTION["task_start"]({"slug": "noplan"})
                 return json.loads(
-                    harness_server.TOOLS["task_verify"]["handler"](
+                    harness_server._EXECUTION["task_verify"](
                         {"task_id": "TASK__noplan"}
                     )["content"][0]["text"]
                 )
@@ -2462,7 +2462,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
         harness_server = _server()
         source = Path(harness_server.__file__).read_text(encoding="utf-8")
         start = source.index("def handle_task_start(")
-        end = source.index("\ndef handle_goal_start(", start)
+        end = source.index("\ndef _session_resumes(", start)
         handler = source[start:end]
         self.assertLess(
             handler.index("write_active_marker("),

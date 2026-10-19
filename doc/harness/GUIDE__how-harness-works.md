@@ -2,7 +2,7 @@
 tags: [harness, guide, architecture, lifecycle, onboarding]
 summary: 하네스 전체 동작 안내 — 과제 수명주기, MCP 제어면, 훅과 prewrite gate, 영수증과 마감 게이트, 스킬 단계, 에이전트와 lens, Goal, batch 병렬 모드, 설치·setup·manifest, 계약, 메모리·학습, Claude/Codex 차이.
 updated: 2026-09-28
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - .claude-plugin/marketplace.json
   - .claude/settings.json
@@ -67,7 +67,7 @@ invalidated_by_paths:
   - doc/CLAUDE.md
   - doc/harness/critics/
   - doc/harness/review-overlays/
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # GUIDE — 하네스는 어떻게 동작하는가
@@ -372,10 +372,10 @@ batch lead도 worktree의 `plugin/`이 아니라 설치된 플러그인으로 �
 
 **writer 권한은 바인딩된 프레임으로 제한된다.** 누가 무엇을 쓸 수 있는지는 대상마다 다르다(`_lib.py:1453-1463, 1597-1610`).
 
-- **TASK.json 쓰기·교체·복원, `publish_task_close`, Goal 쓰기**: `authorized(marker=False)`를 통과해야 한다. 이 검사는 role이 `harness_server`인 바인딩만 받는다. 해당 프레임은 harness_server의 `handle_*` 8개다(`handle_task_start`, `handle_task_context`, `handle_task_close`, `handle_task_blocked`, `handle_write_plan`, `handle_goal_start`, `handle_goal_add_task`, `handle_goal_finish`)(`_lib.py:773, 1684, 1711, 1728, 3913`).
+- **TASK.json 쓰기·교체·복원과 close**: 정규 MCP 비공개 실행 owner만 허용한다. Goal 장부 writer는 제거했으며 명시적 마이그레이션 owner가 기존 binding 변환만 수행한다.
 - **활성 마커**(`write_active_marker`, binding-conflict fence, 마커 복원·삭제): 위 프레임들과, Codex `codex_hook_registration`의 `restore_watcher_registration`, `register_task_result`가 쓸 수 있다(`marker=True`, `_lib.py:2252, 2273, 2317, 2443`, `codex_hook_registration.py:443-444`).
 
-바인딩 검사는 모듈의 정규 경로와 코드 identity까지 확인한다. 다만 이것은 `_lib` writer 함수 호출에 대한 **프로세스 내 프레임 검사**다. 셸이나 다른 프로세스가 파일을 직접 쓰는 것은 막지 않는다. `task_verify`, `goal_context`, `goal_next_task`는 writer가 아니다(`harness_server.py:2061-2068`).
+바인딩 검사는 모듈의 정규 경로와 코드 identity까지 확인한다. 다만 이것은 `_lib` writer 함수 호출에 대한 **프로세스 내 프레임 검사**다. 셸이나 다른 프로세스가 파일을 직접 쓰는 것은 막지 않는다. `task_verify`는 writer가 아니다(`harness_server.py:2061-2068`).
 
 ### 3.3 status는 저장되지 않고 파생된다
 
@@ -399,8 +399,8 @@ TASK.json 유효?
 
 알아 둘 점:
 
-- **closed 상태는 `RECEIPTS.jsonl`의 정확한 바이트에 묶여 있다.** close 뒤에 이 파일이 한 바이트라도 바뀌면 상태가 `invalid`로 바뀐다. 그러면 `goal_finish(complete)`가 실패하고, `task_start`는 plain이든 fresh_run이든 거부한다(`_lib.py:3902-3907`, `harness_server.py:1295-1307`).
-- **낡은 reader도 closed를 invalid로 본다.** fingerprint를 계산하는 동안 모든 행을 검증한다. 그래서 더 새로운 빌드가 쓴 행을 읽지 못하는 낡은 MCP나 훅 런타임은 바이트가 하나도 바뀌지 않았는데도 제대로 닫힌 과제를 `invalid`로 보고하고, `goal_finish(complete)`도 실패한다. 오류 문구는 reader가 낡았을 가능성을 언급한다(`_lib.py:3340-3366`).
+- **closed 상태는 `RECEIPTS.jsonl`의 정확한 바이트에 묶여 있다.** close 뒤에 이 파일이 한 바이트라도 바뀌면 상태가 `invalid`로 바뀐다. 그러면 기존 완료 증거가 무효이며, `task_start`는 plain이든 fresh_run이든 거부한다(`_lib.py:3902-3907`, `harness_server.py:1295-1307`).
+- **낡은 reader도 closed를 invalid로 본다.** fingerprint를 계산하는 동안 모든 행을 검증한다. 그래서 더 새로운 빌드가 쓴 행을 읽지 못하는 낡은 MCP나 훅 런타임은 바이트가 하나도 바뀌지 않았는데도 제대로 닫힌 과제를 `invalid`로 보고하고. 오류 문구는 reader가 낡았을 가능성을 언급한다(`_lib.py:3340-3366`).
 - CONTRACTS C-17은 `planning`/`implementing`/`verifying` 같은 상태 이름을 쓰지만, 코드에는 `open`/`blocked`/`closed`/`invalid` 네 개뿐이다(`CONTRACTS.md:259`).
 
 ### 3.4 task ID 규칙
@@ -413,25 +413,22 @@ TASK.json 유효?
 - `task_dir`은 정규 상대경로나 절대경로와 정확히 같아야 한다.
 - 검증된 `doc/harness/tasks`의 바로 아래 자식이어야 하고 symlink이면 안 된다. 디렉터리가 실제로 있을 필요는 없다(그래서 Goal에 미래 child를 먼저 등록할 수 있다, §9).
 
-### 3.5 MCP 도구 11개
+### 3.5 MCP 도구 하나
 
-**전송.** 서버는 stdio JSON-RPC 2.0이다. Content-Length 프레이밍과 NDJSON을 모두 받는다. 지원하는 protocol은 `2025-11-25`와 `2025-06-18`이고 `serverInfo.version`은 `2.0.0`이다. `initialize`는 런타임별 `instructions`를 돌려준다. Codex용 instructions에는 `get_goal → goal_start → goal_context …` 절차가 들어 있다(`harness_server.py:26-27, 43-80, 2268-2334`).
+stdio JSON-RPC 2.0은 Content-Length와 NDJSON 전송을 지원한다.
+`TOOL_DEFS`, `TOOLS`, tools/list 모두 `wbs` 하나만 제공한다. 구형 별칭은
+Unknown tool로 거부된다. 아래의 task handler 이름은 비공개 구현 이름이다.
 
-`TOOL_DEFS`의 모든 도구는 `additionalProperties: false`다(`harness_server.py:2073-2159`). 다만 `call_tool`은 스키마로 입력을 검증하지 않고 핸들러로 바로 넘긴다. 그래서 스키마의 enum도 서버에서는 강제되지 않는다(`harness_server.py:2167-2171`).
+| wbs action | 동작 |
+|---|---|
+| open / context | WBS 실행 생성·재개 / 현재 문맥 |
+| plan / check / next | 성과 정의 / 선택 assertion 실행 / 의존 준비 성과 |
+| dispatch | 정확한 work pack 바인딩과 부모 주차 |
+| verify / close / block | 독립 영수증 검증 / 완료 / 차단 기록 |
+| migrate | 구형 데이터 preview; apply=true일 때만 변환 |
 
-| 도구 | 입력(필수는 **굵게**) | 하는 일 | 상태 쓰기 |
-|---|---|---|---|
-| `goal_start` | **objective**, goal_id, source | Goal 생성·동기화. `goals/<GOAL__id>.json`, `current.json` | 예 |
-| `goal_context` | 없음 | 활성 Goal과 child 목록 | 아니오 |
-| `goal_add_task` | **task_id**, title, status, task_dir, batch_requests | child upsert. batch_requests는 독립 작업 묶음을 선언한다. 활성 Goal이 있어야 하고, terminal Goal이면 거부 | 예 |
-| `goal_next_task` | 없음 | 첫 번째 queued 또는 active child; batch child는 batch/integration dispatch를 함께 반환 | 아니오 |
-| `goal_finish` | status(complete/blocked) | Goal 종료. 활성 Goal이어야 한다. complete는 child가 1개 이상이고, 각 child가 Goal 기록과 `task_control_status` 양쪽에서 closed여야 한다(검증 뒤 한 번 더 확인) | 예 |
-| `task_start` | task_dir / task_id / slug 중 하나 이상, request_file, fresh_run, execution_mode, workspace | 생성, 재개, run 리셋(§3.6). `request_file`은 내용이 아니라 경로이고, 파일이 없거나 읽을 수 없으면 조용히 무시된다 | 예 |
-| `task_context` | **task_id**, workspace | task pack, `run_id`, `watcher_status` 반환. 다음 조건을 모두 만족할 때만 이 세션 마커와 legacy `.active`를 다시 쓴다: 과제가 열려 있고, 이 세션의 focus가 다른 열린 과제에 잡혀 있지 않고, Codex의 명시적 workspace 호출이나 exact thread id 없는 main 호출이 아니다. Codex main exact 바인딩은 다른 worktree의 열린 바인딩도 거절한다. 그 밖에는 읽기 전용 | 조건부(마커) |
-| `task_verify` | **task_id**, run_commands, parallel, max_workers, workspace | verdict 계산. `run_commands`면 `verify_runner.py --json` 실행(§6.9) | 아니오 |
-| `task_close` | **task_id**, workspace | close 게이트, fingerprint 기록, 마커 삭제, Goal 갱신 | 예 |
-| `task_blocked` | **task_id**, **blocked_reason**, **unblock_condition**, workspace | BLOCKED.md 작성, 마커 삭제 | 예 |
-| `write_plan` | **plan**, task_id / task_dir, required_lenses, workspace | PLAN.md 작성, TASK.json lens 교체. 조건과 동작은 아래 목록 참조 | 예 |
+workspace는 등록된 worktree를 명시한다. migrate는 root에서 실행하며
+다른 필드를 받지 않는다. 일반 동작은 해당 action에 허용한 필드만 받는다.
 
 `write_plan`의 조건과 동작:
 
@@ -459,7 +456,7 @@ TASK.json 유효?
 | 그 밖의 예외 | `"<tool> failed: <e>"`만 |
 | 핸들러의 거부(예: task_start의 focus 거부, closed 과제 거부) | 예외가 아니라 `_err`가 돌려주는 data: `task_dir`, `status`, `next_action` 등 |
 
-주의: `call_tool`은 핸들러가 낸 `ValueError`를 원인과 관계없이 selector 오류 모양으로 포장한다. 그래서 goal 오류(`no active goal`, `goal is terminal…`, `goal completion blocked by unfinished or unverified child tasks: …`)도 selector 오류 모양으로 돌아온다. `field`는 message에 든 selector 키가 먼저이고, 없으면 입력에 있는 `goal_id`/`task_dir`/`task_id`/`slug` 순이며, 둘 다 없을 때만 `selector`다. 예를 들어 `goal_add_task`의 `no active goal`은 `field: task_id`와 넘긴 task_id를 `rejected_value`로 달고, next_action은 "Correct the named selector to the canonical form and retry without changing repository state."이다. 이 next_action은 이런 오류에는 맞지 않는 안내다. 실제 원인은 message에서 읽어야 한다(`harness_server.py:2175-2204`, `_lib.py:802, 819-821, 864-866, 873, 906`).
+`call_tool`은 `_invoke`를 통해 비공개 실행 owner와 같은 구조화 오류를 반환한다. 원인과 복구 안내를 함께 읽는다.
 
 **런타임 판별.** `HARNESS_RUNTIME` 환경 변수를 먼저 본다. 없으면 `clientInfo.name`에 `codex`나 `claude`가 들어 있는지 본다. 둘 다 아니면 `generic`이다. Codex로 initialize되면 MCP 프로세스 안에서 Codex `WatcherManager`를 시작한다. 시작에 실패하면 `last_watcher_error`에 기록하고 서버는 그대로 뜬다(`harness_server.py:30-40, 2243-2258, 2322-2334`).
 
@@ -510,7 +507,7 @@ TASK.json 유효?
 
 **write focus(C-09).** `_session_resumes`는 focus가 비어 있거나, 열려 있지 않거나, 지금 시작하려는 과제와 같을 때만 True다. 다른 열린 과제가 focus를 쥐고 있으면 `task_start`는 `task_start refused: another open task owns the resolvable session focus`로 거부하고, next_action은 "Finish or park the currently focused task"다(`harness_server.py:1196-1204, 1338-1347, 1612-1646`).
 
-> C-09는 세션 focus 충돌을 거부하며 queue는 `goal_add_task`의 Goal child에만 있다. Codex MCP는 명시적 workspace 호출 또는 exact `CODEX_THREAD_ID` 없는 main 호출에서 exact-session 검사를 PostToolUse로 미룬다. main exact identity가 있으면 공유 잠금 안에서 다른 worktree의 열린 바인딩도 검사하고 충돌 시 거절한다. PostToolUse가 발견한 충돌은 관련 과제를 fence하여 thread binding을 지운다(`CONTRACTS.md` C-09).
+> C-09는 세션 focus 충돌을 거부하며 진행은 WBS 의존 관계에 따른다. Codex MCP는 명시적 workspace 호출 또는 exact `CODEX_THREAD_ID` 없는 main 호출에서 exact-session 검사를 PostToolUse로 미룬다. main exact identity가 있으면 공유 잠금 안에서 다른 worktree의 열린 바인딩도 검사하고 충돌 시 거절한다. PostToolUse가 발견한 충돌은 관련 과제를 fence하여 thread binding을 지운다(`CONTRACTS.md` C-09).
 
 주의할 점:
 
@@ -1198,7 +1195,7 @@ goal-queue 스킬은 제거됐다. 테스트는 두 트리(`plugin/skills/goal-q
 ```
 Phase 0   재개 판정: PLAN.md 없음 → Plan / PLAN 있고 PASS 아님 → Develop/Verify /
           PASS 이고 missing_for_close 비어 있음 → Close.
-          Goal 만 활성이면 goal_next_task. 활성 과제가 없을 때만 task_start
+          Native Goal만 활성이면 같은 objective의 WBS를 연다.
 Phase 1   task_start
 Phase 2   Skill(harness:plan)
 Phase 3   Skill(harness:develop)
@@ -1386,7 +1383,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 6. (close **전**, develop 8.5와 같은 단계) 재사용할 수 있는 교훈을 captured/rejected/none으로 분류한다. captured는 커밋된 아티팩트가 있어야 한다. 파일 스스로 "Before task close, classify every reusable discovery…"라고 한다(`self-improvement.md:154-171`, `develop/SKILL.md:450-453`).
 7. harness 저장소면 완료된 diff를 커밋한다. 이 단계의 출처는 self-improvement.md가 아니라 `plugin/skills/run/SKILL.md:225-230`이다.
 
-Goal child라면 이 모든 것이 `goal_next_task`보다 먼저다.
+후속 WBS 성과를 고르기 전에 이 절차를 수행한다.
 
 ### 7.9 스킬 산문의 알려진 어긋남
 
@@ -1472,55 +1469,20 @@ Goal child라면 이 모든 것이 `goal_next_task`보다 먼저다.
 
 ---
 
-## 9. Goal
+## 9. WBS와 native Goal
 
-Goal은 여러 child 과제를 담는 컨테이너다. 선언한 독립 work pack은 batch pool에서 병렬 실행하고 이후 canonical integration child를 연다. 일반 child는 순차 경로를 유지한다. 넓은 목표는 native `/goal`이 소유하고, 그 상태는 MCP goal 도구가 저장한다(`doc/harness/patterns/native-goals.md`).
+Native Goal은 objective와 지속 실행 문맥만 제공한다. 일반 요청과 같은
+`wbs` 루트를 열고 PLAN의 관측 가능한 성과를 점진적으로 갱신한다.
+측정은 선언한 assertion의 실제 검증과 현재 소스·실행 증거에 묶인다.
+작업 수나 AI 추정치는 진행률이 아니다. 파일 소유권은 실제 병렬 실행
+handoff 때만 별도로 선언한다. 자세한 규범은
+[WBS 진행률](REQ__measurable-wbs-progress.md)을 따른다.
 
-- **저장**: `doc/harness/goals/<GOAL__id>.json`과 `current.json`. goal 트랜잭션(flock) 안에서만 쓴다(`_lib.py:272-273, 319-412`).
-- **goal_id**: `GOAL__<safe-id>`이거나, 자유 텍스트에서 `GOAL__<첫 6단어>-<sha1[:8]>`로 만든다. 단어는 ASCII `[A-Za-z0-9]+` 토큰만 소문자로 센다. 그래서 한국어 objective는 `GOAL__goal-<hash>`가 된다. 해시는 sanitize된 objective 전체로 계산한다(`_lib.py:319-343, 764-790`).
-- **child**: `{task_id, title, status, task_dir}` 및 선언한 work pack의 선택적 `batch` 메타데이터. status 도구 스키마의 enum은 `queued`/`active`/`closed`/`blocked`지만 서버는 검증하지 않는다. `goal_add_task`는 임의의 문자열 status도 저장하고, `goal_next_task`는 queued|active만 고르므로 철자가 틀린 child는 조용히 건너뛴다. `goal_finish`는 complete/blocked가 아닌 status 인자를 complete로 처리한다(`harness_server.py:2086-2104, 2167-2171`, `_lib.py:815-848, 867`).
-- **순서**: `goal_next_task`는 목록 순서에서 첫 번째 queued 또는 active child를 돌려준다. 이미 알고 있는 child들은 선언 순서를 유지한다(`_lib.py:851-857`).
-
-```
-goal_start(objective)          ← 같은 Goal 을 이어 가려면 첫 응답의 goal_id 를 넘긴다
-  └ goal_context → 일반 child 없음 → task_start → goal_add_task(task_id, status=queued/active)
-  ┌───────────────────────────────────────────────────────────┐
-  │ child: task_start → write_plan → develop → review → QA     │
-  │        → task_verify → task_close  (Goal 의 child 를 closed 로 자동 표시)
-  │        → self-improvement, learning promotion              │
-  │   PASS 불가 → task_blocked → goal_add_task(task_id, status=blocked)  ← 직접 해야 함
-  └──────────────┬────────────────────────────────────────────┘
-                 ▼
-  goal_next_task → 다음 child … (범위가 늘면 goal_add_task 로 추가)
-                 ▼
-  goal_finish(complete)  ← child ≥1, 모든 child 가 Goal 기록과 task_control_status 양쪽에서 closed
-  goal_finish(blocked)   ← 활성 Goal 이면 언제든 가능
-```
-
-근거: `_lib.py:793-911`, `harness_server.py:1579-1609, 1829-1836`.
-
-단계가 여러 개로 알려져 있으면, task 디렉터리가 생기기 전에 child를 queued로 미리 추가할 수 있다("future IDs are valid"). 순서는 사용자가 준 로드맵 순서를 따르고, 없으면 의존/위험 순서를 따른다. 일반 child는 `task_start`가 실제로 만든다. 독립 work pack은 먼저 `goal_add_task(batch_requests)`로 미래 integration child를 선언하고 `goal_next_task.dispatch`를 따른다. `route: batch`는 정확한 pool을 생성/재개하며, 모든 request 통합·보관 증거·cleanup과 pool close 뒤 `route: integration`에서만 child를 시작한다. task start/close와 Goal finish가 이 증거를 재검증한다. API·거부·resume 계약은 [자동 병렬 라우팅](REQ__automatic-parallel-routing.md)을 따른다. 활성 과제가 없을 때 UserPromptSubmit이 넣는 `[harness-goal]` 블록은 `get_goal → goal_start`, 일반 변경 요청의 `task_start`, child가 없을 때의 `task_start → goal_add_task`, 그리고 `goal_next_task`를 안내하고 현재 Goal id·child 수·다음 child를 보여 준다. Goal 상태는 쓰지 않는다(`doc/harness/patterns/native-goals.md:34-40, 49-60`, `plugin/skills/run/SKILL.md:74-75, 93`, `_lib.py:2040-2080`, `prompt_memory.py:73-106`).
-
-**Goal 규칙**(`_lib.py:772-911`, `harness_server.py:1557-1609, 1824-1836, 1856-1918`):
-
-| 규칙 | 결과 |
-|---|---|
-| `task_start`는 과제를 child로 붙이지 않는다 | `goal_add_task`를 따로 불러야 한다 |
-| child status가 자동으로 바뀌는 경우는 `task_close` → closed 하나뿐이다. 그것도 과제 checkout root의 Goal이 active일 때만이다 | `task_start`는 active로, `task_blocked`는 blocked로 바꾸지 않는다(goal 트랜잭션도 `add_goal_task`도 부르지 않음) |
-| 주차한 child는 queued/active로 남는다 | `goal_next_task`가 같은 주차 과제를 계속 돌려준다. `goal_add_task(task_id, status="blocked")`로 직접 표시한다 |
-| 수동으로 표시한 closed | `goal_next_task`는 믿고 건너뛰지만, `goal_finish`는 실제 close 상태를 다시 검증한다 |
-| `current.json`은 하나뿐이다 | 다른 objective로(goal_id 없이) `goal_start`하면 child 없는 새 Goal이 current가 된다. 이전 Goal 파일은 status active로 남지만 더 이상 current가 아니다. 문구가 조금만 달라도 해시가 바뀐다 |
-| 같은 id로 `goal_start`를 다시 부른다 | created_at과 child 목록은 유지하고 status를 active로 되돌린다. complete나 blocked였던 Goal이 옛 child와 함께 조용히 다시 열린다 |
-| terminal Goal | `goal_add_task`와 `goal_finish`가 `goal is terminal`로 거부된다. 다시 `goal_start`해야 한다 |
-| 활성 Goal 없음 | `goal_add_task`는 `no active goal`로 거부 |
-| child 0개 | `goal_finish(complete)`는 `no child tasks`로 실패 |
-| complete 검증 | 각 child가 Goal 목록의 status와 실제 `task_control_status`(close fingerprint가 현재 RECEIPTS.jsonl과 일치) 양쪽에서 closed여야 한다. 모두 통과하면 TASK.json과 status를 한 번 더 다시 읽어 확인한다. 실패한 child는 `goal completion blocked by unfinished or unverified child tasks: …`에 나열된다 |
-
-**close와 child의 연결.** `task_close`는 과제 checkout의 root에서 goal 트랜잭션을 잡는다. 그래서 batch lead의 close(worktree root)는 **coordinator의 Goal을 갱신하지 못한다.** lead는 goal 도구를 쓰지 않는다.
-
-**goal 오류 읽기.** goal 핸들러의 `ValueError`는 selector 오류 모양으로 포장되어 돌아온다(§3.5). 원인은 message에서 읽는다.
-
-**turn을 넘는 지속.** Stop 훅이 없으므로, 과제가 열려 있는 동안 계속 진행하게 하려면 `/goal` 조건에 close 조건(예: "task_close PASS")을 넣는다(C-17).
+구형 Goal 장부·큐·공개 task 별칭은 제거했다. 기존 기록은
+`wbs(action="migrate")`로 미리 확인하고 `apply=true`로 명시적으로 옮긴다.
+원본을 먼저 보관하고 목적지 해시를 확인한 후 소스를 퇴역시킨다.
+기존 TASK·영수증·배치 ID는 보존하고 과거 상태를 완료 증거로 승격하지 않는다.
+[마이그레이션](patterns/native-goals.md) 참조.
 
 ---
 
@@ -2207,7 +2169,7 @@ TASK.json의 스키마가 지원되지 않거나 안전하지 않다. Harness는
 근거: `_lib.py:2579-2626`.
 
 **close했던 과제가 `invalid`가 됐다**
-close 뒤에 RECEIPTS.jsonl 바이트가 바뀌었거나, 이 행들을 거부하는 낡은 reader가 읽고 있다(§3.3). 이 상태에서는 `goal_finish(complete)`도 실패한다.
+close 뒤에 RECEIPTS.jsonl 바이트가 바뀌었거나, 이 행들을 거부하는 낡은 reader가 읽고 있다(§3.3). 이 상태의 완료 증거는 유효하지 않다.
 
 **`start_status: ready_with_warnings` + `TASK_CONTEXT_DEFERRED`**
 `task_start`를 다시 부르지 말고 `task_context`를 부른다.
@@ -2218,8 +2180,8 @@ workspace가 정규 절대경로가 아니거나, 등록된 같은 저장소 wor
 **goal 도구 오류에 `field: selector`가 붙어 있다**
 포장 방식 때문이다(§3.5). message의 실제 원인(`no active goal`, `goal is terminal`, `no child tasks`, `unfinished or unverified child tasks`)을 읽는다.
 
-**`goal_next_task`가 주차한 과제를 계속 돌려준다**
-`task_blocked`는 Goal child 상태를 바꾸지 않는다. `goal_add_task(task_id, status="blocked")`로 직접 표시한다(§9).
+**주차한 WBS를 다시 진행해야 한다**
+실제 unblock 조건을 충족한 다음 같은 WBS를 open으로 재개한다. 진행 중인 pool이 있으면 먼저 정확한 pool을 통합한다.
 
 **`batch_preflight.py`가 exit 1**
 JSON `verdict`가 `adjust`인지 `refuse`인지 본다. exit 2는 사용법 오류이고 JSON이 없다.

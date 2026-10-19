@@ -194,8 +194,8 @@ No harness policy boilerplate. Keep concise and executable.
 ## 6.3 Write PLAN.md via MCP
 
 ```text
-write_plan {
-  task_id: "TASK__<id>",
+wbs { action: "plan",
+  wbs_id: "WBS__<id>",
   plan: "<PLAN.md content>",
   required_lenses: ["review-code", "review-security", "qa-cli"]
 }

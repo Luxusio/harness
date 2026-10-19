@@ -324,9 +324,8 @@ lead remains live or unknown. Keep queued work durable while halted. Then open
 `harness:run` lifecycle (`task_start` → plan → develop → QA → close). Under
 that task:
 
-For a Goal-owned pack, use the canonical integration child returned by
-`goal_next_task` after the whole pool is integrated and closed, rather than
-inventing another completion child. If a halted pool needs a separate recovery
+For a WBS-owned pack, reopen the owning WBS after the whole pool is
+integrated and closed. If a halted pool needs a separate recovery
 task after every writer stops, that repair task does not complete the pack;
 return to the exact pool and finish it before opening the integration child.
 

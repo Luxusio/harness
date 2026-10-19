@@ -2,14 +2,14 @@
 tags: [harness, contracts, enforcement, lint]
 summary: 계약의 Enforced by 필드는 실행되는 메커니즘을 지명해야 한다. 명시적 관례 선언은 예외지만, 존재하지 않는 훅을 지명하는 것은 결함이다.
 updated: 2026-09-04
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - CONTRACTS.md
   - plugin/scripts/contract_lint.py
   - plugin/hooks/hooks.json
   - plugin/skills/setup/templates/CONTRACTS.md
   - tests/test_contract_lint_real_tree.py
-freshness_updated: 2026-09-23T00:42:07Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — a contract's "Enforced by" names something that actually runs

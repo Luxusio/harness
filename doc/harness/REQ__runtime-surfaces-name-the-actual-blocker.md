@@ -2,7 +2,7 @@
 tags: [harness, stop-gate, task-verify, diagnostics, turn-end]
 summary: 런타임 표면은 호출자가 다음 행동을 정하는 데 필요한 정보를 가리지 않는다. 일반 안내로 선행 blocker를 덮어쓰지 않고, 거부는 실제 실패 범주와 입력 필드를 지목하며, 게이트는 작업을 만들지 못하는 블록을 하지 않고, 파킹은 재개의 증거 비용을 미리 밝힌다.
 updated: 2026-09-11
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/_gate_response.py
   - plugin/scripts/_lib.py
@@ -17,7 +17,7 @@ invalidated_by_paths:
   - tests/test_no_git_receipt_model.py
   - tests/test_receipt_watcher_fail_closed.py
   - tests/test_harness_mcp_server.py
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — 런타임 표면은 실제 blocker를 지목한다

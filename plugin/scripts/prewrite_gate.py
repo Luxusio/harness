@@ -86,9 +86,10 @@ PROTECTED_ARTIFACT_HUMAN = {
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
     "REVIEWS.jsonl": "the shared review-detail writer",
-    "WBS.json": "write_plan and task_wbs MCP tools",
+    "WBS.json": "WBS plan/check/dispatch MCP actions",
 }
-GOAL_CONTROL_DIR = os.path.join("doc", "harness", "goals")
+RETIRED_GOALS = os.path.join("doc", "harness", "goals")
+MIGRATION_ARCHIVE = os.path.join("doc", "harness", "archive", "goal-migration")
 
 SOURCE_EXTENSIONS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
@@ -147,14 +148,16 @@ def _rel(path, repo_root):
     return rel
 
 
-def _is_goal_control_artifact(path):
+def _is_migration_artifact(path):
     if not path: return False
     normalized = os.path.normpath(str(path))
-    if normalized == GOAL_CONTROL_DIR or normalized.endswith(os.sep + GOAL_CONTROL_DIR):
+    if normalized == RETIRED_GOALS or normalized.endswith(os.sep + RETIRED_GOALS):
         return True
-    marker = os.sep + GOAL_CONTROL_DIR + os.sep
+    if normalized == MIGRATION_ARCHIVE or normalized.endswith(os.sep + MIGRATION_ARCHIVE) or normalized.startswith(MIGRATION_ARCHIVE + os.sep) or os.sep + MIGRATION_ARCHIVE + os.sep in normalized:
+        return True
+    marker = os.sep + RETIRED_GOALS + os.sep
     suffix = normalized.split(marker, 1)[1] if marker in normalized else ""
-    if not suffix and normalized.startswith(GOAL_CONTROL_DIR + os.sep): suffix = normalized[len(GOAL_CONTROL_DIR) + 1:]
+    if not suffix and normalized.startswith(RETIRED_GOALS + os.sep): suffix = normalized[len(RETIRED_GOALS) + 1:]
     return bool(suffix and os.sep not in suffix and suffix.endswith(".json"))
 
 
@@ -188,7 +191,7 @@ def _is_protected_artifact(path, repo_root=None):
                 or _is_task_local_review_detail(normalized, repo_root=repo_root)
             )
         )
-        or _is_goal_control_artifact(normalized)
+        or _is_migration_artifact(normalized)
         or normalized.endswith(os.path.join(TASK_DIR, ".active"))
         or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
     )
@@ -197,12 +200,12 @@ def _is_protected_artifact(path, repo_root=None):
 def _protected_denial(path):
     """Return ``(owner, human)`` for a C-05 protected-artifact deny of ``path``."""
     basename = os.path.basename(path)
-    goal_control = _is_goal_control_artifact(path)
-    owner = "goal-control-mcp" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
-    owner_human = "native Goal MCP tools" if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
+    goal_control = _is_migration_artifact(path)
+    owner = "legacy-data-migration" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
+    owner_human = 'wbs(action="migrate")' if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
     human = (
         f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
-        f"tool (e.g. write_plan for PLAN.md)."
+        f"tool (e.g. wbs action=plan for PLAN.md)."
     )
     return owner, human
 

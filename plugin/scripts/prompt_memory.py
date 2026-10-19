@@ -32,8 +32,6 @@ try:
         TASK_DIR,
         _log_gate_error,
         resolve_active_task_dir,
-        read_current_goal,
-        next_goal_task,
         write_session_hint,
     )
 except Exception:
@@ -70,39 +68,12 @@ RESTORE_INJECT_CAP = 1400
 RESTORE_ARTIFACTS = ("RECEIPTS.jsonl", "BLOCKED.md")
 
 
-def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
-    """Inject the runtime Goal sync procedure.
-
-    Hooks cannot call agent-only tools such as Codex get_goal, so the hook
-    provides the exact MCP sequence the agent should run when native goal
-    context is present.
-    """
-    try:
-        goal = synced_goal or read_current_goal(repo_root)
-    except Exception:
-        goal = synced_goal or {}
-    goal_id = str(goal.get("goal_id") or "")
-    objective = _sanitize_prompt_text(str(goal.get("objective") or ""))
-    tasks = goal.get("tasks") if isinstance(goal.get("tasks"), list) else []
-    try:
-        next_info = next_goal_task(repo_root) if goal else {"task": None}
-    except Exception:
-        next_info = {"task": None}
-    task = next_info.get("task") if isinstance(next_info, dict) else None
-    next_task = task.get("task_id") if isinstance(task, dict) else ""
-
-    status = ""
-    if goal_id:
-        status = f" active={goal_id} tasks={len(tasks)}"
-        if next_task:
-            status += f" next={next_task}"
-        if objective:
-            status += f" objective={objective[:80]}"
+def _build_goal_block(repo_root: str) -> str:
+    """Native objective and ordinary work share the same WBS."""
     return (
         "[harness-goal] native goal? get_goal->wbs(open); "
         "plain mutating request? wbs(open); plan/check/verify/close on the same root; "
         "next: wbs(next), same outcome tree."
-        + status
     )
 
 

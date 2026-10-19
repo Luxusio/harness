@@ -72,8 +72,7 @@ serially. `finish` owns rebase, fast-forward, evidence harvest and disposal.
 Preserve its conflict/error/recovery behavior, including S1 proof. Recompute
 host slots and refill immediately while unrelated leads remain live.
 
-After all requests integrate and cleanup succeeds, close the pool. A Goal calls
-`goal_next_task` again and starts its returned canonical integration child;
+After all requests integrate and cleanup succeeds, close the pool. A WBS-owned pack reopens the same WBS root;
 standalone batches start the ordinary integration task. Review the full batch
 base-to-integrated diff and run combined QA. Leads skip source auto-install;
 the integration task owns verified delivery and final completion reporting.

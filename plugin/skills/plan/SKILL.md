@@ -3,7 +3,7 @@ name: plan
 description: Harness-native planning pipeline with a compact low-risk branch and a full single-reviewer branch; both write PLAN.md and task lens declarations via MCP.
 argument-hint: <task-slug>
 user-invocable: false
-allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__write_plan
+allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__wbs
 ---
 
 Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish the final task contract through the protected-artifact MCP.

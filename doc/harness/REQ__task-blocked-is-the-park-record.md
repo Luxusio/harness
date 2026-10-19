@@ -2,13 +2,13 @@
 tags: [harness, lifecycle, task_blocked, turn-end, contracts]
 summary: task_blocked 와 BLOCKED.md 는 미완료 태스크의 durable park 기록으로 유지한다. park 는 종결이 아니며 close 는 여전히 C-04 PASS 만 인정한다. "PASS 만 턴을 끝낸다" 방향(2026-09-02)은 Stop 훅 제거(2026-09-23)로 소멸했고 복원하지 않는다.
 updated: 2026-09-25
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/hooks/hooks.json
   - CONTRACTS.md
   - plugin/skills/setup/templates/CONTRACTS.md
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — task_blocked is the park record, not a turn-end escape

@@ -190,10 +190,10 @@ def test_oversized_state_refuses_before_publishing_or_losing_repairability(tmp_p
 def test_dispatch_bounds_combined_evidence_not_only_the_pack(tmp_path, monkeypatch):
     import pytest
     repo, td = baseline(tmp_path, [node("A"), node("B")])
-    import goal_batch
+    import work_pack
     import batch_state
     monkeypatch.setattr(batch_state, "main_boundary", lambda repo: None)
-    monkeypatch.setattr(goal_batch, "make_spec", lambda *args: dict(batch_id="test", requests=[], padding="x" * 1050000))
+    monkeypatch.setattr(work_pack, "make_spec", lambda *args: dict(batch_id="test", requests=[], padding="x" * 1050000))
     before = (td / "WBS.json").read_bytes()
     with pytest.raises(ValueError, match="storage budget"):
         wbs.work_pack(str(td), str(repo), "run", bind=True, ownership={"A": ["a.txt"], "B": ["b.txt"]})
@@ -450,3 +450,40 @@ def test_ambient_git_index_cannot_hide_changes_to_ignored_tracked_source(tmp_pat
     assert wbs.fingerprint(str(repo)) != real_source
     assert progress(repo, td)["percentage"] == 0
     assert not check(repo, td)["passed"]
+
+
+def test_retired_aliases_fail_over_actual_mcp_protocol(tmp_path, monkeypatch):
+    from test_harness_mcp_server import harness_server
+    replies = []
+    server = harness_server.McpServer()
+    monkeypatch.setattr(server, '_reply', lambda msg_id, result: replies.append((msg_id, result)))
+    names = ['goal_start', 'goal_context', 'goal_add_task', 'goal_next_task', 'goal_finish',
+             'task_start', 'task_context', 'task_wbs', 'write_plan', 'task_verify', 'task_close', 'task_blocked']
+    before = list(tmp_path.iterdir())
+    for index, name in enumerate(names):
+        server.handle_request(dict(jsonrpc='2.0', id=index, method='tools/call',
+                                   params=dict(name=name, arguments=dict(task_id='TASK__never'))))
+    assert len(replies) == len(names)
+    assert all(result.get('isError') and 'Unknown tool' in result['structuredContent']['error']
+               for _, result in replies)
+    assert list(tmp_path.iterdir()) == before
+    assert set(harness_server.TOOLS) == {tool['name'] for tool in harness_server.TOOL_DEFS} == {'wbs'}
+    server.close()
+
+
+def test_public_migration_is_explicit_and_owner_authorized(tmp_path, monkeypatch):
+    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_goal_migration import row
+    path = row(tmp_path)
+    owner = HarnessMcpServerTests()
+    blocked = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='open', wbs_id='sample'))
+    assert blocked.get('isError') and 'migrate' in blocked['structuredContent']['error']
+    preview = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='migrate'))
+    assert not preview.get('isError'), preview
+    assert path.exists() and preview['structuredContent']['status'] == 'preview'
+    refused = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='migrate', apply='true'))
+    assert refused.get('isError') and path.exists()
+    applied = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='migrate', apply=True))
+    assert not applied.get('isError'), applied
+    assert applied['structuredContent']['status'] == 'complete' and not path.exists()
+    assert not list(tmp_path.rglob('TASK.json'))

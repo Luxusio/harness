@@ -36,7 +36,7 @@ Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록�
 ### Harness Goal 동기화
 1. 사용자가 native `/goal <objective>` 입력 → hook이 harness Goal state를
    생성/동기화한다. 이후 agent가 Goal context를 보고 필요한 경우
-   `task_start` + `goal_add_task`로 `doc/harness/tasks/.active` 마커를
+   `wbs(action="open")`로 `doc/harness/tasks/.active` 마커를
    만든다. Plain repo-mutating request에서도 hook이 task를 자동 생성하지
    않으며, agent가 필요성을 판단해 `task_start`로 direct task를 연다.
 2. Turn-end 자체는 hook으로 강제되지 않는다. 태스크가 `in_progress`인 동안

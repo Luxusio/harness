@@ -89,18 +89,16 @@ def test_run_skills_use_only_native_goal_and_learn_before_next_child():
     ):
         body = path.read_text(encoding="utf-8")
         assert "### Native Goal continuation" in body
-        assert "goal_add_task" in body
+        assert "goal_add_task" not in body
         assert 'wbs(action="next")' in body
         assert body.index("`task_close` first") < body.index('only then call `wbs(action="next")`')
         assert "learning promotion" in body
         assert "task_pack_runner.py" not in body
         assert "goal_queue_runner.py" not in body
 
-    assert "## Ordered Children" in native
-    assert "## Learning Before Continuation" in native
-    assert "Runbook memory" in native
-    assert "promote_learnings.py" in native
-    assert "ordered native Goal child" in requirement
-    assert "goal_finish" in requirement
+    assert "## Explicit migration" in native
+    assert "confirmed user requirements" in native
+    assert "ordered outcomes to one WBS" in requirement
+    assert "wbs(action=\"next\")" in requirement
     assert not (REPO / "plugin/skills/goal-queue/SKILL.md").exists()
     assert not (REPO / "plugin-codex/internal-skills/goal-queue/SKILL.md").exists()

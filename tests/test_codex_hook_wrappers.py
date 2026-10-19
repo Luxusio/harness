@@ -148,14 +148,10 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest = root / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("type: cli\n", encoding="utf-8")
-            goals = root / "doc/harness/goals"
-            goals.mkdir(parents=True)
-            (goals / "current.json").write_text(json.dumps({
-                "goal_id": "GOAL__linked",
-                "objective": "Fix setup routing",
-                "status": "active",
-                "tasks": [],
-            }), encoding="utf-8")
+            from _lib import native_wbs_id
+            from test_harness_mcp_server import HarnessMcpServerTests
+            td = root / 'doc/harness/tasks' / ('TASK__' + native_wbs_id('Fix setup routing')[5:])
+            HarnessMcpServerTests()._make_task(repo, td.name)
             payload = {
                 "cwd": repo,
                 "tool_name": "functions.create_goal",
@@ -365,9 +361,9 @@ class TestCodexHookWrappers(unittest.TestCase):
                 "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             }) + "\n", encoding="utf-8")
-            payload = json.dumps({
+            payload = json.dumps({"tool_input": {"action": "open"},
                 "cwd": repo, "session_id": root_id,
-                "tool_name": "mcp__harness__task_start", "tool_use_id": "call_post_bind",
+                "tool_name": 'mcp__harness__wbs', "tool_use_id": "call_post_bind",
                 "tool_response": {"structuredContent": {
                     "task_dir": str(task), "task_id": task.name, "run_id": run_id,
                 }},
@@ -407,9 +403,9 @@ class TestCodexHookWrappers(unittest.TestCase):
                         "required_lenses": ["review-code", "qa-cli"],
                         "close_receipt_fingerprint": None,
                     }) + "\n", encoding="utf-8")
-                    payload = json.dumps({
+                    payload = json.dumps({"tool_input": {"action": "open"},
                         "cwd": repo, "session_id": session_id,
-                        "tool_name": "task_start", "tool_use_id": f"call_session_{index}",
+                        "tool_name": 'wbs', "tool_use_id": f"call_session_{index}",
                         "tool_response": {"structuredContent": {
                             "task_dir": str(task), "task_id": task.name,
                             "run_id": run_id,
@@ -442,9 +438,9 @@ class TestCodexHookWrappers(unittest.TestCase):
                     "required_lenses": ["review-code", "qa-cli"],
                     "close_receipt_fingerprint": None,
                 }) + "\n", encoding="utf-8")
-                payloads.append(json.dumps({
+                payloads.append(json.dumps({"tool_input": {"action": "open"},
                     "cwd": repo, "session_id": session_id,
-                    "tool_name": "task_start", "tool_use_id": f"call_conflict_{name}",
+                    "tool_name": 'wbs', "tool_use_id": f"call_conflict_{name}",
                     "tool_response": {"structuredContent": {
                         "task_dir": str(task), "task_id": task.name,
                         "run_id": run_id,
@@ -529,9 +525,9 @@ class TestCodexHookWrappers(unittest.TestCase):
                 }) + "\n", encoding="utf-8")
                 tasks.append(task)
                 runs.append(run_id)
-                payloads.append(json.dumps({
+                payloads.append(json.dumps({"tool_input": {"action": "open"},
                     "cwd": repo, "session_id": session_id,
-                    "tool_name": "task_start", "tool_use_id": f"call_terminal_{name}",
+                    "tool_name": 'wbs', "tool_use_id": f"call_terminal_{name}",
                     "tool_response": {"structuredContent": {
                         "task_dir": str(task), "task_id": task.name,
                         "run_id": run_id,
@@ -558,8 +554,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest = root / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            payload = json.dumps({
-                "cwd": repo, "session_id": root_id, "tool_name": "task_start",
+            payload = json.dumps({"tool_input": {"action": "open"},
+                "cwd": repo, "session_id": root_id, "tool_name": 'wbs',
                 "tool_use_id": "call_failed_result",
                 "tool_response": {"status": "failed", "structuredContent": {
                     "task_dir": str(root / "doc/harness/tasks/TASK__missing"),
@@ -627,8 +623,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             }
             task_control = task / "TASK.json"
             task_control.write_text(json.dumps(control) + "\n", encoding="utf-8")
-            payload = json.dumps({
-                "cwd": repo, "session_id": root_id, "tool_name": "task_start",
+            payload = json.dumps({"tool_input": {"action": "open"},
+                "cwd": repo, "session_id": root_id, "tool_name": 'wbs',
                 "tool_use_id": "call_rotate_result",
                 "tool_response": {"structuredContent": {
                     "task_dir": str(task), "task_id": task.name, "run_id": old_run,
@@ -653,9 +649,9 @@ class TestCodexHookWrappers(unittest.TestCase):
     def test_post_tool_use_routes_task_result_registration_fail_open(self):
         mod = _load("hook_post_tool_use")
         callback = mock.Mock(side_effect=RuntimeError("watcher unavailable"))
-        payload = json.dumps({
+        payload = json.dumps({"tool_input": {"action": "context"},
             "cwd": str(REPO_ROOT), "session_id": "019f834e-1e91-7662-9024-f548103d751e",
-            "tool_name": "mcp__harness__task_context", "tool_use_id": "call_route_context",
+            "tool_name": 'mcp__harness__wbs', "tool_use_id": "call_route_context",
             "tool_response": {"structuredContent": {
                 "task_dir": "/ignored", "task_id": "TASK__ignored", "run_id": "run",
             }},
@@ -1065,10 +1061,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         )
         self.assertEqual(
             config["hooks"]["PostToolUse"][0]["matcher"],
-            "Bash|.*create_goal|task_start|task_context|"
-            "mcp__harness__task_start|mcp__harness__task_context|"
-            "mcp__plugin_harness_harness__task_start|"
-            "mcp__plugin_harness_harness__task_context|"
+            "Bash|.*create_goal|"
             "wbs|mcp__harness__wbs|mcp__plugin_harness_harness__wbs",
         )
         for event, name in (

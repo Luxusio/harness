@@ -71,8 +71,8 @@ class TestDenyProtectedArtifact(unittest.TestCase):
         r = invoke_hook(GATE, "Write", {"file_path": goal})
         decision, reason = parse_decision(r.stdout)
         self.assertEqual(decision, "deny")
-        self.assertIn("owner=goal-control-mcp", reason)
-        self.assertIn("native Goal MCP tools", reason)
+        self.assertIn("owner=legacy-data-migration", reason)
+        self.assertIn('wbs(action="migrate")', reason)
 
     def test_write_claude_subagent_transcript_denies(self):
         transcript = os.path.expanduser(
@@ -155,7 +155,7 @@ class TestMultiEdit(unittest.TestCase):
         r = invoke_hook(GATE, "apply_patch", {"patch": patch})
         decision, reason = parse_decision(r.stdout)
         self.assertEqual(decision, "deny")
-        self.assertIn("goal-control-mcp", reason)
+        self.assertIn("legacy-data-migration", reason)
 
     def test_multiedit_triggers_gate(self):
         """MultiEdit on a protected artifact must deny."""

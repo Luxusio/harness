@@ -2,7 +2,7 @@
 tags: [harness, lifecycle, worktree, batch, mcp, contracts]
 summary: 한 세션이 과제마다 worktree 리드를 띄워 병렬로 진행한다. Claude는 native isolation을, Codex는 검증된 workspace와 native coordinator 신원 연결을 사용한다. 병합 후 통합 과제가 전체 검증과 설치를 맡는다.
 updated: 2026-09-29
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/mcp/harness_server.py
   - plugin/scripts/prewrite_gate.py
@@ -16,7 +16,7 @@ invalidated_by_paths:
   - plugin/agents/task-lead.md
   - plugin/skills/batch/SKILL.md
   - CONTRACTS.md
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — parallel tasks in one session via worktree leads

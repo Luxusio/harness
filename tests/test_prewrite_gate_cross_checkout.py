@@ -40,11 +40,11 @@ PROTECTED = (
     (f"{TASKS}/TASK__x/REVIEWS.jsonl", "review-detail-writer"),
     (f"{TASKS}/.active_sessions/{SID}.json", "task-control-runtime"),
     (f"{TASKS}/.active", "task-control-runtime"),
-    ("doc/harness/goals/current.json", "goal-control-mcp"),
+    ("doc/harness/goals/current.json", "legacy-data-migration"),
 )
 IN_ROOT_TASK_JSON_TEXT = (
     "TASK.json is owned by task control MCP tools. Use the owning skill or MCP "
-    "tool (e.g. write_plan for PLAN.md)."
+    "tool (e.g. wbs action=plan for PLAN.md)."
 )
 
 

@@ -18,7 +18,6 @@ try:
         find_repo_root,
         is_codex_task_binding_tool,
         is_harness_enabled_repo,
-        read_current_goal,
         resolve_active_task_dir,
     )
 except Exception:  # pragma: no cover - hook must fail open
@@ -26,7 +25,6 @@ except Exception:  # pragma: no cover - hook must fail open
     find_repo_root = None
     is_codex_task_binding_tool = None
     is_harness_enabled_repo = None
-    read_current_goal = None
     resolve_active_task_dir = None
 
 register_task_result = None
@@ -99,7 +97,7 @@ def _goal_routing_hint(payload: bytes) -> str:
     ``get_goal`` itself. PostToolUse is the first reliable point at which the
     goal exists and the agent can be told to synchronize it through harness.
     """
-    if find_harness_root is None or is_harness_enabled_repo is None or read_current_goal is None:
+    if find_harness_root is None or is_harness_enabled_repo is None:
         return ""
     data = _json_payload(payload)
     if not _is_create_goal_tool(str(data.get("tool_name") or data.get("tool") or "")):
@@ -126,14 +124,6 @@ def _goal_routing_hint(payload: bytes) -> str:
             objective = " ".join(str(tool_input.get("objective") or "").split())
         from _lib import native_wbs_is_synced
         if native_wbs_is_synced(repo_root, objective):
-            return ""
-        current = read_current_goal(repo_root)
-        current_objective = " ".join(str(current.get("objective") or "").split())
-        if (
-            objective
-            and current.get("status") == "active"
-            and objective == current_objective
-        ):
             return ""
     except Exception:
         return ""

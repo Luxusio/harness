@@ -1,11 +1,11 @@
 ---
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/hook_tree_health.py
   - plugin/scripts/drift_warn.py
   - plugin/mcp/harness_server.py
   - plugin/hooks/hooks.json
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — a harness that cannot record receipts must say so

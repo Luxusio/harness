@@ -12,6 +12,8 @@ hook's session id in agreement.
 """
 from __future__ import annotations
 
+from test_harness_mcp_server import call_execution
+
 import importlib.util
 import json
 import os
@@ -78,7 +80,7 @@ class TaskStartMarkerBindingTests(unittest.TestCase):
         with mock.patch.object(
             harness_server, "find_repo_root", return_value=repo_root,
         ):
-            return harness_server.call_tool(name, args)
+            return call_execution(harness_server, name, args)
 
     def _marker_names(self, repo_root: str) -> list[str]:
         sessions = Path(repo_root) / "doc/harness/tasks/.active_sessions"

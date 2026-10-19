@@ -15,7 +15,7 @@ unable to start its worker. The native thread-bound MCP eager path and native
 PostToolUse binding must produce registrations accepted by the same reader.
 
 Installed PostToolUse routing includes the exact public `wbs` tool names.
-Only successful open/context actions may bind; check/plan/dispatch/close/block,
+Retired task/Goal aliases cannot bind. Only successful open/context actions may bind; check/plan/dispatch/close/block,
 foreign tools and failed results cannot reactivate or redirect the coordinator.
 
 A shared MCP host without CODEX_THREAD_ID needs an actual native PostToolUse

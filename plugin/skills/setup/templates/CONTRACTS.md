@@ -104,7 +104,7 @@ edits and source-scope discipline remain the developer's responsibility.
 **Title:** Protected artifact ownership.
 **When:** Any direct `Write`/`Edit`/`MultiEdit`/`apply_patch` to PLAN.md,
 TASK.json, RECEIPTS.jsonl, task-local REVIEWS.jsonl, or
-`doc/harness/goals/*.json`.
+retired `doc/harness/goals/*.json` (explicit WBS migration only).
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
 Harness does not intercept Bash/shell file mutation.
 **On violation:** hard-block. Agent must route through the owning task MCP tool
@@ -151,8 +151,7 @@ While this session's marker (or, when it names no open task, the legacy
 `.active`) names another open task, `task_start` refuses with "another open
 task owns the resolvable session focus", both for a new task and for resuming
 an existing task by id. Once the focused task is closed or parked with
-`task_blocked`, resuming an existing task by id re-points focus to it. Only
-Goal children queue, through `goal_add_task`. When the Codex MCP process has
+`task_blocked`, resuming an existing task by id re-points focus to it. WBS dependencies determine ready outcomes; there is no Goal child queue. When the Codex MCP process has
 no `CODEX_THREAD_ID` (the usual case), `task_start` skips this refusal;
 PostToolUse then binds the thread to the returned task only when the thread
 holds no other open task, and otherwise fences both tasks and clears the

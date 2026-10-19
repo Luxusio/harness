@@ -2,7 +2,7 @@
 tags: [harness, receipts, hooks, install, session-binding, observability]
 summary: 영수증 서브시스템은 조용히 죽지 않는다. import 실패는 payload 가 지목한 repo 에 항상 breadcrumb 를 남기고, 설치 트리의 stale bytecode 는 인스톨러가 제거하며, 열린 태스크를 resume 한 세션은 그 태스크에 바인딩된다.
 updated: 2026-09-27
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/background_hook.py
   - plugin/scripts/subagent_lifecycle.py
@@ -14,7 +14,7 @@ invalidated_by_paths:
   - tests/test_task_context_binds_resuming_session.py
   - tests/regression/task__unified_install/test_install_py.py
   - tests/conftest.py
-freshness_updated: 2026-09-29T05:30:50Z
+freshness_updated: 2026-10-19T06:06:13Z
 ---
 
 # REQ — 영수증 서브시스템의 실패는 관측 가능하다
