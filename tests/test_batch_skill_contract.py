@@ -371,7 +371,7 @@ def test_pool_reserves_and_binds_before_authorizing_exact_worker():
     assert norm.index("init --requests-file") < norm.index("claim` atomically")
     assert norm.index("bootstrap-only; do not") < norm.index("bind --slug") < norm.index("Only after successful binding".lower())
     _assert_all(_text(TASK_LEAD), (
-        "Do not call `task_start`, create task artifacts, edit source or commit",
+        "Do not call `wbs(action=\"open\")`, create task artifacts, edit source or commit",
         "this same native agent with confirmed `batch_state.py bind` success",
         "Never infer permission from the original request",
     ), TASK_LEAD)
@@ -391,7 +391,7 @@ def test_pool_capacity_refill_and_serial_integration_keep_lifecycle_gates():
         "Do not open a main-checkout task while any lead remains live or unknown",
         "`review-code`, conditional `review-security`, then `qa-cli`",
         "receipt-backed review-before-QA order",
-        "before `task_close`",
+        "before `wbs(action=\"close\")`",
         "never substitutes for task review/QA/close",
         "never bypass durable checkpoints by invoking direct finish here",
     ), BATCH_SKILL)
@@ -409,7 +409,7 @@ def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolatio
         "source and task mutations are not",
         "binds your actual host worker identity",
         "explicit mutation permission",
-        "task_start(workspace=W, task_id=existing_id)` without `fresh_run`",
+        "wbs(action=\"open\", workspace=W, wbs_id=existing_id)` without `fresh_run`",
         "Require the same run id",
         "Preserve receipts and evidence",
         "never restart solely to manufacture a PASS",
@@ -508,7 +508,7 @@ def test_selected_module_commits_stay_under_outer_task_lifecycle():
     assert "`git -c <w/module>`" in lead
     assert "do not start a separate task inside a module" in lead
     assert "lifecycle calls and nested review/qa cwd at w" in lead
-    outer = lead[lead.index("## after `task_close` reports pass"):]
+    outer = lead[lead.index("## after `wbs(action=\"close\")` reports pass"):]
     assert "outer implementation diff" in outer
     assert 'git commit --trailer "harness-task: <task_id>"' in outer
     assert "no push, no merge" in outer
@@ -524,7 +524,7 @@ def test_selected_resume_preserves_module_identity_and_unfinished_edits():
                   "confirmed prepared-module handoff"):
         assert token in resume
     assert "dirty module edits" in resume and "rather than resetting" in resume
-    assert "task_start(workspace=w, task_id=existing_id)` without `fresh_run`" in resume
+    assert "wbs(action=\"open\", workspace=w, wbs_id=existing_id)` without `fresh_run`" in resume
 
 
 def test_published_s1_contract_has_one_owner_and_keeps_unsupported_topologies_out():

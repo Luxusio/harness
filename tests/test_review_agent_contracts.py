@@ -245,7 +245,7 @@ def test_known_ceilings_are_promoted_to_a_greppable_doc_ledger_before_close():
             path,
         )
         phase_86 = body[body.index("### Phase 8.6"):body.index("### Phase 8.7")]
-        assert phase_86.index("Known ceiling") < phase_86.index("task_verify"), path
+        assert phase_86.index("Known ceiling") < phase_86.index('wbs(action="verify")'), path
 
 
 def test_develop_tests_are_proportional_to_changed_behavior():
@@ -1269,7 +1269,8 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
                 "by plugin/scripts/_lib.py and delivered in the task_verify "
                 "next_action; reference that instead of copying it."
             )
-        _assert_all(body, ("_lib.py", "task_verify"), path)
+        _assert_all(body, ("_lib.py",), path)
+        assert 'wbs(action="verify")' in body or "task_verify" in body, path
 
         # Two pairs exist and the receipt stream selects between them. A surface
         # that names only the missing-attestation one sends a coordinator on an
@@ -1286,7 +1287,7 @@ def test_missing_attestation_pair_has_exactly_one_authoritative_location():
         # cannot tell "exactly one authoritative location" — a true statement
         # about *ownership* — from "the fixed missing-attestation pair" as the
         # only route, and the first phrasing is one this file should keep.
-        if "task_blocked" in normalized:
+        if "task_blocked" in normalized or 'wbs(action="block")' in normalized:
             # `empty-stream` carries the check: it is the term for the state
             # that distinguishes the pairs, it stays English in the Korean
             # surfaces (`plugin/CLAUDE.md`), and no surface can name the

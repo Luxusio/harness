@@ -21,7 +21,7 @@ def test_public_run_is_thin_implicit_entry_to_canonical_workflow():
     assert INTERNAL_RUN.is_file()
     assert "spawn_agent" in body
     assert "conditional security reviewer" in body
-    assert "task_verify" in body and "task_close" in body
+    assert 'wbs(action="verify")' in body and 'wbs(action="close")' in body
     assert "allow_implicit_invocation: true" in metadata
     assert "$harness:run" in metadata
 
@@ -62,7 +62,7 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     assert "Develop owns the implementation-through-close transaction" in run
     assert "Do not run a second QA or close cycle" in run
     assert "Verify recovery (only when develop returned before close)" in run
-    assert "Skip the `task_close` call when Phase 3 already closed" in run
+    assert "Skip the `wbs(action=\"close\")` call when Phase 3 already closed" in run
     assert "Reviewer Protocol (Codex variant)" in plan
     assert "Dual Voice" not in plan
     assert "Codex has no Agent fan-out tool" not in plan
@@ -70,7 +70,7 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     assert "Voice count is single in both" not in plan
 
     develop = (REPO / "plugin-codex/internal-skills/develop/SKILL.md").read_text(encoding="utf-8")
-    assert "Phase 9 is the only normal owner of `task_close`" in develop
+    assert "Phase 9 is the only normal owner of `wbs(action=\"close\")`" in develop
     assert develop.index("### Phase 8.7: Distilled Change Doc") < develop.index("### Phase 9:")
     assert "current task receipt run" in develop
     assert "checks are not lifecycle gates" in develop
