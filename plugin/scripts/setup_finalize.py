@@ -42,12 +42,12 @@ ROUTING_MARKER = "<!-- harness:routing-injected -->"
 CODEX_RUN_POLICY = "skills/run/agents/openai.yaml"
 ROUTING_BLOCK = """## Harness routing
 <!-- harness:routing-injected -->
-- On Codex, every repo-mutating request → invoke `$harness:run` before editing; it loads the internal canonical workflow, syncs a native Goal when present, and otherwise opens/resumes a Harness task
-- On Claude Code, run the public cycle (task start → plan → develop → QA → close) through native `/goal` for explicit goals or the runtime's canonical task route for plain repo-mutating requests; review and task_verify remain internal close gates
+- On Codex, every repo-mutating request → invoke `$harness:run` before editing; it loads the canonical workflow and opens/resumes one WBS; a native Goal supplies only the objective
+- On Claude Code, run the same WBS cycle (open → plan → develop → QA → close); use `wbs(action="verify")` for ordered evidence and `wbs(action="close")` only after verified outcomes and review/QA PASS
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
-- Plan-only requests → sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
-- Implement an approved PLAN.md / develop only → resume the active Goal child task through the internal develop path
-- Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next Goal child task
+- Plan-only requests → open/resume the WBS and stop after its plan phase if the user explicitly asks not to implement
+- Implement an approved PLAN.md / develop only → resume the same WBS through the internal develop path
+- Contract drift / post-upgrade cleanup → update the same WBS for necessary work; use a separate root only for an independently authorized follow-up
 - Read-only question or explanation → answer directly, no Harness run skill
 
 ### Durable Decision Documentation Gate

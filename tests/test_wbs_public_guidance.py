@@ -112,3 +112,20 @@ def test_shipped_runtime_rules_expose_only_current_wbs_actions():
     assert "Goal child" not in rules
     assert "fresh_run" in rules and "empty-stream" in rules
     assert "plugin/scripts/_lib.py" in rules
+
+
+def test_generated_routing_uses_same_wbs_and_preserves_user_content():
+    setup = importlib.import_module("setup_finalize")
+    user_before = "# Project rules\nKeep user decisions.\n\n"
+    user_after = "\n## Local conventions\nUser-owned text.\n"
+    original = user_before + "## Harness routing\n<!-- harness:routing-injected -->\nOld generated routing\n<!-- /harness:routing-injected -->\n" + user_after
+    rendered = setup._with_routing_block(original)
+    assert rendered.startswith(user_before) and rendered.endswith(user_after)
+    assert rendered.count(setup.ROUTING_MARKER) == 1
+    assert setup._with_routing_block(rendered) == rendered
+    assert "Old generated routing" not in rendered
+    assert "opens/resumes one WBS" in rendered
+    assert "resume the same WBS" in rendered
+    assert 'wbs(action="verify")' in rendered and 'wbs(action="close")' in rendered
+    assert "Goal child" not in rendered and "sync/create Goal" not in rendered
+    assert "task_verify" not in rendered
