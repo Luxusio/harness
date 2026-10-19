@@ -1088,7 +1088,7 @@ PENDING이고 `receipts_recordable`이 False가 아니면 next_action은 다음 
 | `unpaired` | start가 없거나 completion이 중복 | 훅 트리가 SubagentStart를 기록하는지 확인 |
 | `stale_followup` | 결속된 verdict는 유효하고, 뒤따른 읽을 수 없는 후속만 있음 | 결속된 verdict를 되살리려는 재실행은 불필요. 후속이 같은 verdict의 되풀이인지 확인하고, 새 finding이었다면 그 lens를 새로 스폰한다 |
 
-`missing_for_close` 항목은 PLAN.md(micro 제외), `completed review verdict…`(review가 PASS가 아닐 때), `completed QA verdict…`(runtime이 PASS가 아닐 때)다. TASK.json에 선언된 lens에서만 만들어지고 diff는 보지 않는다(`_lib.py:4862-4883`).
+`missing_for_close`에는 PLAN.md(micro 제외), `completed review verdict…`(review가 PASS가 아닐 때), `completed QA verdict…`(runtime이 PASS가 아닐 때)가 들어간다. 리뷰/QA 항목은 TASK.json의 lens 선언과 영수증에서 계산한다. 그뿐 아니라 WBS가 unbaselined가 아니면서 측정할 수 없거나 미검증 성과가 있으면 `verified WBS outcomes`, 연결된 pack의 route가 integration이 아니면 `integrated WBS work pack`도 추가한다(`_lib.py:emit_compact_context`). 미검증 성과는 같은 WBS의 assertion을 실제로 check하고, 미통합 pack은 정확히 연결된 pool을 통합한 뒤 같은 루트로 재개·검증한다. lens PASS만으로 이 두 조건을 우회할 수 없다.
 
 `wbs(action="verify")`는 스냅샷을 읽는 동안만 락을 잡고, `wbs(action="close")`는 판단부터 기록까지 락을 계속 잡는다(`harness_server.py:1721` 대 `1793`).
 
@@ -1412,7 +1412,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 6. (close **전**, develop 8.5와 같은 단계) 재사용할 수 있는 교훈을 captured/rejected/none으로 분류한다. captured는 커밋된 아티팩트가 있어야 한다. 파일 스스로 "Before task close, classify every reusable discovery…"라고 한다(`self-improvement.md:154-171`, `develop/SKILL.md:450-453`).
 7. harness 저장소면 완료된 diff를 커밋한다. 이 단계의 출처는 self-improvement.md가 아니라 `plugin/skills/run/SKILL.md:225-230`이다.
 
-후속 WBS 성과를 고르기 전에 이 절차를 수행한다.
+이 절차는 WBS 루트 close 이후, 별도로 승인된 후속 실행 전에 수행한다. 같은 열린 루트 안에서 next로 다음 성과를 고를 때마다 close/reopen하거나 self-improvement를 반복하지 않는다.
 
 ### 7.9 스킬 산문의 알려진 어긋남
 
