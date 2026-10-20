@@ -317,6 +317,7 @@ def last_hook_input() -> dict:
 
 def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str:
     root = os.path.abspath(repo_root)
+    resolved_root = os.path.realpath(root)
     current = root
     for part in relative_dir.split("/"):
         current = os.path.join(current, part)
@@ -325,7 +326,7 @@ def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str
         if os.path.islink(current) or not os.path.isdir(current):
             raise ValueError(f"invalid {label}; {relative_dir} must be a real directory inside the repository")
         try:
-            if os.path.commonpath((os.path.realpath(current), os.path.realpath(root))) != os.path.realpath(root):
+            if os.path.commonpath((os.path.realpath(current), resolved_root)) != resolved_root:
                 raise ValueError(f"invalid {label}; {relative_dir} resolves outside the repository")
         except ValueError:
             raise ValueError(f"invalid {label}; {relative_dir} resolves outside the repository") from None

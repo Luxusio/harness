@@ -61,3 +61,41 @@ Fresh-process projection tests verify the changed Python implementation.
 Installing updated files does not prove that an existing MCP process reloaded
 already-imported modules. Native Claude is unavailable in this environment;
 Claude projection checks do not constitute native Claude execution.
+
+## Registration liveness and early diagnosis (2026-10-20)
+
+User intent (conversation): “증거수집도 버그 고쳐”, followed by “왜 또 왜 또
+고장났어” and “아니 진짜 맨날 watcher는 맨날 고장나더라? 뭐 제대로 돌아가는
+꼴을 본 적이 없어”. These request reliable collection and explain the recurring
+failure. The mechanics below are derived implementation requirements, not
+claims that the user selected a timeout or filesystem algorithm.
+
+This incident confirmed valid native identity and supported direct lifecycle
+events, but a registration still naming a previous closed task. With three
+linked workspaces, binding discovery alone took 0.59–0.64 seconds against a
+0.5-second registration budget. Profiling found redundant control-directory
+root resolution and duplicate marker reads. This identifies a reproducible
+registration failure; it does not establish the cause of every past outage.
+
+Registration must handle this ordinary linked-worktree path within a bounded
+caller deadline. Reuse a root resolution only within one validation call;
+retain component confinement checks, current-run resolution and conflict
+revalidation. Missing markers need no second binding read. A shared registration
+budget must fit the enclosing hook's remaining deadline, never reset or add to
+it. Hooks remain fail-open and evidence completion remains fail-closed.
+
+Deadline exhaustion, validation exceptions, actual conflicts, absent bindings
+and publication rejection must not collapse into the same diagnosis. Report
+the failed stage and a bounded, non-sensitive reason immediately through the
+existing hook diagnostics. PostToolUse must not silently discard registration
+failures. Registration success alone does not establish a live watcher or an
+observed lifecycle. Diagnostic files never supply authoritative native identity.
+When later readiness in the same MCP response positively disproves an earlier
+capability warning, remove that superseded warning; preserve unrelated warnings
+and never clear a warning on unknown readiness alone.
+
+Regression evidence includes three real linked worktrees, slow discovery,
+timeout/exception classification, enclosing deadline intersection, absent
+markers and conflict fences, immutable offsets and exact future native
+lifecycle collection. No past receipt is reconstructed and no previous task
+is reopened merely to manufacture missing evidence.

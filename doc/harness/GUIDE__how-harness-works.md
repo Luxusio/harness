@@ -67,7 +67,7 @@ invalidated_by_paths:
   - doc/CLAUDE.md
   - doc/harness/critics/
   - doc/harness/review-overlays/
-freshness_updated: 2026-10-20T04:50:40Z
+freshness_updated: 2026-10-20T06:04:41Z
 ---
 
 # GUIDE — 하네스는 어떻게 동작하는가
@@ -710,9 +710,11 @@ Codex 훅은 `hooks.json`이 아니라 `install.py`의 `_codex_hooks_config`가 
 | PostToolUse | `Bash`, `create_goal`, canonical `wbs` forms (open/context only) | `hook_post_tool_use.py` | 3 |
 
 - 이 명령들에는 `|| true`가 없고 SessionStart timeout은 10을 넘는다. C-12의 적용 범위가 `hooks.json`이라서 계약 위반은 아니다. 대신 내부 try/except와 자식 프로세스 timeout에 의존한다.
-- `hook_pre_tool_use.py`는 쓰기 도구에서 gate 자식에 3.0초를 준다. timeout, spawn 실패, 출력 없는 nonzero 종료면 `prewrite_gate.protected_artifact_decision`을 프로세스 안에서 실행하여 C-05 대상만 거부한다. 다른 쓰기와 fallback 자체 오류는 fail-open이다. wrapper 전체가 바깥 5초 제한으로 죽으면 이 보장도 없다. `spawn_agent`에서는 bind할 수 없는 review 이름을 거부하고 0.5초 예산으로 watcher 등록을 복구한다(`hook_pre_tool_use.py`의 `CHILD_TIMEOUT_SECONDS`, `_run`, `_protected_artifact_fallback`, `main`).
+- `hook_pre_tool_use.py`는 쓰기 도구에서 gate 자식에 3.0초를 준다. timeout, spawn 실패, 출력 없는 nonzero 종료면 `prewrite_gate.protected_artifact_decision`을 프로세스 안에서 실행하여 C-05 대상만 거부한다. 다른 쓰기와 fallback 자체 오류는 fail-open이다. wrapper 전체가 바깥 5초 제한으로 죽으면 이 보장도 없다. `spawn_agent`에서는 bind할 수 없는 review 이름을 거부하고 공유 2초 예산으로 watcher 등록을 복구한다(`hook_pre_tool_use.py`의 `CHILD_TIMEOUT_SECONDS`, `_run`, `_protected_artifact_fallback`, `main`).
 - `hook_user_prompt_submit.py`는 harness 저장소에서 항상 `[harness-route] Repository mutation: invoke $harness:run before edits`를 앞에 붙인다. 그다음 `session_id`를 담은 payload를 `HARNESS_RUNTIME=codex` 환경의 `prompt_memory.py`로 넘긴다(자식 6초, 전체 7초). 그래서 Codex에서도 session hint가 기록된다(`hook_user_prompt_submit.py:14-89`).
-- `hook_session_start.py`는 먼저 `restore_watcher_registration(payload, retry_seconds=1.0, budget_seconds=1.25)`를 부른다. 이 호출은 try/except로 감싸져 있지 않다(import만 보호된다). 그다음 `verification_gap_check`와 `project_format_check`를 8초 자식 프로세스로 실행하고, 결과를 additionalContext로 돌려준다. 배너와 drift_warn은 없다(`hook_session_start.py:13-16, 33-69`).
+- `hook_session_start.py`는 먼저 공유 2초 예산으로 `restore_watcher_registration`을 한 번 호출한다. 이 호출은 try/except로 감싸져 있지 않다(import만 보호된다). 그다음 `verification_gap_check`와 `project_format_check`를 8초 자식 프로세스로 실행하고, 결과를 additionalContext로 돌려준다. 배너와 drift_warn은 없다(`hook_session_start.py`).
+
+watcher 등록의 timeout·예외는 실패 단계와 함께 보고하며, 확인된 충돌이나 작업 연결 부재와 구분한다. PostToolUse는 공유 예산을 전체 잔여 시간과 교차 적용하고 진단 기록 시간을 남긴다. 등록 실패는 기존 세션 진단과 additionalContext에 표시하며, 등록 성공 자체가 실제 lifecycle 수집 증거를 대신하지 않는다.
 - `hook_post_tool_use.py`는 세 가지 일을 한다. WBS open/context 결과만 thread에 바인딩하고, `create_goal` 뒤에 `[harness-goal]` 힌트를 주고, Bash 결과를 `tool_routing.py`로 넘겨 additionalContext로 감싼다(`hook_post_tool_use.py:149-210`).
 
 ### 4.8 일부러 없는 훅
@@ -2066,7 +2068,7 @@ root CLAUDE.md의 `## Memory` 규칙:
 | completion 증거 | transcript 출처와 start attachment(final text 비교 없음) | coordinator FINAL_ANSWER == child task_complete 메시지 |
 | prewrite gate | PreToolUse `Write\|Edit\|MultiEdit`에서 직접 실행(10초) | 래퍼가 3.0초 자식으로 실행. `apply_patch` 포함. 출력 없는 실패 시 C-05만 in-process fallback으로 거부, 다른 쓰기는 허용 |
 | 훅 정의 | `plugin/hooks/hooks.json`(`\|\| true`, timeout ≤10) | `install.py`가 생성(`\|\| true` 없음, SessionStart 20초) |
-| SessionStart | 배너 + gap + format + drift | watcher 등록 복구(1.25초 예산) + gap + format |
+| SessionStart | 배너 + gap + format + drift | watcher 등록 복구(공유 2초 예산) + gap + format |
 | UserPromptSubmit | `prompt_memory.py`(hint 기록) | `[harness-route]` + `prompt_memory.py`(`HARNESS_RUNTIME=codex`, hint 기록) |
 | PostToolUse 힌트 | 평문 stdout(모델에 보이지 않을 가능성, §4.4) | additionalContext로 감쌈 |
 | spawn 전 검사 | 없음 | `spawn_agent`의 bind 불가 review 이름 거부 |

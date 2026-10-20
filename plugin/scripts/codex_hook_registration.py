@@ -41,6 +41,7 @@ from _lib import (
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 TASK_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
+REGISTRATION_BUDGET_SECONDS = 2.0
 
 
 class _RegistrationTimeout(BaseException):
@@ -52,13 +53,18 @@ def _harness_enabled_cwd(cwd: str) -> bool:
     return bool(find_harness_root(cwd))
 
 
-def _call_with_deadline(callback, deadline: float, fallback=False):
+def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out=None, stage="registration"):
     """Run in-process registration work inside the remaining hard budget."""
+    def failed(reason):
+        if status_out is not None and status_out.get("status") != "failed":
+            status_out.update(status="failed", stage=stage, reason=f"{stage}: {reason}")
+        return fallback
+
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        return fallback
+        return failed("deadline exhausted")
     if not hasattr(signal, "setitimer"):
-        return fallback
+        return failed("deadline enforcement unavailable")
 
     def _timeout(_signum, _frame):
         raise _RegistrationTimeout()
@@ -67,7 +73,7 @@ def _call_with_deadline(callback, deadline: float, fallback=False):
         current_timer = signal.getitimer(signal.ITIMER_REAL)
         previous_handler = signal.signal(signal.SIGALRM, _timeout)
     except (AttributeError, ValueError):
-        return fallback
+        return failed("deadline enforcement unavailable")
     effective_remaining = min(
         remaining,
         current_timer[0] if current_timer[0] > 0 else remaining,
@@ -77,13 +83,13 @@ def _call_with_deadline(callback, deadline: float, fallback=False):
         previous_timer = signal.setitimer(signal.ITIMER_REAL, effective_remaining)
     except (AttributeError, ValueError):
         signal.signal(signal.SIGALRM, previous_handler)
-        return fallback
+        return failed("deadline enforcement unavailable")
     try:
         return callback()
     except _RegistrationTimeout:
-        return fallback
-    except Exception:
-        return fallback
+        return failed("deadline exhausted")
+    except Exception as exc:
+        return failed(f"validation unavailable ({type(exc).__name__})")
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0.0)
         signal.signal(signal.SIGALRM, previous_handler)
@@ -110,6 +116,7 @@ def _ensure_with_deadline(
     session_cwd: str | None = None,
     task_id: str = "",
     run_id: str = "",
+    status_out: dict | None = None,
 ) -> bool:
     """Interrupt the complete registration attempt at its wall-clock budget."""
     return bool(_call_with_deadline(
@@ -122,6 +129,7 @@ def _ensure_with_deadline(
         ),
         deadline,
         False,
+        status_out=status_out, stage="registration publication",
     ))
 
 
@@ -193,9 +201,16 @@ def authenticate_native_session(thread_id: str, control_root: str) -> str:
 
 def _bound_workspace_roots(control_root: str, thread_id: str) -> list[str] | None:
     roots = workspace_roots(control_root)
-    if any(_has_binding_conflict_fence(read_active_session_marker(root, thread_id)) for root in roots):
-        return None
-    return [root for root in roots if resolve_session_task_binding(root, thread_id)]
+    if not roots:
+        raise RuntimeError("workspace registry unavailable")
+    bound = []
+    for root in roots:
+        marker = read_active_session_marker(root, thread_id)
+        if _has_binding_conflict_fence(marker):
+            return None
+        if marker and resolve_session_task_binding(root, thread_id):
+            bound.append(root)
+    return bound
 
 
 def _live_conflicts(control_root: str, marker: dict) -> list[dict]:
@@ -296,15 +311,16 @@ def _task_result(payload: bytes) -> tuple[str, str, str]:
 def register_task_result(
     payload: bytes,
     *,
-    budget_seconds: float = 0.5,
+    budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
     status_out: dict | None = None,
 ) -> bool:
     """Bind a successful Harness task result to this exact Codex session."""
     deadline = time.monotonic() + max(0.0, float(budget_seconds))
     result = bool(_call_with_deadline(
         lambda: _register_task_result(payload, deadline, status_out), deadline,
+        status_out=status_out, stage="task binding",
     ))
-    if not result and time.monotonic() >= deadline and status_out is not None:
+    if not result and time.monotonic() >= deadline and status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
         status_out.update({
             "status": REGISTRATION_FAILED,
             "reason": "task binding did not complete within its registration budget",
@@ -347,7 +363,7 @@ def _register_task_result(payload: bytes, deadline: float, status_out: dict | No
 def register_native_task(
     session_cwd: str, thread_id: str, control_root: str,
     task_dir: str, task_id: str, run_id: str,
-    *, budget_seconds: float = 0.5, status_out: dict | None = None,
+    *, budget_seconds: float = REGISTRATION_BUDGET_SECONDS, status_out: dict | None = None,
 ) -> bool:
     """Bind an authenticated process-owned native actor through the hook owner."""
     # Native ancestry discovery is separately bounded by the trusted rollout
@@ -361,7 +377,7 @@ def register_native_task(
     return bool(_call_with_deadline(
         lambda: _bind_task_session(
             session_cwd, thread_id, control_root, task_dir, task_id, run_id, deadline, status_out,
-        ), deadline,
+        ), deadline, status_out=status_out, stage="task binding",
     ))
 
 
@@ -467,15 +483,16 @@ def _bind_task_session(
                     budget_seconds=max(0.0, deadline - time.monotonic()),
                     status_out=status_out,
                 )
-    except Exception:
-        if status_out is not None:
-            status_out.update({"status": REGISTRATION_FAILED, "reason": "exact task binding failed"})
+    except Exception as exc:
+        if status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
+            status_out.update({"status": REGISTRATION_FAILED, "stage": "task binding",
+                               "reason": f"task binding unavailable ({type(exc).__name__})"})
         return False
 def restore_watcher_registration(
     payload: bytes,
     *,
     retry_seconds: float = 0.0,
-    budget_seconds: float = 0.5,
+    budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
     ensure_fn: Callable[[str, str], bool] = ensure,
     bind_fn: Callable[[str, str], bool] | None = None,
     status_out: dict | None = None,
@@ -501,16 +518,21 @@ def restore_watcher_registration(
             status_out["reason"] = reason
 
     _record(NOT_APPLICABLE, "registration was not attempted")
+    if status_out is not None:
+        status_out.pop("stage", None)
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))
     cwd, thread_id = _registration_identity(payload)
     if status_out is not None and thread_id:
         status_out["thread_id"] = thread_id
     control_root = (
-        _call_with_deadline(lambda: find_harness_root(cwd), deadline, "")
+        _call_with_deadline(lambda: find_harness_root(cwd), deadline, "",
+                            status_out=status_out, stage="harness root discovery")
         if cwd else ""
     )
     if not cwd or not thread_id or not control_root:
+        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
+            return False
         # Report against the payload, not the collapsed identity tuple:
         # `_registration_identity` returns ("", "") when the thread id is
         # missing, discarding a perfectly good cwd. Blaming the cwd sends
@@ -533,8 +555,11 @@ def restore_watcher_registration(
     generation_bound = ensure_fn is ensure
     bound_roots = (_call_with_deadline(
         lambda: _bound_workspace_roots(control_root, thread_id), deadline, None,
+        status_out=status_out, stage="workspace binding discovery",
     ) if generation_bound else [])
     if bound_roots is None or len(bound_roots) > 1:
+        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
+            return False
         _record(NOT_APPLICABLE, "conflicting workspace bindings")
         return False
     if bound_roots:
@@ -549,8 +574,11 @@ def restore_watcher_registration(
     # The watcher cannot attest a spawn without this marker, while a missing
     # registration can be retried safely from the next pre-spawn hook.
     if not bool(_call_with_deadline(
-        lambda: bind_fn(control_root, thread_id), deadline, False
+        lambda: bind_fn(control_root, thread_id), deadline, False,
+        status_out=status_out, stage="current task binding",
     )):
+        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
+            return False
         # No open task to bind to. Spawning a subagent before task_start is
         # ordinary, not broken, so this is not a registration failure.
         _record(NOT_APPLICABLE, "no open task is bound to this session")
@@ -558,7 +586,12 @@ def restore_watcher_registration(
     task_id = ""
     run_id = ""
     if generation_bound:
-        binding = resolve_session_task_binding(control_root, thread_id)
+        binding = _call_with_deadline(
+            lambda: resolve_session_task_binding(control_root, thread_id), deadline, {},
+            status_out=status_out, stage="current run resolution",
+        )
+        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
+            return False
         task_dir = str(binding.get("task_dir") or "")
         task_id = os.path.basename(os.path.normpath(task_dir)) if task_dir else ""
         run_id = str(binding.get("run_id") or "")
@@ -572,24 +605,30 @@ def restore_watcher_registration(
         if ensure_fn is ensure:
             restored = _ensure_with_deadline(
                 control_root, thread_id, deadline, session_cwd=cwd,
-                task_id=task_id, run_id=run_id,
+                task_id=task_id, run_id=run_id, status_out=status_out,
             )
         else:
             try:
                 restored = ensure_fn(control_root, thread_id)
-            except Exception:
+            except Exception as exc:
                 restored = False
+                _record(REGISTRATION_FAILED, f"registration publication unavailable ({type(exc).__name__})")
+                if status_out is not None:
+                    status_out["stage"] = "registration publication"
         if restored:
             _record(REGISTERED, "")
             return True
         if time.monotonic() >= retry_deadline:
+            if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
+                return False
             # An attempt was made against a real identity and a real root and
             # did not succeed. This one is a genuine failure.
             _record(
                 REGISTRATION_FAILED,
-                "watcher registration did not complete within "
-                f"{max(0.0, float(budget_seconds))}s",
+                "registration validation or publication was refused",
             )
+            if status_out is not None:
+                status_out["stage"] = "registration publication"
             return False
         time.sleep(min(0.05, max(0.0, retry_deadline - time.monotonic())))
 

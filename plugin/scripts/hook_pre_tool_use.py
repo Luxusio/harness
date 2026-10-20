@@ -7,7 +7,9 @@ import os
 import re
 import subprocess
 import sys
+import time
 
+_IMPORT_STARTED_AT = time.monotonic()
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
@@ -15,6 +17,7 @@ try:
     from codex_hook_registration import (  # type: ignore
         NOT_APPLICABLE,
         REGISTRATION_FAILED,
+        REGISTRATION_BUDGET_SECONDS,
         restore_watcher_registration,
         _registration_identity,
     )
@@ -23,6 +26,7 @@ except Exception:  # pragma: no cover - registration recovery is best effort
     _registration_identity = None
     NOT_APPLICABLE = "not_applicable"
     REGISTRATION_FAILED = "failed"
+    REGISTRATION_BUDGET_SECONDS = 0.0
 
 try:
     from codex_lifecycle_watcher import registration_host_live, workspace_roots  # type: ignore
@@ -124,7 +128,6 @@ def _invalid_review_spawn_name(payload: bytes) -> str:
 
 
 HOOK_TIMEOUT_SECONDS = 5.0
-REGISTRATION_BUDGET_SECONDS = 0.5
 
 WATCHER_DIAGNOSTICS_RELPATH = "doc/harness/.watcher-diagnostics.json"
 
@@ -285,6 +288,7 @@ def _clear_registration_failure(payload: bytes) -> None:
         "last_registration_error": "",
         "last_registration_note": "",
     })
+_IMPORT_SECONDS = time.monotonic() - _IMPORT_STARTED_AT
 # The prewrite gate child's budget. The rest of HOOK_TIMEOUT_SECONDS covers
 # interpreter start, this wrapper's imports, the kill, and the in-process
 # protected-artifact fallback below. HOOK_TIMEOUT_SECONDS itself is set by
@@ -329,6 +333,7 @@ def _protected_artifact_fallback(payload: bytes) -> bytes:
 
 
 def main() -> int:
+    registration_deadline = time.monotonic() + max(0.0, HOOK_TIMEOUT_SECONDS - _IMPORT_SECONDS - 1.0)
     payload = sys.stdin.buffer.read()
     tool_name = _tool_name(payload)
     if _is_subagent_spawn_tool(tool_name):
@@ -347,7 +352,8 @@ def main() -> int:
         try:
             registered = restore_watcher_registration(
                 payload,
-                budget_seconds=REGISTRATION_BUDGET_SECONDS,
+                budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
+                                   max(0.0, registration_deadline - time.monotonic())),
                 status_out=status,
             )
         except Exception as exc:

@@ -188,7 +188,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         self.assertTrue(all(call.get("cwd") == repo for call in calls))
         child_names = [Path(call["cmd"][1]).name for call in calls]
         restore.assert_called_once_with(
-            payload.encode(), retry_seconds=1.0, budget_seconds=1.25,
+            payload.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS,
         )
         self.assertNotIn("codex_lifecycle_watcher.py", child_names)
         self.assertNotIn("hygiene_scan.py", child_names)
@@ -273,7 +273,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                  mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(mod.main(), 0)
-        restore.assert_called_once_with(raw.encode(), retry_seconds=1.0, budget_seconds=1.25)
+        restore.assert_called_once_with(raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS)
 
         for name in ("hook_post_tool_use", "hook_user_prompt_submit"):
             self.assertFalse(hasattr(_load(name), "restore_watcher_registration"), name)
@@ -658,11 +658,12 @@ class TestCodexHookWrappers(unittest.TestCase):
         })
         output = io.StringIO()
         with mock.patch.object(mod, "register_task_result", callback), \
+             mock.patch("hook_pre_tool_use._update_diagnostics"), \
              mock.patch.object(sys, "stdin", _BytesStdin(payload)), \
              contextlib.redirect_stdout(output):
             self.assertEqual(mod.main(), 0)
         callback.assert_called_once()
-        self.assertEqual(output.getvalue(), "")
+        self.assertIn("task binding unavailable (RuntimeError)", output.getvalue())
 
     def test_registration_binds_before_rollout_discovery(self):
         mod = _load("codex_hook_registration")
@@ -957,7 +958,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(mod.main(), 0)
             restore.assert_called_once_with(
-                raw.encode(), budget_seconds=0.5, status_out=mock.ANY,
+                raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS, status_out=mock.ANY,
             )
             # The hook must ask for the tri-state outcome, not just the bool:
             # reporting a not-applicable registration as a failure fabricates a
@@ -1350,7 +1351,9 @@ def test_posttool_binding_budget_includes_session_and_receipt_lock_admission(tmp
             assert status["status"] == mod.REGISTRATION_FAILED
             actual_hook = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
                                          input=payload, cwd=repo, capture_output=True, timeout=2.5)
-            assert actual_hook.returncode == 0 and not actual_hook.stdout and not actual_hook.stderr
+            assert actual_hook.returncode == 0 and not actual_hook.stderr
+            notice = json.loads(actual_hook.stdout)["hookSpecificOutput"]["additionalContext"]
+            assert "task binding: deadline exhausted" in notice
             assert marker.read_bytes() == before_marker
             assert watcher.registrations(str(repo)) == before_registration
             assert not (task / "RECEIPTS.jsonl").exists()

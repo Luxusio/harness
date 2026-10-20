@@ -106,6 +106,7 @@ except Exception:  # pragma: no cover - advisory check must never block startup
 try:
     from codex_hook_registration import (  # type: ignore
         REGISTERED as _REGISTRATION_REGISTERED,
+        REGISTRATION_BUDGET_SECONDS as _REGISTRATION_BUDGET_SECONDS,
         restore_watcher_registration as _restore_watcher_registration,
         _live_conflicts as _codex_live_conflicts,
         authenticate_native_session as _authenticate_native_session,
@@ -113,6 +114,7 @@ try:
     )
 except Exception:  # pragma: no cover - reported as a positive Codex failure
     _REGISTRATION_REGISTERED = "registered"
+    _REGISTRATION_BUDGET_SECONDS = 0.0
     _restore_watcher_registration = None
     _codex_live_conflicts = None
     _authenticate_native_session = None
@@ -329,7 +331,7 @@ def _server_runtime() -> str:
     return str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
 
 
-TASK_START_REGISTRATION_BUDGET_SECONDS = 0.5
+TASK_START_REGISTRATION_BUDGET_SECONDS = _REGISTRATION_BUDGET_SECONDS
 
 
 def _register_task_start_watcher(
@@ -1225,6 +1227,10 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
         snapshot=binding_handoff["snapshot"],
     )
     data["watcher_status"] = status
+    if status.get("receipts_recordable") is True and not status.get("receipt_capability_warning"):
+        data["warnings"] = [w for w in data.get("warnings", []) if w.get("code") != "RECEIPT_HOOKS_UNAVAILABLE"]
+        if "start_status" in data:
+            data["start_status"] = "ready_with_warnings" if data["warnings"] else "ready"
     if isinstance(data.get("task_context"), dict):
         # Re-gate the original routing against refreshed registration readiness,
         # keeping the operation's one immutable receipt view and minimal fallback.
@@ -1678,6 +1684,8 @@ def _handle_task_start(
         status, registration, task_dir, str(resumed.get("run_id") or ""),
         snapshot=preserved_snapshot,
     )
+    if status.get("receipts_recordable") is True and not status.get("receipt_capability_warning"):
+        warnings = [w for w in warnings if w.get("code") != "RECEIPT_HOOKS_UNAVAILABLE"]
     if binding_handoff is not None:
         binding_handoff.update({"context": ctx, "snapshot": preserved_snapshot})
     ctx = _gate_next_action(ctx, status)

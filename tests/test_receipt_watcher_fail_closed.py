@@ -2839,7 +2839,8 @@ class TestRegistrationOutcomeIsTriState(unittest.TestCase):
         self.assertFalse(registered)
         self.assertEqual(status["status"], reg.REGISTRATION_FAILED)
         self.assertNotEqual(status["status"], reg.NOT_APPLICABLE)
-        self.assertIn("did not complete", status["reason"])
+        self.assertIn("publication was refused", status["reason"])
+        self.assertNotIn("deadline", status["reason"])
         self.assertEqual(
             status["thread_id"], "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000"
         )

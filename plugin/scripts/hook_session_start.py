@@ -6,15 +6,20 @@ import os
 import json
 import subprocess
 import sys
+import time
 
+_IMPORT_STARTED_AT = time.monotonic()
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 try:
-    from codex_hook_registration import restore_watcher_registration  # type: ignore
+    from codex_hook_registration import restore_watcher_registration, REGISTRATION_BUDGET_SECONDS  # type: ignore
 except Exception:  # pragma: no cover - hook must fail open
     restore_watcher_registration = None
+    REGISTRATION_BUDGET_SECONDS = 0.0
 
+_IMPORT_SECONDS = time.monotonic() - _IMPORT_STARTED_AT
+HOOK_TIMEOUT_SECONDS = 20.0
 
 def _payload_data(payload: bytes) -> dict:
     try:
@@ -46,10 +51,12 @@ def _run(args: list[str], payload: bytes) -> bytes:
 
 
 def main() -> int:
+    deadline = time.monotonic() + max(0.0, HOOK_TIMEOUT_SECONDS - _IMPORT_SECONDS)
     payload = sys.stdin.buffer.read()
     chunks: list[str] = []
     if restore_watcher_registration is not None:
-        restore_watcher_registration(payload, retry_seconds=1.0, budget_seconds=1.25)
+        restore_watcher_registration(payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
+                                    max(0.0, deadline - time.monotonic())))
     commands = [
         ["verification_gap_check.py"],
         ["project_format_check.py"],

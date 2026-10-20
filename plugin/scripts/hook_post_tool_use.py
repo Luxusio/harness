@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 
+_IMPORT_STARTED_AT = time.monotonic()
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
@@ -27,27 +28,53 @@ except Exception:  # pragma: no cover - hook must fail open
     is_harness_enabled_repo = None
     resolve_active_task_dir = None
 
+_IMPORT_SECONDS = time.monotonic() - _IMPORT_STARTED_AT
 register_task_result = None
 
 
-def _register_task_result(payload: bytes) -> None:
+def _register_task_result(payload: bytes, *, deadline: float) -> None:
     """Lazy import avoids loading protected writer authority for unrelated hooks."""
     global register_task_result
-    if register_task_result is None:
-        try:
-            from codex_hook_registration import register_task_result as callback  # type: ignore
-        except Exception:
-            return
-        register_task_result = callback
+    status = {}
+    registered = False
     try:
-        register_task_result(payload, budget_seconds=0.5)
+        from codex_hook_registration import REGISTRATION_BUDGET_SECONDS
+        if register_task_result is None:
+            from codex_hook_registration import register_task_result as callback  # type: ignore
+            register_task_result = callback
+        registered = register_task_result(
+            payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
+                                        max(0.0, deadline - time.monotonic())),
+            status_out=status,
+        )
+    except Exception as exc:
+        registered = False
+        status.update(status="failed", stage="task binding",
+                      reason=f"task binding unavailable ({type(exc).__name__})")
+    # Reuse the existing session-scoped advisory writer. It never creates a
+    # receipt or gives diagnostics authority over the native actor identity.
+    reason = " ".join(str(status.get("reason") or "task binding failed").split())[:200]
+    try:
+        from hook_pre_tool_use import _update_diagnostics, _report_registration_not_applicable
+        if registered:
+            _update_diagnostics(payload, {"registration_present": True,
+                                         "last_registration_error": "", "last_registration_note": ""})
+        elif status.get("status") == "failed":
+            _update_diagnostics(payload, {"registration_present": False, "last_registration_error": reason})
+        else:
+            _report_registration_not_applicable(payload, str(status.get("reason") or "task result was not bindable"))
     except Exception:
-        pass
+        pass  # Advisory persistence failure must not suppress the hook result.
+    if not registered and status.get("status") == "failed":
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": f"[harness] Receipt watcher registration failed: {reason}. Registration grants no review/QA evidence; do not hand-author receipts.",
+        }}))
 
 HOOK_TIMEOUT_SECONDS = 3.0
 TOTAL_BUDGET_SECONDS = 2.4
 CHILD_TIMEOUT_SECONDS = 1.5
-DEADLINE_MARGIN_SECONDS = 0.1
+DEADLINE_MARGIN_SECONDS = 0.4  # Leave time to publish registration diagnostics.
 def _receipt_control_root(cwd: str) -> str:
     root = find_harness_root(cwd) if find_harness_root is not None else ""
     if root:
@@ -136,12 +163,12 @@ def _goal_routing_hint(payload: bytes) -> str:
 
 
 def main() -> int:
-    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
+    deadline = time.monotonic() + max(0.0, TOTAL_BUDGET_SECONDS - _IMPORT_SECONDS)
     payload = sys.stdin.buffer.read()
     data = _json_payload(payload)
     tool_name = _tool_name(payload)
     if _is_task_binding_tool(tool_name, data.get("tool_input") or data.get("input") or data.get("arguments")):
-        _register_task_result(payload)
+        _register_task_result(payload, deadline=deadline - DEADLINE_MARGIN_SECONDS)
         return 0
     goal_hint = ""
     if _is_create_goal_tool(tool_name):
