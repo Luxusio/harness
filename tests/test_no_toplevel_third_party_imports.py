@@ -1,7 +1,8 @@
 """Regression tests for P5: no top-level third-party imports in tests/.
 
-Ensures that all test_*.py files in tests/ use only stdlib modules or
-project-local harness scripts (plugin/scripts/) at the module level.
+Ensures that test_*.py files use only stdlib or project-local runtime/test
+helpers in unguarded module-level imports. Optional test runners must skip
+cleanly when unavailable; other optional packages are imported where needed.
 
 The real failure pattern this guards against:
   import yaml      ← PyYAML: not stdlib, not in plugin/scripts/ → FAIL
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -36,8 +38,9 @@ def _local_script_modules() -> set[str]:
 
 
 def _allowed_toplevel_modules() -> set[str]:
-    """Return stdlib, pytest convention, and project-local module names."""
-    return set(sys.stdlib_module_names) | {"conftest"} | _local_script_modules()
+    """Recognize test helpers without permitting external test dependencies."""
+    test_modules = {path.stem for path in TESTS_DIR.glob("test_*.py")}
+    return set(sys.stdlib_module_names) | {"conftest"} | _local_script_modules() | test_modules
 
 
 def _allowed_runtime_modules() -> set[str]:
@@ -71,18 +74,45 @@ def get_disallowed_toplevel_imports(source: str) -> list[tuple[str, int]]:
 class NoThirdPartyToplevelImportsTests(unittest.TestCase):
 
     def test_stdlib_conftest_and_local_script_imports_are_allowed(self):
-        source = "import tomllib\nimport conftest\nimport _lib\n"
+        source = "import tomllib\nimport conftest\nimport _lib\nimport test_batch_state\n"
         self.assertEqual([], get_disallowed_toplevel_imports(source))
 
     def test_synthetic_third_party_import_is_rejected(self):
-        self.assertEqual(
-            [("synthetic_third_party", 1)],
-            get_disallowed_toplevel_imports("import synthetic_third_party\n"),
+        for name in ("synthetic_third_party", "pytest", "yaml"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    [(name, 1)], get_disallowed_toplevel_imports(f"import {name}\n"),
+                )
+
+    def test_pytest_modules_skip_cleanly_without_site_packages(self):
+        modules = [
+            "test_batch_pending.py", "test_batch_worktrees.py",
+            "test_codex_registration_liveness.py", "test_device_lab_qa_contract.py",
+            "test_install_permission_reporting.py", "test_installer_output.py",
+            "test_verify_receipt_settlement.py", "test_wbs_input_policy.py",
+            "test_wbs_measurement.py",
+        ]
+        code = f"""
+import importlib.util
+import unittest
+assert importlib.util.find_spec('pytest') is None
+for name in {modules!r}:
+    suite = unittest.TestLoader().discover('tests', pattern=name)
+    result = unittest.TestResult()
+    suite.run(result)
+    assert result.wasSuccessful(), (name, result.errors, result.failures)
+    assert len(result.skipped) == 1, (name, result.skipped)
+"""
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-S", "-c", code], cwd=REPO_ROOT, env=env,
+            capture_output=True, text=True, timeout=30,
         )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_no_third_party_toplevel_imports_in_test_files(self):
-        """All test_*.py files in tests/ must only use stdlib or project-local
-        harness scripts (plugin/scripts/) at the top level.
+        """Unguarded top-level imports must be stdlib or project-local helpers.
 
         This guards against accidental import yaml / import pyyaml / import requests
         at module level, which breaks in minimal environments that lack those packages.
@@ -115,8 +145,8 @@ class NoThirdPartyToplevelImportsTests(unittest.TestCase):
             self.fail(
                 "Found top-level third-party imports in test files:\n"
                 + "\n".join(f"  {v}" for v in violations)
-                + "\n\nFix: move the import inside the test method, "
-                "or add the package to plugin/scripts/ if it is a project-local module."
+                + "\n\nFix: import optional packages inside the test method, "
+                "or explicitly skip a runner-dependent module when its runner is unavailable."
             )
 
 
@@ -174,6 +204,7 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
         self.assertIn("_lib", allowed)
         self.assertNotIn("synthetic_third_party", allowed)
         self.assertNotIn("yaml", allowed)
+        self.assertNotIn("test_batch_state", allowed)
 
     def test_literal_dynamic_imports_are_resolved(self):
         cases = {

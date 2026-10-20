@@ -9,7 +9,13 @@ import subprocess
 import sys
 from unittest import mock
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 
 @pytest.fixture(autouse=True)

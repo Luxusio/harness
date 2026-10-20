@@ -173,6 +173,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `install_verified.py` | Stateless trusted post-QA delivery wrapper; compares canonical payloads from an isolated verified snapshot and refreshes only stale runtimes | stdout / exit status |
 | `batch_state.py` | Durable batch records, bounded pool claims, validated bootstrap retention, exact worker/result binding, serialized finish checkpoints, status/recovery, same-worktree resume and explicit retained abandonment; operational state never grants task PASS | `doc/harness/runtime/batches/` |
+| `batch_worktrees.py` | Routes managed WBS worktree preparation, binding, completion and recovery through the existing batch owners | Managed pool result |
+| `batch_pending.py` | Read-only discovery of retained worktree pools and their next lifecycle action after restart; never deletes resources | Pending-pool advisory |
 | `work_pack.py` | Validates task-owned isolated work packs and integration evidence before completion | Library routing result |
 | `goal_migration.py` | Explicitly previews/imports retired Goal records and pack bindings, preserving historical identities and evidence | WBS migrate report |
 | `parallel_dispatch.py` | Proposes ready AC lanes from dependencies, path ownership and observed host capacity; the coordinator reserves actual slots | stdout (JSON) |

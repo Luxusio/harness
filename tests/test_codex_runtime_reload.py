@@ -404,6 +404,15 @@ def test_failed_daemon_install_renders_ordered_recovery_with_exact_retry(tmp_pat
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--force", "--config-path", str(config)])
     assert module.main() == 1
     output = capsys.readouterr().out
+    assert output.startswith("Codex: FAILED\n  Error: ")
+    assert output.count(error) == 1
+    assert "dangling symlink" in output
+    assert "same shell/runtime" not in output
+    assert "only after it succeeds, retry:" not in output
+
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--verbose"])
+    assert module.main() == 1
+    output = capsys.readouterr().out
     assert output.count(error) == 1
     assert "dangling symlink" in output
     assert "CODEX_HOME" in output and "same shell/runtime" in output

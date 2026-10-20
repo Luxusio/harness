@@ -3,8 +3,13 @@
 from pathlib import Path
 import re
 
-import pytest
-import yaml
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,6 +108,7 @@ def test_setup_uses_device_lab_without_changing_manifest_or_project_config(path)
 
 @pytest.mark.parametrize("role", ["qa-desktop", "ux-desktop"])
 def test_claude_tool_allowlist_reaches_actual_device_lab_actions(role):
+    import yaml
     frontmatter = text(f"plugin/agents/{role}.md").split("---", 2)[1]
     tools = yaml.safe_load(frontmatter)["tools"].split(", ")
     for action in ("devices", "status", "window_list", "focus_window", "screenshot",
@@ -136,6 +142,7 @@ def test_active_native_docs_do_not_restore_obsolete_x11_contract(path):
 
 
 def test_qa_verdict_identity_and_requirement_provenance_are_preserved():
+    import yaml
     for runtime in ("plugin", "plugin-codex"):
         body = text(f"{runtime}/agents/qa-desktop.md")
         assert "first line of the final response must be exactly" in body

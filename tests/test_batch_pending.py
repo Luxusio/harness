@@ -7,7 +7,13 @@ from pathlib import Path
 import subprocess
 import sys
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugin/scripts'
 sys.path.insert(0, str(SCRIPTS))

@@ -7,7 +7,13 @@ import shutil
 import stat
 import sys
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 from test_install_writable_source_comparison import _load_install_module
 

@@ -20,7 +20,7 @@ examples inline inside a sentence. Mentioning the token in ordinary prose is
 always safe.
 
 Run verification commands in the foreground and await them. Never end your
-turn with a command or subagent you started still running.
+turn while a command or subagent you started is still running.
 
 ## Required inputs and expected behavior
 
