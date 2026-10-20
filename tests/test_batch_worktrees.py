@@ -425,3 +425,89 @@ def test_abbreviated_result_commit_integrates_and_replays_exact_original(tmp_pat
     assert replay['batch']['requests'][0]['status'] == 'integrated'
     with pytest.raises(batch.Refusal, match='replay differs'):
         call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result={**result, 'commit': full_commit}, worker_stopped=True)
+
+
+def ignore_disposal_fixture(pool):
+    ignore = pool.repo / '.gitignore'
+    ignore.write_text(ignore.read_text() + '*.local\n.venv/\nnode_modules/\n__pycache__/\n.pytest_cache\n.mypy_cache/\n.ruff_cache/\n.cache/\n')
+    _git('add', '.gitignore', cwd=pool.repo)
+    _git('commit', '-qm', 'ignore disposal fixture data', cwd=pool.repo)
+
+
+@pytest.mark.parametrize('kind', ['precious', 'other-task', 'bad-learning', 'invalid-marker', 'cache-file', 'unknown-cache', 'nested-cache-repo'])
+def test_ordinary_complete_retains_unknown_ignored_bytes_and_original_lock(tmp_path, monkeypatch, kind):
+    pool, spec = setup(tmp_path, monkeypatch)
+    ignore_disposal_fixture(pool)
+    result = finish_result(pool, spec)
+    worktree = Path(result['worktree'])
+    rel = {'precious':'precious.local', 'other-task':'doc/harness/tasks/TASK__other/notes.md',
+           'bad-learning':'doc/harness/learnings.jsonl', 'invalid-marker':'doc/harness/tasks/.active_sessions/default.json',
+           'cache-file':'.pytest_cache', 'unknown-cache':'.cache/precious.txt',
+           'nested-cache-repo':'.venv/nested/.git/config'}[kind]
+    precious = worktree / rel
+    _write(precious, 'unique ignored evidence\n')
+    marker = worktree / '.harness-batch-bootstrap'
+    original_marker = marker.read_bytes()
+    lock_path = Path(_git('rev-parse', '--absolute-git-dir', cwd=worktree)) / 'locked'
+    original_lock = lock_path.read_bytes()
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    assert response['status'] == 'kept'
+    assert precious.read_text() == 'unique ignored evidence\n'
+    assert marker.read_bytes() == original_marker and lock_path.read_bytes() == original_lock
+    assert _git('branch', '--list', result['branch'], cwd=pool.repo)
+    assert response['operation_result']['cleanup']['unlocked'] is False
+
+
+def test_post_merge_hook_ignored_bytes_are_inventoried_before_unlock(tmp_path, monkeypatch):
+    import shlex
+    pool, spec = setup(tmp_path, monkeypatch)
+    ignore_disposal_fixture(pool)
+    result = finish_result(pool, spec)
+    late = Path(result['worktree']) / 'late.local'
+    hook = pool.repo / '.git/hooks/post-merge'
+    hook.write_text('#!/bin/sh\nprintf "late unique evidence\\n" > ' + shlex.quote(str(late)) + '\n')
+    hook.chmod(0o755)
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    assert response['status'] == 'kept'
+    assert late.read_text() == 'late unique evidence\n'
+    assert response['operation_result']['integrated_tip'] == _head(pool.repo)
+    assert response['operation_result']['cleanup']['unlocked'] is False
+    assert (late.parent / '.harness-batch-bootstrap').is_file()
+
+
+@pytest.mark.parametrize('mutate', ['task', 'archive'])
+def test_evidence_changed_after_harvest_prevents_ordinary_removal(tmp_path, monkeypatch, mutate):
+    pool, spec = setup(tmp_path, monkeypatch)
+    result = finish_result(pool, spec)
+    original = batch.finish_helper._cleanup
+    def late_change(repo, worktree, branch, outcome, *args, **kwargs):
+        directory = (Path(worktree) / 'doc/harness/tasks/TASK__a' if mutate == 'task'
+                     else Path(repo) / 'doc/harness/archive/batch/TASK__a')
+        _write(directory / 'late-evidence.txt', 'late unique bytes\n')
+        return original(repo, worktree, branch, outcome, *args, **kwargs)
+    monkeypatch.setattr(batch.finish_helper, '_cleanup', late_change)
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    assert response['status'] == 'kept'
+    assert Path(result['worktree']).exists()
+    assert 'archive' in response['operation_result']['reason']
+    assert response['operation_result']['cleanup']['unlocked'] is False
+
+
+@pytest.mark.parametrize('markers', ['empty-directory', 'exact-marker'])
+def test_reproducible_cache_directories_and_exact_closed_metadata_allow_disposal(tmp_path, monkeypatch, markers):
+    pool, spec = setup(tmp_path, monkeypatch)
+    ignore_disposal_fixture(pool)
+    result = finish_result(pool, spec)
+    worktree = Path(result['worktree'])
+    for name in ('.venv', 'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'):
+        _write(worktree / name / 'generated-cache.bin', 'reproducible content\n')
+    sessions = worktree / 'doc/harness/tasks/.active_sessions'
+    sessions.mkdir()
+    _write(worktree / 'doc/harness/tasks/.active.fixture.lock', '')
+    if markers == 'exact-marker':
+        _write(sessions / 'default.json', json.dumps(dict(session_id='default', task_dir=str(worktree / 'doc/harness/tasks/TASK__a'),
+                    task_id='TASK__a', run_id=RUN, updated='2026-10-20T00:00:00+00:00')))
+        _write(sessions / '.session-hint', 'default\n')
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    assert response['batch']['requests'][0]['status'] == 'integrated', response
+    assert not worktree.exists()

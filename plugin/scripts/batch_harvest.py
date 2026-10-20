@@ -297,7 +297,7 @@ def _s1_git_text(root, *args):
     return result.stdout.rstrip('\n')
 
 
-def _s1_content(worktree, task_id, source_entries, manifest, repo):
+def _s1_content(worktree, task_id, source_entries, manifest, repo, *, ordinary_allowed=(), ordinary_caches=False):
     """Every outer file must be tracked or have an exact preserved counterpart."""
     from batch_submodules import reject_hidden_index_flags
 
@@ -308,7 +308,7 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo):
     tracked = set(filter(None, _s1_git_text(worktree, 'ls-files', '-z').split('\0')))
     selected = {m['path'] for m in manifest['modules']}
     task_rel = 'doc/harness/tasks/' + task_id
-    allowed = set(tracked) | {task_rel + '/' + rel for rel in source_entries}
+    allowed = set(tracked) | {task_rel + '/' + rel for rel in source_entries} | set(ordinary_allowed)
     allowed.add(task_rel)
     learning_rel = 'doc/harness/learnings.jsonl'
     learning = os.path.join(worktree, learning_rel)
@@ -325,7 +325,7 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo):
         # malformed rows or unique bytes that were not appended to the ledger.
         _s1_require(all(line in dest_lines for line in source_lines), "learning content not preserved")
         allowed.add(learning_rel)
-    directories = set()
+    directories = set(ordinary_allowed)
     for path in allowed | selected:
         parent = os.path.dirname(path)
         while parent:
@@ -349,6 +349,10 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo):
                 continue  # tracked link bytes are integrated; never follow its target
             if rel in selected:
                 continue  # shared helper independently proves all module content
+            if ordinary_caches and name in ORDINARY_CACHES:
+                count += _ordinary_cache(full)
+                _s1_require(count <= 100000, 'worktree content inventory exceeds bound')
+                continue
             _s1_require(rel in directories or rel in tracked, 'unknown ignored or untracked directory: ' + rel)
             keep.append(name)
         dirs[:] = keep
@@ -362,6 +366,136 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo):
             _s1_require(stat.S_ISREG(mode) or rel in tracked and stat.S_ISLNK(mode), 'nonregular worktree content')
         count += len(dirs) + len(files)
         _s1_require(count <= 100000, 'worktree content inventory exceeds bound')
+
+
+
+# Only these actual directory trees are reproducible disposal exceptions.
+# A regular file or symlink with the same name is never a cache exception.
+ORDINARY_CACHES = {'.venv', 'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'}
+
+
+def _ordinary_cache(root):
+    def unreadable(exc):
+        raise HarvestError('cannot inspect reproducible cache') from exc
+    count = 0
+    for current, dirs, files in os.walk(root, followlinks=False, onerror=unreadable):
+        for name in dirs + files:
+            full = os.path.join(current, name)
+            _s1_require(name != '.git', 'nested repository inside cache: ' + full)
+            mode = os.lstat(full).st_mode
+            _s1_require(stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode),
+                        'nonregular cache content: ' + full)
+            count += 1
+            _s1_require(count <= 100000, 'cache content inventory exceeds bound')
+    return count
+
+
+def _ordinary_bytes(path, limit=65536):
+    _s1_path(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        _s1_require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                    and info.st_nlink == 1 and not info.st_mode & 0o022,
+                    'unsafe disposable control metadata: ' + path)
+        raw = handle.read(limit + 1)
+    _s1_require(len(raw) <= limit, 'disposable control metadata exceeds bound')
+    return raw
+
+
+def _ordinary_markers(worktree, task_id):
+    from _lib import read_task_control, task_control_status, sanitize_session_id
+    task_rel = 'doc/harness/tasks/' + task_id
+    source = os.path.join(worktree, task_rel)
+    control = read_task_control(source)
+    if not control or task_control_status(source, control) != 'closed':
+        return set()  # standalone legacy evidence can be archived, never infer marker ownership
+    allowed = set()
+    tasks = os.path.dirname(source)
+    for name in os.listdir(tasks):
+        full = os.path.join(tasks, name)
+        if re.fullmatch(r'\.active(?:\.[A-Za-z0-9_.-]+)?\.lock', name):
+            _s1_require(_ordinary_bytes(full, 0) == b'', 'nonempty Harness operational lock')
+            allowed.add('doc/harness/tasks/' + name)
+        elif name == '.active':
+            _s1_require(_ordinary_bytes(full, 4096).decode('utf-8').strip() == source,
+                        'legacy active marker belongs to another task')
+            allowed.add('doc/harness/tasks/' + name)
+    sessions = os.path.join(tasks, '.active_sessions')
+    owned_sessions = set()
+    if os.path.lexists(sessions):
+        _s1_path(sessions, True)
+        allowed.add('doc/harness/tasks/.active_sessions')
+        for name in os.listdir(sessions):
+            if not name.endswith('.json'):
+                continue  # unknown entries are rejected by the full inventory
+            raw = _ordinary_bytes(os.path.join(sessions, name))
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    _s1_require(key not in result, 'duplicate session marker field')
+                    result[key] = value
+                return result
+            marker = json.loads(raw, object_pairs_hook=unique)
+            sid = name[:-5]
+            _s1_require(isinstance(marker, dict) and set(marker) == {'session_id', 'task_dir', 'task_id', 'run_id', 'updated'}
+                        and all(isinstance(v, str) and v for v in marker.values())
+                        and marker['session_id'] == sid and sanitize_session_id(sid) == sid
+                        and marker['task_dir'] == source and marker['task_id'] == task_id
+                        and marker['run_id'] == control['run_id'], 'session marker does not belong to exact closed task')
+            owned_sessions.add(sid)
+            allowed.add('doc/harness/tasks/.active_sessions/' + name)
+        hint = os.path.join(sessions, '.session-hint')
+        if os.path.lexists(hint):
+            sid = _ordinary_bytes(hint, 4096).decode('utf-8').strip()
+            _s1_require(sid in owned_sessions, 'session hint lacks exact closed-task marker')
+            allowed.add('doc/harness/tasks/.active_sessions/.session-hint')
+    return allowed
+
+
+def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=None):
+    """Refuse ordinary disposal until every noncache byte is accounted for.
+
+    This is a removal guard, not an additional archive or task authority. Its
+    inventory runs after integration/harvest, immediately before unlocking.
+    """
+    try:
+        _verify_registered_worktree(repo, worktree)
+        source = _s1_path(os.path.join(worktree, 'doc/harness/tasks', task_id), True)
+        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+        for directory in (source, archive):
+            _refuse_non_regular_tree(directory)
+        entries = _tree_entries(source)
+        _s1_require(entries == _tree_entries(archive), 'task evidence differs from preserved archive')
+        if checkpoint is not None:
+            fingerprint = 'sha256:' + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
+            _s1_require(checkpoint.get('stage') == 'harvested'
+                        and checkpoint.get('harvest', {}).get('archived') == archive
+                        and checkpoint.get('archive_fingerprint') == fingerprint,
+                        'task archive differs from durable removal checkpoint')
+        allowed = _ordinary_markers(worktree, task_id)
+        learning = os.path.join(worktree, 'doc/harness/learnings.jsonl')
+        if os.path.lexists(learning):
+            raw = _ordinary_bytes(learning, 1024 * 1024)
+            for line in raw.splitlines():
+                _s1_require(isinstance(json.loads(line), dict), 'malformed learning content cannot be discarded')
+            destination = _ordinary_bytes(os.path.join(repo, 'doc/harness/learnings.jsonl'), 1024 * 1024)
+            source_lines = raw.split(b'\n')
+            if raw.endswith(b'\n'):
+                source_lines.pop()
+            destination_lines = set(destination.split(b'\n'))
+            _s1_require(all(line in destination_lines for line in source_lines),
+                        'learning bytes not preserved outside worktree')
+        if retention is not None:
+            from batch_finish import RETENTION_MARKER, validate_retention
+            validate_retention(worktree, retention)
+            allowed.add(RETENTION_MARKER)
+        _s1_content(worktree, task_id, entries, {'modules': []}, repo,
+                    ordinary_allowed=allowed, ordinary_caches=True)
+        _s1_require(_tree_entries(source) == entries and _tree_entries(archive) == entries,
+                    'task evidence changed during removal inventory')
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise HarvestError('ordinary removal proof refused: ' + str(exc)) from exc
 
 
 def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner=None):

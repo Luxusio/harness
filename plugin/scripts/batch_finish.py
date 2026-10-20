@@ -352,6 +352,11 @@ def _removal_failure_note(repo: str, worktree: str, lock, cleanup: dict) -> str:
 def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None,
              submodules=None, proof=None) -> None:
     cleanup = result["cleanup"]
+    if submodules is None:
+        try:
+            batch_harvest.ordinary_removal_proof(repo, worktree, result['task_id'], retention, proof)
+        except batch_harvest.HarvestError as exc:
+            raise Outcome('kept', f'ordinary removal proof refused, worktree kept: {exc}') from exc
     lock = _worktree_lock(repo, worktree)
     if lock is not None:
         unlocked = _git(repo, "worktree", "unlock", worktree)
@@ -495,9 +500,9 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
             _cleanup(repo, worktree, args.branch, result, retention,
                      submodules=submodules, proof=removal_checkpoint)
         elif retention is None:
-            _cleanup(repo, worktree, args.branch, result)
+            _cleanup(repo, worktree, args.branch, result, proof=removal_checkpoint)
         else:
-            _cleanup(repo, worktree, args.branch, result, retention)
+            _cleanup(repo, worktree, args.branch, result, retention, proof=removal_checkpoint)
         result["status"] = "integrated"
     except Outcome as outcome:
         result["status"], result["reason"] = outcome.status, outcome.reason

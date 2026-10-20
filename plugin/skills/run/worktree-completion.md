@@ -61,6 +61,14 @@ gate. Standalone temporary checkout recovery follows the procedure below.
    outside the tree before deleting it. Reproducible caches may be discarded;
    unknown content or nested repository/submodule data must be retained.
    Selected S1 module objects use the preservation proof below.
+   Ordinary managed disposal checks the ignored inventory again immediately
+   before removal. Unique or unknown ignored content retains W/branch/marker;
+   canonical task evidence and learnings require byte-preserved copies outside W.
+   Exempt only narrowly recognized reproducible caches and validated discardable
+   Harness session/empty-lock metadata, never broad `*.log`, `.cache` or private
+   directories. A retained Native checkpoint is unique evidence, never a cache;
+   preserve and byte-verify it outside W with exact accounting before explicit
+   removal. Do not automatically archive arbitrary user data to bypass refusal.
 5. Recheck ownership, stopped writers, source/destination identity, committed
    ancestry and clean status. From the surviving checkout, unlock only an
    existing lock belonging to the stopped worker, use normal

@@ -213,6 +213,31 @@ and cannot be hidden by abandonment. Recompute the halt only after a safe
 disposition. Verified integration cleanup
 continues to use the shared temporary-worktree completion procedure.
 
+## Ignored content at the ordinary disposal boundary
+
+Derived preservation guard for the approved safe managed-disposal outcome:
+ordinary automatic removal checks the ignored inventory immediately before
+removal. Unique or unknown ignored content refuses disposal and retains W,
+branch and the bootstrap marker. Git cleanliness alone does not prove safety.
+Canonical task evidence and learnings must be byte-preserved outside W before
+removal; arbitrary ignored user data is not automatically archived or discarded.
+
+Cache exclusions are actual directory trees named `.venv`, `node_modules`,
+`__pycache__`, `.pytest_cache`, `.mypy_cache` or `.ruff_cache` only. A same-named
+regular file or symlink is not a cache; nested `.git` inside a cache refuses.
+The exact canonical owning-task tree must match its archive and checkpoint
+fingerprint; every raw learning row must have an outside-W preserved copy.
+Only strict five-field session markers for that same closed task/run, a legacy
+`.active` pointing to that exact closed task, a `.session-hint` naming its
+validated session, and empty regular Harness operational lock metadata are
+discardable controls; unknown
+controls retain W. No broad `*.log`, `.cache` or private-directory exemption is
+permitted. An existing ignored Native checkpoint
+is unique evidence, never a cache: require outside byte verification and exact
+accounting before explicit removal. The stricter selected S1 inventory and
+preservation guard remains unchanged. No second ledger or new MCP argument is
+introduced.
+
 ## Trust, delivery and verification
 
 State records are versioned and bounded. Unknown schemas, malformed records,

@@ -101,6 +101,35 @@ def test_public_conflict_recovery_requires_exact_acknowledged_tip(tmp_path, monk
     assert (pool.repo / "a.txt").read_text() == "lead\n"
 
 
+def test_public_complete_retains_unique_ignored_content(tmp_path, monkeypatch):
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, available_slots=1)
+    assert not prepared.get("isError"), prepared
+    handoff, = prepared["structuredContent"]["handoffs"]
+    slug, worktree = handoff["slug"], Path(handoff["worktree"])
+    assert not call("dispatch", operation="bind", slug=slug, worker_id="actual-worker").get("isError")
+    (worktree / "a.txt").write_text("lead\n")
+    _git("add", "a.txt", cwd=worktree)
+    _git("commit", "-qm", "lead", "--trailer", "Harness-Task: " + handoff["task_id"], cwd=worktree)
+    task(worktree, slug, closed=True)
+    actual = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+                  commit=_head(worktree), verdict="closed", run_id=RUN)
+    exclude = pool.repo / ".git/info/exclude"
+    exclude.write_text(exclude.read_text() + "\nprecious.local\n")
+    precious = worktree / "precious.local"
+    precious.write_bytes(b"unique ignored user data\x00\xff")
+    marker = (worktree / ".harness-batch-bootstrap").read_bytes()
+    kept = call("dispatch", operation="complete", slug=slug, worker_id="actual-worker", result=actual, worker_stopped=True)
+    assert not kept.get("isError"), kept
+    body = kept["structuredContent"]
+    assert body["status"] in {"kept", "recovery-required"}, body
+    assert body["operation_result"]["integrated_tip"]
+    assert precious.read_bytes() == b"unique ignored user data\x00\xff"
+    assert (worktree / ".harness-batch-bootstrap").read_bytes() == marker
+    assert _git("branch", "--list", handoff["branch"], cwd=pool.repo)
+    assert call("open").get("isError")
+
+
 def test_failed_parent_park_has_no_worktree_effect(tmp_path, monkeypatch):
     from test_harness_mcp_server import harness_server
     pool, call = setup_parent(tmp_path, monkeypatch)
