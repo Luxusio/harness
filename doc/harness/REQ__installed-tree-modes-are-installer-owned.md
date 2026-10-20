@@ -230,3 +230,8 @@ runtime, plus an error message for failures. Internal steps, banners and summary
 footers are omitted. A dry run says preview rather than success. Optional verbose
 output exposes diagnostic steps and recovery details; exit codes still reflect
 independent runtime results.
+
+User correction: “영어로 해라”. Installer-owned result labels are English:
+`SUCCESS`, `FAILED`, `DRY RUN`, and the `Error:` prefix. Runtime names and the
+concise line structure stay the same. Existing OS/runtime diagnostic details
+are preserved.

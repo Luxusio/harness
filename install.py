@@ -2298,11 +2298,11 @@ def main() -> int:
     any_failed = False
     for r in sorted(results, key=lambda x: x.runtime):
         if not r.ok:
-            outcome = "실패"
+            outcome = "FAILED"
         elif args.dry_run:
-            outcome = "미리보기 (dry-run)"
+            outcome = "DRY RUN"
         else:
-            outcome = "성공"
+            outcome = "SUCCESS"
         print(f"{'Claude' if r.runtime == 'claude' else 'Codex'}: {outcome}")
         if args.verbose:
             for step in r.steps:
@@ -2311,7 +2311,7 @@ def main() -> int:
                 print(f"    backup: {r.backup_path}")
         if not r.ok:
             any_failed = True
-            print(f"  오류: {r.summary}")
+            print(f"  Error: {r.summary}")
             if not args.verbose:
                 continue
             if r.recovery:

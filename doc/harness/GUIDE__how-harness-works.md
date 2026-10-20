@@ -1734,7 +1734,7 @@ host git 클라이언트(예: drvfs 위의 GitKraken)에서는 branch와 commit�
 
 ### 11.1 `install.py`
 
-- PATH에서 `codex`와 `claude`를 찾아, 찾은 런타임마다 병렬로 설치한다. `--codex-only`와 `--claude-only`는 함께 쓸 수 없다(exit 2). CLI가 하나도 없으면 `no supported runtime CLI found`로 exit 2. 기본 출력은 런타임별 `Claude: 성공`, `Codex: 실패` 같은 결과 한 줄과 실패한 경우의 오류 메시지다. `--dry-run`은 `미리보기 (dry-run)`, `--verbose`는 내부 단계와 복구 안내를 표시한다. 하나라도 실패하면 exit 1이다. 아래 ERROR/SYNCHRONIZED/STALE은 출력 상태가 아니라 내부 payload 비교 결과다.
+- PATH에서 `codex`와 `claude`를 찾아, 찾은 런타임마다 병렬로 설치한다. `--codex-only`와 `--claude-only`는 함께 쓸 수 없다(exit 2). CLI가 하나도 없으면 `no supported runtime CLI found`로 exit 2. 기본 출력은 런타임별 `Claude: SUCCESS`, `Codex: FAILED` 같은 결과 한 줄과 실패한 경우의 오류 메시지다. `--dry-run`은 `DRY RUN`, `--verbose`는 내부 단계와 복구 안내를 표시한다. 하나라도 실패하면 exit 1이다. 아래 ERROR/SYNCHRONIZED/STALE은 출력 상태가 아니라 내부 payload 비교 결과다.
 - Codex는 먼저 `codex --version`이 `.codex-version`(0.130.0) 이상인지 확인한다.
 - **기본 실행은 조건부다**(`install.py:824-987, 1517-1594, 1811-1868`).
 
@@ -2189,11 +2189,11 @@ wbs {"action": "close", "wbs_id": "TASK__fix-parser-crash"}
 ## 16. 문제 해결 FAQ
 
 **설치 결과 출력**
-`python3 install.py`는 선택된 런타임마다 `Claude: 성공`, `Codex: 실패`처럼 한
+`python3 install.py`는 선택된 런타임마다 `Claude: SUCCESS`, `Codex: FAILED`처럼 한
 줄을 표시한다. 실패한 런타임 아래에만 오류가 나오며, 확인 가능한 실패 단계와
 경로를 보존한다.
 `--verbose`는 세부 단계와 복구 안내를 표시하고, `--dry-run`은 성공 대신
-`미리보기 (dry-run)`로 표시한다. 설치 실패의 종료 코드는 1이다.
+`DRY RUN`로 표시한다. 설치 실패의 종료 코드는 1이다.
 
 **QA가 끝났는데 검증이 영수증 누락을 보고하는 경우**
 완료 전달과 watcher의 기록은 비동기다. 최종 verify는 WBS를 한 번 측정한 뒤

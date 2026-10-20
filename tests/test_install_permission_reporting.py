@@ -118,7 +118,7 @@ def test_permission_failure_names_stage_path_and_preserves_progress(tmp_path, mo
     monkeypatch.setattr(install, {"payload sync": "sync_codex_payload", "cache install": "install_codex_plugin_cache", "config merge": "emit_and_install_codex_config"}[stage], denied)
     assert install.main() == 1
     out = capsys.readouterr().out
-    assert "Codex: 실패" in out
+    assert "Codex: FAILED" in out
     assert "Codex " + stage in out and str(path) in out
     assert "codex 1.0.0 >= pin" in out  # Progress survives an unexpected exception.
 
@@ -131,7 +131,7 @@ def test_compact_results_have_only_runtime_lines_and_failure_error(monkeypatch, 
     monkeypatch.setattr(install, "install_claude", lambda **k: install.InstallResult("claude", True, "done", ["private step"]))
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", not failed, "cache install: denied /test/path" if failed else "synchronized", ["private step"]))
     assert install.main() == int(failed)
-    expected = "Claude: 성공\nCodex: " + ("실패\n  오류: cache install: denied /test/path\n" if failed else "성공\n")
+    expected = "Claude: SUCCESS\nCodex: " + ("FAILED\n  Error: cache install: denied /test/path\n" if failed else "SUCCESS\n")
     captured = capsys.readouterr()
     assert captured.out == expected
     assert not captured.err
@@ -143,7 +143,7 @@ def test_preview_is_not_reported_as_applied_success(monkeypatch, capsys):
     monkeypatch.setattr(install.shutil, "which", lambda _: "/bin/runtime")
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", True, "would install"))
     assert install.main() == 0
-    assert capsys.readouterr().out == "Codex: 미리보기 (dry-run)\n"
+    assert capsys.readouterr().out == "Codex: DRY RUN\n"
 
 
 def test_verbose_explicitly_shows_diagnostic_details(monkeypatch, capsys):

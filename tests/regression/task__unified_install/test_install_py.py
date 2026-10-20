@@ -87,7 +87,7 @@ def test_dry_run_prints_plan_without_mutation(tmp_path):
         "codex CLI not found in PATH" in output and "claude CLI not found in PATH" in output
     )
     if not both_missing:
-        assert "dry-run" in r.stdout.lower()
+        assert "dry run" in r.stdout.lower()
     # Config file untouched
     assert cfg.stat().st_size == pre_size
     assert cfg.read_text() == "# untouched\n"
@@ -144,7 +144,7 @@ def test_default_auto_detect_skips_missing_claude_when_codex_available(tmp_path)
     r = _run(["--dry-run", "--config-path", str(cfg)], extra_path=str(fake_bin))
 
     assert r.returncode == 0, r.stderr
-    assert r.stdout == "Codex: 미리보기 (dry-run)\n"
+    assert r.stdout == "Codex: DRY RUN\n"
     assert "Codex:" in r.stdout
     assert "Claude:" not in r.stdout
 
@@ -792,7 +792,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     )
     assert module.main() == 0
     output = capsys.readouterr().out
-    assert output == "Claude: 성공\nCodex: 성공\n"
+    assert output == "Claude: SUCCESS\nCodex: SUCCESS\n"
 
     skipped = lambda runtime: (lambda **_: module.InstallResult(
         runtime, True, f"{runtime} payload SYNCHRONIZED — install skipped",
@@ -801,7 +801,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     monkeypatch.setattr(module, "install_claude", skipped("claude"))
     assert module.main() == 0
     output = capsys.readouterr().out
-    assert output == "Claude: 성공\nCodex: 성공\n"
+    assert output == "Claude: SUCCESS\nCodex: SUCCESS\n"
 
     monkeypatch.setattr(sys, "argv", ["install.py", "--force"])
     applied = lambda runtime: (lambda **_: module.InstallResult(runtime, True, "install complete"))
@@ -809,7 +809,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     monkeypatch.setattr(module, "install_claude", applied("claude"))
     assert module.main() == 0
     output = capsys.readouterr().out
-    assert output == "Claude: 성공\nCodex: 성공\n"
+    assert output == "Claude: SUCCESS\nCodex: SUCCESS\n"
     assert "config/registry health not checked" not in output
     monkeypatch.setattr(sys, "argv", ["install.py"])
 
@@ -819,7 +819,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     )
     assert module.main() == 1
     captured = capsys.readouterr()
-    assert "Claude: 실패\n  오류: comparison failed" in captured.out
+    assert "Claude: FAILED\n  Error: comparison failed" in captured.out
 
 
 def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
@@ -1771,7 +1771,7 @@ def test_claude_install_accepts_existing_plugin_and_mcp_messages(tmp_path):
     )
 
     assert r.returncode == 0, r.stderr + r.stdout
-    assert r.stdout == "Claude: 성공\n"
+    assert r.stdout == "Claude: SUCCESS\n"
 
 
 def test_claude_install_fails_when_marketplace_list_fails(tmp_path):
@@ -1853,8 +1853,8 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
     captured = capsys.readouterr()
 
     assert rc == 1
-    assert "Codex: 성공" in captured.out
-    assert "Claude: 실패" in captured.out
+    assert "Codex: SUCCESS" in captured.out
+    assert "Claude: FAILED" in captured.out
     assert "claude plugin marketplace list failed: list failed" in captured.out
     assert "features enable plugin_hooks" in codex_log.read_text().splitlines()
     assert "--version" in claude_log.read_text().splitlines()
