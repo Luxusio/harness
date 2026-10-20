@@ -90,6 +90,12 @@ the failed stage and a bounded, non-sensitive reason immediately through the
 existing hook diagnostics. PostToolUse must not silently discard registration
 failures. Registration success alone does not establish a live watcher or an
 observed lifecycle. Diagnostic files never supply authoritative native identity.
+Registration uses strict binding reads: a missing marker is benign absence,
+while unreadable, malformed or unsafe markers and unavailable task authority
+are failures. An unavailable workspace registry is a discovery failure at
+every registration publication read. Flush failure feedback before advisory
+diagnostic I/O and bound that I/O by the remaining hook deadline; interrupted
+writes clean up their owned temporary files.
 When later readiness in the same MCP response positively disproves an earlier
 capability warning, remove that superseded warning; preserve unrelated warnings
 and never clear a warning on unknown readiness alone.

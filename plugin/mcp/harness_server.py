@@ -590,6 +590,8 @@ def _watcher_status(
         capability_warning = receipt_capability_warning()
     except Exception:
         capability_warning = ""
+    if capability_warning and _run_has_receipts(task_dir, run_id, snapshot):
+        capability_warning = ""  # Disproves this heuristic only, not live errors.
     manager_running = _SERVER.watcher_manager is not None if _SERVER is not None else None
     if _SERVER is not None and _SERVER.watcher_manager is not None:
         is_running = getattr(_SERVER.watcher_manager, "is_running", None)
@@ -698,10 +700,10 @@ def _watcher_status(
         unrecordable_summary = "The receipt hook could not import its dependencies."
         unrecordable_reason = _hook_capability_marker_reason(task_dir)
         recordable = False
-    elif capability_warning and not _run_has_receipts(task_dir, run_id, snapshot):
+    elif capability_warning:
         # A suspicion, not an observation: this inspects plugin registration,
         # not whether receipts are actually being written. Checked against the
-        # live run's own receipts here rather than only below, so a session the
+        # live run's own receipts above, so a session the
         # file demonstrably contradicts does not carry the warning text at all
         # — it was stating "no entry will be written" beside 41 written entries.
         # Truncated on the way out like every other reason string. The
@@ -757,8 +759,7 @@ def _watcher_status(
 
     # No promotion branch follows, deliberately. A receipt disproves exactly one
     # cause — the heuristic capability warning — and it already does so where
-    # that warning is raised: the `capability_warning and not
-    # _run_has_receipts(...)` guard above means a run with receipts never enters
+    # that warning is raised: the current-run receipt disproof above means a run with receipts never enters
     # the warning branch at all, so `recordable` keeps its initializer. A second
     # `recordable is None and _run_has_receipts(...)` promotion used to sit here
     # and could not tell that cause from the other two, so it also disproved a

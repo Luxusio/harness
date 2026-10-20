@@ -3,6 +3,9 @@ import contextlib
 import io
 import json
 import time
+import os
+import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -95,7 +98,7 @@ def test_stage_timeout_and_exception_never_claim_absence_or_conflict(registratio
         monkeypatch.setattr(owner, "_bound_workspace_roots", lambda *_: [str(main)])
     if stage == "registration publication":
         kwargs["bind_fn"] = lambda *_: True
-        monkeypatch.setattr(owner, "resolve_session_task_binding", lambda *_: dict(task_dir=str(main / "doc/harness/tasks/TASK__registration_liveness"), run_id="run"))
+        monkeypatch.setattr(owner, "resolve_session_task_binding", lambda *_, **kw: dict(task_dir=str(main / "doc/harness/tasks/TASK__registration_liveness"), run_id="run"))
     status = {}
     payload = json.dumps(dict(cwd=str(main), session_id=thread)).encode()
     assert not owner.restore_watcher_registration(payload, budget_seconds=0.04, status_out=status, **kwargs)
@@ -134,7 +137,7 @@ def test_post_tool_failure_is_visible_and_parent_budget_is_respected(tmp_path, m
     monkeypatch.setattr(hook, "register_task_result", register)
     monkeypatch.setattr(pre, "_update_diagnostics", lambda raw, update: seen.append(update))
     with contextlib.redirect_stdout(io.StringIO()) as output:
-        hook._register_task_result(payload, deadline=time.monotonic() + 0.25)
+        hook._register_task_result(payload, deadline=time.monotonic() + hook.DEADLINE_MARGIN_SECONDS + 0.25)
     text = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
     assert "failed" in text and "private details" not in text
     assert seen[-1]["registration_present"] is False
@@ -170,3 +173,92 @@ def test_registration_budget_intersects_parent_startup_time(tmp_path, monkeypatc
         monkeypatch.setattr(hook, "_run", lambda *_: b"")
     assert hook.main() == 0
     assert len(calls) == 1 and 0 < calls[0] <= 0.15
+
+
+def test_unreadable_marker_is_unavailable_at_production_open_boundary(registration, monkeypatch):
+    import _lib as lib
+    owner, _, main, thread, _, _ = registration
+    marker = str(main / "doc/harness/tasks/.active_sessions" / (thread + ".json"))
+    original = os.open
+    def opening(path, *args, **kwargs):
+        if os.fspath(path) == marker:
+            raise PermissionError("private path details")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(lib.os, "open", opening)
+    status = {}
+    payload = json.dumps(dict(cwd=str(main), session_id=thread)).encode()
+    assert not owner.restore_watcher_registration(payload, status_out=status)
+    assert status["status"] == "failed" and status["stage"] == "workspace binding discovery"
+    assert "PermissionError" in status["reason"] and "private path" not in status["reason"]
+
+
+@pytest.mark.parametrize("lost_at", [1, 2, 3])
+def test_post_tool_empty_registry_at_each_publication_read_is_visible(registration, monkeypatch, lost_at):
+    import hook_post_tool_use as hook
+    owner, watcher, main, _, payload, _ = registration
+    roots = watcher.workspace_roots(str(main))
+    calls = []
+    def registry(*args):
+        calls.append(True)
+        return [] if len(calls) >= lost_at else roots
+    monkeypatch.setattr(owner, "workspace_roots", registry)
+    monkeypatch.setattr(hook, "register_task_result", owner.register_task_result)
+    status = {}
+    assert not owner.register_task_result(payload, status_out=status)
+    assert status["status"] == "failed" and status["stage"] == "workspace registry discovery"
+    calls.clear()
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        hook._register_task_result(payload, deadline=time.monotonic() + 2)
+    assert "workspace registry discovery" in output.getvalue()
+
+
+def test_persistent_capability_warning_is_disproved_by_valid_current_run_receipt():
+    from test_receipt_watcher_fail_closed import _task_with_receipt, _server
+    server = _server()
+    with _task_with_receipt() as (task, run):
+        with mock.patch.object(server, "receipt_capability_warning", return_value="collector not confirmed"), \
+             mock.patch.object(server, "_server_runtime", return_value="claude"), \
+             mock.patch.object(server, "_SERVER", None), \
+             mock.patch.object(server, "_diagnostics_for_this_session", return_value={}) as diagnostics:
+            status = server._watcher_status(task_dir=task, run_id=run)
+            assert status["receipt_capability_warning"] == "" and status["receipts_recordable"] is True
+            diagnostics.return_value = {"last_watcher_error": "live collector failed"}
+            status = server._watcher_status(task_dir=task, run_id=run)
+            assert status["receipt_capability_warning"] == "" and status["receipts_recordable"] is False
+
+
+def test_post_tool_slow_diagnostics_cannot_hide_failure_or_exceed_deadline():
+    from conftest import SCRIPTS_DIR
+    code = '''
+import sys,time,json
+sys.path.insert(0,sys.argv[1])
+import hook_post_tool_use as hook
+import hook_pre_tool_use as pre
+def failure(*args,**kwargs):
+    kwargs['status_out'].update(status='failed',reason='registration rejected')
+    return False
+hook.register_task_result=failure
+pre._update_diagnostics=lambda *a:time.sleep(1.3)
+started=time.monotonic()
+hook._register_task_result(b'{}',deadline=started+0.2)
+print()
+print(json.dumps({'elapsed':time.monotonic()-started}))
+'''
+    result = subprocess.run([sys.executable, "-c", code, str(SCRIPTS_DIR)], capture_output=True, text=True, timeout=3)
+    assert result.returncode == 0, result.stderr
+    notice, timing = map(json.loads, result.stdout.splitlines())
+    assert "failed" in notice["hookSpecificOutput"]["additionalContext"]
+    assert timing["elapsed"] < 0.7
+
+
+def test_deadline_interrupted_diagnostic_write_cleans_owned_temp(tmp_path, monkeypatch):
+    import _lib as lib
+    import codex_hook_registration as owner
+    original = os.write
+    def slow_write(*args):
+        time.sleep(0.2)
+        return original(*args)
+    monkeypatch.setattr(lib.os, "write", slow_write)
+    path = tmp_path / "diagnostic.json"
+    assert not owner._call_with_deadline(lambda: lib.write_json_diagnostics(str(path), {"status": "failed"}), time.monotonic() + 0.03)
+    assert list(tmp_path.iterdir()) == []

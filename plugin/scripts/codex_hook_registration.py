@@ -89,7 +89,7 @@ def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out
     except _RegistrationTimeout:
         return failed("deadline exhausted")
     except Exception as exc:
-        return failed(f"validation unavailable ({type(exc).__name__})")
+        return failed(f"validation unavailable ({type(exc.__cause__ or exc).__name__})")
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0.0)
         signal.signal(signal.SIGALRM, previous_handler)
@@ -205,10 +205,10 @@ def _bound_workspace_roots(control_root: str, thread_id: str) -> list[str] | Non
         raise RuntimeError("workspace registry unavailable")
     bound = []
     for root in roots:
-        marker = read_active_session_marker(root, thread_id)
+        marker = read_active_session_marker(root, thread_id, strict=True)
         if _has_binding_conflict_fence(marker):
             return None
-        if marker and resolve_session_task_binding(root, thread_id):
+        if marker and resolve_session_task_binding(root, thread_id, strict=True):
             bound.append(root)
     return bound
 
@@ -253,7 +253,7 @@ def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool
     Exact binding is published by PostToolUse, where the hook has both the
     current root-session identity and the successful MCP task result.
     """
-    return bool(resolve_session_task_binding(control_root, thread_id))
+    return bool(resolve_session_task_binding(control_root, thread_id, strict=True))
 
 
 
@@ -340,8 +340,13 @@ def _register_task_result(payload: bytes, deadline: float, status_out: dict | No
     ):
         return False
     control_root = find_harness_root(cwd) or ""
-    roots = workspace_roots(control_root) if control_root else []
+    if not control_root:
+        return False
+    roots = workspace_roots(control_root)
     if not roots:
+        if status_out is not None:
+            status_out.update(status=REGISTRATION_FAILED, stage="workspace registry discovery",
+                              reason="workspace registry discovery: registry unavailable")
         return False
     data = _payload_data(payload)
     tool_input = _task_arguments(data)
@@ -388,6 +393,9 @@ def _bind_task_session(
     """One cross-workspace lock/fence/marker owner for hooks and native MCP."""
     roots = workspace_roots(control_root)
     if not roots:
+        if status_out is not None:
+            status_out.update(status=REGISTRATION_FAILED, stage="workspace registry discovery",
+                              reason="workspace registry discovery: registry unavailable")
         return False
     expected_parent = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
     canonical_task = os.path.realpath(task_dir)
@@ -402,13 +410,18 @@ def _bind_task_session(
     try:
         with active_session_transaction(roots[0]), ExitStack() as workspace_locks:
             roots = workspace_roots(roots[0])
+            if not roots:
+                if status_out is not None:
+                    status_out.update(status=REGISTRATION_FAILED, stage="workspace registry discovery",
+                                      reason="workspace registry discovery: registry unavailable")
+                return False
             if control_root not in roots:
                 return False
             for root in sorted(roots[1:]):
                 workspace_locks.enter_context(active_session_transaction(root))
             # One shared transaction serializes binding and conflict fencing
             # across every validated checkout of this repository.
-            markers = {root: read_active_session_marker(root, thread_id) for root in roots}
+            markers = {root: read_active_session_marker(root, thread_id, strict=True) for root in roots}
             if any(_conflicts_overflow(marker) for marker in markers.values()):
                 for root in roots:
                     if root == control_root or markers[root]:
@@ -418,7 +431,7 @@ def _bind_task_session(
                     status_out.update({"status": NOT_APPLICABLE,
                                        "reason": "coordinator conflict fence overflow requires a new coordinator"})
                 return False
-            bindings = {root: resolve_session_task_binding(root, thread_id) for root in roots}
+            bindings = {root: resolve_session_task_binding(root, thread_id, strict=True) for root in roots}
             lock_dirs = {canonical_task}
             for root in roots:
                 lock_dirs.update(_conflict_task_dirs(root, markers[root]))
@@ -439,7 +452,7 @@ def _bind_task_session(
                 live = []
                 for root in roots:
                     live.extend(_live_conflicts(root, markers[root]))
-                    binding = resolve_session_task_binding(root, thread_id)
+                    binding = resolve_session_task_binding(root, thread_id, strict=True)
                     if binding:
                         live.append({"task_dir": binding["task_dir"],
                                      "task_id": os.path.basename(binding["task_dir"]),
@@ -469,7 +482,7 @@ def _bind_task_session(
                     for root in roots:
                         if _has_binding_conflict_fence(markers[root]):
                             clear_binding_conflict_fence(root, thread_id)
-                existing = resolve_session_task_binding(control_root, thread_id)
+                existing = resolve_session_task_binding(control_root, thread_id, strict=True)
                 if not existing and not invalidate_registration(control_root, thread_id):
                     return False
                 write_active_marker(
@@ -587,7 +600,7 @@ def restore_watcher_registration(
     run_id = ""
     if generation_bound:
         binding = _call_with_deadline(
-            lambda: resolve_session_task_binding(control_root, thread_id), deadline, {},
+            lambda: resolve_session_task_binding(control_root, thread_id, strict=True), deadline, {},
             status_out=status_out, stage="current run resolution",
         )
         if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:

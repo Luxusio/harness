@@ -37,14 +37,16 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
     global register_task_result
     status = {}
     registered = False
+    bounded_call = None
     try:
-        from codex_hook_registration import REGISTRATION_BUDGET_SECONDS
+        from codex_hook_registration import REGISTRATION_BUDGET_SECONDS, _call_with_deadline
+        bounded_call = _call_with_deadline
         if register_task_result is None:
             from codex_hook_registration import register_task_result as callback  # type: ignore
             register_task_result = callback
         registered = register_task_result(
             payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
-                                        max(0.0, deadline - time.monotonic())),
+                                        max(0.0, deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS)),
             status_out=status,
         )
     except Exception as exc:
@@ -54,7 +56,14 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
     # Reuse the existing session-scoped advisory writer. It never creates a
     # receipt or gives diagnostics authority over the native actor identity.
     reason = " ".join(str(status.get("reason") or "task binding failed").split())[:200]
-    try:
+    if not registered and status.get("status") == "failed":
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": f"[harness] Receipt watcher registration failed: {reason}. Registration grants no review/QA evidence; do not hand-author receipts.",
+        }}))
+        sys.stdout.flush()
+
+    def persist():
         from hook_pre_tool_use import _update_diagnostics, _report_registration_not_applicable
         if registered:
             _update_diagnostics(payload, {"registration_present": True,
@@ -63,13 +72,8 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
             _update_diagnostics(payload, {"registration_present": False, "last_registration_error": reason})
         else:
             _report_registration_not_applicable(payload, str(status.get("reason") or "task result was not bindable"))
-    except Exception:
-        pass  # Advisory persistence failure must not suppress the hook result.
-    if not registered and status.get("status") == "failed":
-        sys.stdout.write(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": f"[harness] Receipt watcher registration failed: {reason}. Registration grants no review/QA evidence; do not hand-author receipts.",
-        }}))
+    if bounded_call is not None:
+        bounded_call(persist, deadline, stage="diagnostic publication")
 
 HOOK_TIMEOUT_SECONDS = 3.0
 TOTAL_BUDGET_SECONDS = 2.4
@@ -168,7 +172,7 @@ def main() -> int:
     data = _json_payload(payload)
     tool_name = _tool_name(payload)
     if _is_task_binding_tool(tool_name, data.get("tool_input") or data.get("input") or data.get("arguments")):
-        _register_task_result(payload, deadline=deadline - DEADLINE_MARGIN_SECONDS)
+        _register_task_result(payload, deadline=deadline)
         return 0
     goal_hint = ""
     if _is_create_goal_tool(tool_name):

@@ -659,13 +659,15 @@ def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
             os.close(fd)
         os.replace(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
         return True
-    except OSError:
+    except BaseException as exc:
         if dir_fd is not None:
             try:
                 os.unlink(tmp, dir_fd=dir_fd)
             except OSError:
                 pass
-        return False
+        if isinstance(exc, OSError):
+            return False
+        raise
     finally:
         if dir_fd is not None:
             try:
@@ -1928,12 +1930,12 @@ def _session_active_path(repo_root, session_id=None):
     return os.path.join(_active_sessions_dir(repo_root), sid + ".json")
 
 
-def read_active_session_marker(repo_root, session_id):
+def read_active_session_marker(repo_root, session_id, *, strict=False):
     """Read one exact marker, including a non-authoritative recovery fence."""
     sid = sanitize_session_id(session_id)
     if sid != session_id or sid == "default":
         return {}
-    return _read_session_marker(_session_active_path(repo_root, sid), sid)
+    return _read_session_marker(_session_active_path(repo_root, sid), sid, strict=strict)
 
 
 def _publish_session_marker(repo_root, sid, payload):
@@ -2160,7 +2162,7 @@ def _read_regular_marker(path, *, max_size=256 * 1024):
     return _read_regular_text_file(path, max_size=max_size)
 
 
-def _read_session_marker(path, expected_session_id):
+def _read_session_marker(path, expected_session_id, *, strict=False):
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
@@ -2168,11 +2170,22 @@ def _read_session_marker(path, expected_session_id):
                 raise ValueError(f"duplicate active marker key: {key}")
             result[key] = value
         return result
+    if strict:
+        snapshot = _strict_regular_text_snapshot(path, max_size=256 * 1024)
+        if not snapshot["exists"]:
+            return {}
+        text = snapshot["text"]
+    else:
+        text = _read_regular_marker(path)
     try:
-        data = json.loads(_read_regular_marker(path), object_pairs_hook=unique_object)
+        data = json.loads(text, object_pairs_hook=unique_object)
     except (TypeError, ValueError):
+        if strict:
+            raise RuntimeError("active session marker is invalid") from None
         return {}
     if not isinstance(data, dict) or data.get("session_id") != expected_session_id:
+        if strict:
+            raise RuntimeError("active session marker identity is invalid")
         return {}
     return data
 
@@ -2223,7 +2236,7 @@ def resolve_active_task_dir(repo_root=None, session_id=None):
     )
 
 
-def resolve_session_task_binding(repo_root, session_id):
+def resolve_session_task_binding(repo_root, session_id, *, strict=False):
     """Resolve only an exact session marker and its current open run."""
     if not isinstance(session_id, str) or not session_id or session_id == "default":
         return {}
@@ -2231,14 +2244,26 @@ def resolve_session_task_binding(repo_root, session_id):
         return {}
     try:
         marker = _read_session_marker(
-            _session_active_path(repo_root, session_id), session_id,
+            _session_active_path(repo_root, session_id), session_id, strict=strict,
         )
     except ValueError:
+        if strict:
+            raise RuntimeError("active session storage unavailable") from None
         return {}
-    task_dir = _live_active_task_dir(repo_root, marker.get("task_dir"))
+    value = marker.get("task_dir")
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        task_dir = canonical_task_dir(task_dir=value, repo_root=repo_root)
+    except ValueError:
+        if strict:
+            raise RuntimeError("active task directory unavailable") from None
+        return {}
     if not task_dir or marker.get("task_id") != os.path.basename(task_dir):
         return {}
     control = read_task_control(task_dir)
+    if strict and not control:
+        raise RuntimeError("active task authority unavailable")
     if (
         not control
         or task_control_status(task_dir, control) != "open"
