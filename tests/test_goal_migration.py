@@ -1,8 +1,13 @@
 """One-time import preserves data, refuses ambiguity, and resumes publication."""
 import copy
+import ctypes
+import errno
 import hashlib
 import json
+import os
+import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 from conftest import pytest
@@ -588,3 +593,315 @@ def test_interruption_after_atomic_new_publication_retries_without_hardlinks(tmp
     assert source.exists() and (tmp_path / destination).stat().st_nlink == 1
     monkeypatch.setattr(migration, "_rename_new", original)
     assert migration.apply(tmp_path)["status"] == "complete"
+
+
+def unsupported_native(monkeypatch, error=errno.EINVAL):
+    """Exercise the production publisher, replacing only the unavailable syscall."""
+    class Rename:
+        def __call__(self, *args):
+            ctypes.set_errno(error)
+            return -1
+    libc = SimpleNamespace() if error is None else SimpleNamespace(renameat2=Rename())
+    monkeypatch.setattr(ctypes, "CDLL", lambda *args, **kwargs: libc)
+
+
+def tree_snapshot(repo):
+    return {str(path.relative_to(repo)): (path.read_bytes(), path.stat().st_ino, path.stat().st_nlink,
+                                        path.stat().st_mtime_ns)
+            for path in repo.rglob("*") if path.is_file()}
+
+
+def crash_migration(repo, destination, *, boundary="after_link"):
+    """A real process death leaves kernel state; Python finally cannot clean it."""
+    script = r'''
+import ctypes, errno, json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import _lib, goal_migration as migration
+_lib._trusted_control_writer = lambda: True
+class Rename:
+    def __call__(self, *args):
+        ctypes.set_errno(errno.EINVAL)
+        return -1
+class Libc:
+    renameat2 = Rename()
+ctypes.CDLL = lambda *args, **kwargs: Libc()
+original_link, original_unlink, original_fsync, original_replace = os.link, os.unlink, os.fsync, os.replace
+target, boundary = sys.argv[3:5]
+linked_parent = []
+def link(source, destination, **kwargs):
+    if destination == target and boundary == "before_link":
+        os._exit(73)
+    result = original_link(source, destination, **kwargs)
+    if destination == target:
+        linked_parent.append(kwargs["dst_dir_fd"])
+        if boundary == "after_link":
+            os._exit(73)
+    return result
+def unlink(path, **kwargs):
+    result = original_unlink(path, **kwargs)
+    if linked_parent and path.startswith(".migration-") and boundary == "after_unlink":
+        os._exit(73)
+    return result
+def fsync(fd):
+    if linked_parent and fd == linked_parent[0] and boundary == "before_directory_fsync":
+        os._exit(73)
+    return original_fsync(fd)
+def replace(source, destination, **kwargs):
+    if destination == target and boundary in {"before_complete_replace", "after_complete_replace"}:
+        fd = os.open(source, os.O_RDONLY, dir_fd=kwargs["src_dir_fd"])
+        try:
+            complete = json.loads(os.read(fd, migration.LIMIT * 16))["status"] == "complete"
+        finally:
+            os.close(fd)
+        if complete and boundary == "before_complete_replace":
+            os._exit(73)
+        result = original_replace(source, destination, **kwargs)
+        if complete:
+            os._exit(73)
+        return result
+    return original_replace(source, destination, **kwargs)
+os.link, os.unlink, os.fsync, os.replace = link, unlink, fsync, replace
+migration.apply(Path(sys.argv[2]))
+raise SystemExit("requested publication boundary was never reached")
+'''
+    result = subprocess.run([sys.executable, "-c", script, str(Path(migration.__file__).parent),
+                             str(repo), Path(destination).name, boundary], capture_output=True, text=True,
+                            timeout=20)
+    assert result.returncode == 73, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("error", [errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, None],
+                         ids=["invalid-filesystem-operation", "unimplemented", "unsupported", "missing-symbol"])
+def test_unsupported_native_migration_publishes_complete_single_link_files(tmp_path, monkeypatch, owner, error):
+    source = row(tmp_path)
+    before = source.read_bytes()
+    unsupported_native(monkeypatch, error)
+    original_link = os.link
+    published = []
+    def link(source, destination, **kwargs):
+        result = original_link(source, destination, **kwargs)
+        fd = os.open(destination, os.O_RDONLY, dir_fd=kwargs["dst_dir_fd"])
+        try:
+            published.append(os.read(fd, migration.LIMIT * 16))
+            stage_fd = os.open(source, os.O_RDONLY, dir_fd=kwargs["src_dir_fd"])
+            try:
+                assert published[-1] == os.read(stage_fd, migration.LIMIT * 16)
+            finally:
+                os.close(stage_fd)
+        finally:
+            os.close(fd)
+        return result
+    monkeypatch.setattr(os, "link", link)
+    result = migration.apply(tmp_path)
+    assert result["status"] == "complete" and published
+    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == before
+    assert not source.exists()
+    assert all(path.stat().st_nlink == 1 for path in tmp_path.rglob("*") if path.is_file())
+    assert not list(tmp_path.rglob(".migration-*"))
+    assert migration.preview(tmp_path) == migration.apply(tmp_path) == result
+
+
+@pytest.mark.parametrize("error", [errno.EACCES, errno.EIO, errno.ENOSPC])
+def test_native_operational_errors_never_trigger_fallback(tmp_path, monkeypatch, owner, error):
+    source = row(tmp_path)
+    before = source.read_bytes()
+    unsupported_native(monkeypatch, error)
+    monkeypatch.setattr(os, "link", lambda *a, **k: pytest.fail("operational error must not fall back"))
+    with pytest.raises((OSError, ValueError)):
+        migration.apply(tmp_path)
+    assert source.read_bytes() == before and not (tmp_path / migration.MANIFEST).exists()
+
+
+def test_native_success_does_not_use_hardlink_fallback(tmp_path, monkeypatch, owner):
+    row(tmp_path)
+    calls = []
+    class Rename:
+        def __call__(self, src_fd, source, dst_fd, destination, flags):
+            calls.append(flags)
+            os.rename(source, destination, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+            return 0
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: SimpleNamespace(renameat2=Rename()))
+    monkeypatch.setattr(os, "link", lambda *a, **k: pytest.fail("supported native path must stay native"))
+    assert migration.apply(tmp_path)["status"] == "complete" and calls
+    assert not list(tmp_path.rglob(".migration-*"))
+
+
+@pytest.mark.parametrize("publication", ["archive", "prepared-manifest", "destination"])
+def test_process_death_after_link_has_read_only_preview_and_exact_retry(tmp_path, monkeypatch, owner, publication):
+    source = row(tmp_path)
+    original = source.read_bytes()
+    destination = migration.preview(tmp_path)["destinations"][0]
+    relative = {"archive": migration.ARCHIVE + "/original/" + migration.GOALS + "/" + source.name,
+                "prepared-manifest": migration.MANIFEST, "destination": destination}[publication]
+    crash_migration(tmp_path, relative)
+    target = tmp_path / relative
+    stage = target.with_name(migration._publication_stage(target.name))
+    assert target.stat().st_ino == stage.stat().st_ino and target.stat().st_nlink == 2
+    before_preview = tree_snapshot(tmp_path)
+    migration.preview(tmp_path)
+    assert tree_snapshot(tmp_path) == before_preview
+    assert source.read_bytes() == original
+    unsupported_native(monkeypatch)
+    result = migration.apply(tmp_path)
+    assert result["status"] == "complete" and migration.apply(tmp_path) == result
+    assert not stage.exists() and target.stat().st_nlink == 1
+    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
+    assert not list(tmp_path.rglob(".migration-*"))
+
+
+@pytest.mark.parametrize("boundary", ["before_link", "after_unlink", "before_directory_fsync"])
+def test_process_death_around_link_recovers_without_partial_destination(tmp_path, monkeypatch, owner, boundary):
+    source = row(tmp_path)
+    destination = migration.preview(tmp_path)["destinations"][0]
+    crash_migration(tmp_path, destination, boundary=boundary)
+    target = tmp_path / destination
+    stage = target.with_name(migration._publication_stage(target.name))
+    if boundary == "before_link":
+        assert not target.exists() and stage.stat().st_nlink == 1
+    else:
+        assert target.is_file() and target.stat().st_nlink == 1 and not stage.exists()
+    before_preview = tree_snapshot(tmp_path)
+    migration.preview(tmp_path)
+    assert tree_snapshot(tmp_path) == before_preview and source.exists()
+    unsupported_native(monkeypatch)
+    assert migration.apply(tmp_path)["status"] == "complete"
+    assert not list(tmp_path.rglob(".migration-*"))
+
+
+@pytest.mark.parametrize("sync_failure", [False, True], ids=["sync-before-retirement", "sync-error-retains-sources"])
+def test_retry_after_alias_removal_syncs_publication_before_retiring_sources(tmp_path, monkeypatch, owner, sync_failure):
+    source = row(tmp_path)
+    original = source.read_bytes()
+    destination = migration.preview(tmp_path)["destinations"][0]
+    crash_migration(tmp_path, destination, boundary="before_directory_fsync")
+    target = tmp_path / destination
+    assert target.stat().st_nlink == 1
+    assert not target.with_name(migration._publication_stage(target.name)).exists()
+    directory = target.parent.stat()
+    identity = (directory.st_dev, directory.st_ino)
+    original_fsync, original_retire = os.fsync, migration._retire
+    synced, retired = [], []
+    def fsync(fd):
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) == identity:
+            synced.append(True)
+            if sync_failure:
+                raise OSError(errno.EIO, "publication directory sync failed")
+        return original_fsync(fd)
+    def retire(repo, relative, expected):
+        assert synced, "source retirement preceded durability of the recovered publication"
+        retired.append(relative)
+        return original_retire(repo, relative, expected)
+    unsupported_native(monkeypatch)
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(migration, "_retire", retire)
+    if sync_failure:
+        with pytest.raises((ValueError, OSError)):
+            migration.apply(tmp_path)
+        assert synced and not retired and source.read_bytes() == original
+        assert json.loads((tmp_path / migration.MANIFEST).read_text())["status"] == "prepared"
+    else:
+        assert migration.apply(tmp_path)["status"] == "complete" and synced and retired
+        assert not source.exists()
+    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
+
+
+@pytest.mark.parametrize("publication", ["archive", "manifest", "destination"])
+def test_completed_journal_normalizes_valid_pair_before_early_return(tmp_path, monkeypatch, owner, publication):
+    source = row(tmp_path)
+    unsupported_native(monkeypatch)
+    result = migration.apply(tmp_path)
+    relative = {"archive": migration.ARCHIVE + "/original/" + migration.GOALS + "/" + source.name,
+                "manifest": migration.MANIFEST, "destination": result["destinations"][0]}[publication]
+    target = tmp_path / relative
+    stage = target.with_name(migration._publication_stage(target.name))
+    os.link(target, stage)
+    before = tree_snapshot(tmp_path)
+    assert migration.preview(tmp_path) == result and tree_snapshot(tmp_path) == before
+    assert migration.apply(tmp_path) == result
+    assert not stage.exists() and target.stat().st_nlink == 1
+
+
+@pytest.mark.parametrize("boundary", ["before_complete_replace", "after_complete_replace"])
+def test_process_death_publishing_completed_manifest_resumes_without_sources(tmp_path, monkeypatch, owner, boundary):
+    source = row(tmp_path)
+    original = source.read_bytes()
+    crash_migration(tmp_path, migration.MANIFEST, boundary=boundary)
+    manifest = tmp_path / migration.MANIFEST
+    stage = manifest.with_name(migration._publication_stage(manifest.name))
+    assert not source.exists()
+    if boundary == "before_complete_replace":
+        assert json.loads(manifest.read_bytes())["status"] == "prepared"
+        assert json.loads(stage.read_bytes())["status"] == "complete"
+    else:
+        assert json.loads(manifest.read_bytes())["status"] == "complete" and not stage.exists()
+    before = tree_snapshot(tmp_path)
+    migration.preview(tmp_path)
+    assert tree_snapshot(tmp_path) == before
+    unsupported_native(monkeypatch)
+    assert migration.apply(tmp_path)["status"] == "complete"
+    assert not stage.exists() and manifest.stat().st_nlink == 1
+    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
+
+
+@pytest.mark.parametrize("corruption", ["wrong-inode", "third-link", "external-link", "symlink", "changed-bytes"])
+def test_retry_refuses_unsafe_publication_alias_without_cleanup(tmp_path, monkeypatch, owner, corruption):
+    source = row(tmp_path)
+    destination = migration.preview(tmp_path)["destinations"][0]
+    crash_migration(tmp_path, destination)
+    target = tmp_path / destination
+    stage = target.with_name(migration._publication_stage(target.name))
+    if corruption == "wrong-inode":
+        raw = stage.read_bytes()
+        stage.unlink()
+        stage.write_bytes(raw)
+        stage.chmod(0o600)
+    elif corruption == "third-link":
+        os.link(target, tmp_path / "unowned-alias")
+    elif corruption == "external-link":
+        stage.rename(tmp_path / "unowned-alias")
+    elif corruption == "symlink":
+        stage.unlink()
+        stage.symlink_to(target)
+    else:
+        target.write_bytes(b"unrecorded changed bytes")
+    before = tree_snapshot(tmp_path)
+    unsupported_native(monkeypatch)
+    with pytest.raises((ValueError, OSError)):
+        migration.apply(tmp_path)
+    assert source.exists() and tree_snapshot(tmp_path) == before
+
+
+def test_single_link_orphan_with_changed_bytes_is_not_reused(tmp_path, monkeypatch, owner):
+    source = row(tmp_path)
+    destination = migration.preview(tmp_path)["destinations"][0]
+    crash_migration(tmp_path, destination, boundary="before_link")
+    target = tmp_path / destination
+    stage = target.with_name(migration._publication_stage(target.name))
+    stage.write_bytes(b"unowned staging data")
+    before = tree_snapshot(tmp_path)
+    unsupported_native(monkeypatch)
+    with pytest.raises(ValueError):
+        migration.apply(tmp_path)
+    assert source.exists() and not target.exists() and tree_snapshot(tmp_path) == before
+
+
+def test_fallback_never_replaces_target_created_at_link_boundary(tmp_path, monkeypatch, owner):
+    source = row(tmp_path)
+    destination = migration.preview(tmp_path)["destinations"][0]
+    unsupported_native(monkeypatch)
+    original_link = os.link
+    def link(stage, target, **kwargs):
+        if target == Path(destination).name:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=kwargs["dst_dir_fd"])
+            try:
+                os.write(fd, b"late concurrent user content")
+            finally:
+                os.close(fd)
+        return original_link(stage, target, **kwargs)
+    monkeypatch.setattr(os, "link", link)
+    with pytest.raises(ValueError, match="destination changed"):
+        migration.apply(tmp_path)
+    assert source.exists() and (tmp_path / destination).read_bytes() == b"late concurrent user content"
+    assert json.loads((tmp_path / migration.MANIFEST).read_text())["status"] == "prepared"

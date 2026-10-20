@@ -12,7 +12,6 @@ import errno
 from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from functools import wraps
-import secrets
 import fcntl
 import hashlib
 import json
@@ -56,6 +55,8 @@ def _json(data):
 def _encode(value):
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
 
+
+_UNSPECIFIED = object()
 
 _ROOT = ContextVar("goal_migration_root", default=None)
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -166,14 +167,26 @@ def _path(repo, relative):
     return repo.joinpath(*parts)
 
 
-def _read_at(parent, name, relative, limit):
+def _publication_stage(name):
+    return ".migration-" + hashlib.sha256(os.fsencode(name)).hexdigest()[:32]
+
+
+def _read_at(parent, name, relative, limit, *, publication=False):
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
     except FileNotFoundError:
         return None
     try:
         info = os.fstat(fd)
-        _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
+        paired = publication and info.st_nlink == 2
+        if paired:
+            try:
+                alias = os.stat(_publication_stage(name), dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError as exc:
+                raise ValueError("Goal migration: unaccounted publication links: " + relative) from exc
+            _require(_same(info, alias) and stat.S_ISREG(alias.st_mode),
+                     "unaccounted publication links: " + relative)
+        _require(stat.S_ISREG(info.st_mode) and (info.st_nlink == 1 or paired) and info.st_uid == os.getuid()
                  and not stat.S_IMODE(info.st_mode) & 0o022 and info.st_size <= limit,
                  "unsafe or oversized file: " + relative)
         data = b""
@@ -183,23 +196,105 @@ def _read_at(parent, name, relative, limit):
                 break
             data += block
         after = os.fstat(fd)
-        _require(len(data) <= limit and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
-                 == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns), "file changed while reading")
+        _require(len(data) <= limit and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+                 == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_nlink), "file changed while reading")
         _require(_same(info, os.stat(name, dir_fd=parent, follow_symlinks=False)), "file replaced while reading")
+        if paired:
+            try:
+                alias_after = os.stat(_publication_stage(name), dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError as exc:
+                raise ValueError("Goal migration: publication alias disappeared") from exc
+            _require(_same(after, alias_after) and alias_after.st_nlink == 2,
+                     "publication alias changed while reading")
         return data
     finally:
         os.close(fd)
 
 
-def _read(repo, relative, limit=LIMIT):
+def _read(repo, relative, limit=LIMIT, *, publication=False):
     parts = _parts(relative)
     try:
         with _directory(repo, parts[:-1]) as (parent, bound):
-            data = _read_at(parent, parts[-1], relative, limit)
+            data = _read_at(parent, parts[-1], relative, limit, publication=publication)
             bound()
             return data
     except FileNotFoundError:
         return None
+
+
+def _read_publication(repo, relative, limit=LIMIT):
+    return _read(repo, relative, limit, publication=True)
+
+
+def _normalize_at(parent, name, relative, expected, *, stage_expected=_UNSPECIFIED):
+    """Remove only the exact validated publication alias, never unknown links."""
+    current = _read_at(parent, name, relative, 16 * LIMIT, publication=True)
+    _require(current == expected, "publication bytes changed: " + relative)
+    stage = _publication_stage(name)
+    try:
+        alias = os.stat(stage, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        # A previous process may have removed its alias but died before the
+        # directory sync. Observed bytes alone do not make publication durable.
+        if current is not None:
+            os.fsync(parent)
+        return
+    if alias.st_nlink == 2:
+        target = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        _require(_same(alias, target) and target.st_nlink == 2,
+                 "unaccounted publication links: " + relative)
+    else:
+        # A pre-link crash leaves one private stage. Its requested bytes must
+        # agree before it can be removed and recreated; sources stay strict.
+        staged = _read_at(parent, stage, relative, 16 * LIMIT)
+        _require(staged == (expected if stage_expected is _UNSPECIFIED else stage_expected),
+                 "conflicting publication stage: " + relative)
+        _require(current is None or current != staged,
+                 "unrelated publication stage inode: " + relative)
+    alias_after = os.stat(stage, dir_fd=parent, follow_symlinks=False)
+    _require(_same(alias, alias_after) and
+             (alias.st_nlink, alias.st_size, alias.st_mtime_ns, alias.st_ctime_ns) ==
+             (alias_after.st_nlink, alias_after.st_size, alias_after.st_mtime_ns, alias_after.st_ctime_ns),
+             "publication alias replaced")
+    os.unlink(stage, dir_fd=parent)
+    os.fsync(parent)
+
+
+def _normalize_publication(repo, relative, expected, *, stage_expected=_UNSPECIFIED):
+    parts = _parts(relative)
+    with _directory(repo, parts[:-1]) as (parent, bound):
+        bound()
+        _normalize_at(parent, parts[-1], relative, expected, stage_expected=stage_expected)
+        bound()
+
+
+
+def _check_originals(repo, sources, destinations):
+    """Validate interrupted pre-manifest archives without changing preview."""
+    originals = dict(sources)
+    originals.update({p: before for p, (before, _) in destinations.items() if before is not None})
+    for relative, expected in originals.items():
+        archive = ARCHIVE + "/original/" + relative
+        parts = _parts(archive)
+        try:
+            with _directory(repo, parts[:-1]) as (parent, bound):
+                current = _read_at(parent, parts[-1], archive, LIMIT, publication=True)
+                _require(current is None or current == expected, "conflicting original archive")
+                stage = _publication_stage(parts[-1])
+                try:
+                    alias = os.stat(stage, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    alias = None
+                if alias is not None and alias.st_nlink != 2:
+                    _require(current is None, "unrelated publication stage inode: " + archive)
+                    _require(_read_at(parent, stage, archive, LIMIT) == expected,
+                             "conflicting publication stage: " + archive)
+                elif alias is not None:
+                    _require(current is not None and _same(alias, os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)),
+                             "unaccounted publication links: " + archive)
+                bound()
+        except FileNotFoundError:
+            pass
 
 
 def _rename_new(parent, temporary, destination):
@@ -210,26 +305,43 @@ def _rename_new(parent, temporary, destination):
     if rename is None:
         rename = getattr(libc, "renameatx_np", None)
         flag = 4  # RENAME_EXCL on macOS
-    _require(rename is not None, "atomic no-replace publication is unavailable")
+    if rename is None:
+        _link_new(parent, temporary, destination)
+        return
     rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     rename.restype = ctypes.c_int
     if rename(parent, os.fsencode(temporary), parent, os.fsencode(destination), flag) != 0:
         error = ctypes.get_errno()
         if error == errno.EEXIST:
             raise FileExistsError(error, os.strerror(error), destination)
+        if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP}:
+            _link_new(parent, temporary, destination)
+            return
         raise OSError(error, os.strerror(error), destination)
 
 
-_UNSPECIFIED = object()
+def _link_new(parent, temporary, destination):
+    try:
+        os.link(temporary, destination, src_dir_fd=parent, dst_dir_fd=parent,
+                follow_symlinks=False)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        raise ValueError("Goal migration: atomic no-replace hardlink publication failed: "
+                         + str(exc)) from exc
+    # A crash before unlink is recognized solely by this exact same-parent pair.
+    os.unlink(temporary, dir_fd=parent)
 
 
 def _write(repo, relative, data, *, expected=_UNSPECIFIED):
     parts = _parts(relative)
     with _directory(repo, parts[:-1], create=True) as (parent, bound):
-        before = _read_at(parent, parts[-1], relative, 16 * LIMIT)
+        before = _read_at(parent, parts[-1], relative, 16 * LIMIT, publication=True)
         if expected is not _UNSPECIFIED:
             _require(_hash(before) == expected, "destination changed after preparation")
-        temporary = ".migration-" + secrets.token_hex(16)
+        temporary = _publication_stage(parts[-1])
+        # Existing visible bytes may be the result of an interrupted link.
+        _normalize_at(parent, parts[-1], relative, before, stage_expected=data)
         fd = None
         try:
             bound()
@@ -255,11 +367,16 @@ def _write(repo, relative, data, *, expected=_UNSPECIFIED):
             bound()
         finally:
             if fd is not None:
-                os.close(fd)
-            try:
-                os.unlink(temporary, dir_fd=parent)
-            except FileNotFoundError:
-                pass
+                try:
+                    owned = os.fstat(fd)
+                    try:
+                        alias = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        alias = None
+                    if owned.st_nlink == 1 and alias is not None and _same(owned, alias):
+                        os.unlink(temporary, dir_fd=parent)
+                finally:
+                    os.close(fd)
 
 
 def _retire(repo, relative, expected):
@@ -502,7 +619,7 @@ def _report(sources, destinations, recoveries, status):
 
 
 def _manifest(repo):
-    raw = _read(repo, MANIFEST, 16 * LIMIT)
+    raw = _read_publication(repo, MANIFEST, 16 * LIMIT)
     if raw is None:
         return None
     data = _json(raw)
@@ -514,7 +631,7 @@ def _manifest(repo):
         _require(relative.startswith(GOALS + "/"), "invalid archived source")
         _require(isinstance(record, dict) and set(record) == {"sha256"}
                  and isinstance(record["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", record["sha256"]), "invalid source manifest")
-        original = _read(repo, ARCHIVE + "/original/" + relative)
+        original = _read_publication(repo, ARCHIVE + "/original/" + relative)
         _require(original is not None and _hash(original) == record["sha256"], "archive changed or missing")
         current = _read(repo, relative)
         _require(current is None or _hash(current) == record["sha256"], "legacy source changed after preparation")
@@ -532,8 +649,8 @@ def _manifest(repo):
         except (ValueError, TypeError) as exc:
             raise ValueError("Goal migration: invalid archived destination") from exc
         _require(len(after) <= LIMIT and _hash(after) == record["after"], "destination archive changed")
-        _require(_hash(_read(repo, relative)) in ({record["after"]} if data["status"] == "complete" else {record["before"], record["after"]}), "destination changed after preparation")
-        original = _read(repo, ARCHIVE + "/original/" + relative)
+        _require(_hash(_read_publication(repo, relative)) in ({record["after"]} if data["status"] == "complete" else {record["before"], record["after"]}), "destination changed after preparation")
+        original = _read_publication(repo, ARCHIVE + "/original/" + relative)
         _require(_hash(original) == record["before"], "destination original archive changed")
     entries = _entries(repo, GOALS)
     if entries is not None:
@@ -548,7 +665,9 @@ def preview(repo_root):
     journal = _manifest(repo)
     if journal:
         return _report(journal["sources"], journal["destinations"], journal["recoveries"], journal["status"])
-    return _report(*_collect(repo), "preview")
+    sources, destinations, recoveries = _collect(repo)
+    _check_originals(repo, sources, destinations)
+    return _report(sources, destinations, recoveries, "preview")
 
 
 @_pinned
@@ -558,6 +677,7 @@ def apply(repo_root):
     initial = _manifest(repo)
     if initial is None:
         sources, destinations, recoveries = _collect(repo)
+        _check_originals(repo, sources, destinations)
         report = _report(sources, destinations, recoveries, "preview")
         _require(not report["blockers"], "missing legacy pool; preview returns exact initialization intake")
         if not sources and not destinations:
@@ -600,16 +720,21 @@ def apply(repo_root):
             _require(current == (sources, destinations, recoveries), "inputs changed before preparation")
             for relative, raw in sources.items():
                 archive = ARCHIVE + "/original/" + relative
-                existing = _read(repo, archive)
+                existing = _read_publication(repo, archive)
                 _require(existing is None or existing == raw, "conflicting original archive")
                 if existing is None:
                     _write(repo, archive, raw)
+                else:
+                    _normalize_publication(repo, archive, raw)
             for relative, (before, _) in destinations.items():
                 archive = ARCHIVE + "/original/" + relative
-                existing = _read(repo, archive)
+                existing = _read_publication(repo, archive)
                 _require(existing is None or existing == before, "conflicting destination archive")
-                if before is not None and existing is None:
-                    _write(repo, archive, before)
+                if before is not None:
+                    if existing is None:
+                        _write(repo, archive, before)
+                    else:
+                        _normalize_publication(repo, archive, before)
             journal = dict(version=1, status="prepared", recoveries=recoveries,
                            sources={p: {"sha256": _hash(raw)} for p, raw in sources.items()},
                            destinations={p: dict(before=_hash(before), after=_hash(after),
@@ -617,6 +742,29 @@ def apply(repo_root):
                                          for p, (before, after) in destinations.items()})
             _require(len(_encode(journal)) <= 16 * LIMIT, "migration manifest exceeds budget")
             _write(repo, MANIFEST, _encode(journal))
+        # _manifest has validated semantics and archive hashes. Normalize all
+        # exact publication pairs before either completion or source retirement.
+        for relative in journal["sources"]:
+            archive = ARCHIVE + "/original/" + relative
+            original = _read_publication(repo, archive)
+            _require(_hash(original) == journal["sources"][relative]["sha256"], "archive changed")
+            _normalize_publication(repo, archive, original)
+        for relative, record in journal["destinations"].items():
+            archive = ARCHIVE + "/original/" + relative
+            original = _read_publication(repo, archive)
+            _require(_hash(original) == record["before"], "destination original archive changed")
+            if original is not None:
+                _normalize_publication(repo, archive, original)
+            current = _read_publication(repo, relative)
+            _require(_hash(current) in ({record["after"]} if journal["status"] == "complete"
+                                       else {record["before"], record["after"]}), "destination changed")
+            if current is not None:
+                _normalize_publication(repo, relative, current,
+                                       stage_expected=base64.b64decode(record["data"], validate=True))
+        manifest_raw = _read_publication(repo, MANIFEST, 16 * LIMIT)
+        _require(_json(manifest_raw) == journal, "manifest changed")
+        _normalize_publication(repo, MANIFEST, manifest_raw,
+                               stage_expected=_encode(dict(journal, status="complete")))
         if journal["status"] == "complete":
             return _report(journal["sources"], journal["destinations"], journal["recoveries"], "complete")
         # Recheck the whole transaction before each stage; replay accepts only

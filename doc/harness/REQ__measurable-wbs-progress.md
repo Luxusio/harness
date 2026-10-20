@@ -30,6 +30,39 @@ Migration preserves execution/evidence identities and archives original records;
 it never converts historical status labels into measured credit. Transaction
 formats and recovery behavior are derived implementation choices.
 
+### Migration on filesystems without exclusive rename
+
+User source: the current conversation reports v9fs refusing the atomic operation
+needed for WBS migration with EINVAL; the user requests “문제도 해결해”. The
+observable outcome is safe explicit migration in that workspace. The mechanism
+below is a derived engineering decision, not an attributed user design request.
+
+Migration must work when exclusive rename is unsupported but same-directory
+hardlinks are supported. It publishes fully written and synchronized bytes
+without replacing a concurrently created destination. Permission, storage and
+I/O errors remain failures; they are not permission to overwrite or skip
+synchronization. If neither atomic publication primitive is supported, retain
+originals and report the filesystem limitation.
+
+A fallback interrupted between link and staging removal is recoverable using
+only its exact deterministic same-parent staging name plus descriptor identity,
+safe ownership/mode, bounded stable bytes and exactly two links accounting for
+both aliases. The filename alone proves nothing. Existing source/archive and
+manifest hash checks still apply. Legacy sources, locks and task controls keep
+their strict single-link rule; arbitrary aliases, third links, symlinks and
+conflicting staging bytes are refused. A pre-publication orphan stage is reused
+or removed only after matching the exact intended bytes and trusted identity.
+
+Preview can inspect a valid interrupted publication without writing. Apply
+normalizes only verified publication aliases under the existing migration and
+required task/batch locks, before retiring sources or returning an already
+complete manifest. Archive-first ordering, the version1 manifest, exact original
+bytes, conflict checks and idempotent retry remain authoritative. No additional
+migration ledger or runtime compatibility interface is introduced. Verification must include actual process death after link, not only exceptions
+that run cleanup, and an isolated v9fs migration; real project legacy data is
+not a test fixture.
+
+
 All work reports verified outcome weight from the declared WBS,
 never an agent's percentage, elapsed time, task count or scheduling status.
 PLAN.md owns task intent in one `wbs` JSON fence. Each leaf names an observable
