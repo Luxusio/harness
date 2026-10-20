@@ -204,7 +204,7 @@ keeps Git-declared source enumeration. `artifacts` lists required artifact files
 `exclude` removes declared unnecessary paths; `deny` prohibits file reads.
 Explicit source roots are enumerated directly without Git: their actual files,
 including ignored build inputs, are measured except declared exclusions and Git
-administrative `.git` entries. A required Git administrative input is unavailable.
+administrative `.git` entries. A required Git administrative source input is unavailable.
 Because Git may read ignore/config includes outside its candidate list, `deny`
 requires explicit `source` (possibly empty for artifact-only checks); default
 Git enumeration with `deny` fails unavailable before invoking Git. A denied
@@ -216,7 +216,7 @@ which is denied, excluded or missing is unavailable, not unchanged. Apply
 lexical policy decisions before resolving/opening candidate paths. Explicit
 ignored artifacts are measured only when selected, with a separate bounded
 32 MiB artifact budget; source retains its own 32 MiB budget. Global entry,
-listing, depth and time bounds remain. Errors identify the input and exhausted
+listing and time bounds remain; depth limits apply to Git-module nesting. Errors identify the input and exhausted
 budget without returning source contents.
 
 The policy itself is bound to source evidence. New policy publication preserves
