@@ -13,6 +13,8 @@ REPO = Path(__file__).resolve().parents[1]
 TASK_LEAD = REPO / "plugin" / "agents" / "task-lead.md"
 BATCH_SKILL = REPO / "plugin" / "skills" / "batch" / "SKILL.md"
 DEVELOP_SKILL = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
+OWNER_REQ = REPO / "doc/harness/REQ__batch-state-pool-recovery.md"
+COMPLETION = REPO / "plugin/skills/run/worktree-completion.md"
 
 
 def _text(path: Path) -> str:
@@ -43,9 +45,9 @@ def _assert_all(body: str, fragments: tuple[str, ...], path: Path) -> None:
         assert _normalized(fragment) in lowered, f"{path}: missing {fragment!r}"
 
 
-def test_task_lead_frontmatter_declares_worktree_isolation_and_inherits_tools():
+def test_task_lead_uses_mcp_checkout_without_host_isolation_and_inherits_tools():
     meta = _frontmatter(TASK_LEAD)
-    assert meta.get("isolation") == "worktree", TASK_LEAD
+    assert "isolation" not in meta, TASK_LEAD
     assert meta.get("model") == "inherit", TASK_LEAD
     # A lead runs the whole lifecycle: it needs Agent, Skill and the harness MCP
     # task tools under whatever server name the host exposes (plugin-scoped
@@ -84,7 +86,7 @@ def test_task_lead_body_states_batch_carveouts():
             "install_verified.py",
             "git rev-parse HEAD",
             "coordinator",
-            "never `cd`",
+            "Never change process-wide cwd",
             "plain",
             "installed plugin",
         ),
@@ -105,67 +107,50 @@ def test_batch_skill_frontmatter_and_weight():
 
 
 def test_batch_skill_names_every_coordinator_step():
+    # The public owner performs the lifecycle; a skill must not reconstruct it
+    # with a shell command chain or ask the native host to allocate another W.
     body = _text(BATCH_SKILL)
-    _assert_all(
-        body,
-        (
-            "one assistant message",
-            "3 concurrent leads",
-            "git merge --ff-only",
-            "rebase --no-autostash",
-            "batch_finish.py",
-            "batch_harvest.py",
-            "git worktree remove",
-            "never",
-            "--force",
-            "TASK__batch-integrate",
-            "install_verified.py",
-            "baseRef",
-            "\"head\"",
-            "branches and commits only",
-        ),
-        BATCH_SKILL,
-    )
+    _assert_all(body, (
+        'wbs(action="dispatch"', 'operation="prepare"', 'operation="bind"',
+        'operation="complete"', 'operation="status"', 'operation="resume"',
+        'operation="recover"', "one assistant message", "Default lead cap is 3",
+        "rebase, fast-forward, evidence harvest, worktree removal and `git branch -d`",
+        "install_verified.py", "branches and commits only",
+        "Do not run `git worktree add`", "without native worktree isolation",
+        "No separate integration child or ledger",
+    ), BATCH_SKILL)
 
 
 def test_batch_skill_covers_conflict_and_blocked_lead_handling():
-    body = _text(BATCH_SKILL)
-    _assert_all(
-        body,
-        (
-            "rebase --abort",
-            "GIT_EDITOR=true",
-            "rebase --continue",
-            "carry",
-            "integration task",
-            "blocked",
-            "failed",
-            "kept",
-        ),
-        BATCH_SKILL,
-    )
+    _assert_all(_text(BATCH_SKILL), (
+        "GIT_EDITOR=true", "--continue", "integration task", "blocked", "failed", "kept",
+        "Conflicts, fast-forward refusal or unknown outcomes halt new starts and integration",
+        "collect other workers and preserve their results", "finish --resume",
+        "Clear the halt only through validated owner recovery",
+    ), BATCH_SKILL)
+    # Abort/classification details belong to the existing finish owner, not an
+    # alternate manual integration implementation in the coordinator prompt.
+    req = REPO / "doc/harness/REQ__parallel-tasks-via-worktree-leads.md"
+    _assert_all(_text(req), ("rebase --abort", "diff --name-only --diff-filter=U"), req)
 
 
 def test_batch_skill_integrates_leads_without_merge_commits():
     body = _text(BATCH_SKILL)
-    assert "--no-ff" not in body, BATCH_SKILL
-    assert "git merge --abort" not in body, BATCH_SKILL
-    assert "never by a merge commit" in body, BATCH_SKILL
-    assert "fall back to a merge commit" in body, BATCH_SKILL
-    _assert_all(
-        body,
-        (
-            # The branch is checked out in the lead worktree: rebase runs there.
-            'git -C <W> rebase --no-autostash "$(git rev-parse HEAD)"',
-            # A rebase drops a merge commit's own change; refuse such a lead.
-            'git rev-list --merges "$(git rev-parse HEAD)..<branch>"',
-            # A conflict and a dirty refusal share exit 1; paths tell them apart.
-            "git -C <W> diff --name-only --diff-filter=U",
-            "git -C <W> rebase --abort",
-            "go on to the next closed lead",
-        ),
-        BATCH_SKILL,
-    )
+    assert "--no-ff" not in body
+    assert "git merge --abort" not in body
+    _assert_all(body, (
+        "No manual force removal, stash, merge-commit fallback or forced branch deletion",
+        "Never run integrations concurrently", "recorded lead checkout",
+        "without a whole-wave barrier",
+    ), BATCH_SKILL)
+    # Preserve the loss-prevention and branch identity rules at the shared
+    # policy and durable owner rather than pinning obsolete shell steps.
+    _assert_all(_text(COMPLETION), (
+        "A merge commit in the source range needs resolution",
+        "never a lossy rebase that silently drops its changes",
+        "git -c rebase.updateRefs=false rebase --no-autostash <destination-tip>",
+        "git merge --ff-only refs/heads/<source-branch>",
+    ), COMPLETION)
 
 
 def test_develop_skill_points_to_task_lead_carveouts():
@@ -196,36 +181,23 @@ def test_root_claude_md_states_batch_focus_and_install_clauses():
 
 def test_batch_skill_routes_managed_finish_through_durable_state_and_integrates_closed_leads():
     body = _text(BATCH_SKILL)
+    _assert_all(body, (
+        'operation="complete", slug=S, worker_id=<bound host ID>, result=<actual JSON object>, worker_stopped=true',
+        "for genuinely closed leads", "closes an eligible fully disposed pool",
+        "Replayed completion must match the recorded result even when W has already been removed",
+        "Partial success retains its checkpoint and exact remaining action",
+        "integrated_tip` always takes precedence over a cleanup error",
+        "Do not edit records or bypass checkpoints with direct finish",
+        "integrated, worktree kept", "integrated, branch kept", "`trailer_present: false`",
+    ), BATCH_SKILL)
     norm = _normalized(body)
-    # User projects have no plugin/scripts/; the installed payload does.
-    assert "${claude_plugin_root}/scripts/batch_state.py" in norm
     assert "python3 ${claude_plugin_root}/scripts/batch_finish.py" not in norm
     assert "python3 plugin/scripts/batch_finish.py" not in norm
-    # batch_finish.py owns harvest; the skill no longer calls it directly.
     assert "scripts/batch_harvest.py" not in norm
-    assert _normalized(
-        "--repo <main checkout> --batch-id <id> finish --slug <slug>"
-    ) in norm
-    # Claude Code keeps its agent lock after the lead returns; the helper
-    # releases it only when the worktree is locked.
-    assert "git worktree unlock" in norm
-    assert _normalized("only when `git worktree list --porcelain` shows one") in norm
-    assert _normalized("never unlock a worktree whose lead is still running") in norm
-    # Every status the helper prints has a coordinator action.
-    for status, code in (
-        ("integrated", 0), ("kept", 3), ("conflict", 4), ("ff-refused", 5),
-    ):
-        assert f"`{status}` (exit {code})" in norm, status
-    assert _normalized("any other exit (1: unexpected error, 2: usage): stop integrating") in norm
-    # Step e.1 resumes a resolved lead; a conflict never strands later leads.
-    assert _normalized("rerun the step d.1 command with `--resume`") in norm
-    assert _normalized("continue step d in order for every remaining closed lead") in norm
-    # Step g reports both tips and the traceability trailer.
-    assert _normalized("integrated, worktree kept") in norm
-    # After a `git branch -d` refusal the worktree is gone: no rerun helps.
-    assert _normalized("integrated, branch kept") in norm
-    assert _normalized("`git branch -d <branch>` once the cause is fixed") in norm
-    assert "`trailer_present: false`" in norm
+    _assert_all(_text(COMPLETION), (
+        "Never unlock a running worker's worktree", "unlock only an existing lock belonging to the stopped worker",
+        "report only the branch as retained, not a nonexistent worktree",
+    ), COMPLETION)
 
 
 def test_c09_batch_clause_is_in_root_and_template_contracts():
@@ -252,49 +224,30 @@ def test_this_repo_branches_leads_from_head_and_ignores_worktrees():
 
 
 def test_batch_skill_rejects_reused_slugs_before_integrating():
-    norm = _normalized(_text(BATCH_SKILL))
-    assert _normalized("Slugs must be distinct within the batch") in norm
-    assert "doc/harness/archive/batch/task__<slug>" in norm
-    assert _normalized("integration stopped at a conflict carried from step d.2") in norm
+    _assert_all(_text(BATCH_SKILL), (
+        "Slugs must be distinct within the batch", "task/archive identity collisions refuse",
+        "Never replace the exact pool to bypass a retained scope",
+        "Conflicts, fast-forward refusal or unknown outcomes halt new starts and integration",
+    ), BATCH_SKILL)
+    _assert_all(_text(OWNER_REQ), ("reused task/archive identities refuse intake",), OWNER_REQ)
 
 
 def test_batch_skill_gates_spawning_on_the_repo_shape_preflight():
-    body = _text(BATCH_SKILL)
-    norm = _normalized(body)
-    # Installed payload path, like batch_harvest; a user project has no plugin/.
-    assert "${claude_plugin_root}/scripts/batch_preflight.py" in norm
-    assert "python3 plugin/scripts/batch_preflight.py" not in norm
-    assert _normalized("Spawn only when it exits 0") in norm
-    for shape in ("`submodule-checkout`", "`linked-worktree`", "`non-git`", "`separate-git-dir`"):
-        assert shape in norm, shape
-    _assert_all(
-        body,
-        (
-            "in every populated submodule, and in every ignored nested repo",
-            "`inside-submodule` or `inside-ignored-nested-repo` is not batched",
-            "ordinary harness task in the main checkout",
-            "`outside-root` scope cannot run in a batch lead",
-            "excluded_requests",
-            "overlaps",
-            "off-limits: <preflight off_limits",
-            "keep it and report it like a blocked lead",
-            # One path per flag; `ok` is necessary, not sufficient.
-            "--request <slug>=<path> --request <slug>=<path2>",
-            "a comma list is refused",
-            "exits 0 (`verdict: \"ok\"`) and steps b.2–b.5 hold",
-            # Step g accounts for every request kept out of the wave.
-            "excluded (ordinary task, done or pending)",
-            "queued (dependency or retained scope)",
-            "outside the root, not batchable",
-        ),
-        BATCH_SKILL,
-    )
-    # The plain root-only status check is gone; the script owns cleanliness.
-    assert _normalized("`git status --porcelain` in the main checkout must be empty") not in norm
-    # Step b.3 moved into the script: git sees a symlinked `.claude` elsewhere.
+    _assert_all(_text(BATCH_SKILL), (
+        "preflight classifies every declared scope path",
+        "Only a `tracked-area` or validated `selected-submodule` scope may run in a lead",
+        "`inside-submodule` or `inside-ignored-nested-repo` is not batched",
+        "ordinary harness task in the main checkout", "`outside-root` scope cannot run in a batch lead",
+        "control-root shape, clean root/nested repositories", "post-checkout-hook hazards",
+        "`.claude/worktrees/` must be ignored", "off-limits",
+        "excluded (ordinary task, done or pending)", "queued (dependency or retained scope)",
+        "outside the root, not batchable",
+    ), BATCH_SKILL)
+    # CLI flag syntax and exit classification are backend behavior tests;
+    # this prompt requires a successful managed preparation before spawn.
+    norm = _normalized(_text(BATCH_SKILL))
+    assert norm.index('operation="prepare"') < norm.index("## c) bootstrap and bind before work")
     assert "git check-ignore .claude/worktrees/x" not in norm
-    assert "`worktrees_ignore`" in norm
-    assert _normalized("at the path git actually sees") in norm
 
 
 def test_task_lead_forbids_module_management_and_unselected_or_nested_repo_edits():
@@ -330,7 +283,7 @@ def test_req_documents_worktree_location_and_multi_repo_shapes():
         body,
         (
             "validates registration, not path",
-            "$CODEX_HOME/worktrees",
+            "MCP-created linked checkout",
             "WorktreeCreate hook",
             "read-only",
             "same 9p mount",
@@ -352,49 +305,43 @@ def test_task_lead_operates_only_its_worktree_wbs_and_defines_verdicts():
 
 
 def test_pool_reserves_and_binds_before_authorizing_exact_worker():
-    body = _text(BATCH_SKILL)
-    _assert_all(body, (
-        "init --requests-file <JSON> [--max-leads <N>]",
-        "claim` atomically reserves capacity before spawning",
-        "Reserved and running requests both consume slots",
-        "current destination `spawn_head`",
-        "bootstrap-only; do not start a task or edit source",
-        "bind --slug <slug> --worker-id <native id> --worktree <W> --branch <branch>",
-        "Only after successful binding",
-        "resume that same agent",
-        "Use the actual bound worker id",
-        "Identity/task/run/close mismatch refuses",
-        "--worker-stopped --no-external-work",
-        "Never discard a reservation just due to elapsed time",
+    _assert_all(_text(BATCH_SKILL), (
+        "owner parks the parent before worktree effects", "records reservations and exact creation intent",
+        "bootstrap-only", "No source or task mutation is permitted before bind",
+        "Obtain the actual native worker ID from the host", 'operation="bind", slug=S, worker_id=<actual host ID>',
+        "owner uses its recorded W/branch; callers do not choose them",
+        "continue that same bound agent", "explicit mutation permission",
+        "release additionally requires confirmed no external work",
     ), BATCH_SKILL)
-    norm = _normalized(body)
-    assert norm.index("init --requests-file") < norm.index("claim` atomically")
-    assert norm.index("bootstrap-only; do not") < norm.index("bind --slug") < norm.index("Only after successful binding".lower())
+    norm = _normalized(_text(BATCH_SKILL))
+    assert norm.index('operation="prepare"') < norm.index('operation="bind"') < norm.index("explicit mutation permission")
     _assert_all(_text(TASK_LEAD), (
-        "Do not call `wbs(action=\"open\")`, create task artifacts, edit source or commit",
-        "this same native agent with confirmed `batch_state.py bind` success",
-        "Never infer permission from the original request",
+        "No task MCP call, task artifacts or commit is permitted before bind",
+        "coordinator continues this same native agent", 'wbs(action="dispatch", operation="bind")',
+        "never infer permission from original prose or edited state",
     ), TASK_LEAD)
+    _assert_all(_text(OWNER_REQ), (
+        "Reserved and running requests consume slots", "Never expire a reservation solely because time passed",
+        "worker, worktree, branch, task and current run, with valid close evidence",
+    ), OWNER_REQ)
 
 
 def test_pool_capacity_refill_and_serial_integration_keep_lifecycle_gates():
     _assert_all(_text(BATCH_SKILL), (
-        "default is **3 concurrent leads**",
-        "`--max-leads`, then manifest `batch.max_leads`, then 3",
-        "above 8 clamp to 8",
-        "Invalid explicit values refuse; invalid manifest values fall back to 3",
-        "serially in completion order",
-        "claim/refill free slots from the current main HEAD while other leads continue",
-        "No full-wave barrier",
-        "Never run two finish commands concurrently",
-        "only releases a dependency once its predecessor is integrated and cleaned",
-        "Do not open a main-checkout task while any lead remains live or unknown",
+        "Default lead cap is 3", "Reserve at least one slot for independent review/QA",
+        "available_slots` (minimum zero)", "No free slot means no spawn",
+        "Integrate completed leads in completion order and refill through `prepare` without a whole-wave barrier",
+        "Never run integrations concurrently",
+        "dependencies release only after their predecessor integrates and cleanup completes",
+        "unknown liveness forbids opening a main task",
         "`review-code`, conditional `review-security`, then `qa-cli`",
-        "receipt-backed review-before-QA order",
-        "before `wbs(action=\"close\")`",
-        "never substitutes for task review/QA/close",
-        "never bypass durable checkpoints by invoking direct finish here",
+        "receipt-backed review-before-QA order", 'before `wbs(action="close")`',
+        "Operational closure never replaces review/QA or closes the WBS itself",
     ), BATCH_SKILL)
+    _assert_all(_text(OWNER_REQ), (
+        "explicit `--max-leads`, then optional manifest `batch.max_leads`, then 3",
+        "above 8 clamp to 8", "Invalid explicit values fail; invalid manifest values fall back to 3",
+    ), OWNER_REQ)
 
 
 def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolation():
@@ -405,7 +352,7 @@ def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolatio
     assert "isolation" not in meta
     assert "tools" not in meta
     _assert_all(_text(path), (
-        "Resolve W and enter that exact directory before task tools or nested agents",
+        "Resolve W and pass that exact working directory to every command and nested agent before task tools",
         "source and task mutations are not",
         "binds your actual host worker identity",
         "explicit mutation permission",
@@ -416,47 +363,43 @@ def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolatio
         "Never clean up your own worktree",
     ), path)
     _assert_all(_text(BATCH_SKILL), (
-        "Prefer the original native agent",
+        "Prefer the original agent",
         "harness:task-lead-resume",
-        "Never spawn regular `task-lead` for resume",
-        "resume --slug <slug> --worker-stopped",
-        "Confirm the original worker and all nested writers through the host",
+        "non-isolating",
+        'operation="resume", slug=S, worker_stopped=true',
+        "Confirm through the host that that worker and all nested writers stopped",
     ), BATCH_SKILL)
 
 
 def test_abandonment_retains_source_and_truthful_unfinished_disposition():
     _assert_all(_text(BATCH_SKILL), (
-        "Only after an explicit user choice to abandon",
-        "abandon --slug <slug> --worker-stopped --reason <decision>",
-        "Abandonment retains source, branch and evidence",
-        "retains unresolved scope ownership",
-        "It does not cancel/close the task or satisfy the Goal",
-        "Report the unfinished retained disposition and next action",
-        "never `-D` for unmerged unique commits",
-        "Operational close refuses unfinished work/cleanup",
-        "reports abandoned retention separately",
+        "Only an explicit user choice permits abandonment", "retains source, branch, evidence and unresolved scope ownership",
+        "never cancels/closes the task or satisfies the WBS", "exceptional owner commands in `batch_state.py`",
+        "actual stopped-writer proof", "Label abandoned requests as retained work or never dispatched",
+        "Do not claim overall completion while owned cleanup remains unresolved",
     ), BATCH_SKILL)
+    _assert_all(_text(OWNER_REQ), (
+        "abandon --slug S --worker-stopped --reason TEXT",
+        "Refuse unresolved active work or cleanup; distinguish retained abandonment from integrated completion",
+        "does not delete unintegrated source, force-delete branches, modify task status",
+        "Unknown post-effect outcomes or pending integrated cleanup remain recoverable and cannot be hidden by abandonment",
+    ), OWNER_REQ)
 
 
 def test_native_bootstrap_retention_precedes_bind_and_exact_worker_message():
     assert "SendMessage" in _frontmatter(BATCH_SKILL)["allowed-tools"].split(", ")
     norm = _normalized(_text(BATCH_SKILL))
-    bootstrap = "bootstrap --slug <slug> --worktree <w> --branch <branch>"
-    assert norm.index(bootstrap) < norm.index("bind --slug") < norm.index("native `sendmessage`")
+    assert norm.index("creates the registered worktrees") < norm.index('operation="bind"') < norm.index("native `sendmessage`")
     _assert_all(_text(BATCH_SKILL), (
-        'Require `status: "bootstrapped"`',
-        "exact `{batch_id,slug,spawn_head}` reservation bytes",
-        "Only after successful binding, use native `SendMessage` addressed to that exact bound agent ID",
-        "Retain the marker through every unfinished or zero-source final",
-        "never stage or remove it in a lead",
+        "agent verifies registration, branch/HEAD and helper marker", "No source or task mutation is permitted before bind",
+        "same bound agent", "explicit mutation permission", "including blocked and zero-source returns",
     ), BATCH_SKILL)
     lead = _normalized(_text(TASK_LEAD))
-    assert lead.index(bootstrap) < lead.index("return bootstrap json") < lead.index("`batch_state.py bind`") < lead.index("`sendmessage`")
+    assert lead.index("helper-created `.harness-batch-bootstrap`") < lead.index("return bootstrap json") < lead.index('operation="bind"') < lead.index("`sendmessage`")
     _assert_all(_text(TASK_LEAD), (
-        "sole permitted pre-bind write",
+        "Never create a worktree, write a substitute marker, start a task or edit source",
         "Keep `.harness-batch-bootstrap` through all final returns, including blocked, failed and task-only/zero-source closed results",
-        "Never stage, edit or remove it",
-        "git add <intended paths>` excluding `.harness-batch-bootstrap`",
+        "Never stage, edit or remove it", "git add <intended paths>` excluding `.harness-batch-bootstrap`",
         "without a dummy or empty commit",
     ), TASK_LEAD)
 
@@ -472,11 +415,13 @@ def test_resume_preserves_marker_and_managed_finish_removes_only_after_harvest()
         "with successful binding and explicit mutation permission",
     ), path)
     _assert_all(_text(BATCH_SKILL), (
-        "Managed finish preserves the marker through rebase and integration failures",
-        "removes only that marker after the durable archive checkpoint, immediately before ordinary or guarded S1 worktree removal",
+        "It is removed only by managed disposal after harvest",
         "Unknown marker bytes, links, tracking or other dirty files refuse",
         "standalone finish has no exemption",
     ), BATCH_SKILL)
+    _assert_all(_text(OWNER_REQ), (
+        "Managed completion validates the marker and removes it only after durable harvest, immediately before ordinary or guarded S1 removal",
+    ), OWNER_REQ)
     _assert_all(_text(TASK_LEAD), (
         "It grants no PASS or task authority",
         "managed finish removes it only after durable evidence harvest, immediately before worktree removal",
@@ -488,18 +433,18 @@ def test_selected_modules_require_opt_in_and_prepared_same_worker_handoff():
     # lead. Keeping one surface permissive must not silently widen the others.
     batch = _normalized(_text(BATCH_SKILL))
     lead = _normalized(_text(TASK_LEAD))
-    for token in ("submodules: [module paths]", "--submodule <slug>=<module path>",
+    for token in ("submodules: [module paths]", "Public WBS dispatch does not add a separate submodule-selection field",
                   "omission keeps default exclusions", "reserve the whole gitlink"):
-        assert token in batch
-    bind = batch.index("bind --slug")
+        assert _normalized(token) in batch
+    bind = batch.index('operation="bind"')
     prepared = batch.index("all selected modules prepared", bind)
-    handoff = batch.index("only after successful binding", prepared)
+    handoff = batch.index("continue that same bound agent", prepared)
     assert bind < prepared < handoff
-    assert "exact bound agent id" in batch[handoff:]
+    assert "same bound agent" in batch[handoff:]
     assert "confirmed prepared-module manifest" in lead
-    assert "only coordinator bind prepares these clones" in lead
+    assert "only coordinator bind prepares those clones" in lead
     assert "only explicitly selected, coordinator-prepared s1 modules within your declared scope" in lead
-    assert "missing or incomplete preparation is a blocker" in lead
+    assert "missing or mismatched authority means stay stopped" in lead
 
 
 def test_selected_module_commits_stay_under_outer_task_lifecycle():

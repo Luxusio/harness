@@ -1,12 +1,81 @@
 # Batch state, bounded scheduling and recovery
 
+## Managed MCP lifecycle: intent and derivation (2026-10-20)
+
+User-explicit source: this conversation, “worktree정리 안되는문제를 구조적으로 해결할 방법 없냐? 너의 기억에 의존하는거 말고”.
+User-confirmed source: “ㅇㅇ 그렇게 가자” approves the immediately preceding
+proposal that MCP own creation, integration, disposal and restart recovery,
+with owning WBS completion requiring disposal and unresolved work preserved.
+
+Derived engineering contract: extend the existing `wbs(action="dispatch")`
+with lifecycle operations using the existing batch record and lock. Persist
+exact creation intent before Git effects. Repeated preparation returns existing
+handoffs; it never adopts a foreign path or branch because HEAD happens to match.
+Bind the actual native worker before mutation permission. Completion requires
+the coordinator's explicit stopped-writer assertion and the existing exact
+result/task/run/close proof, then runs integration, archive and disposal without
+a separate remembered finish call. Partial success remains retryable from its
+original checkpoint. No timeout proves that a worker stopped.
+
+Read-only WBS/session/prompt discovery exposes pending operational work even
+without an active task. Hooks neither mutate Git nor authorize cleanup.
+Only the owning WBS is gated by its pool; unrelated repair tasks remain usable.
+Completion proof includes actual absence of the owned worktree and disposable
+branch, alongside existing archive and destination-ancestry evidence.
+No second ledger, daemon, forced deletion or fabricated task closure is added.
+
 The coordinator records a batch before dispatching any lead. Its operational
 record survives interruption at `doc/harness/runtime/batches/<id>.json`; it is
 not task control or review/QA evidence. Only the existing task lifecycle can
 publish a closed task. A returned `closed` result must match its recorded
 worker, worktree, branch, task and current run, with valid close evidence.
 
-## Coordinator commands
+## Managed WBS interface
+
+Normal coordination uses the same public `wbs` tool, with
+`action="dispatch"` and the owning `wbs_id`. `operation` selects:
+
+| Operation | Inputs and observable behavior |
+|---|---|
+| `prepare` (default) | Initial `ownership` maps pending outcome IDs to literal scope lists; bound-pack retries may omit it. Optional `available_slots` limits admission. Bind the exact WBS pack, park its parent, initialize/reserve and create MCP-owned W/branch plus marker before returning handoffs. Existing reservations survive retries. |
+| `status` | Read stored state and current observations, including pending integration/disposal and exact next actions, without mutation. |
+| `bind` | `slug`, actual host `worker_id`; use recorded W/branch, prepare selected S1 modules, and return confirmed running binding. No caller-chosen checkout. |
+| `complete` | `slug`, bound `worker_id`, actual `result` object, explicit `worker_stopped=true`; validate result and task/run/close proof, then integrate, harvest, dispose and close an eligible pool. Blocked/failed work stays retained. |
+| `resume` | `slug`, explicit `worker_stopped=true`; reserve the same retained W/branch/task/run for authenticated continuation. |
+| `recover` | `slug`, explicit `worker_stopped=true`; reconcile original checkpoints. After conflict resolution under a recovery task, optional `recovery_commit` explicitly acknowledges the exact reviewed resolved branch-tip SHA. |
+
+Public WBS preparation derives requests from pending outcomes and their
+dependencies plus execution-only ownership. It does not turn source scopes into
+progress milestones or add a separate submodule-selection field; preserve
+existing explicit S1 owner metadata without inventing a selection.
+
+Preparation persists exact resource intent before Git effects and rechecks
+foreign ownership before reuse. A crash after creation must not require a new
+checkout or lose the original reservation. Completion retries first compare the
+recorded result; disposal of W does not make replay fail merely because W is
+gone. Result, finish and eligible pool close are one managed operation, using
+existing batch locks/checkpoints, not one atomic Git transaction. Partial
+failure names the exact retained resource and recovery action. No elapsed time
+or silence substitutes for the coordinator's observed stopped-writer assertion.
+
+Derived conflict-continuation mechanism: `recovery_commit` is an explicit
+acknowledgment of the independently reviewed resolved tip, not a replacement
+lead result. Accept a changed tip only from the recorded pre-integration
+checkpoint, with stopped writers, exact W/branch/task/run and close proof
+preserved, and the recorded destination proven to be an ancestor. Already
+integrated checkpoints never adopt a different tip. Normal `complete` always
+compares the original result and cannot authorize unexpected new commits.
+
+Context/next and the existing session/prompt context hooks project pending pools
+even without an active task. Discovery is bounded, read-only and advisory;
+unsafe/corrupt state produces a bounded warning, never hidden success. The
+owning WBS refuses completion until archive/ancestry and actual absence of its
+owned W/branch prove disposition. Other repair tasks remain usable.
+
+## Owner CLI and exceptional recovery commands
+
+These existing commands remain the internal owner and explicit recovery
+interface. They are not the normal WBS coordinator's remembered call chain.
 
 Use `python3 plugin/scripts/batch_state.py --repo ROOT --batch-id ID COMMAND`.
 The runtime-installed script uses the same interface.
@@ -59,10 +128,11 @@ reported separately from invalid data. External Git writers do not obey this
 lock, so current branch identity, Git operation state, cleanliness and ownership
 must be rechecked at their actual use boundaries.
 
-Dispatch is a handshake: reserve, spawn a bootstrap-only agent, receive its
-worktree/branch/HEAD, bind it, then authorize that exact agent to begin work.
-The bootstrap must not edit source or start a task before binding. It creates
-only `.harness-batch-bootstrap`, a nonignored untracked regular file containing
+Dispatch is a handshake: MCP reserves and creates the exact checkout and
+marker, then a bootstrap-only agent verifies its worktree/branch/HEAD and stops.
+Bind its actual native identity before authorizing that same agent to begin.
+Bootstrap must not edit source, recreate the marker or start a task before
+binding. MCP creates `.harness-batch-bootstrap`, a nonignored untracked regular file containing
 the exact `{batch_id,slug,spawn_head}` reservation payload. Bind accepts only
 that validated operational marker as a bootstrap change and rejects halted or
 unresolved integration, including reservations made before the halt. Never expire
@@ -74,17 +144,16 @@ A successful selected bind returns `request.submodules` and
 `request.submodule_manifest`; resume returns those fields inside `handoff`. A failed spawn requires explicit
 stopped/no-external-work confirmation before release.
 
-Claude removes unchanged isolation worktrees on completion; its retention rules
-keep worktrees with untracked work. The marker therefore remains through native
-bootstrap completion, blocked/failed returns and closed tasks with no source
-change. Never stage it or remove it in a lead. For lead QA, only this validated
-operational marker is excepted from source cleanliness; implementation changes
-still require commits. Continue the exact bound native agent with `SendMessage`
-when available. Managed finish validates the marker at cleanliness boundaries
-and removes it only after durable harvest, immediately before worktree
-removal through the ordinary or guarded S1 route. Unknown or unsafe marker content never permits a dirty-worktree bypass.
-See [Claude subagents](https://code.claude.com/docs/en/sub-agents#frontmatter-reference)
-and [worktree retention](https://code.claude.com/docs/en/worktrees#clean-up-subagent-and-background-session-worktrees).
+Both runtimes receive the same MCP-created checkout, never a second native
+isolation worktree. The marker remains through bootstrap, blocked/failed returns
+and closed tasks without source changes. It also protects earlier retained
+native checkouts from unchanged-worktree cleanup. Never stage, edit or remove it
+in a lead. Only this validated operational marker is excepted from source
+cleanliness; implementation changes still require commits. Continue the exact
+bound native agent with `SendMessage` on Claude or the actual same-agent
+continuation capability on Codex. Managed completion validates the marker and
+removes it only after durable harvest, immediately before ordinary or guarded
+S1 removal. Unknown marker bytes, links or tracking never permit a dirt bypass.
 
 No main-checkout Harness task is open while live worktree leads can emit
 lifecycle events. After all writers stop, the coordinator runs the integration
@@ -127,9 +196,9 @@ its bound reservation and retries in the same worktree after stopped-writer
 confirmation; releasing a bound worktree as unused is forbidden.
 
 Resume uses the original native agent when available; otherwise use the
-non-isolating `task-lead-resume` agent in the exact existing worktree. Ordinary
-`task-lead` isolation would allocate another checkout and is not a resume.
-Call `task_start(workspace=W, task_id=existing_id)` without `fresh_run` so
+non-isolating `task-lead-resume` agent in the exact existing worktree. No
+continuation may allocate another checkout.
+Call `wbs(action="open", workspace=W, wbs_id=existing_id)` without `fresh_run` so
 existing evidence survives. A changed task generation or branch refuses.
 
 Abandonment is an explicit user choice. It does not delete unintegrated source,
@@ -154,8 +223,10 @@ by the coordinator based on host results, not an operating-system liveness
 proof. No generic process-killing or agent-spawning service is introduced.
 
 The installed script, workflow and resume-agent definitions ship together.
-Claude supports worktree task lifecycle; Codex can develop and exercise the
-shared CLI but still refuses worktree `workspace` lifecycle calls. Only explicitly
+Both Claude and Codex use registered-worktree lifecycle calls. Codex requires
+process-owned native identity/cwd/full-ancestry proof under the shared binding
+owner; an unauthenticated shared MCP host does not gain authority from prompt
+text or explicit workspace alone. Only explicitly
 selected direct modules use S1; unselected modules and ignored nested repositories
 remain ordinary sequential tasks.
 
@@ -170,8 +241,8 @@ runtime payloads; full QA and native receipt gates remain required.
 
 ## Known ceiling
 
-Native Claude bootstrap/bind/continuation was not exercised in the local Codex
-development runtime. The same installed helpers are tested with real Git and
+The newly managed native Claude bootstrap/bind/continuation path is not proven
+by CLI fixtures in the local Codex development runtime. The same installed helpers are tested with real Git and
 process interruption; validate native dispatch when a live Claude runtime is
 available. A host without a continuation channel retains the reservation and
 worktree and reports that blocker; it does not authorize an unbound worker.

@@ -6,13 +6,15 @@ batch lifecycle. Other agents share the process environment: never use a
 process-wide cwd change. Pass explicit working directories to every shell
 command and use absolute paths under W for source edits.
 
-Your first turn is bootstrap-only. Verify branch and HEAD against the claim;
-run `batch_state.py --repo <main> --batch-id <id> bootstrap --slug <slug>
---worktree <W> --branch <branch>`. Return the bootstrap identity and stop.
+Your first turn is bootstrap-only. Verify the registered W, exact branch and
+HEAD against the MCP handoff, and verify the existing helper marker matches
+`{batch_id,slug,spawn_head}`. Do not create a worktree or write a marker. Return
+the bootstrap identity and stop.
 Do not start a task or edit source. Preserve `.harness-batch-bootstrap`.
 
-After the coordinator resumes this same native agent with successful binding
-and mutation permission, recheck the exact worktree/branch and any prepared
+Only after successful `wbs(action="dispatch", operation="bind")` using the
+actual host identity may the coordinator resume this same native agent with
+explicit mutation permission. Then recheck the exact worktree/branch and any prepared
 S1 module manifest. Read the normal internal run/plan/develop workflow and
 execute it inside W, with these overrides:
 

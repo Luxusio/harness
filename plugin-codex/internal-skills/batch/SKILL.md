@@ -9,10 +9,9 @@ user-invocable: false
 Read the shared batch procedure at
 `${HARNESS_PLUGIN_ROOT}/internal-skills/batch/shared-procedure.md` once. Its
 preflight, reservation, S1 selected-module preparation, result validation,
-serial finish, recovery and retention rules apply. This file replaces only
-Claude's native isolation/spawn and continuation calls. Shared preflight b.2's
-Claude settings/baseRef requirement does not apply: explicit worktree creation
-below pins the exact spawn HEAD. Do not execute Claude
+serial finish, recovery and retention rules apply. This file adapts only
+Claude's spawn and same-agent continuation calls. MCP preparation pins the exact spawn HEAD for both runtimes; Claude native
+isolation/baseRef does not choose a checkout. Do not execute Claude
 `Agent`, `SendMessage` or `Skill` examples on Codex.
 
 For WBS dispatch use the exact returned batch ID and request list; existing
@@ -21,10 +20,9 @@ for combined verification only after the whole pool integrates and closes. No ma
 while leads run. Independent declared requests automatically use this route
 when the host exposes spawn and same-agent continuation capabilities.
 
-For a WBS-owned pack, pass its returned task_id as `--owner-task-id <task_id>`
-when initializing the exact batch. This immutable pool owner must match the
-parent binding. Standalone batches may omit it. Preserve it on every retry;
-never attach a different root to an initialized pool.
+The owning WBS is the immutable pool owner. Reuse its exact pack and batch ID;
+never initialize a replacement pool to bypass retained work or a halted state.
+Use the shared CLI only for explicit owner recovery, not normal orchestration.
 
 ## Capacity and capability
 
@@ -33,7 +31,7 @@ host equivalent), and live-agent inventory. Count the coordinator, running
 leads, nested workers and unreleased finished agents. Leave at least one slot
 for lead review/QA; cap lead admission to the smaller of `batch.max_leads` and
 free slots minus that verification reserve. Pass the nonnegative result as
-`claim --available-slots N`. Assign nested workers capacity from that same
+`available_slots=N` to each managed `prepare`. Assign nested workers capacity from that same
 inventory, never a new per-lead host limit. At a host capacity too small for
 one coordinator, one lead and an independent reviewer, report the capability
 blocker before reservations rather than creating an unfinishable lead.
@@ -43,42 +41,63 @@ bindings. An old installed runtime rejecting workspace, missing native
 ancestry, or unavailable independent evidence is a concrete blocker. Do not
 drop `workspace` or manufacture receipts to get around it. If no pool has been
 declared yet, dependent or unavailable work uses the ordinary sequential task
-route. Once a Goal work pack is declared, preserve its intent and report its
+route. Once a WBS work pack is declared, preserve its intent and report its
 specific capability blocker instead of silently marking the pack complete.
 
 ## Bootstrap and bind
 
-1. Write the exact requests to an ignored JSON file and run shared `init` and
-   preflight. On every refill, `claim` reserves capacity before spawning.
-2. For each claim, create a unique branch and registered worktree under
-   `<main>/.claude/worktrees/` at the returned `spawn_head`, using plain
-   `git worktree add -b <branch> <W> <spawn_head>`. Never change process-wide
-   cwd: all shell calls pass an explicit working directory or `git -C`.
-   Recheck the returned branch/HEAD and the worktree registration.
-3. Spawn a bootstrap-only agent with a unique name; prompt it to read
-   `${HARNESS_PLUGIN_ROOT}/agents/task-lead.md`, name its exact W/branch,
-   batch ID, slug, exact claim `task_id`, scope, off-limits paths, selected modules and spawn HEAD.
-   Bootstrap writes only the shared helper's retention marker and returns.
-   Record the actual native worker identity from the host result.
-4. Run shared `bind` with that identity, W and branch. S1 preparation belongs
-   only to bind. Continue the same stopped agent only after successful binding,
+1. Call `wbs(action="dispatch", wbs_id=<owner>, operation="prepare", ownership={<pending outcome ID>: [<scope>, ...]}, available_slots=N)`.
+   Initial preparation needs execution-only ownership for the pending outcomes;
+   retries of the bound pack may omit it. Preparation is the default operation:
+   it parks its parent, reserves capacity,
+   persists exact creation intent and creates registered W/branch plus helper
+   marker before returning handoffs. Repeated preparation returns existing
+   reservations safely. Do not run `git worktree add` or native isolation.
+2. Spawn a bootstrap-only agent with a unique name; prompt it to read
+   `${HARNESS_PLUGIN_ROOT}/agents/task-lead.md`, name exact W/branch, batch ID,
+   slug, exact `task_id`, scope, off-limits, selected modules and spawn HEAD.
+   Bootstrap verifies the MCP-owned registration/HEAD/marker, returns and stops;
+   it neither starts a task nor writes a replacement marker. Record its actual
+   native worker identity from the host result.
+3. Call `wbs(action="dispatch", wbs_id=<owner>, operation="bind", slug=S, worker_id=<actual host ID>)`.
+   MCP uses recorded W/branch; callers do not select them. S1 preparation belongs
+   only to bind. Continue that same stopped agent only after successful binding,
    with explicit mutation permission and prepared-module handoff. Use
-   `followup_task` for an idle agent when that is the exposed continuation tool;
-   a message-only operation that does not start a turn is insufficient.
-5. A failure before spawn does not prove no external work exists. Reconcile
-   reservations with actual created resources, preserve unknown workers and
-   worktrees, and use shared release/resume rules. Never blindly re-spawn.
+   `followup_task` when that is the available continuation tool; message-only
+   delivery that cannot start a turn is insufficient.
+4. Pass explicit working directories to every shell command, absolute W paths
+   to edits and `workspace=W` to every lead MCP call. Never change process-wide
+   cwd. A failed spawn does not prove no external work exists. Retain and
+   reconcile resources with `status`; never blindly allocate replacements.
 
-## Collect and refill
+## Collect, recover and refill
 
-Accept only actual host completion from the bound worker, after its nested
-writers have stopped. Pass its final JSON to shared `result`, then run `finish`
-serially. `finish` owns rebase, fast-forward, evidence harvest and disposal.
-Preserve its conflict/error/recovery behavior, including S1 proof. Recompute
-host slots and refill immediately while unrelated leads remain live.
+Accept actual host completion only from the bound worker after all nested
+writers stop. Call `wbs(action="dispatch", wbs_id=<owner>, operation="complete",
+slug=S, worker_id=<bound ID>, result=<actual JSON object>, worker_stopped=true)`.
+The same owner validates the result, serializes rebase/fast-forward, harvests
+proof and disposes W/branch; it closes a fully disposed eligible pool. No
+separate remembered result, finish or close call. Matching retries resume saved
+checkpoints, including after worktree deletion. Actual closed task/run evidence
+is required; narrative PASS or missing receipts never authorizes integration.
 
-After all requests integrate and cleanup succeeds, close the pool. A WBS-owned pack reopens the same WBS root;
-standalone batches start the ordinary integration task. Review the full batch
-base-to-integrated diff and run combined QA. Leads skip source auto-install;
-the integration task owns verified delivery and final completion reporting.
-Abandoned, blocked or retained required work remains unfinished.
+Inspect read-only `operation="status"` on interruption. After actual stopped
+writer confirmation, use `operation="recover"` for integration checkpoints or
+`operation="resume"` for the exact retained W/branch/task/run. After independently
+reviewed conflict resolution, `recover` may acknowledge the exact resolved
+branch tip with optional `recovery_commit=<SHA>`; only the recorded
+pre-integration checkpoint can accept a changed tip, preserving exact identities,
+close proof and destination ancestry. Normal `complete` never replaces the
+original result or authorizes unexpected new commits. Then follow the
+returned next action and bind real worker identity before continuation. Context,
+next and session/prompt discovery surface pending pools even with no active
+task; they do not mutate Git or assert worker liveness. Preserve shared S1 proof,
+conflict/error/retention rules and no-force disposal. Do not rerun a lens solely
+for a missing receipt. Recompute slots and refill via `prepare` without a wave
+barrier, but never run integration concurrently or past an unresolved halt.
+
+After all requests integrate and cleanup succeeds, reopen the same WBS root for
+combined independent review/QA. Leads skip source auto-install; the root owns
+verified delivery. Operational pool closure never replaces WBS verification.
+Blocked/abandoned work remains unfinished; report exact retained resources and
+blocker. Only the owning pack's completion is gated, not unrelated repair WBSs.

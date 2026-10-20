@@ -68,6 +68,7 @@ def _integrated_proof(repo: str, data: dict) -> None:
     batch.require(current_ref == ref, "work-pack batch destination branch changed")
     commits = [data["initial_head"]]
     for item in data["requests"]:
+        batch.disposal_complete(repo, item)
         checkpoint = item.get("checkpoint", {})
         tip = checkpoint.get("integrated_tip")
         archive = os.path.join(repo, "doc/harness/archive/batch", item["task_id"])

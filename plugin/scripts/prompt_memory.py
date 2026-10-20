@@ -9,7 +9,8 @@ Suspect-note summaries are intentionally not injected here, so prompt hooks do
 not dilute the active task's attention scope.
 
 Output is silent outside harness-enabled repos. Total length is hard-capped at
-400 chars for the compact prompt context; excess truncates with ``…``. The
+400 chars for the compact prompt context; excess truncates with ``…``.
+Pending worktree recovery has its own separate bounded block. The
 ``|| true`` wrapper in ``hooks.json`` (C-12 fail-safe) keeps the session healthy
 on any crash.
 """
@@ -235,8 +236,15 @@ def main() -> int:
     if not task_dir:
         output_parts.append(_build_goal_block(repo_root))
 
-    if output_parts:
-        sys.stdout.write(_truncate_output("\n".join(output_parts)))
+    # Recovery is independently capped so normal context cannot truncate it.
+    try:
+        from batch_pending import render_prompt_block
+        recovery = render_prompt_block(repo_root)
+    except Exception:
+        recovery = "[harness-worktree-recovery] discovery unavailable; inspect MCP context."
+    if output_parts or recovery:
+        compact = _truncate_output("\n".join(output_parts))
+        sys.stdout.write("\n".join(part for part in (compact, recovery) if part))
         sys.stdout.flush()
 
     return 0

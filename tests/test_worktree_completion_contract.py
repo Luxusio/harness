@@ -59,19 +59,26 @@ def test_closed_resume_routes_to_disposal_without_repeating_lifecycle():
     assert "Source changes or integration conflicts still require" in ownership
 
 
-def test_batch_loads_policy_before_helper_and_recovery_does_not_forge_closed():
-    phase = _section(_text(REPO / "plugin/skills/batch/SKILL.md"), "d) Collect results, rebase, and fast-forward")
-    reference = "${CLAUDE_PLUGIN_ROOT}/skills/run/worktree-completion.md"
-    command = "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/batch_state.py --repo <main checkout> --batch-id <id> finish"
-    assert phase.index("Before invoking the helper, read") < phase.index(reference) < phase.index(command)
-    assert 'For every lead with `verdict: "closed"`' in phase
-    assert "rebase, fast-forward, harvest, remove, then combined review/QA" in phase
-    recovery = phase[phase.index('A lead with `verdict: "blocked"`'):]
-    assert "retain its worktree and branch while unresolved" in recovery
-    assert "independently reviewed and QA-passed" in recovery
-    assert "only through the shared procedure's per-change accounting, byte-verified archive and unchanged-inventory checks" in recovery
-    assert "Never fabricate a closed lead result" in recovery
-    assert "or change original task status/receipts" in recovery
+def test_batch_routes_managed_completion_and_recovery_does_not_forge_closed():
+    phase = _section(_text(REPO / "plugin/skills/batch/SKILL.md"), "d) Complete, recover and refill")
+    assert 'operation="complete"' in phase
+    assert "Confirm through the host that that worker and all nested writers stopped" in phase
+    assert "for genuinely closed leads" in phase
+    assert "rebase, fast-forward, evidence harvest, worktree removal and `git branch -d`" in phase
+    assert "Review the shared `skills/run/worktree-completion.md`" in phase
+    assert "before completion" in phase
+    assert "never infers closure from narrative PASS, an archive, or an unreceipted review result" in phase
+    assert 'operation="recover"' in phase and 'operation="resume"' in phase
+    assert "Blocked/failed leads remain retained with exact blockers" in phase
+    # Non-managed already-copied recovery still has the same stricter per-change
+    # proof; the new managed entry point does not authorize invented closure.
+    recovery = _shared("Interrupted or already-copied recovery")
+    assert "do not fabricate a closed lead result" in recovery
+    assert "edit original task status/receipts" in recovery
+    assert "Per-change disposition" in recovery
+    assert "Fresh independent review and QA" in recovery
+    assert "readable, byte-verified archive" in recovery
+    assert "exact path inventory and archived bytes" in recovery
 
 
 def test_normal_route_is_linear_and_preserves_source_evidence():
@@ -154,14 +161,14 @@ def test_real_codex_payload_projects_policy_and_resolves_caller_references(tmp_p
 
     # The durable wrapper and its integration/harvest dependencies ship in the
     # real payload, with the same implementation exercised by the Git tests.
-    for script in ("batch_state.py", "batch_finish.py", "batch_harvest.py", "batch_preflight.py", "batch_submodules.py"):
+    for script in ("batch_state.py", "batch_worktrees.py", "batch_pending.py", "batch_finish.py", "batch_harvest.py", "batch_preflight.py", "batch_submodules.py"):
         assert (target / "scripts" / script).read_bytes() == (REPO / "plugin/scripts" / script).read_bytes()
 
     shared = target / "internal-skills/run/worktree-completion.md"
     expected = _text(SHARED).replace("${CLAUDE_PLUGIN_ROOT}", "${HARNESS_PLUGIN_ROOT}")
     assert _text(shared) == expected
     assert "${CLAUDE_PLUGIN_ROOT}" not in _text(shared)
-    helper = re.search(r"`\$\{HARNESS_PLUGIN_ROOT\}/(scripts/batch_finish\.py)`", _text(shared))
+    helper = re.search(r"`\$\{HARNESS_PLUGIN_ROOT\}/(scripts/batch_state\.py)`", _text(shared))
     assert helper and (target / helper[1]).is_file()
     for caller, heading in CALLERS[2:]:
         phase = _section(_text(target / caller.removeprefix("plugin-codex/")), heading)
@@ -187,10 +194,10 @@ def test_single_force_exception_requires_state_managed_s1_preservation_and_archi
     assert "No standalone helper, lead or copied-recovery route inherits this exception" in exception
     assert "never invoke force manually" in exception
     batch = _section(_text(REPO / "plugin/skills/batch/SKILL.md"),
-                     "d) Collect results, rebase, and fast-forward")
-    assert "Ordinary removal never passes `--force`" in batch
-    assert "Only state-managed S1" in batch and "shared completion procedure" in batch
-    assert "Never manually force removal" in batch
+                     "d) Complete, recover and refill")
+    assert "No manual force removal" in batch
+    assert "Selected S1 preservation, reconciliation and guarded disposal remain exclusively owned by the existing helpers" in batch
+    assert "worktree-completion.md" in batch
 
 
 def test_copied_recovery_cannot_inherit_selected_module_force_permission():

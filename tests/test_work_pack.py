@@ -27,7 +27,7 @@ def pytest_generate_tests(metafunc):
             [request("a", "../escape"), request("b")],
             [request("a", "*.py"), request("b")], [request("integration"), request("b")]])
     if "change" in metafunc.fixturenames:
-        metafunc.parametrize("change", ["ancestry", "branch", "archive_symlink", "run", "checkpoint", "harvest"])
+        metafunc.parametrize("change", ["ancestry", "branch", "archive_symlink", "run", "checkpoint", "harvest", "residual_path", "residual_ref", "residual_registration"])
     if "proof" in metafunc.fixturenames:
         metafunc.parametrize("proof", ["missing", "tampered"])
     if "used_identity" in metafunc.fixturenames:
@@ -181,6 +181,14 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
     elif change == "harvest":
         item["checkpoint"]["harvest"] = None
         pool.state.write_text(json.dumps(state))
+    elif change == "residual_path":
+        Path(item["worktree"]).mkdir()
+    elif change == "residual_ref":
+        _git("branch", item["branch"], cwd=pool.repo)
+    elif change == "residual_registration":
+        _git("worktree", "add", "--detach", item["worktree"], cwd=pool.repo)
+        import shutil
+        shutil.rmtree(item["worktree"])
     else:
         del item["checkpoint"]
         pool.state.write_text(json.dumps(state))

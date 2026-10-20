@@ -44,6 +44,15 @@ def main() -> int:
     if not is_harness_enabled_repo(repo_root):
         return 0
 
+    # Batch recovery survives the absence of an active task or browser lens.
+    try:
+        from batch_pending import render_prompt_block
+        recovery = render_prompt_block(repo_root)
+    except Exception:
+        recovery = "[harness-worktree-recovery] discovery unavailable; inspect MCP context."
+    if recovery:
+        print(recovery)
+
     task_dir = resolve_active_task_dir(repo_root)
     if not os.path.isdir(task_dir):
         return 0

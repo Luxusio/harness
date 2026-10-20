@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import contextlib
 import datetime
 import fcntl
 import hashlib
@@ -208,6 +209,17 @@ def validate(data, repo, batch_id):
             result = item['result']
             require(isinstance(result, dict) and result.get('verdict') in {'closed', 'blocked', 'failed'}, 'invalid stored result')
             require(all(result.get(k) == item.get(k) for k in ('task_id', 'worktree', 'branch')), 'stored result identity mismatch')
+        if 'creation_intent' in item:
+            intent = item['creation_intent']
+            require(isinstance(intent, dict) and set(intent) == {'worktree', 'branch', 'spawn_head', 'token'}
+                    and isinstance(intent.get('token'), str) and re.fullmatch(r'[0-9a-f]{64}', intent['token'])
+                    and item['status'] != 'queued'
+                    and isinstance(intent.get('spawn_head'), str) and finish_helper.COMMIT_RE.fullmatch(intent['spawn_head'])
+                    and intent['spawn_head'] == item.get('spawn_head')
+                    and intent.get('worktree') == os.path.join(repo, '.claude/worktrees', 'harness-' + intent['token'][:24])
+                    and intent.get('branch') == 'harness/' + intent['token'], 'invalid creation intent')
+            if item.get('worktree'):
+                require(all(item[k] == intent[k] for k in ('worktree', 'branch')), 'creation intent binding changed')
         if 'retention' in item:
             require(item['retention'] == retention_contract(batch_id, item), 'invalid retention identity')
         if item['status'] in {'returned', 'integrating', 'integrated', 'kept', 'recovery-required'}:
@@ -219,6 +231,8 @@ def validate(data, repo, batch_id):
             require(checkpoint.get('destination_ref') == data['destination_ref'] and checkpoint.get('run_id') == item.get('run_id')
                     and checkpoint.get('close_fingerprint') == item.get('close_fingerprint'), 'checkpoint identity mismatch')
             require(isinstance(checkpoint.get('branch_tip'), str) and finish_helper.COMMIT_RE.fullmatch(checkpoint['branch_tip']), 'invalid checkpoint tip')
+            if 'recovery_commit' in checkpoint:
+                require(checkpoint['recovery_commit'] == checkpoint['branch_tip'] and re.fullmatch(r'[0-9a-f]{40}', checkpoint['recovery_commit']), 'invalid recovery commit acknowledgement')
             if checkpoint.get('harvest'):
                 require(isinstance(checkpoint['harvest'], dict) and checkpoint['harvest'].get('archived') == os.path.join(repo, 'doc/harness/archive/batch', item['task_id']), 'invalid checkpoint archive')
     return data
@@ -236,7 +250,7 @@ def load_all(directory, repo):
         records[batch_id] = data
         for item in data['requests']:
             for key in ownership:
-                value = item.get(key)
+                value = item.get(key) or item.get('creation_intent', {}).get(key)
                 if value and (key == 'task_id' or item['status'] != 'integrated'):
                     require(value not in ownership[key], f'duplicate {key} ownership')
                     ownership[key].add(value)
@@ -436,6 +450,15 @@ def held(records, target):
             and x.get('disposition') != 'never-dispatched']
 
 
+
+def disposal_complete(repo, item):
+    """A stored integrated flag cannot conceal surviving owned Git resources."""
+    require(not os.path.lexists(item['worktree']), 'integrated worktree still exists')
+    listing = finish_helper._git_out(repo, 'worktree', 'list', '--porcelain', '-z')
+    require('worktree ' + item['worktree'] not in listing.split('\0'), 'integrated worktree is still registered')
+    result = finish_helper._git(repo, 'show-ref', '--verify', '--quiet', 'refs/heads/' + item['branch'])
+    require(result.returncode == 1, 'integrated branch still exists or cannot be inspected')
+
 def observation(repo, item):
     result = {'next_action': {'queued': 'claim', 'reserved': 'bind or explicitly release unused reservation', 'running': 'await worker result', 'returned': 'finish', 'integrated': 'none', 'abandoned': 'retained work requires explicit disposition'}.get(item['status'], 'recover or resume with stopped worker assertion')}
     if item['status'] == 'abandoned' and not item.get('worktree'):
@@ -443,6 +466,19 @@ def observation(repo, item):
                                  else 'unknown external work retained; explicit disposition required')
     if item['status'] == 'reserved' and item.get('worktree'):
         result['next_action'] = 'bind same-worktree bootstrap; after failed bootstrap confirm worker stopped and resume same reservation'
+    if item['status'] == 'integrated':
+        result.update(worktree_exists=os.path.lexists(item['worktree']),
+                      branch_tip=finish_helper._resolve_commit(repo, 'refs/heads/' + item['branch']))
+        try:
+            disposal_complete(repo, item)
+        except Exception as exc:
+            result.update(identity_error=str(exc), next_action='recover; integrated resources remain: ' + str(exc))
+        return result
+    intent = item.get('creation_intent', {})
+    if intent and not item.get('worktree'):
+        result.update(worktree_exists=os.path.lexists(intent['worktree']),
+                      branch_tip=finish_helper._resolve_commit(repo, 'refs/heads/' + intent['branch']),
+                      next_action='prepare exact managed creation, then bind actual worker')
     if item.get('worktree'):
         result['worktree_exists'] = os.path.exists(item['worktree'])
         result['branch_tip'] = finish_helper._resolve_commit(repo, 'refs/heads/' + item['branch'])
@@ -472,7 +508,7 @@ def execute(args, directory, records):
     if args.command == 'init':
         owner_task_id = getattr(args, 'owner_task_id', None)
         require(owner_task_id is None or batch_harvest.TASK_ID_RE.fullmatch(owner_task_id), 'invalid pool owner')
-        requests = read_json(args.requests_file)
+        requests = copy.deepcopy(args.requests) if hasattr(args, 'requests') else read_json(args.requests_file)
         requests_valid(requests)
         maximum, source = cap(repo, args.max_leads)
         normalized = normalize_requests(requests)
@@ -554,6 +590,9 @@ def execute(args, directory, records):
         require(all(x['status'] == 'integrated' or not (x.get('checkpoint', {}).get('integrated_tip')
                     or x.get('finish_result', {}).get('integrated_tip')) for x in data['requests']), 'integrated cleanup remains')
         require(not data['halted'], 'recovery remains unresolved')
+        for completed in data['requests']:
+            if completed['status'] == 'integrated':
+                disposal_complete(repo, completed)
         data['status'] = 'closed'
         save()
         abandoned = [x for x in data['requests'] if x['status'] == 'abandoned']
@@ -562,6 +601,9 @@ def execute(args, directory, records):
         return {'status': 'closed', 'disposition': disposition, 'batch': data}
     item = next((x for x in data['requests'] if x['slug'] == args.slug), None)
     require(item is not None, 'unknown slug')
+    if args.command in {'bootstrap', 'bind'} and item.get('creation_intent'):
+        intent = item['creation_intent']
+        require(args.worktree == intent['worktree'] and args.branch == intent['branch'], 'managed creation binding changed')
     if args.command == 'bootstrap':
         require(not data['halted'] and item['status'] == 'reserved' and not item.get('resuming'), 'bootstrap requires fresh unhalted reservation')
         no_main_task(repo)
@@ -595,7 +637,9 @@ def execute(args, directory, records):
         require(finish_helper._git(repo, 'check-ref-format', '--branch', args.branch).returncode == 0, 'invalid branch')
         worktree = os.path.realpath(args.worktree)
         for other in held(records, item):
-            require(other.get('worktree') != worktree and other.get('branch') != args.branch and other.get('worker_id') != args.worker_id, 'worktree/branch/worker already owned')
+            require((other.get('worktree') or other.get('creation_intent', {}).get('worktree')) != worktree
+                    and (other.get('branch') or other.get('creation_intent', {}).get('branch')) != args.branch
+                    and other.get('worker_id') != args.worker_id, 'worktree/branch/worker already owned')
         if item.get('submodules') and item.get('worktree'):
             require(worktree == item['worktree'] and args.branch == item['branch']
                     and (item.get('resuming') or args.worker_id == item['worker_id']),
@@ -635,7 +679,7 @@ def execute(args, directory, records):
         item['status'] = 'running'
     elif args.command == 'result':
         require(item['status'] == 'running' and args.worker_id == item['worker_id'], 'result worker/state mismatch')
-        result = read_json(args.result_file)
+        result = copy.deepcopy(args.result) if hasattr(args, 'result') else read_json(args.result_file)
         require(isinstance(result, dict) and result.get('verdict') in {'closed', 'blocked', 'failed'}, 'invalid result verdict')
         for key in ('task_id', 'branch', 'worktree'):
             require(result.get(key) == item[key], f'result {key} mismatch')
@@ -665,7 +709,7 @@ def execute(args, directory, records):
         item.update(result=result, status='returned' if result['verdict'] == 'closed' else result['verdict'], returned_at=now())
     elif args.command == 'release':
         require(args.worker_stopped and args.no_external_work, 'release requires stopped/no-external-work assertions')
-        require(item['status'] == 'reserved' and not item.get('worktree'), 'only unused reservations may be released')
+        require(item['status'] == 'reserved' and not item.get('worktree') and not item.get('creation_intent'), 'only unused reservations may be released')
         item['status'] = 'queued'
         item.pop('spawn_head', None)
     elif args.command == 'abandon':
@@ -717,7 +761,12 @@ def execute(args, directory, records):
         bound(repo, item)
         control(item, closed=True)
         item['status'] = 'integrating'
-        item['checkpoint'] = dict(stage='started', branch_tip=bound(repo, item), destination_ref=data['destination_ref'], run_id=item['run_id'], close_fingerprint=item['close_fingerprint'])
+        branch_tip = bound(repo, item)
+        previous_checkpoint = item.get('checkpoint')
+        # Retrying an exact checkpoint must not erase its rebase/ack/archive
+        # proof before the next Git effect has produced a fresh checkpoint.
+        if not (args.resume and previous_checkpoint and previous_checkpoint.get('branch_tip') == branch_tip):
+            item['checkpoint'] = dict(stage='started', branch_tip=branch_tip, destination_ref=data['destination_ref'], run_id=item['run_id'], close_fingerprint=item['close_fingerprint'])
         save()
         def checkpoint(stage, result):
             require(result['destination_ref'] == data['destination_ref'], 'destination changed')
@@ -752,6 +801,21 @@ def execute(args, directory, records):
     elif args.command == 'recover':
         require(args.worker_stopped and item['status'] in {'integrating', 'kept', 'recovery-required', 'integrated'}, 'recover requires stopped integration')
         checkpoint = item.get('checkpoint', {})
+        recovery_commit = getattr(args, 'recovery_commit', None)
+        if recovery_commit is not None:
+            require(isinstance(recovery_commit, str) and re.fullmatch(r'[0-9a-f]{40}', recovery_commit), 'recovery_commit must be a full 40-character commit')
+            require(item['status'] != 'integrated' and checkpoint.get('stage') in {'started', 'rebase'}
+                    and not any(checkpoint.get(k) for k in ('integrated_tip', 'harvest', 'archive_fingerprint')),
+                    'recovery_commit requires preintegration checkpoint')
+            main_boundary(repo, data['destination_ref'])
+            require(bound(repo, item) == recovery_commit, 'recovery_commit differs from current branch tip')
+            no_git_operation(item['worktree'])
+            require(not finish_helper.lead_status(item['worktree'], item.get('retention')), 'recovery worktree is dirty')
+            require(finish_helper._git(repo, 'merge-base', '--is-ancestor', data['destination_ref'], recovery_commit).returncode == 0,
+                    'recovery_commit does not contain current destination')
+            control(item, closed=True)
+            checkpoint.update(branch_tip=recovery_commit, stage='rebase', recovery_commit=recovery_commit)
+            save()  # explicit operator acknowledgement precedes any resumed effect
         try:
             reconcile_modules(repo, item)
             main_boundary(repo, data['destination_ref'])
@@ -801,6 +865,38 @@ def execute(args, directory, records):
     return {'status': item['status'], 'request': item}
 
 
+
+def acquire_lock(directory):
+    """Acquire the one batch ownership lock, shared by CLI and MCP."""
+    path = os.path.join(directory, '.lock')
+    if os.path.lexists(path):
+        safe(path)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                and info.st_nlink == 1 and not info.st_mode & 0o022, 'unsafe lock')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise Busy('batch lock is busy; retry') from exc
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@contextlib.contextmanager
+def locked_records(repo, create=False, readonly=False):
+    directory = os.path.join(repo, 'doc/harness/runtime/batches')
+    parents(directory, create=create)
+    fd = None if readonly else acquire_lock(directory)
+    try:
+        yield directory, load_all(directory, repo)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', default=None)
@@ -827,6 +923,8 @@ def main(argv=None):
             command.add_argument('--result-file', required=True)
         if name == 'finish':
             command.add_argument('--resume', action='store_true')
+        if name == 'recover':
+            command.add_argument('--recovery-commit', help='Explicitly acknowledge the exact manually resolved preintegration tip')
         if name in {'recover', 'resume', 'abandon', 'release'}:
             command.add_argument('--worker-stopped', action='store_true')
         if name == 'release':
@@ -841,16 +939,7 @@ def main(argv=None):
         directory = os.path.join(args.repo, 'doc/harness/runtime/batches')
         parents(directory, create=args.command == 'init')
         if args.command != 'status':
-            lock_path = os.path.join(directory, '.lock')
-            if os.path.lexists(lock_path):
-                safe(lock_path)
-            lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-            info = os.fstat(lock)
-            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and not info.st_mode & 0o022, 'unsafe lock')
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise Busy('batch lock is busy; retry') from exc
+            lock = acquire_lock(directory)
         records = load_all(directory, args.repo)
         result = execute(args, directory, records)
         print(json.dumps(result, indent=2))

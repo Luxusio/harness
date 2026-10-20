@@ -46,7 +46,7 @@ def _initialize_instructions(runtime: str) -> str:
         "Start with coarse observable outcomes in PLAN's wbs fence, with optional check argv. "
         "Never prescribe edited files for progress or freeze implementation at intake. Refine as discovery requires. "
         "check runs one declared outcome assertion; verify reads ordered independent review/QA evidence; close still requires both. "
-        "dispatch hands independently owned work to the existing isolated-worktree pool and parks its parent until integration. "
+        "dispatch owns prepare/bind/complete/resume/recover/status on the existing isolated-worktree pool; it creates worktrees and completes integration/disposal before parent completion. "
         "File ownership is supplied only at this actual concurrent execution handoff. "
         "Internally task_start preserves the execution run and receipts; fresh_run=true deliberately discards evidence. "
         "Use wbs(action=migrate) to preview retired records; apply=true explicitly converts them. Retired tool names are unavailable. "
@@ -2064,6 +2064,78 @@ def handle_task_wbs(args: dict) -> dict:
         return _ok(wbs.verify(td, repo, current["run_id"], _req(args, "leaf_id"), timeout=timeout))
 
 
+def _managed_dispatch(common: dict, args: dict) -> dict:
+    """Coordinate the existing pool; task and batch owners keep their locks."""
+    import wbs
+    import batch_worktrees
+    control_root, repo = _task_roots(common)
+    if repo != control_root:
+        raise ValueError("worktree lifecycle must run from the surviving control checkout")
+    operation = args.get("operation", "prepare")
+    fields = {
+        "prepare": {"ownership", "available_slots"},
+        "status": set(),
+        "bind": {"slug", "worker_id"},
+        "complete": {"slug", "worker_id", "result", "worker_stopped"},
+        "resume": {"slug", "worker_stopped"},
+        "recover": {"slug", "worker_stopped", "recovery_commit"},
+    }
+    if not isinstance(operation, str) or operation not in fields:
+        raise ValueError("unknown worktree lifecycle operation")
+    supplied = set(args) - {"action", "wbs_id", "workspace", "operation"}
+    if supplied - fields[operation]:
+        raise ValueError("unexpected fields for worktree operation: " + ", ".join(sorted(supplied - fields[operation])))
+    if operation in {"bind", "complete", "resume", "recover"}:
+        _req(args, "slug")
+    if operation in {"bind", "complete"}:
+        _req(args, "worker_id")
+    if operation in {"complete", "resume", "recover"} and args.get("worker_stopped") is not True:
+        raise ValueError("confirm the actual worker and all nested writers stopped with worker_stopped=true")
+    if operation == "complete" and not isinstance(args.get("result"), dict):
+        raise ValueError("complete requires the actual structured worker result")
+    if "recovery_commit" in args and (not isinstance(args["recovery_commit"], str)
+                                     or not re.fullmatch(r"[0-9a-f]{40}", args["recovery_commit"])):
+        raise ValueError("recovery_commit must acknowledge the exact reviewed resolved tip SHA")
+    if "available_slots" in args and (type(args["available_slots"]) is not int or args["available_slots"] < 0):
+        raise ValueError("available_slots must be a nonnegative integer")
+    td = canonical_task_dir(task_id=common["task_id"], repo_root=repo)
+    control = _validated_task_control(td)
+    if not control:
+        return _invalid_task_control_error("dispatch", td)
+    status = task_control_status(td, control)
+    if operation == "prepare":
+        if status == "open":
+            bound = _invoke("task_wbs", handle_task_wbs, dict(common, action="dispatch", ownership=args.get("ownership")))
+            if bound.get("isError"):
+                return bound
+            parked = _invoke("task_blocked", handle_task_blocked, dict(common,
+                blocked_reason="WBS execution is handed off to its bound isolated worktree pool.",
+                unblock_condition="Integrate and close the exact bound work pack, then reopen this WBS for combined verification."))
+            if parked.get("isError"):
+                return parked
+        elif status != "blocked":
+            raise ValueError("prepare requires an open or parked owning WBS")
+    elif operation != "status" and status not in {"blocked", "closed"}:
+        raise ValueError("park the owning WBS before operating its worktree pool")
+    state = wbs.read_state(td)
+    if not state or not state.get("batch"):
+        raise ValueError("no bound work pack; first dispatch the owning WBS with execution ownership")
+    options = {key: args[key] for key in fields[operation] - {"ownership"} if key in args}
+    try:
+        body = batch_worktrees.execute(repo, state["batch"], operation=operation, **options)
+    except Exception as exc:
+        # Creation can fail after the parent is parked. Preserve the exact
+        # bound identity in the response so retry does not invent another pack.
+        return _err("worktree lifecycle refused: " + str(exc), data={
+            "wbs_id": "WBS__" + common["task_id"][6:],
+            "batch_id": state["batch"]["batch_id"], "operation": operation,
+            "next_action": "Inspect dispatch(operation='status') for this same WBS; retain its exact pool and recover or retry the failed operation.",
+        })
+    body.update(wbs_id="WBS__" + common["task_id"][6:], operation=operation,
+                execution="integrated" if body.get("status") == "closed" else "awaiting_worktrees")
+    return _ok(body)
+
+
 def handle_wbs(args: dict) -> dict:
     """One public outcome tree; existing handlers retain execution authority."""
     import wbs
@@ -2087,7 +2159,7 @@ def handle_wbs(args: dict) -> dict:
         "context": ("task_context", set()),
         "plan": ("write_plan", {"plan", "required_lenses"}),
         "check": ("task_wbs", {"timeout"}),
-        "dispatch": ("task_wbs", {"ownership"}),
+        "dispatch": ("task_wbs", {"ownership", "operation", "slug", "worker_id", "result", "worker_stopped", "available_slots", "recovery_commit"}),
         "verify": ("task_verify", set()),
         "close": ("task_close", set()),
         "block": ("task_blocked", {"blocked_reason", "unblock_condition"}),
@@ -2101,25 +2173,18 @@ def handle_wbs(args: dict) -> dict:
                           | ({"objective"} if action == "open" else set()))
     if unknown:
         raise ValueError("unexpected fields for WBS action: " + ", ".join(sorted(unknown)))
+    if action == "dispatch":
+        return _managed_dispatch(common, args)
     call_args = dict(common, **{key: args[key] for key in fields if key in args})
     if action == "plan":
         if wbs.from_plan(_req(args, "plan")) is None:
             raise ValueError("WBS planning requires an outcome tree; begin with one coarse outcome and refine during work")
     if action == "check":
         call_args.update(action="verify", leaf_id=_req(args, "node_id"))
-    elif action == "dispatch":
-        call_args["action"] = "dispatch"
     result = _invoke(operation, _EXECUTION[operation], call_args)
     if result.get("isError"):
         return result
     body = dict(result["structuredContent"], wbs_id="WBS__" + task_id[6:])
-    if action == "dispatch":
-        parked = _invoke("task_blocked", handle_task_blocked, dict(common,
-            blocked_reason="WBS execution is handed off to its bound isolated worktree pool.",
-            unblock_condition="Integrate and close the exact bound work pack, then reopen this WBS for combined verification."))
-        if parked.get("isError"):
-            return parked
-        body.update(execution="awaiting_worktrees", next_action="Run the returned exact work pack through the batch workflow. Reopen this WBS after integration; no parent source writes while leads run.")
     if action in {"open", "context", "next"}:
         _, repo = _task_roots(common)
         td = body["task_dir"]
@@ -2127,6 +2192,8 @@ def handle_wbs(args: dict) -> dict:
         projection = body["task_context"].get("progress", {})
         body["tree"] = state["nodes"] if state else []
         body["progress"] = projection
+        from batch_pending import pending
+        body["pending_worktrees"] = pending(_task_roots(common)[0])
         if action == "next":
             body["ready"] = wbs.ready_outcomes(state, projection) if state else []
     return _ok(body)
@@ -2302,6 +2369,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "node_id": {"type": "string"}, "plan": {"type": "string"},
          "required_lenses": {"type": "array", "items": {"type": "string"}},
          "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+         "operation": {"type": "string", "enum": ["prepare", "status", "bind", "complete", "resume", "recover"], "description": "dispatch lifecycle operation. prepare (default) creates owned worktrees; bind admits the actual native worker; complete records its stopped result and integrates/disposes; status is read-only."},
+         "slug": {"type": "string", "description": "Exact request slug returned by managed dispatch."},
+         "worker_id": {"type": "string", "description": "Actual native host worker identity, never inferred from lead text."},
+         "result": {"type": "object", "description": "Actual structured stopped-worker result; existing task/run/close proof remains authoritative."},
+         "worker_stopped": {"type": "boolean", "description": "Coordinator confirmed the native worker and all nested writers stopped; required for complete/resume/recover."},
+         "recovery_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "recover only: acknowledge the exact reviewed resolved rebase tip. Never accepted by normal completion; original result identity is preserved."},
+         "available_slots": {"type": "integer", "minimum": 0, "description": "Actual free host slots after reserving review/QA capacity; bounds prepare reservations."},
          "timeout": {"type": "integer", "minimum": 1, "maximum": 60},
          "apply": {"type": "boolean", "default": False, "description": "Explicitly apply previewed legacy-data migration."},
          "fresh_run": {"type": "boolean"}, "blocked_reason": {"type": "string"},

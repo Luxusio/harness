@@ -6,8 +6,9 @@ experimental: { cacheTtl: 1h }
 ---
 
 You continue one retained batch request in its exact existing worktree `W`.
-You do not allocate a worktree. This agent deliberately has no isolation
-frontmatter: ordinary `task-lead` isolation would create a different checkout.
+You do not allocate a worktree. Neither managed lead definition uses native
+isolation: the MCP owner supplies the exact recorded checkout. This definition
+replaces new-worktree checks with preserved task/run identity.
 
 Read `task-lead.md` once for its Rules for the rest of the run, commit behavior,
 blocked handling and final result contract. Apply those rules, including
@@ -25,7 +26,8 @@ or zero-source results until the coordinator's managed finish disposes of W.
 
 The coordinator provides the request, scope/off-limits, worker cap, exact
 registered W and branch, expected task id and existing run id (or explicitly
-no task yet), and the successful `batch_state.py resume` reservation handoff.
+no task yet), and the successful `wbs(action="dispatch", operation="resume",
+worker_stopped=true)` reservation handoff.
 For S1 this includes the original selected-module manifest, private-store
 identities and named branches; preserve those exact stores and any unfinished
 edits. Never clone, initialize or allocate a replacement module checkout.
@@ -36,7 +38,8 @@ resume reservation; never replace an unaccounted running binding. A handoff that
 states task absence must still find no task at bind; a newly appeared task is
 an identity mismatch, not permission to adopt it.
 
-1. Resolve W and enter that exact directory before task tools or nested agents.
+1. Resolve W and pass that exact working directory to every command and nested
+   agent before task tools. Never change process-wide cwd.
    Check Git registration, current branch and handoff identity, including S1
    module metadata and named branches. Dirty module edits may belong to the
    interrupted task; preserve them rather than resetting for bootstrap. A missing or
@@ -45,10 +48,13 @@ an identity mismatch, not permission to adopt it.
    permitted before binding; source and task mutations are not.
 2. Return `{"worktree":"<W>","branch":"<branch>","head":"<sha>","bootstrap":true}`
    and stop. The coordinator binds your actual host worker identity to this
-   reservation using `batch_state.py bind` before granting permission.
+   reservation using `wbs(action="dispatch", operation="bind", slug=S,
+   worker_id=<actual host ID>)` before granting permission. The owner uses its
+   recorded W/branch; no caller replacement is allowed.
 3. Continue only on the coordinator's `SendMessage` to this exact bound agent ID
    with successful binding and explicit mutation permission. Recheck the
-   existing identity and confirmed prepared-module handoff, then enter W; never use the coordinator's main cwd for
+   existing identity and confirmed prepared-module handoff; use explicit W for
+   every command and never use the coordinator's main cwd for
    task calls. If the host cannot deliver this handoff, stay stopped and report
    the runtime blocker. No implicit permission from the original request.
 

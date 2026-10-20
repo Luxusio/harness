@@ -1,6 +1,6 @@
 ---
 tags: [harness, lifecycle, worktree, batch, mcp, contracts]
-summary: 한 세션이 과제마다 worktree 리드를 띄워 병렬로 진행한다. Claude는 native isolation을, Codex는 검증된 workspace와 native coordinator 신원 연결을 사용한다. 병합 후 통합 과제가 전체 검증과 설치를 맡는다.
+summary: 한 세션이 MCP가 생성·기록한 worktree에서 리드를 병렬 실행한다. 두 런타임 모두 실제 worker 신원을 바인딩하고 MCP가 통합·증거 보존·정리까지 소유한다. 상위 WBS는 정리와 통합 검증 후 완료한다.
 updated: 2026-10-20
 freshness: current
 invalidated_by_paths:
@@ -48,14 +48,36 @@ User source: current conversation, “야 지금 작업하면서 자꾸 worktree
 
 Derived implementation decision: authenticate process-owned Codex native identity before eager workspace binding and reuse the existing binding/registration owners. This is an engineering mechanism for the requested completion outcome, not a claim that the user requested a particular authentication design. Retention of unresolved work remains required; successful integration and evidence harvest precede disposal.
 
+## Managed lifecycle approval and derived API (2026-10-20)
+
+User-explicit source: “worktree정리 안되는문제를 구조적으로 해결할 방법 없냐? 너의 기억에 의존하는거 말고” and “애초에 워크트리 만들고 시작하는거자체를 mcp로 넣어놔야하나?”.
+User confirmation: “ㅇㅇ 그렇게 가자” approves the preceding proposal that MCP
+own creation through integration/disposal and restart recovery. Owning WBS
+completion must include disposal; conflicting or unique work must be preserved.
+
+Derived mechanics: reuse `wbs(action="dispatch")` and existing batch records,
+with `operation=prepare|status|bind|complete|resume|recover`, rather than add a
+second ledger or service. MCP creates the exact checkout before worker spawn;
+Claude lead isolation must be absent so it cannot create a duplicate. Bind the
+real host identity before mutation. Actual stopped-worker completion validates
+closure and runs existing serial integration, archive and removal; retries use
+original checkpoints. A derived optional `recover recovery_commit=<exact SHA>`
+acknowledges an independently reviewed conflict-resolved tip only at its original
+pre-integration checkpoint, with stopped writers, unchanged W/branch/task/run
+and valid close proof, plus destination ancestry. It does not rewrite the lead
+result; normal `complete` accepts only that original result.
+Hooks/context discover pending work, never authorize or
+perform cleanup. The [batch recovery contract](REQ__batch-state-pool-recovery.md)
+owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
+
 ## Requirement
 
 - One Claude Code session can run several harness tasks at once. The main
   session is the coordinator. It spawns one `harness:task-lead` subagent per
-  task, and each lead runs in its own linked git worktree (Claude Code
-  `isolation: worktree`, under `<repo>/.claude/worktrees/<name>`; see
-  "Worktree location").
-- Codex uses the same pool with explicitly created registered worktrees and
+  task, and each lead receives its exact MCP-created linked checkout under
+  `<repo>/.claude/worktrees/<name>`. Claude does not request native isolation;
+  both runtimes verify and reuse the managed handoff (see "Worktree location").
+- Codex uses the same pool with MCP-created registered worktrees and
   native lead agents. Its task tools pass canonical workspace while native cwd
   may remain main; the shared binding owner binds the authenticated coordinator to the
   worktree. See `plugin-codex/internal-skills/batch/SKILL.md` and the
@@ -63,8 +85,8 @@ Derived implementation decision: authenticate process-owned Codex native identit
 - Each linked worktree is a separate checkout with its own write focus (C-09).
   Task state under `doc/harness/tasks/` is gitignored, so every worktree has
   its own task namespace, focus markers, and `RECEIPTS.jsonl`.
-- A lead runs the normal lifecycle (`task_start` → plan → develop → review/QA
-  → `task_close`) inside its worktree and commits on its branch, in one commit
+- A lead runs the normal lifecycle (`wbs(action="open")` → plan → develop → review/QA
+  → `wbs(action="close")`) inside its worktree and commits on its branch, in one commit
   carrying a `Harness-Task: <task_id>` trailer (`git commit --trailer`), so
   the task stays traceable after the rebase gives that commit a new id. It
   never asks the user; undelegated material decisions go back to the
@@ -75,17 +97,18 @@ Derived implementation decision: authenticate process-owned Codex native identit
   (`git -C <W> rebase --no-autostash <main HEAD>`), fast-forwards the main
   checkout (`git merge --ff-only <branch>`), harvests the lead's task
   evidence, then removes the worktree and branch;
-  `plugin/scripts/batch_finish.py` runs that whole step for one lead. No
-  merge commit is created. After every lead is integrated it opens one
-  integration task in the main checkout that runs the full suite, review,
-  QA, and — in the harness source repo — the verified install. Leads never
-  run `install_verified.py`.
+  MCP `dispatch operation="complete"` runs that whole step for one lead via
+  `batch_state.py` and `batch_finish.py`, then closes an eligible disposed pool. No
+  merge commit is created. After every lead integrates and cleanup completes,
+  reopen the same owning WBS in main for the full suite, review, QA and — in
+  the harness source repo — verified install. A standalone batch uses its
+  ordinary integration task. Leads never run `install_verified.py`.
 - The coordinator persists requests, reservations, worker/worktree identity and
   integration checkpoints through `batch_state.py`. It refills available slots
   without waiting for a whole wave; dependent requests wait for confirmed
-  integration and cleanup. Bootstrap-only leads create the validated retention
-  marker and return identity before `bind` permits their normal lifecycle. The
-  marker preserves otherwise unchanged native worktrees and ignored task evidence
+  integration and cleanup. MCP creates the validated retention marker; bootstrap-only leads verify it
+  and return identity before `bind` permits their normal lifecycle. The
+  marker preserves operational ownership and earlier retained native worktrees
   until durable harvest; it is never staged or treated as task authority. Exact restart, retained-scope reservations,
   cap selection and abandonment semantics are owned by
   [Batch state, bounded scheduling and recovery](REQ__batch-state-pool-recovery.md).
@@ -309,10 +332,11 @@ open the repository at all.
 
 ## Worktree location
 
-- The runtime picks where a lead worktree lives. Claude Code
-  `isolation: worktree` always creates `<repo>/.claude/worktrees/<name>` (its
-  `worktree.location` setting is not read for agent isolation); the Codex app
-  uses `$CODEX_HOME/worktrees`, outside the repository.
+- Managed dispatch chooses and records the lead checkout under
+  `<repo>/.claude/worktrees/<name>` before spawning either runtime. A lead
+  does not use native isolation or the Codex app's automatic worktree location.
+  Existing registered retained checkouts remain recoverable at their recorded
+  paths; preparation must not create substitutes.
 - Harness is location-agnostic: it validates registration, not path. The MCP
   `workspace` check (`resolve_registered_worktree`) and `batch_harvest.py`
   accept a linked worktree because its gitdir is registered under
@@ -320,7 +344,7 @@ open the repository at all.
   checkout sits; `batch_preflight.py` recognizes lead worktrees by the paths
   `git worktree list --porcelain` registers, not by where they live. The only
   location-specific check is `batch_preflight.py`'s `worktrees_ignore` (batch
-  SKILL preflight step b.3), which checks that Claude's default
+  SKILL managed preparation), which checks that the managed
   `.claude/worktrees/` is gitignored where git sees it.
 - Placing worktrees under `.git` (for example `.git/harness-worktrees/<name>`)
   was evaluated and rejected:
@@ -369,8 +393,8 @@ Repository hazards without controlled preparation:
 - An ignored nested repo does not exist in a lead worktree at all. Its only
   copy is in the main checkout, which no lead may write, and a plain
   `git status --porcelain` there does not report its changes.
-- (c) cannot host a batch: Claude Code cannot create an isolation worktree
-  without a git root, and the workspace validator refuses it. A control root
+- (c) cannot host a batch: managed worktree creation requires a Git control
+  root, and the workspace validator refuses a non-Git parent. A control root
   that is itself a linked worktree, an absorbed submodule checkout (whose
   `.git` is a gitfile), or a separate-git-dir checkout is refused by the
   validator too, because it requires `<control>/.git/worktrees`; a submodule
@@ -409,7 +433,7 @@ Default rules and selected S1 extension:
   meaning a value with `*?[` or a comma that names no existing path; an
   existing path such as `app/[locale]` is fine, and each path gets its own
   `--request`) is a usage error: exit 2 and no report. `ok` covers only these
-  checks; the coordinator's other preflight steps (`baseRef`, no open
+  checks; the coordinator's other preflight conditions (no open
   main-checkout task, the recorded HEAD) still apply. The
   coordinator acts on `verdict` and on `refusals`, `excluded_requests`,
   `overlaps`, and `off_limits`, and reruns the script after adjusting a wave;
@@ -535,12 +559,14 @@ remain outside S1 and use the ordinary sequential route.
   repeatable regression is
   `tests/test_worktree_workspace.py::test_nested_lens_start_and_stop_in_worktree_bind_to_worktree_task`.
 
-- Claude Code refuses the `Write` tool from an `isolation: worktree` lead to a
+- Historical native-isolation probe: Claude Code refused `Write` from an
+  `isolation: worktree` lead to a
   main-checkout path ("This agent is isolated in the worktree ..."), and the
-  same refusal holds for a nested subagent the lead spawns without isolation.
+  same refusal was observed for its nested subagent without isolation. This
+  native guard is not claimed for the new non-isolating managed leads.
   Bash writes are not guarded by it, which matches C-05 (Harness does not
   intercept shell mutation).
-- After a lead returns, its worktree stays locked
+- Historical native-isolation probe: after a lead returned, its worktree stayed locked
   (`locked claude agent <name> (pid ...)`) while the coordinator session
   runs, so the coordinator runs `git worktree unlock` before
   `git worktree remove`. Never unlock a worktree whose lead is still running.
@@ -549,14 +575,16 @@ remain outside S1 and use the ordinary sequential route.
 
 ## Preconditions and limits
 
-- Project `.claude/settings.json` sets `"worktree": {"baseRef": "head"}` so
+- The older native-isolation route used project `.claude/settings.json`
+  `"worktree": {"baseRef": "head"}` so
   leads branch from the coordinator's local HEAD, not the remote default
   branch. Each lead refuses to start when its HEAD differs from the
-  coordinator HEAD it was given.
+  coordinator HEAD it was given. Managed dispatch now pins its recorded spawn
+  HEAD directly; native baseRef is no longer a managed-creation precondition.
 - `.claude/worktrees/` is gitignored in every harness project: manifest
   version 7 adds it to setup's managed operational ignores
   (`doc/harness/REQ__versioned-project-file-migrations.md`).
-  `batch_preflight.py` still checks it (batch SKILL step b.3) and refuses
+  `batch_preflight.py` still checks it (batch SKILL managed preparation) and refuses
   when it is not ignored, for example in a project not yet migrated to v7;
   the refusal tells the user which path to add, and a later
   `--migrate-harness-version` moves the line into the managed block.
@@ -580,11 +608,12 @@ remain outside S1 and use the ordinary sequential route.
   lead oversubscribes CPU and IO, so leads pass `-n 4`.
 - Leads run the installed harness plugin, not the `plugin/` tree in their own
   worktree.
-- Claude uses native isolated leads; Codex uses registered worktrees and
-  authenticated native coordinator ancestry with explicit workspace binding.
+- Both runtimes use MCP-created registered checkouts. Claude leads receive
+  explicit cwd/workspace; Codex additionally uses authenticated native
+  coordinator ancestry with explicit workspace binding.
   The Codex internal batch workflow requires actual spawn/continuation
   capabilities and reserves room for independent review/QA. Leads operate
-  only their worktree WBS; close never updates a coordinator Goal ledger.
+  only their worktree WBS; close never updates a second Goal ledger.
   A task-owned work pack releases its parent only after all requests integrate
   and the exact pool closes. Codex MCP returns canonical workspace and either
   defers to genuine PostToolUse or binds its process-owned actor after native
@@ -640,11 +669,13 @@ integrated. Unaccounted changes remain protected. Original task status and
 receipts are not rewritten or relabeled as closed; recovery evidence is separate.
 Verified, fully accounted originals are then removed rather than kept forever.
 
-This is coordinator workflow, not a Git-state gate in `task_verify` or
-`task_close`. Routing and payload tests establish that the rule is available;
-they do not prove an agent obeyed it. Actual completion reporting must name
-the integrated destination and removed resources, or the exact retained work
-and blocker.
+For WBS-owned packs this is enforced by managed dispatch and the owning WBS
+completion proof: archive/ancestry alone are insufficient while an owned
+worktree or disposable branch still exists. Lead source close remains the
+receipt-backed task gate; it does not remove its own checkout. Standalone
+temporary-worktree recovery still follows the shared coordinator procedure.
+Actual completion reporting names the integrated destination and removed
+resources, or exact retained work and blocker.
 
 ## Verification cues
 
@@ -736,18 +767,13 @@ and blocker.
   symlink inside the repository checked at its target, a check-ignore
   failure and an unloadable `setup_finalize` refused with a report, and the
   key `unchecked` when the control root is not ok.
-- `tests/test_batch_skill_contract.py`: lead frontmatter (`model: inherit`,
-  `experimental: { cacheTtl: 1h }`, no `subagentPromptCacheTtl` under
-  `plugin/` or in `.claude/settings.json`), the lead's one-commit
-  `Harness-Task` trailer, the batch SKILL's `batch_finish.py` call, its
-  status actions and `--resume`, step b.3 moved into the preflight; lead
-  carve-outs, every
-  coordinator step, the C-09 clause in both contract files, root CLAUDE.md
-  clauses, and this repository's `baseRef`/ignore settings; the preflight
-  script in intake/preflight and the off-limits spawn line; the lead's
-  submodule and nested-repo prohibitions; this document's worktree-location
-  and multi-repo sections; the batch SKILL's rebase and fast-forward
-  integration commands, merge-commit precheck, and conflict test, and the
-  absence of `--no-ff` and `git merge --abort` there.
+- `tests/test_batch_skill_contract.py`: lead frontmatter retains `model: inherit`
+  and per-agent cache TTL, while native worktree isolation is absent. Both
+  runtime workflows use managed prepare/bind/complete/recover/resume/status,
+  real worker identity, bootstrap verification before mutation, bounded slots,
+  explicit checkout/workspace and preserved S1 module handoffs. Owner helpers
+  retain linear rebase/fast-forward, no-force ordinary disposal, exact result
+  and evidence preservation requirements. Existing C-09 and ignore contracts
+  continue to apply; native baseRef no longer selects managed creation.
 - Live probe: a real worktree subagent starts a task with `workspace` and its
   nested reviewer's start/stop receipts appear in the worktree task.

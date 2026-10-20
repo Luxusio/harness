@@ -3,7 +3,10 @@
 Read this at normal completion and interrupted-work recovery. A temporary
 worktree is not a permanent deliverable: integrate its intended changes and
 remove it and its disposable branch before reporting the overall work done.
-This is coordinator procedure, not a Git-state gate in `wbs(action="close")`.
+Managed WBS packs use `wbs(action="dispatch", operation="complete")` for
+integration/disposal; their owning WBS completion checks archive, ancestry and
+actual absence of owned W/branch. Source-task close remains a separate receipt
+gate. Standalone temporary checkout recovery follows the procedure below.
 
 ## Ownership and timing
 
@@ -16,7 +19,9 @@ This is coordinator procedure, not a Git-state gate in `wbs(action="close")`.
   must be retained. Never unlock a running worker's worktree.
 - A batch lead closes its task and returns to its coordinator; it never
   integrates or removes its own worktree. The coordinator uses
-  `${CLAUDE_PLUGIN_ROOT}/scripts/batch_finish.py` through the batch workflow for
+  `wbs(action="dispatch", operation="complete", worker_stopped=true)` through
+  the batch workflow. Its installed owner is
+  `${CLAUDE_PLUGIN_ROOT}/scripts/batch_state.py` (delegating to `batch_finish.py`) for
   closed, clean leads. Preserve its order: rebase, fast-forward, harvest,
   remove, then combined review/QA in the integration task. A kept result is
   remaining work, not successful cleanup.
@@ -82,6 +87,18 @@ inherits this exception. The full S1 contract is
 `doc/harness/REQ__batch-submodule-support.md`; never invoke force manually.
 
 ## Interrupted or already-copied recovery
+
+For a managed pack inspect `dispatch operation="status"`, then use `recover` or
+`resume` with actual stopped-writer confirmation. Context/next and existing
+session/prompt discovery expose pending pools even without an active task. They
+never clean up Git or infer stopped writers. Reuse the exact W/branch/task/run;
+normal preparation and completion retries use the same durable batch record.
+After independently reviewed conflict resolution, managed `recover` may receive
+`recovery_commit=<exact resolved branch-tip SHA>` as explicit acknowledgment.
+Only its original pre-integration checkpoint can accept the changed tip, with
+exact W/branch/task/run, close proof and destination ancestry preserved. Normal
+`complete` still validates the original lead result; an already integrated
+checkpoint cannot adopt unexpected new commits.
 
 Prefer resuming and finishing in the original worktree, then rebase and
 fast-forward as above. If the runtime cannot operate that task, name the
