@@ -26,7 +26,10 @@ to its weight (for example, split weight 1 into 0.5 and 0.5). Choose coarse, und
 precision. One leaf suffices for small work. `wbs(action="plan")` atomically publishes
 the baseline and runtime WBS evidence without changing TASK's schema.
 Use `wbs(action="check", node_id=...)` only when an outcome is ready to
-check. Read `task_context.progress`; never author a percentage or count task
+check. Context/open/next and plan updates do not hash source: current progress
+is unmeasured and historical credit is labelled separately. Never report that
+history as current completion. Explicit check and final verify/close measure
+current inputs. Never author a percentage or count task
 additions as accomplishment. Passing commands still need review for adequacy.
 To refine, keep the pending leaf's ID and weight as a group, remove its check
 and add concrete children conserving weight. Adapt pending outcomes, checks
@@ -34,6 +37,16 @@ and dependencies as discovery requires; changed definitions lose old credit.
 Start with large results and elaborate only work about to be done. Splitting
 earns nothing and never restarts the progress clock. File ownership belongs
 only to actual concurrent execution, separately from progress measurement.
+When verification inputs become known, optionally publish one `wbs-inputs`
+JSON fence with literal `source` roots, `artifacts` files, `exclude` and `deny`
+paths. This is an adaptable verification policy, never an initial edit plan.
+Include actual common/build/lockfile/resource inputs; independent review owns
+adequacy. Denied required inputs stay unavailable; do not omit them to obtain
+PASS. Policy changes preserve history without promoting old proof. See the
+REQ for exact bounds and no-read semantics. Park an external blocker with
+`wbs(action="block", node_id=..., blocked_reason=..., unblock_condition=...)`
+so independent work remains ready; `open` with that node_id clears the local
+block without restoring old credit. Omit node_id for root lifecycle parking.
 See `doc/harness/REQ__measurable-wbs-progress.md` for the observable contract.
 
 ## 6.2 Assemble PLAN.md content

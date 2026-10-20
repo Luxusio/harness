@@ -1514,19 +1514,29 @@ handoff 때만 별도로 선언한다. 자세한 규범은
 소스 변경은 현재 credit을 주지 않으며, 기준선이 없는 과거 자료는 percentage=null이다.
 100%도 독립 review/QA, 실제 pack 통합 또는 receipt-backed close를 대신하지 않는다.
 
-저장된 `nodes`와 측정 응답의 `outcomes`는 서로 다른 표현이다. checkout 증거의
-예산·경계 검사에 실패하면 `progress.status=invalid`, `percentage=null`이다.
+저장된 `nodes`와 측정 응답의 `outcomes`는 서로 다른 표현이다. 조회·next·재개·
+계획 수정은 소스를 해시하지 않고 `unmeasured`, `percentage=null`과 구분된 과거
+검증 정보를 반환한다. 명시적 check와 최종 verify/close에서 현재 입력을 측정하며,
+그 측정의 예산·경계 검사에 실패하면 `progress.status=invalid`, `percentage=null`이다.
 실행 전 실패한 check는 `execution=not_run`, `passed=null`로 반환하고 기존 기록을
 바꾸지 않는다. 실행 후 측정 실패는 실제 반환 코드와 `measurement_error`를 구분해
 보존하며, 해당 항목의 `last_attempt` 표시는 확정적인 재검증까지 과거 PASS의
 점수를 보류한다. Git이 선언한 소스만 한도 내에서 읽으며, 하위 모듈의 ignored
 산출물을 재귀 순회하지 않는다(`plugin/scripts/wbs.py`).
 
+검증 입력이 알려지면 PLAN의 선택적 `wbs-inputs` fence에서 `source`, `artifacts`,
+`exclude`, `deny`를 지정한다. 편집할 파일 목록이 아니라 검증 시점의 입력 정책이다.
+정책을 증거에 결합하며, 금지 경로는 해석·열기 전에 걸러낸다. 필수 입력이 금지되거나
+없으면 검증할 수 없다. source와 artifact는 각각 32 MiB 예산을 갖는다. `block`에
+`node_id`를 주면 그 항목과 의존 작업만 보류하고 독립 작업은 next에 남는다.
+같은 `node_id`로 open해도 과거 점수는 재검증 전까지 복구되지 않는다.
+
 새 사용자 요구나 필요한 추가 개발이 발견되면 같은 PLAN의 미완료 성과·의존 관계·
 검증을 갱신한다. 사용자 발언과 derived 기술 선택은 출처를 구분하고, 추측을
 필수 요구사항으로 승격하지 않는다. 새 성과는 분모와 scope_revision을 늘릴 수
 있지만 credit이나 진척 시계를 주지 않는다. 미완료 leaf를 더 작은 성과로 나누면
-기존 가중치를 보존한다. 완료 leaf를 나누거나 재가중해 진척을 만들지 않는다.
+기존 가중치를 보존한다. 과거 PASS가 계획 수정을 막지는 않지만, 분할한 자식에게
+과거 검증 점수를 넘기거나 재가중해 진척을 만들지 않는다.
 검증 가중치가 7,200초 증가하지 않았으면 다음 활성 경계에서 refinement_due를
 보고 유용한 미완료 성과만 구체화한다. 외부 대기는 blocker와 unblock_condition을
 기록한다. 별도 daemon이나 반복적 장부 분할은 없으며 실제 개발이 우선이다.

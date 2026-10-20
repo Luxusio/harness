@@ -56,12 +56,14 @@ def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
     assert "Call task_start" not in (td / "BLOCKED.md").read_text()
     assert not call("open").get("isError")
     assert server.read_task_control(str(td))["run_id"] == run
-    # A committed scaffold whose context projection fails must recover through
-    # context, rather than create another generation or name an unavailable tool.
+    # Preserved-run resume fails atomically when response preparation fails;
+    # it does not publish a partially resumed generation or invent another run.
     with mock.patch.object(server, "emit_compact_context", side_effect=RuntimeError("projection unavailable")):
         fallback = call("open")
-    assert not fallback.get("isError")
-    assert "wbs(action='context'" in fallback["structuredContent"]["next_action"]
+    assert fallback.get("isError")
+    assert "projection unavailable" in fallback["structuredContent"]["error"]
+    assert server.read_task_control(str(td))["run_id"] == run
+    assert not call("open").get("isError")
     invalid = call("context", root="WBS__missing")
     assert invalid.get("isError")
     assert "wbs(action='open')" in invalid["structuredContent"]["next_action"]

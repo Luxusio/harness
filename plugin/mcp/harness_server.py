@@ -1351,6 +1351,7 @@ def _handle_task_start(
             )
             transaction_stack.close()
             return result
+    preserved_context = None
     request_text = ""
     if rf:
         rp = rf if os.path.isabs(rf) else os.path.join(repo_root, rf)
@@ -1506,6 +1507,9 @@ def _handle_task_start(
                     repo_root, task_dir, control=resumed, session_id=session_id,
                 ):
                     raise RuntimeError("task_start could not publish the preserved run binding")
+                preserved_context = emit_compact_context(task_dir, preserved_snapshot)
+                if "error" in preserved_context:
+                    raise RuntimeError(str(preserved_context.get("error") or "compact context unavailable"))
             except BaseException:
                 restore_errors = []
                 try:
@@ -1568,7 +1572,7 @@ def _handle_task_start(
             transaction_stack.close()
             raise
     try:
-        ctx = emit_compact_context(task_dir, preserved_snapshot)
+        ctx = preserved_context if preserved_context is not None else emit_compact_context(task_dir, preserved_snapshot)
         if "error" in ctx:
             raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
     except Exception as exc:
@@ -1818,7 +1822,7 @@ def handle_task_verify(args: dict) -> dict:
     st = read_task_control(td)
     rv = receipt_runtime_verdict(td, st, snapshot)
     review_verdict = receipt_review_verdict(td, st, snapshot)
-    ctx = emit_compact_context(td, snapshot)
+    ctx = emit_compact_context(td, snapshot, measure_wbs=True)
     status = _watcher_status(
         task_dir=td, task_id=ti, run_id=str(st.get("run_id") or ""), snapshot=snapshot,
     )
@@ -1892,7 +1896,7 @@ def handle_task_close(args: dict) -> dict:
         def close_error(message, data):
             return _err(message, data=dict(data))
 
-        ctx = emit_compact_context(td, snapshot)
+        ctx = emit_compact_context(td, snapshot, measure_wbs=True)
         missing = ctx.get("missing_for_close") or []
         if missing:
             data = {
@@ -2046,7 +2050,15 @@ def handle_task_wbs(args: dict) -> dict:
         return _invalid_task_control_error("task_wbs", td)
     action = args.get("action", "context")
     if action == "context":
-        return _ok({"progress": wbs.task_progress(td, repo, control["run_id"])})
+        return _ok({"progress": wbs.task_progress(td, repo, control["run_id"], measure=False)})
+    if action in {"block_outcome", "open_outcome"}:
+        with receipt_stream_transaction(td):
+            if _validated_task_control(td) != control or task_control_status(td, control) != "open":
+                raise ValueError("outcome operation requires the same open task run")
+            body = wbs.block_outcome(td, _req(args, "leaf_id"), run_id=control["run_id"], clear=action == "open_outcome",
+                                    reason=args.get("blocked_reason"), unblock_condition=args.get("unblock_condition"))
+            return _ok(dict(body, task_dir=td, task_id=os.path.basename(td), run_id=control["run_id"],
+                            wbs_id="WBS__" + os.path.basename(td)[6:]))
     if action == "dispatch":
         with receipt_stream_transaction(td):
             if _validated_task_control(td) != control or task_control_status(td, control) != "open":
@@ -2169,10 +2181,19 @@ def handle_wbs(args: dict) -> dict:
         raise ValueError("unknown WBS action")
     operation, fields = routes[action]
     unknown = set(args) - ({"action", "wbs_id", "workspace"} | fields
-                          | ({"node_id"} if action == "check" else set())
+                          | ({"node_id"} if action in {"check", "open", "block"} else set())
                           | ({"objective"} if action == "open" else set()))
     if unknown:
         raise ValueError("unexpected fields for WBS action: " + ", ".join(sorted(unknown)))
+    if action in {"open", "block"} and "node_id" in args:
+        if set(args) - {"action", "wbs_id", "workspace", "node_id", "blocked_reason", "unblock_condition"}:
+            raise ValueError("outcome operations preserve the existing task run")
+        if action == "open" and ("blocked_reason" in args or "unblock_condition" in args):
+            raise ValueError("open outcome accepts only node_id")
+        return _invoke("task_wbs", _EXECUTION["task_wbs"], dict(common,
+                       action="open_outcome" if action == "open" else "block_outcome",
+                       leaf_id=_req(args, "node_id"),
+                       **{key: args[key] for key in ("blocked_reason", "unblock_condition") if key in args}))
     if action == "dispatch":
         return _managed_dispatch(common, args)
     call_args = dict(common, **{key: args[key] for key in fields if key in args})
@@ -2361,12 +2382,12 @@ del _bind_control_writer
 
 TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "wbs", "title": "Work through one WBS outcome tree",
-     "description": "One entry point for opening/resuming a WBS, rolling outcome planning, measured progress, explicit outcome checks, isolated worktree dispatch, independent verification and receipt-backed completion. Implementation tasks are internal execution envelopes.",
+     "description": "One WBS outcome tree. open/context/next/plan do not hash source; current progress is unmeasured and historical credit is labelled. check and final verify/close measure current inputs. PLAN may include one wbs-inputs JSON fence with source roots, artifact files, exclude and deny lists, chosen at verification time rather than as an edit plan. block/open with node_id park/reopen one outcome while independent work continues. Dispatch owns isolated worktrees; ordered review/QA and current outcome proofs still gate completion.",
      "inputSchema": {"type": "object", "properties": {
          "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate"]},
          "wbs_id": {"type": "string", "description": "Stable root ID; WBS__<id>, legacy TASK__<id>, or a bare safe ID."},
          "objective": {"type": "string", "description": "For open without an ID, derive one stable root for this objective, including native Goals."},
-         "node_id": {"type": "string"}, "plan": {"type": "string"},
+         "node_id": {"type": "string", "description": "check target, or local outcome for block/open; omission keeps root lifecycle behavior."}, "plan": {"type": "string"},
          "required_lenses": {"type": "array", "items": {"type": "string"}},
          "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
          "operation": {"type": "string", "enum": ["prepare", "status", "bind", "complete", "resume", "recover"], "description": "dispatch lifecycle operation. prepare (default) creates owned worktrees; bind admits the actual native worker; complete records its stopped result and integrates/disposes; status is read-only."},

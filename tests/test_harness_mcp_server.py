@@ -2113,7 +2113,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("context scan unavailable", payload["warnings"][0]["detail"])
             self.assertFalse(payload["task_context"]["source_write_allowed"])
 
-    def test_resumed_task_context_warning_reports_ready_without_new_creation(self):
+    def test_preserved_resume_context_failure_refuses_and_restores_focus(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
@@ -2140,18 +2140,11 @@ class HarnessMcpServerTests(unittest.TestCase):
                     side_effect=RuntimeError("context delayed"),
                 ),
             ):
-                result = harness_server.handle_task_start(
-                    {"task_id": "TASK__resumed-warning"}
-                )
-
-            payload = result["structuredContent"]
-            self.assertEqual(payload["start_status"], "ready_with_warnings")
-            self.assertFalse(payload["task_created"])
-            self.assertTrue(payload["resumed"])
-            self.assertEqual(
-                payload["warnings"][0]["message"],
-                "Task ready; full routing context was deferred to keep task_start responsive.",
-            )
+                before_control = (task_dir / "TASK.json").read_bytes()
+                with self.assertRaisesRegex(RuntimeError, "context delayed"):
+                    harness_server.handle_task_start({"task_id": "TASK__resumed-warning"})
+                self.assertEqual((task_dir / "TASK.json").read_bytes(), before_control)
+                self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
 
     def test_failed_existing_resume_restores_state_and_receipts(self):
         for terminal_status in ("open", "closed", "blocked"):

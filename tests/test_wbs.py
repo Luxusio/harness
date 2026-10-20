@@ -86,6 +86,13 @@ def test_rewrites_cannot_manufacture_credit(tmp_path, mutation):
         candidate[0].pop("check")
         candidate.append(node("B", parent="A"))
     before = (td / "WBS.json").read_bytes()
+    if mutation == "split_done":
+        old = wbs.read_state(str(td))
+        state = publish(td, candidate)
+        assert state["checks"] == old["checks"]
+        assert state["last_progress_at"] == old["last_progress_at"]
+        assert progress(repo, td)["percentage"] == 0  # Children inherit no credit.
+        return
     with pytest.raises(ValueError):
         wbs.prepare(str(td), plan(candidate), "run")
     assert before == (td / "WBS.json").read_bytes()
@@ -183,7 +190,7 @@ def test_oversized_state_refuses_before_publishing_or_losing_repairability(tmp_p
     assert rejected.get("isError"), rejected
     assert "storage budget" in rejected["structuredContent"]["error"]
     assert before == {name: (td / name).read_bytes() for name in before}
-    assert call("context")["structuredContent"]["progress"]["status"] == "measured"
+    assert call("context")["structuredContent"]["progress"]["status"] == "unmeasured"
     assert not call("plan", plan=plan([node()])).get("isError")
 
 
@@ -281,7 +288,8 @@ def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
     assert call("next")["structuredContent"]["ready"] == ["A"]
     assert call("check", node_id="A")["structuredContent"]["passed"]
     context = call("context")["structuredContent"]
-    assert context["wbs_id"] == "WBS__sample" and context["progress"]["percentage"] == 100
+    assert context["wbs_id"] == "WBS__sample" and context["progress"]["percentage"] is None
+    assert context["progress"]["historical_percentage"] == 100
     assert context["tree"][0]["id"] == "A"
     assert call("next")["structuredContent"]["ready"] == []
     assert not call("verify").get("isError")

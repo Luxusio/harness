@@ -1,5 +1,7 @@
 """Bounded checkout observation and explicit non-attesting assertion results."""
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -173,7 +175,8 @@ def test_current_nodes_schema_public_context_check_preserves_identity(tmp_path, 
     before = (td / "WBS.json").read_bytes()
     monkeypatch.setattr(wbs, "MAX_EVIDENCE_BYTES", 1)
     ctx = call("context")["structuredContent"]
-    assert ctx["progress"]["status"] == "invalid" and ctx["progress"]["percentage"] is None
+    assert ctx["progress"]["status"] == "unmeasured" and ctx["progress"]["percentage"] is None
+    assert ctx["progress"]["historical_percentage"] == 30
     checked = call("check", node_id="A")
     assert not checked.get("isError"), checked
     assert checked["structuredContent"]["execution"] == "not_run"
@@ -183,7 +186,7 @@ def test_current_nodes_schema_public_context_check_preserves_identity(tmp_path, 
     assert call("open")["structuredContent"]["run_id"] == opened["run_id"]
     state = wbs.read_state(str(td))
     assert "nodes" in state and "outcomes" not in state
-    assert call("context")["structuredContent"]["progress"]["percentage"] == 30
+    assert call("context")["structuredContent"]["progress"]["historical_percentage"] == 30
 
 
 def test_listing_limit_refuses_truncation_and_time_budget(tmp_path, monkeypatch):
@@ -253,3 +256,97 @@ def test_in_root_symlink_ancestor_never_attests_an_alias(tmp_path):
     directory.rename(target)
     directory.symlink_to(target, target_is_directory=True)
     assert progress(repo, td)["percentage"] is None
+
+
+def test_ancestor_swap_after_path_validation_cannot_attest_external_bytes(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    source = repo / "source"
+    source.mkdir()
+    (source / "file.txt").write_text("inside")
+    git(repo, "add", "source/file.txt")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "file.txt").write_text("outside")
+    actual = Path.is_symlink
+    swapped = False
+    def probe(path):
+        nonlocal swapped
+        answer = actual(path)
+        if path == source and not swapped:
+            swapped = True
+            source.rename(repo / "saved-source")
+            source.symlink_to(outside, target_is_directory=True)
+        return answer
+    monkeypatch.setattr(Path, "is_symlink", probe)
+    assert progress(repo, td)["percentage"] is None
+    assert swapped
+
+
+def test_ignored_module_root_does_not_use_eager_listdir(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    mod = module(repo)
+    with (mod / ".gitignore").open("a") as stream:
+        stream.write("*.artifact\n")
+    for n in range(32):
+        (mod / f"{n}.artifact").write_text("ignored")
+    original = os.listdir
+    def listdir(path):
+        assert Path(path) != mod, "module emptiness allocated an eager directory listing"
+        return original(path)
+    monkeypatch.setattr(os, "listdir", listdir)
+    assert check(repo, td)["passed"]
+
+
+def test_module_rebinding_during_git_enumeration_is_unavailable(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    mod = module(repo)
+    outside = tmp_path / "outside-module"
+    outside.mkdir()
+    actual = wbs._execute
+    swapped = False
+    def execute(argv, cwd, *args, **kwargs):
+        nonlocal swapped
+        if argv[:3] == ["git", "ls-files", "--stage"] and Path(cwd).resolve() == mod and not swapped:
+            swapped = True
+            mod.rename(repo / "saved-module")
+            mod.symlink_to(outside, target_is_directory=True)
+        return actual(argv, cwd, *args, **kwargs)
+    monkeypatch.setattr(wbs, "_execute", execute)
+    assert progress(repo, td)["percentage"] is None
+    assert swapped
+
+
+def test_near_full_evidence_reserves_inconclusive_capacity_before_execution(tmp_path, monkeypatch):
+    nodes = [node(f"A{n}", 1) for n in range(256)]
+    repo, td = baseline(tmp_path, nodes)
+    state = wbs.read_state(str(td))
+    source = wbs.fingerprint(str(repo))
+    for n in state["nodes"]:
+        state["checks"][n["id"]] = dict(passed=True, source=source, definition=wbs.digest(n), checked_at=100,
+                                        result=dict(returncode=0, error=None, output=""))
+    target = 1024 * 1024 - 100
+    size = len(wbs.encode_state(state).encode())
+    for proof in state["checks"].values():
+        amount = min(4000, target - size)
+        proof["result"]["output"] = "a" * amount
+        size += amount
+    assert size == target
+    (td / "WBS.json").write_text(wbs.encode_state(state))
+    assert progress(repo, td)["percentage"] == 100
+    before = (td / "WBS.json").read_bytes()
+    monkeypatch.setattr(wbs, "_execute", forbidden_assertion_runner(wbs._execute))
+    result = check(repo, td, "A0")
+    assert result["execution"] == "not_run" and result["passed"] is None
+    assert "storage budget" in result["measurement_error"]
+    assert (td / "WBS.json").read_bytes() == before
+
+
+def test_deleted_tracked_parent_is_measurable_as_missing_source(tmp_path):
+    repo, td = baseline(tmp_path)
+    (repo / "source").mkdir()
+    (repo / "source" / "file.txt").write_text("source")
+    git(repo, "add", "source/file.txt")
+    assert check(repo, td)["passed"]
+    (repo / "source" / "file.txt").unlink()
+    (repo / "source").rmdir()
+    assert progress(repo, td)["percentage"] == 0

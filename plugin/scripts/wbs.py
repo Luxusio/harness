@@ -7,6 +7,7 @@ replacement for independent review, QA, task close or batch integration proof.
 from __future__ import annotations
 
 from decimal import Decimal, localcontext
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 import math
@@ -27,6 +28,7 @@ MAX_EVIDENCE_ENTRIES = 4096
 MAX_EVIDENCE_BYTES = 32 * 1024 * 1024
 MAX_LISTING_BYTES = 1024 * 1024
 MAX_MODULE_DEPTH = 8
+MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 
 
 def digest(value):
@@ -111,7 +113,36 @@ def from_plan(text):
     return validate(json.loads(blocks[0])) if blocks else None
 
 
-def transition(old, new, completed=()):
+def input_policy(value):
+    if value is None:
+        return None
+    require(isinstance(value, dict) and not set(value) - {"source", "artifacts", "exclude", "deny"}, "invalid input policy")
+    result = {key: value.get(key, []) for key in ("artifacts", "exclude", "deny")}
+    if "source" in value:
+        result["source"] = value["source"]
+    for paths in result.values():
+        require(isinstance(paths, list) and len(paths) <= 128, "input policy needs bounded literal paths")
+        for path in paths:
+            require(isinstance(path, str) and 0 < len(path) <= 2048 and "\0" not in path
+                    and "\\" not in path and not path.startswith("/") and not re.match(r"^[A-Za-z]:", path)
+                    and (path == "." or all(p not in {"", ".", ".."} for p in path.split("/"))),
+                    "input policy paths must be canonical checkout-relative literals")
+        require(len(paths) == len(set(paths)), "duplicate input policy paths")
+    require(result.get("source") != [] or result["artifacts"], "input policy selects no evidence")
+    return result
+
+
+def inputs_from_plan(text):
+    blocks = re.findall(r"^```wbs-inputs\s*\n(.*?)^```\s*$", text, re.M | re.S)
+    require(len(blocks) <= 1, "use one wbs-inputs fence")
+    return input_policy(json.loads(blocks[0])) if blocks else None
+
+
+def covers(root, path):
+    return root == "." or path == root or path.startswith(root + "/")
+
+
+def transition(old, new):
     """Only refinement: stable nodes cannot disappear or silently change credit."""
     previous, current = {n["id"]: n for n in old}, {n["id"]: n for n in new}
     require(previous.keys() <= current.keys(), "cannot remove baseline nodes")
@@ -119,8 +150,6 @@ def transition(old, new, completed=()):
     new_leaves = {n["id"] for n in leaves(new)}
     for key, item in previous.items():
         candidate = current[key]
-        if key in old_leaves - new_leaves:
-            require(key not in completed, "cannot split a verified outcome")
         require(all(item.get(field) == candidate.get(field) for field in ("parent", "weight")),
                 "preserve baseline weight and parent; implementation and pending checks may adapt")
     for key in current.keys() - previous.keys():
@@ -153,8 +182,15 @@ def validate_state(state):
         require("pack_only" not in state, "unknown baseline mode")
         validate(state.get("nodes"))
     require(isinstance(state.get("run_id"), str) and isinstance(state.get("checks"), dict), "invalid check evidence")
+    input_policy(state.get("inputs"))
+    blocks = state.get("blocks", {})
+    require(isinstance(blocks, dict) and set(blocks) <= {n["id"] for n in state["nodes"]}, "invalid outcome blocks")
+    for block in blocks.values():
+        require(isinstance(block, dict) and set(block) == {"reason", "unblock_condition"}
+                and all(isinstance(v, str) and 0 < len(v.strip()) <= 4000 for v in block.values()), "invalid outcome blocker")
     for proof in state["checks"].values():
         require(isinstance(proof, dict) and type(proof.get("passed")) is bool, "invalid assertion evidence")
+        require("invalidated" not in proof or type(proof["invalidated"]) is bool, "invalid assertion invalidation")
         if "last_attempt" in proof:
             attempt = proof["last_attempt"]
             require(isinstance(attempt, dict) and set(attempt) == {"result", "checked_at", "measurement_error"}
@@ -202,8 +238,9 @@ def prepare(task_dir, plan, run_id, *, now=None):
             require(len(old["batch_history"]) <= 32, "work pack history limit reached")
             old.pop("batch")
             old.pop("pack_only", None)
-        projection = task_progress(task_dir, find_repo_root(task_dir), run_id, now=stamp)
-        transition(old["nodes"], nodes, [row["id"] for row in projection.get("outcomes", []) if row["verified"]])
+        # Planning has no authority to assert current completion from history.
+        # New children never inherit their former leaf's proof.
+        transition(old["nodes"], nodes)
         if first_baseline:
             old = dict(old, started_at=stamp, last_progress_at=stamp, scope_revision=1)
         state = dict(old, nodes=nodes, run_id=run_id,
@@ -211,29 +248,74 @@ def prepare(task_dir, plan, run_id, *, now=None):
                     checks=old["checks"] if old["run_id"] == run_id else {})
     else:
         state = dict(version=1, nodes=nodes, run_id=run_id, checks={}, started_at=stamp, last_progress_at=stamp)
+    policy = inputs_from_plan(plan)
+    if policy is None:
+        state.pop("inputs", None)
+    else:
+        state["inputs"] = policy
     encode_state(state)
     return state
 
 
-def fingerprint(repo):
+def fingerprint(repo, policy=None):
     """Observe checkout contents internally, without prescribing edited files."""
     from _lib import _trusted_git_env
     root, result = Path(repo).resolve(), []
-    total = 0
+    policy = input_policy(policy)
+    selected = policy.get("source") if policy else None
+    excludes = policy["exclude"] if policy else []
+    denied = policy["deny"] if policy else []
+    artifacts = policy["artifacts"] if policy else []
+    seen = set()
+    for required in (selected or []) + artifacts:
+        require(not any(covers(p, required) for p in excludes + denied), "required input is excluded or denied: " + required)
+    # Git enumeration itself needs administrative and ignore-file metadata.
+    require(not any(p == "." or ".git" in p.split("/") or p.endswith(".gitignore") for p in denied),
+            "denied input prevents Git evidence enumeration")
+    total = {"source": 0, "artifact": 0}
     listing_bytes = 0
     deadline = time.monotonic() + 30
+    root_info = root.stat()
 
     def remaining():
         seconds = deadline - time.monotonic()
-        require(seconds > 0, "checkout evidence exceeds measurement budget (time)")
+        require(seconds > 0, "checkout evidence exceeds measurement budget (time; limit 30 seconds)")
         return min(10, seconds)
 
-    def git(directory, *args):
+    @contextmanager
+    def directory_handle(path):
+        """Open each component relative to its parent; verify the chain on exit."""
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        with ExitStack() as stack:
+            fd = os.open(root, flags)
+            stack.callback(os.close, fd)
+            info = os.fstat(fd)
+            require((info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino),
+                    "checkout directory identity changed")
+            chain, current = [(root, info)], root
+            for part in path.relative_to(root).parts:
+                remaining()
+                fd = os.open(part, flags, dir_fd=fd)
+                stack.callback(os.close, fd)
+                current = current / part
+                chain.append((current, os.fstat(fd)))
+            yield fd
+            for location, opened in chain:
+                observed = location.lstat()
+                require(stat.S_ISDIR(observed.st_mode)
+                        and (observed.st_dev, observed.st_ino) == (opened.st_dev, opened.st_ino),
+                        "checkout directory identity changed")
+
+    def git(directory, *args, directory_fd):
         nonlocal listing_bytes
-        answer = _execute(["git", *args], directory, remaining(), env=_trusted_git_env(),
+        # Preserve the validated cwd across a concurrent pathname replacement.
+        fd_root = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"
+        answer = _execute(["git", *args], f"{fd_root}/{directory_fd}", remaining(), env=_trusted_git_env(),
+                          pass_fds=(directory_fd,),
                           output_limit=MAX_LISTING_BYTES - listing_bytes, retain=MAX_LISTING_BYTES, binary=True)
         require(answer["returncode"] == 0 and not answer["error"],
-                "checkout Git evidence unavailable: " + (answer["error"] or "Git command failed"))
+                "checkout Git evidence unavailable: " + (answer["error"] or "Git command failed")
+                + f" (input {directory.relative_to(root)}; listing used {listing_bytes}; limit {MAX_LISTING_BYTES} bytes)")
         listing_bytes += len(answer["output"])
         return answer["output"]
 
@@ -241,52 +323,78 @@ def fingerprint(repo):
         require(len(result) < MAX_EVIDENCE_ENTRIES, "checkout evidence exceeds measurement budget (entries)")
         result.append([path.relative_to(root).as_posix(), value])
 
-    def file(path):
-        nonlocal total
+    def file(path, category="source"):
+        require(len(result) < MAX_EVIDENCE_ENTRIES, "checkout evidence exceeds measurement budget (entries)")
+        observed = False
         try:
-            before = path.lstat()
+            with directory_handle(path.parent) as parent_fd:
+                observed = True
+                observe_file(path, parent_fd, category)
+        except FileNotFoundError:
+            if observed:
+                raise  # A bound ancestor disappeared during observation.
+            add(path, None)  # A tracked directory was already deleted.
+
+    def observe_file(path, parent_fd, category):
+        nonlocal total
+        limit = MAX_EVIDENCE_BYTES if category == "source" else MAX_ARTIFACT_BYTES
+        budget_error = f"checkout evidence exceeds measurement budget ({category} bytes; input {path.relative_to(root)}; limit {limit})"
+        try:
+            before = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             add(path, None)
             return
         require(stat.S_ISREG(before.st_mode), "nonregular or symlink scope cannot attest source")
-        require(before.st_size <= MAX_EVIDENCE_BYTES - total,
-                "checkout evidence exceeds measurement budget (bytes)")
+        require(before.st_size <= limit - total[category], budget_error + f"; size {before.st_size}")
         # No follow and nonblocking also refuse a replacement link/FIFO before read.
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         with os.fdopen(fd, "rb") as handle:
             identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
             opened = os.fstat(handle.fileno())
             require(identity(before) == identity(opened), "source changed during measurement")
             hashed = hashlib.sha256()
-            while chunk := handle.read(min(65536, MAX_EVIDENCE_BYTES - total + 1)):
+            while chunk := handle.read(min(65536, limit - total[category] + 1)):
                 remaining()
-                total += len(chunk)
-                require(total <= MAX_EVIDENCE_BYTES, "checkout evidence exceeds measurement budget (bytes)")
+                total[category] += len(chunk)
+                require(total[category] <= limit, budget_error)
                 hashed.update(chunk)
-            require(identity(opened) == identity(os.fstat(handle.fileno())) == identity(path.lstat()),
+            require(identity(opened) == identity(os.fstat(handle.fileno()))
+                    == identity(os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)),
                     "source changed during measurement")
         add(path, digest([before.st_mode, hashed.hexdigest()]))
 
     def checkout(directory, depth=0):
         require(depth <= MAX_MODULE_DEPTH, "checkout evidence exceeds measurement budget (module depth)")
-        top = os.fsdecode(git(directory, "rev-parse", "--show-toplevel")).removesuffix("\n")
+        with directory_handle(directory) as directory_fd:
+            scan(directory, depth, directory_fd)
+
+    def scan(directory, depth, directory_fd):
+        top = os.fsdecode(git(directory, "rev-parse", "--show-toplevel", directory_fd=directory_fd)).removesuffix("\n")
         require(Path(top).resolve() == directory, "checkout Git evidence belongs to another repository")
         entries = {}
-        for row in git(directory, "ls-files", "--stage", "-z").split(b"\0"):
+        for row in git(directory, "ls-files", "--stage", "-z", directory_fd=directory_fd).split(b"\0"):
             if not row:
                 continue
             header, name = row.split(b"\t", 1)
             mode, oid, stage = header.split()
             require(stage == b"0", "unmerged source cannot attest checkout")
             entries[os.fsdecode(name)] = (mode, oid)
-        for name in git(directory, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
+        for name in git(directory, "ls-files", "--others", "--exclude-standard", "-z", directory_fd=directory_fd).split(b"\0"):
             if name:
                 entries.setdefault(os.fsdecode(name), (None, None))
-        require(len(entries) <= MAX_EVIDENCE_ENTRIES - len(result),
-                "checkout evidence exceeds measurement budget (entries)")
         for scope, (mode, oid) in sorted(entries.items()):
             remaining()
             path = directory / scope
+            relative = path.relative_to(root).as_posix()
+            if relative in artifacts:
+                continue  # Artifacts have a separate explicit read and budget.
+            if any(covers(p, relative) for p in excludes):
+                continue
+            if selected is not None and not any(covers(p, relative) or mode == b"160000" and covers(relative, p) for p in selected):
+                continue
+            require(not any(covers(p, relative) for p in denied), "required input is denied: " + relative)
+            require(len(result) < MAX_EVIDENCE_ENTRIES,
+                    f"checkout evidence exceeds measurement budget (entries; input {relative}; limit {MAX_EVIDENCE_ENTRIES})")
             require(path.resolve().is_relative_to(directory), "scope escapes checkout")
             # Check every ancestor rather than resolving through an in-root alias.
             ancestor = path
@@ -295,21 +403,37 @@ def fingerprint(repo):
                 ancestor = ancestor.parent
             if mode == b"160000":
                 require(not path.exists() or path.is_dir(), "gitlink checkout is not a directory")
-                if not path.exists() or next(path.iterdir(), None) is None:
+                if not path.exists():
                     add(path, digest(["gitlink", os.fsdecode(oid), None]))
                 else:
-                    head = git(path, "rev-parse", "--verify", "HEAD").strip().decode("ascii")
-                    require(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head), "invalid module HEAD")
-                    add(path, digest(["gitlink", os.fsdecode(oid), head]))
-                    checkout(path, depth + 1)
+                    with directory_handle(path) as module_fd:
+                        with os.scandir(module_fd) as children:
+                            empty = next(children, None) is None
+                        if empty:
+                            add(path, digest(["gitlink", os.fsdecode(oid), None]))
+                        else:
+                            head = git(path, "rev-parse", "--verify", "HEAD", directory_fd=module_fd).strip().decode("ascii")
+                            require(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head), "invalid module HEAD")
+                            add(path, digest(["gitlink", os.fsdecode(oid), head]))
+                            checkout(path, depth + 1)
             else:
                 file(path)
+            if result and result[-1][1] is not None:
+                seen.update(p for p in selected or [] if covers(p, relative))
     checkout(root)
+    require(selected is None or all(p in seen for p in selected), "required source input missing from Git evidence")
+    for artifact in artifacts:
+        path = root / artifact
+        require(not any(covers(p, artifact) for p in denied + excludes), "required artifact is excluded or denied: " + artifact)
+        count = len(result)
+        file(path, "artifact")
+        require(len(result) > count and result[-1][1] is not None, "required artifact missing: " + artifact)
     require(any(value is not None for _, value in result), "no existing source/test evidence")
-    return digest(sorted(result))
+    remaining()
+    return digest([policy, sorted(result)]) if policy is not None else digest(sorted(result))
 
 
-def task_progress(task_dir, repo, run_id, *, now=None, _source=None):
+def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=True):
     stamp = time.time() if now is None else now
     try:
         state = read_state(task_dir)
@@ -319,15 +443,24 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None):
             validate_history(task_dir, repo, state)
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None,
                         integration=batch_route(task_dir, repo, state))
-        plan_nodes = from_plan(Path(task_dir, "PLAN.md").read_text())
+        plan_text = Path(task_dir, "PLAN.md").read_text()
+        plan_nodes = from_plan(plan_text)
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
+        require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
         rows = []
-        source = fingerprint(repo) if _source is None else _source
+        if measure:
+            source = fingerprint(repo, state.get("inputs")) if _source is None else _source
+        else:
+            latest = max((p for p in state["checks"].values() if p.get("source")),
+                         key=lambda p: p.get("checked_at", 0), default={})
+            source = latest.get("source")
         for node in leaves(state["nodes"]):
             proof = state["checks"].get(node["id"], {})
             valid = (state["run_id"] == run_id and proof.get("passed") is True
-                     and "last_attempt" not in proof and proof.get("definition") == digest(node))
-            valid = valid and proof.get("source") == source
+                     and "last_attempt" not in proof and not proof.get("invalidated")
+                     and proof.get("definition") == digest(node))
+            valid = valid and source is not None and proof.get("source") == source
+            valid = valid and proof.get("inputs") == (digest(state["inputs"]) if "inputs" in state else None)
             rows.append(dict(id=node["id"], title=node["title"], weight=node["weight"],
                              verified=bool(valid), checked_at=proof.get("checked_at") if valid else None))
         # Downstream outcomes lose current credit when prerequisite evidence
@@ -337,10 +470,14 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None):
         @cache
         def current(key):
             item = index[key]
+            if key in state.get("blocks", {}):
+                return False
             children = [n["id"] for n in state["nodes"] if n["parent"] == key]
             own = all(current(child) for child in children) if children else by_id[key]["verified"]
             deps, ancestor = set(item["depends_on"]), item["parent"]
             while ancestor:
+                if ancestor in state.get("blocks", {}):
+                    return False
                 deps.update(index[ancestor]["depends_on"])
                 ancestor = index[ancestor]["parent"]
             return own and all(current(dep) for dep in deps)
@@ -354,6 +491,16 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None):
         complete = all(n["verified"] for n in rows)
         validate_history(task_dir, repo, state)
         integration = batch_route(task_dir, repo, state) if state.get("batch") else None
+        if not measure:
+            for row in rows:
+                row["historical_verified"], row["verified"] = row["verified"], False
+            return dict(status="unmeasured", percentage=None, verified_weight=None, total_weight=total,
+                        historical_percentage=100 if complete else min(99.99, round(100 * earned / total, 2)),
+                        historical_verified_weight=earned, outcomes=rows, integration=integration,
+                        blocks=state.get("blocks", {}), scope_revision=state.get("scope_revision", 1),
+                        last_progress_at=state["last_progress_at"],
+                        refinement_due=not complete and stamp - state["last_progress_at"] >= STALL_SECONDS,
+                        next_action="Stored evidence only; explicit check or final verify/close must measure current inputs.")
         return dict(status="measured", percentage=100 if complete else min(99.99, round(100 * earned / total, 2)),
                     scope_revision=state.get("scope_revision", 1),
                     verified_weight=earned, total_weight=total, outcomes=rows,
@@ -366,12 +513,17 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None):
 
 
 def _unavailable(reason):
-    return dict(status="invalid", percentage=None, verified_weight=None, total_weight=None, reason=str(reason))
+    return dict(status="invalid", percentage=None, verified_weight=None, total_weight=None, reason=_error_text(reason))
 
 
-def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=4000, binary=False):
+def _error_text(reason):
+    return (str(reason) or type(reason).__name__).encode(errors="replace")[:4000].decode(errors="replace")
+
+
+def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=4000, binary=False, pass_fds=()):
     """Bound time and captured output, terminating the entire assertion group."""
-    proc = subprocess.Popen(argv, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    proc = subprocess.Popen(argv, cwd=repo, env=env, pass_fds=pass_fds, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, start_new_session=True)
     output, failure = bytearray(), None
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
@@ -421,9 +573,12 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     require(state is not None and state["run_id"] == run_id, "baseline current task run first through wbs(action='plan')")
     if state.get("batch"):
         require(batch_route(task_dir, repo, state)["route"] == "integration", "work pack is unfinished; preserve parked parent")
-    require(from_plan(Path(task_dir, "PLAN.md").read_text()) == state["nodes"], "plan/evidence mismatch")
+    plan_text = Path(task_dir, "PLAN.md").read_text()
+    require(from_plan(plan_text) == state["nodes"], "plan/evidence mismatch")
+    require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
     node = next((n for n in leaves(state["nodes"]) if n["id"] == leaf_id), None)
     require(node is not None, "unknown leaf")
+    require(leaf_id not in blocked_outcomes(state), "selected outcome or prerequisite is blocked")
     require(node.get("check"), "choose the outcome assertion through wbs(action='plan') when ready; no implementation layout required")
     observation_errors = (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError)
 
@@ -431,10 +586,22 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         return dict(leaf_id=leaf_id, passed=None,
                     execution="not_run" if result is None else "start_failed" if result["returncode"] is None else "completed",
                     **(result or dict(returncode=None, error=None, output="")),
-                    measurement_status="unavailable", measurement_phase=phase, measurement_error=str(reason),
+                    measurement_status="unavailable", measurement_phase=phase, measurement_error=_error_text(reason),
                     progress=_unavailable(reason))
+    # Reserve the largest bounded publication before any assertion can run.
+    # Preserve the previous proof even when the next result is inconclusive.
+    reserve = dict(state, checks=dict(state["checks"]))
+    reserved_proof = dict(state["checks"].get(leaf_id, dict(passed=False)))
+    reserved_proof["last_attempt"] = dict(
+        result=dict(returncode=-999999999999999999999, error="\0" * 4000, output="\0" * 4000),
+        checked_at=1.7976931348623157e308, measurement_error="\0" * 4000)
+    reserve["checks"][leaf_id] = reserved_proof
     try:
-        before = fingerprint(repo)
+        encode_state(reserve)
+    except ValueError as exc:
+        return unavailable(exc, "before")
+    try:
+        before = fingerprint(repo, state.get("inputs"))
     except observation_errors as exc:
         return unavailable(exc, "before")
     before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before)
@@ -446,24 +613,26 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         return all(complete(child) for child in children) if children else key in verified
     deps, ancestor = set(node["depends_on"]), node["parent"]
     index = {n["id"]: n for n in state["nodes"]}
+    require(leaf_id not in state.get("blocks", {}), "selected outcome is blocked")
     while ancestor:
+        require(ancestor not in state.get("blocks", {}), "selected outcome group is blocked")
         deps.update(index[ancestor]["depends_on"])
         ancestor = index[ancestor]["parent"]
     require(all(complete(dep) for dep in deps), "dependencies are not verified")
     try:
         result = _execute(node["check"], repo, timeout)
     except OSError as exc:
-        result = dict(returncode=None, error=str(exc), output="")
+        result = dict(returncode=None, error=_error_text(exc), output="")
     stamp = time.time() if now is None else now
     try:
-        after_source = fingerprint(repo)
+        after_source = fingerprint(repo, state.get("inputs"))
         after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_source)
         require(after_progress["status"] == "measured", after_progress.get("reason", "current measurement unavailable"))
     except observation_errors as exc:
         # Preserve the prior proof's fields, but prevent it from resurrecting
         # credit after a newer inconclusive attempt, even if measurement heals.
         proof = dict(state["checks"].get(leaf_id, dict(passed=False)))
-        proof["last_attempt"] = dict(result=result, checked_at=stamp, measurement_error=str(exc)[:4000])
+        proof["last_attempt"] = dict(result=result, checked_at=stamp, measurement_error=_error_text(exc))
         state["checks"][leaf_id] = proof
         _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
         return unavailable(exc, "after", result)
@@ -477,6 +646,8 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     if success:
         state["checks"][leaf_id] = dict(previous) if leaf_id in verified else dict(
             passed=True, definition=digest(node), source=before, checked_at=stamp, result=result)
+        if "inputs" in state:
+            state["checks"][leaf_id]["inputs"] = digest(state["inputs"])
     after = weight_sum(n for n in leaves(state["nodes"]) if n["id"] in (verified - {leaf_id}) | ({leaf_id} if success else set()))
     if after > weight_sum(n for n in before_progress["outcomes"] if n["verified"]):
         state["last_progress_at"] = stamp
@@ -513,10 +684,11 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
     require(state is not None, "baseline WBS before dispatch")
     if state.get("batch"):
         return batch_route(task_dir, repo, state)
-    progress = task_progress(task_dir, repo, run_id)
-    require(progress["status"] == "measured", "valid current WBS required")
-    done = {row["id"] for row in progress["outcomes"] if row["verified"]}
-    pending = [n for n in leaves(state["nodes"]) if n["id"] not in done]
+    progress = task_progress(task_dir, repo, run_id, measure=False)
+    require(progress["status"] == "unmeasured", "valid stored WBS required")
+    done = {row["id"] for row in progress["outcomes"] if row.get("historical_verified")}
+    blocked = blocked_outcomes(state)
+    pending = [n for n in leaves(state["nodes"]) if n["id"] not in done and n["id"] not in blocked]
     require(len(pending) >= 2, "use direct development for a single unfinished outcome")
     require(isinstance(ownership, dict) and set(ownership) == {n["id"] for n in pending},
             "declare current execution ownership for the actual worktree handoff, separately from progress WBS")
@@ -550,29 +722,74 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
     return result
 
 
+def blocked_outcomes(state):
+    index = {n["id"]: n for n in state["nodes"]}
+    @cache
+    def blocked(key):
+        node = index[key]
+        if key in state.get("blocks", {}):
+            return True
+        ancestor = node["parent"]
+        deps = set(node["depends_on"])
+        while ancestor:
+            if ancestor in state.get("blocks", {}):
+                return True
+            deps.update(index[ancestor]["depends_on"])
+            ancestor = index[ancestor]["parent"]
+        children = {n["id"] for n in state["nodes"] if n["parent"] == key}
+        return any(blocked(dep) for dep in deps | children)
+    return {key for key in index if blocked(key)}
+
+
 def ready_outcomes(state, progress):
     """Ready IDs from the same outcome graph, never a second task queue."""
-    if progress.get("status") != "measured":
+    if progress.get("status") not in {"measured", "unmeasured"}:
         return []
     if progress.get("integration") and progress["integration"]["route"] != "integration":
         return []
-    done = {row["id"] for row in progress.get("outcomes", []) if row["verified"]}
+    done = {row["id"] for row in progress.get("outcomes", [])
+            if row["verified"] or progress["status"] == "unmeasured" and row.get("historical_verified")}
     nodes = state["nodes"]
     index = {node["id"]: node for node in nodes}
     @cache
     def complete(key):
+        if key in state.get("blocks", {}):
+            return False
         children = [n["id"] for n in nodes if n["parent"] == key]
         return all(complete(child) for child in children) if children else key in done
     ready = []
+    blocked = blocked_outcomes(state)
     for node in leaves(nodes):
-        if node["id"] in done:
+        if node["id"] in done or node["id"] in blocked:
             continue
         deps, ancestor = set(node["depends_on"]), node["parent"]
         while ancestor:
+            if ancestor in state.get("blocks", {}):
+                deps.add(ancestor)
             deps.update(index[ancestor]["depends_on"])
             ancestor = index[ancestor]["parent"]
         if all(complete(dep) for dep in deps):
             ready.append(node["id"])
     return ready
+
+
+def block_outcome(task_dir, node_id, *, run_id, reason=None, unblock_condition=None, clear=False):
+    """Local WBS parking; the task owner holds the existing receipt transaction."""
+    from _lib import _atomic_text_write
+    state = read_state(task_dir)
+    require(state is not None and node_id in {n["id"] for n in state["nodes"]}, "unknown outcome")
+    require(state["run_id"] == run_id, "baseline the current task run before changing outcome blockers")
+    state = dict(state, blocks=dict(state.get("blocks", {})), checks=dict(state["checks"]))
+    if clear:
+        state["blocks"].pop(node_id, None)
+    else:
+        require(all(isinstance(v, str) and 0 < len(v.strip()) <= 4000 for v in (reason, unblock_condition)),
+                "bounded blocker reason and unblock condition required")
+        state["blocks"][node_id] = dict(reason=reason, unblock_condition=unblock_condition)
+        affected = blocked_outcomes(state)
+        for key in affected & state["checks"].keys():
+            state["checks"][key] = dict(state["checks"][key], invalidated=True)
+    _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+    return dict(node_id=node_id, blocked=not clear, blocks=state["blocks"])
 
 

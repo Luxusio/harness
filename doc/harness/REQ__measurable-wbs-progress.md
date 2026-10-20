@@ -89,8 +89,9 @@ WBS coarse and refine it as work reveals useful next steps. Pending outcomes,
 dependencies and assertion choices may adapt without predeclaring the code
 layout; changing an outcome/check invalidates its old proof rather than
 pretending the new criterion was already verified.
-Pending leaves may become parents of more concrete leaves, conserving weight;
-completed leaves cannot be subdivided or reweighted to manufacture credit.
+Leaves may become parents of more concrete leaves, conserving weight; refinement
+never transfers a former leaf's proof to its children or earns progress. Stored
+historical PASS does not establish current completion or freeze adaptive planning.
 Newly discovered outcomes may expand scope: the denominator grows, the scope
 revision is visible, and neither earned weight nor its clock advances. Pending
 implementation details stay adaptable; the percentage describes the current
@@ -129,7 +130,8 @@ evidence, ancestry, conflicts and serialized integration.
 
 The internal checkout fingerprint is conservative: source changes invalidate
 old current evidence until assertions are rerun. Reads execute no assertion.
-Fingerprint scanning is bounded to 4,096 evidence entries and 32 MiB; above that budget
+Source fingerprint scanning is bounded to 4,096 evidence entries and 32 MiB of
+source content (plus the separately bounded explicit artifacts described below); above that budget
 progress is explicitly unavailable rather than estimated. This avoids making
 progress calculation an unbounded repository traversal.
 
@@ -157,6 +159,10 @@ No separate attempt ledger or task generation is created. A conclusive failed/st
 failed assertion or changed source earns no credit. Historical evidence never
 substitutes for a current successful measurement; review/QA receipts remain
 separate from WBS outcome proofs.
+Before starting an assertion, check reserves capacity for the largest bounded
+inconclusive publication in the existing 1 MiB evidence file. If preserving
+history leaves insufficient capacity, return `not_run` with the storage-budget
+reason and unchanged evidence; do not execute and then lose the invalidation.
 
 Evidence enumeration uses each checkout's own Git-declared tracked and
 nonignored untracked paths. It must not recursively inventory arbitrary
@@ -168,9 +174,59 @@ identity/absence observation. Unsafe, unsupported or rebound directories remain
 unmeasurable. Git listing output, nesting and source reads are bounded before
 unbounded allocation (1 MiB aggregate Git output, eight module levels and a
 30-second measurement deadline); files are hashed in bounded chunks with stable descriptor
-identity checks. Resource exhaustion remains explicit rather than silently
+identity checks. Directory traversal and Git subprocess cwd are anchored to
+validated directory descriptors; pathname rebinding cannot redirect source
+reads. Directory emptiness probes are lazy rather than allocating every name.
+Resource exhaustion remains explicit rather than silently
 excluding source. No manual file list, new progress ledger or schema migration
 is required.
+
+### Control reads, verification inputs and local blockers
+
+Follow-up source: the user supplied the BeatKernel incident analysis, including
+“조회·재개에 자동 전체 해시를 붙이지 않기” and “금지 경로는 파일을 열기 전에
+걸러야”. The reported helper provenance and actual ZIP validation remain
+unfinished BeatKernel work. The following API/policy details are derived
+mechanics implementing that direction and the measurable-progress requirement;
+they are not claims that the user prescribed a storage format.
+
+Context, next, unchanged-run open/resume and plan updates read control/evidence
+metadata without hashing source. Their current progress is explicitly
+`unmeasured` with null percentage; historical verified weight is labelled as
+historical, never current completion. Explicit check and final verify/close
+perform current measurement. Final close still requires current outcome proofs,
+ordered independent review/QA and exact work-pack integration. A scheduling
+hint based on historical evidence grants no verification authority.
+
+The owner may publish a `wbs-inputs` JSON fence in PLAN when verification inputs
+are understood. Optional `source` lists literal source roots/files; omission
+keeps Git-declared source enumeration. `artifacts` lists required artifact files.
+`exclude` removes declared unnecessary paths; `deny` prohibits file reads.
+Policies are task-level, adaptable verification inputs, never edited-file
+instructions. They must cover relevant common code, lockfiles, build scripts
+and resources; independent review checks adequacy. A selected required input
+which is denied, excluded or missing is unavailable, not unchanged. Apply
+lexical policy decisions before resolving/opening candidate paths. Explicit
+ignored artifacts are measured only when selected, with a separate bounded
+32 MiB artifact budget; source retains its own 32 MiB budget. Global entry,
+listing, depth and time bounds remain. Errors identify the input and exhausted
+budget without returning source contents.
+
+The policy itself is bound to source evidence. New policy publication preserves
+old records but grants no current credit to evidence collected under another
+scope. No policy is needed at initial planning, and publishing one must not
+first run the old global scan. Outcome-specific inferred input scopes are not
+introduced by this change.
+
+Unchanged-run resume validates fallible response/context preparation within its
+publication rollback boundary. Failure preserves the original blocked artifact,
+run, receipts and ownership. `block` with `node_id` parks only that outcome in
+the same WBS; `open` with `node_id` clears that local blocker. Local blockers
+and their dependency/ancestor effects withhold credit and scheduling, while
+independent work remains available from next. These operations neither close
+the root nor create a second task queue. Blocking invalidates affected outcome
+and dependency proofs without deleting their historical fields; clearing the
+blocker does not revive their credit before conclusive revalidation.
 
 Follow-up user confirmation “수정ㄱ” applies to the immediately preceding review
 finding that an ambient alternate Git index can hide changes to real-index
