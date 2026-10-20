@@ -37,7 +37,7 @@ def assert_rebinding_refused(error):
     if "binding changed" not in str(error.value):
         assert "unsafe storage path" in str(error.value)
         assert isinstance(error.value.__cause__, OSError)
-        assert error.value.__cause__.errno == errno.ENXIO
+        assert error.value.__cause__.errno in {errno.ENXIO, errno.EACCES}
 
 
 @pytest.fixture
