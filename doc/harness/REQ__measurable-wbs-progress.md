@@ -129,9 +129,48 @@ evidence, ancestry, conflicts and serialized integration.
 
 The internal checkout fingerprint is conservative: source changes invalidate
 old current evidence until assertions are rerun. Reads execute no assertion.
-Fingerprint scanning is bounded to 4,096 files and 32 MiB; above that budget
+Fingerprint scanning is bounded to 4,096 evidence entries and 32 MiB; above that budget
 progress is explicitly unavailable rather than estimated. This avoids making
 progress calculation an unbounded repository traversal.
+
+### Measurement failures and checkout boundaries
+
+User source: the reported `WBS__native-10adcc4a4fee302320bf` incident requests
+“예산 제한을 무작정 없애지는 말 것”, “계산 실패·검증 미실행·검증 실패를
+구분해서 표시할 것”, and “기존 WBS ID, run ID, 항목과 검증 기록을 보존할 것”.
+These are user_explicit outcomes. The mechanisms below are derived from those
+outcomes and the existing requirement that stale source earns no current credit.
+The supplied external checkout's precise oversize cause has not been established.
+
+Version1 storage continues to use `nodes`; `outcomes` is a measured projection,
+not a required stored field. Invalid measurement returns a null percentage and
+an explicit reason. Check must not index a failed projection as measured data.
+An unavailable precheck reports `execution: not_run`, `passed: null` and its
+measurement error without starting the assertion or rewriting existing checks.
+An executed assertion reports its actual return code and execution status;
+inconclusive postmeasurement reports `passed: null`, a measurement error and
+unavailable progress, preserving historical proof fields. Its selected check
+records a bounded `last_attempt` containing the actual result and measurement
+error; that marker withholds current credit until a conclusive rerun. Thus a
+prior PASS cannot revive merely because measurement becomes available again.
+No separate attempt ledger or task generation is created. A conclusive failed/start-
+failed assertion or changed source earns no credit. Historical evidence never
+substitutes for a current successful measurement; review/QA receipts remain
+separate from WBS outcome proofs.
+
+Evidence enumeration uses each checkout's own Git-declared tracked and
+nonignored untracked paths. It must not recursively inventory arbitrary
+directories, ignored build output or Git administrative data. A populated
+gitlink requires its indexed identity, actual HEAD and bounded Git-declared
+checkout content, including dirty tracked and nonignored untracked source;
+HEAD alone cannot attest a module. Unpopulated gitlinks retain an explicit
+identity/absence observation. Unsafe, unsupported or rebound directories remain
+unmeasurable. Git listing output, nesting and source reads are bounded before
+unbounded allocation (1 MiB aggregate Git output, eight module levels and a
+30-second measurement deadline); files are hashed in bounded chunks with stable descriptor
+identity checks. Resource exhaustion remains explicit rather than silently
+excluding source. No manual file list, new progress ledger or schema migration
+is required.
 
 Follow-up user confirmation “수정ㄱ” applies to the immediately preceding review
 finding that an ambient alternate Git index can hide changes to real-index

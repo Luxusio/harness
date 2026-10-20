@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import time
 from functools import cache
@@ -22,6 +23,10 @@ from functools import cache
 STATE = "WBS.json"
 STALL_SECONDS = 7200
 MAX_NODES = 256
+MAX_EVIDENCE_ENTRIES = 4096
+MAX_EVIDENCE_BYTES = 32 * 1024 * 1024
+MAX_LISTING_BYTES = 1024 * 1024
+MAX_MODULE_DEPTH = 8
 
 
 def digest(value):
@@ -150,6 +155,18 @@ def validate_state(state):
     require(isinstance(state.get("run_id"), str) and isinstance(state.get("checks"), dict), "invalid check evidence")
     for proof in state["checks"].values():
         require(isinstance(proof, dict) and type(proof.get("passed")) is bool, "invalid assertion evidence")
+        if "last_attempt" in proof:
+            attempt = proof["last_attempt"]
+            require(isinstance(attempt, dict) and set(attempt) == {"result", "checked_at", "measurement_error"}
+                    and isinstance(attempt["result"], dict)
+                    and set(attempt["result"]) == {"returncode", "error", "output"}
+                    and (attempt["result"]["returncode"] is None or type(attempt["result"]["returncode"]) is int)
+                    and (attempt["result"]["error"] is None or isinstance(attempt["result"]["error"], str))
+                    and isinstance(attempt["result"]["output"], str)
+                    and len(attempt["result"]["output"].encode()) <= 16000
+                    and type(attempt["checked_at"]) in (int, float) and math.isfinite(attempt["checked_at"])
+                    and isinstance(attempt["measurement_error"], str) and 0 < len(attempt["measurement_error"]) <= 4000,
+                    "invalid inconclusive assertion evidence")
         if proof["passed"]:
             require(all(isinstance(proof.get(k), str) and re.fullmatch(r"[0-9a-f]{64}", proof[k])
                         for k in ("definition", "source")), "invalid assertion binding")
@@ -202,29 +219,97 @@ def fingerprint(repo):
     """Observe checkout contents internally, without prescribing edited files."""
     from _lib import _trusted_git_env
     root, result = Path(repo).resolve(), []
-    listing = subprocess.run(["git", "ls-files", "-c", "-o", "--exclude-standard", "-z"],
-                             cwd=root, env=_trusted_git_env(), capture_output=True, timeout=10, check=True)
-    scopes = sorted(set(os.fsdecode(s) for s in listing.stdout.split(b"\0") if s))
     total = 0
-    for scope in scopes:
-        path = root / scope
-        require(path.resolve().is_relative_to(root), "scope escapes checkout")
-        paths = sorted(path.rglob("*")) if path.is_dir() else [path]
-        for entry in paths:
-            require(not entry.is_symlink(), "symlink scope cannot attest source")
-            if entry.is_dir():
+    listing_bytes = 0
+    deadline = time.monotonic() + 30
+
+    def remaining():
+        seconds = deadline - time.monotonic()
+        require(seconds > 0, "checkout evidence exceeds measurement budget (time)")
+        return min(10, seconds)
+
+    def git(directory, *args):
+        nonlocal listing_bytes
+        answer = _execute(["git", *args], directory, remaining(), env=_trusted_git_env(),
+                          output_limit=MAX_LISTING_BYTES - listing_bytes, retain=MAX_LISTING_BYTES, binary=True)
+        require(answer["returncode"] == 0 and not answer["error"],
+                "checkout Git evidence unavailable: " + (answer["error"] or "Git command failed"))
+        listing_bytes += len(answer["output"])
+        return answer["output"]
+
+    def add(path, value):
+        require(len(result) < MAX_EVIDENCE_ENTRIES, "checkout evidence exceeds measurement budget (entries)")
+        result.append([path.relative_to(root).as_posix(), value])
+
+    def file(path):
+        nonlocal total
+        try:
+            before = path.lstat()
+        except FileNotFoundError:
+            add(path, None)
+            return
+        require(stat.S_ISREG(before.st_mode), "nonregular or symlink scope cannot attest source")
+        require(before.st_size <= MAX_EVIDENCE_BYTES - total,
+                "checkout evidence exceeds measurement budget (bytes)")
+        # No follow and nonblocking also refuse a replacement link/FIFO before read.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as handle:
+            identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            opened = os.fstat(handle.fileno())
+            require(identity(before) == identity(opened), "source changed during measurement")
+            hashed = hashlib.sha256()
+            while chunk := handle.read(min(65536, MAX_EVIDENCE_BYTES - total + 1)):
+                remaining()
+                total += len(chunk)
+                require(total <= MAX_EVIDENCE_BYTES, "checkout evidence exceeds measurement budget (bytes)")
+                hashed.update(chunk)
+            require(identity(opened) == identity(os.fstat(handle.fileno())) == identity(path.lstat()),
+                    "source changed during measurement")
+        add(path, digest([before.st_mode, hashed.hexdigest()]))
+
+    def checkout(directory, depth=0):
+        require(depth <= MAX_MODULE_DEPTH, "checkout evidence exceeds measurement budget (module depth)")
+        top = os.fsdecode(git(directory, "rev-parse", "--show-toplevel")).removesuffix("\n")
+        require(Path(top).resolve() == directory, "checkout Git evidence belongs to another repository")
+        entries = {}
+        for row in git(directory, "ls-files", "--stage", "-z").split(b"\0"):
+            if not row:
                 continue
-            require(not entry.exists() or entry.is_file(), "nonregular scope")
-            size = entry.stat().st_size if entry.exists() else 0
-            total += size
-            require(total <= 32 * 1024 * 1024 and len(result) < 4096, "checkout evidence exceeds measurement budget")
-            result.append([entry.relative_to(root).as_posix(),
-                           digest([entry.stat().st_mode, hashlib.sha256(entry.read_bytes()).hexdigest()]) if entry.exists() else None])
+            header, name = row.split(b"\t", 1)
+            mode, oid, stage = header.split()
+            require(stage == b"0", "unmerged source cannot attest checkout")
+            entries[os.fsdecode(name)] = (mode, oid)
+        for name in git(directory, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
+            if name:
+                entries.setdefault(os.fsdecode(name), (None, None))
+        require(len(entries) <= MAX_EVIDENCE_ENTRIES - len(result),
+                "checkout evidence exceeds measurement budget (entries)")
+        for scope, (mode, oid) in sorted(entries.items()):
+            remaining()
+            path = directory / scope
+            require(path.resolve().is_relative_to(directory), "scope escapes checkout")
+            # Check every ancestor rather than resolving through an in-root alias.
+            ancestor = path
+            while ancestor != directory:
+                require(not ancestor.is_symlink(), "symlink scope cannot attest source")
+                ancestor = ancestor.parent
+            if mode == b"160000":
+                require(not path.exists() or path.is_dir(), "gitlink checkout is not a directory")
+                if not path.exists() or next(path.iterdir(), None) is None:
+                    add(path, digest(["gitlink", os.fsdecode(oid), None]))
+                else:
+                    head = git(path, "rev-parse", "--verify", "HEAD").strip().decode("ascii")
+                    require(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head), "invalid module HEAD")
+                    add(path, digest(["gitlink", os.fsdecode(oid), head]))
+                    checkout(path, depth + 1)
+            else:
+                file(path)
+    checkout(root)
     require(any(value is not None for _, value in result), "no existing source/test evidence")
-    return digest(result)
+    return digest(sorted(result))
 
 
-def task_progress(task_dir, repo, run_id, *, now=None):
+def task_progress(task_dir, repo, run_id, *, now=None, _source=None):
     stamp = time.time() if now is None else now
     try:
         state = read_state(task_dir)
@@ -237,10 +322,11 @@ def task_progress(task_dir, repo, run_id, *, now=None):
         plan_nodes = from_plan(Path(task_dir, "PLAN.md").read_text())
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
         rows = []
-        source = fingerprint(repo)
+        source = fingerprint(repo) if _source is None else _source
         for node in leaves(state["nodes"]):
             proof = state["checks"].get(node["id"], {})
-            valid = state["run_id"] == run_id and proof.get("passed") is True and proof.get("definition") == digest(node)
+            valid = (state["run_id"] == run_id and proof.get("passed") is True
+                     and "last_attempt" not in proof and proof.get("definition") == digest(node))
             valid = valid and proof.get("source") == source
             rows.append(dict(id=node["id"], title=node["title"], weight=node["weight"],
                              verified=bool(valid), checked_at=proof.get("checked_at") if valid else None))
@@ -276,12 +362,16 @@ def task_progress(task_dir, repo, run_id, *, now=None):
                     integration=integration,
                     next_action="Refine only unclear unfinished outcomes; preserve weights. Report real external blockers instead of recursive splitting.")
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as exc:
-        return dict(status="invalid", percentage=None, verified_weight=0, total_weight=None, reason=str(exc))
+        return _unavailable(exc)
 
 
-def _execute(argv, repo, timeout):
+def _unavailable(reason):
+    return dict(status="invalid", percentage=None, verified_weight=None, total_weight=None, reason=str(reason))
+
+
+def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=4000, binary=False):
     """Bound time and captured output, terminating the entire assertion group."""
-    proc = subprocess.Popen(argv, cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    proc = subprocess.Popen(argv, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     output, failure = bytearray(), None
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
@@ -302,7 +392,7 @@ def _execute(argv, repo, timeout):
                     selector.unregister(key.fileobj)
                 else:
                     output.extend(chunk)
-                    if len(output) > 1024 * 1024:
+                    if len(output) > output_limit:
                         failure = "output limit exceeded"
                         break
             if failure:
@@ -314,7 +404,8 @@ def _execute(argv, repo, timeout):
         except subprocess.TimeoutExpired:
             stop()
             code, failure = proc.wait(), "timeout"
-        return dict(returncode=code, error=failure, output=bytes(output[-4000:]).decode(errors="replace"))
+        captured = bytes(output[-retain:])
+        return dict(returncode=code, error=failure, output=captured if binary else captured.decode(errors="replace"))
     finally:
         selector.close()
         proc.stdout.close()
@@ -334,7 +425,21 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     node = next((n for n in leaves(state["nodes"]) if n["id"] == leaf_id), None)
     require(node is not None, "unknown leaf")
     require(node.get("check"), "choose the outcome assertion through wbs(action='plan') when ready; no implementation layout required")
-    before_progress = task_progress(task_dir, repo, run_id, now=now)
+    observation_errors = (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError)
+
+    def unavailable(reason, phase, result=None):
+        return dict(leaf_id=leaf_id, passed=None,
+                    execution="not_run" if result is None else "start_failed" if result["returncode"] is None else "completed",
+                    **(result or dict(returncode=None, error=None, output="")),
+                    measurement_status="unavailable", measurement_phase=phase, measurement_error=str(reason),
+                    progress=_unavailable(reason))
+    try:
+        before = fingerprint(repo)
+    except observation_errors as exc:
+        return unavailable(exc, "before")
+    before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before)
+    if before_progress["status"] != "measured":
+        return unavailable(before_progress.get("reason", "current measurement unavailable"), "before")
     verified = {row["id"] for row in before_progress["outcomes"] if row["verified"]}
     def complete(key):
         children = [n["id"] for n in state["nodes"] if n["parent"] == key]
@@ -345,15 +450,26 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         deps.update(index[ancestor]["depends_on"])
         ancestor = index[ancestor]["parent"]
     require(all(complete(dep) for dep in deps), "dependencies are not verified")
-    before = fingerprint(repo)
     try:
         result = _execute(node["check"], repo, timeout)
     except OSError as exc:
         result = dict(returncode=None, error=str(exc), output="")
     stamp = time.time() if now is None else now
+    try:
+        after_source = fingerprint(repo)
+        after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_source)
+        require(after_progress["status"] == "measured", after_progress.get("reason", "current measurement unavailable"))
+    except observation_errors as exc:
+        # Preserve the prior proof's fields, but prevent it from resurrecting
+        # credit after a newer inconclusive attempt, even if measurement heals.
+        proof = dict(state["checks"].get(leaf_id, dict(passed=False)))
+        proof["last_attempt"] = dict(result=result, checked_at=stamp, measurement_error=str(exc)[:4000])
+        state["checks"][leaf_id] = proof
+        _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+        return unavailable(exc, "after", result)
     success = result["returncode"] == 0 and not result["error"]
     if success:
-        success = fingerprint(repo) == before
+        success = after_source == before
         if not success:
             result["error"] = "source changed during verification; rerun against stable inputs"
     previous = state["checks"].pop(leaf_id, None)
@@ -365,7 +481,10 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     if after > weight_sum(n for n in before_progress["outcomes"] if n["verified"]):
         state["last_progress_at"] = stamp
     _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
-    return dict(leaf_id=leaf_id, passed=success, **result, progress=task_progress(task_dir, repo, run_id, now=now))
+    return dict(leaf_id=leaf_id, passed=success, **result,
+                execution="start_failed" if result["returncode"] is None else "completed",
+                measurement_status="measured", measurement_error=None,
+                progress=task_progress(task_dir, repo, run_id, now=now, _source=after_source))
 
 
 def batch_route(task_dir, repo, state):

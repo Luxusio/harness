@@ -1,7 +1,7 @@
 ---
 tags: [harness, guide, architecture, lifecycle, onboarding]
 summary: 하네스 전체 동작 안내 — 과제 수명주기, MCP 제어면, 훅과 prewrite gate, 영수증과 마감 게이트, 스킬 단계, 에이전트와 lens, Goal, batch 병렬 모드, 설치·setup·manifest, 계약, 메모리·학습, Claude/Codex 차이.
-updated: 2026-10-19
+updated: 2026-10-20
 freshness: current
 invalidated_by_paths:
   - .claude-plugin/marketplace.json
@@ -67,7 +67,7 @@ invalidated_by_paths:
   - doc/CLAUDE.md
   - doc/harness/critics/
   - doc/harness/review-overlays/
-freshness_updated: 2026-10-19T06:06:13Z
+freshness_updated: 2026-10-20T04:50:40Z
 ---
 
 # GUIDE — 하네스는 어떻게 동작하는가
@@ -1513,6 +1513,14 @@ handoff 때만 별도로 선언한다. 자세한 규범은
 때만 가중치에 포함된다. 읽기나 next는 assertion을 실행하지 않는다. 실패·timeout·
 소스 변경은 현재 credit을 주지 않으며, 기준선이 없는 과거 자료는 percentage=null이다.
 100%도 독립 review/QA, 실제 pack 통합 또는 receipt-backed close를 대신하지 않는다.
+
+저장된 `nodes`와 측정 응답의 `outcomes`는 서로 다른 표현이다. checkout 증거의
+예산·경계 검사에 실패하면 `progress.status=invalid`, `percentage=null`이다.
+실행 전 실패한 check는 `execution=not_run`, `passed=null`로 반환하고 기존 기록을
+바꾸지 않는다. 실행 후 측정 실패는 실제 반환 코드와 `measurement_error`를 구분해
+보존하며, 해당 항목의 `last_attempt` 표시는 확정적인 재검증까지 과거 PASS의
+점수를 보류한다. Git이 선언한 소스만 한도 내에서 읽으며, 하위 모듈의 ignored
+산출물을 재귀 순회하지 않는다(`plugin/scripts/wbs.py`).
 
 새 사용자 요구나 필요한 추가 개발이 발견되면 같은 PLAN의 미완료 성과·의존 관계·
 검증을 갱신한다. 사용자 발언과 derived 기술 선택은 출처를 구분하고, 추측을
