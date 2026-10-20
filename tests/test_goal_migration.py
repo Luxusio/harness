@@ -31,6 +31,15 @@ def row(repo, *, goal="GOAL__old", objective="Finish requested work", tasks=None
     return path
 
 
+def assert_rebinding_refused(error):
+    # v9fs can reject a descriptor after its ancestor was renamed before the
+    # explicit inode comparison runs. Accept that specific safe refusal only.
+    if "binding changed" not in str(error.value):
+        assert "unsafe storage path" in str(error.value)
+        assert isinstance(error.value.__cause__, OSError)
+        assert error.value.__cause__.errno == errno.ENXIO
+
+
 @pytest.fixture
 def owner(monkeypatch):
     monkeypatch.setattr(sys.modules["_lib"], "_trusted_control_writer", lambda: True)
@@ -365,8 +374,9 @@ def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative,
     monkeypatch.setattr(migration, "_rename_new", publishing)
     monkeypatch.setattr(os, "open", opening)
     monkeypatch.setattr(os, "replace", replacing)
-    with pytest.raises(ValueError, match="binding changed"):
+    with pytest.raises(ValueError, match="binding changed|unsafe storage path") as error:
         migration._write(tmp_path, relative, b"migration data")
+    assert_rebinding_refused(error)
     assert marker.read_bytes() == b"outside remains untouched"
     assert sorted(p.name for p in outside.iterdir()) == [marker.name]
     assert not list(moved.glob(".migration-*"))
@@ -393,8 +403,9 @@ def test_fd_read_rebind_never_reads_outside(tmp_path, monkeypatch):
         return result
     monkeypatch.setattr(os, "open", opening)
     monkeypatch.setattr(os, "read", reading)
-    with pytest.raises(ValueError, match="binding changed"):
+    with pytest.raises(ValueError, match="binding changed|unsafe storage path") as error:
         migration._read(tmp_path, relative)
+    assert_rebinding_refused(error)
     assert b"outside secret" not in b"".join(consumed)
 
 
@@ -415,8 +426,9 @@ def test_fd_retire_rebind_never_deletes_outside(tmp_path, monkeypatch):
             source.parent.symlink_to(outside, target_is_directory=True)
         return original_unlink(path, *args, **kwargs)
     monkeypatch.setattr(os, "unlink", unlinking)
-    with pytest.raises(ValueError, match="binding changed"):
+    with pytest.raises(ValueError, match="binding changed|unsafe storage path") as error:
         migration._retire(tmp_path, relative, migration._hash(b"original"))
+    assert_rebinding_refused(error)
     assert marker.read_bytes() == b"untouched"
 
 
@@ -496,8 +508,9 @@ def test_fd_archive_directory_creation_rebind_does_not_escape(tmp_path, monkeypa
             parent.symlink_to(outside, target_is_directory=True)
         return original_mkdir(path, *args, **kwargs)
     monkeypatch.setattr(os, "mkdir", making)
-    with pytest.raises(ValueError, match="binding changed"):
+    with pytest.raises(ValueError, match="binding changed|unsafe storage path") as error:
         migration._write(tmp_path, migration.ARCHIVE + "/original/source.json", b"archive")
+    assert_rebinding_refused(error)
     assert not list(outside.iterdir())
 
 
@@ -518,8 +531,9 @@ def test_fd_directory_enumeration_rebind_refuses_external_rows(tmp_path, monkeyp
             goals.symlink_to(outside, target_is_directory=True)
         return original_listdir(path)
     monkeypatch.setattr(os, "listdir", listing)
-    with pytest.raises(ValueError, match="binding changed"):
+    with pytest.raises(ValueError, match="binding changed|unsafe storage path") as error:
         migration._entries(tmp_path, migration.GOALS)
+    assert_rebinding_refused(error)
     assert (outside / "secret").read_text() == "untouched"
 
 
@@ -905,3 +919,108 @@ def test_fallback_never_replaces_target_created_at_link_boundary(tmp_path, monke
         migration.apply(tmp_path)
     assert source.exists() and (tmp_path / destination).read_bytes() == b"late concurrent user content"
     assert json.loads((tmp_path / migration.MANIFEST).read_text())["status"] == "prepared"
+
+
+def test_successful_publication_does_not_stat_vanished_stage_descriptor(tmp_path, monkeypatch, owner):
+    source = row(tmp_path)
+    original = source.read_bytes()
+    unsupported_native(monkeypatch)
+    original_open, original_close, original_fstat = os.open, os.close, os.fstat
+    original_publish, original_replace = migration._rename_new, os.replace
+    stages, invalidated, publications = {}, set(), []
+    def opening(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if isinstance(path, str) and path.startswith(".migration-") and flags & os.O_CREAT:
+            stages[(kwargs["dir_fd"], path)] = fd
+        return fd
+    def published(parent, stage):
+        fd = stages[(parent, stage)]
+        invalidated.add(fd)
+        publications.append(stage)
+    def publish(parent, stage, destination):
+        result = original_publish(parent, stage, destination)
+        published(parent, stage)
+        return result
+    def replace(stage, destination, **kwargs):
+        result = original_replace(stage, destination, **kwargs)
+        published(kwargs["src_dir_fd"], stage)
+        return result
+    def fstat(fd):
+        if fd in invalidated:
+            raise FileNotFoundError(errno.ENOENT, "v9fs staging name disappeared")
+        return original_fstat(fd)
+    def close(fd):
+        invalidated.discard(fd)
+        for key, tracked in list(stages.items()):
+            if tracked == fd:
+                del stages[key]
+        return original_close(fd)
+    monkeypatch.setattr(os, "open", opening)
+    monkeypatch.setattr(os, "close", close)
+    monkeypatch.setattr(os, "fstat", fstat)
+    monkeypatch.setattr(migration, "_rename_new", publish)
+    monkeypatch.setattr(os, "replace", replace)
+    result = migration.apply(tmp_path)
+    assert result["status"] == "complete" and publications and not stages and not invalidated
+    assert migration.apply(tmp_path) == result
+    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
+
+
+@pytest.mark.parametrize("rebound", [False, True], ids=["owned-stage", "unrelated-stage-inode"])
+def test_failed_write_cleanup_requires_original_descriptor_proof(tmp_path, monkeypatch, rebound):
+    target = tmp_path / "note.md"
+    stage = target.with_name(migration._publication_stage(target.name))
+    original_open, original_write, original_fstat = os.open, os.write, os.fstat
+    staged_fds, proofs = [], []
+    def opening(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if path == stage.name and flags & os.O_CREAT:
+            staged_fds.append(fd)
+        return fd
+    def writing(fd, data):
+        if fd in staged_fds:
+            if rebound:
+                stage.unlink()
+                stage.write_bytes(b"unrelated replacement")
+                stage.chmod(0o600)
+            raise OSError(errno.EIO, "interrupted staging write")
+        return original_write(fd, data)
+    def fstat(fd):
+        if fd in staged_fds:
+            proofs.append(fd)
+        return original_fstat(fd)
+    monkeypatch.setattr(os, "open", opening)
+    monkeypatch.setattr(os, "write", writing)
+    monkeypatch.setattr(os, "fstat", fstat)
+    with pytest.raises(ValueError, match="unsafe storage path"):
+        migration._write(tmp_path, target.name, b"migration bytes", expected=None)
+    assert proofs and not target.exists()
+    if rebound:
+        assert stage.read_bytes() == b"unrelated replacement"
+    else:
+        assert not stage.exists()
+
+
+def test_public_wbs_migration_uses_its_isolated_root_without_hook_bypass(tmp_path):
+    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_codex_hook_wrappers import _load
+    (tmp_path / ".git").mkdir()
+    write(tmp_path, "doc/harness/manifest.yaml", b"version: 7\nproject:\n  type: library\n")
+    source = row(tmp_path, goal="GOAL__isolated-v9fs-fixture")
+    original = source.read_bytes()
+    _load("_lib")
+    server = HarnessMcpServerTests()
+    preview = server._call_in_repo(str(tmp_path), "wbs", dict(action="migrate"))
+    assert not preview.get("isError"), preview
+    report = preview["structuredContent"]
+    expected_sources = {migration.GOALS + "/" + source.name, migration.GOALS + "/current.json"}
+    assert report["status"] == "preview" and set(report["sources"]) == expected_sources
+    assert not (tmp_path / migration.ARCHIVE).exists()
+    assert len(report["destinations"]) == 1 and not report["blockers"]
+    refused = server._call_in_repo(str(tmp_path), "wbs", dict(action="migrate", apply="true"))
+    assert refused.get("isError") and source.read_bytes() == original
+    applied = server._call_in_repo(str(tmp_path), "wbs", dict(action="migrate", apply=True))
+    assert not applied.get("isError"), applied
+    assert applied["structuredContent"]["status"] == "complete" and not source.exists()
+    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
+    assert not list(tmp_path.rglob("TASK.json")) and not list(tmp_path.rglob(".migration-*"))

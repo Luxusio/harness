@@ -368,13 +368,17 @@ def _write(repo, relative, data, *, expected=_UNSPECIFIED):
         finally:
             if fd is not None:
                 try:
-                    owned = os.fstat(fd)
                     try:
                         alias = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
                     except FileNotFoundError:
                         alias = None
-                    if owned.st_nlink == 1 and alias is not None and _same(owned, alias):
-                        os.unlink(temporary, dir_fd=parent)
+                    # v9fs can resolve fstat through the vanished staging name
+                    # after publication. No cleanup or inode proof is needed
+                    # when that name is already absent.
+                    if alias is not None:
+                        owned = os.fstat(fd)
+                        if owned.st_nlink == 1 and _same(owned, alias):
+                            os.unlink(temporary, dir_fd=parent)
                 finally:
                     os.close(fd)
 
