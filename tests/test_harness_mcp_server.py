@@ -307,7 +307,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     },
                 )
 
-    def test_context_verify_and_close_each_read_one_receipt_snapshot(self):
+    def test_context_and_close_use_one_snapshot_verify_refreshes_after_settlement(self):
         handlers = (
             harness_server.handle_task_context,
             harness_server.handle_task_verify,
@@ -336,7 +336,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 finally:
                     os.chdir(prior_cwd)
                 self.assertNotIn("isError", result)
-                self.assertEqual(snapshot.call_count, 1)
+                self.assertEqual(snapshot.call_count, 2 if handler is harness_server.handle_task_verify else 1)
 
     def test_tool_registry_matches_expected_tool_surface(self):
         tools = {tool["name"] for tool in harness_server.list_tools()}

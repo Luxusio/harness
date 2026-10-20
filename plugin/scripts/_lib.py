@@ -4717,7 +4717,7 @@ def nonparsing_completion_note(lenses):
 # ── Task context ─────────────────────────────────────────────────────────
 
 
-def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False):
+def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured_progress=None):
     """Build the canonical task pack with on-the-fly routing."""
     st = read_task_control(task_dir)
     if not st:
@@ -4839,7 +4839,9 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False):
             + "Completed QA verdicts present — run wbs(action='close')."
         )
     from wbs import task_progress
-    progress = task_progress(task_dir, find_repo_root(task_dir), st["run_id"], measure=measure_wbs)
+    progress = measured_progress if measured_progress is not None else task_progress(
+        task_dir, find_repo_root(task_dir), st["run_id"], measure=measure_wbs,
+    )
     if progress.get("status") != "unbaselined" and (
         progress.get("status") != "measured" or not all(row["verified"] for row in progress["outcomes"])
     ):

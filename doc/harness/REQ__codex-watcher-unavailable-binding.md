@@ -108,3 +108,24 @@ timeout/exception classification, enclosing deadline intersection, absent
 markers and conflict fences, immutable offsets and exact future native
 lifecycle collection. No past receipt is reconstructed and no previous task
 is reopened merely to manufacture missing evidence.
+
+## Final verification and asynchronous completion (2026-10-20)
+
+User intent: “왜 또 영수증 누락이야 또 고쳐” and “영수증 이거 진짜 제대로 사용
+가능한거 맞아? 맨날 누락되고 그러는데?”. The synchronization mechanics below
+are derived repairs, not user-selected timing requirements.
+
+The observed native QA final arrived at 06:38:28.207Z, verification was requested
+at 06:38:31.913Z, and the watcher appended the authentic completion at
+06:38:32.953460Z. Verification retained a receipt snapshot taken before expensive
+WBS measurement and returned stale missing-completion guidance after the
+completion existed. This incident is a stale-read race, not permanent loss.
+
+A final verify measures WBS once, then evaluates receipts from a final coherent
+view. An already-started required current-run lifecycle may settle within a
+short bounded reader wait. No receipt/session writer lock is held while waiting
+or measuring. No writer, replay, watcher restart, coordinator retry or synthetic
+event is added. Integrity errors, genuine absence, wrong generations, unordered
+QA and terminal negatives never become PASS through waiting. Task authority and
+WBS changes during the operation invalidate that result. Verdict, missing items,
+review/QA routing, watcher diagnosis and next action use the same final snapshot.

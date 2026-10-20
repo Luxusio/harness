@@ -719,7 +719,11 @@ class TestNextActionGate(unittest.TestCase):
         ), mock.patch.object(
             harness_server, "_validated_task_control", return_value=control,
         ), mock.patch.object(
-            harness_server, "receipt_snapshot", return_value=object(),
+            harness_server, "receipt_stream_transaction", side_effect=lambda *_: contextlib.nullcontext(),
+        ), mock.patch.object(
+            harness_server.wbs, "read_state", return_value=None,
+        ), mock.patch.object(
+            harness_server, "receipt_snapshot", return_value=_harness_lib().ReceiptSnapshot((), "sha256:fixture"),
         ), mock.patch.object(
             harness_server, "read_task_control", return_value=control,
         ), mock.patch.object(
@@ -733,6 +737,7 @@ class TestNextActionGate(unittest.TestCase):
                 "next_action": "Run and await the required QA subagent(s).",
                 "missing_for_close": ["completed QA verdict: qa-cli"],
                 "required_qa_lenses": ["qa-cli"],
+                "runtime_verdict": "PENDING", "review_verdict": "PASS",
             },
         ), mock.patch.object(
             harness_server, "_watcher_status", return_value={
@@ -763,7 +768,11 @@ class TestNextActionGate(unittest.TestCase):
         ), mock.patch.object(
             harness_server, "_validated_task_control", return_value=control,
         ), mock.patch.object(
-            harness_server, "receipt_snapshot", return_value=object(),
+            harness_server, "receipt_stream_transaction", side_effect=lambda *_: contextlib.nullcontext(),
+        ), mock.patch.object(
+            harness_server.wbs, "read_state", return_value=None,
+        ), mock.patch.object(
+            harness_server, "receipt_snapshot", return_value=_harness_lib().ReceiptSnapshot((), "sha256:fixture"),
         ), mock.patch.object(
             harness_server, "read_task_control", return_value=control,
         ), mock.patch.object(
@@ -777,6 +786,7 @@ class TestNextActionGate(unittest.TestCase):
                 "next_action": "Run and await the required QA subagent(s).",
                 "missing_for_close": ["completed QA verdict: qa-cli"],
                 "required_qa_lenses": ["qa-cli"],
+                "runtime_verdict": "PENDING", "review_verdict": "PASS",
             },
         ), mock.patch.object(
             harness_server, "_watcher_status", return_value={

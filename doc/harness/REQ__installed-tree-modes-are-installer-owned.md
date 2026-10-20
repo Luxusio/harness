@@ -1,7 +1,7 @@
 ---
 tags: [harness, install, guards, permissions, diagnostics]
 summary: 설치된 런타임 트리의 권한 모드는 설치기의 책임이다. 가드가 group/other-writable 모듈을 거부하는 것은 정상이며, 완화 대상이 아니라 설치기가 그런 트리를 만들지 않아야 한다. 그리고 거부 메시지는 실제로 거부한 조건을 말해야 한다.
-updated: 2026-09-26
+updated: 2026-10-20
 freshness: current
 invalidated_by_paths:
   - install.py
@@ -9,7 +9,7 @@ invalidated_by_paths:
   - tests/test_install_writable_source_comparison.py
   - plugin/scripts/_lib.py
   - tests/test_install_writable_payload.py
-freshness_updated: 2026-10-19T06:06:13Z
+freshness_updated: 2026-10-20T07:01:13Z
 ---
 
 # REQ — installed-tree modes are the installer's responsibility
@@ -150,7 +150,7 @@ A diagnosis alone still looped. On a host whose `~/.claude` and `~/.codex` were
 root:root 0777, every conditional run — and so every `install_verified.py`
 delivery — was refused, and the output then printed `--force` as the repair,
 which never touches a directory above the payload. The refusal now ends with
-`; fix: <command>`, `InstallResult.repair` carries it, and `main()` prints
+`; fix: <command>`, `InstallResult.repair` carries it, and verbose `main()` prints
 `repair: <command>, then re-run: python3 install.py --<runtime>-only`
 in place of the `--force` line. The nearest-existing-ancestor refusal for a
 missing target names its component, mode, uid and remedy the same way.
@@ -200,3 +200,30 @@ exists for. Symlinked or non-directory ancestors still fail with the bare
 surface is out of scope here.
 
 Verification: `tests/test_install_unsafe_ancestor_remedy.py`.
+
+## Private projection permissions and concise results (2026-10-20)
+
+User intent: “설치도 또 안되네...”, “그리고 설치 결과도 너무 복잡해 좀 단순화 해
+줘”, and “그냥 클러드 성공 실패 코덱스 성공 실패 이렇게 주고 에러메세지 있으면
+띄우고 그렇게 하면 안되나?”. Private staging and phase-aware errors are derived
+implementation requirements, not permission changes requested by the user.
+
+Copying a read-only source directory can prevent adding generated projection
+content; a copied read-only configuration can prevent rewriting it. Prepare only
+the copied private staging tree for owner writes before those mutations, keeping
+executable intent and removing group/other write bits. Source modes and bytes,
+shared parents, symlink targets and foreign ownership remain untouched.
+
+Installation errors preserve their actual phase and failing path. Previously
+`repr(PermissionError)` hid its filename. Preserve earlier progress for detailed
+diagnosis and distinguish failed activation, successful rollback, failed rollback
+with a retained backup, and cleanup failure after a new tree is already active.
+The original error must survive a subsequent rollback/cleanup error. These cases
+are independently reproducible; the user's original inaccessible path was not
+present in the supplied output and is not established by those reproductions.
+
+Default CLI output contains one concise success/failure result per selected
+runtime, plus an error message for failures. Internal steps, banners and summary
+footers are omitted. A dry run says preview rather than success. Optional verbose
+output exposes diagnostic steps and recovery details; exit codes still reflect
+independent runtime results.

@@ -99,9 +99,9 @@ def test_codex_only_skips_claude(tmp_path):
     if r.returncode != 0:
         # Same tolerance as test_claude_only_skips_codex: only a missing CLI.
         assert "codex CLI not found in PATH" in (r.stdout + r.stderr), r.stderr
-    assert "[claude]" not in r.stdout
+    assert "Claude:" not in r.stdout
     # codex section present (or "codex CLI not found" if codex unavailable in env)
-    assert "[codex]" in r.stdout or "codex CLI not found" in r.stdout
+    assert "Codex:" in r.stdout or "codex CLI not found" in r.stdout
 
 
 def test_claude_only_skips_codex(tmp_path):
@@ -109,8 +109,8 @@ def test_claude_only_skips_codex(tmp_path):
     r = _run(["--dry-run", "--claude-only", "--config-path", str(cfg)])
     if r.returncode != 0:
         assert "claude CLI not found" in r.stdout
-    assert "[codex]" not in r.stdout
-    assert "[claude]" in r.stdout or "claude CLI not found" in r.stdout
+    assert "Codex:" not in r.stdout
+    assert "Claude:" in r.stdout or "claude CLI not found" in r.stdout
 
 
 def test_mutual_exclusion_rejected():
@@ -144,10 +144,9 @@ def test_default_auto_detect_skips_missing_claude_when_codex_available(tmp_path)
     r = _run(["--dry-run", "--config-path", str(cfg)], extra_path=str(fake_bin))
 
     assert r.returncode == 0, r.stderr
-    assert "runtimes: codex" in r.stdout
-    assert "skipping: claude (claude CLI not found in PATH)" in r.stdout
-    assert "[codex]" in r.stdout
-    assert "[claude]" not in r.stdout
+    assert r.stdout == "Codex: 미리보기 (dry-run)\n"
+    assert "Codex:" in r.stdout
+    assert "Claude:" not in r.stdout
 
 
 def test_dry_run_parallel_attempts_both_when_available():
@@ -157,8 +156,8 @@ def test_dry_run_parallel_attempts_both_when_available():
         return
     r = _run(["--dry-run"])
     assert r.returncode == 0, r.stderr
-    assert "[codex]" in r.stdout
-    assert "[claude]" in r.stdout
+    assert "Codex:" in r.stdout
+    assert "Claude:" in r.stdout
 
 
 def test_help_lists_all_flags():
@@ -793,10 +792,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     )
     assert module.main() == 0
     output = capsys.readouterr().out
-    assert "[codex] STATUS: SKIPPED" in output
-    assert "[claude] STATUS: APPLIED" in output
-    assert "Conditional install complete" in output
-    assert "config/registry health not checked" in output
+    assert output == "Claude: 성공\nCodex: 성공\n"
 
     skipped = lambda runtime: (lambda **_: module.InstallResult(
         runtime, True, f"{runtime} payload SYNCHRONIZED — install skipped",
@@ -805,8 +801,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     monkeypatch.setattr(module, "install_claude", skipped("claude"))
     assert module.main() == 0
     output = capsys.readouterr().out
-    assert "Payloads already current. No install performed." in output
-    assert "config/registry health not checked" in output
+    assert output == "Claude: 성공\nCodex: 성공\n"
 
     monkeypatch.setattr(sys, "argv", ["install.py", "--force"])
     applied = lambda runtime: (lambda **_: module.InstallResult(runtime, True, "install complete"))
@@ -814,7 +809,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     monkeypatch.setattr(module, "install_claude", applied("claude"))
     assert module.main() == 0
     output = capsys.readouterr().out
-    assert "Install complete on all detected runtimes." in output
+    assert output == "Claude: 성공\nCodex: 성공\n"
     assert "config/registry health not checked" not in output
     monkeypatch.setattr(sys, "argv", ["install.py"])
 
@@ -824,8 +819,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
     )
     assert module.main() == 1
     captured = capsys.readouterr()
-    assert "[claude] STATUS: ERROR" in captured.out
-    assert "python3 install.py --claude-only --force" in captured.out
+    assert "Claude: 실패\n  오류: comparison failed" in captured.out
 
 
 def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
@@ -1610,7 +1604,7 @@ def test_dry_run_mentions_codex_install_root_when_codex_available(tmp_path):
     if not shutil.which("codex"):
         return
     cfg = tmp_path / "fake-codex-config.toml"
-    r = _run(["--dry-run", "--codex-only", "--config-path", str(cfg)])
+    r = _run(["--dry-run", "--codex-only", "--verbose", "--config-path", str(cfg)])
     assert r.returncode == 0, r.stderr
     assert "would sync plugin payload to" in r.stdout
     assert "would install Codex plugin cache entry harness@harness" in r.stdout
@@ -1629,7 +1623,7 @@ def test_dry_run_mentions_claude_install_root_when_claude_available(tmp_path):
     # write, which a tmp root proves without the suite depending on the live one.
     install_root = tmp_path / "claude" / "harness-dev"
     r = _run_with_env(
-        ["--dry-run", "--claude-only"], {"HARNESS_DEST": str(install_root)},
+        ["--dry-run", "--claude-only", "--verbose"], {"HARNESS_DEST": str(install_root)},
     )
     assert r.returncode == 0, r.stderr
     assert "would sync plugin payload to" in r.stdout
@@ -1777,7 +1771,7 @@ def test_claude_install_accepts_existing_plugin_and_mcp_messages(tmp_path):
     )
 
     assert r.returncode == 0, r.stderr + r.stdout
-    assert "Claude install complete" in r.stdout
+    assert r.stdout == "Claude: 성공\n"
 
 
 def test_claude_install_fails_when_marketplace_list_fails(tmp_path):
@@ -1859,10 +1853,8 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
     captured = capsys.readouterr()
 
     assert rc == 1
-    assert "runtimes:" in captured.out
-    assert "codex" in captured.out
-    assert "claude" in captured.out
-    assert "Codex install complete" in captured.out
+    assert "Codex: 성공" in captured.out
+    assert "Claude: 실패" in captured.out
     assert "claude plugin marketplace list failed: list failed" in captured.out
     assert "features enable plugin_hooks" in codex_log.read_text().splitlines()
     assert "--version" in claude_log.read_text().splitlines()

@@ -192,7 +192,7 @@ def test_main_prints_the_remedy_instead_of_force(tmp_path, monkeypatch, capsys):
         "Claude payload comparison failed: unsafe payload path component: /x",
         repair="chmod go-w /x",
     )
-    monkeypatch.setattr(sys, "argv", ["install.py", "--claude-only"])
+    monkeypatch.setattr(sys, "argv", ["install.py", "--claude-only", "--verbose"])
     monkeypatch.setattr(install.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(install, "install_claude", lambda **_kw: failing)
     install.main()
@@ -203,7 +203,7 @@ def test_main_prints_the_remedy_instead_of_force(tmp_path, monkeypatch, capsys):
 
 def test_main_keeps_the_force_repair_for_other_failures(monkeypatch, capsys):
     failing = install.InstallResult("claude", False, "Claude payload comparison failed: boom")
-    monkeypatch.setattr(sys, "argv", ["install.py", "--claude-only"])
+    monkeypatch.setattr(sys, "argv", ["install.py", "--claude-only", "--verbose"])
     monkeypatch.setattr(install.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(install, "install_claude", lambda **_kw: failing)
     install.main()

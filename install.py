@@ -975,24 +975,76 @@ def _copytree_clean(src: Path, dst: Path) -> None:
             "__pycache__", "*.pyc", ".pytest_cache", ".omc",
         ),
     )
+    # Only this newly copied private projection is changed. Generated files
+    # and child projections must remain writable even from a read-only source.
+    for parent, dirs, files in os.walk(dst, followlinks=False):
+        for path in [Path(parent), *(Path(parent) / name for name in dirs + files)]:
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            if info.st_uid != os.getuid():
+                raise PermissionError(f"private projection is not owned by this installer: {path}")
+            mode = (stat.S_IMODE(info.st_mode) | stat.S_IWUSR) & ~0o022
+            if stat.S_IMODE(info.st_mode) != mode:
+                os.chmod(path, mode, follow_symlinks=False)
 
 
 def _activate_staged_tree(staged: Path, target: Path) -> None:
     """Activate a fully-built tree while retaining the prior tree on failure."""
     backup = target.with_name(f".{target.name}.previous")
     if backup.exists():
-        shutil.rmtree(backup)
+        try:
+            shutil.rmtree(backup)
+        except OSError as exc:
+            raise RuntimeError(f"previous backup cleanup failed before activation; target {target} unchanged; backup {backup}: {exc}") from exc
     had_target = target.exists()
     if had_target:
-        os.replace(target, backup)
+        try:
+            os.replace(target, backup)
+        except OSError as exc:
+            raise RuntimeError(f"activation did not begin; previous payload unchanged at {target}: {exc}") from exc
     try:
         os.replace(staged, target)
-    except BaseException:
+    except BaseException as activation_error:
         if had_target and backup.exists():
-            os.replace(backup, target)
+            try:
+                os.replace(backup, target)
+            except OSError as rollback_error:
+                raise RuntimeError(
+                    f"activation failed: {activation_error}; rollback failed: {rollback_error}; "
+                    f"previous payload retained at {backup}; target {target} was not restored"
+                ) from activation_error
+            raise RuntimeError(
+                f"activation failed; previous payload restored at {target}: {activation_error}"
+            ) from activation_error
         raise
     if backup.exists():
-        shutil.rmtree(backup)
+        try:
+            shutil.rmtree(backup)
+        except OSError as exc:
+            raise RuntimeError(f"new payload active at {target}; previous backup cleanup failed at {backup}: {exc}") from exc
+
+
+def _install_exception_message(exc: BaseException) -> str:
+    parts, seen = [], set()
+    while exc is not None and id(exc) not in seen and len(parts) < 3:
+        seen.add(id(exc))
+        parts.append(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+        exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
+    return " <- ".join(parts)[:6000]
+
+
+class _InstallStepError(RuntimeError):
+    def __init__(self, stage: str, steps: list[str], exc: Exception):
+        self.steps = list(steps)
+        super().__init__(f"{stage}: {_install_exception_message(exc)}")
+
+
+def _install_step(stage: str, steps: list[str], operation):
+    try:
+        return operation()
+    except Exception as exc:
+        raise _InstallStepError(stage, steps, exc) from exc
 
 
 def _build_codex_payload(target: Path, final_root: Path) -> None:
@@ -1787,7 +1839,7 @@ def install_codex(*, dry_run: bool, force: bool,
     if not shutil.which("codex"):
         return InstallResult("codex", False, "codex CLI not found in PATH", steps)
     # Step 1: version check
-    rc, out, err = _run(["codex", "--version"], dry_run)
+    rc, out, err = _install_step("Codex version check", steps, lambda: _run(["codex", "--version"], dry_run))
     if dry_run:
         steps.append("would run: codex --version")
     else:
@@ -1839,7 +1891,7 @@ def install_codex(*, dry_run: bool, force: bool,
         ):
             steps.extend(_normalize_payload_modes(owned_root))
     if not force:
-        payload_state, payload_reason = _codex_payload_state(config_path)
+        payload_state, payload_reason = _install_step("Codex payload comparison", steps, lambda: _codex_payload_state(config_path))
         if payload_state == PAYLOAD_ERROR:
             return InstallResult(
                 "codex", False,
@@ -1888,7 +1940,7 @@ def install_codex(*, dry_run: bool, force: bool,
         source_plugin_root = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
         steps.append(f"would sync plugin payload to {CODEX_INSTALL_ROOT}")
     else:
-        source_plugin_root = sync_codex_payload()
+        source_plugin_root = _install_step("Codex payload sync", steps, sync_codex_payload)
         steps.append(f"synced plugin payload to {CODEX_INSTALL_ROOT}")
 
     codex_home = _codex_home_for_config(config_path)
@@ -1902,7 +1954,7 @@ def install_codex(*, dry_run: bool, force: bool,
         steps.append("would refresh Codex hook trust state for harness plugin hooks")
         steps.append("would reload installed hooks in running local Codex sessions")
     else:
-        cached_plugin_root = install_codex_plugin_cache(codex_plugin_source_root, codex_home)
+        cached_plugin_root = _install_step("Codex cache install", steps, lambda: install_codex_plugin_cache(codex_plugin_source_root, codex_home))
         steps.append(f"installed Codex plugin cache entry {CODEX_PLUGIN_ID} at {cached_plugin_root}")
         steps.append("installed Codex plugin-local hooks.json")
         # The sync and the cache install both copy source modes verbatim, so
@@ -1947,19 +1999,19 @@ def install_codex(*, dry_run: bool, force: bool,
         steps.append("  preview: " + " | ".join(snippet_preview))
         return InstallResult("codex", True,
                              "dry-run — would install Codex (steps above)", steps)
-    result = emit_and_install_codex_config(
+    result = _install_step("Codex config merge", steps, lambda: emit_and_install_codex_config(
         str(config_plugin_root),
         config_path=config_path,
         force=True,
-    )
+    ))
     if not result["ok"]:
         return InstallResult("codex", False, result["message"], steps,
                              backup_path=result["backup_path"])
     steps.append(result["message"])
-    trust_result = install_codex_hook_trust_state(
+    trust_result = _install_step("Codex hook trust", steps, lambda: install_codex_hook_trust_state(
         config_path or DEFAULT_CODEX_CONFIG_PATH,
         _codex_hooks_config(cached_plugin_root),
-    )
+    ))
     if not trust_result["ok"]:
         return InstallResult("codex", False, trust_result["message"],
                              steps, backup_path=result["backup_path"])
@@ -1979,7 +2031,7 @@ def install_codex(*, dry_run: bool, force: bool,
                              f"codex plugin marketplace add failed: {err.strip() or out.strip()}",
                              steps, backup_path=result["backup_path"])
     steps.append("codex plugin marketplace registered")
-    reload_ok, reload_message = _reload_codex_runtime(config_path)
+    reload_ok, reload_message = _install_step("Codex hook reload", steps, lambda: _reload_codex_runtime(config_path))
     if not reload_ok:
         retry = ["python3", "install.py", "--codex-only", "--force"]
         if config_path is not None:
@@ -2190,6 +2242,7 @@ def main() -> int:
     p.add_argument("--codex-only", action="store_true", help="Install only on Codex CLI")
     p.add_argument("--claude-only", action="store_true", help="Install only on Claude Code")
     p.add_argument("--dry-run", action="store_true", help="Print plan, do not mutate")
+    p.add_argument("--verbose", action="store_true", help="Show installation steps and recovery details")
     p.add_argument(
         "--force", action="store_true",
         help=(
@@ -2225,12 +2278,10 @@ def main() -> int:
         print(f"ERROR: no supported runtime CLI found{detail}", file=sys.stderr)
         return 2
 
-    print(f"harness install — repo root: {REPO_ROOT}")
-    print(f"runtimes: {', '.join(name for name, _ in tasks)}"
-          + (" (dry-run)" if args.dry_run else ""))
-    for item in skipped:
-        print(f"skipping: {item}")
-    print()
+    if args.verbose:
+        print(f"harness install — repo root: {REPO_ROOT}")
+        for item in skipped:
+            print(f"skipping: {item}")
 
     results: list[InstallResult] = []
     with ThreadPoolExecutor(max_workers=len(tasks)) as ex:
@@ -2240,29 +2291,29 @@ def main() -> int:
             try:
                 r = f.result()
             except Exception as e:
-                r = InstallResult(name, False, f"crashed: {e!r}")
+                r = InstallResult(name, False, str(e) if isinstance(e, _InstallStepError)
+                                  else _install_exception_message(e), getattr(e, "steps", []))
             results.append(r)
 
-    # Render summary
-    print("─" * 70)
     any_failed = False
     for r in sorted(results, key=lambda x: x.runtime):
-        marker = "✓" if r.ok else "✗"
         if not r.ok:
-            outcome = "ERROR"
-        elif "install skipped" in r.summary:
-            outcome = "SKIPPED"
+            outcome = "실패"
         elif args.dry_run:
-            outcome = "DRY_RUN"
+            outcome = "미리보기 (dry-run)"
         else:
-            outcome = "APPLIED"
-        print(f"{marker} [{r.runtime}] STATUS: {outcome} — {r.summary}")
-        for step in r.steps:
-            print(f"    · {step}")
-        if r.backup_path:
-            print(f"    backup: {r.backup_path}")
+            outcome = "성공"
+        print(f"{'Claude' if r.runtime == 'claude' else 'Codex'}: {outcome}")
+        if args.verbose:
+            for step in r.steps:
+                print(f"    · {step}")
+            if r.backup_path:
+                print(f"    backup: {r.backup_path}")
         if not r.ok:
             any_failed = True
+            print(f"  오류: {r.summary}")
+            if not args.verbose:
+                continue
             if r.recovery:
                 print(f"    recovery: {r.recovery}")
             elif r.repair:
@@ -2277,29 +2328,7 @@ def main() -> int:
                     "    repair after correcting the reported cause: "
                     f"python3 install.py --{r.runtime}-only --force"
                 )
-        print()
-
-    drift_note = (
-        "Payload comparison covers installer-owned trees only; "
-        "config/registry health not checked."
-    )
-    if any_failed:
-        if not args.force:
-            print(drift_note)
-        print("Install completed with errors. Re-run failed runtimes after addressing the issue above.",
-              file=sys.stderr)
-        return 1
-    if args.dry_run:
-        print("Dry-run complete. Re-run without --dry-run to apply.")
-    elif args.force:
-        print("Install complete on all detected runtimes.")
-    elif all("install skipped" in result.summary for result in results):
-        print("Payloads already current. No install performed.")
-    else:
-        print("Conditional install complete. Refreshed stale runtime payloads only.")
-    if not args.force:
-        print(drift_note)
-    return 0
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":

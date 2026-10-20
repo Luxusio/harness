@@ -12,6 +12,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from contextlib import ExitStack
@@ -78,7 +79,7 @@ from _lib import (  # type: ignore
     _has_binding_conflict_fence,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
     receipt_runtime_verdict,
-    receipt_review_verdict, required_review_lenses,
+    receipt_review_verdict, required_review_lenses, _required_qa_lenses,
     receipt_snapshot, receipt_stream_fingerprint,
     read_json_diagnostics, write_json_diagnostics,
     reset_receipt_streams_for_new_run, restore_receipt_streams,
@@ -1813,10 +1814,35 @@ def _handle_task_context(
     })
 
 
+RECEIPT_SETTLEMENT_SECONDS = 2.0
+
+
+def _settled_receipt_snapshot(task_dir: str, control: dict):
+    """Let the existing async owner finish; never hold its lock while waiting."""
+    deadline = time.monotonic() + RECEIPT_SETTLEMENT_SECONDS
+    required = set(required_review_lenses(task_dir, control) + _required_qa_lenses(task_dir, control))
+    while True:
+        if read_task_control(task_dir) != control:
+            raise RuntimeError("task authority changed during receipt settlement")
+        snapshot = receipt_snapshot(task_dir)
+        if receipt_runtime_verdict(task_dir, control, snapshot) != "PENDING":
+            return snapshot
+        latest = {}
+        for entry in snapshot.entries:
+            if entry.get("task_run_id") == control["run_id"] and entry.get("lens") in required:
+                latest[entry["lens"]] = entry
+        pending = any(entry.get("event") == "started" for entry in latest.values())
+        remaining = deadline - time.monotonic()
+        if not pending or remaining <= 0:
+            return snapshot
+        time.sleep(min(0.05, remaining))
+
+
 def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti, repo_root=_task_roots(args)[1])
-    if not _validated_task_control(td):
+    initial_control = _validated_task_control(td)
+    if not initial_control:
         return _invalid_task_control_error("task_verify", td)
     verify_run = None
     if _truthy(args.get("run_commands")):
@@ -1827,14 +1853,22 @@ def handle_task_verify(args: dict) -> dict:
             parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
             max_workers=max_workers,
         )
-    snapshot = receipt_snapshot(td)
-    st = read_task_control(td)
-    rv = receipt_runtime_verdict(td, st, snapshot)
-    review_verdict = receipt_review_verdict(td, st, snapshot)
-    ctx = emit_compact_context(td, snapshot, measure_wbs=True)
-    status = _watcher_status(
-        task_dir=td, task_id=ti, run_id=str(st.get("run_id") or ""), snapshot=snapshot,
-    )
+    initial_wbs = wbs.read_state(td)
+    progress = wbs.task_progress(td, _task_roots(args)[1], initial_control["run_id"], measure=True)
+    _settled_receipt_snapshot(td, initial_control)
+    # WBS work and settlement must not block the watcher receipt writer.
+    # Only final publication uses the common transaction, with fresh evidence.
+    with receipt_stream_transaction(td):
+        st = read_task_control(td)
+        if st != initial_control or wbs.read_state(td) != initial_wbs:
+            return _err("task_verify refused: task authority or WBS changed during verification")
+        snapshot = receipt_snapshot(td)
+        ctx = emit_compact_context(td, snapshot, measured_progress=progress)
+        rv = ctx["runtime_verdict"]
+        review_verdict = ctx["review_verdict"]
+        status = _watcher_status(
+            task_dir=td, task_id=ti, run_id=str(st.get("run_id") or ""), snapshot=snapshot,
+        )
     ctx = _gate_next_action(ctx, status)
     if rv == "PENDING" and status.get("receipts_recordable") is not False:
         ctx = dict(ctx)

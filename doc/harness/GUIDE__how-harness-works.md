@@ -67,7 +67,7 @@ invalidated_by_paths:
   - doc/CLAUDE.md
   - doc/harness/critics/
   - doc/harness/review-overlays/
-freshness_updated: 2026-10-20T06:04:41Z
+freshness_updated: 2026-10-20T07:01:13Z
 ---
 
 # GUIDE — 하네스는 어떻게 동작하는가
@@ -2183,6 +2183,18 @@ wbs {"action": "close", "wbs_id": "TASK__fix-parser-crash"}
 ---
 
 ## 16. 문제 해결 FAQ
+
+**설치 결과 출력**
+`python3 install.py`는 선택된 런타임마다 `Claude: 성공`, `Codex: 실패`처럼 한
+줄을 표시한다. 실패한 런타임 아래에만 실패 단계와 경로를 포함한 오류가 나온다.
+`--verbose`는 세부 단계와 복구 안내를 표시하고, `--dry-run`은 성공 대신
+`미리보기 (dry-run)`로 표시한다. 설치 실패의 종료 코드는 1이다.
+
+**QA가 끝났는데 검증이 영수증 누락을 보고하는 경우**
+완료 전달과 watcher의 기록은 비동기다. 최종 verify는 WBS를 한 번 측정한 뒤
+현재 실행의 이미 시작된 필수 lens에 대해 짧은 상한 안에서 기록을 기다리고,
+마지막 영수증 스냅샷으로 판정과 누락 목록을 함께 만든다. 이 대기는 영수증을
+만들거나 재수집하지 않는다. 상한 뒤에도 실제 증거가 없으면 PASS가 될 수 없다.
 
 **`[gate=prewrite rule=C-02-plan-first …]`**
 활성 실행에 PLAN.md가 없다. 같은 wbs_id로 plan 스킬과 `wbs(action="plan")`을 사용한다. 작은 작업은 한 성과로 충분하다. 공개 open은 execution_mode를 받지 않으며, 기존 micro 기록의 내부 PLAN 면제를 새 호출 옵션으로 선택할 수 없다. PLAN 요구를 피하려고 fresh_run을 만들지 않는다.
