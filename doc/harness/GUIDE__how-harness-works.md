@@ -1062,8 +1062,10 @@ index:   0              1                   2             3
 
 ### 6.9 WBS verify
 
-`wbs(action="verify", wbs_id=...)`는 TASK.json을 검증하고 **스냅샷 하나**로
-review/runtime verdict와 compact context를 계산한다. 원시 영수증 행은 내보내지
+`wbs(action="verify", wbs_id=...)`는 TASK.json을 검증하고 WBS를 한 번 측정한
+뒤, 필요한 경우 짧은 상한 안에서 시작된 필수 lens의 완료를 기다린다. 대기 중
+스냅샷을 다시 읽을 수 있고, **마지막 일관된 스냅샷**으로 review/runtime verdict와
+compact context를 계산한다. 원시 영수증 행은 내보내지
 않는다. task_dir, runtime_verdict, review_verdict, next_action,
 missing_for_close, report_path, required_review_lenses, required_qa_lenses와
 watcher_status를 반환한다. WBS wrapper는 같은 wbs_id도 반환한다.
@@ -1092,7 +1094,9 @@ PENDING이고 `receipts_recordable`이 False가 아니면 next_action은 다음 
 
 `missing_for_close`에는 PLAN.md(micro 제외), `completed review verdict…`(review가 PASS가 아닐 때), `completed QA verdict…`(runtime이 PASS가 아닐 때)가 들어간다. 리뷰/QA 항목은 TASK.json의 lens 선언과 영수증에서 계산한다. 그뿐 아니라 WBS가 unbaselined가 아니면서 측정할 수 없거나 미검증 성과가 있으면 `verified WBS outcomes`, 연결된 pack의 route가 integration이 아니면 `integrated WBS work pack`도 추가한다(`_lib.py:emit_compact_context`). 미검증 성과는 같은 WBS의 assertion을 실제로 check하고, 미통합 pack은 정확히 연결된 pool을 통합한 뒤 같은 루트로 재개·검증한다. lens PASS만으로 이 두 조건을 우회할 수 없다.
 
-`wbs(action="verify")`는 스냅샷을 읽는 동안만 락을 잡고, `wbs(action="close")`는 판단부터 기록까지 락을 계속 잡는다(`harness_server.py:1721` 대 `1793`).
+verify는 WBS 측정과 완료 대기 중에 writer 락을 잡지 않는다. 마지막 receipt
+트랜잭션에서는 TASK/WBS 변경 여부를 확인하고 최종 스냅샷, context와 watcher
+진단을 계산한다. close는 판단부터 종료 기록까지 락을 계속 잡는다.
 
 ### 6.10 `wbs(action="close")`
 
@@ -1730,7 +1734,7 @@ host git 클라이언트(예: drvfs 위의 GitKraken)에서는 branch와 commit�
 
 ### 11.1 `install.py`
 
-- PATH에서 `codex`와 `claude`를 찾아, 찾은 런타임마다 병렬로 설치한다. `--codex-only`와 `--claude-only`는 함께 쓸 수 없다(exit 2). CLI가 하나도 없으면 `no supported runtime CLI found`로 exit 2. 요약에는 런타임별로 ERROR/SKIPPED/DRY_RUN/APPLIED가 나오고, 하나라도 실패하면 exit 1이다(`install.py:1985-2102`).
+- PATH에서 `codex`와 `claude`를 찾아, 찾은 런타임마다 병렬로 설치한다. `--codex-only`와 `--claude-only`는 함께 쓸 수 없다(exit 2). CLI가 하나도 없으면 `no supported runtime CLI found`로 exit 2. 기본 출력은 런타임별 `Claude: 성공`, `Codex: 실패` 같은 결과 한 줄과 실패한 경우의 오류 메시지다. `--dry-run`은 `미리보기 (dry-run)`, `--verbose`는 내부 단계와 복구 안내를 표시한다. 하나라도 실패하면 exit 1이다. 아래 ERROR/SYNCHRONIZED/STALE은 출력 상태가 아니라 내부 payload 비교 결과다.
 - Codex는 먼저 `codex --version`이 `.codex-version`(0.130.0) 이상인지 확인한다.
 - **기본 실행은 조건부다**(`install.py:824-987, 1517-1594, 1811-1868`).
 

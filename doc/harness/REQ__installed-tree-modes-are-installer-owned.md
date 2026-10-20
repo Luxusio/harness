@@ -214,9 +214,12 @@ the copied private staging tree for owner writes before those mutations, keeping
 executable intent and removing group/other write bits. Source modes and bytes,
 shared parents, symlink targets and foreign ownership remain untouched.
 
-Installation errors preserve their actual phase and failing path. Previously
-`repr(PermissionError)` hid its filename. Preserve earlier progress for detailed
-diagnosis and distinguish failed activation, successful rollback, failed rollback
+Unexpected errors at wrapped Codex version, payload comparison/sync, cache,
+config merge, hook trust and hook reload boundaries preserve phase and earlier
+progress. Other unexpected installation errors retain their exception chain and
+failing path when supplied by the OS, without a phase/progress guarantee.
+Previously `repr(PermissionError)` hid its filename. Activation errors distinguish
+failed activation, successful rollback, failed rollback
 with a retained backup, and cleanup failure after a new tree is already active.
 The original error must survive a subsequent rollback/cleanup error. These cases
 are independently reproducible; the user's original inaccessible path was not

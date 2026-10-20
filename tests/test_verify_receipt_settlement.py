@@ -74,14 +74,20 @@ def test_delayed_completion_can_append_while_single_verify_waits(pending_task):
     assert not worker.is_alive()
 
 
-def test_no_completion_is_bounded_and_never_writes_receipts(pending_task):
+def test_no_completion_is_bounded_and_never_writes_receipts(pending_task, monkeypatch):
     server, _, _, path, _, _ = pending_task
     before = path.read_bytes()
-    started = time.monotonic()
+    clock = [0.0]
+    waits = []
+    def wait(seconds):
+        waits.append(seconds)
+        clock[0] += seconds
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(server.time, "sleep", wait)
     result = payload(verify(server))
     assert result["runtime_verdict"] == "PENDING"
     assert "completed QA verdict: qa-cli" in result["missing_for_close"]
-    assert time.monotonic() - started < 0.8
+    assert waits and sum(waits) == pytest.approx(server.RECEIPT_SETTLEMENT_SECONDS)
     assert path.read_bytes() == before
 
 
