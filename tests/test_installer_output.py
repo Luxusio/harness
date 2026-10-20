@@ -49,9 +49,9 @@ def test_success_details_are_opt_in(installer, monkeypatch, capsys, verbose):
     assert set(calls) == {"codex", "claude"}
     assert calls["codex"] == {"dry_run": False, "force": False, "config_path": None}
     assert calls["claude"] == {"dry_run": False, "force": False}
-    assert "[codex] STATUS: APPLIED — Codex install complete" in captured.out
-    assert "[claude] STATUS: SKIPPED — Claude payload SYNCHRONIZED" in captured.out
-    for detail in ("repo root:", "runtimes:", "codex step", "claude step", "backup: /backup", "config/registry health not checked"):
+    assert "Codex: SUCCESS" in captured.out
+    assert "Claude: SUCCESS" in captured.out
+    for detail in ("repo root:", "codex step", "claude step", "backup: /backup"):
         assert (detail in captured.out) == verbose
     if not verbose:
         assert len(captured.out.splitlines()) == 2
@@ -61,7 +61,7 @@ def test_cache_refresh_remains_applied(installer, monkeypatch, capsys):
     result = installer.InstallResult("claude", True, "Claude payload SYNCHRONIZED — plugin cache refreshed (config/registry health not checked)")
     rc, captured, _ = run_main(installer, monkeypatch, capsys, {"claude": result}, "--claude-only")
     assert rc == 0
-    assert "STATUS: APPLIED" in captured.out and "plugin cache refreshed" in captured.out
+    assert captured.out == "Claude: SUCCESS\n"
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -74,10 +74,10 @@ def test_dry_run_explains_apply_and_full_plan(installer, monkeypatch, capsys, ve
     )
     assert rc == 0
     assert calls["codex"] == {"dry_run": True, "force": True, "config_path": "/test/config.toml"}
-    assert "STATUS: DRY_RUN" in captured.out
-    assert "Re-run without --dry-run to apply." in captured.out
+    assert "Codex: DRY RUN" in captured.out
+    assert "SUCCESS" not in captured.out
     assert ("would sync plugin payload" in captured.out) == verbose
-    assert ("steps above" in captured.out) == verbose
+    assert "steps above" not in captured.out
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -88,10 +88,11 @@ def test_partial_failure_keeps_cause_and_retry(installer, monkeypatch, capsys, v
     }
     rc, captured, calls = run_main(installer, monkeypatch, capsys, results, *(["--verbose"] if verbose else []))
     assert rc == 1 and len(calls) == 2
-    assert "[codex] STATUS: APPLIED" in captured.out
-    assert "[claude] STATUS: ERROR — marketplace failed: permission denied" in captured.out
-    assert "python3 install.py --claude-only --force" in captured.out
-    assert "Install failed." in captured.err
+    assert "Codex: SUCCESS" in captured.out
+    assert "Claude: FAILED" in captured.out
+    assert "Error: marketplace failed: permission denied" in captured.out
+    assert ("python3 install.py --claude-only --force" in captured.out) == verbose
+    assert not captured.err
     assert ("ordinary step" in captured.out) == verbose
 
 
@@ -103,7 +104,7 @@ def test_unsafe_remedy_is_not_replaced_by_force(installer, monkeypatch, capsys, 
     rc, captured, _ = run_main(installer, monkeypatch, capsys, {"claude": result}, "--claude-only", *(["--verbose"] if verbose else []))
     assert rc == 1
     assert "unsafe payload path component: /home/user/my config" in captured.out
-    assert f"repair: {repair}, then re-run: python3 install.py --claude-only" in captured.out
+    assert (f"repair: {repair}, then re-run: python3 install.py --claude-only" in captured.out) == verbose
     assert "--force" not in captured.out
     assert captured.out.count(repair) == (2 if verbose else 1)
 
@@ -113,7 +114,8 @@ def test_recovery_precedes_repair_and_retains_verification_order(installer, monk
     recovery = "repair daemon; verify: codex app-server daemon version; only after it succeeds, retry: python3 install.py --codex-only --force --config-path '/my config.toml'"
     result = installer.InstallResult("codex", False, "daemon unavailable", repair="ignored repair", recovery=recovery)
     rc, captured, _ = run_main(installer, monkeypatch, capsys, {"codex": result}, "--codex-only", *(["--verbose"] if verbose else []))
-    assert rc == 1 and f"recovery: {recovery}" in captured.out
+    assert rc == 1
+    assert (f"recovery: {recovery}" in captured.out) == verbose
     assert "ignored repair" not in captured.out
 
 
@@ -123,14 +125,14 @@ def test_smoke_failures_keep_actual_probe_diagnostics(installer, monkeypatch, ca
     rc, captured, _ = run_main(installer, monkeypatch, capsys, {"claude": result}, "--claude-only", *(["--verbose"] if verbose else []))
     assert rc == 1
     assert "failed its smoke test" in captured.out
-    assert "runtime smoke: could not run /probe: Permission denied" in captured.out
-    assert "runtime smoke: failing registration details" in captured.out
+    assert ("runtime smoke: could not run /probe: Permission denied" in captured.out) == verbose
+    assert ("runtime smoke: failing registration details" in captured.out) == verbose
     assert ("ordinary sync step" in captured.out) == verbose
 
 
 def test_worker_exception_is_an_error(installer, monkeypatch, capsys):
     rc, captured, _ = run_main(installer, monkeypatch, capsys, {"codex": RuntimeError("broken pipe")}, "--codex-only")
-    assert rc == 1 and "STATUS: ERROR" in captured.out and "broken pipe" in captured.out
+    assert rc == 1 and "Codex: FAILED" in captured.out and "broken pipe" in captured.out
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -138,7 +140,7 @@ def test_auto_detection_keeps_missing_runtime_notice(installer, monkeypatch, cap
     result = installer.InstallResult("codex", True, "Codex install complete")
     rc, captured, calls = run_main(installer, monkeypatch, capsys, {"codex": result}, *(["--verbose"] if verbose else []), available=("codex",))
     assert rc == 0 and set(calls) == {"codex"}
-    assert "skipping: claude (claude CLI not found in PATH)" in captured.out
+    assert ("skipping: claude (claude CLI not found in PATH)" in captured.out) == verbose
 
 
 def test_no_runtimes_and_conflicting_flags_remain_usage_errors(installer, monkeypatch, capsys):
