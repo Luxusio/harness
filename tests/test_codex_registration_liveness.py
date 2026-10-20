@@ -342,3 +342,28 @@ def test_conflict_helpers_reuse_locked_registry_and_reject_unavailable_discovery
     for helper in (owner._live_conflicts, owner._conflict_task_dirs):
         with pytest.raises(RuntimeError, match="registry unavailable"):
             helper(str(main), dict(conflicts=conflicts))
+
+
+def test_mcp_focus_uses_locked_registry_without_false_overflow(registration, monkeypatch):
+    from test_worktree_workspace import harness_server as server
+    _, watcher, main, thread, _, data = registration
+    roots = watcher.workspace_roots(str(main))
+    monkeypatch.setattr(server, "_task_roots", lambda args: (str(main), str(main)))
+    monkeypatch.setattr(server, "_current_session_identity", lambda root: thread)
+    monkeypatch.setattr(server, "_server_runtime", lambda: "codex")
+    calls = []
+    def registry(*args):
+        calls.append(True)
+        return roots if len(calls) <= 2 else []
+    monkeypatch.setattr(server, "_codex_workspace_roots", registry)
+    # The helper must receive the locked snapshot, not discover a third time.
+    helper = server._codex_live_conflicts
+    def conflicts(root, marker, *, roots=None):
+        assert roots
+        return helper(root, marker, roots=roots)
+    monkeypatch.setattr(server, "_codex_live_conflicts", conflicts)
+    result = server._with_codex_main_focus(
+        {"task_id": data["task_id"]}, lambda args: {"ok": True},
+    )
+    assert result == {"ok": True}
+    assert len(calls) == 2

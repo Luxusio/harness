@@ -1168,7 +1168,7 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
             marker = read_active_session_marker(root, session_id)
             fenced = fenced or _has_binding_conflict_fence(marker)
             try:
-                conflicts = _codex_live_conflicts(root, marker)
+                conflicts = _codex_live_conflicts(root, marker, roots=roots)
             except RuntimeError:
                 return _err("task focus refused: coordinator conflict fence overflow requires a new coordinator")
             unresolved = False
