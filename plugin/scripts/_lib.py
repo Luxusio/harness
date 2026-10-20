@@ -2250,6 +2250,14 @@ def resolve_session_task_binding(repo_root, session_id, *, strict=False):
         if strict:
             raise RuntimeError("active session storage unavailable") from None
         return {}
+    if _has_binding_conflict_fence(marker):
+        return {}
+    binding_fields = ("task_dir", "task_id", "run_id")
+    if strict and any(key in marker for key in binding_fields) and any(
+        not isinstance(marker.get(key), str) or not marker[key]
+        for key in binding_fields
+    ):
+        raise RuntimeError("active session binding malformed")
     value = marker.get("task_dir")
     if not isinstance(value, str) or not value:
         return {}
@@ -2260,6 +2268,8 @@ def resolve_session_task_binding(repo_root, session_id, *, strict=False):
             raise RuntimeError("active task directory unavailable") from None
         return {}
     if not task_dir or marker.get("task_id") != os.path.basename(task_dir):
+        if strict:
+            raise RuntimeError("active session binding malformed")
         return {}
     control = read_task_control(task_dir)
     if strict and not control:

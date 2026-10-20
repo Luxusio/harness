@@ -213,14 +213,21 @@ def _bound_workspace_roots(control_root: str, thread_id: str) -> list[str] | Non
     return bound
 
 
-def _live_conflicts(control_root: str, marker: dict) -> list[dict]:
-    return _live_binding_conflicts(marker, workspace_roots(control_root))
+def _conflict_roots(control_root: str, roots: list[str] | None) -> list[str]:
+    roots = workspace_roots(control_root) if roots is None else roots
+    if not roots:
+        raise RuntimeError("workspace registry unavailable")
+    return roots
 
 
-def _conflict_task_dirs(control_root: str, marker: dict) -> list[str]:
+def _live_conflicts(control_root: str, marker: dict, *, roots=None) -> list[dict]:
+    return _live_binding_conflicts(marker, _conflict_roots(control_root, roots))
+
+
+def _conflict_task_dirs(control_root: str, marker: dict, *, roots=None) -> list[str]:
     """Return structurally valid task directories named by a conflict fence."""
     tasks_roots = {os.path.realpath(os.path.join(root, "doc", "harness", "tasks"))
-                   for root in workspace_roots(control_root)}
+                   for root in _conflict_roots(control_root, roots)}
     found = []
     if _conflicts_overflow(marker):
         raise _BindingConflictOverflow("coordinator conflict fence exceeds its bound")
@@ -434,7 +441,7 @@ def _bind_task_session(
             bindings = {root: resolve_session_task_binding(root, thread_id, strict=True) for root in roots}
             lock_dirs = {canonical_task}
             for root in roots:
-                lock_dirs.update(_conflict_task_dirs(root, markers[root]))
+                lock_dirs.update(_conflict_task_dirs(root, markers[root], roots=roots))
                 if bindings[root]:
                     lock_dirs.add(bindings[root]["task_dir"])
             with ExitStack() as locks:
@@ -451,7 +458,7 @@ def _bind_task_session(
                 }
                 live = []
                 for root in roots:
-                    live.extend(_live_conflicts(root, markers[root]))
+                    live.extend(_live_conflicts(root, markers[root], roots=roots))
                     binding = resolve_session_task_binding(root, thread_id, strict=True)
                     if binding:
                         live.append({"task_dir": binding["task_dir"],

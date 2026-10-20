@@ -91,9 +91,12 @@ existing hook diagnostics. PostToolUse must not silently discard registration
 failures. Registration success alone does not establish a live watcher or an
 observed lifecycle. Diagnostic files never supply authoritative native identity.
 Registration uses strict binding reads: a missing marker is benign absence,
-while unreadable, malformed or unsafe markers and unavailable task authority
-are failures. An unavailable workspace registry is a discovery failure at
-every registration publication read. Flush failure feedback before advisory
+while unreadable or unsafe markers, invalid JSON/session identity, partial or
+inconsistent binding fields, and unavailable task authority are failures.
+Valid neutral markers and valid stale-run bindings grant no authority and
+remain benign. Conflict fences retain their separate validation. Reuse the
+validated workspace registry while holding its binding transaction; an
+unavailable registry at discovery is a failure. Flush failure feedback before advisory
 diagnostic I/O and bound that I/O by the remaining hook deadline; interrupted
 writes clean up their owned temporary files.
 When later readiness in the same MCP response positively disproves an earlier

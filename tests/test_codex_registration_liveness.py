@@ -4,6 +4,7 @@ import io
 import json
 import time
 import os
+from pathlib import Path
 import subprocess
 import sys
 from unittest import mock
@@ -262,3 +263,82 @@ def test_deadline_interrupted_diagnostic_write_cleans_owned_temp(tmp_path, monke
     path = tmp_path / "diagnostic.json"
     assert not owner._call_with_deadline(lambda: lib.write_json_diagnostics(str(path), {"status": "failed"}), time.monotonic() + 0.03)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("slow_stage", ["failure diagnostics", "live host", "success diagnostics", "unknown diagnostics"])
+def test_pre_tool_slow_advisory_work_is_bounded_and_failure_visible(slow_stage):
+    from conftest import SCRIPTS_DIR
+    code = '''
+import sys,time,json,io
+sys.path.insert(0,sys.argv[1])
+import hook_pre_tool_use as hook
+stage=sys.argv[2]
+hook.HOOK_TIMEOUT_SECONDS=1.4
+hook._IMPORT_SECONDS=0
+hook.sys.stdin=io.TextIOWrapper(io.BytesIO(b'{"tool_name":"collaboration.spawn_agent"}'))
+def restore(*a,**kw):
+    kw['status_out'].update(status='not_applicable' if stage=='unknown diagnostics' else 'failed',reason='registration rejected')
+    return stage in ('live host','success diagnostics')
+hook.restore_watcher_registration=restore
+hook._watcher_host_live=lambda *a: (time.sleep(10) or True) if stage=='live host' else True
+hook._update_diagnostics=lambda *a:time.sleep(10)
+hook._observed_registration_failure=lambda *a:False
+started=time.monotonic()
+hook.main()
+print(json.dumps({'elapsed':time.monotonic()-started}))
+'''
+    result = subprocess.run([sys.executable, "-c", code, str(SCRIPTS_DIR), slow_stage], capture_output=True, text=True, timeout=3)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["elapsed"] < 1.9
+    if slow_stage in {"failure diagnostics", "live host"}:
+        assert "receipt watcher registration failed" in result.stderr
+
+
+@pytest.mark.parametrize("kind", ["neutral", "partial", "mismatch", "stale"])
+def test_strict_binding_distinguishes_neutral_corrupt_and_stale_markers(registration, kind):
+    import _lib as lib
+    _, _, main, thread, _, _ = registration
+    path = main / "doc/harness/tasks/.active_sessions" / (thread + ".json")
+    marker = json.loads(path.read_text())
+    if kind == "neutral":
+        marker = {"session_id": thread, "updated": marker.get("updated")}
+    elif kind == "partial":
+        marker.pop("task_dir")
+    elif kind == "mismatch":
+        marker["task_id"] = "TASK__wrong"
+    else:
+        marker["run_id"] = "stale-run"
+    path.write_text(json.dumps(marker))
+    if kind in {"partial", "mismatch"}:
+        with pytest.raises(RuntimeError, match="binding malformed"):
+            lib.resolve_session_task_binding(str(main), thread, strict=True)
+    else:
+        assert lib.resolve_session_task_binding(str(main), thread, strict=True) == {}
+
+
+def test_conflict_helpers_reuse_locked_registry_and_reject_unavailable_discovery(registration, monkeypatch):
+    from test_codex_lifecycle_watcher import _write_exact_session_binding
+    owner, watcher, main, thread, payload, data = registration
+    roots = watcher.workspace_roots(str(main))
+    other = roots[1]
+    other_task, other_run = _write_exact_session_binding(Path(other), thread)
+    conflicts = [dict(task_dir=data["task_dir"], task_id=data["task_id"], run_id=data["run_id"]),
+                 dict(task_dir=os.path.join(other, "doc/harness/tasks", other_task), task_id=other_task, run_id=other_run)]
+    marker_path = main / "doc/harness/tasks/.active_sessions" / (thread + ".json")
+    marker_path.write_text(json.dumps(dict(session_id=thread, conflicts=conflicts)))
+    # Only initial discoveries and the locked refresh are available. Helpers
+    # must use that locked snapshot instead of treating another [] as no peers.
+    calls = []
+    def registry(*a):
+        calls.append(True)
+        return roots if len(calls) <= 3 else []
+    monkeypatch.setattr(owner, "workspace_roots", registry)
+    status = {}
+    assert not owner.register_task_result(payload, status_out=status)
+    assert len(calls) == 3
+    assert status["status"] == "not_applicable" and "conflicting" in status["reason"]
+    assert len(json.loads(marker_path.read_text())["conflicts"]) == 2
+    assert not watcher.registrations(str(main))
+    for helper in (owner._live_conflicts, owner._conflict_task_dirs):
+        with pytest.raises(RuntimeError, match="registry unavailable"):
+            helper(str(main), dict(conflicts=conflicts))

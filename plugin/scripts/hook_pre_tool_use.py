@@ -18,6 +18,7 @@ try:
         NOT_APPLICABLE,
         REGISTRATION_FAILED,
         REGISTRATION_BUDGET_SECONDS,
+        _call_with_deadline,
         restore_watcher_registration,
         _registration_identity,
     )
@@ -27,6 +28,7 @@ except Exception:  # pragma: no cover - registration recovery is best effort
     NOT_APPLICABLE = "not_applicable"
     REGISTRATION_FAILED = "failed"
     REGISTRATION_BUDGET_SECONDS = 0.0
+    _call_with_deadline = None
 
 try:
     from codex_lifecycle_watcher import registration_host_live, workspace_roots  # type: ignore
@@ -222,11 +224,7 @@ def _update_diagnostics(payload: bytes, updates: dict) -> None:
     write_json_diagnostics(path, fresh, confine_to=root)
 
 
-def _report_registration_failure(payload: bytes, reason: str) -> None:
-    _update_diagnostics(payload, {
-        "registration_present": False,
-        "last_registration_error": reason,
-    })
+def _report_registration_failure(payload: bytes, reason: str, *, deadline=None) -> None:
     sys.stderr.write(
         "[harness] receipt watcher registration failed: "
         f"{reason}. This subagent's start and completion will NOT be recorded "
@@ -235,6 +233,21 @@ def _report_registration_failure(payload: bytes, reason: str) -> None:
         "then call wbs(action='verify') once and use wbs(action='block') if required evidence is missing; "
         "do not hand-author receipts.\n"
     )
+    sys.stderr.flush()
+    _bounded_advisory(lambda: _update_diagnostics(payload, {
+        "registration_present": False,
+        "last_registration_error": reason,
+    }), deadline)
+
+
+def _bounded_advisory(callback, deadline, *, status_out=None, stage="hook diagnostics"):
+    if _call_with_deadline is not None:
+        return _call_with_deadline(
+            callback,
+            deadline if deadline is not None else time.monotonic() + REGISTRATION_BUDGET_SECONDS,
+            stage=stage, status_out=status_out,
+        )
+    return False
 
 
 def _report_registration_not_applicable(payload: bytes, reason: str) -> None:
@@ -333,7 +346,8 @@ def _protected_artifact_fallback(payload: bytes) -> bytes:
 
 
 def main() -> int:
-    registration_deadline = time.monotonic() + max(0.0, HOOK_TIMEOUT_SECONDS - _IMPORT_SECONDS - 1.0)
+    hook_deadline = time.monotonic() + max(0.0, HOOK_TIMEOUT_SECONDS - _IMPORT_SECONDS - 0.2)
+    registration_deadline = hook_deadline - 0.8
     payload = sys.stdin.buffer.read()
     tool_name = _tool_name(payload)
     if _is_subagent_spawn_tool(tool_name):
@@ -346,7 +360,7 @@ def main() -> int:
         # run; only attested close remains unavailable.
         if restore_watcher_registration is None:
             reason = "codex_hook_registration is unavailable in this hook tree"
-            _report_registration_failure(payload, reason)
+            _report_registration_failure(payload, reason, deadline=hook_deadline)
             return 0
         status: dict = {}
         try:
@@ -357,29 +371,31 @@ def main() -> int:
                 status_out=status,
             )
         except Exception as exc:
-            reason = f"{type(exc).__name__}: {exc}"
-            _report_registration_failure(payload, reason)
+            reason = f"registration unavailable ({type(exc).__name__})"
+            _report_registration_failure(payload, reason, deadline=hook_deadline)
             return 0
         reason = str(status.get("reason") or "")
         if registered:
-            if not _watcher_host_live(payload):
-                reason = (
+            live_status = {}
+            if not _bounded_advisory(lambda: _watcher_host_live(payload), registration_deadline,
+                                     status_out=live_status, stage="watcher host liveness"):
+                reason = live_status.get("reason") or (
                     "watcher registration exists but no live MCP-hosted watcher "
                     "holds its lease"
                 )
-                _report_registration_failure(payload, reason)
+                _report_registration_failure(payload, reason, deadline=hook_deadline)
                 return 0
-            _clear_registration_failure(payload)
+            _bounded_advisory(lambda: _clear_registration_failure(payload), hook_deadline)
         elif status.get("status") == REGISTRATION_FAILED:
             reason = reason or (
                 "watcher registration did not complete within "
                 f"{REGISTRATION_BUDGET_SECONDS}s"
             )
-            _report_registration_failure(payload, reason)
+            _report_registration_failure(payload, reason, deadline=hook_deadline)
         else:
             # NOT_APPLICABLE: not a Codex rollout, no thread identity, or no
             # open task yet. None of those is a fault to report or to gate on.
-            _report_registration_not_applicable(payload, reason)
+            _bounded_advisory(lambda: _report_registration_not_applicable(payload, reason), hook_deadline)
         return 0
 
     script = ""
