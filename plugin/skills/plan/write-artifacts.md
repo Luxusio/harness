@@ -40,6 +40,9 @@ only to actual concurrent execution, separately from progress measurement.
 When verification inputs become known, optionally publish one `wbs-inputs`
 JSON fence with literal `source` roots, `artifacts` files, `exclude` and `deny`
 paths. This is an adaptable verification policy, never an initial edit plan.
+Explicit source roots include ignored inputs and bypass Git discovery; declare
+unnecessary descendants in exclude. Deny requires explicit source to prevent
+Git ignore/config reads outside that scope; otherwise measurement is unavailable.
 Include actual common/build/lockfile/resource inputs; independent review owns
 adequacy. Denied required inputs stay unavailable; do not omit them to obtain
 PASS. Policy changes preserve history without promoting old proof. See the

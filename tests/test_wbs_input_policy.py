@@ -1,6 +1,8 @@
 """Control reads, explicit verification inputs, local parking and resume rollback."""
 import json
 import os
+import ctypes
+import sys
 from pathlib import Path
 
 import pytest
@@ -69,7 +71,7 @@ def test_denied_and_excluded_candidates_are_filtered_before_resolve_or_open(tmp_
 @pytest.mark.parametrize("policy", [dict(source=["src.txt"], deny=["src.txt"]),
                                    dict(source=["src.txt"], exclude=["src.txt"]),
                                    dict(source=["missing-input"]),
-                                   dict(source=["src.txt"], deny=[".gitignore"])])
+                                   dict(deny=["private"])])
 def test_required_input_unavailable_is_not_run_without_partial_credit(tmp_path, monkeypatch, policy):
     repo, td = baseline(tmp_path)
     publish(td, [node()], policy)
@@ -83,6 +85,60 @@ def test_required_input_unavailable_is_not_run_without_partial_credit(tmp_path, 
     assert result["passed"] is None and result["execution"] == "not_run"
     assert result["progress"]["percentage"] is None
     assert (td / "WBS.json").read_bytes() == before
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="kernel file-access observer requires inotify")
+@pytest.mark.parametrize("source,deny,available", [
+    (["src.txt"], ["private"], True),
+    (["src.txt"], [".gitignore"], True),
+    (["private"], ["private/.gitignore"], False),
+    (None, ["private"], False),
+])
+def test_denied_git_metadata_is_never_opened_in_subprocesses(tmp_path, source, deny, available):
+    repo, td = baseline(tmp_path)
+    secret = repo / "private"
+    secret.mkdir()
+    ignore = secret / ".gitignore"
+    ignore.write_text("[core]\n    editor = forbidden\n")
+    # Git startup can read arbitrary includes in addition to nested ignore files.
+    with (repo / ".git/config").open("a") as config:
+        config.write('\n[include]\n    path = ../private/.gitignore\n')
+    (repo / ".gitignore").write_text("unused\n")
+    policy = dict(deny=deny)
+    if source is not None:
+        policy["source"] = source
+    publish(td, [node()], policy)
+    libc = ctypes.CDLL(None, use_errno=True)
+    observer = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+    assert observer >= 0
+    try:
+        for path in (ignore, repo / ".gitignore"):
+            assert libc.inotify_add_watch(observer, os.fsencode(path), 0x21) >= 0  # ACCESS | OPEN
+        result = check(repo, td)
+        if available:
+            assert result["passed"] is True
+        else:
+            assert result["execution"] == "not_run" and result["passed"] is None
+        with pytest.raises(BlockingIOError):
+            os.read(observer, 4096)
+    finally:
+        os.close(observer)
+
+
+def test_explicit_directories_hash_ignored_inputs_without_git(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    source = repo / "source"
+    source.mkdir()
+    (source / "build-input.bin").write_bytes(b"first")
+    (repo / ".gitignore").write_text("*.bin\n")
+    policy = dict(source=["source"], deny=["private"])
+    monkeypatch.setattr(wbs, "_execute", lambda *a, **k: pytest.fail("explicit source invoked Git"))
+    before = wbs.fingerprint(repo, policy)
+    (source / "build-input.bin").write_bytes(b"second")
+    assert before != wbs.fingerprint(repo, policy)
+    monkeypatch.setattr(wbs, "MAX_LISTING_BYTES", 2)
+    with pytest.raises(ValueError, match="listing"):
+        wbs.fingerprint(repo, policy)
 
 
 @pytest.mark.parametrize("path", ["../secret", "/tmp/secret", "src/../file", "src/", "src//file", "C:/secret", "src\\file"])

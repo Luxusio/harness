@@ -1521,13 +1521,16 @@ handoff 때만 별도로 선언한다. 자세한 규범은
 실행 전 실패한 check는 `execution=not_run`, `passed=null`로 반환하고 기존 기록을
 바꾸지 않는다. 실행 후 측정 실패는 실제 반환 코드와 `measurement_error`를 구분해
 보존하며, 해당 항목의 `last_attempt` 표시는 확정적인 재검증까지 과거 PASS의
-점수를 보류한다. Git이 선언한 소스만 한도 내에서 읽으며, 하위 모듈의 ignored
+점수를 보류한다. 기본 모드에서는 Git이 선언한 소스를 한도 내에서 읽으며, 하위 모듈의 ignored
 산출물을 재귀 순회하지 않는다(`plugin/scripts/wbs.py`).
 
 검증 입력이 알려지면 PLAN의 선택적 `wbs-inputs` fence에서 `source`, `artifacts`,
 `exclude`, `deny`를 지정한다. 편집할 파일 목록이 아니라 검증 시점의 입력 정책이다.
 정책을 증거에 결합하며, 금지 경로는 해석·열기 전에 걸러낸다. 필수 입력이 금지되거나
-없으면 검증할 수 없다. source와 artifact는 각각 32 MiB 예산을 갖는다. `block`에
+없으면 검증할 수 없다. 명시적 source는 Git을 호출하지 않고 지정한 루트의 실제
+파일을 읽는다(ignored 파일 포함, `.git` 관리 항목 제외). Git 자체의 ignore/config
+읽기를 통제할 수 없으므로 deny에는 명시적 source가 필요하며, 없으면 측정 불가다.
+source와 artifact는 각각 32 MiB 예산을 갖는다. `block`에
 `node_id`를 주면 그 항목과 의존 작업만 보류하고 독립 작업은 next에 남는다.
 같은 `node_id`로 open해도 과거 점수는 재검증 전까지 복구되지 않는다.
 

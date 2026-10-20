@@ -269,9 +269,10 @@ def fingerprint(repo, policy=None):
     seen = set()
     for required in (selected or []) + artifacts:
         require(not any(covers(p, required) for p in excludes + denied), "required input is excluded or denied: " + required)
-    # Git enumeration itself needs administrative and ignore-file metadata.
-    require(not any(p == "." or ".git" in p.split("/") or p.endswith(".gitignore") for p in denied),
-            "denied input prevents Git evidence enumeration")
+    # Git can read ignore/config includes outside its enumerated candidate set.
+    # Only explicit inputs can enforce a no-read boundary without invoking Git.
+    require(not denied or selected is not None,
+            "deny requires explicit source inputs; Git metadata reads cannot be confined")
     total = {"source": 0, "artifact": 0}
     listing_bytes = 0
     deadline = time.monotonic() + 30
@@ -390,8 +391,6 @@ def fingerprint(repo, policy=None):
                 continue  # Artifacts have a separate explicit read and budget.
             if any(covers(p, relative) for p in excludes):
                 continue
-            if selected is not None and not any(covers(p, relative) or mode == b"160000" and covers(relative, p) for p in selected):
-                continue
             require(not any(covers(p, relative) for p in denied), "required input is denied: " + relative)
             require(len(result) < MAX_EVIDENCE_ENTRIES,
                     f"checkout evidence exceeds measurement budget (entries; input {relative}; limit {MAX_EVIDENCE_ENTRIES})")
@@ -418,10 +417,41 @@ def fingerprint(repo, policy=None):
                             checkout(path, depth + 1)
             else:
                 file(path)
-            if result and result[-1][1] is not None:
-                seen.update(p for p in selected or [] if covers(p, relative))
-    checkout(root)
-    require(selected is None or all(p in seen for p in selected), "required source input missing from Git evidence")
+    if selected is None:
+        checkout(root)
+    else:
+        # Required roots describe verification inputs, independently of Git's
+        # index/ignore rules. Never ask Git to discover these paths.
+        pending, visited = [root / p for p in selected], set()
+        while pending:
+            remaining()
+            path = pending.pop()
+            relative = path.relative_to(root).as_posix()
+            if relative in visited or relative in artifacts or any(covers(p, relative) for p in excludes):
+                continue
+            require(not any(covers(p, relative) for p in denied), "required input is denied: " + relative)
+            require(".git" not in path.relative_to(root).parts, "Git administrative input cannot attest source")
+            visited.add(relative)
+            if path == root:
+                is_directory = True
+            else:
+                with directory_handle(path.parent) as parent_fd:
+                    info = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                is_directory = stat.S_ISDIR(info.st_mode)
+            if is_directory:
+                with directory_handle(path) as directory_fd:
+                    with os.scandir(directory_fd) as children:
+                        for child in children:
+                            remaining()
+                            listing_bytes += len(os.fsencode(child.name)) + 1
+                            require(listing_bytes <= MAX_LISTING_BYTES,
+                                    "checkout evidence exceeds measurement budget (input listing bytes)")
+                            if child.name != ".git":
+                                pending.append(path / child.name)
+            else:
+                file(path)
+        seen.update(p for p in selected if any(value is not None and covers(p, name) for name, value in result))
+    require(selected is None or all(p in seen for p in selected), "required source input missing from evidence")
     for artifact in artifacts:
         path = root / artifact
         require(not any(covers(p, artifact) for p in denied + excludes), "required artifact is excluded or denied: " + artifact)

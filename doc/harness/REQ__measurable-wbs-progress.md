@@ -202,6 +202,13 @@ The owner may publish a `wbs-inputs` JSON fence in PLAN when verification inputs
 are understood. Optional `source` lists literal source roots/files; omission
 keeps Git-declared source enumeration. `artifacts` lists required artifact files.
 `exclude` removes declared unnecessary paths; `deny` prohibits file reads.
+Explicit source roots are enumerated directly without Git: their actual files,
+including ignored build inputs, are measured except declared exclusions and Git
+administrative `.git` entries. A required Git administrative input is unavailable.
+Because Git may read ignore/config includes outside its candidate list, `deny`
+requires explicit `source` (possibly empty for artifact-only checks); default
+Git enumeration with `deny` fails unavailable before invoking Git. A denied
+descendant inside a selected root also fails before opening that descendant.
 Policies are task-level, adaptable verification inputs, never edited-file
 instructions. They must cover relevant common code, lockfiles, build scripts
 and resources; independent review checks adequacy. A selected required input
@@ -233,6 +240,6 @@ finding that an ambient alternate Git index can hide changes to real-index
 tracked files. As a derived implementation constraint, source enumeration uses
 the checkout's own Git identity and strips ambient Git repository, index and
 configuration overrides through the existing trusted environment helper. A file
-tracked by the real checkout remains measured even when it matches ignore rules
+tracked by the real checkout in default Git mode remains measured even when it matches ignore rules
 and an alternate index omits it. A subsequent change invalidates its prior
 assertion proof; inherited Git settings cannot keep stale progress at100%.
