@@ -24,7 +24,7 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
-PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, and ordered review/QA entries in the current task run provide close evidence. Harness does not detect edits after QA; the developer decides when a change warrants rerunning review or QA.
+PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, issue `wbs(action="target", target={inputs,commands,lenses,purpose:"acceptance"})`; pass its frozen snapshot_root to the role and append `_vt_<token>` to native task_name. Roles read/run against that view with explicit cwd, never mutable source autodiscovery. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Lifecycle ordering remains independent. Historical lifecycle-only records stay source-unbound; diagnostic targets cannot satisfy acceptance. See `doc/harness/REQ__verification-target-applicability.md`.
 
 **Missing receipt policy.** Receipt absence never immediately fails or
 suppresses a substantive lens. Await the actual result and label an unreceipted
@@ -482,9 +482,8 @@ coordinator integration/disposal after source close, before overall completion.
 Report retained originals and their next action; never silently leave them.
 
 Phase 9 is the only normal owner of `wbs(action="close")` and the user-facing completion
-response. The developer owns deciding whether work after review or QA affects
-the evidence and therefore warrants rerunning the applicable lenses. Harness
-does not inspect Git or automatically stale receipts. Rerun the verified source
+response. Target-aware gates invalidate affected source applicability after relevant edits;
+lifecycle receipts remain authentic history. Preserve unaffected result scope. Rerun the verified source
 installer when its concrete install payload changed; installer-local payload
 checks remain allowed. Call `wbs(action="verify")` once after the final required receipt
 sequence is complete.

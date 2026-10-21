@@ -219,3 +219,9 @@ still begins at its immutable current offset; no historical backfill occurs.
 - Wrong task run, repository, session, rollout, thread, agent path, task name,
   lens, order, final, or verdict is rejected.
 - Focused watcher/hook tests and the full suite pass after verified install.
+
+## Separate target applicability
+
+Lifecycle rows remain unchanged. A preissued `_vt_<token>` in the authenticated structured native task_name can associate the matched first start/completion with its owner-issued copied source view. Only the first exact native agent invocation is source-bound; inherited followup names do not preauthorize a new target. Delayed replay resolves existing issuance and never hashes mutable source as review evidence. Source association is separate from verdict authority and does not prove arbitrary tool reads were sandboxed. See `doc/harness/REQ__verification-target-applicability.md`.
+
+Long-lived parent ancestry is evaluated from one copied complete JSONL prefix. Both native correlation passes inspect the same bytes; a streaming rehash of the captured source prefix and descriptor/path identity reject rewrite, replacement or truncation. Ordinary append cannot starve a child merely because the coordinator is active. Parent history has a separate bounded 256 MiB capacity; child completion parsing remains bounded to 64 MiB. Temporary copied proof bytes are regenerable reader scratch, never source/evidence storage.

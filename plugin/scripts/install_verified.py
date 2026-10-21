@@ -71,6 +71,10 @@ def _verification_state(task_dir: Path) -> tuple[bool, str, str]:
         return False, "fresh review PASS required", fingerprint
     if receipt_runtime_verdict(str(task_dir), state, snapshot) != "PASS":
         return False, "fresh QA PASS after review required", fingerprint
+    from verification_target import applicability
+    applicable = applicability(str(task_dir), str(find_repo_root(str(task_dir))), snapshot, measure=True)
+    if applicable.get("missing_lenses"):
+        return False, "applicable verification target required: " + ", ".join(applicable["missing_lenses"]), fingerprint
     return True, "", fingerprint
 
 
@@ -100,7 +104,7 @@ def _normalize_payload_path(path: str) -> str:
     return raw
 
 
-def _read_payload_file(repo_root: Path, path: str) -> tuple[bytes, os.stat_result] | None:
+def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=False) -> tuple[bytes, os.stat_result] | None:
     """Read one stable regular file through descriptor-relative no-follow opens."""
     rel = _normalize_payload_path(path)
     if not rel:
@@ -135,7 +139,7 @@ def _read_payload_file(repo_root: Path, path: str) -> tuple[bytes, os.stat_resul
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.getuid()
             or before.st_nlink != 1
-            or mode not in {0o644, 0o755}
+            or mode not in ({0o444, 0o555} if readonly else {0o644, 0o755})
         ):
             return None
         chunks = []
@@ -143,7 +147,10 @@ def _read_payload_file(repo_root: Path, path: str) -> tuple[bytes, os.stat_resul
             chunk = os.read(file_fd, 1024 * 1024)
             if not chunk:
                 break
-            chunks.append(chunk)
+            if consume is None:
+                chunks.append(chunk)
+            else:
+                consume(chunk)
         after = os.fstat(file_fd)
         identity_before = (
             before.st_dev, before.st_ino, before.st_size, before.st_mode,

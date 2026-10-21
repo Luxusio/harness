@@ -31,7 +31,7 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
-PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, while ordered review and QA entries in the current TASK.json generation provide close evidence. Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
+PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, issue `wbs(action="target", target={inputs,commands,lenses,purpose:"acceptance"})`; pass its frozen snapshot_root to the role and append `_vt_<token>` to native task_name. Roles read/run against that view with explicit cwd, never mutable source autodiscovery. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Lifecycle ordering remains independent. Historical lifecycle-only records stay source-unbound; diagnostic targets cannot satisfy acceptance. See `doc/harness/REQ__verification-target-applicability.md`.
 
 **Missing receipt policy.** Receipt absence never immediately fails or
 suppresses a substantive lens. Await the actual result and label an unreceipted

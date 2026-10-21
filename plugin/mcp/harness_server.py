@@ -332,7 +332,10 @@ def _server_runtime() -> str:
     return str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
 
 
-TASK_START_REGISTRATION_BUDGET_SECONDS = _REGISTRATION_BUDGET_SECONDS
+# MCP can perform cross-workspace native ancestry and registration; unlike a
+# latency-sensitive hook it has an explicit longer, still finite transaction.
+# Real long-coordinator proof alone costs 1.2-1.8s before registry/locks.
+TASK_START_REGISTRATION_BUDGET_SECONDS = 8.0
 
 
 def _register_task_start_watcher(
@@ -1863,14 +1866,16 @@ def handle_task_verify(args: dict) -> dict:
         if st != initial_control or wbs.read_state(td) != initial_wbs:
             return _err("task_verify refused: task authority or WBS changed during verification")
         snapshot = receipt_snapshot(td)
-        ctx = emit_compact_context(td, snapshot, measured_progress=progress)
+        ctx = emit_compact_context(td, snapshot, measured_progress=progress, measure_targets=True)
         rv = ctx["runtime_verdict"]
         review_verdict = ctx["review_verdict"]
         status = _watcher_status(
             task_dir=td, task_id=ti, run_id=str(st.get("run_id") or ""), snapshot=snapshot,
         )
     ctx = _gate_next_action(ctx, status)
-    if rv == "PENDING" and status.get("receipts_recordable") is not False:
+    source_only_pending = (ctx.get("verification_targets", {}).get("missing_lenses")
+                           and receipt_runtime_verdict(td, st, snapshot) == "PASS")
+    if rv == "PENDING" and status.get("receipts_recordable") is not False and not source_only_pending:
         ctx = dict(ctx)
         # A lens that completed with a rejected verdict shape is neither an
         # unrun lens nor a missing receipt, and the generic pending guidance
@@ -1901,6 +1906,7 @@ def handle_task_verify(args: dict) -> dict:
     payload = {
         "task_dir": td, "runtime_verdict": rv,
         "receipt_recording": ctx["receipt_recording"],
+        "verification_targets": ctx.get("verification_targets", {"status": "unbound", "enforced": False}),
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
         "report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
@@ -2192,6 +2198,50 @@ def _managed_dispatch(common: dict, args: dict) -> dict:
     return _ok(body)
 
 
+def handle_verification_target(args: dict) -> dict:
+    """Preissue concrete inputs under the existing canonical control writer."""
+    import verification_target
+    task_id = _req(args, "task_id")
+    _, repo = _task_roots(args)
+    common = args
+    td = canonical_task_dir(task_id=task_id, repo_root=repo)
+    # Prepare real recording capability before launching a new substantive
+    # role. Do not repair/replay completed roles or create receipt evidence.
+    requested_spec = verification_target._spec(args.get("target"))
+    initial_control = _validated_task_control(td)
+    if not initial_control or task_control_status(td, initial_control) != "open":
+        return _err("target issuance requires an open planned task")
+    control_root, _ = _task_roots(common)
+    native_cwd = (_authenticate_native_session(_current_session_identity(control_root), control_root)
+                  if requested_spec["purpose"] == "acceptance" and requested_spec["lenses"]
+                  and _server_runtime() == "codex" and _authenticate_native_session else "")
+    registration = (_register_task_start_watcher(repo, td, initial_control,
+                    session_cwd=native_cwd, diagnostics_root=control_root)
+                    if native_cwd else None)
+    readiness = _watcher_status(task_dir=td, task_id=task_id, run_id=initial_control["run_id"])
+    readiness = _apply_task_start_registration_status(readiness, registration, td, initial_control["run_id"])
+    # Same owner authorization and task transaction as existing mutations.
+    with active_session_transaction(find_harness_root(td) or repo), receipt_stream_transaction(td):
+        control = _validated_task_control(td)
+        if control != initial_control or task_control_status(td, control) != "open":
+            return _err("target not issued: task/run changed during readiness preflight")
+        prior_targets = wbs.read_state(td).get(verification_target.FIELD)
+        try:
+            issued = verification_target.issue_target(td, repo, requested_spec, output_dirs=args["target"].get("output_dirs", []))
+        except (ValueError, OSError) as error:
+            # Atomic publication can succeed before a filesystem durability
+            # error is reported. Inspect the owner index rather than lie.
+            try:
+                was_issued = wbs.read_state(td).get(verification_target.FIELD) != prior_targets
+            except (ValueError, OSError):
+                was_issued = None
+            return _err(str(error), data={"issued": was_issued, "watcher_status": readiness,
+                        "next_action": "Preserve task and receipts. Correct the named input or restore stable inputs, then issue the target again before new native roles."})
+    public_target = {key: issued[key] for key in ("token", "run_id", "snapshot_root", "input_fingerprint", "spec", "context")}
+    return _ok(dict(wbs_id="WBS__" + task_id[6:], issued=True,
+                    target=public_target, watcher_status=readiness))
+
+
 def handle_wbs(args: dict) -> dict:
     """One public outcome tree; existing handlers retain execution authority."""
     import wbs
@@ -2210,6 +2260,12 @@ def handle_wbs(args: dict) -> dict:
     common = {"task_id": task_id}
     if "workspace" in args:
         common["workspace"] = args["workspace"]
+    if action == "target":
+        allowed = {"action", "wbs_id", "workspace", "target"}
+        if set(args) - allowed:
+            raise ValueError("target accepts only target specification plus WBS identity/workspace")
+        return _invoke("verification_target", handle_verification_target,
+                       dict(common, target=args.get("target")))
     routes = {
         "open": ("task_start", {"fresh_run"}),
         "context": ("task_context", set()),
@@ -2423,7 +2479,7 @@ def handle_wbs_migrate(args):
 for _control_writer in (
     handle_task_start, handle_task_context, handle_task_close,
     handle_task_blocked, handle_write_plan, handle_task_wbs,
-    handle_wbs_migrate,
+    handle_wbs_migrate, handle_verification_target,
 ):
     _bind_control_writer(_control_writer)
 del _control_writer
@@ -2436,10 +2492,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "wbs", "title": "Work through one WBS outcome tree",
      "description": "One WBS outcome tree. open/context/next/plan do not hash source; current progress is unmeasured and historical credit is labelled. check and final verify/close measure current inputs. PLAN may include one wbs-inputs JSON fence with source roots, artifact files, exclude and deny lists, chosen at verification time rather than as an edit plan. block/open with node_id park/reopen one outcome while independent work continues. Dispatch owns isolated worktrees; ordered review/QA and current outcome proofs still gate completion.",
      "inputSchema": {"type": "object", "properties": {
-         "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate"]},
+         "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate", "target"]},
          "wbs_id": {"type": "string", "description": "Stable root ID; WBS__<id>, legacy TASK__<id>, or a bare safe ID."},
          "objective": {"type": "string", "description": "For open without an ID, derive one stable root for this objective, including native Goals."},
          "node_id": {"type": "string", "description": "check target, or local outcome for block/open; omission keeps root lifecycle behavior."}, "plan": {"type": "string"},
+         "target": {"type": "object", "description": "target only: preissue a frozen source view before native review/QA. inputs (explicit WBS input policy), commands (argv arrays), lenses, purpose acceptance|diagnostic, optional environment key names, toolchain executables, and output_dirs outside selected inputs (not part of target identity). Use returned snapshot_root; append _vt_<token> to native task_name."},
          "required_lenses": {"type": "array", "items": {"type": "string"}},
          "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
          "operation": {"type": "string", "enum": ["prepare", "status", "bind", "complete", "resume", "recover"], "description": "dispatch lifecycle operation. prepare (default) creates owned worktrees; bind admits the actual native worker; complete records its stopped result and integrates/disposes; status is read-only."},

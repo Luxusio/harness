@@ -167,6 +167,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
 | `setup_finalize.py` | Canonical setup validation, manifest version migration, operational ignores, and legacy version-file cleanup | `.gitignore`, `doc/harness/manifest.yaml` |
 | `project_format_check.py` | Read-only SessionStart reminder for older Harness project file formats and missing operational ignores | stdout |
+| `verification_target.py` | Persistent copied verification inputs and separate source applicability for authentic review/QA results |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `wbs.py` | Measure verified outcomes and preserve WBS refinement evidence | `WBS.json` |

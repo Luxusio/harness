@@ -94,10 +94,11 @@ extra reconciliation failure modes.
 **Title:** `wbs(action="close")` requires receipt-backed `runtime_verdict: PASS`.
 **When:** Task is about to be marked closed.
 **Enforced by:** MCP `wbs(action="close")` — checks the task-bound review/QA receipt
-sequence and the resulting runtime verdict. It does not inspect Git state.
+sequence and the resulting runtime verdict, plus declared target applicability
+for target-aware tasks. Context does not inspect source.
 **On violation:** hard-block.
-**Why:** Independent completion evidence is required, while post-verification
-edits and source-scope discipline remain the developer's responsibility.
+**Why:** Independent completion evidence and applicable declared input bytes
+are separate requirements; source-view scope adequacy remains reviewed.
 
 ### C-05
 
@@ -230,8 +231,8 @@ declaration of applicable lenses.
 **On violation:** `wbs(action="close")` refuses when a required ordered completion is
 absent or does not explicitly PASS. A start-only receipt never passes.
 **Why:** A self-authored PASS is indistinguishable from hallucination. Source
-fingerprints are intentionally not part of receipt validity; edits after QA and
-scope drift are developer-owned risks.
+fingerprints are separate applicability evidence, not part of receipt validity.
+Target-aware gates check declared inputs; reviewed scope adequacy remains explicit.
 
 ### C-14a
 

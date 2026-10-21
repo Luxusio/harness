@@ -63,6 +63,7 @@ TASK_ID_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
 # while the existing whole-rollout bound remains the outer memory limit.
 MAX_LINE_BYTES = 8 * _REVIEW_DETAIL_MAX_BYTES
 MAX_CHILD_BYTES = 64 * 1024 * 1024
+MAX_PARENT_BYTES = 256 * 1024 * 1024  # Bounded long-lived coordinator history.
 POLL_SECONDS = 0.20
 IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
@@ -256,7 +257,7 @@ def _coordinator_identity(thread_id: str, session_cwd: str, seen=()) -> dict[str
     if thread_id in seen or len(seen) > 16:
         return {}
     path = _find_rollout(thread_id)
-    opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_CHILD_BYTES) if path else None
+    opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_PARENT_BYTES) if path else None
     if opened is None:
         return {}
     handle, _ = opened
@@ -305,13 +306,14 @@ def _file_generation(info: Any) -> tuple[int, ...]:
 
 def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool:
     path = _find_rollout(parent_id)
-    opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_CHILD_BYTES) if path else None
+    opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_PARENT_BYTES) if path else None
     if opened is None:
         return False
     handle, info = opened
     handle = io.BufferedReader(handle, buffer_size=1024 * 1024)
     key = (str(path), thread_id, agent_path)
     generation = _file_generation(info)
+    proof = None
     try:
         with _PARENT_SPAWN_LOCK:
             cached = _PARENT_SPAWN_CACHE.get(key)
@@ -321,10 +323,43 @@ def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool
             if _file_generation(os.fstat(handle.fileno())) != generation:
                 raise _AncestryPending()
             return cached[1]
+        # The live coordinator legitimately appends while a child authenticates.
+        # Parse one copied complete prefix, not two different moving EOFs.
+        captured_size = info.st_size
+        proof = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+        copied, complete, prefix_hash = 0, 0, hashlib.sha256()
+        while copied < captured_size:
+            data = handle.read(min(1024 * 1024, captured_size - copied))
+            if not data:
+                raise _AncestryPending()
+            proof.write(data)
+            prefix_hash.update(data)
+            newline = data.rfind(b"\n")
+            if newline >= 0:
+                complete = copied + newline + 1
+            copied += len(data)
+        proof.truncate(complete)
+        proof.seek(0)
+
+        def prefix_unchanged():
+            if not _path_matches_handle(path, _sessions_root(), handle, max_size=MAX_PARENT_BYTES):
+                return False
+            if os.fstat(handle.fileno()).st_size < captured_size:
+                return False
+            handle.seek(0)
+            observed, remaining = hashlib.sha256(), captured_size
+            while remaining:
+                data = handle.read(min(1024 * 1024, remaining))
+                if not data:
+                    return False
+                observed.update(data)
+                remaining -= len(data)
+            return observed.digest() == prefix_hash.digest()
+
         task_name = agent_path.rsplit("/", 1)[1]
         child_bytes = thread_id.encode("ascii")
         call_ids = set()
-        for raw in handle:
+        for raw in proof:
             if len(raw) > MAX_LINE_BYTES:
                 return False
             if not raw.endswith(b"\n"):
@@ -338,13 +373,13 @@ def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool
             if activity and activity[1:] == (thread_id, agent_path):
                 call_ids.add(activity[0])
         if len(call_ids) != 1:
-            if _file_generation(os.fstat(handle.fileno())) != generation:
+            if not prefix_unchanged():
                 raise _AncestryPending()
             return False
         call_bytes = next(iter(call_ids)).encode("ascii")
-        handle.seek(0)
+        proof.seek(0)
         calls, outputs, activities, order = {}, {}, {}, {}
-        for raw in handle:
+        for raw in proof:
             if len(raw) > MAX_LINE_BYTES:
                 return False
             if not raw.endswith(b"\n"):
@@ -364,9 +399,7 @@ def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool
                 if value:
                     target.setdefault(value[0], []).append(value[1:])
                     order.setdefault(value[0], []).append(kind)
-        if not _path_matches_handle(path, _sessions_root(), handle):
-            return False
-        if _file_generation(os.fstat(handle.fileno())) != generation:
+        if not prefix_unchanged():
             raise _AncestryPending()
         matches = [key for key, value in calls.items()
                    if value == [(task_name,)]
@@ -380,6 +413,8 @@ def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool
             _PARENT_SPAWN_CACHE[key] = (generation, valid)
         return valid
     finally:
+        if proof is not None:
+            proof.close()
         handle.close()
 
 

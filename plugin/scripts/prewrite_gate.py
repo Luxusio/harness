@@ -198,6 +198,7 @@ def _is_protected_artifact(path, repo_root=None):
                 or _is_task_local_review_detail(normalized, repo_root=repo_root)
             )
         )
+        or os.sep + "work" + os.sep + "verification-targets" + os.sep in normalized
         or _is_migration_artifact(normalized)
         or _is_pool_control_artifact(normalized)
         or normalized.endswith(os.path.join(TASK_DIR, ".active"))

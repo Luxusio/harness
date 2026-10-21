@@ -1,69 +1,14 @@
-# ADR: Receipt gates without source snapshots
+# ADR: Lifecycle receipts and verification target applicability
 
-Status: accepted  
-Date: 2026-08-11  
-Task: `TASK__remove-automatic-git-change-detection`
+Status: amended 2026-10-21. Supersedes the developer-only source-freshness decision of 2026-08-11; lifecycle receipt identity remains unchanged.
 
 ## Context
-
-Harness previously derived task scope and verification freshness from Git HEAD,
-dirty paths, committed paths, gitlinks, submodules, linked worktrees, and file
-fingerprints. That made lifecycle calls slow and fragile in workspaces that
-contain ignored nested repositories or independently managed services. It also
-turned a workflow coordinator into a local repository-integrity monitor.
+Lifecycle receipts authenticate independent task/run/agent/lens completion and review-before-QA ordering. They alone do not prove source contents. Earlier contracts delegated post-QA edits entirely to the developer, leaving repeated manual manifests and ABA gaps.
 
 ## Decision
+Keep lifecycle receipt authenticity separate from source applicability. New review/QA uses an owner-issued persistent copied target before the native invocation. Existing authenticated native task_name and matched first-generation runtime identity associate its token; no replay hash, prompt text, direct final or new receipt field supplies source authority. Roles consume the copied read-only source view. This declares a controlled source view, not a sandbox over every arbitrary role tool call.
 
-Automatic Git change detection is removed from `task_start`, `task_context`,
-`task_verify`, and `task_close`.
-
-The plan supplies applicable review and QA lenses in `TASK.json`. Lifecycle
-receipts prove only:
-
-- the Harness task identity;
-- the runtime child-agent identity;
-- the declared review or QA lens;
-- a matched start and explicit completion verdict, including an exact runtime
-  event/session/thread/agent-path tuple when the runtime supplies one; and
-- required ordering, including review PASS before QA start.
-
-Receipts do not prove HEAD, diff contents, touched paths, source scope, or that
-the repository stayed unchanged after verification. Post-review/post-QA edits,
-concurrent mutations, and scope drift are developer-owned risks.
-
-Explicit operations may still inspect Git or fingerprint their own concrete
-payload. Examples include setup discovery, a verified installer, release
-packaging, and an opt-in diagnostic command. Such checks are local to that
-operation and are not lifecycle gates.
-
-For the verified installer, review/QA receipts authorize the current task run;
-the payload fingerprint proves only that the bytes copied and executed stayed
-stable during that explicit install transaction. It does not claim that those
-bytes are the same bytes seen by the reviewers. This is the same intentional
-developer-owned post-QA mutation risk, including for `install.py` itself.
-
-Receipt streams remain a transaction boundary. Each lifecycle generation gets
-a random identity in `TASK.json`, copied into the session marker and receipts;
-events from an earlier generation cannot authorize an explicitly fresh run,
-including when a watcher replays its rollout. Ordinary open/blocked resume
-preserves the current generation and receipt stream. A closed task refuses
-ordinary resume; explicit `fresh_run: true` rotates its receipt stream under the
-hardened no-follow receipt lock. Close holds the same lock from verdict
-evaluation through attestation/state publication. Late watcher events cannot
-append after the task becomes terminal. Crossing an ignored nested Git boundary
-likewise requires a session-specific ancestor task binding; the legacy
-repository-wide marker is insufficient.
+Explicit verify, close and verified installation compare relevant current inputs/build context with active target records. Context/open/plan do not scan source. Historical lifecycle-only records remain unbound, with their historical lifecycle semantics, and are never source-certified by migration. Target-aware tasks require applicable required-lens evidence. Followup inherited tokens are unsupported for source certification; a newly issued native spawn is the supported route.
 
 ## Consequences
-
-- Submodules, ignored nested repositories, and linked worktrees no longer need
-  special change-tracking support.
-- Lifecycle latency and failure modes are independent of repository size and
-  Git metadata layout.
-- Harness still rejects missing, malformed, mismatched, or incorrectly ordered
-  review/QA receipts.
-- Harness cannot automatically detect edits after QA or work performed outside
-  the planned scope. Developers rerun review/QA when those changes warrant it.
-
-This tradeoff is intentional: Harness coordinates evidence and ordering; it
-does not police the developer's local Git workspace.
+Source-only restoration at another path and unrelated documentation edits preserve applicable product results. Input/command/toolchain/dependency changes invalidate affected targets without rewriting authentic receipt history. Diagnostic targets neither replace acceptance nor inflate completion. Immutable manifests live beside copied input storage; WBS has only active references. See [verification target requirements](../REQ__verification-target-applicability.md) for exact supported boundary and limits. Git state is not a substitute for actual declared input bytes.

@@ -1220,7 +1220,7 @@ def _make_control_writer_authority():
         "harness_server": {
             "handle_task_start", "handle_task_context", "handle_task_close",
             "handle_task_blocked", "handle_write_plan", "handle_wbs_migrate",
-            "handle_task_wbs",
+            "handle_task_wbs", "handle_verification_target",
         },
         "codex_hook_registration": {
             "restore_watcher_registration", "register_task_result",
@@ -4764,7 +4764,7 @@ def nonparsing_completion_note(lenses):
 # ── Task context ─────────────────────────────────────────────────────────
 
 
-def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured_progress=None):
+def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured_progress=None, measure_targets=False):
     """Build the canonical task pack with on-the-fly routing."""
     st = read_task_control(task_dir)
     if not st:
@@ -4900,6 +4900,17 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
         next_action = "Park this parent through wbs(action='block') before batch admission; finish its exact work pack before resuming."
     if progress.get("refinement_due"):
         next_action += " WBS has no earned progress for two hours: refine unclear unfinished work at this boundary without changing weights; report real external blockers instead of splitting them."
+    from verification_target import applicability
+    targets = applicability(task_dir, find_repo_root(task_dir), snapshot,
+                            measure=measure_wbs or measure_targets)
+    if targets.get("missing_lenses"):
+        missing_for_close.append("applicable verification target: " + ", ".join(targets["missing_lenses"]))
+        # Applicability supplements lifecycle evidence; it cannot replace an
+        # actual FAIL/BLOCKED result or turn missing attestation into a rerun.
+        if runtime_verdict == "PASS":
+            if not why_blocked:
+                next_action = "Verification target is stale, unavailable or unbound. Preserve lifecycle history; issue a target for changed inputs and run only affected required lenses against its frozen source view."
+            runtime_verdict = "PENDING"
     return {
         "task_id": os.path.basename(task_dir),
         "status": task_control_status(task_dir, st, snapshot),
@@ -4907,6 +4918,7 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
         "routing": routing,
         "runtime_verdict": runtime_verdict,
         "receipt_recording": receipt_recording_status(snapshot, st["run_id"]),
+        "verification_targets": targets,
         "progress": progress,
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_blocked,
