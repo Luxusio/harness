@@ -595,7 +595,7 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
                 and checkpoint.get('integrated_tip') == tip and checkpoint.get('stage') == 'harvested',
                 'residue archive/integration proof changed')
     tree = _s1_git_text(repo, 'ls-tree', '-r', '-t', '-z', tip)
-    tracked, directories = {}, set()
+    tracked, directories, gitlinks = {}, set(), set()
     for entry in filter(None, tree.split('\0')):
         header, path = entry.split('\t', 1)
         mode, kind, oid = header.split()
@@ -603,7 +603,10 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
             directories.add(path)
         elif kind == 'blob' and mode in {'100644', '100755'}:
             tracked[path] = (oid, mode == '100755')
-        # Links/gitlinks are intentionally unsupported residue, even tracked.
+        elif kind == 'commit' and mode == '160000':
+            gitlinks.add(path)
+        # Tracked symlinks remain unsupported residue.
+    directories.update(gitlinks)
     task_rel = 'doc/harness/tasks/' + task_id
     preserved = {task_rel + '/' + rel: digest for rel, digest in archived.items() if digest is not None}
     directories.add(task_rel)
@@ -615,7 +618,7 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
     algorithm = _s1_git_text(repo, 'rev-parse', '--show-object-format')
     _s1_require(algorithm in {'sha1', 'sha256'}, 'unsupported Git object format')
     def inventory():
-        found = {}
+        found, cache_dirs = {}, set()
         def unreadable(exc):
             raise HarvestError('cannot inspect residue') from exc
         for current, dirs, files in os.walk(worktree, followlinks=False, onerror=unreadable):
@@ -626,11 +629,27 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
                 identity = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
                 _s1_require(info.st_uid == os.getuid() and info.st_nlink == 1 or stat.S_ISDIR(info.st_mode)
                             and info.st_uid == os.getuid(), 'unsafe residue ownership/link count')
+                parent = os.path.dirname(rel) or '.'
+                in_cache = parent in cache_dirs or rel in cache_dirs
+                if in_cache:
+                    _s1_require(os.path.basename(rel) != '.git', 'nested repository inside residue cache: ' + rel)
                 if stat.S_ISDIR(info.st_mode):
-                    _s1_require(rel == '.' or rel in directories, 'unknown residue directory: ' + rel)
+                    if rel in gitlinks:
+                        # An uninitialized placeholder owns no module bytes.
+                        # Observe only whether an entry exists; never descend.
+                        with os.scandir(path) as children:
+                            _s1_require(next(children, None) is None, 'populated gitlink residue: ' + rel)
+                    elif (in_cache or os.path.basename(rel) in ORDINARY_CACHES
+                          and (parent == '.' or parent in directories)):
+                        cache_dirs.add(rel)
+                    else:
+                        _s1_require(rel == '.' or rel in directories, 'unknown residue directory: ' + rel)
                     found[rel] = identity
                     continue
                 _s1_require(stat.S_ISREG(info.st_mode), 'nonregular residue: ' + rel)
+                if in_cache:
+                    found[rel] = identity
+                    continue
                 sha = hashlib.sha256()
                 blob = hashlib.new(algorithm)
                 blob.update(('blob ' + str(info.st_size) + '\0').encode())
@@ -653,6 +672,8 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
                     matches = True
                 _s1_require(matches, 'unpreserved or changed residue: ' + rel)
                 found[rel] = identity
+            dirs[:] = [name for name in dirs
+                       if os.path.relpath(os.path.join(current, name), worktree) not in gitlinks]
         return found
     expected = inventory()
     _s1_require(inventory() == expected, 'residue inventory changed')

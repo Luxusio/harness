@@ -1382,7 +1382,12 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
     assert worktree.exists()
     archive = pool.repo / 'doc/harness/archive/batch/TASK__a'
     original_archive = (archive / 'PLAN.md').read_bytes()
-    for kind in ('unknown-file', 'unknown-dir', 'modified', 'exec-bit', 'symlink', 'fifo', 'archive', 'missing-row', 'malformed-row'):
+    cache = worktree / 'doc/harness/__pycache__'
+    (cache / 'nested').mkdir(parents=True)
+    (cache / 'runtime.cpython.pyc').write_bytes(b'\x00reproducible bytecode')
+    (cache / 'nested/fixture.pyc').write_bytes(b'\x00nested cache')
+    for kind in ('unknown-file', 'unknown-dir', 'modified', 'exec-bit', 'symlink', 'fifo', 'archive',
+                 'missing-row', 'malformed-row', 'cache-link', 'cache-git', 'cache-special', 'unknown-parent-cache'):
         path = worktree / 'valuable'
         if kind == 'unknown-file': path.write_text('keep me')
         elif kind == 'unknown-dir': path.mkdir()
@@ -1392,6 +1397,12 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
         elif kind == 'fifo': os.mkfifo(path)
         elif kind == 'missing-row': ledger.write_text(lead_row + '{\"key\":\"unpreserved\"}\n')
         elif kind == 'malformed-row': ledger.write_text(lead_row + 'invalid-json\n')
+        elif kind == 'cache-link': (cache / 'linked.pyc').symlink_to(worktree / 'a.txt')
+        elif kind == 'cache-git': (cache / '.git').write_text('unowned metadata')
+        elif kind == 'cache-special': os.mkfifo(cache / 'pipe')
+        elif kind == 'unknown-parent-cache':
+            (path / '__pycache__').mkdir(parents=True)
+            (path / '__pycache__/unowned.pyc').write_bytes(b'keep unknown parent')
         else: (archive / 'PLAN.md').write_text('changed archive')
         before_mode = directory.stat().st_mode
         pool.cli('recover', '--slug', 'a', '--worker-stopped', ok=False)
@@ -1402,6 +1413,14 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
         elif kind == 'modified': (worktree / 'a.txt').write_text('a\n')
         elif kind == 'exec-bit': (worktree / 'a.txt').chmod(0o644)
         elif kind in ('missing-row', 'malformed-row'): ledger.write_text(lead_row)
+        elif kind == 'cache-link': (cache / 'linked.pyc').unlink()
+        elif kind == 'cache-git': (cache / '.git').unlink()
+        elif kind == 'cache-special': (cache / 'pipe').unlink()
+        elif kind == 'unknown-parent-cache':
+            assert (path / '__pycache__/unowned.pyc').read_bytes() == b'keep unknown parent'
+            (path / '__pycache__/unowned.pyc').unlink()
+            (path / '__pycache__').rmdir()
+            path.rmdir()
         else: (archive / 'PLAN.md').write_bytes(original_archive)
     destination_ledger = pool.repo / 'doc/harness/learnings.jsonl'
     preserved_ledger = destination_ledger.read_bytes()
@@ -1411,5 +1430,54 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
     assert not worktree.exists() and not _git('branch', '--list', branch, cwd=pool.repo)
     # Idempotent retry after the branch has already disappeared.
     pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    assert (archive / 'PLAN.md').read_bytes() == original_archive
+    pool.cli('close')
+
+
+def test_gitlink_residue_empty_placeholder_and_populated_refusal(tmp_path, monkeypatch, capsys):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import batch_finish
+    import batch_state
+    pool = Pool(tmp_path, monkeypatch)
+    gitlink = 'modules/uninitialized'
+    _git('update-index', '--add', '--cacheinfo', '160000,' + _head(pool.repo) + ',' + gitlink,
+         cwd=pool.repo)
+    _git('commit', '-qm', 'record uninitialized module placeholder', cwd=pool.repo)
+    (pool.repo / gitlink).mkdir(parents=True)
+    pool.init()
+    pool.claim()
+    worktree, branch, directory = complete(pool)
+    original_cleanup = batch_finish._cleanup
+    plan_bytes = (directory / 'PLAN.md').read_bytes()
+    def interrupted(repo, tree, name, result, *args, **kwargs):
+        _git('worktree', 'remove', str(worktree), cwd=pool.repo)
+        _write(directory / 'PLAN.md', plan_bytes.decode())
+        (worktree / gitlink).mkdir(parents=True)
+        (worktree / gitlink).chmod(0o500)
+        directory.chmod(0o500)
+        raise OSError('simulated removal interrupted at empty gitlink placeholder')
+    monkeypatch.setattr(batch_finish, '_cleanup', interrupted)
+    assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+    capsys.readouterr()
+    monkeypatch.setattr(batch_finish, '_cleanup', original_cleanup)
+    placeholder = worktree / gitlink
+    archive = pool.repo / 'doc/harness/archive/batch/TASK__a'
+    original_archive = (archive / 'PLAN.md').read_bytes()
+    for name in ('module-data', '.git', '.hidden'):
+        placeholder.chmod(0o700)
+        unexpected = placeholder / name
+        unexpected.write_text('unpreserved module content\n')
+        placeholder.chmod(0o500)
+        before = (placeholder.stat().st_mode, directory.stat().st_mode)
+        refusal = pool.cli('recover', '--slug', 'a', '--worker-stopped', ok=False)
+        assert 'populated gitlink residue' in refusal['reason']
+        assert (placeholder.stat().st_mode, directory.stat().st_mode) == before
+        assert unexpected.read_text() == 'unpreserved module content\n'
+        assert _git('branch', '--list', branch, cwd=pool.repo)
+        placeholder.chmod(0o700)
+        unexpected.unlink()
+        placeholder.chmod(0o500)
+    pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    assert not worktree.exists() and not _git('branch', '--list', branch, cwd=pool.repo)
     assert (archive / 'PLAN.md').read_bytes() == original_archive
     pool.cli('close')

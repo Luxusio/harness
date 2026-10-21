@@ -296,3 +296,17 @@ preserved archive, without promoting them to the current run's acceptance
 evidence. Learning-ledger preservation uses bounded exact raw-row inclusion in
 the destination ledger; unrelated prior rows do not invalidate preserved rows.
 Malformed or missing rows still refuse disposal.
+
+An ordinary unregistered residue may contain an uninitialized gitlink
+placeholder only when the integrated commit records that exact gitlink path
+and the remaining entry is a plain empty directory. Both pre-mutation inventory
+passes require emptiness; any entry, including hidden module metadata, refuses
+without descending into the module. Populated and selected modules retain their
+existing independent preservation requirements.
+
+Partial ordinary residue retains the same existing `ORDINARY_CACHES` directory
+categories as registered removal, only beneath an already proved ancestor.
+Every cache directory and regular file participates in the bounded identity
+inventory and deletion rechecks. Links, special entries and nested `.git`
+refuse; an unknown parent never becomes disposable because it contains a cache.
+The empty-gitlink requirement takes precedence over cache recognition.
