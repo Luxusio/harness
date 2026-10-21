@@ -4187,6 +4187,53 @@ def _lens_events_by_lens(receipts, prefix, current_run_id):
     return grouped
 
 
+def receipt_recording_status(snapshot, run_id):
+    """Describe persisted executions from the caller's coherent snapshot.
+
+    Missing completion is not evidence of process liveness or response receipt.
+    This bounded projection neither changes authentication nor authorizes PASS.
+    """
+    identities = ("source", "runtime_id", "agent_id", "agent_type", "lens")
+    groups = {}
+    for index, entry in enumerate(snapshot.entries):
+        if entry["task_run_id"] != run_id:
+            continue
+        key = tuple(entry[field] for field in identities)
+        if key not in groups:
+            groups[key] = dict(zip(identities, key), started_records=0,
+                               completed_records=0, verdict=None)
+        row = groups[key]
+        row[entry["event"] + "_records"] += 1
+        row["last_record_index"] = index
+        if entry["event"] == "completed":
+            row["verdict"] = entry["verdict"]
+    counts = {}
+    for row in groups.values():
+        starts, ends = row["started_records"], row["completed_records"]
+        if starts > 1 or ends > 1:
+            state = "conflicting_records"
+            row["verdict"] = None
+        elif not starts:
+            state = "completion_without_start"
+        elif not ends:
+            state = "awaiting_completion_record"
+        elif row["verdict"] == "PENDING":
+            state = "completion_unbound"
+        else:
+            state = "completion_recorded"
+        row["recording_status"] = state
+        counts[state] = counts.get(state, 0) + 1
+    latest = sorted(groups.values(), key=lambda row: row["last_record_index"], reverse=True)[:32]
+    for row in latest:
+        del row["last_record_index"]
+    return {
+        "basis": "persisted_receipts", "task_run_id": run_id,
+        "snapshot_fingerprint": snapshot.fingerprint,
+        "total_executions": len(groups), "counts": counts,
+        "truncated": len(groups) > len(latest), "executions": latest,
+    }
+
+
 def _rerun_in_flight(events):
     """True when the lens's newest receipt is a start, i.e. it is running again.
 
@@ -4859,6 +4906,7 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
         "task_dir": task_dir,
         "routing": routing,
         "runtime_verdict": runtime_verdict,
+        "receipt_recording": receipt_recording_status(snapshot, st["run_id"]),
         "progress": progress,
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_blocked,

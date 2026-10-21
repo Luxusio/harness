@@ -59,6 +59,7 @@ def test_completion_during_measurement_uses_final_coherent_snapshot(pending_task
     assert not result["missing_for_close"]
     assert "Completed QA" in result["next_action"]
     assert measured == [True]
+    assert result["receipt_recording"]["counts"] == {"completion_recorded": 2}
 
 
 def test_delayed_completion_can_append_while_single_verify_waits(pending_task):
@@ -95,6 +96,9 @@ def test_no_completion_is_bounded_and_never_writes_receipts(pending_task, monkey
     assert "completed QA verdict: qa-cli" in result["missing_for_close"]
     assert waits and sum(waits) == pytest.approx(server.RECEIPT_SETTLEMENT_SECONDS)
     assert path.read_bytes() == before
+    assert result["receipt_recording"]["counts"] == {
+        "completion_recorded": 1, "awaiting_completion_record": 1,
+    }
 
 
 @pytest.mark.parametrize("verdict", ["FAIL", "BLOCKED_ENV"])
@@ -166,3 +170,89 @@ def test_no_started_required_lens_does_not_wait(pending_task):
     path.write_text("")
     with mock.patch.object(server.time, "sleep", side_effect=AssertionError("unconditional wait")):
         assert payload(verify(server))["runtime_verdict"] == "PENDING"
+
+
+def test_context_preserves_distinct_executions_and_old_run_history(pending_task, monkeypatch):
+    server, lib, task, path, append, completion = pending_task
+    # One completed QA and another independent invocation still awaiting its
+    # completion must stay visible, even though both have the same lens.
+    append()
+    second = dict(completion, event="started", verdict="", summary="",
+                  runtime_id="claude:session:second-qa", agent_id="second-qa")
+    append(second)
+    append(dict(second, task_run_id=lib.new_uuid7(), runtime_id="claude:session:old-qa"))
+    before = path.read_bytes()
+    with mock.patch.object(server.wbs, "fingerprint", side_effect=AssertionError("query must not hash")):
+        result = payload(server.call_tool("wbs", {"action": "context", "wbs_id": "settlement"}))
+    report = result["task_context"]["receipt_recording"]
+    assert report["total_executions"] == 3
+    assert report["counts"] == {"completion_recorded": 2, "awaiting_completion_record": 1}
+    assert report["executions"][0]["runtime_id"] == second["runtime_id"]
+    assert report["executions"][0]["verdict"] is None
+    assert report["snapshot_fingerprint"] == lib.receipt_snapshot(task).fingerprint
+    assert path.read_bytes() == before
+
+
+def test_recorded_pass_then_invalidating_terminal_is_visible(pending_task):
+    server, lib, task, _, append, completion = pending_task
+    append()
+    pending_verdict, summary = lib.normalize_receipt_completion("qa-cli", "unreadable report", "PENDING")
+    append(dict(completion, verdict=pending_verdict, summary=summary))
+    result = payload(server.call_tool("wbs", {"action": "context", "wbs_id": "settlement"}))
+    report = result["task_context"]["receipt_recording"]
+    assert report["counts"]["conflicting_records"] == 1
+    row = report["executions"][0]
+    assert row["completed_records"] == 2 and row["verdict"] is None
+    assert "summary" not in row
+    assert result["task_context"]["runtime_verdict"] != "PASS"
+
+
+def test_recording_projection_bounds_history_without_hiding_counts(pending_task):
+    _, lib, task, _, append, completion = pending_task
+    for index in range(40):
+        append(dict(completion, event="started", verdict="", summary="",
+                    runtime_id=f"claude:session:qa-{index}", agent_id=f"qa-{index}"))
+    before = Path(task, "RECEIPTS.jsonl").read_bytes()
+    snapshot = lib.receipt_snapshot(task)
+    report = lib.receipt_recording_status(snapshot, lib.read_task_control(task)["run_id"])
+    assert report["total_executions"] == 42
+    assert report["counts"] == {"completion_recorded": 1, "awaiting_completion_record": 41}
+    assert report["truncated"] and len(report["executions"]) == 32
+    assert report["executions"][0]["agent_id"] == "qa-39"
+    assert Path(task, "RECEIPTS.jsonl").read_bytes() == before
+
+
+def test_recording_projection_distinguishes_unbound_and_missing_start(pending_task):
+    server, lib, task, path, append, completion = pending_task
+    verdict, summary = lib.normalize_receipt_completion("qa-cli", "not a verdict", "PENDING")
+    append(dict(completion, verdict=verdict, summary=summary))
+    report = lib.receipt_recording_status(lib.receipt_snapshot(task), lib.read_task_control(task)["run_id"])
+    assert report["counts"]["completion_unbound"] == 1
+    # A stream with only a completion does not establish an authenticated pair.
+    rows = path.read_text().splitlines(True)
+    path.write_text("".join(row for row in rows if json.loads(row)["event"] != "started"))
+    result = payload(server.call_tool("wbs", {"action": "context", "wbs_id": "settlement"}))
+    assert result["task_context"]["receipt_recording"]["counts"] == {"completion_without_start": 2}
+    assert result["task_context"]["runtime_verdict"] != "PASS"
+
+
+def test_duplicate_started_records_are_conflicting_without_rewriting(pending_task):
+    _, lib, task, path, append, completion = pending_task
+    append(dict(completion, event="started", verdict="", summary=""))
+    before = path.read_bytes()
+    report = lib.receipt_recording_status(lib.receipt_snapshot(task), lib.read_task_control(task)["run_id"])
+    row = report["executions"][0]
+    assert row["recording_status"] == "conflicting_records"
+    assert row["started_records"] == 2 and row["verdict"] is None
+    assert path.read_bytes() == before
+
+
+def test_timeout_error_explains_action_specific_support(pending_task):
+    server, _, _, _, _, _ = pending_task
+    result = server.call_tool("wbs", {"action": "verify", "wbs_id": "settlement", "timeout": 120})
+    assert result.get("isError")
+    message = str(result)
+    assert "action verify" in message and "allowed fields:" in message
+    assert "check (1..60 seconds)" in message
+    schema = server.TOOLS["wbs"]["inputSchema"]["properties"]["timeout"]
+    assert schema["maximum"] == 60 and "check only" in schema["description"]

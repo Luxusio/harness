@@ -45,9 +45,12 @@ def validate(nodes):
     index = {}
     for raw in nodes:
         require(isinstance(raw, dict), "node must be an object")
-        allowed = {"id", "title", "weight", "parent", "depends_on", "check"}
+        allowed = {"id", "title", "weight", "parent", "depends_on", "check", "inputs"}
         require(not set(raw) - allowed, "unknown node fields")
         item = dict(raw, parent=raw.get("parent"), depends_on=raw.get("depends_on", []))
+        if "inputs" in item:
+            require(item["inputs"] is not None, "leaf inputs must be an explicit policy")
+            item["inputs"] = input_policy(item["inputs"])
         key = item.get("id")
         require(isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", key), "invalid node id")
         require(key not in index, "duplicate node id")
@@ -87,7 +90,7 @@ def validate(nodes):
     for key, item in index.items():
         if children[key]:
             require(weight_sum(index[c] for c in children[key]) == Decimal(str(item["weight"])), "split must conserve parent weight")
-            require(not any(field in item for field in ("check", "task_id", "leaf_id")), "group cannot claim leaf verification")
+            require(not any(field in item for field in ("check", "task_id", "leaf_id", "inputs")), "group cannot claim leaf verification")
         else:
             check = item.get("check")
             require(check is None or isinstance(check, list) and 0 < len(check) <= 128
@@ -257,7 +260,7 @@ def prepare(task_dir, plan, run_id, *, now=None):
     return state
 
 
-def fingerprint(repo, policy=None):
+def fingerprint(repo, policy=None, *, _deadline=None):
     """Observe checkout contents internally, without prescribing edited files."""
     from _lib import _trusted_git_env
     root, result = Path(repo).resolve(), []
@@ -275,7 +278,7 @@ def fingerprint(repo, policy=None):
             "deny requires explicit source inputs; Git metadata reads cannot be confined")
     total = {"source": 0, "artifact": 0}
     listing_bytes = 0
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 30 if _deadline is None else _deadline
     root_info = root.stat()
 
     def remaining():
@@ -463,10 +466,55 @@ def fingerprint(repo, policy=None):
     return digest([policy, sorted(result)]) if policy is not None else digest(sorted(result))
 
 
-def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=True):
+def verification_inputs(state, node):
+    policy = node.get("inputs", state.get("inputs"))
+    # A leaf can specialize its dependency scope, never remove a task-wide
+    # no-read boundary. Root excludes remain defaults, not security denials.
+    denied = (state.get("inputs") or {}).get("deny", [])
+    if "inputs" in node and denied:
+        policy = dict(policy, deny=list(dict.fromkeys(denied + policy.get("deny", []))))
+    return policy
+
+
+def measurement_sources(repo, state, *, only=None, observed=None):
+    """One observation per distinct actual scope, preserving the root default."""
+    if not any("inputs" in node for node in leaves(state["nodes"])):
+        return fingerprint(repo, state.get("inputs")) if observed is None else observed
+    policies = {digest(verification_inputs(state, node)): verification_inputs(state, node)
+                for node in leaves(state["nodes"]) if only is None or node["id"] in only}
+    deadline = time.monotonic() + 30
+    return {key: observed[key] if isinstance(observed, dict) and key in observed else fingerprint(repo, policy, _deadline=deadline)
+            for key, policy in policies.items()}
+
+
+def check_outcomes(state, leaf_id):
+    """Selected leaf plus transitive prerequisites, including group dependencies."""
+    index = {node["id"]: node for node in state["nodes"]}
+    required = set()
+    def include(key):
+        if key in required:
+            return
+        required.add(key)
+        for child in state["nodes"]:
+            if child["parent"] == key:
+                include(child["id"])
+        ancestor = key
+        while ancestor is not None:
+            for dep in index[ancestor]["depends_on"]:
+                include(dep)
+            ancestor = index[ancestor]["parent"]
+    include(leaf_id)
+    return required
+
+
+def scoped_source(sources, policy):
+    return sources.get(digest(policy)) if isinstance(sources, dict) else sources
+
+
+def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=True, _state=None):
     stamp = time.time() if now is None else now
     try:
-        state = read_state(task_dir)
+        state = read_state(task_dir) if _state is None else _state
         if state is None:
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None)
         if state.get("pack_only"):
@@ -479,18 +527,21 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
         require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
         rows = []
         if measure:
-            source = fingerprint(repo, state.get("inputs")) if _source is None else _source
+            sources = measurement_sources(repo, state) if _source is None else _source
         else:
-            latest = max((p for p in state["checks"].values() if p.get("source")),
-                         key=lambda p: p.get("checked_at", 0), default={})
-            source = latest.get("source")
+            sources = {}
+            for proof in sorted(state["checks"].values(), key=lambda p: p.get("checked_at", 0)):
+                if proof.get("source"):
+                    sources[proof.get("inputs", digest(None))] = proof["source"]
         for node in leaves(state["nodes"]):
+            policy = verification_inputs(state, node)
+            source = scoped_source(sources, policy)
             proof = state["checks"].get(node["id"], {})
             valid = (state["run_id"] == run_id and proof.get("passed") is True
                      and "last_attempt" not in proof and not proof.get("invalidated")
                      and proof.get("definition") == digest(node))
             valid = valid and source is not None and proof.get("source") == source
-            valid = valid and proof.get("inputs") == (digest(state["inputs"]) if "inputs" in state else None)
+            valid = valid and proof.get("inputs") == (digest(policy) if policy is not None else None)
             rows.append(dict(id=node["id"], title=node["title"], weight=node["weight"],
                              verified=bool(valid), checked_at=proof.get("checked_at") if valid else None))
         # Downstream outcomes lose current credit when prerequisite evidence
@@ -611,6 +662,14 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     require(leaf_id not in blocked_outcomes(state), "selected outcome or prerequisite is blocked")
     require(node.get("check"), "choose the outcome assertion through wbs(action='plan') when ready; no implementation layout required")
     observation_errors = (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError)
+    needed = check_outcomes(state, leaf_id)
+
+    def aggregate(sources, current_state):
+        try:
+            complete_sources = measurement_sources(repo, current_state, observed=sources)
+            return task_progress(task_dir, repo, run_id, now=now, _source=complete_sources, _state=current_state)
+        except observation_errors as exc:
+            return _unavailable(exc)
 
     def unavailable(reason, phase, result=None):
         return dict(leaf_id=leaf_id, passed=None,
@@ -631,10 +690,11 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     except ValueError as exc:
         return unavailable(exc, "before")
     try:
-        before = fingerprint(repo, state.get("inputs"))
+        before_sources = measurement_sources(repo, state, only=needed)
+        before = scoped_source(before_sources, verification_inputs(state, node))
     except observation_errors as exc:
         return unavailable(exc, "before")
-    before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before)
+    before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before_sources)
     if before_progress["status"] != "measured":
         return unavailable(before_progress.get("reason", "current measurement unavailable"), "before")
     verified = {row["id"] for row in before_progress["outcomes"] if row["verified"]}
@@ -649,14 +709,16 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         deps.update(index[ancestor]["depends_on"])
         ancestor = index[ancestor]["parent"]
     require(all(complete(dep) for dep in deps), "dependencies are not verified")
+    before_aggregate = aggregate(before_sources, state)
     try:
         result = _execute(node["check"], repo, timeout)
     except OSError as exc:
         result = dict(returncode=None, error=_error_text(exc), output="")
     stamp = time.time() if now is None else now
     try:
-        after_source = fingerprint(repo, state.get("inputs"))
-        after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_source)
+        after_sources = measurement_sources(repo, state, only=needed)
+        after_source = scoped_source(after_sources, verification_inputs(state, node))
+        after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_sources)
         require(after_progress["status"] == "measured", after_progress.get("reason", "current measurement unavailable"))
     except observation_errors as exc:
         # Preserve the prior proof's fields, but prevent it from resurrecting
@@ -676,16 +738,20 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     if success:
         state["checks"][leaf_id] = dict(previous) if leaf_id in verified else dict(
             passed=True, definition=digest(node), source=before, checked_at=stamp, result=result)
-        if "inputs" in state:
-            state["checks"][leaf_id]["inputs"] = digest(state["inputs"])
-    after = weight_sum(n for n in leaves(state["nodes"]) if n["id"] in (verified - {leaf_id}) | ({leaf_id} if success else set()))
-    if after > weight_sum(n for n in before_progress["outcomes"] if n["verified"]):
+        policy = verification_inputs(state, node)
+        if policy is not None:
+            state["checks"][leaf_id]["inputs"] = digest(policy)
+    final_progress = aggregate(after_sources, state)
+    if (final_progress["status"] == before_aggregate["status"] == "measured"
+            and weight_sum(n for n in final_progress["outcomes"] if n["verified"])
+            > weight_sum(n for n in before_aggregate["outcomes"] if n["verified"])):
         state["last_progress_at"] = stamp
+        final_progress["last_progress_at"] = stamp
     _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
     return dict(leaf_id=leaf_id, passed=success, **result,
                 execution="start_failed" if result["returncode"] is None else "completed",
                 measurement_status="measured", measurement_error=None,
-                progress=task_progress(task_dir, repo, run_id, now=now, _source=after_source))
+                progress=final_progress)
 
 
 def batch_route(task_dir, repo, state):

@@ -933,7 +933,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "source_write_allowed", "why_source_write_blocked", "review_verdict",
                 "required_review_lenses", "required_qa_lenses", "missing_for_close",
                 "next_action", "report_path", "effective_close_gate",
-                "progress",
+                "progress", "receipt_recording",
             })
             self.assertNotIn("subagent_receipts", context)
             self.assertNotIn("review_receipts", context)
@@ -1058,7 +1058,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(set(verify["structuredContent"]), {
             "task_dir", "runtime_verdict", "next_action", "missing_for_close",
             "report_path", "review_verdict", "required_review_lenses",
-            "required_qa_lenses", "watcher_status",
+            "required_qa_lenses", "watcher_status", "receipt_recording",
         })
         self.assertEqual(verify["structuredContent"]["required_qa_lenses"], ["qa-cli"])
         self.assertEqual(

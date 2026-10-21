@@ -259,3 +259,122 @@ def test_resume_context_failure_restores_block_run_receipts_and_ownership(tmp_pa
     resumed = call("open")
     assert not resumed.get("isError"), resumed
     assert resumed["structuredContent"]["run_id"] == opened["run_id"]
+
+
+def _scoped_node(key, sources, **extra):
+    item = node(key, inputs={"source": sources}, **extra)
+    item["check"] = [sys.executable, "-c", "from pathlib import Path; " +
+                     "; ".join(f"assert Path({name!r}).read_text() == 'ok'" for name in sources)]
+    return item
+
+
+def test_unrelated_scope_preserves_checks_and_shared_inputs_invalidate_both(tmp_path):
+    nodes = [_scoped_node("A", ["a.txt", "shared.txt"]),
+             _scoped_node("B", ["b.txt", "shared.txt"])]
+    repo, td = baseline(tmp_path, nodes)
+    for name in ("a.txt", "b.txt", "shared.txt"):
+        (repo / name).write_text("ok")
+    assert check(repo, td, "A")["passed"]
+    assert check(repo, td, "B")["passed"]
+    before_b = wbs.read_state(str(td))["checks"]["B"]
+    (repo / "a.txt").write_text("changed")
+    measured = progress(repo, td)
+    assert measured["percentage"] == 50
+    assert {row["id"] for row in measured["outcomes"] if row["verified"]} == {"B"}
+    (repo / "notes.md").write_text("unrelated documentation")
+    assert progress(repo, td)["percentage"] == 50
+    assert wbs.read_state(str(td))["checks"]["B"] == before_b
+    (repo / "shared.txt").write_text("changed")
+    assert progress(repo, td)["percentage"] == 0
+
+
+def test_scope_policy_change_does_not_promote_old_proof_and_dependencies_stale(tmp_path):
+    nodes = [_scoped_node("A", ["a.txt"]),
+             _scoped_node("B", ["b.txt"], depends_on=["A"])]
+    repo, td = baseline(tmp_path, nodes)
+    for name in ("a.txt", "b.txt", "extra.txt"):
+        (repo / name).write_text("ok")
+    assert check(repo, td, "A")["passed"]
+    assert check(repo, td, "B")["passed"]
+    nodes[0]["inputs"]["source"].append("extra.txt")
+    text = plan(nodes)
+    state = wbs.prepare(str(td), text, "run", now=110)
+    (td / "PLAN.md").write_text(text)
+    (td / "WBS.json").write_text(wbs.encode_state(state))
+    assert progress(repo, td)["percentage"] == 0
+    assert check(repo, td, "A")["passed"]
+    assert progress(repo, td)["percentage"] == 100
+    (repo / "a.txt").write_text("changed")
+    assert progress(repo, td)["percentage"] == 0
+
+
+def test_identical_scopes_are_measured_once_and_queries_never_rehash(tmp_path, monkeypatch):
+    nodes = [_scoped_node(key, ["src.txt"]) for key in ("A", "B")]
+    repo, td = baseline(tmp_path, nodes)
+    calls = []
+    original = wbs.fingerprint
+    def observed(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(wbs, "fingerprint", observed)
+    assert check(repo, td, "A")["passed"]
+    assert len(calls) == 2  # One before and one after, not one per leaf.
+    assert check(repo, td, "B")["passed"]
+    before = len(calls)
+    result = wbs.task_progress(str(td), str(repo), "run", measure=False)
+    assert result["historical_percentage"] == 100 and result["percentage"] is None
+    assert len(calls) == before
+
+
+def test_unrelated_scope_losing_credit_does_not_reset_progress_clock(tmp_path, monkeypatch):
+    nodes = [_scoped_node("A", ["a.txt"]), _scoped_node("B", ["b.txt"])]
+    repo, td = baseline(tmp_path, nodes)
+    for name in ("a.txt", "b.txt"):
+        (repo / name).write_text("ok")
+    assert check(repo, td, "A", now=101)["passed"]
+    original = wbs._execute
+    def concurrent_change(*args, **kwargs):
+        result = original(*args, **kwargs)
+        (repo / "a.txt").write_text("changed independently")
+        return result
+    monkeypatch.setattr(wbs, "_execute", concurrent_change)
+    result = check(repo, td, "B", now=200)
+    assert result["passed"] and result["progress"]["percentage"] == 50
+    assert result["progress"]["last_progress_at"] == 101
+    assert wbs.read_state(str(td))["last_progress_at"] == 101
+
+
+def test_root_deny_cannot_be_removed_by_leaf_policy(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    (repo / "private.txt").write_text("never read this fixture")
+    publish(td, [_scoped_node("A", ["private.txt"])],
+            {"source": ["src.txt"], "deny": ["private.txt"]})
+    actual_open = os.open
+    def opening(path, *args, **kwargs):
+        assert os.fspath(path) not in {"private.txt", str(repo / "private.txt")}
+        return actual_open(path, *args, **kwargs)
+    monkeypatch.setattr(os, "open", opening)
+    monkeypatch.setattr(wbs, "_execute", lambda *a, **k: pytest.fail("forbidden input must block command"))
+    result = check(repo, td)
+    assert result["execution"] == "not_run"
+    assert result["measurement_status"] == "unavailable"
+    assert wbs.read_state(str(td))["checks"] == {}
+
+
+def test_missing_unrelated_scope_does_not_block_independent_check_or_destroy_proof(tmp_path):
+    nodes = [_scoped_node("A", ["a.txt"]), _scoped_node("B", ["b.txt"])]
+    repo, td = baseline(tmp_path, nodes)
+    (repo / "a.txt").write_text("ok")
+    result = check(repo, td, "A")
+    assert result["passed"] and result["execution"] == "completed"
+    assert result["measurement_status"] == "measured"
+    assert result["progress"]["percentage"] is None  # B cannot yet be measured.
+    assert wbs.read_state(str(td))["checks"]["A"]["passed"]
+    (repo / "b.txt").write_text("ok")
+    assert check(repo, td, "B")["passed"]
+    (repo / "b.txt").unlink()
+    assert check(repo, td, "A")["passed"]
+    saved = wbs.read_state(str(td))["checks"]["A"]
+    (repo / "b.txt").write_text("ok")
+    assert progress(repo, td)["percentage"] == 100
+    assert wbs.read_state(str(td))["checks"]["A"] == saved

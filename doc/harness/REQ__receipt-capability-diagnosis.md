@@ -120,3 +120,46 @@ which have no start receipt and still need a transcript attachment.
   if required receipt evidence is still missing.
 - A `BLOCKED.md` naming an unverified watcher cause is worse than a fixed generic
   evidence-missing reason: the next session trusts it and repeats the wrong repair.
+# Persisted execution status
+
+User source: the 2026-10-21 BeatKernel/CCC reports request distinguishing actual
+completion from durable recording and preserving execution generations without
+rerunning completed work. This section's response fields are derived design,
+not quoted user requirements.
+
+Context and final verification expose a bounded `receipt_recording` projection
+from the same validated receipt snapshot used by their gates. It reports only
+the current task run, groups exact runtime/source/agent/type/lens identities,
+and exposes stored start/completion counts, missing starts, unbound verdicts
+and conflicting records. Separate same-lens executions remain separate.
+Aggregate counts include omitted executions; truncation is explicit. No raw
+transcript or summary is returned, and the query neither hashes source nor
+writes receipts. A corrupt stream remains an integrity failure.
+
+`awaiting_completion_record` means only that no completion was persisted in
+this snapshot. It does not prove that the agent is running, that its response
+was received, or why recording is absent. `completion_recorded` is persistence
+evidence, not independent proof of a valid ordered PASS. Conflicting records
+are never presented as ordinary completion. Existing receipt validity and
+review-before-QA rules remain authoritative. Live manager readiness and
+durable historical recording are separate observations.
+
+## Native follow-up generations
+
+Derived from the same user request: a completed agent's later native
+`followup_task` is a new invocation, not a second terminal of the original
+spawn. Its authenticated native call ID and `interacted` activity must agree
+on the original child identity. The new runtime receipt identity uses that
+call ID; the child reader selects its corresponding NEW_TASK boundary.
+An empty follow-up tool output is not a missing spawn identity: the native
+activity is required and supplies the already known child correlation.
+Original task/run binding and independent root/child completion agreement
+remain mandatory. Replayed generations retain their exact identity and do
+not rewrite previous records. Conflicting deliveries within one generation
+still fail closed. Merely sending a message is not a new invocation.
+
+A root completion may arrive before its trusted child rollout has flushed
+`task_complete`. A still-running/incomplete child is retryable, not a permanent
+identity mismatch. Only matched completed child/root evidence permits a receipt;
+invalid metadata or differing completed finals still fail closed. The watcher
+retries observation, never reruns the reviewer or test command.

@@ -1130,6 +1130,20 @@ def _structured_tool_output(output: Any) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
+def _followup_call(event: dict[str, Any]) -> tuple[str, str] | None:
+    payload = _event_payload(event, "response_item")
+    if (not payload or payload.get("type") != "function_call"
+            or payload.get("namespace") != "collaboration"
+            or payload.get("name") != "followup_task"):
+        return None
+    arguments = _json_arguments(payload)
+    call_id = str(payload.get("call_id") or "")
+    target = str((arguments or {}).get("target") or "")
+    if not CALL_RE.fullmatch(call_id) or not (AGENT_PATH_RE.fullmatch(target) or TASK_NAME_RE.fullmatch(target)):
+        return None
+    return call_id, target
+
+
 def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
     if not payload or payload.get("type") != "function_call_output":
@@ -1149,7 +1163,7 @@ def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
     return (call_id, identity) if _valid_agent_identity(identity) else None
 
 
-def _spawn_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
+def _spawn_activity(event: dict[str, Any], *, kind: str = "started") -> tuple[str, str, str] | None:
     """Decode the runtime's structured child-start correlation event."""
     payload = _event_payload(event, "event_msg")
     if not payload or payload.get("type") != "item_completed":
@@ -1163,7 +1177,7 @@ def _spawn_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
     child_id = str(item.get("agent_thread_id") or "")
     agent_path = str(item.get("agent_path") or "")
     if (
-        item.get("kind") != "started"
+        item.get("kind") != kind
         or not CALL_RE.fullmatch(call_id)
         or not THREAD_RE.fullmatch(child_id)
         or not AGENT_PATH_RE.fullmatch(agent_path)
@@ -1196,6 +1210,7 @@ def _child_status(
     root_id: str,
     agent_path: str,
     session_cwd: str,
+    *, generation: int = 1,
 ) -> tuple[str, Path | None, str]:
     try:
         coordinator = ({"session_id": root_id, "agent_path": "/root", "depth": 0}
@@ -1255,10 +1270,10 @@ def _child_status(
                         if isinstance(item, dict) and item.get("type") == "input_text"
                     ]
                     if any("Message Type: NEW_TASK" in text for text in texts):
+                        if child_turn and (len(completes) != 1 or len(finals) > 1):
+                            return "invalid", path, ""
                         child_boundaries += 1
-                        child_turn = True
-                        finals.clear()
-                        completes.clear()
+                        child_turn = child_boundaries == generation
                         continue
             if child_turn and event.get("type") == "event_msg" and payload.get("type") == "agent_message" and payload.get("phase") == "final_answer":
                 finals.append(str(payload.get("message") or ""))
@@ -1275,10 +1290,8 @@ def _child_status(
         return "pending", path, ""
     if matching_meta != 1:
         return "invalid", path, ""
-    if child_boundaries == 0:
+    if child_boundaries < generation:
         return "pending", path, ""
-    if child_boundaries != 1:
-        return "invalid", path, ""
     if not finals and not completes:
         return "running", path, ""
     if len(finals) > 1 or len(completes) != 1:
@@ -1487,9 +1500,7 @@ class Watcher:
             })
             self.by_agent[item["agent_path"]] = item
             return
-        child_status, _, _ = _child_status(
-            item["child_id"], self.root_id, item["agent_path"], self.session_cwd,
-        )
+        child_status, _, _ = self._item_child_status(item)
         if child_status == "pending":
             return
         # The registration offset proves this spawn was observed in order.
@@ -1539,6 +1550,10 @@ class Watcher:
         })
         self.by_agent[item["agent_path"]] = item
 
+    def _item_child_status(self, item):
+        kwargs = {"generation": item["generation"]} if item.get("generation", 1) > 1 else {}
+        return _child_status(item["child_id"], self.root_id, item["agent_path"], self.session_cwd, **kwargs)
+
     def _maybe_complete(self, item: dict[str, Any]) -> None:
         root_final = str(item.get("root_final") or "")
         if not item.get("started") or not root_final or item.get("completed") or item.get("invalid"):
@@ -1554,10 +1569,8 @@ class Watcher:
         ):
             self._invalidate(item, "active task changed while agent was running")
             return
-        status, transcript, child_final = _child_status(
-            item["child_id"], self.root_id, item["agent_path"], self.session_cwd,
-        )
-        if status == "pending":
+        status, transcript, child_final = self._item_child_status(item)
+        if status in {"pending", "running"}:
             return
         if status != "complete" or transcript is None or root_final != child_final:
             self._invalidate(item, "root and child completion evidence did not match")
@@ -1617,10 +1630,36 @@ class Watcher:
     def retry(self) -> None:
         for call_id in list(self.calls):
             self._maybe_start(call_id)
-        for item in list(self.by_agent.values()):
+        for item in list(self.calls.values()):
             self._maybe_complete(item)
 
     def feed(self, event: dict[str, Any]) -> None:
+        followup = _followup_call(event)
+        if followup:
+            call_id, target = followup
+            prior = next((item for item in reversed(list(self.calls.values()))
+                          if (item.get("started") or item.get("followup_child")) and not item.get("invalid")
+                          and target in {item.get("agent_path"), item.get("followup_path"), item.get("task_name")}), None)
+            if prior is None:
+                return  # No authenticated original invocation in this stream.
+            binding = _require_task_binding(
+                self.repo_root, self.root_id, self.expected_generation, self.session_cwd,
+            )
+            if (_event_precedes_run(event, binding.get("run_id", ""))
+                    or binding.get("task_dir") != prior.get("task_dir")
+                    or binding.get("run_id") != prior.get("task_run_id")):
+                return
+            if call_id in self.calls:
+                self._invalidate(self.calls[call_id], "duplicate follow-up invocation")
+                return
+            self.calls[call_id] = dict(
+                task_name=prior["task_name"], task_dir=prior["task_dir"],
+                task_run_id=prior["task_run_id"],
+                followup_child=prior.get("child_id") or prior["followup_child"],
+                followup_path=prior.get("agent_path") or prior["followup_path"],
+                generation=prior.get("generation", 1) + 1,
+            )
+            return
         spawn = _spawn_call(event)
         if spawn:
             call_id, task_name = spawn
@@ -1637,12 +1676,21 @@ class Watcher:
             self._set_once(item, "task_run_id", binding.get("run_id", ""))
             self._maybe_start(call_id)
             return
-        activity = _spawn_activity(event)
+        interacted = _spawn_activity(event, kind="interacted")
+        activity = _spawn_activity(event) or interacted
         if activity:
             call_id, child_id, agent_path = activity
             item = self.calls.get(call_id)
             if not item or not item.get("task_name"):
                 return
+            if item.get("followup_child"):
+                if (not interacted or child_id != item["followup_child"]
+                        or agent_path != item["followup_path"]):
+                    self._invalidate(item, "follow-up activity changed child identity")
+                    return
+                self._set_once(item, "output_path", agent_path)
+            elif interacted:
+                return  # Activity alone cannot create an invocation.
             self._set_once(item, "child_id", child_id)
             self._set_once(item, "agent_path", agent_path)
             self._maybe_start(call_id)
@@ -1660,6 +1708,10 @@ class Watcher:
         if output:
             call_id, agent_path = output
             item = self.calls.setdefault(call_id, {})
+            if item.get("followup_child"):
+                if agent_path != item["followup_path"]:
+                    self._invalidate(item, "follow-up output changed child identity")
+                return
             self._set_once(item, "output_path", agent_path)
             self._maybe_start(call_id)
             return
@@ -1678,7 +1730,12 @@ class Watcher:
         self._deliver(agent_path, root_final)
 
     def _deliver(self, agent_path: str, root_final: str) -> dict[str, Any] | None:
-        item = self.by_agent.get(agent_path) or next(
+        # Native deliveries are ordered per child. Complete the oldest observed
+        # invocation still awaiting a delivery, including a queued follow-up.
+        item = next((entry for entry in self.calls.values()
+                     if (entry.get("agent_path") or entry.get("followup_path")) == agent_path
+                     and not entry.get("invalid") and entry.get("root_final") is None), None)
+        item = item or self.by_agent.get(agent_path) or next(
             (entry for entry in self.calls.values() if entry.get("agent_path") == agent_path), None,
         )
         if not item:

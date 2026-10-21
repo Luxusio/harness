@@ -1900,6 +1900,7 @@ def handle_task_verify(args: dict) -> dict:
         ) + RECEIPT_PENDING_VERIFY_NEXT_ACTION
     payload = {
         "task_dir": td, "runtime_verdict": rv,
+        "receipt_recording": ctx["receipt_recording"],
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
         "report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
@@ -2227,7 +2228,15 @@ def handle_wbs(args: dict) -> dict:
                           | ({"node_id"} if action in {"check", "open", "block"} else set())
                           | ({"objective"} if action == "open" else set()))
     if unknown:
-        raise ValueError("unexpected fields for WBS action: " + ", ".join(sorted(unknown)))
+        allowed = {"action", "wbs_id", "workspace"} | fields
+        if action in {"check", "open", "block"}:
+            allowed.add("node_id")
+        if action == "open":
+            allowed.add("objective")
+        hint = " timeout is supported only by check (1..60 seconds)." if "timeout" in unknown else ""
+        raise ValueError(f"unexpected fields for WBS action {action}: "
+                         + ", ".join(sorted(unknown))
+                         + "; allowed fields: " + ", ".join(sorted(allowed)) + "." + hint)
     if action in {"open", "block"} and "node_id" in args:
         if set(args) - {"action", "wbs_id", "workspace", "node_id", "blocked_reason", "unblock_condition"}:
             raise ValueError("outcome operations preserve the existing task run")
@@ -2440,7 +2449,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "worker_stopped": {"type": "boolean", "description": "Coordinator confirmed the native worker and all nested writers stopped; required for complete/resume/recover."},
          "recovery_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "recover only: acknowledge the exact reviewed resolved rebase tip. Never accepted by normal completion; original result identity is preserved."},
          "available_slots": {"type": "integer", "minimum": 0, "description": "Actual free host slots after reserving review/QA capacity; bounds prepare reservations."},
-         "timeout": {"type": "integer", "minimum": 1, "maximum": 60},
+         "timeout": {"type": "integer", "minimum": 1, "maximum": 60,
+                     "description": "check only: assertion timeout in seconds (1..60, default 60); not accepted by verify or other actions."},
          "apply": {"type": "boolean", "default": False, "description": "Explicitly apply previewed legacy-data migration."},
          "fresh_run": {"type": "boolean"}, "blocked_reason": {"type": "string"},
          "unblock_condition": {"type": "string"},

@@ -243,3 +243,33 @@ configuration overrides through the existing trusted environment helper. A file
 tracked by the real checkout in default Git mode remains measured even when it matches ignore rules
 and an alternate index omits it. A subsequent change invalidates its prior
 assertion proof; inherited Git settings cannot keep stale progress at100%.
+
+
+## Outcome-specific verification inputs
+
+User source: the 2026-10-21 BeatKernel/CCC reports request invalidating only
+results whose actual inputs changed. The following mechanism is derived from
+that accepted outcome, not a quoted user design.
+
+A leaf may declare optional `inputs` using the same verification policy as the
+root `wbs-inputs` fence. Without a leaf policy, the root remains its default.
+Groups cannot declare leaf-only evidence inputs. Task-wide `deny` paths are
+always inherited; a leaf override cannot remove a no-read boundary. Other root
+fields are defaults for leaves without a policy; a leaf deny adds restrictions
+for that scope only. The policy describes actual source/test/build dependencies
+chosen at verification time; it does not
+prescribe implementation files at intake. Shared code and build inputs must
+appear in every scope that depends on them. Identical scopes are measured once
+per observation. A proof belongs to its own scope and definition; changing a
+policy cannot promote an older proof. Unrelated-scope changes retain applicable
+checks, while prerequisite invalidation still propagates. Stored queries do
+not hash any scope and never present historical credit as current measurement.
+
+This binds declared assertion evidence only. It does not authenticate the
+source seen by independent reviewers or QA and cannot substitute for their
+separate target-applicability and ordered receipt requirements.
+
+An explicit leaf check requires measurable target and prerequisite scopes. An
+unrelated missing input or artifact cannot prevent that check or erase its
+result. Aggregate progress can remain unavailable with a null percentage while
+the selected assertion has a measured result; this is not whole-task PASS.

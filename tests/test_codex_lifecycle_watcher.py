@@ -3118,3 +3118,84 @@ def test_direct_bound_watch_rejects_missing_or_mismatched_initial_registration(t
                                idle_seconds=0.03)
         assert result != 0, field
         record.assert_not_called()
+
+
+def _followup_events(child_id, agent_path, target=None, call_id="call_followup_123456"):
+    events = _spawn_events("unused", child_id, "unused", agent_path, call_id)
+    events[0]["payload"].update(name="followup_task", arguments=json.dumps({
+        "target": target or agent_path, "message": "encrypted",
+    }))
+    events[1]["payload"]["item"]["kind"] = "interacted"
+    events[2]["payload"]["output"] = ""
+    return events
+
+
+def _assert_native_followup(tmp_path, monkeypatch, target, *, delayed_child_completion=False):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review"
+    first = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    second = "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0"
+    child = _rollout_path(codex_home, child_id)
+    initial = _child_events(root_id, child_id, agent_path, str(repo), first)
+    _write_jsonl(child, initial)
+    receipts = []
+    watcher = mod.Watcher(str(repo), root_id)
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=lambda _td, row: receipts.append(dict(row)) or row), \
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
+        for event in _spawn_events(root_id, child_id, "code_review", agent_path):
+            watcher.feed(event)
+        watcher.feed(_delivery(agent_path, first))
+        # A real idle follow-up emits a second NEW_TASK in the same child,
+        # an interacted activity and potentially empty tool output.
+        next_boundary = _child_events(root_id, child_id, agent_path, str(repo))[-1:]
+        _write_jsonl(child, initial + next_boundary)
+        for event in _followup_events(child_id, agent_path, target):
+            watcher.feed(event)
+        assert [row.get("event") for row in receipts] == ["started", "completed", "started"]
+        assert receipts[0]["runtime_id"] != receipts[2]["runtime_id"]
+        assert receipts[1]["verdict"] == "PASS"
+        if delayed_child_completion:
+            watcher.feed(_delivery(agent_path, second))
+            assert len(receipts) == 3
+            assert not watcher.by_agent[agent_path].get("invalid")
+        _write_jsonl(child, initial + _child_events(root_id, child_id, agent_path, str(repo), second)[-3:])
+        if delayed_child_completion:
+            watcher.retry()
+        else:
+            watcher.feed(_delivery(agent_path, second))
+        watcher.feed(_delivery(agent_path, second))
+        assert [row.get("verdict") for row in receipts] == [None, "PASS", None, "FAIL"]
+        assert mod._child_status(child_id, root_id, agent_path, str(repo))[2] == first
+        assert mod._child_status(child_id, root_id, agent_path, str(repo), generation=2)[2] == second
+        watcher.feed(_delivery(agent_path, first))  # Conflict inside generation2.
+    assert [row.get("verdict") for row in receipts] == [None, "PASS", None, "FAIL", "PENDING"]
+
+
+def test_native_followup_has_distinct_receipts_and_selected_child_turn(tmp_path, monkeypatch):
+    _assert_native_followup(tmp_path, monkeypatch, "/root/code_review")
+
+
+def test_native_followup_accepts_exact_relative_child_name(tmp_path, monkeypatch):
+    _assert_native_followup(tmp_path, monkeypatch, "code_review")
+
+
+def test_root_completion_waits_for_child_generation_flush(tmp_path, monkeypatch):
+    _assert_native_followup(tmp_path, monkeypatch, "code_review", delayed_child_completion=True)
+
+
+def test_interacted_activity_without_followup_call_is_not_authority(tmp_path, monkeypatch):
+    mod = _load()
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    watcher = mod.Watcher(str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42")
+    activity = _followup_events("019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "/root/code_review")[1]
+    with mock.patch.object(mod, "record_subagent_receipt", side_effect=AssertionError("unauthenticated start")):
+        watcher.feed(activity)
+    assert not watcher.calls

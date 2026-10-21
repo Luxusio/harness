@@ -30,6 +30,16 @@ one acquisition path:
 3. The matching structured spawn output supplies the same child agent path.
 4. The watcher records the start only after all three records agree.
 
+A native `collaboration.followup_task` on a previously correlated direct child
+creates another invocation with its own call ID. Its exact `interacted`
+SubAgentActivity must match that child's thread and path; unlike spawn, this
+tool may return an empty output. Neither a plain message nor activity alone
+creates a generation. Each authenticated invocation selects its corresponding
+NEW_TASK boundary in the same trusted child rollout. The ordinal is reconstructed
+from observed invocation calls, never from supplied prompt text. Generations
+retain separate runtime IDs and must independently satisfy completion agreement.
+Conflicting terminals within a generation still invalidate that lifecycle.
+
 Missing, malformed, or mismatched child evidence fails closed. A child that is
 already complete when a delayed watcher replays may establish a start only when
 the immutable registration offset precedes the exact root spawn and the replay
@@ -52,7 +62,7 @@ review or QA lens. The coordinator's exact active-task marker and current
 task authorities.
 
 The persisted compact identity is one namespaced `runtime_id`:
-`codex:<coordinator-thread>:<spawn-event>:<child-thread>`. Separate runtime event,
+`codex:<coordinator-thread>:<invocation-call>:<child-thread>`. Separate runtime event,
 session, and thread fields are not stored. This is a storage projection only;
 all bounded rollout checks above still run before a receipt is appended.
 
@@ -60,8 +70,9 @@ Completion requires one child `task_complete` final and one direct child
 `FINAL_ANSWER` delivered to that coordinator. Their final text must match exactly. If
 the child rollout also contains a distinct child final-answer event, it must
 match the same text. Duplicate, conflicting, historical, cross-run, or
-out-of-order boundaries invalidate the lifecycle rather than selecting a
-convenient candidate.
+out-of-order boundaries within the selected invocation invalidate the lifecycle
+rather than selecting a convenient candidate. Later authenticated NEW_TASK
+boundaries do not erase an earlier invocation's completion.
 
 SessionStart may create the versioned root registration. A successful Harness
 `task_start` or `task_context` PostToolUse event supplies exact hook session
