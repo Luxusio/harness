@@ -76,6 +76,21 @@ See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 ## Step 1: Run test commands from PLAN.md
 
 Run the highest available verification tier without asking the user to opt in.
+For shared preparation, use `verify_runner.py --jobs <group.json> --root <exact
+source-view> --results <task-work/group-results.json> --task-id <task> --run-id
+<run> --generation <generation>`. One group has at most one producer and its
+read-only consumers; independent groups use separate result files and can run
+concurrently. Declare source/artifact inputs, argv, environment, toolchains,
+explicit producer output files and actual host capabilities. Name shared
+VM/display/GPU/audio/port/build resources in each conflicting job's `resources`.
+Pending leases do not occupy worker slots. Use the same per-group result file
+for restored views or later outcome assertions: unchanged scoped bytes and
+context reuse successful execution; lost output regenerates preparation without
+invalidating consumers of byte-identical artifacts. Legacy shell commands do not
+gain reuse authority. Typed execution JSON is advisory and never replaces native
+review/QA receipts or WBS gates. See
+`doc/harness/REQ__verification-execution.md` for declarations, capability preflight,
+failure states and ownership boundaries.
 If this task created or unblocked a live/API/browser/CLI verification path, use
 that path now. Local rebuilds, dev server restarts, local DB seeds, and dev-only
 tokens are normal verification work. Stop to ask only for destructive state changes,
