@@ -1355,7 +1355,7 @@ def _handle_task_start(
     control_root, repo_root = _task_roots(args)
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
-    wbs.require_integrated_for_task(repo_root, tid)
+    wbs.require_integrated_for_task(repo_root, tid, measure=False)
     existing_control_path = task_control_file(task_dir)
     resumed_existing = os.path.lexists(existing_control_path)
     exact_session_id = _current_session_identity(control_root)

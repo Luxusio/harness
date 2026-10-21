@@ -20,6 +20,77 @@ def policy_plan(nodes, policy):
     return plan(nodes) + "\n```wbs-inputs\n" + json.dumps(policy) + "\n```\n"
 
 
+def test_explicit_siblings_reuse_one_parent_chain_and_detect_rebinding(tmp_path, monkeypatch):
+    repo, _ = baseline(tmp_path)
+    source = repo / "source"
+    source.mkdir()
+    for n in range(40):
+        (source / f"{n:02}.txt").write_text("input")
+    actual = os.open
+    directories = []
+    def opening(path, flags, *args, **kwargs):
+        if flags & os.O_DIRECTORY:
+            directories.append(os.fspath(path))
+        return actual(path, flags, *args, **kwargs)
+    monkeypatch.setattr(os, "open", opening)
+    policy = dict(source=[f"source/{n:02}.txt" for n in range(40)])
+    wbs.fingerprint(repo, policy)
+    assert len(directories) == 2  # checkout plus source, independent of sibling count
+    old = wbs.fingerprint(repo, policy)
+    swapped = False
+    def swapping(path, flags, *args, **kwargs):
+        nonlocal swapped
+        fd = opening(path, flags, *args, **kwargs)
+        if path == "38.txt" and not swapped:
+            swapped = True
+            source.rename(repo / "saved-source")
+            source.mkdir()
+            for n in range(40):
+                (source / f"{n:02}.txt").write_text("replacement")
+        return fd
+    monkeypatch.setattr(os, "open", swapping)
+    with pytest.raises(ValueError, match="directory identity changed"):
+        wbs.fingerprint(repo, policy)
+    assert swapped and old != wbs.fingerprint(repo, policy)
+
+
+def test_source_byte_override_is_bounded_separate_and_policy_bound(tmp_path, monkeypatch):
+    repo, td = baseline(tmp_path)
+    default = dict(source=["src.txt"])
+    assert "source_byte_limit" not in wbs.input_policy(default)
+    monkeypatch.setattr(wbs, "MAX_EVIDENCE_BYTES", 1)
+    with pytest.raises(ValueError, match="source bytes"):
+        wbs.fingerprint(repo, default)
+    override = dict(default, source_byte_limit=64 * 1024 * 1024)
+    publish(td, [node()], override)
+    assert check(repo, td)["passed"]
+    previous = wbs.read_state(str(td))["checks"]
+    publish(td, [node()], dict(default, source_byte_limit=32 * 1024 * 1024))
+    assert wbs.read_state(str(td))["checks"] == previous
+    assert progress(repo, td)["percentage"] == 0
+    assert wbs.fingerprint(repo, override) != wbs.fingerprint(repo, dict(default, source_byte_limit=32 * 1024 * 1024))
+    (repo / "artifact").write_text("long")
+    monkeypatch.setattr(wbs, "MAX_ARTIFACT_BYTES", 1)
+    with pytest.raises(ValueError, match="artifact bytes"):
+        wbs.fingerprint(repo, dict(override, artifacts=["artifact"]))
+
+
+@pytest.mark.parametrize("limit", [True, False, 0, -1, 1.0, "64000000", None, 64 * 1024 * 1024 + 1])
+def test_source_byte_override_rejects_invalid_values(limit):
+    with pytest.raises(ValueError, match="source_byte_limit"):
+        wbs.input_policy(dict(source=["src.txt"], source_byte_limit=limit))
+
+
+def test_actual_input_above_default_remains_required_under_override(tmp_path):
+    large = tmp_path / "required.bin"
+    with large.open("wb") as handle:
+        handle.truncate(34 * 1024 * 1024)
+    with pytest.raises(ValueError, match="source bytes"):
+        wbs.fingerprint(tmp_path, dict(source=[large.name]))
+    assert wbs.fingerprint(tmp_path, dict(source=[large.name], source_byte_limit=64 * 1024 * 1024))
+
+
+
 def publish(td, nodes, policy):
     text = policy_plan(nodes, policy)
     state = wbs.prepare(str(td), text, "run", now=100)

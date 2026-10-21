@@ -26,6 +26,7 @@ STALL_SECONDS = 7200
 MAX_NODES = 256
 MAX_EVIDENCE_ENTRIES = 4096
 MAX_EVIDENCE_BYTES = 32 * 1024 * 1024
+MAX_SOURCE_BYTE_LIMIT = 64 * 1024 * 1024
 MAX_LISTING_BYTES = 1024 * 1024
 MAX_MODULE_DEPTH = 8
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
@@ -119,7 +120,7 @@ def from_plan(text):
 def input_policy(value):
     if value is None:
         return None
-    require(isinstance(value, dict) and not set(value) - {"source", "artifacts", "exclude", "deny"}, "invalid input policy")
+    require(isinstance(value, dict) and not set(value) - {"source", "artifacts", "exclude", "deny", "source_byte_limit"}, "invalid input policy")
     result = {key: value.get(key, []) for key in ("artifacts", "exclude", "deny")}
     if "source" in value:
         result["source"] = value["source"]
@@ -132,6 +133,11 @@ def input_policy(value):
                     "input policy paths must be canonical checkout-relative literals")
         require(len(paths) == len(set(paths)), "duplicate input policy paths")
     require(result.get("source") != [] or result["artifacts"], "input policy selects no evidence")
+    if "source_byte_limit" in value:
+        limit = value["source_byte_limit"]
+        require(type(limit) is int and 0 < limit <= MAX_SOURCE_BYTE_LIMIT,
+                "source_byte_limit must be a positive integer <= 67108864")
+        result["source_byte_limit"] = limit
     return result
 
 
@@ -234,7 +240,7 @@ def prepare(task_dir, plan, run_id, *, now=None):
         from _lib import find_repo_root
         first_baseline = old.get("pack_only") is True
         if old.get("batch") and nodes != old["nodes"]:
-            require(batch_route(task_dir, find_repo_root(task_dir), old)["route"] == "integration",
+            require(batch_route(task_dir, find_repo_root(task_dir), old, measure=False)["route"] == "integration",
                     "finish the active work pack before refinement")
             old = dict(old, batch_history=old.get("batch_history", []) + [
                 dict(batch=old["batch"])])
@@ -341,7 +347,7 @@ def fingerprint(repo, policy=None, *, _deadline=None):
 
     def observe_file(path, parent_fd, category):
         nonlocal total
-        limit = MAX_EVIDENCE_BYTES if category == "source" else MAX_ARTIFACT_BYTES
+        limit = (policy or {}).get("source_byte_limit", MAX_EVIDENCE_BYTES) if category == "source" else MAX_ARTIFACT_BYTES
         budget_error = f"checkout evidence exceeds measurement budget ({category} bytes; input {path.relative_to(root)}; limit {limit})"
         try:
             before = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -425,34 +431,46 @@ def fingerprint(repo, policy=None, *, _deadline=None):
     else:
         # Required roots describe verification inputs, independently of Git's
         # index/ignore rules. Never ask Git to discover these paths.
-        pending, visited = [root / p for p in selected], set()
-        while pending:
-            remaining()
-            path = pending.pop()
-            relative = path.relative_to(root).as_posix()
-            if relative in visited or relative in artifacts or any(covers(p, relative) for p in excludes):
-                continue
-            require(not any(covers(p, relative) for p in denied), "required input is denied: " + relative)
-            require(".git" not in path.relative_to(root).parts, "Git administrative input cannot attest source")
-            visited.add(relative)
-            if path == root:
-                is_directory = True
-            else:
-                with directory_handle(path.parent) as parent_fd:
+        pending, visited = sorted(root / p for p in selected), set()
+        # Keep only the current parent chain, not one descriptor per visited
+        # directory. Siblings share its validated handle for stat and read.
+        # Closing/replacing this stack revalidates every ancestor as before.
+        with ExitStack() as parent_stack:
+            parent, parent_fd = None, None
+            while pending:
+                remaining()
+                path = pending.pop()
+                relative = path.relative_to(root).as_posix()
+                if relative in visited or relative in artifacts or any(covers(p, relative) for p in excludes):
+                    continue
+                require(not any(covers(p, relative) for p in denied), "required input is denied: " + relative)
+                require(".git" not in path.relative_to(root).parts, "Git administrative input cannot attest source")
+                visited.add(relative)
+                if path == root:
+                    is_directory = True
+                else:
+                    if path.parent != parent:
+                        parent_stack.close()
+                        parent_fd = parent_stack.enter_context(directory_handle(path.parent))
+                        parent = path.parent
                     info = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-                is_directory = stat.S_ISDIR(info.st_mode)
-            if is_directory:
-                with directory_handle(path) as directory_fd:
-                    with os.scandir(directory_fd) as children:
-                        for child in children:
-                            remaining()
-                            listing_bytes += len(os.fsencode(child.name)) + 1
-                            require(listing_bytes <= MAX_LISTING_BYTES,
-                                    "checkout evidence exceeds measurement budget (input listing bytes)")
-                            if child.name != ".git":
-                                pending.append(path / child.name)
-            else:
-                file(path)
+                    is_directory = stat.S_ISDIR(info.st_mode)
+                if is_directory:
+                    with directory_handle(path) as directory_fd:
+                        with os.scandir(directory_fd) as children:
+                            candidates = []
+                            for child in children:
+                                remaining()
+                                listing_bytes += len(os.fsencode(child.name)) + 1
+                                require(listing_bytes <= MAX_LISTING_BYTES,
+                                        "checkout evidence exceeds measurement budget (input listing bytes)")
+                                if child.name != ".git":
+                                    candidates.append(path / child.name)
+                            pending.extend(sorted(candidates))
+                else:
+                    require(len(result) < MAX_EVIDENCE_ENTRIES,
+                            "checkout evidence exceeds measurement budget (entries)")
+                    observe_file(path, parent_fd, "source")
         seen.update(p for p in selected if any(value is not None and covers(p, name) for name, value in result))
     require(selected is None or all(p in seen for p in selected), "required source input missing from evidence")
     for artifact in artifacts:
@@ -518,9 +536,9 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
         if state is None:
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None)
         if state.get("pack_only"):
-            validate_history(task_dir, repo, state)
+            validate_history(task_dir, repo, state, measure=measure)
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None,
-                        integration=batch_route(task_dir, repo, state))
+                        integration=batch_route(task_dir, repo, state, measure=measure))
         plan_text = Path(task_dir, "PLAN.md").read_text()
         plan_nodes = from_plan(plan_text)
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
@@ -570,8 +588,8 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
         total = float(weight_sum(rows))
         earned = float(weight_sum(n for n in rows if n["verified"]))
         complete = all(n["verified"] for n in rows)
-        validate_history(task_dir, repo, state)
-        integration = batch_route(task_dir, repo, state) if state.get("batch") else None
+        validate_history(task_dir, repo, state, measure=measure)
+        integration = batch_route(task_dir, repo, state, measure=measure) if state.get("batch") else None
         if not measure:
             for row in rows:
                 row["historical_verified"], row["verified"] = row["verified"], False
@@ -595,6 +613,36 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
 
 def _unavailable(reason):
     return dict(status="invalid", percentage=None, verified_weight=None, total_weight=None, reason=_error_text(reason))
+
+
+def summary(context):
+    """Pure advisory projection of owner-assembled facts; never close authority.
+
+    QA receipts attest software checks, not an implementation milestone or a
+    real deployment/device test. Those tiers stay unknown without such facts.
+    """
+    progress = context.get("progress", {})
+    integration = progress.get("integration") or {}
+    verdicts = (context.get("review_verdict"), context.get("runtime_verdict"))
+    if "FAIL" in verdicts:
+        software = "failed"
+    elif "BLOCKED_ENV" in verdicts:
+        software = "blocked"
+    elif verdicts[0] in {"PASS", "NOT_APPLICABLE"} and verdicts[1] == "PASS":
+        software = "current" if context.get("verification_targets", {}).get("status") == "applicable" else "stored"
+    else:
+        software = "pending"
+    return dict(advisory=True, task_id=context.get("task_id"), task_status=context.get("status"),
+                evidence=dict(implemented="unknown",
+                              integrated=("current" if integration.get("proof_fresh") else "stored")
+                              if integration.get("route") == "integration" else "unknown",
+                              software_verified=software, actual_environment="unknown",
+                              complete="stored" if context.get("status") == "closed" else "pending"),
+                measurement=progress.get("status", "unknown"),
+                outcomes=[dict(id=row["id"], title=row["title"],
+                               evidence="current" if row.get("verified") else
+                               "stored" if row.get("historical_verified") else "pending")
+                          for row in progress.get("outcomes", [])])
 
 
 def _error_text(reason):
@@ -754,24 +802,24 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
                 progress=final_progress)
 
 
-def batch_route(task_dir, repo, state):
+def batch_route(task_dir, repo, state, *, measure=True):
     import work_pack
-    return work_pack.route(repo, Path(task_dir).name, state["batch"])
+    return work_pack.route(repo, Path(task_dir).name, state["batch"], measure=measure)
 
 
-def validate_history(task_dir, repo, state):
+def validate_history(task_dir, repo, state, *, measure=True):
     for prior in state.get("batch_history", []):
-        require(batch_route(task_dir, repo, prior)["route"] == "integration", "previous work pack proof is no longer integrated")
+        require(batch_route(task_dir, repo, prior, measure=measure)["route"] == "integration", "previous work pack proof is no longer integrated")
 
 
-def require_integrated_for_task(repo, task_id):
+def require_integrated_for_task(repo, task_id, *, measure=True):
     from _lib import canonical_task_dir
     td = canonical_task_dir(task_id=task_id, repo_root=repo)
     state = read_state(td) if Path(td).is_dir() else None
     if state:
-        validate_history(td, repo, state)
+        validate_history(td, repo, state, measure=measure)
     if state and state.get("batch"):
-        require(batch_route(td, repo, state)["route"] == "integration", "work pack unfinished; integrate and close the pool before resuming parent")
+        require(batch_route(td, repo, state, measure=measure)["route"] == "integration", "work pack unfinished; integrate and close the pool before resuming parent")
 
 
 def admission_definition(state, ownership, selected):
@@ -828,7 +876,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
     assignment = dict(run_id=run_id, host=host,
                       ownership=ownership, selected=[], available_slots=available)
     if state.get('batch'):
-        result = batch_route(task_dir, repo, state)
+        result = batch_route(task_dir, repo, state, measure=False)
         assignment.update(mode='verification' if result['route'] == 'integration' else 'managed',
                           ownership={r['slug']: r['scopes'] for r in state['batch']['requests']})
         if not host['spawn_available'] or not host['continuation_available']:

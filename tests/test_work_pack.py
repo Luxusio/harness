@@ -126,6 +126,46 @@ def test_integrated_pack_requires_archive_and_destination_proof(tmp_path, monkey
         route(pool, spec)
 
 
+def test_stored_queries_skip_archive_hash_but_authority_still_refuses_tampering(tmp_path, monkeypatch):
+    import pytest
+    import wbs
+    import batch_state
+    from test_managed_wbs import host_snapshot
+    pool, call, td = mcp_integration(tmp_path, monkeypatch)
+    state = wbs.read_state(str(td))
+    # The first baseline preserves this real integrated pack in history.
+    assert state.get("batch_history")
+    actual = batch_state.fingerprint
+    def forbidden(*args, **kwargs):
+        pytest.fail("stored query freshly hashed archive")
+    monkeypatch.setattr(batch_state, "fingerprint", forbidden)
+    monkeypatch.setattr(wbs, "fingerprint", forbidden)
+    for action in ("context", "next", "open"):
+        result = call("wbs", dict(action=action, wbs_id=CHILD))
+        assert not result.get("isError"), result
+    text = (td / "PLAN.md").read_text()
+    assert not call("wbs", dict(action="plan", wbs_id=CHILD, plan=text)).get("isError")
+    spec = state["batch_history"][0]["batch"]
+    stored = work_pack.route(str(pool.repo), CHILD, spec, measure=False)
+    assert stored["route"] == "integration" and stored["proof_fresh"] is False
+    # Also cover an active pack, independent of the historical projection.
+    active = dict(state, batch=spec, batch_history=[])
+    assert wbs.task_progress(str(td), str(pool.repo), state["run_id"], measure=False, _state=active)["integration"]["proof_fresh"] is False
+    (td / "WBS.json").write_text(wbs.encode_state(active))
+    assert wbs.work_pack(str(td), str(pool.repo), state["run_id"], host=host_snapshot())["route"] == "integration"
+    (pool.repo / "doc/harness/archive/batch/TASK__a/PLAN.md").write_text("tampered archived content")
+    assert work_pack.route(str(pool.repo), CHILD, spec, measure=False)["route"] == "integration"
+    monkeypatch.setattr(batch_state, "fingerprint", actual)
+    with pytest.raises(ValueError, match="archive fingerprint"):
+        work_pack.require_integrated(str(pool.repo), CHILD, spec)
+    with pytest.raises(ValueError, match="archive fingerprint"):
+        wbs.require_integrated_for_task(str(pool.repo), CHILD)
+    archive = pool.repo / "doc/harness/archive/batch/TASK__a"
+    archive.rename(archive.with_name("moved"))
+    with pytest.raises(ValueError, match="missing"):
+        work_pack.route(str(pool.repo), CHILD, spec, measure=False)
+
+
 def test_all_integrated_still_requires_batch_close(tmp_path, monkeypatch):
     from test_batch_state import complete
     pool, spec = pack(tmp_path, monkeypatch)

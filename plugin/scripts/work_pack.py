@@ -64,7 +64,7 @@ def make_spec(repo_root: str, task_id: str, requests: list) -> dict:
         raise ValueError("work-pack batch intake refused: " + str(exc)) from exc
 
 
-def _integrated_proof(repo: str, data: dict) -> None:
+def _integrated_proof(repo: str, data: dict, *, measure=True) -> None:
     ref = data["destination_ref"]
     current_ref = batch.finish_helper._git(repo, "symbolic-ref", "-q", "HEAD").stdout.strip()
     batch.require(current_ref == ref, "work-pack batch destination branch changed")
@@ -81,8 +81,13 @@ def _integrated_proof(repo: str, data: dict) -> None:
         harvest = checkpoint.get("harvest")
         batch.require(isinstance(harvest, dict) and harvest.get("archived") == archive,
                       "work-pack batch archive identity mismatch")
-        batch.require(batch.fingerprint(archive) == checkpoint.get("archive_fingerprint"),
-                      "work-pack batch archive fingerprint changed")
+        batch.parents(archive)
+        batch.require(isinstance(checkpoint.get("archive_fingerprint"), str)
+                      and re.fullmatch(r"sha256:[0-9a-f]{64}", checkpoint["archive_fingerprint"]),
+                      "work-pack batch archive fingerprint missing")
+        if measure:
+            batch.require(batch.fingerprint(archive) == checkpoint["archive_fingerprint"],
+                          "work-pack batch archive fingerprint changed")
         batch.control(item, base=archive, closed=True)
         if item.get("submodule_manifest"):
             batch.batch_submodules.preserved_proof(repo, item["submodule_manifest"])
@@ -93,9 +98,12 @@ def _integrated_proof(repo: str, data: dict) -> None:
         ).returncode == 0, "work-pack batch commit is missing from destination ancestry")
 
 
-def route(repo_root: str, task_id: str, spec: dict) -> dict:
+def route(repo_root: str, task_id: str, spec: dict, *, measure=True) -> dict:
     """Return batch dispatch/resume or integration routing; refuse corrupt proof.
 
+With measure=False this is stored/advisory routing: archive contents are not
+fingerprinted and the result cannot authorize completion. Ownership, archive
+presence, closed control, disposal and destination ancestry are still checked.
 No state is created here. A missing batch is initialized through batch_state;
 an existing pool keeps its reservation, recovery, and cleanup ownership.
 """
@@ -119,16 +127,16 @@ an existing pool keeps its reservation, recovery, and cleanup ownership.
         if not os.path.lexists(path):
             return result
         data = batch.validate(batch.read_json(path), repo, expected["batch_id"])
-        return inspect_pool(repo, task_id, expected, data)
+        return inspect_pool(repo, task_id, expected, data, measure=measure)
     except (batch.Refusal, OSError, KeyError, TypeError) as exc:
         raise ValueError("work-pack batch proof refused: " + str(exc)) from exc
 
 
-def inspect_pool(repo, task_id, expected, data):
+def inspect_pool(repo, task_id, expected, data, *, measure=True):
     """Validate a neutral owner-bound pool, including staged importer metadata."""
     data = batch.validate(data, repo, expected["batch_id"])
     batch.require(data.get("owner_task_id") == task_id, "work-pack pool owner mismatch")
-    result = {**copy.deepcopy(expected), "route": "batch"}
+    result = {**copy.deepcopy(expected), "route": "batch", "proof_fresh": bool(measure)}
     batch.require(batch.normalize_requests(data["requests"]) == expected["requests"],
                   "work-pack batch intake differs from existing pool")
     result["batch_state"] = data["status"]
@@ -144,7 +152,7 @@ def inspect_pool(repo, task_id, expected, data):
         else:
             result["next_action"] = "Resume this exact batch, dispatch ready reservations, and integrate returned leads through batch_state."
         return result
-    _integrated_proof(repo, data)
+    _integrated_proof(repo, data, measure=measure)
     if data["status"] != "closed":
         result["next_action"] = "Close the fully integrated batch through batch_state, then start the owning WBS execution."
         return result

@@ -4924,7 +4924,7 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
             if not why_blocked:
                 next_action = "Verification target is stale, unavailable or unbound. Preserve lifecycle history; issue a target for changed inputs and run only affected required lenses against its frozen source view."
             runtime_verdict = "PENDING"
-    return {
+    context = {
         "task_id": os.path.basename(task_dir),
         "status": task_control_status(task_dir, st, snapshot),
         "task_dir": task_dir,
@@ -4943,6 +4943,9 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
         "report_path": f"doc/harness/tasks/{os.path.basename(task_dir)}/{RECEIPTS_NAME}",
         "effective_close_gate": "micro" if micro_loop else "standard",
     }
+    from wbs import summary
+    context["summary"] = summary(context)
+    return context
 
 
 # ── Explicit installer Git payload helper ──────────────────────────────

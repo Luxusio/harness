@@ -131,7 +131,7 @@ evidence, ancestry, conflicts and serialized integration.
 The internal checkout fingerprint is conservative: source changes invalidate
 old current evidence until assertions are rerun. Reads execute no assertion.
 Source fingerprint scanning is bounded to 4,096 evidence entries and 32 MiB of
-source content (plus the separately bounded explicit artifacts described below); above that budget
+source content by default (plus the separately bounded explicit artifacts described below); above that budget
 progress is explicitly unavailable rather than estimated. This avoids making
 progress calculation an unbounded repository traversal.
 
@@ -215,9 +215,38 @@ and resources; independent review checks adequacy. A selected required input
 which is denied, excluded or missing is unavailable, not unchanged. Apply
 lexical policy decisions before resolving/opening candidate paths. Explicit
 ignored artifacts are measured only when selected, with a separate bounded
-32 MiB artifact budget; source retains its own 32 MiB budget. Global entry,
+32 MiB artifact budget; source retains its own 32 MiB default budget. Global entry,
 listing and time bounds remain; depth limits apply to Git-module nesting. Errors identify the input and exhausted
 budget without returning source contents.
+
+Derived mechanics for the existing no-full-hash-on-query requirement: active
+and historical work-pack routing may validate stored integration metadata
+without freshly fingerprinting archived contents. This advisory mode retains
+pool/owner identity, disposal, checkpoint, archive presence and closed task
+control, preserved module pins and destination ancestry checks. Its result is
+labelled `proof_fresh: false`; explicit check and final verify/close retain the
+default fresh archive proof. Stored routing cannot authorize completion.
+
+Derived bounded-input policy: optional `source_byte_limit` is a positive integer
+(booleans are rejected), at most 67,108,864 bytes (64 MiB). Omission preserves
+the existing 33,554,432-byte (32 MiB) default and normalized policy identity.
+An explicit limit is part of the proof-bound policy; changing it invalidates
+old current credit. This accommodates a required input set above the default
+without omitting required files or allowing unbounded scanning. Artifact,
+entry, listing, module-depth and time limits remain unchanged. Explicit-source
+siblings may share one validated parent handle chain within a traversal;
+switching parents closes and revalidates it. No persistent descriptor/hash
+cache replaces fresh reads or deny-before-open, inode and ancestor checks.
+
+Derived compact projection: owner context exposes an advisory `summary` of its
+existing outcome IDs/titles and evidence tiers: implemented, integrated,
+software_verified, actual_environment and complete. Unsupported implementation
+or actual-environment facts remain `unknown`; software QA alone never proves
+them. `stored` distinguishes historical/receipt facts from `current` measured
+facts, and a valid closed control record supplies only stored completion.
+The summary creates no WBS IDs, edited percentages, second ledger or close
+authority. These API details implement the existing measurable-progress and
+cheap-query direction; they are not additional quoted user requirements.
 
 The policy itself is bound to source evidence. New policy publication preserves
 old records but grants no current credit to evidence collected under another

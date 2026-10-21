@@ -556,6 +556,20 @@ warnings, watcher_status, task_context와 tree/progress가 포함된다. 일부 
 
 ### 3.8 workspace: control root와 task root
 
+WBS 조회의 `summary`는 기존 owner context에서 만든 advisory projection이다.
+기존 outcome ID/title과 stored/current/pending evidence를 간단히 보여 주며,
+implemented/integrated/software_verified/actual_environment/complete를 구분한다.
+구현 완료나 실제 환경 검증 사실이 없으면 `unknown`을 유지하고 QA PASS로
+추측하지 않는다. context/next/resume/plan의 work-pack 경로는 archive 내용을
+다시 해시하지 않는 `proof_fresh: false` 모드를 사용한다. archive 존재와
+owner/closed control/ancestry는 계속 확인하며 check/verify/close는 fresh proof를
+확인한다. 요약이나 stored route 자체는 close 권한이 아니다.
+
+필수 source 입력이 기본 32 MiB를 넘으면 PLAN의 `wbs-inputs`에
+`source_byte_limit`을 명시할 수 있다. 양의 정수 byte만 허용하고 최대 64 MiB이며,
+변경된 정책은 이전 proof의 current credit을 재사용하지 않는다. 필요한 파일을
+제외해 한도를 맞추지 말고 artifact 32 MiB 및 다른 기존 budget도 유지한다.
+
 `_task_roots(args)`는 `(control_root, task_root)`를 돌려준다(`harness_server.py:1057-1087`).
 
 - `workspace`를 생략하거나 control root와 같은 값을 주면 두 root가 같다. Codex도 이 경로를 지원한다. 명시적 workspace 호출이나 exact 환경 thread ID 없는 main 호출은 native PostToolUse가 바인딩하며, exact main identity가 있으면 공유 잠금 아래 eager 바인딩한다.
