@@ -35,9 +35,9 @@ def execute(root, jobs, generation="one", **kwargs):
                            max_workers=2, timeout=kwargs.pop("timeout", 5), **kwargs)
 
 
-def shared(root):
-    producer = job(root, "prepare", "from pathlib import Path\nPath('built').write_text('shared')\n", kind="producer", outputs=["built"])
-    consumers = [job(root, name, "from pathlib import Path\nassert Path('built').read_text() == 'shared'\nprint('consumed')\n", artifacts=["built"]) for name in ("alpha", "beta")]
+def shared(root, artifact="built"):
+    producer = job(root, "prepare", f"from pathlib import Path\nPath({artifact!r}).write_text('shared')\n", kind="producer", outputs=[artifact])
+    consumers = [job(root, name, f"from pathlib import Path\nassert Path({artifact!r}).read_text() == 'shared'\nprint('consumed')\n", artifacts=[artifact]) for name in ("alpha", "beta")]
     return [producer, *consumers]
 
 
@@ -57,15 +57,22 @@ def test_shared_producer_reuse_selective_changes_and_lost_artifact(tmp_path):
 
 
 def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
+    import verification_target as vt
     # A .git-free view nested inside a checkout must never walk to the main root.
+    original = tmp_path / "original"
+    original.mkdir()
+    jobs = shared(original, "build/built")
     view = tmp_path / "view"
     view.mkdir()
-    jobs = shared(view)
+    vt._manifest(original, [p.name for p in original.glob("*.py")], destination=view)
+    vt._seal_view(view, ["build"])
+    assert view.stat().st_mode & 0o222 == 0
+    assert all(p.stat().st_mode & 0o222 == 0 for p in view.glob("*.py"))
     declaration = tmp_path / "jobs.json"
     declaration.write_text(json.dumps(jobs))
     argv = [sys.executable, str(SCRIPTS / "verify_runner.py")]
     assert subprocess.run(argv + ["--help"], capture_output=True).returncode == 0
-    args = ["--jobs", str(declaration), "--root", str(view), "--results", str(view / "result.json"), "--task-id", "task", "--run-id", "run", "--generation", "one"]
+    args = ["--jobs", str(declaration), "--root", str(view), "--results", str(tmp_path / "group-results.json"), "--task-id", "task", "--run-id", "run", "--generation", "one"]
     proc = subprocess.run(argv + args, cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["schema"] == runner.SCHEMA
@@ -73,12 +80,20 @@ def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     restored.mkdir()
     for script in view.glob("*.py"):
         shutil.copyfile(script, restored / script.name)
+        assert (restored / script.name).stat().st_mode & 0o200
+    (restored / "build").mkdir()
+    shutil.copyfile(view / "build/built", restored / "build/built")
     # External per-group results stay fixed while source/artifact roots relocate.
     args[args.index("--root") + 1] = str(restored)
     args[args.index("--generation") + 1] = "restored"
     again = subprocess.run(argv + args, capture_output=True, text=True, timeout=20)
     assert again.returncode == 0, again.stderr
-    assert [r["reused"] for r in json.loads(again.stdout)["commands"]] == [False, True, True]
+    assert all(r["reused"] for r in json.loads(again.stdout)["commands"])
+    (restored / "build/built").unlink()
+    args[args.index("--generation") + 1] = "regenerated"
+    regenerated = subprocess.run(argv + args, capture_output=True, text=True, timeout=20)
+    assert regenerated.returncode == 0, regenerated.stderr
+    assert [r["reused"] for r in json.loads(regenerated.stdout)["commands"]] == [False, True, True]
     declaration.write_text('{"invalid":true}')
     invalid = subprocess.run(argv + args, capture_output=True, text=True, timeout=10)
     assert invalid.returncode == 2 and "bounded jobs" in invalid.stderr
