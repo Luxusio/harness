@@ -52,6 +52,15 @@ Outer JavaScript, printed tool results and compatibility markers are not
 substitutes for native identity. Existing unregistered work is never replayed
 into receipts.
 
+Derived reliability constraint from the existing receipt protocol: native
+session authentication reads bounded metadata using the same 256MiB parent
+history limit as coordinator ancestry authentication. A valid long-lived
+coordinator between64MiB and256MiB must not lose task binding merely because
+the metadata reader used the separate child-transcript limit. Parent histories
+above256MiB still refuse, and child completion reads retain their64MiB limit.
+Ownership, link, descriptor/path identity, native cwd and ancestry checks remain
+required. This does not authorize replay of already completed unregistered work.
+
 Verification must cover installed routing and a real native task-result event,
 then fresh required review and QA started/completed receipts. Missing event
 delivery must remain distinguishable from rejected task binding; configuration

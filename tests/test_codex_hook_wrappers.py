@@ -1487,3 +1487,43 @@ def test_binding_deadline_closes_watcher_admission_descriptors_and_can_retry(tmp
         assert not (task / "RECEIPTS.jsonl").exists()
         assert mod.register_task_result(payload, budget_seconds=2), stage
         assert watcher.registrations(str(repo))[0]["run_id"] == run_id
+
+
+def test_long_native_coordinator_metadata_binding(tmp_path, monkeypatch):
+    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
+    mod = _load("codex_hook_registration")
+    import codex_lifecycle_watcher as watcher
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    home, repo = tmp_path / "codex", tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    manifest = repo / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("type: library\n")
+    _write_exact_session_binding(repo, root_id)
+    rollout = _rollout_path(home, root_id)
+    metadata = {"type": "session_meta", "payload": {
+        "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("CODEX_THREAD_ID", root_id)
+    for size, expected in ((watcher.MAX_CHILD_BYTES + 1, str(repo)),
+                           (watcher.MAX_PARENT_BYTES, str(repo)),
+                           (watcher.MAX_PARENT_BYTES + 1, "")):
+        _write_jsonl(rollout, [metadata])
+        with rollout.open("r+b") as handle:
+            handle.truncate(size)  # Sparse history: authenticate only the bounded first metadata line.
+        assert mod.authenticate_native_session(root_id, str(repo)) == expected
+
+    _write_jsonl(rollout, [metadata])
+    with rollout.open("r+b") as handle:
+        handle.truncate(watcher.MAX_CHILD_BYTES + 1)
+    rollout.chmod(0o622)
+    assert mod.authenticate_native_session(root_id, str(repo)) == ""
+    rollout.chmod(0o600)
+    foreign = dict(metadata, payload=dict(metadata["payload"], cwd=str(tmp_path / "foreign")))
+    _write_jsonl(rollout, [foreign])
+    with rollout.open("r+b") as handle:
+        handle.truncate(watcher.MAX_CHILD_BYTES + 1)
+    assert mod.authenticate_native_session(root_id, str(repo)) == ""
+    _write_jsonl(rollout, [dict(metadata, payload=dict(metadata["payload"], session_id="foreign"))])
+    assert mod.authenticate_native_session(root_id, str(repo)) == ""

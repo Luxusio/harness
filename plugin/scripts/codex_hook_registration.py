@@ -17,7 +17,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 from codex_lifecycle_watcher import (
     ensure, invalidate_registration, workspace_roots,
     _find_rollout, _open_trusted_file, _sessions_root, _native_meta,
-    _path_matches_handle, _coordinator_identity, MAX_CHILD_BYTES,
+    _path_matches_handle, _coordinator_identity, MAX_PARENT_BYTES,
 )
 from _lib import (
     active_session_transaction,
@@ -176,7 +176,7 @@ def authenticate_native_session(thread_id: str, control_root: str) -> str:
         return ""
     try:
         path = _find_rollout(thread_id)
-        opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_CHILD_BYTES) if path else None
+        opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_PARENT_BYTES) if path else None
         if opened is None:
             return ""
         handle, _ = opened
@@ -192,7 +192,7 @@ def authenticate_native_session(thread_id: str, control_root: str) -> str:
                 return ""
             if not _coordinator_identity(thread_id, cwd):
                 return ""
-            return cwd if _path_matches_handle(path, _sessions_root(), handle) else ""
+            return cwd if _path_matches_handle(path, _sessions_root(), handle, max_size=MAX_PARENT_BYTES) else ""
         finally:
             handle.close()
     except Exception:
