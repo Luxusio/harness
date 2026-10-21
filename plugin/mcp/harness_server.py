@@ -2324,7 +2324,8 @@ def handle_verification_target(args: dict) -> dict:
                         "next_action": "Preserve task and receipts. Correct the named input or restore stable inputs, then issue the target again before new native roles."})
     public_target = {key: issued[key] for key in ("token", "run_id", "snapshot_root", "input_fingerprint", "spec", "context")}
     return _ok(dict(wbs_id="WBS__" + task_id[6:], issued=True,
-                    target=public_target, watcher_status=readiness))
+                    target=public_target, role_handoffs=verification_target.role_handoffs(issued),
+                    watcher_status=readiness))
 
 
 def handle_wbs(args: dict) -> dict:

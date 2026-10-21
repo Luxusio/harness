@@ -16,6 +16,24 @@ def test_public_target_returns_persistent_frozen_view_and_context_does_not_measu
     assert targets.applicability(str(td), str(repo), measure=True)["missing_lenses"] == ["review-code", "qa-cli"]
 
 
+def test_public_handoffs_are_fresh_on_reused_target_and_supported_before_publish(tmp_path):
+    from _lib import _infer_receipt_lens
+    _, td, call, _ = public(tmp_path)
+    spec = dict(specification(), lenses=["review-code", "review-security", "qa-cli"])
+    first = call("target", target=spec)["structuredContent"]
+    second = call("target", target=spec)["structuredContent"]
+    assert first["target"]["token"] == second["target"]["token"]
+    assert first["role_handoffs"] != second["role_handoffs"]
+    for response in (first, second):
+        assert [row["lens"] for row in response["role_handoffs"]] == spec["lenses"]
+        for row in response["role_handoffs"]:
+            assert _infer_receipt_lens(row["task_name"]) == row["lens"]
+            assert targets.TOKEN.search(row["task_name"])[1] == response["target"]["token"]
+    before = (td / "WBS.json").read_bytes()
+    assert call("target", target=dict(spec, lenses=["qa-invented"])).get("isError")
+    assert (td / "WBS.json").read_bytes() == before
+
+
 def test_target_action_rejects_extra_fields_with_actionable_error(tmp_path):
     _, _, call, _ = public(tmp_path)
     result = call("target", target=specification(), timeout=60)
@@ -89,6 +107,7 @@ def test_direct_diagnostic_skips_native_registration_preflight(tmp_path, monkeyp
     result = call("target", target=dict(specification(purpose="diagnostic"), lenses=[]))
     assert not result.get("isError"), result
     assert result["structuredContent"]["issued"] is True
+    assert result["structuredContent"]["role_handoffs"] == []
     assert "manifest" not in result["structuredContent"]["target"]
 
 

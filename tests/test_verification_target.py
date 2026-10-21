@@ -16,6 +16,36 @@ def specification(**extra):
                 lenses=["review-code", "qa-cli"], **extra)
 
 
+def test_handoffs_round_trip_all_supported_lenses_without_persisting_names(tmp_path):
+    from _lib import SUPPORTED_LENSES, _infer_receipt_lens
+    repo, td, _, _ = public(tmp_path)
+    spec = dict(specification(), lenses=sorted(SUPPORTED_LENSES))
+    target = targets.issue_target(str(td), str(repo), spec)
+    before = (td / "WBS.json").read_bytes()
+    first = targets.role_handoffs(target)
+    repeated = targets.issue_target(str(td), str(repo), spec)
+    second = targets.role_handoffs(repeated)
+    assert target["token"] == repeated["token"]
+    assert (td / "WBS.json").read_bytes() == before
+    assert {row["lens"] for row in first} == SUPPORTED_LENSES
+    assert {row["task_name"] for row in first}.isdisjoint(row["task_name"] for row in second)
+    for row in first + second:
+        assert _infer_receipt_lens(row["task_name"]) == row["lens"]
+        assert targets.TOKEN.search(row["task_name"])[1] == target["token"]
+        assert row["task_name"].encode() not in (td / "WBS.json").read_bytes()
+    assert targets.role_handoffs(dict(target, spec=dict(spec, purpose="diagnostic", lenses=[]))) == []
+
+
+def test_unsupported_or_malformed_lens_refused_before_publication(tmp_path):
+    repo, td, _, _ = public(tmp_path)
+    before = (td / "WBS.json").read_bytes()
+    for lenses in (["review-invented"], ["qa-unknown"], ["ux-browser"], [None], [[]], ["qa-cli", "qa-cli"]):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "supported lenses"):
+            targets.issue_target(str(td), str(repo), dict(specification(), lenses=lenses))
+        assert (td / "WBS.json").read_bytes() == before
+        assert not (td / "work/verification-targets").exists()
+
+
 def test_owner_private_source_is_copied_without_changing_original_permissions(tmp_path):
     from install_verified import _read_payload_file
 

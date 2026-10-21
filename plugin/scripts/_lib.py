@@ -4921,7 +4921,7 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
         # Applicability supplements lifecycle evidence; it cannot replace an
         # actual FAIL/BLOCKED result or turn missing attestation into a rerun.
         if runtime_verdict == "PASS":
-            if not why_blocked:
+            if not (progress.get("integration") and progress["integration"]["route"] != "integration"):
                 next_action = "Verification target is stale, unavailable or unbound. Preserve lifecycle history; issue a target for changed inputs and run only affected required lenses against its frozen source view."
             runtime_verdict = "PENDING"
     context = {

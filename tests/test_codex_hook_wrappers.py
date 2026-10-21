@@ -1012,6 +1012,32 @@ class TestCodexHookWrappers(unittest.TestCase):
             }).encode()
             self.assertEqual(mod._invalid_review_spawn_name(raw), "", task_name)
 
+    def test_target_tagged_invalid_role_refused_before_spawn_but_helpers_unchanged(self):
+        mod = _load("hook_pre_tool_use")
+        token = "0123456789abcdef"
+        for name in ("progress_security", "progress_code", "progress_qa", "ux_browser"):
+            raw = json.dumps({"tool_name": "collaboration.spawn_agent",
+                              "tool_input": {"task_name": name + "_vt_" + token}})
+            output = io.StringIO()
+            with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                 mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(mod.main(), 0)
+            restore.assert_not_called()
+            decision = json.loads(output.getvalue())["hookSpecificOutput"]
+            self.assertEqual(decision["permissionDecision"], "deny")
+            self.assertIn("role_handoffs", decision["permissionDecisionReason"])
+        import verification_target
+        from _lib import SUPPORTED_LENSES
+        target = dict(token=token, spec=dict(purpose="acceptance", lenses=sorted(SUPPORTED_LENSES)))
+        names = [row["task_name"] for row in verification_target.role_handoffs(target)]
+        names += ["progress_security", "progress_code", "qa_investigation", "build_catalog_vt_" + token,
+                  "diagnostic_security_vt_" + token, "diagnostic_qa_vt_" + token,
+                  "progress_security_vt_not_a_target"]
+        for name in names:
+            raw = json.dumps({"tool_input": {"task_name": name}}).encode()
+            self.assertEqual(mod._invalid_review_spawn_name(raw), "", name)
+
     def test_pre_tool_registration_failure_warns_without_denying_agents(self):
         mod = _load("hook_pre_tool_use")
 

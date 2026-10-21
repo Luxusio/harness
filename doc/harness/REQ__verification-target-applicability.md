@@ -6,13 +6,30 @@ Users request reusable review and QA evidence bound to actual inputs, relevant-c
 ## Derived mechanism
 Before new Codex review/QA, the owner calls `wbs(action="target", wbs_id=..., target=...)`. The specification declares explicit WBS `inputs`, `commands` as argv arrays, `lenses`, and `purpose` (`acceptance` or `diagnostic`), with optional environment key names and toolchain executable names. Actual platform, toolchain binary contents and hashes of selected environment values join the copied input manifest. Build flags and dependency/configuration files belong in these actual verification inputs, not an edited-file progress plan. Independent review checks scope adequacy.
 
-The response supplies a random token and persistent `snapshot_root`. Append `_vt_<token>` to the structured native agent task_name and direct that role to read and execute against snapshot_root. Source files are copied without hardlinks and made read-only; source checkout changes cannot change that view. Runtime command output belongs outside selected inputs. Optional `output_dirs` prepare bounded writable runtime-only directories (for example `doc/harness/tasks` for the existing pytest session guard). Every selected input file remains read-only; output paths cannot overlap or be ancestors of selected inputs, and cannot be inside a selected source root unless explicitly excluded. These output paths are not target identity. Commands and explicit snapshot roots must be passed to execution tools; repository autodiscovery may walk outside a copied view and must not select mutable source. The snapshot is a declared controlled role view, not an OS sandbox or proof of every arbitrary tool read; same-UID hostile owners are outside this protection.
+The response supplies a random token, persistent `snapshot_root`, and acceptance
+`role_handoffs` containing `{lens, task_name}`. Use the exact returned native task
+name for each role and direct it to read and execute against snapshot_root.
+Source files are copied without hardlinks and made read-only; source checkout changes cannot change that view. Runtime command output belongs outside selected inputs. Optional `output_dirs` prepare bounded writable runtime-only directories (for example `doc/harness/tasks` for the existing pytest session guard). Every selected input file remains read-only; output paths cannot overlap or be ancestors of selected inputs, and cannot be inside a selected source root unless explicitly excluded. These output paths are not target identity. Commands and explicit snapshot roots must be passed to execution tools; repository autodiscovery may walk outside a copied view and must not select mutable source. The snapshot is a declared controlled role view, not an OS sandbox or proof of every arbitrary tool read; same-UID hostile owners are outside this protection.
+
+Derived from the existing requirement to bind future native roles before
+execution: target issuance accepts only canonical `SUPPORTED_LENSES`. Each
+handoff name round-trips through the existing receipt-lens classifier and
+`_vt_<token>` parser. A fresh invocation nonce is generated on every response,
+including reuse of identical target bytes/token; names are ephemeral guidance,
+not stored actor identities or a receipt ledger. Diagnostic responses provide
+no formal handoffs. The existing Codex pre-start name guard also refuses
+reserved target-tagged, attestation-looking names that cannot classify to a
+supported lens, including bare security/QA role names. Ordinary helper names,
+explicit diagnostic names and untargeted names retain their existing behavior.
+The classifier itself, old events and non-attesting finals are unchanged;
+validation cannot repair completed roles or create acceptance evidence.
 
 ## Observable behavior
 - An issued snapshot remains A while the checkout changes A → B → A. Gates compare current actual inputs with copied A, not a source hash observed during delayed receipt replay.
 - Existing native receipt source/task/run/agent/type/runtime identity authenticates the declared token. The matched first start/completion for an exact native agent is supported. Followups inherit names and remain source-unbound; issue a target and spawn a fresh agent for changed targets.
 - Receipt schemas and lifecycle parsing/order remain unchanged. Direct finals, copied text, diagnostics and historical unbound PASS never create target-certified acceptance.
 - `context`, open and plan do not hash inputs. Explicit verify, close and verified installation enforce active per-lens applicability separately from lifecycle verdicts. Relevant changes block target-aware completion and preserve old evidence. Completed results retain manifest-bound applicability if regenerable copied views disappear; a new job reconstructs only from identical current bytes.
+- A stale-target PENDING response names the required target correction even when source-write assignment is unavailable; it must not advertise close. An unfinished work pack retains its existing parking guidance.
 - Identical source content restored elsewhere is equivalent. Unselected documentation does not stale product results; selected source/dependencies/build context do. Changed command scope requires a new acceptance target, while identical issuance reuses its frozen view.
 - Diagnostic targets may declare an empty lenses list for direct runner experiments; they do not replace acceptance targets or satisfy product completion. They can supply bounded investigation evidence without declaring review/QA acceptance.
 - Existing lifecycle-only tasks are visibly `unbound`, retain their old lifecycle semantics and are never retroactively source-certified. Issuing an acceptance target enables future required-lens applicability for that task. Current native token association supports Codex; unbound runtime identities are reported rather than fabricated.

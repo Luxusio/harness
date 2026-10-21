@@ -41,6 +41,7 @@ try:
         find_harness_root,
         resolve_session_task_binding,
         _infer_receipt_lens,
+        SUPPORTED_LENSES,
         emit_permission_decision,
         now_iso,
         read_json_diagnostics,
@@ -53,6 +54,7 @@ except Exception:  # pragma: no cover - diagnostics must never break the hook
     read_json_diagnostics = None
     write_json_diagnostics = None
     _infer_receipt_lens = None
+    SUPPORTED_LENSES = frozenset()
     emit_permission_decision = None
 
 
@@ -118,7 +120,18 @@ def _invalid_review_spawn_name(payload: bytes) -> str:
     }
     review_like = bool(tokens & {"review", "reviewer"})
     if not review_like:
-        return ""
+        if "_vt_" not in task_name:
+            return ""
+        from verification_target import TOKEN
+        reserved_role = (TOKEN.search(task_name) and tokens & {"security", "code", "qa", "ux"}
+                         and "diagnostic" not in tokens)
+        if not reserved_role or _infer_receipt_lens(task_name) in SUPPORTED_LENSES:
+            return ""
+        return (
+            f"Harness cannot bind target-tagged role task_name={task_name!r} to a supported receipt lens. "
+            "Use the exact role_handoffs task_name returned by wbs(action='target'). "
+            "The agent was not started; correct the future invocation and retry."
+        )
     if _infer_receipt_lens(task_name) in {"review-code", "review-security"}:
         return ""
     return (

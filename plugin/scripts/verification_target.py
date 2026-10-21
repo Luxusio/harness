@@ -43,6 +43,7 @@ def _publish(task_dir, state):
 
 
 def _spec(value):
+    from _lib import SUPPORTED_LENSES
     _require(isinstance(value, dict) and not set(value) - {"inputs", "commands", "lenses", "purpose", "environment", "toolchains", "output_dirs"}, "unknown specification fields")
     policy = wbs.input_policy(value.get("inputs"))
     _require(policy is not None and policy.get("source"), "explicit source input roots required")
@@ -50,7 +51,9 @@ def _spec(value):
     _require(isinstance(commands, list) and len(commands) <= 32 and all(isinstance(c, list) and 0 < len(c) <= 128 and all(isinstance(a, str) and a and "\0" not in a for a in c) for c in commands), "commands must be argv arrays")
     purpose = value.get("purpose", "acceptance")
     lenses = value.get("lenses", [])
-    _require(isinstance(lenses, list) and (lenses or purpose == "diagnostic") and len(set(lenses)) == len(lenses) and all(re.fullmatch(r"(?:review|qa|ux)-[a-z]+", x) for x in lenses), "explicit unique lenses required")
+    _require(isinstance(lenses, list) and (lenses or purpose == "diagnostic")
+             and all(isinstance(x, str) and x in SUPPORTED_LENSES for x in lenses)
+             and len(set(lenses)) == len(lenses), "explicit unique supported lenses required")
     purpose = value.get("purpose", "acceptance")
     _require(purpose in {"acceptance", "diagnostic"}, "purpose must be acceptance or diagnostic")
     result = dict(inputs=policy, commands=commands, lenses=lenses, purpose=purpose)
@@ -59,6 +62,21 @@ def _spec(value):
         _require(isinstance(names, list) and len(names) <= 32 and all(isinstance(n, str) and (re.fullmatch(r"[A-Za-z0-9_.+-]+", n) or key == "toolchains" and os.path.isabs(n) and "\0" not in n) for n in names), "invalid " + key)
         result[key] = sorted(set(names))
     return result
+
+
+def role_handoffs(target):
+    """Ephemeral names for future roles, never native identity or evidence."""
+    from _lib import _infer_receipt_lens
+    if target["spec"]["purpose"] != "acceptance":
+        return []
+    nonce, rows = secrets.token_hex(8), []
+    for lens in target["spec"]["lenses"]:
+        name = lens.replace("-", "_") + "_" + nonce + "_vt_" + target["token"]
+        match = TOKEN.search(name)
+        _require(_infer_receipt_lens(name) == lens and match and match[1] == target["token"],
+                 "role handoff cannot bind declared lens and target")
+        rows.append(dict(lens=lens, task_name=name))
+    return rows
 
 
 def _context(spec, repo):

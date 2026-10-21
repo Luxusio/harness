@@ -24,7 +24,7 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
-PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, issue `wbs(action="target", target={inputs,commands,lenses,purpose:"acceptance"})`; pass its frozen snapshot_root to the role and append `_vt_<token>` to native task_name. Roles read/run against that view with explicit cwd, never mutable source autodiscovery. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Lifecycle ordering remains independent. Historical lifecycle-only records stay source-unbound; diagnostic targets cannot satisfy acceptance. See `doc/harness/REQ__verification-target-applicability.md`.
+PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, issue `wbs(action="target", target={inputs,commands,lenses,purpose:"acceptance"})`; pass its frozen snapshot_root and use the exact `role_handoffs` task_name returned for that lens. Do not compose or rename the native task_name. Every response supplies fresh invocation names even when its target token is reused; diagnostic responses have no formal handoffs. Roles read/run against that view with explicit cwd, never mutable source autodiscovery. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Lifecycle ordering remains independent. Historical lifecycle-only records stay source-unbound; diagnostic targets cannot satisfy acceptance. See `doc/harness/REQ__verification-target-applicability.md`.
 
 **Missing receipt policy.** Receipt absence never immediately fails or
 suppresses a substantive lens. Await the actual result and label an unreceipted
