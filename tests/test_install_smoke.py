@@ -43,11 +43,7 @@ INSTALL_PY = REPO_ROOT / "install.py"
 def _installed_tree(destination: Path) -> Path:
     """A tree shaped like `~/.claude/harness-dev/plugin`, built under tmp."""
     plugin_root = destination / "harness-dev" / "plugin"
-    shutil.copytree(
-        REPO_ROOT / "plugin",
-        plugin_root,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
-    )
+    _load("install_smoke_fixture", INSTALL_PY)._copytree_clean(REPO_ROOT / "plugin", plugin_root)
     return plugin_root
 
 

@@ -965,14 +965,14 @@ def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple
     return proc.returncode == 0, lines or ["runtime smoke: no output"]
 
 
-def _copytree_clean(src: Path, dst: Path) -> None:
+def _copytree_clean(src: Path, dst: Path, *, extra_ignores: tuple[str, ...] = ()) -> None:
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(
         src,
         dst,
         ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", ".pytest_cache", ".omc",
+            "__pycache__", "*.pyc", ".pytest_cache", ".omc", *extra_ignores,
         ),
     )
     # Only this newly copied private projection is changed. Generated files
@@ -1152,14 +1152,8 @@ def _build_codex_cache_payload(source_root: Path, target: Path, final_root: Path
 
 
 def _build_claude_payload(target: Path) -> None:
-    shutil.copytree(REPO_ROOT / ".claude-plugin", target / ".claude-plugin")
-    shutil.copytree(
-        PLUGIN_ROOT,
-        target / "plugin",
-        ignore=shutil.ignore_patterns(
-            ".git", "__pycache__", "*.pyc", ".pytest_cache", ".omc",
-        ),
-    )
+    _copytree_clean(REPO_ROOT / ".claude-plugin", target / ".claude-plugin")
+    _copytree_clean(PLUGIN_ROOT, target / "plugin", extra_ignores=(".git",))
     _stamp_claude_plugin_version(target / "plugin")
 
 

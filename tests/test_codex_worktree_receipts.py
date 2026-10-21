@@ -93,7 +93,7 @@ def test_native_workspace_registration_recovery_clears_main_diagnostics(tmp_path
         assert not result.get("isError"), result
         status = _payload(result)["watcher_status"]
         assert status["registration_present"] is True, status
-        assert status["receipts_recordable"] is True, status
+        assert status["receipts_recordable"] is None, status
         assert not status["last_registration_error"], status
         recovered = json.loads(diagnostics.read_text())
         assert recovered["registration_present"] is True
@@ -119,7 +119,8 @@ def test_native_context_recovery_rebuilds_ungated_next_action(tmp_path, monkeypa
     result = _call(main, "task_context", args)
     assert not result.get("isError"), result
     data = _payload(result)
-    assert data["watcher_status"]["receipts_recordable"] is True
+    assert data["watcher_status"]["registration_present"] is True
+    assert data["watcher_status"]["receipts_recordable"] is None
     assert data["task_context"]["next_action"] == expected, data
 
 
@@ -179,7 +180,8 @@ def _assert_native_context_uses_one_snapshot(tmp_path, monkeypatch, *, registrat
     data = _payload(result)
     assert data["task_context"]["runtime_verdict"] == expected["runtime_verdict"]
     if registration_available:
-        assert data["watcher_status"]["receipts_recordable"] is True
+        assert data["watcher_status"]["registration_present"] is True
+        assert data["watcher_status"]["receipts_recordable"] is None
         assert data["task_context"]["next_action"] == expected["next_action"]
     else:
         assert data["watcher_status"]["receipts_recordable"] is False
@@ -867,15 +869,15 @@ def test_all_preexisting_workspace_bindings_are_fenced_and_revoked(tmp_path, mon
     assert not hook.restore_watcher_registration(json.dumps({"cwd": str(main), "thread_id": LEAD}).encode())
 
 
-def test_parent_append_during_start_retries_original_spawn(tmp_path, monkeypatch):
-    _assert_parent_append_retry(tmp_path, monkeypatch, completion=False)
+def test_parent_append_during_start_accepts_unchanged_prefix_once(tmp_path, monkeypatch):
+    _assert_parent_append_prefix(tmp_path, monkeypatch, completion=False)
 
 
-def test_parent_append_during_completion_retains_original_delivery(tmp_path, monkeypatch):
-    _assert_parent_append_retry(tmp_path, monkeypatch, completion=True)
+def test_parent_append_during_completion_accepts_unchanged_prefix_once(tmp_path, monkeypatch):
+    _assert_parent_append_prefix(tmp_path, monkeypatch, completion=True)
 
 
-def _assert_parent_append_retry(tmp_path, monkeypatch, *, completion):
+def _assert_parent_append_prefix(tmp_path, monkeypatch, *, completion):
     from test_codex_lifecycle_watcher import _load, _spawn_events, _delivery, _snapshot, _active_binding
     mod = _load()
     home = tmp_path / "codex"
@@ -891,9 +893,9 @@ def _assert_parent_append_retry(tmp_path, monkeypatch, *, completion):
     appended = False
     real_activity = mod._spawn_activity
 
-    def append_once(event):
+    def append_once(event, **kwargs):
         nonlocal appended
-        result = real_activity(event)
+        result = real_activity(event, **kwargs)
         if result and result[1] == LEAD and not appended:
             appended = True
             with root.open("a") as handle:
@@ -914,13 +916,13 @@ def _assert_parent_append_retry(tmp_path, monkeypatch, *, completion):
             else:
                 for event in events:
                     watcher.feed(event)
-                # Delivery may arrive while its start awaits a stable ancestry proof.
+                # A benign append does not change the authenticated captured prefix.
                 watcher.feed(delivery)
         item = watcher.calls["call_race_lens"]
         assert appended
         assert not item.get("invalid")
-        assert not item.get("completed")
-        assert len(receipts) == (1 if completion else 0)
+        assert item.get("completed") is True
+        assert [receipt["event"] for receipt in receipts] == ["started", "completed"]
         assert item["root_final"] == "VERDICT: PASS\nPassed."
         watcher.retry()
     assert [receipt["event"] for receipt in receipts] == ["started", "completed"]

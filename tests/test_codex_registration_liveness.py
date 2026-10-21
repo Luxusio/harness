@@ -68,14 +68,15 @@ def test_absent_marker_roots_do_not_repeat_binding_resolution(registration):
     assert resolve.call_count == 1  # Two unbound linked roots need no second read.
 
 
-def test_lifecycle_readiness_drops_only_superseded_capability_warning(registration, monkeypatch):
+def test_lifecycle_readiness_retains_warning_until_live_generation_confirmed(registration, monkeypatch):
     from test_worktree_workspace import _call, _payload, harness_server
     _, _, main, _, _, data = registration
     warnings = iter(["collector not confirmed yet", ""])
     monkeypatch.setattr(harness_server, "receipt_capability_warning", lambda: next(warnings, ""))
     result = _payload(_call(main, "task_start", {"task_id": data["task_id"]}))
-    assert result["watcher_status"]["receipts_recordable"] is True
-    assert not any(w["code"] == "RECEIPT_HOOKS_UNAVAILABLE" for w in result["warnings"])
+    assert result["watcher_status"]["registration_present"] is True
+    assert result["watcher_status"]["receipts_recordable"] is None
+    assert any(w["code"] == "RECEIPT_HOOKS_UNAVAILABLE" for w in result["warnings"])
     assert any(w["code"] == "TASK_START_RUN_PRESERVED" for w in result["warnings"])
 
 
@@ -293,7 +294,8 @@ started=time.monotonic()
 hook.main()
 print(json.dumps({'elapsed':time.monotonic()-started}))
 '''
-    result = subprocess.run([sys.executable, "-c", code, str(SCRIPTS_DIR), slow_stage], capture_output=True, text=True, timeout=3)
+    # Startup includes real source imports; the child separately bounds hook work.
+    result = subprocess.run([sys.executable, "-c", code, str(SCRIPTS_DIR), slow_stage], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["elapsed"] < 1.9
     if slow_stage in {"failure diagnostics", "live host"}:

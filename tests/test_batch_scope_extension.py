@@ -2,7 +2,13 @@
 import json
 from pathlib import Path
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 from test_batch_state import RUN, _git, _head, task
 from test_managed_wbs import setup_parent, host_snapshot

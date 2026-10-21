@@ -933,7 +933,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "source_write_allowed", "why_source_write_blocked", "review_verdict",
                 "required_review_lenses", "required_qa_lenses", "missing_for_close",
                 "next_action", "report_path", "effective_close_gate",
-                "progress", "receipt_recording", "verification_targets",
+                "progress", "summary", "receipt_recording", "verification_targets",
             })
             self.assertNotIn("subagent_receipts", context)
             self.assertNotIn("review_receipts", context)
@@ -968,9 +968,9 @@ class HarnessMcpServerTests(unittest.TestCase):
             try:
                 with mock.patch.object(
                     harness_server, "_watcher_status", return_value=unreadable,
-                ):
-                    verify = harness_server.handle_task_verify(
-                        {"task_id": "TASK__verifywatcher"},
+                ), mock.patch.object(harness_lib, "find_repo_root", return_value=tmp):
+                    verify = self._call_in_repo(
+                        tmp, "task_verify", {"task_id": "TASK__verifywatcher"},
                     )
             finally:
                 harness_server.canonical_task_dir = original_ctd
@@ -1026,10 +1026,10 @@ class HarnessMcpServerTests(unittest.TestCase):
                         "summary": "qa-cli passed focused checks",
                     },
                 )
-                verify = call_execution(harness_server,
-                    "task_verify",
-                    {"task_id": "TASK__subagentreceipt"},
-                )
+                with mock.patch.object(harness_lib, "find_repo_root", return_value=tmp):
+                    verify = self._call_in_repo(
+                        tmp, "task_verify", {"task_id": "TASK__subagentreceipt"},
+                    )
                 receipt_path = Path(task_dir) / "RECEIPTS.jsonl"
                 receipt_exists = receipt_path.is_file()
                 receipt = next(
@@ -2799,7 +2799,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             )
             self._patch(td)
             try:
-                result = call_execution(harness_server, "task_verify", {"task_id": "TASK__pr2-006"})
+                result = self._call_in_repo(tmp, "task_verify", {"task_id": "TASK__pr2-006"})
             finally:
                 self._unpatch()
         s = result["structuredContent"]

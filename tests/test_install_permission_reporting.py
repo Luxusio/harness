@@ -18,6 +18,45 @@ except ModuleNotFoundError as error:
 from test_install_writable_source_comparison import _load_install_module
 
 
+def test_claude_read_only_sources_are_writable_only_in_private_projection(tmp_path, monkeypatch):
+    install = _load_install_module()
+    source = tmp_path / "source"
+    contents = {
+        ".claude-plugin/marketplace.json": "{}",
+        "plugin/.claude-plugin/plugin.json": '{"version":"1.0.0"}',
+        "plugin/tool": "#!/bin/sh\nexit 0\n",
+        "plugin/.git/config": "excluded",
+        "plugin/__pycache__/ignored.pyc": "excluded",
+    }
+    for name, content in contents.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        path.chmod(0o555 if name == "plugin/tool" else 0o444)
+    directories = [source, *(p for p in source.rglob("*") if p.is_dir())]
+    for path in directories:
+        path.chmod(0o555)
+    monkeypatch.setattr(install, "REPO_ROOT", source)
+    monkeypatch.setattr(install, "PLUGIN_ROOT", source / "plugin")
+    target = tmp_path / "private"
+    try:
+        install._build_claude_payload(target)
+        assert json.loads((target / "plugin/.claude-plugin/plugin.json").read_text())["version"].startswith("1.0.0+h")
+        assert stat.S_IMODE((target / ".claude-plugin/marketplace.json").stat().st_mode) == 0o644
+        assert stat.S_IMODE((target / "plugin/tool").stat().st_mode) == 0o755
+        assert all(stat.S_IMODE(p.stat().st_mode) == 0o755 for p in target.rglob("*") if p.is_dir())
+        assert not (target / "plugin/.git").exists()
+        assert not (target / "plugin/__pycache__").exists()
+        for name, content in contents.items():
+            path = source / name
+            assert path.read_text() == content
+            assert stat.S_IMODE(path.stat().st_mode) == (0o555 if name == "plugin/tool" else 0o444)
+        assert all(stat.S_IMODE(p.stat().st_mode) == 0o555 for p in directories)
+    finally:
+        for path in directories:
+            path.chmod(0o755)
+
+
 def test_read_only_source_directory_projects_without_source_mode_change(tmp_path, monkeypatch):
     install = _load_install_module()
     source = tmp_path / "source"

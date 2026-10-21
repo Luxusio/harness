@@ -273,7 +273,7 @@ def _gate(wt: Path, file_path: Path) -> str | None:
     return (json.loads(result.stdout).get("hookSpecificOutput") or {}).get("permissionDecision")
 
 
-def test_prewrite_gate_in_worktree_follows_the_worktree_plan(tmp_path):
+def test_worktree_plan_alone_does_not_admit_source_writes(tmp_path):
     repo = _setup(tmp_path)
     main, wt = repo
     assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
@@ -283,7 +283,7 @@ def test_prewrite_gate_in_worktree_follows_the_worktree_plan(tmp_path):
         "task_id": "TASK__lead", "workspace": str(wt),
         "plan": "# Plan\n\nSmall.\n", "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
-    assert _gate(wt, source) in (None, "allow")
+    assert _gate(wt, source) == "deny"
 
 
 def test_full_lifecycle_closes_in_worktree_and_leaves_main_untouched(tmp_path):

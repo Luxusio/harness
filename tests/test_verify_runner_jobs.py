@@ -12,7 +12,13 @@ import sys
 import time
 import threading
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugin/scripts"

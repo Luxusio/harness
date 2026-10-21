@@ -52,9 +52,9 @@ def _stamp_foreign_build_cache(py_path: Path) -> Path:
 
 
 def _checkout_copy(root: Path, *, prune: bool) -> Path:
-    shutil.copytree(
+    from test_install_writable_source_comparison import _load_install_module
+    _load_install_module()._copytree_clean(
         Path(REPO_ROOT) / "plugin" / "scripts", root / "plugin" / "scripts",
-        ignore=shutil.ignore_patterns("__pycache__"),
     )
     conftest = (Path(REPO_ROOT) / "tests" / "conftest.py").read_text(encoding="utf-8")
     assert PRUNE_CALL in conftest

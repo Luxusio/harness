@@ -39,10 +39,10 @@ def make_plugin_root(tmp_path: Path) -> Path:
         source = REPO / "plugin" / rel
         target = root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        shutil.copyfile(source, target)
     run_policy = root / "skills/run/agents/openai.yaml"
     run_policy.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(REPO / "plugin-codex/skills/run/agents/openai.yaml", run_policy)
+    shutil.copyfile(REPO / "plugin-codex/skills/run/agents/openai.yaml", run_policy)
     return root
 
 
@@ -56,7 +56,7 @@ def make_repo(tmp_path: Path, *, manifest: str, project_doc: str = "AGENTS.md") 
         (critics / name).write_text(
             f"# {lens} critic project playbook\n- Verify {lens} behavior.\n", encoding="utf-8"
         )
-    shutil.copy2(REPO / "plugin/skills/setup/templates/CONTRACTS.md", repo / "CONTRACTS.md")
+    shutil.copyfile(REPO / "plugin/skills/setup/templates/CONTRACTS.md", repo / "CONTRACTS.md")
     (repo / project_doc).write_text(
         "@CONTRACTS.md\n<!-- harness:routing-injected -->\n"
         "Repository mutation -> invoke $harness:run before editing.\n",

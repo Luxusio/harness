@@ -211,14 +211,16 @@ def test_c09_batch_clause_is_in_root_and_template_contracts():
         assert clause in _normalized(c09), path
 
 
-def test_this_repo_branches_leads_from_head_and_ignores_worktrees():
+def test_this_repo_branches_leads_from_head_and_ignores_worktrees(tmp_path):
     import json
     import subprocess
 
     settings = json.loads((REPO / ".claude/settings.json").read_text(encoding="utf-8"))
     assert settings["worktree"]["baseRef"] == "head"
+    (tmp_path / ".gitignore").write_bytes((REPO / ".gitignore").read_bytes())
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     ignored = subprocess.run(
-        ["git", "check-ignore", "-q", ".claude/worktrees/probe"], cwd=REPO,
+        ["git", "check-ignore", "-q", ".claude/worktrees/probe"], cwd=tmp_path,
     )
     assert ignored.returncode == 0
 
