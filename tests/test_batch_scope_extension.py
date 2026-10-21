@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from test_batch_state import RUN, _git, _head, task
 from test_managed_wbs import setup_parent
 from test_wbs import plan
@@ -207,3 +209,65 @@ def test_legacy_scope_migration_is_publication_only(tmp_path, monkeypatch):
     refused = call("dispatch", operation="status")
     assert refused.get("isError"), refused
     assert pool.state.read_bytes() == before
+
+
+@pytest.mark.parametrize("verdict", ["blocked", "failed"])
+def test_resumed_scope_grant_preserves_historical_result_and_evidence(tmp_path, monkeypatch, verdict):
+    pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch)
+    receipts = directory / "RECEIPTS.jsonl"
+    receipts.write_bytes(b'{"fixture":"historical nonaccepting execution"}\n')
+    original_evidence = {name: (directory / name).read_bytes()
+                         for name in ("TASK.json", "PLAN.md", "RECEIPTS.jsonl")}
+    result = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+                  verdict=verdict, run_id=RUN, blocked_reason="Original execution requires added caller scope")
+    completed = call("dispatch", operation="complete", slug=handoff["slug"], worker_id="worker-a",
+                     worker_stopped=True, result=result)
+    assert not completed.get("isError"), completed
+    historical = json.loads(pool.state.read_text())["requests"][0]
+    assert historical["status"] == verdict and historical["result"] == result
+    resumed = call("dispatch", operation="resume", slug=handoff["slug"], worker_stopped=True)
+    assert not resumed.get("isError"), resumed
+    rebound = call("dispatch", operation="bind", slug=handoff["slug"], worker_id="replacement")
+    assert not rebound.get("isError"), rebound
+    granted = extend(call, handoff, worktree, worker_id="replacement")
+    assert not granted.get("isError"), granted
+    owner = json.loads(pool.state.read_text())["requests"][0]
+    assert owner["status"] == "running" and owner["resuming"] is True
+    assert owner["result"] == historical["result"]
+    assert owner["returned_at"] == historical["returned_at"]
+    assert owner["run_id"] == historical["run_id"] == RUN
+    assert owner["worker_id"] == "replacement"
+    assert granted["structuredContent"]["operation_result"]["handoff"]["scopes"] == ["a.txt", "b.txt"]
+    assert {name: (directory / name).read_bytes() for name in original_evidence} == original_evidence
+
+
+@pytest.mark.parametrize("evidence", ["unresumed", "closed", "checkpoint", "finish_result", "close_fingerprint"])
+def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, monkeypatch, evidence):
+    pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch)
+    result = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+                  verdict="blocked", run_id=RUN)
+    assert not call("dispatch", operation="complete", slug=handoff["slug"], worker_id="worker-a",
+                    worker_stopped=True, result=result).get("isError")
+    assert not call("dispatch", operation="resume", slug=handoff["slug"], worker_stopped=True).get("isError")
+    assert not call("dispatch", operation="bind", slug=handoff["slug"], worker_id="worker-a").get("isError")
+    state = json.loads(pool.state.read_text())
+    owner = state["requests"][0]
+    # Isolated persisted-state fixtures exercise each eligibility exclusion independently.
+    if evidence == "unresumed":
+        owner["resuming"] = False
+    elif evidence == "closed":
+        owner["result"]["verdict"] = "closed"
+    elif evidence == "checkpoint":
+        owner["checkpoint"] = dict(stage="started", destination_ref=state["destination_ref"],
+                                   run_id=RUN, close_fingerprint=None, branch_tip=_head(worktree))
+    elif evidence == "finish_result":
+        owner["finish_result"] = {"status": "kept"}
+    else:
+        owner["close_fingerprint"] = "sha256:existing-close-proof"
+    pool.state.write_text(json.dumps(state))
+    before = pool.state.read_bytes()
+    original_control = (directory / "TASK.json").read_bytes()
+    refused = extend(call, handoff, worktree)
+    assert refused.get("isError") and "pre-result" in refused["structuredContent"]["error"], refused
+    assert pool.state.read_bytes() == before
+    assert (directory / "TASK.json").read_bytes() == original_control

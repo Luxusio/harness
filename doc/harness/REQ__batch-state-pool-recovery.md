@@ -323,6 +323,13 @@ worker, observed HEAD and task run, literal added scopes and a bounded reason.
 The same worktree, branch, task/run, original request/spec and marker remain.
 Only current execution ownership changes; no progress or acceptance is earned.
 
+A running owner resumed from a blocked or failed return may retain that
+historical nonaccepting result while receiving a grant. The owner requires an
+actual resumed binding and preserves the old result, return timestamp, run and
+receipt bytes. A closed result, any integration checkpoint or finish result,
+or current close proof still refuses extension. Retaining failure history must
+not make supported continuation impossible or turn that history into acceptance.
+
 Before granting, the owner checks prior committed, staged, working and untracked
 changes against the old effective ownership, including both rename endpoints.
 It rechecks pending path contents, modes and index entries before publication;

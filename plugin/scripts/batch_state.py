@@ -696,7 +696,11 @@ def extension_paths(repo, data, item, head):
 def extend_scopes(repo, data, item, records, args, save):
     require(data['schema_version'] in {1, 3} and not any(x.get('submodules') for x in data['requests']),
             'scope extension requires an ordinary pool')
-    require(item['status'] == 'running' and not any(k in item for k in ('result', 'checkpoint', 'finish_result'))
+    historical_result = item.get('result')
+    resumable_result = (item.get('resuming') is True and isinstance(historical_result, dict)
+                        and historical_result.get('verdict') in {'blocked', 'failed'})
+    require(item['status'] == 'running' and ('result' not in item or resumable_result)
+            and not any(k in item for k in ('checkpoint', 'finish_result'))
             and not item.get('close_fingerprint'), 'scope extension requires running pre-result work')
     require(args.worker_stopped is True and args.worker_id == item.get('worker_id') and args.worker_id,
             'scope extension requires exact stopped bound worker')
