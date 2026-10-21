@@ -810,7 +810,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
     if bind:
         import work_pack
         from _lib import _atomic_text_write
-        batch_state.main_boundary(repo)
+        batch_state.main_boundary(repo, scopes=batch_state.ordinary_admission_scopes(repo, requests, managed=True))
         spec = work_pack.make_spec(repo, Path(task_dir).name, requests)
         state.update(batch=spec)
         _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))

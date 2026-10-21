@@ -369,3 +369,9 @@ control comes from the immutable task archive when source control has already
 been removed. Missing or different sidecars, unknown contents and unsafe
 entries refuse before mutation; recovery never creates a new preservation
 copy to retroactively authorize removal.
+
+The public WBS work-pack boundary and its intake preflight use the same explicit
+managed-ordinary effective ownership as preparation, including recorded scope
+grants on retries. Extension preflight checks old plus newly requested ownership
+against destination user changes. Standalone and selected-module defaults stay
+strict; no implicit dirty exception is added to the shared boundary.

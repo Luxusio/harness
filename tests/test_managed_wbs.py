@@ -192,3 +192,57 @@ def test_public_dirty_original_survives_prepare_integrate_and_dispose(tmp_path, 
         assert _git('show', ':shared.txt', cwd=pool.repo) == 'staged user version'
         assert note.read_bytes() == b'untracked user bytes\x00\xff'
     assert done['structuredContent']['status'] == 'closed'
+
+
+def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, monkeypatch):
+    import json
+    from test_batch_scope_extension import prepared, extend
+    pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch)
+    # Newly granted ownership may not cover pending user edits.
+    requested = pool.repo / 'b.txt'
+    baseline = requested.read_bytes()
+    requested.write_text('user change in requested scope\n')
+    state_before = pool.state.read_bytes()
+    refused = extend(call, handoff, worktree)
+    assert refused.get('isError'), refused
+    assert 'overlap' in refused['structuredContent']['error']
+    assert pool.state.read_bytes() == state_before
+    assert requested.read_text() == 'user change in requested scope\n'
+    requested.write_bytes(baseline)  # restore this isolated test's fixture only
+    shared = pool.repo / 'shared.txt'
+    shared.write_text('staged unrelated\n')
+    _git('add', 'shared.txt', cwd=pool.repo)
+    shared.write_text('unstaged unrelated\n')
+    note = pool.repo / 'notes\nlocal.txt'
+    note.write_bytes(b'untracked unrelated\x00\xff')
+    status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
+    index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
+    original_task = (directory / 'TASK.json').read_bytes()
+    original_intent = (pool.repo / 'doc/harness/tasks/TASK__managed/WBS.json').read_bytes()
+    granted = extend(call, handoff, worktree)
+    assert not granted.get('isError'), granted
+    assert not extend(call, handoff, worktree).get('isError')
+    owner = next(item for item in json.loads(pool.state.read_text())['requests'] if item['slug'] == handoff['slug'])
+    assert owner['scopes'] == ['a.txt']
+    assert owner['extra_scopes'] == {'b.txt': str(pool.repo / 'b.txt')}
+    assert (directory / 'TASK.json').read_bytes() == original_task
+    assert (pool.repo / 'doc/harness/tasks/TASK__managed/WBS.json').read_bytes() == original_intent
+    assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == status
+    assert _git('ls-files', '--stage', '-z', cwd=pool.repo) == index
+    assert shared.read_text() == 'unstaged unrelated\n'
+    assert note.read_bytes() == b'untracked unrelated\x00\xff'
+
+
+def test_public_dirty_ownership_overlap_refuses_before_parent_park(tmp_path, monkeypatch):
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    parent = pool.repo / 'doc/harness/tasks/TASK__managed'
+    original = {name: (parent / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    user = pool.repo / 'a.txt'
+    user.write_bytes(b'uncommitted user implementation\x00\xff')
+    refused = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, available_slots=2)
+    assert refused.get('isError'), refused
+    assert 'overlap' in refused['structuredContent']['error']
+    assert all((parent / name).read_bytes() == raw for name, raw in original.items())
+    assert not (parent / 'BLOCKED.md').exists()
+    assert not (pool.repo / 'doc/harness/runtime/batches').exists()
+    assert user.read_bytes() == b'uncommitted user implementation\x00\xff'

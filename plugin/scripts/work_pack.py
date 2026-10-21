@@ -54,9 +54,11 @@ def make_spec(repo_root: str, task_id: str, requests: list) -> dict:
         else:
             batch.require(len(records) < batch.MAX_BATCHES, "batch history limit reached")
             batch.require_unused_task_ids(repo, spec["requests"], records)
-        for item in spec["requests"]:
-            # preflight may attach derived module ownership; keep intent only.
-            batch.preflight(repo, copy.deepcopy(item))
+        effective_requests = existing['requests'] if existing is not None else spec['requests']
+        admission = batch.ordinary_admission_scopes(repo, effective_requests, managed=True)
+        for item in effective_requests:
+            # Preserve immutable intake; validate current effective ownership.
+            batch.preflight(repo, copy.deepcopy(item), dirty_scopes=admission)
         return spec
     except (batch.Refusal, OSError) as exc:
         raise ValueError("work-pack batch intake refused: " + str(exc)) from exc

@@ -374,6 +374,15 @@ def migrate_ordinary(data):
         data['schema_version'] = 3
 
 
+def ordinary_admission_scopes(repo, requests, managed=False):
+    """Explicit ordinary owner boundary shared by intake and execution."""
+    if not managed or any(item.get('submodules') for item in requests):
+        return None
+    return [scope for item in requests for scope in
+            (ownership(item) if 'resolved_scopes' in item else
+             [os.path.join(repo, path) for path in effective_scopes(item)])]
+
+
 def normalize_requests(items):
     result = []
     for item in items:
@@ -731,7 +740,10 @@ def extend_scopes(repo, data, item, records, args, save):
     require(not any(p in effective_scopes(item) for p in scopes), 'extension scope already granted')
     requests = {item['slug']: scopes}
     require(not batch_preflight._globs_and_lists(repo, requests), 'extension scopes must be literal paths')
-    report = batch_preflight.preflight(repo, requests)
+    admission = ordinary_admission_scopes(repo, data['requests'], bool(data.get('owner_task_id')))
+    if admission is not None:
+        admission += [os.path.join(repo, path) for path in scopes]
+    report = batch_preflight.preflight(repo, requests, dirty_scopes=admission)
     require(report['verdict'] == 'ok', 'extension preflight refused: ' + json.dumps(report))
     resolved = {}
     modules = {m['path'] for m in report['submodules']}
@@ -784,8 +796,7 @@ def execute(args, directory, records):
                     and old['max_leads'] == maximum, 'conflicting existing batch')
             return {'status': 'ok', 'batch': old}
         require(len(records) < MAX_BATCHES, 'batch history limit reached')
-        admission = ([os.path.join(repo, scope) for item in normalized for scope in item['scopes']]
-                     if owner_task_id and not any(item.get('submodules') for item in normalized) else None)
+        admission = ordinary_admission_scopes(repo, normalized, bool(owner_task_id))
         ref, head = main_boundary(repo, scopes=admission)
         require_unused_task_ids(repo, normalized, records)
         for item in normalized:
@@ -821,8 +832,7 @@ def execute(args, directory, records):
     def capacity(target):
         active_pool(records, batch_id)
         require(sum(x is not target and x['status'] in {'reserved', 'running'} for x in data['requests']) < data['max_leads'], 'capacity exhausted')
-    admission = ([scope for request in data['requests'] for scope in ownership(request)]
-                 if data.get('owner_task_id') and not any(request.get('submodules') for request in data['requests']) else None)
+    admission = ordinary_admission_scopes(repo, data['requests'], bool(data.get('owner_task_id')))
     if args.command == 'claim':
         require(not data['halted'], 'batch halted; recover retained integration first')
         active_pool(records, batch_id)
