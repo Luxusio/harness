@@ -101,6 +101,11 @@ The same invocation against a restored source root, using the same declared
 relative inputs and result file, validates/reuses that group's existing results.
 This allows substantive QA and a later outcome assertion to consult the same
 execution rather than rerun unchanged product commands for bookkeeping.
+`--reuse-only` validates the same scoped successful job records but never runs
+their argv on a miss; the job returns `executor_error` with no exit code and an
+explicit reuse-only diagnostic. It still measures inputs and probes toolchain
+identity. Use this mode for later bookkeeping assertions that must not repeat
+product tests. A missing or stale proof does not pass.
 Execution JSON is advisory data: it neither creates native QA receipts nor grants
 WBS credit, runtime PASS or close authority. Independent roles still own review
 and QA and the existing WBS gates still decide admission.
@@ -119,7 +124,7 @@ and exclusive output-leaf locks serialize overlapping writers while sibling
 outputs and concurrent readers remain independent. Consumers take shared artifact
 locks. All keys are acquired in sorted order; a failed partial acquisition
 releases everything and leaves the job pending outside worker slots. Independent
-jobs can enter the pool even when earlier declarations await resources. The
+jobs can enter the pool even when earlier declarations await resources.
 An idle resource wait is bounded by `--timeout`, restarting after a job completes;
 time spent executing independent jobs does not consume the later idle wait.
 The result-store wait and each command are also bounded by `--timeout`. Lock files remain stable

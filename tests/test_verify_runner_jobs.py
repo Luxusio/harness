@@ -56,12 +56,28 @@ def test_shared_producer_reuse_selective_changes_and_lost_artifact(tmp_path):
     assert all(not r["reused"] for r in execute(tmp_path, jobs, "five", run_id="new-run")["commands"])
 
 
+def test_reuse_only_never_runs_a_missing_or_stale_command(tmp_path):
+    item = job(tmp_path, "check", "print('executed')\n")
+    first = execute(tmp_path, [item], reuse_only=True)["commands"][0]
+    assert first["state"] == "executor_error" and first["returncode"] is None
+    assert "reuse-only" in first["error"] and "output" not in first
+    assert execute(tmp_path, [item])["status"] == "PASS"
+    assert execute(tmp_path, [item], "two", reuse_only=True)["commands"][0]["reused"]
+    (tmp_path / "check.py").write_text("raise RuntimeError('must not execute')\n")
+    stale = execute(tmp_path, [item], "three", reuse_only=True)["commands"][0]
+    assert stale["returncode"] is None and "output" not in stale and "reuse-only" in stale["error"]
+
+
 def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     import verification_target as vt
     # A .git-free view nested inside a checkout must never walk to the main root.
     original = tmp_path / "original"
     original.mkdir()
     jobs = shared(original, "build/built")
+    producer_script = original / "prepare.py"
+    producer_script.write_text("#!" + sys.executable + "\nimport sys\nif '--version' in sys.argv:\n print('prepare-v1')\n raise SystemExit(0)\n" + producer_script.read_text())
+    producer_script.chmod(0o755)
+    jobs[0]["argv"] = ["./prepare.py"]
     view = tmp_path / "view"
     view.mkdir()
     vt._manifest(original, [p.name for p in original.glob("*.py")], destination=view)
@@ -80,6 +96,7 @@ def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     restored.mkdir()
     for script in view.glob("*.py"):
         shutil.copyfile(script, restored / script.name)
+        (restored / script.name).chmod(0o755 if script.stat().st_mode & 0o111 else 0o644)
         assert (restored / script.name).stat().st_mode & 0o200
     (restored / "build").mkdir()
     shutil.copyfile(view / "build/built", restored / "build/built")

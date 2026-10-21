@@ -121,7 +121,7 @@ def _job_spec(value, root):
 
 
 def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_path,
-             capabilities=(), max_workers=4, timeout=60):
+             capabilities=(), max_workers=4, timeout=60, reuse_only=False):
     """One producer and its read-only consumers; records are advisory, not QA."""
     import verification_target as vt
     import wbs
@@ -208,7 +208,13 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                 argv = [executable, *job["argv"][1:]]
                 env = {key: os.environ[key] for key in spec["environment"] if key in os.environ}
                 def observe_context():
-                    return _scoped_call("import verification_target as vt\nprint(json.dumps(vt._context(value, root)))", spec, root, env)
+                    observed = _scoped_call("import verification_target as vt\nprint(json.dumps(vt._context(value, root)))", spec, root, env)
+                    if not os.path.isabs(command) and Path(executable).is_relative_to(root) and executable not in job["spec"]["toolchains"]:
+                        # Resolve absolute paths to execute, but identify a copied
+                        # local command by its declared location and tool bytes.
+                        key = "checkout:" + Path(executable).relative_to(root).as_posix()
+                        observed["toolchains"][key] = observed["toolchains"].pop(executable)
+                    return observed
                 context = observe_context()
                 def observe():
                     return vt._manifest(root, vt._paths(root, spec["inputs"]))
@@ -217,7 +223,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     expected = {row[0]: row for p in producers for row in records[p["job_id"]].get("artifact_manifest", [])}
                     if any(row != expected[row[0]] for row in inputs if row[0] in expected):
                         raise ValueError("prepared artifact changed before consumer admission")
-                fingerprint = _digest(dict(job=job, context=context, argv=argv, inputs=inputs))
+                fingerprint = _digest(dict(job=job, context=context, argv=job["argv"], inputs=inputs))
                 record.update(input_fingerprint=_digest(inputs), context_fingerprint=fingerprint)
                 prior = old.get(job["job_id"], {})
                 def artifacts():
@@ -238,6 +244,9 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                         raise ValueError("inputs/context changed during reuse validation")
                     record.update(state="completed", status="PASS", returncode=0, reused=True,
                                   artifact_fingerprint=output_hash, artifact_manifest=artifacts(), origin_generation=prior.get("origin_generation"))
+                    return record
+                if reuse_only:
+                    record.update(error="matching successful result unavailable (reuse-only)")
                     return record
                 try:
                     code = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ))\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
@@ -422,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-id")
     parser.add_argument("--run-id")
     parser.add_argument("--generation")
+    parser.add_argument("--reuse-only", action="store_true", help="Validate cached jobs without executing their commands on a miss.")
     parser.add_argument("--capability", action="append", default=[], help="Actual host-provided agent capability; tools/platform are detected.")
     parser.add_argument("commands", nargs="*", help="Override manifest verify_commands.")
     args = parser.parse_args(argv)
@@ -434,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = run_jobs(json.loads(args.jobs.read_text()), repo_root, task_id=args.task_id,
                                run_id=args.run_id, execution_generation=args.generation,
                                results_path=args.results, capabilities=args.capability,
-                               max_workers=args.max_workers, timeout=args.timeout or 60)
+                               max_workers=args.max_workers, timeout=args.timeout or 60, reuse_only=args.reuse_only)
         except (OSError, ValueError, TypeError) as exc:
             parser.error(str(exc))
         print(json.dumps(payload, indent=2, sort_keys=True))

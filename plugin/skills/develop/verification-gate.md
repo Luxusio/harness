@@ -87,7 +87,9 @@ Pending leases do not occupy worker slots. Use the same per-group result file
 for restored views or later outcome assertions: unchanged scoped bytes and
 context reuse successful execution; lost output regenerates preparation without
 invalidating consumers of byte-identical artifacts. Legacy shell commands do not
-gain reuse authority. Typed execution JSON is advisory and never replaces native
+gain reuse authority. Use `--reuse-only` for a later outcome assertion to validate
+that scoped proof without rerunning product commands on a cache miss. Typed execution
+JSON is advisory and never replaces native
 review/QA receipts or WBS gates. See
 `doc/harness/REQ__verification-execution.md` for declarations, capability preflight,
 failure states and ownership boundaries.
