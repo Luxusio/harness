@@ -1081,6 +1081,7 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
                 "plugin-codex/agents/", "${HARNESS_PLUGIN_ROOT}/agents/",
             )
             destination_path.write_text(text, encoding="utf-8")
+            os.chmod(destination_path, 0o644)
     codex_setup = target / "skills" / "setup"
     claude_setup = PLUGIN_ROOT / "skills" / "setup"
     for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):
@@ -1091,9 +1092,11 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
     (target / "hooks.json").write_text(
         json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"
     )
+    os.chmod(target / "hooks.json", 0o644)
     (target / ".mcp.json").write_text(
         json.dumps(_codex_mcp_config(final_root), indent=2) + "\n"
     )
+    os.chmod(target / ".mcp.json", 0o644)
     for rel in (
         "skills/run/SKILL.md",
         "skills/run/agents/openai.yaml",
@@ -1128,7 +1131,7 @@ def _codex_marketplace_payload() -> dict:
 
 def _write_codex_marketplace(install_root: Path) -> None:
     marketplace_dir = install_root / ".agents" / "plugins"
-    marketplace_dir.parent.mkdir(parents=True, exist_ok=True)
+    marketplace_dir.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(
         dir=marketplace_dir.parent, prefix=".plugins-staging-",
     ))
@@ -1136,6 +1139,7 @@ def _write_codex_marketplace(install_root: Path) -> None:
         (staged / "marketplace.json").write_text(
             json.dumps(_codex_marketplace_payload(), indent=2) + "\n"
         )
+        os.chmod(staged / "marketplace.json", 0o644)
         _activate_staged_tree(staged, marketplace_dir)
     except BaseException:
         if staged.exists():
@@ -1148,9 +1152,11 @@ def _build_codex_cache_payload(source_root: Path, target: Path, final_root: Path
     (target / "hooks.json").write_text(
         json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"
     )
+    os.chmod(target / "hooks.json", 0o644)
     (target / ".mcp.json").write_text(
         json.dumps(_codex_mcp_config(final_root), indent=2) + "\n"
     )
+    os.chmod(target / ".mcp.json", 0o644)
 
 
 def _build_claude_payload(target: Path) -> None:
@@ -1796,6 +1802,7 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
                 stale_reasons.append(f"Codex mirror: {reason}")
 
             expected_market_root = expected_root / "market-root"
+            expected_market_root.mkdir(mode=0o700)
             _write_codex_marketplace(expected_market_root)
             expected_marketplace = expected_market_root / ".agents" / "plugins"
             state, reason = _compare_payload_trees(expected_marketplace, marketplace)

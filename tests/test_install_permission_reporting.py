@@ -87,6 +87,27 @@ def test_read_only_source_directory_projects_without_source_mode_change(tmp_path
             assert stat.S_IMODE(projected.stat().st_mode) == 0o644
         state, _, reason = install._tree_inventory(target)
         assert state == install.PAYLOAD_SYNCHRONIZED, reason
+        assert all(stat.S_IMODE((target / name).stat().st_mode) == 0o644
+                   for name in ("hooks.json", ".mcp.json"))
+        cache_source = tmp_path / "cache-source"
+        install._copytree_clean(target, cache_source)
+        for name in ("hooks.json", ".mcp.json"):
+            (cache_source / name).unlink()
+        cache = tmp_path / "cache"
+        install._build_codex_cache_payload(cache_source, cache, tmp_path / "installed-cache")
+        state, _, reason = install._tree_inventory(cache)
+        assert state == install.PAYLOAD_SYNCHRONIZED, reason
+        assert all(stat.S_IMODE((cache / name).stat().st_mode) == 0o644
+                   for name in ("hooks.json", ".mcp.json"))
+        marketplace = tmp_path / "marketplace"
+        marketplace.mkdir(mode=0o700)
+        install._write_codex_marketplace(marketplace)
+        state, _, reason = install._tree_inventory(marketplace)
+        assert state == install.PAYLOAD_SYNCHRONIZED, reason
+        assert stat.S_IMODE(marketplace.stat().st_mode) == 0o700
+        monkeypatch.setattr(install, "CODEX_INSTALL_ROOT", tmp_path / "absent-install")
+        state, reason = install._codex_payload_state(tmp_path / "config/config.toml")
+        assert state == install.PAYLOAD_STALE, reason
     finally:
         os.umask(previous_umask)
         source.chmod(0o755)

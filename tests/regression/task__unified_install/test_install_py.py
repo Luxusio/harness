@@ -37,6 +37,15 @@ CODEX_PLUGIN_VERSION = json.loads(
 )["version"]
 
 
+@pytest.fixture(autouse=True)
+def isolated_installer_home(tmp_path, monkeypatch):
+    """Default install surfaces belong to this fixture, never the host user."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
+
+
 def _load_install_module():
     spec = importlib.util.spec_from_file_location("harness_install_py", INSTALL_PY)
     assert spec and spec.loader
