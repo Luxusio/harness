@@ -517,3 +517,123 @@ def test_reproducible_cache_directories_and_exact_closed_metadata_allow_disposal
     response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
     assert response['batch']['requests'][0]['status'] == 'integrated', response
     assert not worktree.exists()
+
+
+def test_managed_dirty_original_preserves_index_and_bytes_through_disposal(tmp_path, monkeypatch):
+    pool, spec = setup(tmp_path, monkeypatch, [request('a'), request('b')])
+    _write(pool.repo / 'shared.txt', 'staged user edit\n')
+    _git('add', 'shared.txt', cwd=pool.repo)
+    _write(pool.repo / 'shared.txt', 'unstaged user edit\n')
+    _write(pool.repo / 'notes\nlocal.txt', 'untracked user data\n')
+    before_index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
+    before_status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
+    result = finish_result(pool, spec)
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    assert response['batch']['requests'][0]['status'] == 'integrated', response
+    assert (pool.repo / 'a.txt').read_text() == 'a\n'
+    # Existing entries keep staged identity; only the legitimate new file is added.
+    after_index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
+    assert all(entry in after_index.split('\0') for entry in before_index.split('\0'))
+    assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == before_status
+    assert (pool.repo / 'shared.txt').read_text() == 'unstaged user edit\n'
+    assert _git('show', ':shared.txt', cwd=pool.repo) == 'staged user edit'
+    assert (pool.repo / 'notes\nlocal.txt').read_text() == 'untracked user data\n'
+    assert not Path(result['worktree']).exists()
+    assert not _git('branch', '--list', result['branch'], cwd=pool.repo)
+
+
+@pytest.mark.parametrize('collision', ['untracked', 'ancestor', 'rename-source', 'rename-target'])
+def test_managed_dirty_scope_collision_refuses_without_effects(tmp_path, monkeypatch, collision):
+    scope = 'a.txt' if collision not in {'rename-source', 'rename-target'} else ('shared.txt' if collision == 'rename-source' else 'renamed.txt')
+    pool, spec = setup(tmp_path, monkeypatch, [request('a', scope), request('b')])
+    if collision == 'untracked':
+        _write(pool.repo / 'a.txt', 'precious\n')
+    elif collision == 'ancestor':
+        _write(pool.repo / 'a.txt' / 'nested.txt', 'precious\n')
+    else:
+        _git('mv', 'shared.txt', 'renamed.txt', cwd=pool.repo)
+    before = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
+    with pytest.raises(batch.Refusal, match='overlap'):
+        call(pool, spec)
+    assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == before
+    assert not pool.state.exists()
+
+
+def test_managed_actual_changes_are_owned_subset_not_equal(tmp_path, monkeypatch):
+    pool, spec = setup(tmp_path, monkeypatch, [dict(request('a'), scopes=['a.txt', 'unused.txt']), request('b')])
+    result = finish_result(pool, spec)
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    assert response['batch']['requests'][0]['status'] == 'integrated', response
+
+
+def test_managed_outside_owned_commit_is_retained(tmp_path, monkeypatch):
+    pool, spec = setup(tmp_path, monkeypatch, [request('a'), request('b')])
+    result = finish_result(pool, spec)
+    w = Path(result['worktree'])
+    _write(w / 'outside.txt', 'escaped ownership\n')
+    _git('add', 'outside.txt', cwd=w)
+    _git('commit', '-qm', 'outside', cwd=w)
+    result['commit'] = _head(w)
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    item = response['batch']['requests'][0]
+    assert item['status'] == 'recovery-required'
+    assert 'outside request ownership' in item['finish_result']['reason']
+    assert w.exists() and not (pool.repo / 'outside.txt').exists()
+
+
+def test_managed_late_dirty_overlap_refuses_native_merge(tmp_path, monkeypatch):
+    pool, spec = setup(tmp_path, monkeypatch, [request('a'), request('b')])
+    result = finish_result(pool, spec)
+    original = batch.finish_helper._rebase
+    def late(*args, **kwargs):
+        original(*args, **kwargs)
+        _write(pool.repo / 'a.txt', 'late user work\n')
+    monkeypatch.setattr(batch.finish_helper, '_rebase', late)
+    response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
+    item = response['batch']['requests'][0]
+    assert item['status'] == 'recovery-required'
+    assert 'overlap' in item['finish_result']['reason']
+    assert item['finish_result']['integrated_tip'] is None
+    assert (pool.repo / 'a.txt').read_text() == 'late user work\n'
+    assert Path(result['worktree']).exists()
+
+
+def test_resume_missing_worktree_reports_retained_branch_without_new_task(tmp_path, monkeypatch):
+    pool, spec = setup(tmp_path, monkeypatch, [request('a'), request('b')])
+    handoff, = call(pool, spec, available_slots=1)['handoffs']
+    call(pool, spec, operation='bind', slug='a', worker_id='actual-a')
+    w = Path(handoff['worktree'])
+    task(w)
+    moved = w.with_name(w.name + '-unavailable')
+    w.rename(moved)
+    before = pool.state.read_bytes()
+    state = call(pool, spec, operation='status')
+    observed = state['observed']['a'] if 'observed' in state else None
+    # Owner status may wrap the raw state; resume still refuses exact missing W.
+    with pytest.raises(batch.Refusal, match='retained worktree is missing'):
+        call(pool, spec, operation='resume', slug='a', worker_stopped=True)
+    assert pool.state.read_bytes() == before
+    assert _git('rev-parse', 'refs/heads/' + handoff['branch'], cwd=pool.repo) == handoff['spawn_head']
+    assert (moved / 'doc/harness/tasks/TASK__a/TASK.json').is_file()
+
+
+def test_managed_parallel_divergent_siblings_integrate_owned_subsets(tmp_path, monkeypatch):
+    pool, spec = setup(tmp_path, monkeypatch)
+    handoffs = call(pool, spec, available_slots=2)['handoffs']
+    results = []
+    for handoff in handoffs:
+        slug = handoff['slug']
+        call(pool, spec, operation='bind', slug=slug, worker_id='actual-' + slug)
+        w = Path(handoff['worktree'])
+        _write(w / (slug + '.txt'), slug + '\n')
+        _git('add', slug + '.txt', cwd=w)
+        _git('commit', '-qm', slug, '--trailer', 'Harness-Task: TASK__' + slug, cwd=w)
+        task(w, slug, closed=True)
+        results.append(dict(verdict='closed', task_id='TASK__' + slug, worktree=str(w), branch=handoff['branch'], commit=_head(w), run_id=RUN))
+    for handoff, result in zip(handoffs, results):
+        response = call(pool, spec, operation='complete', slug=handoff['slug'], worker_id='actual-' + handoff['slug'], result=result, worker_stopped=True)
+        assert response['batch']['requests'][handoffs.index(handoff)]['status'] == 'integrated', response
+    assert response['status'] == 'closed'
+    assert (pool.repo / 'a.txt').read_text() == 'a\n'
+    assert (pool.repo / 'b.txt').read_text() == 'b\n'
+    assert all(not Path(result['worktree']).exists() for result in results)

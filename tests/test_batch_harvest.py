@@ -760,3 +760,128 @@ def test_s1_full_removal_supports_preexisting_annotated_module_tag(tmp_path, mon
     assert _git("cat-file", "-p", tag, cwd=destination) == annotation
     assert _git("cat-file", "-t", tip, cwd=destination) == "commit"
     assert (main / "doc/harness/archive/batch/TASK__lead/TASK.json").is_file()
+
+
+def _ordinary_snapshot_fixture(tmp_path):
+    import test_batch_state as fixture
+    repo = _main_repo(tmp_path)
+    _ignore_task_evidence(repo)
+    with (repo / '.gitignore').open('a') as handle:
+        handle.write('doc/harness/checkpoints/\ndoc/harness/.watcher-diagnostics.json\n')
+    _git('add', '.gitignore', cwd=repo)
+    _git('commit', '-q', '-m', 'ignore runtime snapshots', cwd=repo)
+    work = tmp_path / 'work'
+    _add_worktree(repo, work, 'lead-snapshots')
+    task = fixture.task(work, slug='snapshots', closed=True)
+    sid = 'session-snapshots'
+    sessions = task.parent / '.active_sessions'
+    sessions.mkdir()
+    (sessions / (sid + '.json')).write_text(json.dumps(dict(
+        session_id=sid, task_dir=str(task), task_id=task.name,
+        run_id=fixture.RUN, updated='2026-10-21T00:00:00Z')))
+    diagnostics = work / 'doc/harness/.watcher-diagnostics.json'
+    diagnostics.write_bytes(b'{"session_id":"session-snapshots", "updated":"2026-10-21T00:00:00Z", "registration_present":true}\n')
+    checkpoint = work / 'doc/harness/checkpoints' / (task.name + '.md')
+    checkpoint.parent.mkdir()
+    checkpoint.write_text('# Checkpoint — ' + task.name + '\n\n- written: 2026-10-21T00:00:00Z\n\n## Task state\n\n- status: open\n\n## Progress\n\n- phase: implementation\n\n## Next action\n\nHistorical resume note\n')
+    mod.harvest(str(repo), str(work), task.name)
+    sidecar = repo / 'doc/harness/archive/worktree-recovery' / task.name / fixture.RUN
+    return repo, work, task, diagnostics, checkpoint, sidecar
+
+
+def test_ordinary_removal_preserves_typed_snapshots_exactly_and_idempotently(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
+    original = {p: p.read_bytes() for p in (diagnostics, checkpoint)}
+    archive = repo / 'doc/harness/archive/batch' / task.name
+    archived = mod._tree_entries(str(archive))
+    for _ in range(2):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+        assert diagnostics.read_bytes() == original[diagnostics]
+        assert checkpoint.read_bytes() == original[checkpoint]
+        assert (sidecar / 'watcher-diagnostics.json').read_bytes() == original[diagnostics]
+        assert (sidecar / 'checkpoint.md').read_bytes() == original[checkpoint]
+        assert mod._tree_entries(str(archive)) == archived
+    _git('worktree', 'remove', str(work), cwd=repo)
+    assert not work.exists()
+    assert (sidecar / 'checkpoint.md').read_bytes() == original[checkpoint]
+
+
+def test_ordinary_snapshots_never_authorize_precious_ignored_content(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
+    precious = work / 'doc/harness/checkpoints/precious.bin'
+    precious.write_bytes(b'unique user data')
+    with _raises(mod.HarvestError, match='unknown ignored or untracked'):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    assert precious.read_bytes() == b'unique user data'
+    assert checkpoint.exists() and diagnostics.exists()
+
+
+def test_ordinary_snapshots_refuse_foreign_malformed_and_unsafe_inputs(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
+    raw = diagnostics.read_bytes()
+    for replacement in (b'{}', raw.replace(b'session-snapshots', b'foreign/invalid'),
+                        raw.replace(b'true', b'"true"'),
+                        raw[:-2] + b',"unexpected":"precious"}\n',
+                        raw[:-2] + b',"session_id":"session-snapshots"}\n'):
+        diagnostics.write_bytes(replacement)
+        with _raises(mod.HarvestError):
+            mod.ordinary_removal_proof(str(repo), str(work), task.name)
+        assert work.exists() and diagnostics.read_bytes() == replacement
+        assert not sidecar.exists()
+    diagnostics.write_bytes(raw)
+    ckraw = checkpoint.read_bytes()
+    checkpoint.write_bytes(ckraw.replace(task.name.encode(), b'TASK__foreign'))
+    with _raises(mod.HarvestError, match='foreign task checkpoint'):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    checkpoint.write_bytes(ckraw)
+    external = tmp_path / 'outside'
+    external.write_bytes(raw)
+    diagnostics.unlink()
+    diagnostics.symlink_to(external)
+    with _raises(mod.HarvestError):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    diagnostics.unlink()
+    os.link(external, diagnostics)
+    with _raises(mod.HarvestError):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    diagnostics.unlink()
+    diagnostics.write_bytes(raw)
+    diagnostics.chmod(0o666)
+    with _raises(mod.HarvestError):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    assert external.read_bytes() == raw and not sidecar.exists()
+
+
+def test_ordinary_snapshot_collisions_and_sidecar_links_never_overwrite(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
+    sidecar.mkdir(parents=True)
+    destination = sidecar / 'watcher-diagnostics.json'
+    destination.write_bytes(b'previous irreplaceable snapshot')
+    with _raises(mod.HarvestError, match='collision'):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    assert destination.read_bytes() == b'previous irreplaceable snapshot'
+    destination.unlink()
+    outside = tmp_path / 'outside'
+    outside.write_bytes(diagnostics.read_bytes())
+    destination.symlink_to(outside)
+    with _raises(mod.HarvestError):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    destination.unlink()
+    os.link(outside, destination)
+    with _raises(mod.HarvestError):
+        mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    assert work.exists() and checkpoint.exists()
+
+
+def test_ordinary_diagnostics_after_close_need_no_removed_session_marker(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
+    # task_close removes the owning session marker; diagnostics carry no task/run
+    # and remain a nonattesting checkout advisory, never closed task evidence.
+    sessions = task.parent / '.active_sessions'
+    (sessions / 'session-snapshots.json').unlink()
+    sessions.rmdir()
+    raw = diagnostics.read_bytes()
+    mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    _git('worktree', 'remove', str(work), cwd=repo)
+    assert not work.exists()
+    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == raw

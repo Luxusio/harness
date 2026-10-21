@@ -110,3 +110,16 @@ combined independent review/QA. Leads skip source auto-install; the root owns
 verified delivery. Operational pool closure never replaces WBS verification.
 Blocked/abandoned work remains unfinished; report exact retained resources and
 blocker. Only the owning pack's completion is gated, not unrelated repair WBSs.
+
+## Durable isolated work and unrelated original edits
+
+Managed ordinary requests may use a dirty original only when user changes are
+disjoint from the declared execution ownership. Preparation never stashes or
+resets. Standalone and selected-submodule flows retain strict cleanliness.
+Finish validates actual changed paths as a subset of ownership and rechecks
+disjointness before native fast-forward; unsupported index states retain W
+with recovery guidance. Keep worktrees, unintegrated commits and essential
+results on persistent repository storage; use temporary paths only for caches.
+Resume the exact task/run after checking actual checkout/ref/control presence;
+recorded running status never proves a process is alive. Preserve known typed
+ancillary metadata outside W before disposal; unknown ignored content retains W.

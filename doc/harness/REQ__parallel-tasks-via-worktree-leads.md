@@ -504,7 +504,7 @@ Default rules and selected S1 extension:
   configured clean filters, as any status there does. Nested repos in the
   user's project are trusted like the main checkout; refusing filter configs
   would falsely refuse git-lfs repos.
-- Preflight cleanliness checks explicitly include untracked files in the
+- Preflight inventories explicitly include untracked files in the
   main checkout, submodules and nested repos, overriding
   `status.showUntrackedFiles=no`.
 - Standalone preflight checks repository shape, scopes, and
@@ -777,3 +777,15 @@ resources, or exact retained work and blocker.
   continue to apply; native baseRef no longer selects managed creation.
 - Live probe: a real worktree subagent starts a task with `workspace` and its
   nested reviewer's start/stop receipts appear in the worktree task.
+
+## Durable dirty-original isolation
+
+The user's CCC preservation request authorizes managed ordinary work with
+unrelated original edits. Derived enforcement compares literal path ownership
+at admission and the actual rebased changed-path subset at integration. A
+clean isolated lead may develop while unrelated staged, unstaged and untracked
+original state remains preserved. Overlap, rename endpoint collisions, selected
+submodule dirt, unknown Git operations and native FF refusal retain resources.
+No stash, reset, custom index rewriting or forced disposal is allowed.
+The existing batch recovery contract owns detailed failure and ancillary
+preservation rules. Durable work never relies on a /tmp-only checkout.

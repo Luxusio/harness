@@ -17,7 +17,9 @@ repository as it found it: the worktree is a registered linked worktree of
 `--repo` with no rebase in progress and `<branch>` checked out; `--commit` is
 the branch tip (with `--resume`: it still resolves); the branch holds no merge
 commit after the main HEAD (a rebase would drop that merge's own change); the
-lead worktree is clean; the main checkout is clean and on a branch.
+lead worktree is clean; the main checkout is on a branch and clean by default.
+Managed ordinary calls may allow destination user changes disjoint from declared
+ownership; actual rebased paths must stay within that ownership.
 It captures that main branch's symbolic ref and checks it again after rebase
 and merge; integration success and failure reconciliation use that original ref.
 
@@ -178,6 +180,66 @@ def _status_lines(checkout: str) -> list:
     return [line for line in listing.splitlines() if line]
 
 
+def dirty_paths(checkout):
+    """Literal paths, never the human quoted/line-oriented status rendering."""
+    listing = _git_out(checkout, '--no-optional-locks', 'status', '--porcelain=v1', '-z',
+                       '--ignore-submodules=none', '--untracked-files=all')
+    records = listing.split('\0')
+    paths, index = [], 0
+    while index < len(records) and records[index]:
+        record = records[index]
+        index += 1
+        if len(record) < 4 or record[2] != ' ' or '\ufffd' in record:
+            raise FinishError('unreadable destination status paths; preserve user work and inspect Git status')
+        code, path = record[:2], record[3:]
+        paths.append(path)
+        if 'R' in code or 'C' in code:
+            if index >= len(records) or not records[index] or '\ufffd' in records[index]:
+                raise FinishError('incomplete destination rename status')
+            paths.append(records[index])
+            index += 1
+        if code.strip() in {'U', 'AA', 'DD'} or 'U' in code:
+            raise FinishError('destination has unmerged paths; resolve the existing Git operation first')
+    return paths
+
+
+def paths_overlap(left, right):
+    return left == right or left.startswith(right.rstrip('/') + '/') or right.startswith(left.rstrip('/') + '/')
+
+
+def require_disjoint_dirty(repo, scopes):
+    """Check managed ordinary destination ownership; never change its index."""
+    batch_submodules.reject_hidden_index_flags(repo)
+    for marker in ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'sequencer', 'BISECT_LOG', 'BISECT_START'):
+        path = _git_out(repo, 'rev-parse', '--git-path', marker).strip()
+        if os.path.exists(path if os.path.isabs(path) else os.path.join(repo, path)):
+            raise FinishError('destination Git operation in progress; preserve its state and finish it before integration')
+    paths = dirty_paths(repo)
+    if scopes is None:
+        if paths:
+            raise FinishError('main checkout is not clean (dirty); preserve user changes and use a managed disjoint request')
+        return
+    roots = [os.path.relpath(scope, repo).replace(os.sep, '/') for scope in scopes]
+    if not roots or any(root == '..' or root.startswith('../') for root in roots):
+        raise FinishError('invalid destination ownership scopes')
+    for path in paths:
+        if any(root == '.' or paths_overlap(path, root) for root in roots):
+            raise FinishError('destination user changes overlap request ownership at ' + repr(path)
+                              + '; preserve them and choose disjoint scopes or integrate after resolving that path')
+
+
+def require_owned_delta(repo, base, tip, scopes):
+    if scopes is None:
+        return
+    roots = [os.path.relpath(scope, repo).replace(os.sep, '/') for scope in scopes]
+    # Disabling rename detection includes both removed and added paths.
+    paths = _git_out(repo, 'diff', '--no-renames', '--name-only', '-z', base, tip, '--').split('\0')
+    for path in filter(None, paths):
+        if '\ufffd' in path or not any(root == '.' or path == root or path.startswith(root + '/') for root in roots):
+            raise FinishError('lead changed path outside request ownership: ' + repr(path)
+                              + '; retain the lead and reconcile its declared work before integration')
+
+
 def _trailer_present(repo: str, base: str, tip: str, task_id: str):
     """Whether every commit in ``base..tip`` carries ``Harness-Task: <task_id>``.
 
@@ -224,7 +286,7 @@ def _result(args, worktree: str) -> dict:
     }
 
 
-def _check(repo: str, worktree: str, args, result: dict, retention=None) -> tuple[str, str]:
+def _check(repo: str, worktree: str, args, result: dict, retention=None, scopes=None) -> tuple[str, str]:
     """Run pre-rebase checks; return the original main ref and its commit."""
     try:
         resolved = resolve_registered_worktree(repo, worktree)
@@ -275,12 +337,11 @@ def _check(repo: str, worktree: str, args, result: dict, retention=None) -> tupl
     dirty = lead_status(worktree, retention)
     if dirty:
         raise Outcome("kept", f"the lead worktree is not clean ({len(dirty)} status entries)")
-    dirty = _status_lines(repo)
-    if dirty:
-        raise Outcome(
-            "ff-refused",
-            f"the main checkout is not clean ({len(dirty)} status entries); nothing was changed",
-        )
+    try:
+        require_disjoint_dirty(repo, scopes)
+        require_owned_delta(repo, _git_out(repo, 'merge-base', main_head, tip).strip(), tip, scopes)
+    except FinishError as exc:
+        raise Outcome('ff-refused', str(exc)) from exc
     return main_ref, main_head
 
 
@@ -416,7 +477,7 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
 
 
 def finish(repo_root: str, args, checkpoint=None, retention=None,
-           submodules=None, persist_submodules=None) -> dict:
+           submodules=None, persist_submodules=None, scopes=None) -> dict:
     """Run step d for one lead; never raises, the result carries the status."""
     repo = os.path.realpath(repo_root)
     worktree = os.path.realpath(args.worktree)
@@ -432,8 +493,9 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
             if submodules['witness'] is not None:
                 previous = submodules['witness']
                 batch_submodules.reconcile_checkout(repo, submodules, previous, target=previous['target'])
-        main_ref, main_head = (_check(repo, worktree, args, result) if retention is None
-                               else _check(repo, worktree, args, result, retention))
+        if submodules is not None and scopes is not None:
+            raise FinishError('scoped dirty admission is not supported for selected submodules')
+        main_ref, main_head = _check(repo, worktree, args, result, retention, scopes)
         result["destination_ref"] = main_ref
         if submodules is None:
             _rebase(repo, worktree, main_head, result)
@@ -465,8 +527,11 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
             _check_main_ref(repo, main_ref)
             if submodules is not None and _resolve_commit(repo, main_ref) != main_head:
                 raise Outcome("ff-refused", "the destination tip changed after the S1 witness")
-            if _status_lines(repo):
-                raise Outcome("ff-refused", "the main checkout became dirty after rebase")
+            try:
+                require_disjoint_dirty(repo, scopes)
+                require_owned_delta(repo, _resolve_commit(repo, main_ref), result['branch_tip'], scopes)
+            except FinishError as exc:
+                raise Outcome('ff-refused', str(exc)) from exc
             merged = _git(repo, *(["-c", "submodule.recurse=false"] if submodules is not None else []),
                           "merge", "--ff-only", ref)
             if merged.returncode != 0:

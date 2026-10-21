@@ -68,7 +68,8 @@ exact creation intent, and creates the registered worktrees plus validated
 existing owned handoffs; matching HEAD alone never authorizes foreign adoption.
 Do not run `git worktree add` or ask the host to create another checkout.
 
-Preflight still owns control-root shape, clean root/nested repositories,
+Preflight still owns control-root shape, clean root/nested repositories in strict
+standalone/S1 flows and scoped disjoint user changes in managed ordinary flows,
 literal source scopes, selected S1 modules, ignored worktree location and
 post-checkout-hook hazards. Refusals preserve work and name the blocker. No main
 checkout task may be open while leads can emit lifecycle events; dispatch parks
@@ -250,3 +251,16 @@ Distinguish unresolved retained originals from
 verified recovery: report the recovery destination/tip and actual worktree and
 branch removal, or the retained path/branch, blocker and next action. Do not
 claim overall completion while owned cleanup remains unresolved.
+
+## Durable isolated work and unrelated original edits
+
+Managed ordinary requests may use a dirty original only when user changes are
+disjoint from the declared execution ownership. Preparation never stashes or
+resets. Standalone and selected-submodule flows retain strict cleanliness.
+Finish validates actual changed paths as a subset of ownership and rechecks
+disjointness before native fast-forward; unsupported index states retain W
+with recovery guidance. Keep worktrees, unintegrated commits and essential
+results on persistent repository storage; use temporary paths only for caches.
+Resume the exact task/run after checking actual checkout/ref/control presence;
+recorded running status never proves a process is alive. Preserve known typed
+ancillary metadata outside W before disposal; unknown ignored content retains W.

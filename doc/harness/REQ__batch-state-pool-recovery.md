@@ -236,8 +236,9 @@ validated session, and empty regular Harness operational lock metadata are
 discardable controls; unknown
 controls retain W. No broad `*.log`, `.cache` or private-directory exemption is
 permitted. An existing ignored Native checkpoint
-is unique evidence, never a cache: require outside byte verification and exact
-accounting before explicit removal. The stricter selected S1 inventory and
+is a historical snapshot, never a cache: require outside byte verification and exact
+accounting before removal. The typed ancillary preservation path below handles
+known checkpoint and diagnostic shapes; unknown contents retain W. The stricter selected S1 inventory and
 preservation guard remains unchanged. No second ledger or new MCP argument is
 introduced.
 
@@ -351,3 +352,13 @@ Public WBS `check` accepts an explicit assertion timeout of1..300seconds,
 default60. This accommodates real public lifecycle assertions under normal
 test-session guards without a custom test driver. Input-measurement budgets
 remain separate; `verify` does not accept a timeout argument.
+
+
+
+## Scoped ordinary admission and durable resume (2026-10-21)
+
+User-explicit outcome: preserve unrelated user changes while developing in a durable isolated checkout; never stash, reset or overwrite original work. Derived mechanism: only managed ordinary requests may admit destination dirt disjoint from all admitted ownership scopes. Standalone and selected-submodule paths retain strict cleanliness. Compare literal NUL-delimited Git paths, including rename endpoints and ancestor collisions. Actual integrated changed paths are a subset of ownership, not an equality requirement. Recheck the rebased delta and destination dirt immediately before native fast-forward; native Git refusal retains the lead with a concrete recovery action. No custom index restoration is permitted.
+
+Managed repositories and unintegrated commits stay under the repository; temporary caches may be recreated. Resume checks registered W, ref, commit and original task/run. Missing resources retain surviving branches/evidence and report targeted recovery; stored worker state does not establish process liveness. Missing build artifacts do not erase source review results; their applicability belongs the verification-target owner.
+
+Known owning-task checkpoint and watcher diagnostics may be preserved byte-for-byte in a separate ancillary archive before disposal. They never authorize closure or modify closed evidence. Producer diagnostics/checkpoints lack task/run attribution; sidecar task/run names identify disposal context only, never provenance or verification evidence. Only exact known-schema, ownership/type-checked preserved entries are accounted for; unknown ignored user data retains the worktree.

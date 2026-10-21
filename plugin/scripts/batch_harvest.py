@@ -467,6 +467,106 @@ def _ordinary_learning_proof(source, destination):
                 'learning bytes not preserved outside worktree')
 
 
+
+def _ordinary_ancillary(repo, worktree, task_id):
+    """Preserve exact typed runtime snapshots outside the immutable task archive.
+
+    These files are advisory, never review/QA evidence. The checkpoint producer
+    has no run identity: its exact task header identifies a historical snapshot,
+    not the current generation. Diagnostics identify a session but not task/run;
+    their sidecar location records disposal context, never generation ownership.
+    Closing clears session markers, so their absence is expected here.
+    """
+    from _lib import read_task_control, task_control_status, sanitize_session_id
+
+    task = os.path.join(worktree, 'doc/harness/tasks', task_id)
+    control = read_task_control(task)
+    candidates = [('doc/harness/.watcher-diagnostics.json', 'watcher-diagnostics.json'),
+                  ('doc/harness/checkpoints/' + task_id + '.md', 'checkpoint.md')]
+    present = [(rel, name) for rel, name in candidates if os.path.lexists(os.path.join(worktree, rel))]
+    if not present:
+        return set()
+    _s1_require(control and task_control_status(task, control) == 'closed',
+                'ancillary snapshots require exact closed task')
+    run = control.get('run_id')
+    _s1_require(isinstance(run, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', run),
+                'unsafe ancillary snapshot run identity')
+    snapshots = []
+    for rel, name in present:
+        source = os.path.join(worktree, rel)
+        raw = _ordinary_bytes(source)
+        if name == 'watcher-diagnostics.json':
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    _s1_require(key not in result, 'duplicate watcher diagnostic field')
+                    result[key] = value
+                return result
+            value = json.loads(raw, object_pairs_hook=unique)
+            required = {'session_id', 'updated', 'registration_present'}
+            optional = {'last_registration_error', 'last_registration_note'}
+            _s1_require(isinstance(value, dict) and required <= set(value) <= required | optional
+                        and isinstance(value['session_id'], str) and value['session_id']
+                        and isinstance(value['updated'], str) and value['updated']
+                        and (value['registration_present'] is None or type(value['registration_present']) is bool)
+                        and all(isinstance(value[key], str) for key in optional & set(value)),
+                        'unknown watcher diagnostics schema')
+            sid = value['session_id']
+            _s1_require(sid != 'default' and sanitize_session_id(sid) == sid,
+                        'watcher diagnostics have unsafe session identity')
+        else:
+            text = raw.decode('utf-8')
+            _s1_require(text.startswith('# Checkpoint — ' + task_id + '\n\n- written: ')
+                        and all(section in text for section in
+                                ('\n## Task state\n', '\n## Progress\n', '\n## Next action\n')),
+                        'unknown or foreign task checkpoint')
+        snapshots.append((rel, name, raw))
+    # No mutable manifest and no mutation of closed task evidence. Exact bytes
+    # themselves are the preservation proof; an existing different copy refuses.
+    root = os.path.join(repo, 'doc/harness/archive/worktree-recovery', task_id, run)
+    for directory in (os.path.join(repo, 'doc/harness/archive'),
+                      os.path.join(repo, 'doc/harness/archive/worktree-recovery'),
+                      os.path.dirname(root), root):
+        try:
+            os.mkdir(directory, 0o700)
+        except FileExistsError:
+            pass
+        _s1_path(directory, True)
+        info = os.lstat(directory)
+        _s1_require(info.st_uid == os.getuid() and not info.st_mode & 0o022,
+                    'unsafe ancillary snapshot directory: ' + directory)
+    preserved = set()
+    for rel, name, raw in snapshots:
+        destination = os.path.join(root, name)
+        if not os.path.lexists(destination):
+            try:
+                fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            except FileExistsError:
+                pass  # concurrent preservation must still match exact bytes
+            else:
+                with os.fdopen(fd, 'wb') as handle:
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        _s1_require(_ordinary_bytes(destination) == raw,
+                    'ancillary snapshot collision; refusing overwrite: ' + destination)
+        _s1_require(_ordinary_bytes(os.path.join(worktree, rel)) == raw,
+                    'ancillary snapshot changed during preservation')
+        preserved.add(rel)
+    # Publish every newly created directory entry durably before W can go.
+    # Syncing only the run directory does not persist its name in its parent.
+    current = root
+    while current != os.path.dirname(repo):
+        _s1_path(current, True)
+        directory_fd = os.open(current, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        current = os.path.dirname(current)
+    return preserved
+
+
 def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=None):
     """Refuse ordinary disposal until every noncache byte is accounted for.
 
@@ -488,6 +588,8 @@ def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=N
                         and checkpoint.get('archive_fingerprint') == fingerprint,
                         'task archive differs from durable removal checkpoint')
         allowed = _ordinary_markers(worktree, task_id)
+        ancillary = _ordinary_ancillary(repo, worktree, task_id)
+        allowed.update(ancillary)
         learning = os.path.join(worktree, 'doc/harness/learnings.jsonl')
         if os.path.lexists(learning):
             _ordinary_learning_proof(learning, os.path.join(repo, 'doc/harness/learnings.jsonl'))
@@ -497,6 +599,8 @@ def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=N
             allowed.add(RETENTION_MARKER)
         _s1_content(worktree, task_id, entries, {'modules': []}, repo,
                     ordinary_allowed=allowed, ordinary_caches=True)
+        _s1_require(_ordinary_ancillary(repo, worktree, task_id) == ancillary,
+                    'ancillary snapshot inventory changed')
         _s1_require(_tree_entries(source) == entries and _tree_entries(archive) == entries,
                     'task evidence changed during removal inventory')
     except (OSError, ValueError, subprocess.SubprocessError) as exc:

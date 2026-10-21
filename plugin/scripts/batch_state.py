@@ -336,11 +336,14 @@ def no_git_operation(repo):
         require(not os.path.exists(path if os.path.isabs(path) else os.path.join(repo, path)), 'Git operation in progress')
 
 
-def main_boundary(repo, expected=None):
+def main_boundary(repo, expected=None, scopes=None):
     ref = finish_helper._git(repo, 'symbolic-ref', '-q', 'HEAD').stdout.strip()
     require(ref.startswith('refs/heads/') and (expected is None or expected == ref), 'detached or changed destination branch')
     no_git_operation(repo)
-    require(not finish_helper._status_lines(repo), 'destination checkout is dirty')
+    try:
+        finish_helper.require_disjoint_dirty(repo, scopes)
+    except finish_helper.FinishError as exc:
+        raise Refusal(str(exc)) from exc
     return ref, finish_helper._resolve_commit(repo, ref)
 
 
@@ -394,11 +397,11 @@ def reconcile_modules(repo, item):
                     'removed S1 worktree destination differs from integration witness')
 
 
-def preflight(repo, item):
+def preflight(repo, item, dirty_scopes=None):
     requests = {item['slug']: effective_scopes(item)}
     require(not batch_preflight._globs_and_lists(repo, requests), 'scope names no existing path and looks like a glob or comma list')
     report = (batch_preflight.preflight(repo, requests, {item['slug']: item['submodules']})
-              if item.get('submodules') else batch_preflight.preflight(repo, requests))
+              if item.get('submodules') else batch_preflight.preflight(repo, requests, dirty_scopes=dirty_scopes))
     require(report['verdict'] == 'ok', 'preflight refused: ' + json.dumps(report))
     resolved = [x['resolved'] for x in report['scopes']]
     expected = item.get('resolved_scopes', []) + list(item.get('extra_scopes', {}).values())
@@ -416,10 +419,13 @@ def overlap(left, right):
 
 
 def bound(repo, item):
-    require(resolve_registered_worktree(repo, item['worktree']), 'worktree is not linked')
+    require(os.path.isdir(item['worktree']), 'retained worktree is missing; preserve branch ' + item['branch'] + ' and restore the exact registered checkout before resume; do not start a replacement task')
+    require(resolve_registered_worktree(repo, item['worktree']), 'worktree is not linked; inspect retained registration and use targeted pool recovery')
     ref = finish_helper._git(item['worktree'], 'symbolic-ref', '-q', 'HEAD').stdout.strip()
     require(ref == 'refs/heads/' + item['branch'], 'worktree branch changed')
-    return finish_helper._resolve_commit(repo, ref)
+    tip = finish_helper._resolve_commit(repo, ref)
+    require(tip, 'retained branch commit is missing; restore the original ref/object before resume, preserving task/run evidence')
+    return tip
 
 
 def control(item, base=None, closed=False):
@@ -520,7 +526,7 @@ def disposal_complete(repo, item):
     require(result.returncode == 1, 'integrated branch still exists or cannot be inspected')
 
 def observation(repo, item):
-    result = {'next_action': {'queued': 'claim', 'reserved': 'bind or explicitly release unused reservation', 'running': 'await worker result', 'returned': 'finish', 'integrated': 'none', 'abandoned': 'retained work requires explicit disposition'}.get(item['status'], 'recover or resume with stopped worker assertion')}
+    result = {'next_action': {'queued': 'claim', 'reserved': 'bind or explicitly release unused reservation', 'running': 'observe actual worker; recorded state does not prove liveness', 'returned': 'finish', 'integrated': 'none', 'abandoned': 'retained work requires explicit disposition'}.get(item['status'], 'recover or resume with stopped worker assertion')}
     if item['status'] == 'abandoned' and not item.get('worktree'):
         result['next_action'] = ('never dispatched; no external work retained' if item.get('disposition') == 'never-dispatched'
                                  else 'unknown external work retained; explicit disposition required')
@@ -547,6 +553,7 @@ def observation(repo, item):
             result['task_status'] = task_control_status(os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id']))
         except Exception as exc:
             result['identity_error'] = str(exc)
+            result['next_action'] = 'preserve retained branch/evidence and restore exact registration before same-task resume: ' + str(exc)
         if not result['worktree_exists'] and result['branch_tip']:
             result['next_action'] = 'recover; remaining branch: ' + item['branch']
     return result
@@ -777,11 +784,13 @@ def execute(args, directory, records):
                     and old['max_leads'] == maximum, 'conflicting existing batch')
             return {'status': 'ok', 'batch': old}
         require(len(records) < MAX_BATCHES, 'batch history limit reached')
-        ref, head = main_boundary(repo)
+        admission = ([os.path.join(repo, scope) for item in normalized for scope in item['scopes']]
+                     if owner_task_id and not any(item.get('submodules') for item in normalized) else None)
+        ref, head = main_boundary(repo, scopes=admission)
         require_unused_task_ids(repo, normalized, records)
         for item in normalized:
             task_id = 'TASK__' + item['slug']
-            resolved, _ = preflight(repo, item)
+            resolved, _ = preflight(repo, item, admission)
             item.update(status='queued', task_id=task_id, resolved_scopes=resolved)
         data = dict(schema_version=2 if any(x.get('submodules') for x in normalized) else 3, batch_id=batch_id, repo=repo, destination_ref=ref, initial_head=head,
                     max_leads=maximum, cap_source=source, created_at=now(), updated_at=now(), status='open', halted=False, requests=normalized)
@@ -812,10 +821,12 @@ def execute(args, directory, records):
     def capacity(target):
         active_pool(records, batch_id)
         require(sum(x is not target and x['status'] in {'reserved', 'running'} for x in data['requests']) < data['max_leads'], 'capacity exhausted')
+    admission = ([scope for request in data['requests'] for scope in ownership(request)]
+                 if data.get('owner_task_id') and not any(request.get('submodules') for request in data['requests']) else None)
     if args.command == 'claim':
         require(not data['halted'], 'batch halted; recover retained integration first')
         active_pool(records, batch_id)
-        _, head = main_boundary(repo, data['destination_ref'])
+        _, head = main_boundary(repo, data['destination_ref'], admission)
         no_main_task(repo)
         claims, reasons = [], {}
         slots = data['max_leads'] - sum(x['status'] in {'reserved', 'running'} for x in data['requests'])
@@ -838,7 +849,7 @@ def execute(args, directory, records):
             if reason:
                 reasons[item['slug']] = reason
                 continue
-            _, off_limits = preflight(repo, item)
+            _, off_limits = preflight(repo, item, admission)
             item.update(status='reserved', spawn_head=head, off_limits=off_limits, reserved_at=now())
             claims.append(copy.deepcopy(item))
             slots -= 1
@@ -979,7 +990,7 @@ def execute(args, directory, records):
         require(not (item.get('checkpoint', {}).get('integrated_tip') or item.get('finish_result', {}).get('integrated_tip')), 'integrated cleanup requires recovery')
         if item.get('checkpoint') or item['status'] in {'integrating', 'recovery-required', 'kept'}:
             checkpoint = item.get('checkpoint', {})
-            main_boundary(repo, data['destination_ref'])
+            main_boundary(repo, data['destination_ref'], admission)
             require(checkpoint.get('destination_ref') == data['destination_ref'] and checkpoint.get('branch_tip'), 'unknown integration requires recovery')
             tip = bound(repo, item)
             require(tip == checkpoint['branch_tip'], 'branch changed; integration requires recovery')
@@ -999,11 +1010,11 @@ def execute(args, directory, records):
         require(not data['halted'], 'batch halted')
         no_main_task(repo)
         capacity(item)
-        main_boundary(repo, data['destination_ref'])
+        main_boundary(repo, data['destination_ref'], admission)
         bound(repo, item)
         run_id = resume_control(item, observe=item['status'] == 'running')
         require(not any(overlap(ownership(item), ownership(x)) for x in held(records, item)), 'retained scope collision')
-        preflight(repo, item)
+        preflight(repo, item, admission)
         if item.get('submodule_manifest'):
             batch_submodules.validate(repo, item['worktree'], item['submodule_manifest'], 'resume')
         item.update(status='reserved', resuming=True, worker_stopped=True, run_id=run_id)
@@ -1018,7 +1029,7 @@ def execute(args, directory, records):
         require(item['status'] == 'returned' or (args.resume and item['status'] in {'kept', 'recovery-required'}), 'finish requires closed returned result')
         active_pool(records, batch_id)
         reconcile_modules(repo, item)
-        main_boundary(repo, data['destination_ref'])
+        main_boundary(repo, data['destination_ref'], admission)
         bound(repo, item)
         control(item, closed=True)
         item['status'] = 'integrating'
@@ -1042,6 +1053,8 @@ def execute(args, directory, records):
             save()
             return copy.deepcopy(result)
         options = {'checkpoint': checkpoint}
+        if admission is not None:
+            options['scopes'] = ownership(item)
         if item.get('submodule_manifest'):
             def persist_modules(manifest):
                 require(manifest is item['submodule_manifest'], 'integration manifest identity changed')
@@ -1068,7 +1081,7 @@ def execute(args, directory, records):
             require(item['status'] != 'integrated' and checkpoint.get('stage') in {'started', 'rebase'}
                     and not any(checkpoint.get(k) for k in ('integrated_tip', 'harvest', 'archive_fingerprint')),
                     'recovery_commit requires preintegration checkpoint')
-            main_boundary(repo, data['destination_ref'])
+            main_boundary(repo, data['destination_ref'], admission)
             require(bound(repo, item) == recovery_commit, 'recovery_commit differs from current branch tip')
             no_git_operation(item['worktree'])
             require(not finish_helper.lead_status(item['worktree'], item.get('retention')), 'recovery worktree is dirty')
@@ -1079,7 +1092,7 @@ def execute(args, directory, records):
             save()  # explicit operator acknowledgement precedes any resumed effect
         try:
             reconcile_modules(repo, item)
-            main_boundary(repo, data['destination_ref'])
+            main_boundary(repo, data['destination_ref'], admission)
             tip = checkpoint.get('branch_tip')
             require(tip and checkpoint.get('destination_ref') == data['destination_ref'], 'exact post-rebase tip missing')
             require(checkpoint.get('run_id') == item.get('run_id') and checkpoint.get('close_fingerprint') == item.get('close_fingerprint'), 'checkpoint task identity mismatch')

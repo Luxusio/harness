@@ -486,7 +486,7 @@ def _worktrees_refusal(git_path: str) -> str:
     )
 
 
-def _inspect(report: dict, root: str, common_dir: str) -> None:
+def _inspect(report: dict, root: str, common_dir: str, dirty_scopes=None) -> None:
     submodules = list_submodules(root)
     report["submodules"] = submodules
     sub_paths = {entry["path"] for entry in submodules}
@@ -508,10 +508,17 @@ def _inspect(report: dict, root: str, common_dir: str) -> None:
                 "entries": entries[:MAX_LISTED_ENTRIES],
             })
             noun = "entry" if len(entries) == 1 else "entries"
-            report["refusals"].append(
-                f"{kind} {rel} is not clean ({len(entries)} status {noun}); "
-                "commit or stash there first"
-            )
+            if rel == '.' and dirty_scopes is not None:
+                from batch_finish import FinishError, require_disjoint_dirty
+                try:
+                    require_disjoint_dirty(root, dirty_scopes)
+                except FinishError as exc:
+                    report['refusals'].append(str(exc))
+            else:
+                report["refusals"].append(
+                    f"{kind} {rel} is not clean ({len(entries)} status {noun}); "
+                    "preserve changes and resolve the existing work before retrying"
+                )
     if submodules:
         for hook in report["post_checkout_hooks"]:
             if hook["mentions_submodule"]:
@@ -523,7 +530,7 @@ def _inspect(report: dict, root: str, common_dir: str) -> None:
                 )
 
 
-def preflight(repo_root: str, requests: dict, submodules=None) -> dict:
+def preflight(repo_root: str, requests: dict, submodules=None, *, dirty_scopes=None) -> dict:
     """Inspect literal scopes and optional per-request direct-module selections."""
     root = os.path.realpath(repo_root)
     report = _empty_report(root)
@@ -538,7 +545,7 @@ def preflight(repo_root: str, requests: dict, submodules=None) -> dict:
         return report
 
     try:
-        _inspect(report, root, common_dir)
+        _inspect(report, root, common_dir, dirty_scopes if not submodules else None)
     except PreflightError as exc:
         report["refusals"].append(str(exc))
     try:
