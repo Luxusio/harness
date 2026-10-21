@@ -151,3 +151,44 @@ def test_schema_keeps_single_wbs_tool_with_lifecycle_operations():
     assert properties["expected_head"]["type"] == "string"
     assert properties["expected_run_id"]["type"] == "string"
     assert properties["reason"]["maxLength"] == 2000
+
+
+
+def test_public_dirty_original_survives_prepare_integrate_and_dispose(tmp_path, monkeypatch):
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    shared = pool.repo / 'shared.txt'
+    shared.write_text('staged user version\n')
+    _git('add', 'shared.txt', cwd=pool.repo)
+    shared.write_text('unstaged user version\n')
+    note = pool.repo / 'local\nnotes.txt'
+    note.write_bytes(b'untracked user bytes\x00\xff')
+    original_index = _git('ls-files', '--stage', '-z', cwd=pool.repo).split('\0')
+    original_status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
+    prepared = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, available_slots=2)
+    assert not prepared.get('isError'), prepared
+    results = []
+    for index, handoff in enumerate(prepared['structuredContent']['handoffs']):
+        worker = 'dirty-public-worker-' + str(index)
+        slug, tree = handoff['slug'], Path(handoff['worktree'])
+        assert not call('dispatch', operation='bind', slug=slug, worker_id=worker).get('isError')
+        rel = 'a.txt' if index == 0 else 'b.txt'
+        (tree / rel).write_text('implemented\n')
+        _git('add', rel, cwd=tree)
+        _git('commit', '-qm', slug, '--trailer', 'Harness-Task: ' + handoff['task_id'], cwd=tree)
+        task(tree, slug, closed=True)  # isolated existing fixture only
+        result = dict(task_id=handoff['task_id'], worktree=str(tree), branch=handoff['branch'],
+                      commit=_head(tree), verdict='closed', run_id=RUN)
+        results.append((handoff, worker, result))
+    for handoff, worker, result in results:
+        done = call('dispatch', operation='complete', slug=handoff['slug'], worker_id=worker,
+                    result=result, worker_stopped=True)
+        assert not done.get('isError'), done
+        assert not Path(result['worktree']).exists()
+        assert not _git('branch', '--list', handoff['branch'], cwd=pool.repo)
+        assert all(entry in _git('ls-files', '--stage', '-z', cwd=pool.repo).split('\0')
+                   for entry in original_index)
+        assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == original_status
+        assert shared.read_text() == 'unstaged user version\n'
+        assert _git('show', ':shared.txt', cwd=pool.repo) == 'staged user version'
+        assert note.read_bytes() == b'untracked user bytes\x00\xff'
+    assert done['structuredContent']['status'] == 'closed'

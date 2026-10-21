@@ -468,7 +468,7 @@ def _ordinary_learning_proof(source, destination):
 
 
 
-def _ordinary_ancillary(repo, worktree, task_id):
+def _ordinary_ancillary(repo, worktree, task_id, *, control_dir=None, preserve=True):
     """Preserve exact typed runtime snapshots outside the immutable task archive.
 
     These files are advisory, never review/QA evidence. The checkpoint producer
@@ -479,22 +479,28 @@ def _ordinary_ancillary(repo, worktree, task_id):
     """
     from _lib import read_task_control, task_control_status, sanitize_session_id
 
-    task = os.path.join(worktree, 'doc/harness/tasks', task_id)
+    task = control_dir or os.path.join(worktree, 'doc/harness/tasks', task_id)
     control = read_task_control(task)
     candidates = [('doc/harness/.watcher-diagnostics.json', 'watcher-diagnostics.json'),
                   ('doc/harness/checkpoints/' + task_id + '.md', 'checkpoint.md')]
     present = [(rel, name) for rel, name in candidates if os.path.lexists(os.path.join(worktree, rel))]
-    if not present:
+    if not present and preserve:
         return set()
     _s1_require(control and task_control_status(task, control) == 'closed',
                 'ancillary snapshots require exact closed task')
     run = control.get('run_id')
     _s1_require(isinstance(run, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', run),
                 'unsafe ancillary snapshot run identity')
+    root = os.path.join(repo, 'doc/harness/archive/worktree-recovery', task_id, run)
+    if not preserve:
+        present = [(rel, name) for rel, name in candidates
+                   if os.path.lexists(os.path.join(worktree, rel)) or os.path.lexists(os.path.join(root, name))]
+    if not present:
+        return set()
     snapshots = []
     for rel, name in present:
         source = os.path.join(worktree, rel)
-        raw = _ordinary_bytes(source)
+        raw = _ordinary_bytes(source if os.path.lexists(source) else os.path.join(root, name))
         if name == 'watcher-diagnostics.json':
             def unique(pairs):
                 result = {}
@@ -523,14 +529,14 @@ def _ordinary_ancillary(repo, worktree, task_id):
         snapshots.append((rel, name, raw))
     # No mutable manifest and no mutation of closed task evidence. Exact bytes
     # themselves are the preservation proof; an existing different copy refuses.
-    root = os.path.join(repo, 'doc/harness/archive/worktree-recovery', task_id, run)
     for directory in (os.path.join(repo, 'doc/harness/archive'),
                       os.path.join(repo, 'doc/harness/archive/worktree-recovery'),
                       os.path.dirname(root), root):
-        try:
-            os.mkdir(directory, 0o700)
-        except FileExistsError:
-            pass
+        if preserve:
+            try:
+                os.mkdir(directory, 0o700)
+            except FileExistsError:
+                pass
         _s1_path(directory, True)
         info = os.lstat(directory)
         _s1_require(info.st_uid == os.getuid() and not info.st_mode & 0o022,
@@ -539,6 +545,7 @@ def _ordinary_ancillary(repo, worktree, task_id):
     for rel, name, raw in snapshots:
         destination = os.path.join(root, name)
         if not os.path.lexists(destination):
+            _s1_require(preserve, 'ancillary snapshot was not preserved before partial removal: ' + rel)
             try:
                 fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             except FileExistsError:
@@ -550,13 +557,14 @@ def _ordinary_ancillary(repo, worktree, task_id):
                     os.fsync(handle.fileno())
         _s1_require(_ordinary_bytes(destination) == raw,
                     'ancillary snapshot collision; refusing overwrite: ' + destination)
-        _s1_require(_ordinary_bytes(os.path.join(worktree, rel)) == raw,
-                    'ancillary snapshot changed during preservation')
+        if os.path.lexists(os.path.join(worktree, rel)):
+            _s1_require(_ordinary_bytes(os.path.join(worktree, rel)) == raw,
+                        'ancillary snapshot changed during preservation')
         preserved.add(rel)
     # Publish every newly created directory entry durably before W can go.
     # Syncing only the run directory does not persist its name in its parent.
     current = root
-    while current != os.path.dirname(repo):
+    while preserve and current != os.path.dirname(repo):
         _s1_path(current, True)
         directory_fd = os.open(current, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -711,11 +719,14 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
             gitlinks.add(path)
         # Tracked symlinks remain unsupported residue.
     directories.update(gitlinks)
+    ancillary = _ordinary_ancillary(repo, worktree, task_id, control_dir=archive, preserve=False)
+    ancillary_entries = {rel: hashlib.sha256(_ordinary_bytes(os.path.join(worktree, rel))).hexdigest()
+                         for rel in ancillary if os.path.lexists(os.path.join(worktree, rel))}
     task_rel = 'doc/harness/tasks/' + task_id
     preserved = {task_rel + '/' + rel: digest for rel, digest in archived.items() if digest is not None}
     directories.add(task_rel)
     directories.update(task_rel + '/' + rel for rel, digest in archived.items() if digest is None)
-    for path in list(directories) + list(preserved):
+    for path in list(directories) + list(preserved) + list(ancillary):
         while '/' in path:
             path = path.rsplit('/', 1)[0]
             directories.add(path)
@@ -770,7 +781,8 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
                                 'residue changed during read')
                 archived_match = (preserved.get(rel) == sha.hexdigest()
                                   and bool(info.st_mode & 0o111) == bool(os.lstat(os.path.join(archive, rel[len(task_rel) + 1:])).st_mode & 0o111))
-                matches = archived_match or tracked.get(rel) == (blob.hexdigest(), bool(info.st_mode & 0o111))
+                matches = (archived_match or ancillary_entries.get(rel) == sha.hexdigest()
+                           or tracked.get(rel) == (blob.hexdigest(), bool(info.st_mode & 0o111)))
                 if rel == 'doc/harness/learnings.jsonl':
                     _ordinary_learning_proof(path, os.path.join(repo, rel))
                     matches = True
@@ -783,6 +795,8 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
     _s1_require(inventory() == expected, 'residue inventory changed')
     _s1_require(ordinary_unregistered(repo, worktree), 'residue registered during proof')
     _s1_require(_tree_entries(archive) == archived, 'archive changed during residue proof')
+    _s1_require(_ordinary_ancillary(repo, worktree, task_id, control_dir=archive, preserve=False) == ancillary,
+                'ancillary preservation changed during residue proof')
     # Keep verified directory descriptors through deletion; never traverse a
     # newly replaced parent by pathname while removing its children.
     handles = {}

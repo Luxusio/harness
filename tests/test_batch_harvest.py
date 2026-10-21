@@ -885,3 +885,50 @@ def test_ordinary_diagnostics_after_close_need_no_removed_session_marker(tmp_pat
     _git('worktree', 'remove', str(work), cwd=repo)
     assert not work.exists()
     assert (sidecar / 'watcher-diagnostics.json').read_bytes() == raw
+
+
+def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
+    original = {str(p.relative_to(work)): p.read_bytes() for p in (diagnostics, checkpoint)}
+    task_id = task.name
+    mod.ordinary_removal_proof(str(repo), str(work), task_id)
+    archive = repo / 'doc/harness/archive/batch' / task_id
+    entries = mod._tree_entries(str(archive))
+    tip = _git('rev-parse', 'HEAD', cwd=repo)
+    proof = dict(stage='harvested', integrated_tip=tip, harvest={'archived': str(archive)},
+                 archive_fingerprint='sha256:' + mod.hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest())
+    _git('worktree', 'remove', str(work), cwd=repo)
+    # Model a native interrupted removal with only typed ancillary remainder;
+    # source task control can already be gone, so immutable archive is authority.
+    for rel, raw in original.items():
+        path = work / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    assert mod.ordinary_unregistered(str(repo), str(work))
+    saved = (sidecar / 'watcher-diagnostics.json').read_bytes()
+    (sidecar / 'watcher-diagnostics.json').unlink()
+    with _raises(mod.HarvestError, match='not preserved'):
+        mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    assert not (sidecar / 'watcher-diagnostics.json').exists()
+    (sidecar / 'watcher-diagnostics.json').write_bytes(saved)
+    diagnostics.write_bytes(original[str(diagnostics.relative_to(work))] + b' ')
+    with _raises(mod.HarvestError, match='collision'):
+        mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    diagnostics.write_bytes(original[str(diagnostics.relative_to(work))])
+    precious = checkpoint.parent / 'precious.bin'
+    precious.write_bytes(b'unique ignored user bytes')
+    with _raises(mod.HarvestError, match='unpreserved'):
+        mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    assert precious.read_bytes() == b'unique ignored user bytes'
+    precious.unlink()
+    mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    assert not work.exists()
+    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved
+    assert (sidecar / 'checkpoint.md').read_bytes() == original[str(checkpoint.relative_to(work))]
+    assert mod._tree_entries(str(archive)) == entries
+    # Files may disappear before an interrupted removal leaves their known
+    # empty checkpoint parent. Already-preserved typed copies still account for it.
+    checkpoint.parent.mkdir(parents=True)
+    mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    assert not work.exists()
+    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved

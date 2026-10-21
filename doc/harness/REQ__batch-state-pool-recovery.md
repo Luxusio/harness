@@ -362,3 +362,10 @@ User-explicit outcome: preserve unrelated user changes while developing in a dur
 Managed repositories and unintegrated commits stay under the repository; temporary caches may be recreated. Resume checks registered W, ref, commit and original task/run. Missing resources retain surviving branches/evidence and report targeted recovery; stored worker state does not establish process liveness. Missing build artifacts do not erase source review results; their applicability belongs the verification-target owner.
 
 Known owning-task checkpoint and watcher diagnostics may be preserved byte-for-byte in a separate ancillary archive before disposal. They never authorize closure or modify closed evidence. Producer diagnostics/checkpoints lack task/run attribution; sidecar task/run names identify disposal context only, never provenance or verification evidence. Only exact known-schema, ownership/type-checked preserved entries are accounted for; unknown ignored user data retains the worktree.
+
+Partial ordinary residue uses that same typed ancillary validation in read-only
+matching mode against its already-preserved disposal-context sidecars. Closed
+control comes from the immutable task archive when source control has already
+been removed. Missing or different sidecars, unknown contents and unsafe
+entries refuse before mutation; recovery never creates a new preservation
+copy to retroactively authorize removal.
