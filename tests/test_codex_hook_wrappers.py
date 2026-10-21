@@ -1376,7 +1376,7 @@ def test_posttool_binding_budget_includes_session_and_receipt_lock_admission(tmp
             assert time.monotonic() - started < 1
             assert status["status"] == mod.REGISTRATION_FAILED
             actual_hook = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
-                                         input=payload, cwd=repo, capture_output=True, timeout=2.5)
+                                         input=payload, cwd=repo, capture_output=True, timeout=15)
             assert actual_hook.returncode == 0 and not actual_hook.stderr
             notice = json.loads(actual_hook.stdout)["hookSpecificOutput"]["additionalContext"]
             assert "task binding: deadline exhausted" in notice

@@ -61,16 +61,34 @@ def test_read_only_source_directory_projects_without_source_mode_change(tmp_path
     install = _load_install_module()
     source = tmp_path / "source"
     shutil.copytree(install.PLUGIN_CODEX_ROOT, source)
+    canonical = tmp_path / "canonical-plugin"
+    install._copytree_clean(install.PLUGIN_ROOT, canonical)
+    shared = {}
+    for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):
+        path = canonical / "skills/setup" / name
+        shared[name] = path.read_bytes()
+        path.chmod(0o444)
     source.chmod(0o555)
     monkeypatch.setattr(install, "PLUGIN_CODEX_ROOT", source)
+    monkeypatch.setattr(install, "PLUGIN_ROOT", canonical)
     target = tmp_path / "projection"
+    previous_umask = os.umask(0o002)
     try:
         install._build_codex_payload(target, tmp_path / "installed")
         assert (target / "scripts/_lib.py").is_file()
         assert (target / "hooks.json").is_file()
         assert stat.S_IMODE(source.stat().st_mode) == 0o555
         assert stat.S_IMODE(target.stat().st_mode) == 0o755
+        for name, content in shared.items():
+            original = canonical / "skills/setup" / name
+            projected = target / "skills/setup" / name
+            assert original.read_bytes() == projected.read_bytes() == content
+            assert stat.S_IMODE(original.stat().st_mode) == 0o444
+            assert stat.S_IMODE(projected.stat().st_mode) == 0o644
+        state, _, reason = install._tree_inventory(target)
+        assert state == install.PAYLOAD_SYNCHRONIZED, reason
     finally:
+        os.umask(previous_umask)
         source.chmod(0o755)
 
 

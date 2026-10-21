@@ -1084,7 +1084,9 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
     codex_setup = target / "skills" / "setup"
     claude_setup = PLUGIN_ROOT / "skills" / "setup"
     for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):
-        shutil.copy2(claude_setup / name, codex_setup / name)
+        destination = codex_setup / name
+        shutil.copyfile(claude_setup / name, destination)
+        os.chmod(destination, 0o644)
     _copytree_clean(claude_setup / "templates", codex_setup / "templates")
     (target / "hooks.json").write_text(
         json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"

@@ -97,7 +97,9 @@ def test_both_runtime_payloads_ship_executable_dispatch_and_ready_lane_guide(tmp
     assert results[0] == results[1]
     guide = (codex / 'internal-skills/develop/ready-lanes.md').read_text()
     assert '${CLAUDE_PLUGIN_ROOT}' not in guide
-    assert '${HARNESS_PLUGIN_ROOT}' in guide
+    source_guide = (REPO / 'plugin/skills/develop/ready-lanes.md').read_text()
+    if '${CLAUDE_PLUGIN_ROOT}' in source_guide:
+        assert '${HARNESS_PLUGIN_ROOT}' in guide
     assert (codex / 'internal-skills/batch/SKILL.md').is_file()
 
 

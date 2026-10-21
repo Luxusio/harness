@@ -96,7 +96,9 @@ class TestDenyProtectedArtifact(unittest.TestCase):
         self.assertIn("runtime-owned receipt provenance", reason)
 
     def test_write_symlink_to_codex_rollout_denies(self):
-        sessions = os.path.expanduser("~/.codex/sessions")
+        sessions = os.path.join(
+            os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions",
+        )
         with tempfile.TemporaryDirectory() as tmp:
             alias = os.path.join(tmp, "codex-sessions")
             os.symlink(sessions, alias, target_is_directory=True)

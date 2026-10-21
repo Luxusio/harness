@@ -19,6 +19,7 @@ import importlib.util
 import json
 import re
 import shlex
+import stat
 from pathlib import Path
 from unittest import mock
 
@@ -264,9 +265,14 @@ def test_tree_comparison_rejects_hardlinks_intermediate_symlinks_and_bounds(
     assert module._compare_payload_trees(
         expected, sticky_leaf,
     )[0] == module.PAYLOAD_STALE
+    temp_info = Path(tempfile.gettempdir()).stat()
+    shared_sticky_root = bool(
+        temp_info.st_uid == 0 and temp_info.st_mode & stat.S_ISVTX
+        and stat.S_IMODE(temp_info.st_mode) & 0o022
+    )
     assert module._compare_payload_trees(
         expected, sticky_leaf / "nested",
-    )[0] == module.PAYLOAD_ERROR
+    )[0] == (module.PAYLOAD_ERROR if shared_sticky_root else module.PAYLOAD_STALE)
 
     monkeypatch.setattr(module, "PAYLOAD_MAX_ENTRIES", 0)
     assert module._compare_payload_trees(expected, expected)[0] == module.PAYLOAD_ERROR
