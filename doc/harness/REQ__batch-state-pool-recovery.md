@@ -271,3 +271,28 @@ by CLI fixtures in the local Codex development runtime. The same installed helpe
 process interruption; validate native dispatch when a live Claude runtime is
 available. A host without a continuation channel retains the reservation and
 worktree and reports that blocker; it does not authorize an unbound worker.
+
+## Derived readonly-view and partial-removal repair
+
+Derived from the approved structural cleanup request, not an additional user
+requirement: Git may remove linked-worktree registration before failing on a
+sealed verification source directory. After the existing full removal proof and
+durable archive checkpoint, only typed archived verification source directories
+may gain owner write permission for disposal; their file bytes and the archive
+remain unchanged. A Git error remains visible even if marker restoration fails.
+
+Supported ordinary recovery also accepts unregistered partial residue only after
+exact integrated tip, task/run/close and archive fingerprint checks. Both Git
+registration and administrative back-pointers must be absent. Every remaining
+regular file and directory must belong to the integrated commit or exact archived
+owning-task tree; learnings require exact outside preservation. Unknown, changed,
+linked or special content refuses before mutation. Recheck identities/inventory
+at deletion boundaries; this is not a hostile same-UID sandbox. Delete the
+retained branch only after the worktree is absent; missing branches remain
+retryable. Selected-submodule disposal retains its independent existing proof.
+
+Disposal authenticates historical typed verification copies against the exact
+preserved archive, without promoting them to the current run's acceptance
+evidence. Learning-ledger preservation uses bounded exact raw-row inclusion in
+the destination ledger; unrelated prior rows do not invalidate preserved rows.
+Malformed or missing rows still refuse disposal.

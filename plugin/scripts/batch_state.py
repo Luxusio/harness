@@ -831,6 +831,14 @@ def execute(args, directory, records):
                 checkpoint['integrated_tip'] = tip
                 if checkpoint.get('stage') in {'started', 'rebase'}:
                     checkpoint['stage'] = 'integrated'
+            if (os.path.lexists(item['worktree']) and not item.get('submodule_manifest')
+                    and batch_harvest.ordinary_unregistered(repo, item['worktree'])):
+                require(integrated and checkpoint.get('integrated_tip') == tip
+                        and checkpoint.get('archive_fingerprint'), 'integration/archive proof missing for residue')
+                archive = checkpoint['harvest']['archived']
+                require(fingerprint(archive) == checkpoint['archive_fingerprint'], 'archive fingerprint changed')
+                control(item, base=archive, closed=True)
+                batch_harvest.remove_ordinary_residue(repo, item['worktree'], item['task_id'], tip, checkpoint)
             if os.path.exists(item['worktree']):
                 require(bound(repo, item) == tip, 'worktree tip changed')
                 control(item, closed=True)

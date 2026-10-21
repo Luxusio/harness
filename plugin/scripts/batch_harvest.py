@@ -453,6 +453,20 @@ def _ordinary_markers(worktree, task_id):
     return allowed
 
 
+def _ordinary_learning_proof(source, destination):
+    """Preserve exact raw rows while permitting unrelated destination history."""
+    raw = _ordinary_bytes(source, 1024 * 1024)
+    for line in raw.splitlines():
+        _s1_require(isinstance(json.loads(line), dict), 'malformed learning content cannot be discarded')
+    preserved = _ordinary_bytes(destination, 1024 * 1024)
+    rows = raw.split(b'\n')
+    if raw.endswith(b'\n'):
+        rows.pop()
+    preserved_rows = set(preserved.split(b'\n'))
+    _s1_require(all(row in preserved_rows for row in rows),
+                'learning bytes not preserved outside worktree')
+
+
 def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=None):
     """Refuse ordinary disposal until every noncache byte is accounted for.
 
@@ -476,16 +490,7 @@ def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=N
         allowed = _ordinary_markers(worktree, task_id)
         learning = os.path.join(worktree, 'doc/harness/learnings.jsonl')
         if os.path.lexists(learning):
-            raw = _ordinary_bytes(learning, 1024 * 1024)
-            for line in raw.splitlines():
-                _s1_require(isinstance(json.loads(line), dict), 'malformed learning content cannot be discarded')
-            destination = _ordinary_bytes(os.path.join(repo, 'doc/harness/learnings.jsonl'), 1024 * 1024)
-            source_lines = raw.split(b'\n')
-            if raw.endswith(b'\n'):
-                source_lines.pop()
-            destination_lines = set(destination.split(b'\n'))
-            _s1_require(all(line in destination_lines for line in source_lines),
-                        'learning bytes not preserved outside worktree')
+            _ordinary_learning_proof(learning, os.path.join(repo, 'doc/harness/learnings.jsonl'))
         if retention is not None:
             from batch_finish import RETENTION_MARKER, validate_retention
             validate_retention(worktree, retention)
@@ -496,6 +501,203 @@ def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=N
                     'task evidence changed during removal inventory')
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise HarvestError('ordinary removal proof refused: ' + str(exc)) from exc
+
+
+def thaw_verification_sources(repo, worktree, task_id, retention, checkpoint):
+    """Only after full ordinary proof and durable archive, unseal typed copies."""
+    ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
+    if checkpoint is None:
+        return
+    from verification_target import _spec
+    task = os.path.join(worktree, 'doc/harness/tasks', task_id)
+    store = os.path.join(task, 'work/verification-targets')
+    if not os.path.isdir(store):
+        return
+    directories = []
+    for token in os.listdir(store):
+        if not re.fullmatch(r'[0-9a-f]{16}', token):
+            continue
+        # Disposal preserves history, including copies issued before fresh_run.
+        # It does not certify these historical inputs for current acceptance.
+        relative = os.path.join('work/verification-targets', token, 'target.json')
+        metadata = _ordinary_bytes(os.path.join(task, relative), 1024 * 1024)
+        archive_task = checkpoint['harvest']['archived']
+        _s1_require(metadata == _ordinary_bytes(os.path.join(archive_task, relative), 1024 * 1024),
+                    'verification metadata differs from preserved archive')
+        record = json.loads(metadata)
+        _s1_require(isinstance(record, dict) and record.get('token') == token
+                    and isinstance(record.get('run_id'), str) and bool(record['run_id'])
+                    and isinstance(record.get('manifest'), list), 'invalid historical verification metadata')
+        _spec(record.get('spec'))
+        for name in os.listdir(os.path.join(store, token)):
+            if name != 'source' and not re.fullmatch(r'source-restored-[0-9a-f]{16}', name):
+                continue
+            root = os.path.join(store, token, name)
+            _s1_path(root, True)
+            for current, dirs, files in os.walk(root):
+                _s1_path(current, True)
+                info = os.lstat(current)
+                directories.append((current, info.st_dev, info.st_ino, info.st_mode))
+    # Inventory/proof must finish before any permission change.
+    ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
+    for path, dev, ino, mode in directories:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            _s1_require((info.st_dev, info.st_ino, info.st_mode) == (dev, ino, mode),
+                        'verification directory changed before disposal')
+            os.fchmod(fd, stat.S_IMODE(mode) | stat.S_IWUSR)
+        finally:
+            os.close(fd)
+
+
+def ordinary_unregistered(repo, worktree):
+    """Absence of both registration and administrative back-pointers."""
+    worktree = os.path.abspath(worktree)
+    listing = _s1_git_text(repo, 'worktree', 'list', '--porcelain', '-z')
+    if any(field == 'worktree ' + worktree for field in listing.split('\0')):
+        return False
+    _s1_require(not os.path.lexists(os.path.join(worktree, '.git')), 'residue retains .git metadata')
+    common = _s1_git_text(repo, 'rev-parse', '--git-common-dir')
+    if not os.path.isabs(common):
+        common = os.path.join(repo, common)
+    admins = os.path.join(common, 'worktrees')
+    if os.path.lexists(admins):
+        _s1_path(admins, True)
+        for name in os.listdir(admins):
+            pointer = os.path.join(admins, name, 'gitdir')
+            if os.path.lexists(pointer):
+                _s1_path(pointer)
+                with open(pointer, encoding='utf-8') as handle:
+                    target = handle.read(65537).strip()
+                _s1_require(len(target) <= 65536, 'oversized worktree administrative pointer')
+                if not os.path.isabs(target):
+                    target = os.path.join(os.path.dirname(pointer), target)
+                _s1_require(os.path.realpath(target) != os.path.join(worktree, '.git'),
+                            'residue retains administrative registration')
+    return True
+
+
+def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
+    """Dispose only a proven remaining subset; caller owns closed-run authority."""
+    _s1_require(ordinary_unregistered(repo, worktree), 'residue is still registered')
+    _s1_path(worktree, True)
+    _s1_require(os.path.abspath(worktree) == os.path.realpath(worktree)
+                and os.path.commonpath([repo, worktree]) != worktree,
+                'unsafe residue root')
+    archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+    _s1_require(os.path.commonpath([archive, worktree]) != worktree, 'archive lies inside residue')
+    _refuse_non_regular_tree(archive)
+    archived = _tree_entries(archive)
+    fingerprint = 'sha256:' + hashlib.sha256(json.dumps(archived, sort_keys=True).encode()).hexdigest()
+    _s1_require(checkpoint.get('archive_fingerprint') == fingerprint
+                and checkpoint.get('harvest', {}).get('archived') == archive
+                and checkpoint.get('integrated_tip') == tip and checkpoint.get('stage') == 'harvested',
+                'residue archive/integration proof changed')
+    tree = _s1_git_text(repo, 'ls-tree', '-r', '-t', '-z', tip)
+    tracked, directories = {}, set()
+    for entry in filter(None, tree.split('\0')):
+        header, path = entry.split('\t', 1)
+        mode, kind, oid = header.split()
+        if kind == 'tree':
+            directories.add(path)
+        elif kind == 'blob' and mode in {'100644', '100755'}:
+            tracked[path] = (oid, mode == '100755')
+        # Links/gitlinks are intentionally unsupported residue, even tracked.
+    task_rel = 'doc/harness/tasks/' + task_id
+    preserved = {task_rel + '/' + rel: digest for rel, digest in archived.items() if digest is not None}
+    directories.add(task_rel)
+    directories.update(task_rel + '/' + rel for rel, digest in archived.items() if digest is None)
+    for path in list(directories) + list(preserved):
+        while '/' in path:
+            path = path.rsplit('/', 1)[0]
+            directories.add(path)
+    algorithm = _s1_git_text(repo, 'rev-parse', '--show-object-format')
+    _s1_require(algorithm in {'sha1', 'sha256'}, 'unsupported Git object format')
+    def inventory():
+        found = {}
+        def unreadable(exc):
+            raise HarvestError('cannot inspect residue') from exc
+        for current, dirs, files in os.walk(worktree, followlinks=False, onerror=unreadable):
+            for path in [current] + [os.path.join(current, n) for n in files + dirs]:
+                rel = os.path.relpath(path, worktree)
+                _s1_require(len(found) < 100000, 'residue inventory exceeds bound')
+                info = os.lstat(path)
+                identity = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
+                _s1_require(info.st_uid == os.getuid() and info.st_nlink == 1 or stat.S_ISDIR(info.st_mode)
+                            and info.st_uid == os.getuid(), 'unsafe residue ownership/link count')
+                if stat.S_ISDIR(info.st_mode):
+                    _s1_require(rel == '.' or rel in directories, 'unknown residue directory: ' + rel)
+                    found[rel] = identity
+                    continue
+                _s1_require(stat.S_ISREG(info.st_mode), 'nonregular residue: ' + rel)
+                sha = hashlib.sha256()
+                blob = hashlib.new(algorithm)
+                blob.update(('blob ' + str(info.st_size) + '\0').encode())
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, 'rb') as handle:
+                    before = os.fstat(handle.fileno())
+                    _s1_require((before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns) == identity,
+                                'residue changed during open')
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                        sha.update(chunk)
+                        blob.update(chunk)
+                    after = os.fstat(handle.fileno())
+                    _s1_require((after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == identity,
+                                'residue changed during read')
+                archived_match = (preserved.get(rel) == sha.hexdigest()
+                                  and bool(info.st_mode & 0o111) == bool(os.lstat(os.path.join(archive, rel[len(task_rel) + 1:])).st_mode & 0o111))
+                matches = archived_match or tracked.get(rel) == (blob.hexdigest(), bool(info.st_mode & 0o111))
+                if rel == 'doc/harness/learnings.jsonl':
+                    _ordinary_learning_proof(path, os.path.join(repo, rel))
+                    matches = True
+                _s1_require(matches, 'unpreserved or changed residue: ' + rel)
+                found[rel] = identity
+        return found
+    expected = inventory()
+    _s1_require(inventory() == expected, 'residue inventory changed')
+    _s1_require(ordinary_unregistered(repo, worktree), 'residue registered during proof')
+    _s1_require(_tree_entries(archive) == archived, 'archive changed during residue proof')
+    # Keep verified directory descriptors through deletion; never traverse a
+    # newly replaced parent by pathname while removing its children.
+    handles = {}
+    parent_fd = os.open(os.path.dirname(worktree), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for rel in sorted(expected, key=lambda p: (p.count('/'), p)):
+            identity = expected[rel]
+            if stat.S_ISDIR(identity[2]):
+                if rel == '.':
+                    owner, name = parent_fd, os.path.basename(worktree)
+                else:
+                    parent, name = os.path.split(rel)
+                    owner = handles[parent or '.']
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=owner)
+                handles[rel] = fd
+                info = os.fstat(fd)
+                _s1_require((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns) == identity,
+                            'residue directory changed before disposal')
+        # No permission changes until all directory identities are checked.
+        for fd in handles.values():
+            info = os.fstat(fd)
+            os.fchmod(fd, stat.S_IMODE(info.st_mode) | stat.S_IWUSR)
+        for rel in sorted((p for p in expected if p != '.'), key=lambda p: (p.count('/'), p), reverse=True):
+            parent, name = os.path.split(rel)
+            owner = handles[parent or '.']
+            info = os.stat(name, dir_fd=owner, follow_symlinks=False)
+            original = expected[rel]
+            _s1_require((info.st_dev, info.st_ino) == original[:2], 'residue replaced before deletion')
+            if stat.S_ISDIR(original[2]):
+                os.rmdir(name, dir_fd=owner)
+            else:
+                _s1_require((info.st_mode, info.st_size, info.st_mtime_ns) == original[2:], 'residue changed before deletion')
+                os.unlink(name, dir_fd=owner)
+        info = os.stat(os.path.basename(worktree), dir_fd=parent_fd, follow_symlinks=False)
+        _s1_require((info.st_dev, info.st_ino) == expected['.'][:2], 'residue root replaced')
+        os.rmdir(os.path.basename(worktree), dir_fd=parent_fd)
+    finally:
+        for fd in handles.values():
+            os.close(fd)
+        os.close(parent_fd)
 
 
 def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner=None):

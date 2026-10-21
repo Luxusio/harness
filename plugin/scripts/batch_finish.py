@@ -337,7 +337,7 @@ def _removal_failure_note(repo: str, worktree: str, lock, cleanup: dict) -> str:
         )
         if not registered:
             cleanup["removed"] = not os.path.lexists(worktree)
-            return "; worktree is no longer registered; branch kept"
+            return "; worktree is no longer registered; " + ("partial residue and branch retained" if os.path.lexists(worktree) else "branch retained")
         if cleanup["unlocked"]:
             relock = ["worktree", "lock"] + (["--reason", lock] if lock else []) + [worktree]
             locked = _git(repo, *relock)
@@ -354,7 +354,7 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
     cleanup = result["cleanup"]
     if submodules is None:
         try:
-            batch_harvest.ordinary_removal_proof(repo, worktree, result['task_id'], retention, proof)
+            batch_harvest.thaw_verification_sources(repo, worktree, result['task_id'], retention, proof)
         except batch_harvest.HarvestError as exc:
             raise Outcome('kept', f'ordinary removal proof refused, worktree kept: {exc}') from exc
     lock = _worktree_lock(repo, worktree)
@@ -378,12 +378,19 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
             # A removal refusal must keep the native retention predicate too.
             marker = os.path.join(worktree, RETENTION_MARKER)
             if retention is not None and os.path.isdir(worktree) and not os.path.lexists(marker):
-                if resolve_registered_worktree(repo, worktree):
-                    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                    with os.fdopen(fd, 'wb') as handle:
-                        handle.write(retention_bytes(retention))
-                        handle.flush()
-                        os.fsync(handle.fileno())
+                try:
+                    registered = resolve_registered_worktree(repo, worktree)
+                except GitBindingError:
+                    registered = False
+                if registered:
+                    try:
+                        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                        with os.fdopen(fd, 'wb') as handle:
+                            handle.write(retention_bytes(retention))
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                    except OSError as restore_error:
+                        cleanup['marker_restore_error'] = str(restore_error)
     except batch_harvest.HarvestError as exc:
         note = _removal_failure_note(repo, worktree, lock, cleanup)
         raise Outcome("kept", f"S1 removal proof refused, worktree kept: {exc}{note}") from exc
@@ -391,8 +398,10 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
         note = _removal_failure_note(repo, worktree, lock, cleanup)
         raise FinishError(f"{type(exc).__name__}: {exc}{note}") from exc
     if removed.returncode != 0:
-        reason = f"`git worktree remove` refused, worktree kept: {_detail(removed)}"
+        reason = f"`git worktree remove` failed (exit {removed.returncode}): {_detail(removed)}"
         reason += _removal_failure_note(repo, worktree, lock, cleanup)
+        if cleanup.get('marker_restore_error'):
+            reason += '; marker restoration failed: ' + cleanup['marker_restore_error']
         raise Outcome("kept", reason)
     cleanup["removed"] = True
     deleted = _git(repo, "branch", "-d", branch)

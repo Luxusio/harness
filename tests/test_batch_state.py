@@ -1303,3 +1303,113 @@ def test_pool_owner_is_immutable_on_reinitialization(tmp_path, monkeypatch):
     refused = pool.init(owner="TASK__other", ok=False)
     assert "owner" in refused["reason"] and pool.state.read_bytes() == before
     assert pool.init(owner="TASK__parent")["batch"]["owner_task_id"] == "TASK__parent"
+
+
+def test_sealed_verification_source_disposal_preserves_archive(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import verification_target
+    from test_wbs import wbs, plan, node
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    worktree, branch, directory = complete(pool)
+    state = wbs.prepare(str(directory), plan([node()]), RUN, now=100)
+    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    target = verification_target.issue_target(str(directory), str(worktree), dict(
+        inputs={'source': ['a.txt']}, commands=[], lenses=[], purpose='diagnostic'))
+    view = Path(target['snapshot_root'])
+    assert view.stat().st_mode & 0o200 == 0
+    original = (view / 'a.txt').read_bytes()
+    # A supported new run retains already issued source copies as history.
+    current_control = (directory / 'TASK.json').read_bytes()
+    old_run = '0198c349-5800-7000-8000-000000000002'
+    old_control = json.loads(current_control)
+    old_control['run_id'] = old_run
+    (directory / 'TASK.json').write_text(json.dumps(old_control))
+    state['run_id'] = old_run
+    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    historical = verification_target.issue_target(str(directory), str(worktree), dict(
+        inputs={'source': ['a.txt']}, commands=[], lenses=[], purpose='diagnostic'))
+    (directory / 'TASK.json').write_bytes(current_control)
+    state['run_id'] = RUN
+    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    try:
+        verification_target.load_target(str(directory), historical['token'])
+        raise AssertionError('historical target must not certify current acceptance')
+    except ValueError as exc:
+        assert 'another run' in str(exc)
+    historical_view = Path(historical['snapshot_root'])
+    result = pool.cli('finish', '--slug', 'a')
+    assert result['status'] == 'integrated', result
+    archived = pool.repo / 'doc/harness/archive/batch/TASK__a' / view.relative_to(directory)
+    assert (archived / 'a.txt').read_bytes() == original
+    assert archived.stat().st_mode & 0o200 == 0
+    historical_archive = pool.repo / 'doc/harness/archive/batch/TASK__a' / historical_view.relative_to(directory)
+    assert (historical_archive / 'a.txt').read_bytes() == original
+    assert historical_archive.stat().st_mode & 0o200 == 0
+    assert not worktree.exists()
+    assert not _git('branch', '--list', branch, cwd=pool.repo)
+
+
+def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, capsys):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import batch_finish
+    import batch_state
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    worktree, branch, directory = complete(pool)
+    original_cleanup = batch_finish._cleanup
+    original_task = (directory / 'PLAN.md').read_bytes()
+    prior_row = json.dumps({'key': 'main-existing', 'insight': 'prior'}) + '\n'
+    lead_row = json.dumps({'key': 'lead-new', 'insight': 'new'}) + '\n'
+    _write(pool.repo / 'doc/harness/learnings.jsonl', prior_row)
+    ledger = worktree / 'doc/harness/learnings.jsonl'
+    _write(ledger, lead_row)
+    def interrupted(repo, tree, name, result, *args, **kwargs):
+        # Real Git successfully drops its registration; simulate the subset left
+        # by an interrupted filesystem removal without editing Git metadata.
+        _git('worktree', 'remove', str(worktree), cwd=pool.repo)
+        _write(worktree / 'a.txt', 'a\n')
+        _write(directory / 'PLAN.md', original_task.decode())
+        _write(ledger, lead_row)
+        directory.chmod(0o500)
+        raise OSError('simulated partial removal')
+    monkeypatch.setattr(batch_finish, '_cleanup', interrupted)
+    assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+    capsys.readouterr()
+    monkeypatch.setattr(batch_finish, '_cleanup', original_cleanup)
+    assert worktree.exists()
+    archive = pool.repo / 'doc/harness/archive/batch/TASK__a'
+    original_archive = (archive / 'PLAN.md').read_bytes()
+    for kind in ('unknown-file', 'unknown-dir', 'modified', 'exec-bit', 'symlink', 'fifo', 'archive', 'missing-row', 'malformed-row'):
+        path = worktree / 'valuable'
+        if kind == 'unknown-file': path.write_text('keep me')
+        elif kind == 'unknown-dir': path.mkdir()
+        elif kind == 'modified': (worktree / 'a.txt').write_text('changed')
+        elif kind == 'exec-bit': (worktree / 'a.txt').chmod(0o755)
+        elif kind == 'symlink': path.symlink_to('a.txt')
+        elif kind == 'fifo': os.mkfifo(path)
+        elif kind == 'missing-row': ledger.write_text(lead_row + '{\"key\":\"unpreserved\"}\n')
+        elif kind == 'malformed-row': ledger.write_text(lead_row + 'invalid-json\n')
+        else: (archive / 'PLAN.md').write_text('changed archive')
+        before_mode = directory.stat().st_mode
+        pool.cli('recover', '--slug', 'a', '--worker-stopped', ok=False)
+        assert directory.stat().st_mode == before_mode
+        assert worktree.exists() and _git('branch', '--list', branch, cwd=pool.repo)
+        if kind == 'unknown-dir': path.rmdir()
+        elif kind in ('unknown-file', 'symlink', 'fifo'): path.unlink()
+        elif kind == 'modified': (worktree / 'a.txt').write_text('a\n')
+        elif kind == 'exec-bit': (worktree / 'a.txt').chmod(0o644)
+        elif kind in ('missing-row', 'malformed-row'): ledger.write_text(lead_row)
+        else: (archive / 'PLAN.md').write_bytes(original_archive)
+    destination_ledger = pool.repo / 'doc/harness/learnings.jsonl'
+    preserved_ledger = destination_ledger.read_bytes()
+    assert prior_row.encode() in preserved_ledger and lead_row.encode() in preserved_ledger
+    pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    assert destination_ledger.read_bytes() == preserved_ledger
+    assert not worktree.exists() and not _git('branch', '--list', branch, cwd=pool.repo)
+    # Idempotent retry after the branch has already disappeared.
+    pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    assert (archive / 'PLAN.md').read_bytes() == original_archive
+    pool.cli('close')

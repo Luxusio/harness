@@ -1293,3 +1293,33 @@ def test_s1_finish_retains_actual_postrebase_stale_module_without_incoming_proof
     assert _lock_reason(main, work) == LOCK_REASON
     assert not mod._rebase_in_progress(str(work))
     assert not (main / "doc/harness/archive/batch/TASK__lead").exists()
+
+
+def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_path, monkeypatch):
+    main = _main(tmp_path, monkeypatch)
+    lead = Lead(main, 'partial-remove-error', lock=False)
+    lead.commit_files({'change.txt': 'committed\n'})
+    _git('merge', '--ff-only', lead.branch, cwd=main)
+    retention = dict(batch_id='fixture', slug='lead', spawn_head=lead.commit)
+    (lead.worktree / mod.RETENTION_MARKER).write_bytes(mod.retention_bytes(retention))
+    mod.batch_harvest.harvest(str(main), str(lead.worktree), lead.task_id)
+    real_git = mod._git
+    def partial_remove(repo, *args):
+        if args[:2] == ('worktree', 'remove'):
+            removed = real_git(repo, *args)
+            assert removed.returncode == 0
+            lead.worktree.mkdir()
+            (lead.worktree / 'change.txt').write_text('committed\n')
+            return subprocess.CompletedProcess(args, 7, '', 'original Git removal detail')
+        return real_git(repo, *args)
+    monkeypatch.setattr(mod, '_git', partial_remove)
+    result = {'task_id': lead.task_id, 'cleanup': dict(unlocked=False, relocked=False, removed=False, branch_deleted=False)}
+    try:
+        mod._cleanup(str(main), str(lead.worktree), lead.branch, result, retention)
+        raise AssertionError('expected original removal refusal')
+    except mod.Outcome as exc:
+        assert exc.status == 'kept'
+        assert 'exit 7' in exc.reason and 'original Git removal detail' in exc.reason
+        assert 'partial residue and branch retained' in exc.reason
+        assert 'worktree kept' not in exc.reason
+    assert lead.worktree.exists() and _tip(main, lead.branch) == lead.commit
