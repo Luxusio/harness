@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -738,6 +739,9 @@ class TestNextActionGate(unittest.TestCase):
                 "missing_for_close": ["completed QA verdict: qa-cli"],
                 "required_qa_lenses": ["qa-cli"],
                 "runtime_verdict": "PENDING", "review_verdict": "PASS",
+                "receipt_recording": _harness_lib().receipt_recording_status(
+                    _harness_lib().ReceiptSnapshot((), "sha256:fixture"), control["run_id"],
+                ),
             },
         ), mock.patch.object(
             harness_server, "_watcher_status", return_value={
@@ -787,6 +791,9 @@ class TestNextActionGate(unittest.TestCase):
                 "missing_for_close": ["completed QA verdict: qa-cli"],
                 "required_qa_lenses": ["qa-cli"],
                 "runtime_verdict": "PENDING", "review_verdict": "PASS",
+                "receipt_recording": _harness_lib().receipt_recording_status(
+                    _harness_lib().ReceiptSnapshot((), "sha256:fixture"), control["run_id"],
+                ),
             },
         ), mock.patch.object(
             harness_server, "_watcher_status", return_value={
@@ -1377,9 +1384,15 @@ class TestReadinessIsTriState(unittest.TestCase):
         harness_server = _server()
 
         class Manager:
-            def worker_error(self, thread_id):
+            repo_root = REPO_ROOT
+            def worker_status(self, thread_id):
                 self.thread_id = thread_id
-                return "RuntimeError: receipt lock unavailable"
+                return {
+                    "task_id": "t", "run_id": "r",
+                    "generation": ("rollout", 0, 1, "t", "r"),
+                    "alive": True, "cursor": 0,
+                    "error": "RuntimeError: receipt lock unavailable", "result": None,
+                }
 
         class Server:
             watcher_manager = Manager()
@@ -1387,6 +1400,12 @@ class TestReadinessIsTriState(unittest.TestCase):
             last_watcher_error = ""
 
         with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+             mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
              mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
              mock.patch.object(
                  harness_server, "_server_runtime", lambda: "codex",
@@ -1494,12 +1513,13 @@ class TestReadinessIsTriState(unittest.TestCase):
         harness_server = _server()
 
         class Manager:
+            repo_root = REPO_ROOT
             @staticmethod
             def is_running():
                 return True
 
             @staticmethod
-            def worker_error(_thread_id):
+            def worker_status(_thread_id):
                 raise RuntimeError("worker registry unavailable")
 
         class Server:
@@ -1508,6 +1528,12 @@ class TestReadinessIsTriState(unittest.TestCase):
             last_watcher_error = ""
 
         with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+             mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
              mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
              mock.patch.object(
                  harness_server, "_server_runtime", lambda: "codex",
@@ -1542,12 +1568,13 @@ class TestReadinessIsTriState(unittest.TestCase):
         harness_server = _server()
 
         class Manager:
+            repo_root = REPO_ROOT
             @staticmethod
             def is_running():
                 return True
 
             @staticmethod
-            def worker_error(_thread_id):
+            def worker_status(_thread_id):
                 raise RuntimeError("worker registry unavailable")
 
         class Server:
@@ -1556,6 +1583,12 @@ class TestReadinessIsTriState(unittest.TestCase):
             last_watcher_error = ""
 
         with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+             mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
              mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
              mock.patch.object(
                  harness_server, "_server_runtime", lambda: "codex",
@@ -1597,15 +1630,27 @@ class TestReadinessIsTriState(unittest.TestCase):
         harness_server = _server()
 
         class Manager:
+            repo_root = REPO_ROOT
             @staticmethod
-            def worker_error(_thread_id):
-                return "RuntimeError: receipt lock unavailable"
+            def worker_status(_thread_id):
+                return {
+                    "task_id": "t", "run_id": "r",
+                    "generation": ("rollout", 0, 1, "t", "r"),
+                    "alive": True, "cursor": 0,
+                    "error": "RuntimeError: receipt lock unavailable", "result": None,
+                }
 
         class Server:
             watcher_manager = Manager()
             last_watcher_error = ""
 
         with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+             mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
              mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False), \
              mock.patch.object(
                  harness_server, "_server_runtime", lambda: "codex",
@@ -1638,15 +1683,19 @@ class TestReadinessIsTriState(unittest.TestCase):
         planted = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
 
         class Manager:
+            repo_root = REPO_ROOT
             queried = []
 
             @classmethod
-            def worker_error(cls, thread_id):
+            def worker_status(cls, thread_id):
                 cls.queried.append(thread_id)
-                return (
-                    "RuntimeError: receipt lock unavailable"
-                    if thread_id == current else ""
-                )
+                return {
+                    "task_id": "t", "run_id": "r",
+                    "generation": ("rollout", 0, 1, "t", "r"),
+                    "alive": True, "cursor": 0,
+                    "error": ("RuntimeError: receipt lock unavailable"
+                              if thread_id == current else ""), "result": None,
+                }
 
         class Server:
             watcher_manager = Manager()
@@ -1654,6 +1703,12 @@ class TestReadinessIsTriState(unittest.TestCase):
             last_watcher_error = ""
 
         with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+             mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
              mock.patch.dict(
                  os.environ, {"CODEX_THREAD_ID": ""}, clear=False,
              ), \
@@ -1693,12 +1748,18 @@ class TestReadinessIsTriState(unittest.TestCase):
 
         def _status(watcher_thread_id):
             class Manager:
+                repo_root = REPO_ROOT
                 queried = []
 
                 @classmethod
-                def worker_error(cls, thread_id):
+                def worker_status(cls, thread_id):
                     cls.queried.append(thread_id)
-                    return "RuntimeError: receipt lock unavailable"
+                    return {
+                        "task_id": "t", "run_id": "r",
+                        "generation": ("rollout", 0, 1, "t", "r"),
+                        "alive": True, "cursor": 0,
+                        "error": "RuntimeError: receipt lock unavailable", "result": None,
+                    }
 
             class Server:
                 watcher_manager = Manager()
@@ -1708,6 +1769,12 @@ class TestReadinessIsTriState(unittest.TestCase):
                 Server.watcher_thread_id = watcher_thread_id
 
             with mock.patch.object(harness_server, "_SERVER", Server()), \
+                 mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+                 mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
                  mock.patch.dict(
                      os.environ, {"CODEX_THREAD_ID": ""}, clear=False,
                  ), \
@@ -1798,6 +1865,120 @@ class TestReadinessIsTriState(unittest.TestCase):
              mock.patch.object(harness_server, "_server_runtime", lambda: runtime):
             return harness_server._watcher_status(task_dir="", task_id="t", run_id="r")
 
+    def test_codex_readiness_requires_a_live_exact_current_worker(self):
+        """Use real registration validation and atomic manager observations."""
+        harness_server = _server()
+        import codex_lifecycle_watcher as watcher
+
+        thread_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+        run_id = "019feefa-2a00-7000-8000-000000000001"
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            root = Path(tmp) / "repo"
+            (root / ".git").mkdir(parents=True)
+            task = root / "doc/harness/tasks/TASK__readiness"
+            task.mkdir(parents=True)
+            (task / "TASK.json").write_text(json.dumps({
+                "run_id": run_id, "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }))
+            sessions = task.parent / ".active_sessions"
+            sessions.mkdir()
+            marker = sessions / f"{thread_id}.json"
+            marker.write_text(json.dumps({
+                "session_id": thread_id, "task_dir": str(task),
+                "task_id": task.name, "run_id": run_id,
+            }))
+            codex_home = Path(tmp) / ".codex"
+            created = datetime.fromtimestamp(
+                int(thread_id.replace("-", "")[:12], 16) / 1000, timezone.utc,
+            )
+            rollout = (codex_home / "sessions" / f"{created:%Y/%m/%d}"
+                       / f"rollout-{thread_id}.jsonl")
+            rollout.parent.mkdir(parents=True)
+            rollout.write_text(json.dumps({"type": "session_meta", "payload": {
+                "id": thread_id, "session_id": thread_id,
+                "cwd": str(root), "thread_source": "user",
+            }}) + "\n")
+            stack.enter_context(mock.patch.dict(os.environ, {
+                "CODEX_HOME": str(codex_home), "CODEX_THREAD_ID": "",
+            }))
+            self.assertTrue(watcher.ensure(
+                str(root), thread_id, task_id=task.name, run_id=run_id,
+            ))
+            registration = watcher.registrations(str(root))[0]
+            generation = watcher._registration_generation(registration)
+            manager = watcher.WatcherManager(str(root))
+            release = threading.Event()
+            live = threading.Thread(target=release.wait, daemon=True)
+            live.start()
+            stack.callback(live.join, 2)
+            stack.callback(release.set)
+            manager.thread = live
+            server = type("Server", (), {
+                "watcher_manager": manager, "watcher_thread_id": thread_id,
+                "last_watcher_error": "",
+            })()
+            stack.enter_context(mock.patch.object(harness_server, "_SERVER", server))
+            stack.enter_context(mock.patch.object(harness_server, "_server_runtime", return_value="codex"))
+            stack.enter_context(mock.patch.object(harness_server, "receipt_capability_warning", return_value=""))
+            stack.enter_context(mock.patch.object(harness_server, "_diagnostics_for_this_session", return_value={
+                "registration_present": True, "root_thread_id": "planted-foreign-thread",
+            }))
+            # Historical receipts and a manager without a worker prove nothing.
+            stack.enter_context(mock.patch.object(harness_server, "_run_has_receipts", return_value=True))
+            def status():
+                return harness_server._watcher_status(str(task), task.name, run_id)
+
+            self.assertIsNone(status()["receipts_recordable"])  # absent local worker
+            external_lease = watcher._acquire_registration_lease(str(root), thread_id)
+            self.assertIsNotNone(external_lease)
+            try:
+                self.assertEqual(manager.scan_once(), 0)
+                self.assertIsNone(status()["receipts_recordable"])
+            finally:
+                external_lease.close()
+            with mock.patch.object(manager, "worker_status", None):
+                self.assertIsNone(status()["receipts_recordable"])
+            with manager._lock:
+                manager.workers[thread_id] = live
+                manager.worker_generations[thread_id] = generation
+                manager.worker_cursors[thread_id] = 31
+            observed = status()
+            self.assertIs(observed["receipts_recordable"], True)
+            self.assertEqual(observed["worker_status"]["cursor"], 31)
+            self.assertTrue(observed["worker_status"]["generation_current"])
+            with manager._lock:
+                manager.worker_errors[thread_id] = "receipt write failed"
+            self.assertIs(status()["receipts_recordable"], False)
+            with manager._lock:
+                manager.worker_errors.clear()
+                manager.worker_generations[thread_id] = (*generation[:2], generation[2] + 1, *generation[3:])
+            self.assertIsNone(status()["receipts_recordable"])
+            with manager._lock:
+                manager.worker_generations[thread_id] = generation
+            registration_path = watcher._state_path(str(root), thread_id)
+            valid_registration = registration_path.read_text()
+            registration_path.write_text("{malformed")
+            self.assertIsNone(status()["receipts_recordable"])
+            registration_path.write_text(valid_registration)
+            original_marker = marker.read_text()
+            marker.write_text(json.dumps({
+                "session_id": thread_id, "task_dir": str(task),
+                "task_id": task.name, "run_id": "another-run",
+            }))
+            self.assertIsNone(status()["receipts_recordable"])
+            marker.write_text(original_marker)
+            with mock.patch.object(manager, "worker_status", side_effect=OSError("unreadable")):
+                self.assertIsNone(status()["receipts_recordable"])
+            with mock.patch.object(manager, "worker_status", return_value={"alive": True}):
+                self.assertIsNone(status()["receipts_recordable"])
+            release.set()
+            live.join(2)
+            # Keep manager liveness independent from the now-stopped worker.
+            with mock.patch.object(manager, "is_running", return_value=True):
+                self.assertIs(status()["receipts_recordable"], False)
+
     def test_manager_running_is_null_outside_codex(self):
         """A definite False reports a component broken for not running."""
         harness_server = _server()
@@ -1817,12 +1998,13 @@ class TestReadinessIsTriState(unittest.TestCase):
         harness_server = _server()
 
         class Manager:
+            repo_root = REPO_ROOT
             @staticmethod
             def is_running():
                 return False
 
             @staticmethod
-            def worker_error(_thread_id):
+            def worker_status(_thread_id):
                 return ""
 
         class Server:
@@ -1830,6 +2012,12 @@ class TestReadinessIsTriState(unittest.TestCase):
             last_watcher_error = ""
 
         with mock.patch.object(harness_server, "_SERVER", Server()), \
+             mock.patch.object(harness_server, "_codex_workspace_roots", return_value=[REPO_ROOT]), \
+             mock.patch.object(harness_server, "_watcher_registrations", return_value=[{
+                 "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+                 "task_id": "t", "run_id": "r", "rollout": "rollout",
+                 "offset": 0, "registered_at": 1,
+             }]), \
              mock.patch.object(
                  harness_server, "_server_runtime", lambda: "codex",
              ), mock.patch.object(

@@ -129,10 +129,16 @@ def _control_root() -> str:
         raise RuntimeError(f"invalid Harness workspace at {root}: {error}")
     return root or candidate
 try:
-    from codex_lifecycle_watcher import WatcherManager as _WatcherManager, workspace_roots as _codex_workspace_roots  # type: ignore
+    from codex_lifecycle_watcher import (  # type: ignore
+        WatcherManager as _WatcherManager, workspace_roots as _codex_workspace_roots,
+        registrations as _watcher_registrations,
+        _registration_generation as _watcher_registration_generation,
+    )
 except Exception:
     _WatcherManager = None
     _codex_workspace_roots = None
+    _watcher_registrations = None
+    _watcher_registration_generation = None
 
 # ── Watcher diagnostics ──────────────────────────────────────────────────
 #
@@ -617,40 +623,87 @@ def _watcher_status(
         or diagnostics.get("last_watcher_error")
         or ""
     )
-    # Distinguishes "no live worker state exists" from "live worker state
-    # exists and this process could not read it". Before this flag both landed
-    # on an empty `last_watcher_error`, and the receipts override below then
-    # reported the second one as recordable. See
-    # `doc/harness/REQ__unreadable-worker-state-is-not-recordable.md`.
     worker_state_unreadable = False
-    if _SERVER is not None and _SERVER.watcher_manager is not None:
-        worker_error = getattr(_SERVER.watcher_manager, "worker_error", None)
-        if callable(worker_error):
-            try:
-                # The diagnostics file is display-only, attacker-influenced
-                # data. Index authoritative in-memory worker state by the
-                # exact identity retained after successful task registration.
-                # The env fallback supports older direct hosts, but ordinary
-                # Codex MCP processes have no CODEX_THREAD_ID of their own.
-                #
-                # Diagnostics never choose a worker. Without an identity owned
-                # by this process, readiness stays unknown rather than letting
-                # a repository file select another session's worker state.
-                current_thread_id = str(
-                    getattr(_SERVER, "watcher_thread_id", "")
-                    or os.environ.get("CODEX_THREAD_ID")
-                    or ""
-                )
-                if current_thread_id:
-                    last_watcher_error = worker_error(
-                        current_thread_id
-                    ) or last_watcher_error
-                else:
-                    worker_state_unreadable = True
-            except Exception:
-                # An exception is also a failure to read it. Silence here used
-                # to be indistinguishable from "there was nothing to read".
+    worker_snapshot = None
+    worker_ready = False
+    worker_stopped = False
+    if _server_runtime() == "codex" and _SERVER is not None and _SERVER.watcher_manager is not None:
+        manager = _SERVER.watcher_manager
+        # Only process-owned identity can select a worker; diagnostics are
+        # display-only and may name another thread.
+        current_thread_id = str(
+            getattr(_SERVER, "watcher_thread_id", "")
+            or os.environ.get("CODEX_THREAD_ID") or ""
+        )
+        status_reader = getattr(manager, "worker_status", None)
+        try:
+            if not current_thread_id:
                 worker_state_unreadable = True
+            elif callable(status_reader):
+                observed = status_reader(current_thread_id)
+                if observed is not None:
+                    # Reject malformed or partial snapshots instead of treating
+                    # an empty error as evidence that recording is possible.
+                    if not (
+                        isinstance(observed, dict)
+                        and {"task_id", "run_id", "generation", "alive", "cursor", "error", "result"}.issubset(observed)
+                        and isinstance(observed.get("task_id"), str)
+                        and isinstance(observed.get("run_id"), str)
+                        and isinstance(observed.get("generation"), tuple)
+                        and len(observed["generation"]) == 5
+                        and isinstance(observed.get("alive"), bool)
+                        and isinstance(observed.get("error"), str)
+                        and (observed.get("cursor") is None or (
+                            type(observed["cursor"]) is int and observed["cursor"] >= 0
+                        ))
+                        and (observed.get("result") is None or type(observed["result"]) is int)
+                    ):
+                        worker_state_unreadable = True
+                    else:
+                        generation_current = False
+                        if task_id and run_id and _watcher_registrations is not None:
+                            registrations = (
+                                registration
+                                for root in _codex_workspace_roots(manager.repo_root)
+                                for registration in _watcher_registrations(root)
+                            )
+                            for registration in registrations:
+                                if (
+                                    registration.get("thread_id") == current_thread_id
+                                    and registration.get("task_id") == task_id
+                                    and registration.get("run_id") == run_id
+                                ):
+                                    generation_current = (
+                                        _watcher_registration_generation(registration)
+                                        == observed["generation"]
+                                    )
+                                    break
+                        exact_worker = (
+                            observed["task_id"] == task_id
+                            and observed["run_id"] == run_id
+                            and generation_current
+                        )
+                        worker_snapshot = {
+                            "task_id": _safe_optional(observed["task_id"]),
+                            "run_id": _safe_optional(observed["run_id"]),
+                            "alive": observed["alive"],
+                            "cursor": observed.get("cursor"),
+                            "error": _safe_reason(observed["error"]),
+                            "result": observed.get("result"),
+                            "generation_current": generation_current,
+                        }
+                        if exact_worker:
+                            last_watcher_error = observed["error"] or last_watcher_error
+                            worker_stopped = (
+                                not observed["alive"] or observed["result"] not in (None, 0)
+                            )
+                            worker_ready = (
+                                observed["alive"] and not observed["error"] and not worker_stopped
+                            )
+            else:
+                worker_state_unreadable = True
+        except Exception:
+            worker_state_unreadable = True
 
     # Readiness is per-runtime. `capability_warning` inspects the *Claude*
     # plugin registration only, so on Codex it is silent even when the Codex
@@ -665,9 +718,7 @@ def _watcher_status(
     unrecordable_summary = ""
     unrecordable_reason = ""
     recordable: bool | None = (
-        None
-        if _server_runtime() == "codex" and not _current_session_identity()
-        else True
+        (True if worker_ready else None) if _server_runtime() == "codex" else True
     )
     if registration_present is False:
         unrecordable_summary = (
@@ -687,6 +738,10 @@ def _watcher_status(
     elif last_watcher_error:
         unrecordable_summary = "Receipt watcher failed to start."
         unrecordable_reason = f"Receipt watcher failed to start: {last_watcher_error}"
+        recordable = False
+    elif worker_stopped:
+        unrecordable_summary = "Receipt watcher worker is not running."
+        unrecordable_reason = "The current task run's receipt watcher worker has stopped."
         recordable = False
     elif _server_runtime() == "codex" and manager_running is False:
         unrecordable_summary = "Receipt watcher manager is not running."
@@ -718,17 +773,8 @@ def _watcher_status(
         recordable = None
 
     if worker_state_unreadable and recordable is not False:
-        # Third state, and the one this override used to swallow. A manager
-        # exposing `worker_error` exists, so live failure state *is* being
-        # tracked somewhere — this process simply had no identity to query it
-        # with, and since a01bf3f it will not borrow one from the diagnostics
-        # file. That leaves the answer genuinely unknown, and an earlier
-        # receipt cannot settle it: the worker may have failed after that
-        # receipt was written.
-        #
-        # `None`, not `False`: nothing was observed here, a read was refused.
-        # The docstring above owns that distinction, and collapsing unknown
-        # into False is named there as what once produced a self-deadlock.
+        # An unreadable observation cannot establish current recording. Keep
+        # observed failures false, and never borrow identity from diagnostics.
         unrecordable_summary = (
             "Receipt watcher state could not be read for this session."
         )
@@ -744,33 +790,18 @@ def _watcher_status(
         # keeps a positively observed failure above from being softened.
         recordable = None
     if recordable is None and not unrecordable_summary and not unrecordable_reason:
-        # The remaining unknown: a Codex host with no exact session identity.
-        # `REQ__subagent-receipt-session-binding.md` calls this state unknown
-        # "until a session hook can establish or disprove it", and a null with
-        # no summary beside it leaves the reader to guess which question went
-        # unanswered — the same defect one level down.
-        #
-        # Guarded on the reason as well as the summary: the capability-warning
-        # branch sets a reason and no summary, and a summary-only guard
-        # overwrote its text with a cause that was not the one that fired.
+        # Missing, external, and stale-generation workers are unknown. Preserve
+        # a more specific capability-warning reason when one exists.
         unrecordable_summary = (
             "Receipt watcher readiness is unknown for this session."
         )
         unrecordable_reason = (
-            "This process has no exact session identity, so whether the receipt "
-            "watcher is recording for this session cannot be established here."
+            "A live local receipt watcher matching this exact session, task, run, "
+            "and current registration generation could not be established here."
         )
 
-    # No promotion branch follows, deliberately. A receipt disproves exactly one
-    # cause — the heuristic capability warning — and it already does so where
-    # that warning is raised: the current-run receipt disproof above means a run with receipts never enters
-    # the warning branch at all, so `recordable` keeps its initializer. A second
-    # `recordable is None and _run_has_receipts(...)` promotion used to sit here
-    # and could not tell that cause from the other two, so it also disproved a
-    # missing session identity and an unreadable worker state — neither of which
-    # asks a question a receipt answers, because the worker can fail after the
-    # receipt was written. Re-adding one is what
-    # `test_a_receipt_does_not_settle_a_missing_session_identity` fails on.
+    # Earlier receipts disprove only the capability heuristic above. They do
+    # not prove that a worker remains alive for the current generation.
 
     return {
         # Every value sourced from the diagnostics file is flattened and bounded
@@ -783,6 +814,7 @@ def _watcher_status(
         "receipts_unrecordable_reason": _safe_reason(unrecordable_reason),
         "receipts_unrecordable_summary": unrecordable_summary,
         "manager_running": manager_running,
+        "worker_status": worker_snapshot,
         # Strict tri-state. This one comes from the diagnostics file too, and it
         # only has to survive an `is False` comparison to do its gating job, so
         # any JSON value would otherwise pass through verbatim — a planted

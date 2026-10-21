@@ -65,6 +65,7 @@ MAX_LINE_BYTES = 8 * _REVIEW_DETAIL_MAX_BYTES
 MAX_CHILD_BYTES = 64 * 1024 * 1024
 MAX_PARENT_BYTES = 256 * 1024 * 1024  # Bounded long-lived coordinator history.
 POLL_SECONDS = 0.20
+BINDING_CHECK_SECONDS = 1.0
 IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
@@ -1071,6 +1072,8 @@ def _require_task_binding(
     if not binding.get("task_dir") or not binding.get("run_id"):
         raise _BindingUnavailable("binding unavailable")
     if expected_generation is not None:
+        if (os.path.basename(binding["task_dir"]), binding["run_id"]) != expected_generation[3:5]:
+            raise _RegistrationChanged("active task generation changed")
         roots = workspace_roots(repo_root)
         if any(_has_binding_conflict_fence(read_active_session_marker(root, root_id))
                for root in roots):
@@ -1426,9 +1429,14 @@ class Watcher:
         if completion_summary is None:
             summary += f"\nRuntime watcher invalidated: {reason}"
         with active_session_transaction(self.repo_root):
-            _require_task_binding(
+            binding = _require_task_binding(
                 self.repo_root, self.root_id, self.expected_generation, self.session_cwd,
             )
+            if (
+                binding.get("task_dir") != item.get("task_dir")
+                or binding.get("run_id") != item.get("task_run_id")
+            ):
+                raise _BindingUnavailable("invalidation task binding changed")
             pending_exists = any(
                 receipt.get("runtime_id") == item.get("runtime_id")
                 and receipt.get("event") == "completed"
@@ -1833,6 +1841,7 @@ def watch(
     stop_event: threading.Event | None = None,
     idle_seconds: float = IDLE_SECONDS,
     on_error: Any | None = None,
+    on_cursor: Any | None = None,
     recovering: bool = False,
     expected_generation: RegistrationGeneration | None = None,
 ) -> int:
@@ -1866,6 +1875,14 @@ def watch(
     discarded_lifecycle_failure = False
     failed_position: int | None = None
     failed_attempts = 0
+    next_binding_check = 0.0
+
+    def note_cursor() -> None:
+        if on_cursor is not None:
+            try:
+                on_cursor(handle.tell())
+            except Exception:
+                pass  # Advisory observation never changes receipt authority.
 
     def notify(message: str) -> None:
         if on_error is None:
@@ -1927,15 +1944,14 @@ def watch(
         watcher.expected_generation = expected_generation
         handle.seek(max(0, offset))
         while not stop_event.is_set() and time.monotonic() - last_data < idle_seconds:
-            if task_id or run_id:
-                binding = _require_task_binding(
+            note_cursor()
+            if (task_id or run_id) and time.monotonic() >= next_binding_check:
+                _require_task_binding(
                     repo_root, thread_id, expected_generation, session_cwd,
                 )
-                if (
-                    os.path.basename(str(binding.get("task_dir") or "")) != task_id
-                    or binding.get("run_id") != run_id
-                ):
-                    return 0
+                # This check can itself be expensive. Start the interval after
+                # it finishes; its result never authorizes receipt publication.
+                next_binding_check = time.monotonic() + BINDING_CHECK_SECONDS
             position = handle.tell()
             raw = handle.readline(MAX_LINE_BYTES + 1)
             if not raw:
@@ -2004,6 +2020,7 @@ def watch(
                 continue
             failed_position = None
             failed_attempts = 0
+            note_cursor()
     except _RegistrationChanged:
         return 0
     except _BindingUnavailable:
@@ -2050,10 +2067,18 @@ class WatcherManager:
         self.worker_generations: dict[str, RegistrationGeneration] = {}
         self.worker_results: dict[str, int] = {}
         self.worker_errors: dict[str, str] = {}
+        self.worker_cursors: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def _worker(self, registration: dict[str, Any], lease: Any) -> None:
         thread_id = str(registration["thread_id"])
+        generation = _registration_generation(registration)
+
+        def note_cursor(position: int) -> None:
+            with self._lock:
+                if self.worker_generations.get(thread_id) == generation:
+                    self.worker_cursors[thread_id] = position
+
         def note_error(message: str) -> None:
             with self._lock:
                 if message:
@@ -2073,6 +2098,7 @@ class WatcherManager:
                 run_id=str(registration.get("run_id") or ""),
                 stop_event=self.stop_event,
                 on_error=note_error,
+                on_cursor=note_cursor,
                 recovering=recovering,
                 expected_generation=_registration_generation(registration),
             )
@@ -2093,6 +2119,23 @@ class WatcherManager:
         """Return a bounded advisory error for one registered root watcher."""
         with self._lock:
             return self.worker_errors.get(thread_id, "")
+
+    def worker_status(self, thread_id: str) -> dict[str, Any] | None:
+        """Return one atomic local observation, never a receipt authorization."""
+        with self._lock:
+            generation = self.worker_generations.get(thread_id) or self.seen.get(thread_id)
+            if generation is None:
+                return None  # Includes a registration leased by another host.
+            worker = self.workers.get(thread_id)
+            return {
+                "task_id": generation[3],
+                "run_id": generation[4],
+                "generation": generation,
+                "alive": bool(worker is not None and worker.is_alive() and not self.stop_event.is_set()),
+                "cursor": self.worker_cursors.get(thread_id),
+                "error": self.worker_errors.get(thread_id, ""),
+                "result": self.worker_results.get(thread_id),
+            }
 
     def is_running(self) -> bool:
         """Report the manager thread itself, not merely its container object."""
@@ -2141,6 +2184,8 @@ class WatcherManager:
                     continue
                 self.seen[thread_id] = generation
                 self.worker_generations[thread_id] = generation
+                self.worker_cursors.pop(thread_id, None)
+                self.worker_results.pop(thread_id, None)
                 worker = threading.Thread(
                     target=self._worker,
                     args=(item, lease),

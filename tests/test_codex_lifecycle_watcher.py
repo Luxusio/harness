@@ -1504,7 +1504,7 @@ def test_manager_starts_one_daemon_worker_per_registration_and_stops(tmp_path):
 
     def fake_watch(repo_root, thread_id, rollout, offset, *, stop_event, **_kwargs):
         calls.append((repo_root, thread_id, rollout, offset))
-        stop_event.wait(0.05)
+        stop_event.wait(1)
         return 0
 
     manager = mod.WatcherManager(str(repo), scan_seconds=0.01)
@@ -1512,7 +1512,13 @@ def test_manager_starts_one_daemon_worker_per_registration_and_stops(tmp_path):
          mock.patch.object(mod, "watch", side_effect=fake_watch):
         assert manager.scan_once() == 2
         assert manager.scan_once() == 0
+        status = manager.worker_status(registrations[0]["thread_id"])
+        assert status["generation"] == mod._registration_generation(registrations[0])
+        assert status["alive"] is True
+        assert status["cursor"] is None  # A fake watch never observed a trusted handle.
+        assert manager.worker_status("external-or-absent") is None
         manager.stop()
+        assert manager.worker_status(registrations[0]["thread_id"])["alive"] is False
     assert {call[1] for call in calls} == {item["thread_id"] for item in registrations}
     assert all(worker.daemon for worker in manager.workers.values())
 
@@ -3199,3 +3205,118 @@ def test_interacted_activity_without_followup_call_is_not_authority(tmp_path, mo
     with mock.patch.object(mod, "record_subagent_receipt", side_effect=AssertionError("unauthenticated start")):
         watcher.feed(activity)
     assert not watcher.calls
+
+
+def test_active_binding_must_match_registration_generation(tmp_path, monkeypatch):
+    mod, repo, root_id, _, registration = _bound_lifecycle_fixture(tmp_path, monkeypatch)
+    generation = mod._registration_generation(registration)
+    task = repo / 'doc/harness/tasks' / registration['task_id']
+    for binding in ({'task_dir': str(task), 'run_id': PRIOR_RUN_ID},
+                    {'task_dir': str(task.with_name('TASK__other')), 'run_id': RUN_ID}):
+        with mock.patch.object(mod, '_active_task_binding_for_session', return_value=binding), \
+             mock.patch.object(mod, '_current_registration_generation', return_value=generation):
+            try:
+                mod._require_task_binding(str(repo), root_id, generation, str(repo))
+            except mod._RegistrationChanged:
+                pass
+            else:
+                raise AssertionError('unchanged registration cannot authorize a different active task/run')
+
+
+def test_invalidation_requires_locked_binding_to_match_item(tmp_path, monkeypatch):
+    mod, repo, root_id, _, registration = _bound_lifecycle_fixture(tmp_path, monkeypatch)
+    task = repo / 'doc/harness/tasks' / registration['task_id']
+    watcher = mod.Watcher(str(repo), root_id)
+    for task_dir, run_id in ((str(task), PRIOR_RUN_ID),
+                             (str(task.with_name('TASK__other')), RUN_ID)):
+        item = {'completed': True, 'task_dir': task_dir, 'task_run_id': run_id,
+                'task_name': 'code_review_binding', 'agent_path': '/root/code_review_binding',
+                'runtime_id': 'old-runtime'}
+        with mock.patch.object(mod, 'record_subagent_receipt') as record, \
+             mock.patch.object(mod, 'receipt_snapshot') as snapshot:
+            try:
+                watcher._invalidate(item, 'duplicate terminal')
+            except mod._BindingUnavailable:
+                pass
+            else:
+                raise AssertionError('invalidation must reject another item task/run')
+        record.assert_not_called()
+        snapshot.assert_not_called()
+        assert not item.get('invalid'), 'failed publication must remain retryable'
+
+
+def test_irrelevant_records_use_completion_based_binding_deadline_and_keep_lifecycle(tmp_path, monkeypatch):
+    mod, repo, root_id, agent_path, registration = _bound_lifecycle_fixture(tmp_path, monkeypatch)
+    rollout = Path(registration['rollout'])
+    data = rollout.read_bytes()
+    offset = registration['offset']
+    irrelevant = (json.dumps({'type': 'event_msg', 'payload': {'type': 'token_count'}}) + '\n').encode()
+    rollout.write_bytes(data[:offset] + irrelevant * 250 + data[offset:])
+    original_require = mod._require_task_binding
+    original_feed = mod.Watcher.feed
+    clock = [100.0]
+    unrelated_count = [0]
+    outer_checks = []
+    receipts = []
+    cursors = []
+    stop = mod.threading.Event()
+
+    def binding(*args, **kwargs):
+        if _binding_read_stage() == 'watch':
+            outer_checks.append(clock[0])
+            clock[0] += mod.BINDING_CHECK_SECONDS * 2
+        return original_require(*args, **kwargs)
+
+    def feed(self, event):
+        if event.get('payload', {}).get('type') == 'token_count':
+            unrelated_count[0] += 1
+            if unrelated_count[0] == 125:
+                clock[0] += mod.BINDING_CHECK_SECONDS * 2
+        return original_feed(self, event)
+
+    def record(_task, item):
+        receipts.append(dict(item))
+        if item['event'] == 'completed':
+            stop.set()
+        return item
+
+    with mock.patch.object(mod.time, 'monotonic', side_effect=lambda: clock[0]), \
+         mock.patch.object(mod.Watcher, 'feed', new=feed), \
+         mock.patch.object(mod, '_require_task_binding', side_effect=binding), \
+         mock.patch.object(mod, 'record_subagent_receipt', side_effect=record), \
+         mock.patch.object(mod, 'receipt_snapshot', side_effect=lambda _td: _snapshot(receipts)):
+        assert mod.watch(str(repo), root_id, str(rollout), offset,
+                         task_id=registration['task_id'], run_id=registration['run_id'],
+                         idle_seconds=30, stop_event=stop, on_cursor=cursors.append) == 0
+    assert outer_checks == [100.0, 104.0], 'check again after the interval, never per unrelated record'
+    assert [(r['event'], r.get('verdict', '')) for r in receipts] == [('started', ''), ('completed', 'PASS')]
+    assert all(r['agent_id'] == agent_path for r in receipts)
+    assert cursors[0] == offset and cursors[-1] == rollout.stat().st_size
+    assert cursors == sorted(cursors)
+
+
+def test_retry_and_invalidation_reject_changed_active_generation(tmp_path, monkeypatch):
+    mod, repo, root_id, agent_path, registration = _bound_lifecycle_fixture(tmp_path, monkeypatch)
+    task = repo / 'doc/harness/tasks' / registration['task_id']
+    generation = mod._registration_generation(registration)
+    watcher = mod.Watcher(str(repo), root_id)
+    watcher.expected_generation = generation
+    item = {'started': True, 'completed': True, 'root_final': 'VERDICT: PASS',
+            'task_dir': str(task), 'task_run_id': RUN_ID,
+            'task_name': 'code_review_binding', 'agent_path': agent_path,
+            'child_id': '019f82a6-ce64-75a3-b01d-92f7b0b4fe6f', 'runtime_id': 'old-runtime'}
+    watcher.calls['call_binding_123456'] = item
+    wrong_binding = {'task_dir': str(task), 'run_id': PRIOR_RUN_ID}
+    with mock.patch.object(mod, '_active_task_binding_for_session', return_value=wrong_binding), \
+         mock.patch.object(mod, '_current_registration_generation', return_value=generation), \
+         mock.patch.object(mod, 'record_subagent_receipt') as record:
+        for action in (lambda: watcher._invalidate(item, 'duplicate terminal'), watcher.retry):
+            if action == watcher.retry:
+                item['completed'] = False
+            try:
+                action()
+            except mod._RegistrationChanged:
+                pass
+            else:
+                raise AssertionError('periodic liveness cannot authorize stale publication')
+        record.assert_not_called()
