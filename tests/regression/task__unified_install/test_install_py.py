@@ -771,19 +771,19 @@ def test_suite_run_cannot_reach_the_real_install_roots(tmp_path):
     # these lines would have deleted from the live Codex runtime while proving
     # the guard that exists to prevent exactly that.
     with pytest.raises(RuntimeError, match="refusing to mutate"):
-        module._prune_bytecode_caches(module.CODEX_INSTALL_ROOT / "absent")
+        module._prune_bytecode_caches(home / ".codex" / "harness" / "absent")
     with pytest.raises(RuntimeError, match="refusing to mutate"):
         module.install_codex_plugin_cache(tmp_path / "absent-source", home / ".codex")
     with mock.patch.object(
         module, "_build_claude_payload", side_effect=AssertionError("reached"),
     ):
         with pytest.raises(RuntimeError, match="refusing to mutate"):
-            module.sync_claude_payload(module.DEFAULT_CLAUDE_INSTALL_ROOT)
+            module.sync_claude_payload(home / ".claude" / "harness-dev")
     with mock.patch.object(
         module, "_build_codex_payload", side_effect=AssertionError("reached"),
     ):
         with pytest.raises(RuntimeError, match="refusing to mutate"):
-            module.sync_codex_payload()
+            module.sync_codex_payload(home / ".codex" / "harness")
 
     # A tmp root of the same shape is untouched by the guard.
     assert module._prune_bytecode_caches(tmp_path / "absent") == []
