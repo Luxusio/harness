@@ -2411,12 +2411,21 @@ def compile_routing(task_dir, repo_root=None):
     maintenance = is_maintenance_task(task_dir, repo_root)
     control = read_task_control(task_dir)
     micro_loop = _is_micro_loop_state(control)
+    from wbs import read_state, admission_definition
+    try:
+        state = read_state(task_dir)
+        assignment = (state or {}).get('execution_admission', {})
+        mode = (assignment.get('mode') if state and assignment.get('run_id') == control.get('run_id')
+                and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected'))
+                else 'unassigned')
+    except (OSError, ValueError, RuntimeError):
+        mode = 'unassigned'
     return {
         "maintenance_task": maintenance,
         "workflow_locked": not maintenance,
         "risk_level": "high" if maintenance else "medium",
         "execution_mode": "micro" if micro_loop else "standard",
-        "orchestration_mode": "solo",
+        "orchestration_mode": mode,
         "planning_mode": "skipped" if micro_loop else "standard",
     }
 
@@ -4780,8 +4789,12 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
 
     micro_loop = _is_micro_loop_state(st)
     has_plan = artifact_exists(task_dir, "PLAN.md")
-    source_write_allowed = has_plan or micro_loop
-    why_blocked = "" if source_write_allowed else "PLAN.md does not exist yet"
+    task_open = st.get('close_receipt_fingerprint') is None and not artifact_exists(task_dir, 'BLOCKED.md')
+    source_write_allowed = task_open and routing['orchestration_mode'] == 'direct'
+    why_blocked = "" if source_write_allowed else "Fresh execution assignment required: dispatch prepare with current host inventory and ownership"
+    if task_open and routing['orchestration_mode'] == 'unassigned' and os.path.isfile(os.path.join(find_repo_root(task_dir), '.git')):
+        source_write_allowed = None
+        why_blocked = 'Status does not authenticate managed lead ownership; prewrite validates its existing pool binding.'
 
     missing_for_close = []
     if not has_plan and not micro_loop:

@@ -846,16 +846,23 @@ def execute(args, directory, records):
                     and available >= 0, 'available slots must be a nonnegative integer')
             slots = min(slots, available)
         by_slug = {x['slug']: x for x in data['requests']}
-        for item in data['requests']:
+        from parallel_dispatch import independent_order
+        ready = [item for item in data['requests'] if item['status'] == 'queued'
+                 and all(by_slug[dep]['status'] == 'integrated' for dep in item['depends_on'])
+                 and not any(overlap(ownership(item), ownership(x)) for x in held(records, item))]
+        ordered = independent_order(ready, ownership)
+        ordered += [item for item in data['requests'] if item not in ordered]
+        for item in ordered:
             if item['status'] != 'queued':
                 continue
             reason = None
             if slots <= 0:
-                reason = 'capacity'
+                reason = 'capacity: available=' + str(slots) + ', max_leads=' + str(data['max_leads'])
             elif any(by_slug[dep]['status'] != 'integrated' for dep in item['depends_on']):
-                reason = 'dependencies'
+                reason = 'dependencies: ' + ', '.join(dep for dep in item['depends_on'] if by_slug[dep]['status'] != 'integrated')
             elif any(overlap(ownership(item), ownership(x)) for x in held(records, item)):
-                reason = 'retained scope ownership'
+                owner = next(x for x in held(records, item) if overlap(ownership(item), ownership(x)))
+                reason = 'retained scope ownership: ' + owner['slug'] + ' (' + ', '.join(owner['scopes']) + ')'
             if reason:
                 reasons[item['slug']] = reason
                 continue

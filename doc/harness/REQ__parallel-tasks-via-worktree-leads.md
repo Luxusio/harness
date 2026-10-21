@@ -789,3 +789,58 @@ submodule dirt, unknown Git operations and native FF refusal retain resources.
 No stash, reset, custom index rewriting or forced disposal is allowed.
 The existing batch recovery contract owns detailed failure and ancillary
 preservation rules. Durable work never relies on a /tmp-only checkout.
+
+## Immediate assignment and per-lane completion (2026-10-21)
+
+User-explicit source: latest message in the current conversation, quoted by the
+coordinator (message identifiers unavailable): “준비된 독립 작업은 즉시 배정”;
+“실행 가능한 작업이 둘 이상이고 슬롯이 있으면 병렬 배정. 순차 진행에는 파일 충돌·선행 작업·공유 자원 같은 구체적인 이유를 기록.”;
+“A가 끝나면 A 리뷰를 시작하고 B 개발은 계속 진행. 전체 구현 완료를 기다리지 않음.”;
+“변경되지 않은 코드의 검증은 재사용하고, 수정된 범위와 영향받는 부분만 다시 검증.”;
+“공유 자원만 순차 사용”; “통합 담당자 지정”;
+“작업 완료 이벤트마다 다음 작업을 즉시 배정.” The user explicitly prefers
+existing WBS/dispatch over a separate large management framework and forbids
+implementation file lists in progress WBS.
+
+Derived mechanics: public `dispatch prepare` takes a caller-observed `host`
+snapshot (capacity, live_agents, reserved_slots, verification_reserve,
+spawn_available, continuation_available) plus execution-only ownership. These
+field names and the stored `execution_admission` are engineering choices, not
+user-requested API requirements. Unique live/reserved IDs include one actual
+coordinator; supported occupied review/QA lenses fulfill the mandatory reserve
+without double counting. Unknown roles consume capacity without claiming
+verification capacity. This is not authentication or a reservation service.
+
+Owner publication binds assignment to the task run, current WBS graph, checks,
+blocks and selected execution ownership. Changing source bytes alone does not
+stale assignment. Prewrite checks current direct assignment or existing exact
+managed lead binding, including micro/maintenance; PLAN/REQ preparation remains
+possible. Routing display reads stored state and does not authenticate runtime
+or acquire integration locks. Missing managed binding is not a permission PASS.
+
+A disjoint ready pair wins over a conflicting broad first request while the
+full request graph remains intact. Serial facts name actual predecessors,
+conflicting outcomes/scopes or observed capacity/capability. Actual pool
+handoffs identify selected managed reservations; parent source remains gated.
+Each lead owns its base commit, branch, checkout, scopes, dependencies and
+acceptance independently. Finished A starts review then QA while B develops.
+One coordinator integrates stopped closed leads serially. A successful partial
+completion explicitly requests fresh host inventory and immediate prepare of
+ready successors; the workflow consumes it without a whole-wave barrier.
+External capacity changes cannot be independently detected by the MCP: the
+host workflow must refresh after completion, release and capability changes.
+
+Existing target applicability and execution result reuse preserve unaffected
+proofs; existing resource/output leases serialize only conflicting VM/display/
+port/build outputs. They do not block independent development or create native
+review/QA receipts. Unmeasured outcomes request measurement, not invented new
+implementation or a replacement pool after integration.
+
+Coverage: `test_public_dispatch_admission_and_completion_refill` exercises real
+public A/B/C lifecycle with isolated task-close fixtures, not native attestation.
+`test_public_direct_assignment_is_fresh_control_not_source_fingerprint` checks
+actual prewrite denial, micro/maintenance, REQ preparation, input changes and
+stale control/ownership. `test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair`
+checks public pair selection without intake truncation. Host inventory reserve
+and unknown-role checks are pinned by
+`test_observed_host_capacity_reserves_real_verification_without_double_count`.

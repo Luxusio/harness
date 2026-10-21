@@ -234,9 +234,9 @@ def test_parallel_fanout_small_task_skip_requires_evidence_and_coordinator_merge
     assert "Merge cost controls batch size only" in body
     assert "does not justify collapsing two or more" in body
     assert "For N>4, spawn batches of up to 4" in body
-    assert "AC ids, estimated lines, estimated runtime" in body
-    assert '`reason:"small-task"`' in body
-    assert "this opt-out is disabled" in body
+    assert "actual predecessor IDs" in body
+    assert '`reason:"small-task"` as an assignment bypass' in body
+    assert "small edit estimate" in body
 
 
 def test_claude_develop_parallelizes_full_suite_verification():
@@ -323,9 +323,9 @@ def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
     assert "state `ac_count`" in body
     assert "`conflict` (specific" in body
     assert "`estimated_lines`, `estimated_seconds`" in body
-    assert "Valid reasons are `spawn_agent-unavailable`, `dependency-conflict`, `small-task`" in body
-    assert "or concrete host-capacity limits from `ready-lanes.md`" in body
-    assert "current host slot inventory" in body
+    assert "structurally derived file collisions, predecessor IDs" in body
+    assert "small-task estimates do not bypass assignment" in body
+    assert "actual host inventory" in body
     assert "actual agent capacity taking precedence" in body
 
 

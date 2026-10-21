@@ -310,7 +310,7 @@ def test_fanout_pairs_test_author_and_reconciles_after_the_batch():
         (
             "the union of `**Files:**` and `**Tests:**` for one AC shares no path "
             "with the union for the other",
-            "computes it from `**Files:**` and `**Tests:**` declarations",
+            "current execution ownership and WBS dependencies",
         ),
         "Component-independent definition",
     )

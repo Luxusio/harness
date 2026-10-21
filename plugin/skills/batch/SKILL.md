@@ -57,7 +57,7 @@ at all.
 Use the existing `wbs` MCP tool for normal WBS-owned execution, not a remembered
 sequence of shell init, worktree creation, result, finish and close commands:
 
-`wbs(action="dispatch", wbs_id=<owning WBS>, operation="prepare", ownership={<pending outcome ID>: [<scope>, ...]}, available_slots=N)`
+`wbs(action="dispatch", wbs_id=<owning WBS>, operation="prepare", ownership={<pending outcome ID>: [<scope>, ...]}, host=<current observed host inventory>)`
 
 `prepare` is the default operation. Initial preparation supplies current
 execution ownership; retries of an already-bound pack may omit it. Reuse the
@@ -77,8 +77,9 @@ its own parent, never an unrelated task. `.claude/worktrees/` must be ignored.
 Claude native `worktree.baseRef` does not select this MCP-owned checkout.
 
 Count coordinators, leads and nested workers against the actual host limit.
-Reserve at least one slot for independent review/QA and pass remaining slots as
-`available_slots` (minimum zero) on every preparation/refill. Default lead cap
+Reserve at least one slot for independent review/QA and pass current `host`
+with unique live/reserved id/role inventories on every preparation/refill.
+The MCP subtracts occupied slots and the remaining verification reserve once. Default lead cap
 is 3, bounded by the configured batch cap and real host capacity. No free slot
 means no spawn. Dependencies and overlapping scopes serialize; dependencies
 release only after their predecessor integrates and cleanup completes.

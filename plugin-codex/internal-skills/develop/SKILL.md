@@ -89,10 +89,10 @@ current `task_id`, state "resuming from prior session" in the conversation.
 
 ### Phase 1: Load plan
 
-Read `doc/harness/tasks/<task_id>/`:
+Micro/maintenance still baseline one concise WBS outcome and publish dispatch prepare before source edits. Read `doc/harness/tasks/<task_id>/`:
 1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
-3. **Resume check:** `PROGRESS.md` -> skip ACs listed in `completed_acs`. For each completed AC, compare target-file mtimes against `PROGRESS.md` mtime; files modified post-PROGRESS -> mark "needs re-verification", do not blindly skip.
+3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
 4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, ask the user (run plan skill / check task_id / abort) via prose.
 
 **Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `${HARNESS_PLUGIN_ROOT}/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using a direct `doc/<area>/REQ__*.md` edit or `${HARNESS_PLUGIN_ROOT}/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
@@ -122,17 +122,17 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Read `ready-lanes.md` for WBS measurement/worktree routing first. Build the contract from PLAN ownership and dependencies before
+Read `ready-lanes.md` and publish current WBS dispatch prepare admission before source edits. Choose execution ownership separately from progress WBS and use concrete dependencies before
 editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
 
-Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/ready-lanes.md` before dispatch. Use `parallel_dispatch.py` with current host slot inventory and the PLAN graph; refresh after each completion. `develop.fanout_cap` applies as on Claude, with actual agent capacity taking precedence.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/ready-lanes.md` before public WBS dispatch prepare with actual host inventory; refresh and consume ready handoffs immediately after each completion. `develop.fanout_cap` applies as on Claude, with actual agent capacity taking precedence.
 
 `Route` is `spawn_agent(worker)` for every disjoint lane; spawn one worker per lane. Use one worker per independent AC. Do not assign multiple independent ACs to one worker. This is capability-gated, not user-request-gated: The user does not need to ask for delegation, `user did not ask for delegation` is an invalid reason, `delegation was not requested` is not a fallback, and Do not wait for the user to request delegation. User request is
 not a condition for parallel routing; this is mandatory capability/task-shape routing.
-Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in task state or final response. Valid reasons are `spawn_agent-unavailable`, `dependency-conflict`, `small-task`, or concrete host-capacity limits from `ready-lanes.md`.
+Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in task state or final response. Use only structurally derived file collisions, predecessor IDs, capability or actual host-capacity facts returned by dispatch prepare; small-task estimates do not bypass assignment.
 Workers read `${HARNESS_PLUGIN_ROOT}/agents/developer.md`, stay inside explicit ownership, do not edit PROGRESS, and return paths/tests/blockers. Prompts must say: return the exact status `needs-coordinator-review` when ownership, lane, or approved scope needs coordinator judgment.
 When an AC declares both `**Files:**` and `**Tests:**` paths (neither `none`), reserve its worker/test-author pair via `ready-lanes.md`; use its explicit unpaired fallback only when host capacity requires it. For a pair, spawn `spawn_agent(task_name="test_author_ac_<NNN>")` with its worker (only digits after `test_author_ac_`, plus `_<n>` on retry, so the watcher infers no lens). The author reads `${HARNESS_PLUGIN_ROOT}/agents/test-author.md` and owns only `**Tests:**`; the worker owns only `**Files:**` and leaves the AC's `Verify:` to the coordinator, overriding developer.md verification for that AC only. After both writers return, run scoped tests and send failures to the owning lane; full-tree `Verify:` waits for all relevant writers.
 Handle `needs-coordinator-review` before generic rollback: never retry with the same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep successful independent siblings promoted.

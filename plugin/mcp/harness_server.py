@@ -2116,9 +2116,14 @@ def handle_task_wbs(args: dict) -> dict:
                             wbs_id="WBS__" + os.path.basename(td)[6:]))
     if action == "dispatch":
         with receipt_stream_transaction(td):
-            if _validated_task_control(td) != control or task_control_status(td, control) != "open":
-                raise ValueError("WBS dispatch requires the same open parent task")
-            return _ok(wbs.work_pack(td, repo, control["run_id"], bind=True, ownership=args.get("ownership")))
+            status = task_control_status(td, control)
+            if (_validated_task_control(td) != control or status not in {"open", "blocked"}
+                    or status == "blocked" and not (wbs.read_state(td) or {}).get("batch")):
+                raise ValueError("WBS dispatch requires the same open task or parked managed parent")
+            if 'handoffs' in args:
+                return _ok(wbs.publish_handoffs(td, control['run_id'], args['expected_admission'], args['handoffs']))
+            return _ok(wbs.work_pack(td, repo, control["run_id"], bind=True,
+                                    ownership=args.get("ownership"), host=args.get("host")))
     if action != "verify":
         raise ValueError("task_wbs action must be context, verify or dispatch")
     timeout = args.get("timeout", 60)
@@ -2140,7 +2145,7 @@ def _managed_dispatch(common: dict, args: dict) -> dict:
         raise ValueError("worktree lifecycle must run from the surviving control checkout")
     operation = args.get("operation", "prepare")
     fields = {
-        "prepare": {"ownership", "available_slots"},
+        "prepare": {"ownership", "host"},
         "status": set(),
         "bind": {"slug", "worker_id"},
         "complete": {"slug", "worker_id", "result", "worker_stopped"},
@@ -2174,33 +2179,49 @@ def _managed_dispatch(common: dict, args: dict) -> dict:
     if "recovery_commit" in args and (not isinstance(args["recovery_commit"], str)
                                      or not re.fullmatch(r"[0-9a-f]{40}", args["recovery_commit"])):
         raise ValueError("recovery_commit must acknowledge the exact reviewed resolved tip SHA")
-    if "available_slots" in args and (type(args["available_slots"]) is not int or args["available_slots"] < 0):
-        raise ValueError("available_slots must be a nonnegative integer")
     td = canonical_task_dir(task_id=common["task_id"], repo_root=repo)
     control = _validated_task_control(td)
     if not control:
         return _invalid_task_control_error("dispatch", td)
     status = task_control_status(td, control)
+    admitted = None
     if operation == "prepare":
+        from parallel_dispatch import host_slots
+        try:
+            host_slots(args.get('host'))
+        except ValueError as exc:
+            return _err(str(exc), data={'field': 'host', 'next_action': 'Supply actual capacity and unique live/reserved id-role inventories, verification reserve and capability booleans.'})
+        if status not in {"open", "blocked"}:
+            raise ValueError("prepare requires an open or parked owning WBS")
+        bound = _invoke("task_wbs", handle_task_wbs, dict(common, action="dispatch",
+                        ownership=args.get("ownership"), host=args.get("host")))
+        if bound.get("isError"):
+            return bound
+        admitted = bound["structuredContent"]
+        if admitted['execution_admission']['mode'] != 'managed':
+            return bound
         if status == "open":
-            bound = _invoke("task_wbs", handle_task_wbs, dict(common, action="dispatch", ownership=args.get("ownership")))
-            if bound.get("isError"):
-                return bound
             parked = _invoke("task_blocked", handle_task_blocked, dict(common,
                 blocked_reason="WBS execution is handed off to its bound isolated worktree pool.",
                 unblock_condition="Integrate and close the exact bound work pack, then reopen this WBS for combined verification."))
             if parked.get("isError"):
                 return parked
-        elif status != "blocked":
-            raise ValueError("prepare requires an open or parked owning WBS")
     elif operation != "status" and status not in {"blocked", "closed"}:
         raise ValueError("park the owning WBS before operating its worktree pool")
     state = wbs.read_state(td)
     if not state or not state.get("batch"):
         raise ValueError("no bound work pack; first dispatch the owning WBS with execution ownership")
-    options = {key: args[key] for key in fields[operation] - {"ownership"} if key in args}
+    options = {key: args[key] for key in fields[operation] - {"ownership", "host"} if key in args}
+    if admitted is not None:
+        options['available_slots'] = admitted['available_slots']
+    capability_deferred = (operation == 'prepare' and admitted is not None
+                           and not (args['host']['spawn_available'] and args['host']['continuation_available']))
     try:
-        body = batch_worktrees.execute(repo, state["batch"], operation=operation, **options)
+        # Keep retained reservations visible, but do not claim or create any
+        # worktree when the fresh host cannot execute its handoff.
+        body = batch_worktrees.execute(repo, state["batch"],
+            operation='status' if capability_deferred else operation,
+            **({} if capability_deferred else options))
     except Exception as exc:
         # Creation can fail after the parent is parked. Preserve the exact
         # bound identity in the response so retry does not invent another pack.
@@ -2209,6 +2230,22 @@ def _managed_dispatch(common: dict, args: dict) -> dict:
             "batch_id": state["batch"]["batch_id"], "operation": operation,
             "next_action": "Inspect dispatch(operation='status') for this same WBS; retain its exact pool and recover or retry the failed operation.",
         })
+    if admitted is not None:
+        published = _invoke('task_wbs', handle_task_wbs, dict(common, action='dispatch',
+                            expected_admission=admitted['execution_admission'],
+                            handoffs=[item['slug'] for item in body['handoffs']]))
+        if published.get('isError'):
+            return published
+        body['execution_admission'] = published['structuredContent']
+    if capability_deferred:
+        body['capability_deferred'] = True
+        body['reasons']['capability'] = admitted['execution_admission']['serial_facts']
+        body['next_action'] = ('Retain the exact pool and existing handoffs; refresh actual host capabilities '
+                               'and prepare again when spawn and continuation are available. Independent running work continues.')
+    if operation in {'complete', 'recover'} and body.get('status') == 'ok':
+        body['refill_required'] = True
+        body['next_action'] = ('Immediately refresh actual host inventory and call dispatch prepare for this same WBS. '
+                               'Bind newly ready handoffs while independent running siblings continue; no wave barrier.')
     body.update(wbs_id="WBS__" + common["task_id"][6:], operation=operation,
                 execution="integrated" if body.get("status") == "closed" else "awaiting_worktrees")
     return _ok(body)
@@ -2287,7 +2324,7 @@ def handle_wbs(args: dict) -> dict:
         "context": ("task_context", set()),
         "plan": ("write_plan", {"plan", "required_lenses"}),
         "check": ("task_wbs", {"timeout"}),
-        "dispatch": ("task_wbs", {"ownership", "operation", "slug", "worker_id", "result", "worker_stopped", "available_slots", "recovery_commit", "scopes", "expected_head", "expected_run_id", "reason"}),
+        "dispatch": ("task_wbs", {"ownership", "operation", "slug", "worker_id", "result", "worker_stopped", "host", "recovery_commit", "scopes", "expected_head", "expected_run_id", "reason"}),
         "verify": ("task_verify", set()),
         "close": ("task_close", set()),
         "block": ("task_blocked", {"blocked_reason", "unblock_condition"}),
@@ -2525,7 +2562,15 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "expected_head": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$", "description": "extend only: exact observed bound worktree HEAD; stale observations refuse."},
          "expected_run_id": {"type": "string", "description": "extend only: exact existing task run, preserved by the grant."},
          "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "extend only: concrete reason for newly discovered execution ownership; grants earn no progress."},
-         "available_slots": {"type": "integer", "minimum": 0, "description": "Actual free host slots after reserving review/QA capacity; bounds prepare reservations."},
+         "host": {"type": "object", "additionalProperties": False,
+                  "required": ["capacity", "live_agents", "reserved_slots", "verification_reserve", "spawn_available", "continuation_available"],
+                  "properties": {
+                      "capacity": {"type": "integer", "minimum": 1, "maximum": 256},
+                      "live_agents": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "object", "required": ["id", "role"], "additionalProperties": False, "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 256}, "role": {"type": "string", "minLength": 1}}}},
+                      "reserved_slots": {"type": "array", "maxItems": 256, "items": {"type": "object", "required": ["id", "role"], "additionalProperties": False, "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 256}, "role": {"type": "string", "minLength": 1}}}},
+                      "verification_reserve": {"type": "integer", "minimum": 1, "maximum": 256},
+                      "spawn_available": {"type": "boolean"}, "continuation_available": {"type": "boolean"}},
+                  "description": "prepare only: current caller-observed capacity, including one live coordinator and distinct actual reservation IDs. Supported occupied review/QA lenses fulfill verification reserve once. Graph/ownership derives direct or managed admission; this is not authentication or a host reservation."},
          "timeout": {"type": "integer", "minimum": 1, "maximum": WBS_CHECK_TIMEOUT_MAX,
                      "description": f"check only: assertion timeout in seconds (1..{WBS_CHECK_TIMEOUT_MAX}, default 60); not accepted by verify or other actions."},
          "apply": {"type": "boolean", "default": False, "description": "Explicitly apply previewed legacy-data migration."},

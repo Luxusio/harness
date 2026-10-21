@@ -52,7 +52,10 @@ def test_context_next_resume_plan_and_dispatch_do_not_hash_source(tmp_path, monk
     assert not call("plan", plan=policy_plan([node("A"), node("B")],
                     dict(source=["src.txt"], deny=["mise.toml", "doc/HANDOFF.md", "target/release/examples/runtime_bench"]))).get("isError")
     state = wbs.read_state(str(td))
-    assert wbs.work_pack(str(td), str(repo), opened["run_id"], ownership={"A": ["src.txt"], "B": ["other.txt"]})
+    from test_managed_wbs import host_snapshot
+    before = (td / "WBS.json").read_bytes()
+    assert wbs.work_pack(str(td), str(repo), opened["run_id"], ownership={"A": ["src.txt"], "B": ["other.txt"]}, host=host_snapshot())
+    assert (td / "WBS.json").read_bytes() == before
     assert call("open")["structuredContent"]["run_id"] == opened["run_id"]
 
 

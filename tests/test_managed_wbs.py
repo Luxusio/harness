@@ -10,6 +10,8 @@ def setup_parent(tmp_path, monkeypatch):
     pool, server = Pool(tmp_path, monkeypatch), HarnessMcpServerTests()
 
     def call(action, **args):
+        if action == 'dispatch' and args.get('operation', 'prepare') == 'prepare' and 'host' not in args and 'available_slots' not in args:
+            args['host'] = host_snapshot()
         return server._call_in_repo(str(pool.repo), "wbs", dict(action=action, wbs_id="managed", **args))
 
     assert not call("open").get("isError")
@@ -20,11 +22,11 @@ def setup_parent(tmp_path, monkeypatch):
 
 def test_public_mcp_owns_creation_and_stopped_completion(tmp_path, monkeypatch):
     pool, call = setup_parent(tmp_path, monkeypatch)
-    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, available_slots=2)
+    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=host_snapshot())
     assert not prepared.get("isError"), prepared
     first = prepared["structuredContent"]
     assert len(first["handoffs"]) == 2
-    repeat = call("dispatch", available_slots=0)
+    repeat = call("dispatch", host=host_snapshot(capacity=2))
     assert not repeat.get("isError"), repeat
     assert {x["worktree"] for x in repeat["structuredContent"]["handoffs"]} == {x["worktree"] for x in first["handoffs"]}
     assert call("context")["structuredContent"]["pending_worktrees"]["pools"]
@@ -70,9 +72,9 @@ def test_invalid_dispatch_arguments_do_not_park_or_create(tmp_path, monkeypatch)
 
 def test_public_conflict_recovery_requires_exact_acknowledged_tip(tmp_path, monkeypatch):
     pool, call = setup_parent(tmp_path, monkeypatch)
-    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, available_slots=1)
+    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=host_snapshot())
     assert not prepared.get("isError"), prepared
-    handoff, = prepared["structuredContent"]["handoffs"]
+    handoff = prepared["structuredContent"]["handoffs"][0]
     slug, worktree = handoff["slug"], Path(handoff["worktree"])
     assert not call("dispatch", operation="bind", slug=slug, worker_id="actual-worker").get("isError")
     (worktree / "a.txt").write_text("lead\n")
@@ -103,9 +105,9 @@ def test_public_conflict_recovery_requires_exact_acknowledged_tip(tmp_path, monk
 
 def test_public_complete_retains_unique_ignored_content(tmp_path, monkeypatch):
     pool, call = setup_parent(tmp_path, monkeypatch)
-    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, available_slots=1)
+    prepared = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=host_snapshot())
     assert not prepared.get("isError"), prepared
-    handoff, = prepared["structuredContent"]["handoffs"]
+    handoff = prepared["structuredContent"]["handoffs"][0]
     slug, worktree = handoff["slug"], Path(handoff["worktree"])
     assert not call("dispatch", operation="bind", slug=slug, worker_id="actual-worker").get("isError")
     (worktree / "a.txt").write_text("lead\n")
@@ -156,6 +158,7 @@ def test_schema_keeps_single_wbs_tool_with_lifecycle_operations():
 
 def test_public_dirty_original_survives_prepare_integrate_and_dispose(tmp_path, monkeypatch):
     pool, call = setup_parent(tmp_path, monkeypatch)
+    _git('config', 'merge.autoStash', 'true', cwd=pool.repo)
     shared = pool.repo / 'shared.txt'
     shared.write_text('staged user version\n')
     _git('add', 'shared.txt', cwd=pool.repo)
@@ -164,7 +167,7 @@ def test_public_dirty_original_survives_prepare_integrate_and_dispose(tmp_path, 
     note.write_bytes(b'untracked user bytes\x00\xff')
     original_index = _git('ls-files', '--stage', '-z', cwd=pool.repo).split('\0')
     original_status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
-    prepared = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, available_slots=2)
+    prepared = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, host=host_snapshot())
     assert not prepared.get('isError'), prepared
     results = []
     for index, handoff in enumerate(prepared['structuredContent']['handoffs']):
@@ -239,10 +242,217 @@ def test_public_dirty_ownership_overlap_refuses_before_parent_park(tmp_path, mon
     original = {name: (parent / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
     user = pool.repo / 'a.txt'
     user.write_bytes(b'uncommitted user implementation\x00\xff')
-    refused = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, available_slots=2)
+    refused = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, host=host_snapshot())
     assert refused.get('isError'), refused
     assert 'overlap' in refused['structuredContent']['error']
     assert all((parent / name).read_bytes() == raw for name, raw in original.items())
     assert not (parent / 'BLOCKED.md').exists()
     assert not (pool.repo / 'doc/harness/runtime/batches').exists()
     assert user.read_bytes() == b'uncommitted user implementation\x00\xff'
+
+
+def host_snapshot(capacity=4, live=()):
+    return dict(capacity=capacity, live_agents=[dict(id='coordinator', role='coordinator'), *live],
+                reserved_slots=[], verification_reserve=1,
+                spawn_available=True, continuation_available=True)
+
+
+def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    nodes = [dict(id=k, title='Observable result ' + k, weight=1,
+                  **({'depends_on': ['A']} if k == 'C' else {})) for k in ('A', 'B', 'C')]
+    assert not call('plan', plan=plan(nodes)).get('isError')
+    prepared = call('dispatch', host=host_snapshot(), ownership={k: [k.lower()+'.py'] for k in ('A', 'B', 'C')})
+    assert not prepared.get('isError'), prepared
+    handoffs = prepared['structuredContent']['handoffs']
+    assert len(handoffs) == 2
+    assert set(prepared['structuredContent']['execution_admission']['selected']) == {x['slug'] for x in handoffs}
+    first, second = handoffs
+    for n, item in enumerate(handoffs):
+        assert not call('dispatch', operation='bind', slug=item['slug'], worker_id='worker-'+str(n)).get('isError')
+    from test_codex_worktree_prewrite import check
+    sibling = Path(second['worktree'])
+    directory = task(sibling, second['slug'])
+    (sibling/'doc/harness/tasks/.active').write_text(str(directory)+'\n')
+    assert check(pool.repo, sibling/'b.py') == {}
+    assert check(pool.repo, sibling/'a.py').get('permissionDecision') == 'deny'
+    worktree = Path(first['worktree'])
+    (worktree / 'a.py').write_text('A reviewed and verified while B develops\n')
+    _git('add', 'a.py', cwd=worktree)
+    _git('commit', '-qm', 'A', '--trailer', 'Harness-Task: '+first['task_id'], cwd=worktree)
+    task(worktree, first['slug'], closed=True)
+    actual = dict(task_id=first['task_id'], worktree=str(worktree), branch=first['branch'],
+                  commit=_head(worktree), verdict='closed', run_id=RUN)
+    done = call('dispatch', operation='complete', slug=first['slug'], worker_id='worker-0',
+                result=actual, worker_stopped=True)
+    assert not done.get('isError'), done
+    assert Path(second['worktree']).is_dir()
+    pool.batch = prepared['structuredContent']['batch_id']
+    for unavailable in ('spawn_available', 'continuation_available'):
+        host = host_snapshot(live=[dict(id='worker-1', role='implementation')])
+        host[unavailable] = False
+        before = pool.state.read_bytes()
+        deferred = call('dispatch', host=host)
+        assert not deferred.get('isError'), deferred
+        body = deferred['structuredContent']
+        assert body['capability_deferred'] is True
+        assert body['handoffs'] == [] and body['execution_admission']['selected'] == []
+        assert body['reasons']['capability'][0][unavailable] is False
+        assert pool.state.read_bytes() == before
+        assert Path(second['worktree']).is_dir()
+    refill = call('dispatch', host=host_snapshot(live=[dict(id='worker-1', role='implementation')]))
+    assert not refill.get('isError'), refill
+    third, = refill['structuredContent']['handoffs']
+    assert refill['structuredContent']['execution_admission']['selected'] == [third['slug']]
+    assert done['structuredContent']['refill_required'] is True
+    assert third['slug'].endswith('-C')
+    assert third['spawn_head'] == _head(pool.repo)
+    pool.batch = prepared['structuredContent']['batch_id']
+    state = pool.state.read_text()
+    assert 'worker-1' in state and '"running"' in state
+
+
+def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_path, monkeypatch):
+    import json
+    import pytest
+    import wbs
+    from test_codex_worktree_prewrite import check
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    nodes = [dict(id='A', title='A', weight=1), dict(id='B', title='B', weight=1, depends_on=['A'])]
+    assert not call('plan', plan=plan(nodes)).get('isError')
+    td = pool.repo / 'doc/harness/tasks/TASK__managed'
+    assert 'deny' == check(pool.repo, pool.repo/'a.py').get('permissionDecision')
+    control = json.loads((td/'TASK.json').read_bytes())
+    control['execution_mode'] = 'micro'
+    (td/'TASK.json').write_text(json.dumps(control))
+    (td/'MAINTENANCE').write_text('Admission gate regression\n')
+    assert 'deny' == check(pool.repo, pool.repo/'a.py').get('permissionDecision')
+    assert check(pool.repo, pool.repo/'doc/harness/REQ__admission.md') == {}
+    assignment = call('dispatch', ownership={'A': ['a.py'], 'B': ['b.py']}, host=host_snapshot())
+    assert not assignment.get('isError'), assignment
+    assert assignment['structuredContent']['execution_admission']['mode'] == 'direct'
+    assert check(pool.repo, pool.repo/'a.py') == {}
+    (pool.repo/'a.py').write_text('source changed\n')
+    assert check(pool.repo, pool.repo/'a.py') == {}
+    assert 'deny' == check(pool.repo, pool.repo/'b.py').get('permissionDecision')
+    before = (td/'WBS.json').read_bytes()
+    state = json.loads(before)
+    for edit in ('nodes', 'checks', 'blocks', 'ownership'):
+        changed = json.loads(before)
+        if edit == 'nodes': changed['nodes'][0]['title'] = 'Changed intent'
+        elif edit == 'checks': changed['checks']['A'] = {'passed': False}
+        elif edit == 'blocks': changed['blocks'] = {'A': dict(reason='actual blocker', unblock_condition='restore capability')}
+        else: changed['execution_admission']['ownership']['A'] = ['b.py']
+        (td/'WBS.json').write_text(json.dumps(changed))
+        with pytest.raises(ValueError, match='missing or stale'):
+            wbs.require_source_assignment(str(pool.repo), 'TASK__managed', 'a.py')
+    (td/'WBS.json').write_bytes(before)
+    assert call('context')['structuredContent']['task_context']['routing']['orchestration_mode'] == 'direct'
+    assert not call('block', blocked_reason='Observed prerequisite unavailable', unblock_condition='Restore that prerequisite').get('isError')
+    assert call('context')['structuredContent']['task_context']['source_write_allowed'] is False
+
+
+def test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair(tmp_path, monkeypatch):
+    import json
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    nodes = [dict(id=k, title=k, weight=1) for k in ('WIDE', 'A', 'B')]
+    assert not call('plan', plan=plan(nodes)).get('isError')
+    result = call('dispatch', host=host_snapshot(), ownership={'A': ['src/a.py'], 'B': ['src/b.py'], 'WIDE': ['src']})
+    assert not result.get('isError'), result
+    body = result['structuredContent']
+    assert {x['slug'].split('-')[-1] for x in body['handoffs']} == {'A', 'B'}
+    assert set(body['execution_admission']['selected']) == {x['slug'] for x in body['handoffs']}
+    state = json.loads((pool.repo/'doc/harness/tasks/TASK__managed/WBS.json').read_bytes())
+    assert len(state['batch']['requests']) == 3
+
+
+def test_standalone_bound_and_resumed_lead_keeps_source_assignment(tmp_path, monkeypatch):
+    import json
+    from test_batch_state import Pool, task, request
+    from test_codex_worktree_prewrite import check
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init([request('a', 'a.py')])
+    assert 'owner_task_id' not in json.loads(pool.state.read_bytes())
+    pool.claim()
+    worktree, branch = pool.bind()
+    directory = task(worktree)
+    (worktree / 'doc/harness/tasks/.active').write_text(str(directory) + '\n')
+    assert check(pool.repo, worktree / 'a.py') == {}
+    assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
+    (worktree / 'a.py').write_text('preserved interrupted source\n')
+    proof = (directory / 'TASK.json').read_bytes()
+    pool.cli('resume', '--slug', 'a', '--worker-stopped')
+    assert check(pool.repo, worktree / 'a.py').get('permissionDecision') == 'deny'
+    pool.cli('bind', '--slug', 'a', '--worker-id', 'replacement',
+             '--worktree', worktree, '--branch', branch)
+    assert check(pool.repo, worktree / 'a.py') == {}
+    assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
+    assert (directory / 'TASK.json').read_bytes() == proof
+    assert (worktree / 'a.py').read_text() == 'preserved interrupted source\n'
+
+
+def _ignore_original_source(pool):
+    ignore = pool.repo / '.gitignore'
+    ignore.write_text(ignore.read_text() + 'src/local.py\n')
+    _git('add', '.gitignore', cwd=pool.repo)
+    _git('commit', '-qm', 'ignore user-local source', cwd=pool.repo)
+    shared = pool.repo / 'shared.txt'
+    shared.write_text('staged user bytes\n')
+    _git('add', 'shared.txt', cwd=pool.repo)
+    shared.write_text('unstaged user bytes\n')
+    return shared
+
+
+def test_public_prepare_preserves_owned_ignored_original(tmp_path, monkeypatch):
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    shared = _ignore_original_source(pool)
+    local = pool.repo / 'src/local.py'
+    local.parent.mkdir()
+    local.write_bytes(b'precious original\x00\xff')
+    original_index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
+    original_head = _head(pool.repo)
+    refused = call('dispatch', ownership={'A': ['src'], 'B': ['b.py']}, host=host_snapshot())
+    assert refused.get('isError') and 'ignored destination content' in str(refused)
+    assert local.read_bytes() == b'precious original\x00\xff'
+    assert shared.read_text() == 'unstaged user bytes\n'
+    assert _git('ls-files', '--stage', '-z', cwd=pool.repo) == original_index
+    assert _head(pool.repo) == original_head
+    assert not (pool.repo / 'doc/harness/runtime/batches').exists()
+
+
+def test_public_native_ff_retains_late_ignored_original_collision(tmp_path, monkeypatch):
+    import batch_finish
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    shared = _ignore_original_source(pool)
+    original_index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
+    original_head = _head(pool.repo)
+    prepared = call('dispatch', ownership={'A': ['src'], 'B': ['b.py']}, host=host_snapshot())
+    assert not prepared.get('isError'), prepared
+    lead = prepared['structuredContent']['handoffs'][0]
+    tree = Path(lead['worktree'])
+    assert not call('dispatch', operation='bind', slug=lead['slug'], worker_id='actual-a').get('isError')
+    source = tree / 'src/local.py'
+    source.parent.mkdir()
+    source.write_text('lead replacement\n')
+    _git('add', '-f', 'src/local.py', cwd=tree)
+    _git('commit', '-qm', 'owned source', '--trailer', 'Harness-Task: '+lead['task_id'], cwd=tree)
+    task(tree, lead['slug'], closed=True)
+    result = dict(task_id=lead['task_id'], worktree=str(tree), branch=lead['branch'],
+                  commit=_head(tree), verdict='closed', run_id=RUN)
+    local = pool.repo / 'src/local.py'
+    original_git = batch_finish._git
+    def collision_at_merge(checkout, *args, **kwargs):
+        if str(checkout) == str(pool.repo) and 'merge' in args:
+            local.parent.mkdir(exist_ok=True)
+            local.write_bytes(b'late precious original\x00\xff')
+        return original_git(checkout, *args, **kwargs)
+    monkeypatch.setattr(batch_finish, '_git', collision_at_merge)
+    refused = call('dispatch', operation='complete', slug=lead['slug'], worker_id='actual-a',
+                   result=result, worker_stopped=True)
+    assert 'local.py' in str(refused) and 'overwritten' in str(refused)
+    assert refused.get('isError') or refused['structuredContent']['status'] in {'kept', 'recovery-required'}
+    assert local.read_bytes() == b'late precious original\x00\xff'
+    assert shared.read_text() == 'unstaged user bytes\n'
+    assert _git('ls-files', '--stage', '-z', cwd=pool.repo) == original_index
+    assert _head(pool.repo) == original_head
+    assert tree.is_dir() and _git('branch', '--list', lead['branch'], cwd=pool.repo)

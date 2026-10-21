@@ -72,6 +72,48 @@ def _overlap(left, right):
                for a in left for b in right)
 
 
+def host_slots(host):
+    """Validate caller-observed capacity; this is not a reservation/auth token."""
+    _require(isinstance(host, dict), 'host must be an object')
+    fields = {'capacity', 'live_agents', 'reserved_slots', 'verification_reserve',
+              'spawn_available', 'continuation_available'}
+    _require(set(host) == fields, 'host fields: missing=' + ','.join(sorted(fields - set(host)))
+             + '; unexpected=' + ','.join(sorted(set(host) - fields)))
+    capacity = _integer(host['capacity'], 'capacity', 1, 256)
+    reserve = _integer(host['verification_reserve'], 'verification_reserve', 1, capacity)
+    from _lib import REVIEW_LENSES, QA_LENSES
+    ids, coordinators, verification = set(), 0, 0
+    for field in ('live_agents', 'reserved_slots'):
+        _require(isinstance(host[field], list), field + ' must be an agent inventory')
+        for agent in host[field]:
+            _require(isinstance(agent, dict) and set(agent) == {'id', 'role'},
+                     'host inventory needs exact id/role')
+            identity, role = agent['id'], agent['role']
+            _require(isinstance(identity, str) and identity == identity.strip() and 0 < len(identity) <= 256
+                     and identity not in ids, 'host agent/reservation IDs must be unique')
+            _require(isinstance(role, str) and bool(role.strip()), 'host agent role required')
+            ids.add(identity)
+            if role == 'coordinator':
+                _require(field == 'live_agents', 'coordinator must occupy a live slot')
+                coordinators += 1
+            verification += role in REVIEW_LENSES | QA_LENSES
+    _require(coordinators == 1, 'include exactly one live coordinator')
+    _require(len(ids) <= capacity, 'host inventory exceeds capacity')
+    for field in ('spawn_available', 'continuation_available'):
+        _require(type(host[field]) is bool, field + ' must be boolean')
+    remaining_reserve = max(0, reserve - verification)
+    return max(0, capacity - len(ids) - remaining_reserve)
+
+
+def independent_order(items, paths):
+    """Prioritize a bounded disjoint pair without rewriting immutable intake."""
+    for index, first in enumerate(items):
+        for second in items[index + 1:]:
+            if not _overlap(paths(first), paths(second)):
+                return [first, second] + [item for item in items if item is not first and item is not second]
+    return list(items)
+
+
 def schedule(snapshot):
     """Return deterministic dispatch groups and an actionable reason per deferred AC."""
     _require(isinstance(snapshot, dict), 'snapshot must be a JSON object')

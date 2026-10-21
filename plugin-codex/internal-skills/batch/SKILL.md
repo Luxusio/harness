@@ -30,8 +30,10 @@ Use the exposed `spawn_agent`, same-agent continuation (`followup_task` or the
 host equivalent), and live-agent inventory. Count the coordinator, running
 leads, nested workers and unreleased finished agents. Leave at least one slot
 for lead review/QA; cap lead admission to the smaller of `batch.max_leads` and
-free slots minus that verification reserve. Pass the nonnegative result as
-`available_slots=N` to each managed `prepare`. Assign nested workers capacity from that same
+free slots minus the remaining verification reserve after counting actual live
+or reserved supported review/QA roles once. Pass current observed `host` capacity,
+live_agents, reserved_slots, verification_reserve, spawn_available and
+continuation_available to each managed `prepare`; do not invent reservations. Assign nested workers capacity from that same
 inventory, never a new per-lead host limit. At a host capacity too small for
 one coordinator, one lead and an independent reviewer, report the capability
 blocker before reservations rather than creating an unfinishable lead.
@@ -46,7 +48,7 @@ specific capability blocker instead of silently marking the pack complete.
 
 ## Bootstrap and bind
 
-1. Call `wbs(action="dispatch", wbs_id=<owner>, operation="prepare", ownership={<pending outcome ID>: [<scope>, ...]}, available_slots=N)`.
+1. Call `wbs(action="dispatch", wbs_id=<owner>, operation="prepare", ownership={<pending outcome ID>: [<scope>, ...]}, host=<current observed host inventory>)`.
    Initial preparation needs execution-only ownership for the pending outcomes;
    retries of the bound pack may omit it. Preparation is the default operation:
    it parks its parent, reserves capacity,

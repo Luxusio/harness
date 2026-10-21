@@ -1,7 +1,7 @@
 ---
 tags: [harness, guide, architecture, lifecycle, onboarding]
 summary: 하네스 전체 동작 안내 — 과제 수명주기, MCP 제어면, 훅과 prewrite gate, 영수증과 마감 게이트, 스킬 단계, 에이전트와 lens, Goal, batch 병렬 모드, 설치·setup·manifest, 계약, 메모리·학습, Claude/Codex 차이.
-updated: 2026-10-20
+updated: 2026-10-21
 freshness: current
 invalidated_by_paths:
   - .claude-plugin/marketplace.json
@@ -586,7 +586,7 @@ task dir, scaffold와 focus 마커는 task root에 쓰인다. 공개 WBS는 requ
 `emit_compact_context`가 만드는 필드(`_lib.py:4843-4968`):
 
 - `status`, `routing`, `runtime_verdict`
-- `source_write_allowed`: PLAN.md가 있거나 micro면 true
+- `source_write_allowed`: 열린 과제의 최신 direct 실행 배정일 때 true. 관리형 lead의 상태 조회는 런타임 소유권을 인증하지 않으므로 미확인(null)이며 실제 prewrite가 기존 pool binding을 검사한다. PLAN·micro만으로 소스 수정 권한이 생기지 않는다.
 - `why_source_write_blocked`, `review_verdict`, required lenses
 - `missing_for_close`, `next_action`, `report_path`
 - `effective_close_gate`: `micro` 또는 `standard`
@@ -597,8 +597,8 @@ task dir, scaffold와 focus 마커는 task root에 쓰인다. 공개 WBS는 requ
 - `workflow_locked`
 - `risk_level`: maintenance면 `high`, 아니면 `medium`
 - `execution_mode`
-- `orchestration_mode: "solo"`
-- `planning_mode`: micro면 `skipped`
+- `orchestration_mode`: 저장된 실행 배정에서 `unassigned`, `direct`, `managed`, `verification`, `blocked`를 계산한다. 조회는 Git·실행 인증·통합 잠금을 추가하지 않는다.
+- `planning_mode`: micro면 긴 계획 단계는 `skipped`이지만 최소 WBS baseline과 dispatch prepare는 필요하다.
 
 > plan `intake.md:59`는 `ui_scope`, `must_read`, `compat.execution_mode`도 읽으라고 하지만, `compile_routing`은 이 필드들을 돌려주지 않는다.
 
@@ -1332,11 +1332,11 @@ full:    0 → 1: deferred-scope.md 생성, 전제 추출, 코디네이터가 pl
 | 8.6 | 변경 경로 → doc root 매핑, Known ceiling 복사, `wbs(action="verify")` 재호출. REQ/GUIDE/ADR/POLICY가 바뀌었거나 과제에 명시적인 durable 사용자 교정이 있으면 documentation-review를 스폰한다. Retrospective REQ pass가 만든 `status: candidate` REQ는 close를 막지 않는다. 바뀐 REQ의 관찰 가능한 동작이 모호하면 FAIL | `:481-493` |
 | 8.7 | `doc/changes/<date>-<slug>.md` | `:495-496` |
 
-**Phase 3.0 순차 route.** develop/SKILL.md는 route로 `Agent(...)`, `sequential-prelude`, `sequential-dependent`만 허용한다(`:151`). parallel-fanout.md는 여기에 `sequential-small-task`를 더한다. 이 route는 lane 표에 `reason:"small-task"`, `estimated_lines`, `estimated_seconds`를 적어야 하고, 합계 10줄 미만이면서 약 15초 이내로 추정될 때만 쓸 수 있다. 사용자가 공격적 병렬을 요청하면 쓸 수 없다(`parallel-fanout.md:221-227, 247-250`). 두 파일의 어휘 차이는 §7.9에 있다.
+**Phase 3.0 실행 배정.** 기존 WBS `dispatch prepare`가 현재 host 관측값과 실행 소유권·의존 관계로 direct/managed를 결정한다. 독립 ready 항목이 둘 이상이고 슬롯이 있으면 각 관리형 worktree에 즉시 배정한다. 순차 사유는 실제 선행 ID·충돌 경로·자원·가용 슬롯이며 small-task 추정은 우회 사유가 아니다. 파일 목록은 진행률 WBS가 아니라 실행 시점 소유권에 둔다. A의 리뷰·QA는 B 개발과 독립적으로 진행하고, 한 통합 담당자가 완료 결과를 순차 통합한 뒤 최신 host inventory로 즉시 prepare/refill한다(`develop/ready-lanes.md`).
 
 **8과 8.5-8.7의 순서.** 스킬 본문이 모순된다. `:80`은 "Phases run in strict order"라고 하는데, 번호와 위치가 8.5보다 앞선 Phase 8이 "Call `wbs(action="close")`"라고 한다(`:433`). 반면 8.5("record it before close", `:459-461`)와 8.6("cannot close with unresolved durable-doc gaps", "Call wbs verify", `:482, :489-490`)은 close 전에 해야 하는 일처럼 쓰여 있다. 이 문서는 8.5·8.6의 문구를 따라 **8.5-8.7을 `wbs(action="close")` 전에 한다**고 해석한다(§7.9).
 
-**병렬 규칙**(`parallel-fanout.md` Batch cap): Phase 3.0은 AC lane을 기본 4개씩 실행한다. manifest `develop.fanout_cap` 정수 1–8을 쓰며 8 초과는 8, 누락·그 밖의 값은 4다. cap은 에이전트 수가 아니라 AC lane 수이며 paired test-author는 같은 lane에 속한다. AC마다 `Files`, `Tests`, `Depends on`, `Verify`를 선언하고 소유 경로를 겹치지 않게 나눈다. 공용 선행 변경은 별도 AC로 끝낸 뒤 소비 AC를 실행한다. test-author는 PLAN 의도에서 Tests 경로만 작성하며 해당 AC의 두 writer가 돌아오면 코디네이터가 scoped 검증을 실행한다. full-tree Verify는 관련 writer가 모두 끝난 뒤 실행한다. 실제 host slot inventory에는 coordinator, paired writer, nested worker와 아직 해제되지 않은 슬롯을 모두 세며, 완료된 AC 뒤에는 독립 ready lane을 즉시 채운다. ac-worker는 자기 Files를 최대 3개의 한 단계 sub-worker로 나눌 수 있지만 오직 `harness:ac-worker`만 스폰하고, sub-worker는 추가 스폰이나 형제 작성 중 전체 AC Verify를 하지 않는다. `name=`은 넘기지 않는다. 근거: [병렬 폭 ADR](patterns/ADR__within-task-parallel-width.md), `plan/write-artifacts.md` Per-AC shape, `agents/ac-worker.md` Sub-split.
+**병렬 규칙**(`parallel-fanout.md` Batch cap): Phase 3.0은 AC lane을 기본 4개씩 실행한다. manifest `develop.fanout_cap` 정수 1–8을 쓰며 8 초과는 8, 누락·그 밖의 값은 4다. cap은 에이전트 수가 아니라 AC lane 수이며 paired test-author는 같은 lane에 속한다. 진행률 WBS에는 성과·의존·수용 조건을 두고 실제 배정 때 실행 소유 경로를 나눈다. 공용 선행 변경은 별도 AC로 끝낸 뒤 소비 AC를 실행한다. test-author는 PLAN 의도에서 Tests 경로만 작성하며 해당 AC의 두 writer가 돌아오면 코디네이터가 scoped 검증을 실행한다. full-tree Verify는 관련 writer가 모두 끝난 뒤 실행한다. 실제 host slot inventory에는 coordinator, paired writer, nested worker와 아직 해제되지 않은 슬롯을 모두 세며, 완료된 AC 뒤에는 독립 ready lane을 즉시 채운다. ac-worker는 자기 Files를 최대 3개의 한 단계 sub-worker로 나눌 수 있지만 오직 `harness:ac-worker`만 스폰하고, sub-worker는 추가 스폰이나 형제 작성 중 전체 AC Verify를 하지 않는다. `name=`은 넘기지 않는다. 근거: [병렬 폭 ADR](patterns/ADR__within-task-parallel-width.md), `plan/write-artifacts.md` Per-AC shape, `agents/ac-worker.md` Sub-split.
 
 ### 7.5 Phase 6.6 리뷰: 깊이, hunter, formal reviewer
 
@@ -1428,7 +1428,7 @@ FIX_NOW → 깊이 과소 분류나 STANDARD focus 오류이면 코디네이터�
 - `develop/SKILL.md:252`은 3.9 smoke를 qa-* 안에서 돌린다고 한다. 6.6 이전에 스폰한 qa-*의 PASS는 영원히 인정되지 않는다. 반대로 FAIL/BLOCKED_ENV는 순서와 관계없이 즉시 runtime_verdict를 FAIL/BLOCKED_ENV로 만든다. 같은 lens가 다시 시작되어 가장 새 행이 `started`가 되면 이 값은 가려지고, 재실행 동안 runtime_verdict는 PENDING이다. 그 뒤에는 읽을 수 있는 새 completion이 결과를 대신한다. `shape` 계열 PENDING completion은 앞선 FAIL/BLOCKED_ENV를 대신하지 못한다(§6.7, `_lib.py:4313-4322, 4453-4485, 4598-4637`, §6.8).
 - develop 8/8.5-8.7의 순서가 모순된다(§7.4). `:80` strict order + `:433` Phase 8의 WBS close vs `:459-461, :482, :489-490`.
 - `self-improvement.md:61-71`의 manifest 자동 수정은 close 뒤에 실행되지만, prewrite gate가 막는다(§7.8). 실제로 하려면 MAINTENANCE 마커가 있는 활성 과제 안에서 쓰거나 후속 과제로 넘겨야 한다. Bash로 gate를 우회하는 것은 CONTRACTS.md § 0이 hard failure로 규정한다.
-- route 어휘가 다르다. `develop/SKILL.md:151`에는 `sequential-small-task`가 없고 `parallel-fanout.md`에는 있다(§7.4). `parallel-fanout.md`의 Phase 4.5 행은 "security" 조건부 specialist를 나열하지만 `quality-audit-pipeline.md` § 4.5에는 그것이 없다(`quality-audit-pipeline.md:7-21`).
+- 실행 배정은 현재 공통 dispatch prepare를 따른다(§7.4). `parallel-fanout.md`의 Phase 4.5 행은 "security" 조건부 specialist를 나열하지만 `quality-audit-pipeline.md` § 4.5에는 그것이 없다(`quality-audit-pipeline.md:7-21`).
 - `develop/SKILL.md:188`의 "forbidden → BLOCK"은 소스 확장자 파일에만 강제된다(§5.6).
 - **도구 허용 목록.** run/develop/plan과 developer는 단일 WBS 도구를 허용한다. 추가 task/Goal MCP 별칭이 필요하지 않다.
 - **도구 이름 하드코딩.** 스킬 본문은 `mcp__plugin_harness_harness__*`를 하드코딩한다. 사용자 수준 서버만 등록된 환경(도구 이름 `mcp__harness__*`)에서는 이름이 맞지 않는다(`plan/intake.md:57`).

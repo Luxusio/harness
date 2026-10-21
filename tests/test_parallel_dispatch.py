@@ -242,3 +242,32 @@ def pytest_generate_tests(metafunc):
     for names, values in cases.items():
         if all(name in metafunc.fixturenames for name in names.split(',')):
             metafunc.parametrize(names, values)
+
+
+def test_observed_host_capacity_reserves_real_verification_without_double_count():
+    import pytest
+    host = dict(capacity=5, live_agents=[dict(id='root', role='coordinator')],
+                reserved_slots=[], verification_reserve=1,
+                spawn_available=True, continuation_available=True)
+    assert dispatcher.host_slots(host) == 3
+    host['live_agents'].append(dict(id='qa', role='qa-cli'))
+    assert dispatcher.host_slots(host) == 3
+    host['reserved_slots'] = [dict(id='held', role='implementation')]
+    assert dispatcher.host_slots(host) == 2
+    host['live_agents'][-1]['role'] = 'qa-placeholder'
+    assert dispatcher.host_slots(host) == 1
+    for change in (dict(verification_reserve=0), dict(capacity=True),
+                   dict(reserved_slots=[dict(id='root', role='implementation')]),
+                   dict(live_agents=[]), dict(spawn_available=1)):
+        invalid = {**host, **change}
+        with pytest.raises(dispatcher.DispatchError):
+            dispatcher.host_slots(invalid)
+
+
+def test_wide_first_does_not_prevent_a_ready_disjoint_pair():
+    data = [dict(id='wide', paths=['src']), dict(id='a', paths=['src/a']),
+            dict(id='b', paths=['src/b'])]
+    original = copy.deepcopy(data)
+    ordered = dispatcher.independent_order(data, lambda x: x['paths'])
+    assert [x['id'] for x in ordered] == ['a', 'b', 'wide']
+    assert data == original

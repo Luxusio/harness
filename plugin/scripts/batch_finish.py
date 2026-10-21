@@ -222,6 +222,16 @@ def require_disjoint_dirty(repo, scopes):
     roots = [os.path.relpath(scope, repo).replace(os.sep, '/') for scope in scopes]
     if not roots or any(root == '..' or root.startswith('../') for root in roots):
         raise FinishError('invalid destination ownership scopes')
+    # Scope the query and collapse ignored directories; do not walk every
+    # ignored build/cache tree or treat unrelated ignored data as disposable.
+    ignored = _git_out(repo, '--no-optional-locks', 'ls-files', '--others', '--ignored',
+                       '--exclude-standard', '--directory', '-z', '--',
+                       *(':(literal)' + root for root in roots)).split('\0')
+    for path in filter(None, ignored):
+        if '\ufffd' in path:
+            raise FinishError('unreadable ignored destination path; preserve user content')
+        raise FinishError('ignored destination content overlaps request ownership at ' + repr(path)
+                          + '; preserve it and choose disjoint scopes before integration')
     for path in paths:
         if any(root == '.' or paths_overlap(path, root) for root in roots):
             raise FinishError('destination user changes overlap request ownership at ' + repr(path)
@@ -533,9 +543,9 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
             except FinishError as exc:
                 raise Outcome('ff-refused', str(exc)) from exc
             merged = _git(repo, *(["-c", "submodule.recurse=false"] if submodules is not None else []),
-                          "merge", "--ff-only", ref)
+                          "merge", "--ff-only", "--no-overwrite-ignore", "--no-autostash", ref)
             if merged.returncode != 0:
-                raise Outcome("ff-refused", f"`git merge --ff-only {ref}` refused: {_detail(merged)}")
+                raise Outcome("ff-refused", f"`git merge --ff-only --no-overwrite-ignore --no-autostash {ref}` refused: {_detail(merged)}")
             _check_main_ref(repo, main_ref)
             head = _git_out(repo, "rev-parse", "--verify", main_ref).strip()
             if head != result["branch_tip"]:

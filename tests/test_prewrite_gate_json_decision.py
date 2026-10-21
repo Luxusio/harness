@@ -6,6 +6,7 @@ Uses real subprocess invocation — no mocks.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import os
 import re
 import subprocess
@@ -31,6 +32,17 @@ TAIL_RE = re.compile(
 )
 
 
+@contextmanager
+def _isolated_task(name, *, plan=True, maintenance=False):
+    from test_prewrite_gate_dormant import _write_task_state
+    with tempfile.TemporaryDirectory() as tmp:
+        root = make_tmp_harness_root(tmp)
+        with scratch_task_in_real_repo(name, repo_root=root, plan=plan,
+                                       maintenance=maintenance) as task_dir:
+            _write_task_state(os.path.dirname(task_dir), name, "open")
+            yield root, task_dir
+
+
 class TestAllowSilent(unittest.TestCase):
     def test_non_write_tool_is_silent(self):
         r = invoke_hook(GATE, "Read", {"file_path": "/tmp/x"})
@@ -48,19 +60,19 @@ class TestAllowSilent(unittest.TestCase):
         self.assertEqual(r.stdout, "")
 
     def test_unrelated_review_detail_basename_is_not_harness_owned(self):
-        with scratch_task_in_real_repo("pr1-unrelated-review-detail"):
-            target = os.path.join(REPO_ROOT, "app/data/REVIEWS.jsonl")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+        with _isolated_task("pr1-unrelated-review-detail") as (root, task_dir):
+            target = os.path.join(root, "app/data/REVIEWS.jsonl")
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
     def test_nested_task_looking_review_detail_path_is_not_harness_owned(self):
-        with scratch_task_in_real_repo("pr1-nested-review-detail"):
+        with _isolated_task("pr1-nested-review-detail") as (root, task_dir):
             target = os.path.join(
-                REPO_ROOT,
+                root,
                 "fixtures/doc/harness/tasks/TASK__sample/REVIEWS.jsonl",
             )
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
@@ -115,9 +127,9 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertIn("runtime-owned receipt provenance", reason)
 
     def test_write_plan_md_inside_task_denies(self):
-        with scratch_task_in_real_repo("pr1-protected") as task_dir:
+        with _isolated_task("pr1-protected") as (root, task_dir):
             plan = os.path.join(task_dir, "PLAN.md")
-            r = invoke_hook(GATE, "Write", {"file_path": plan})
+            r = invoke_hook(GATE, "Write", {"file_path": plan}, cwd=root)
             self.assertEqual(r.returncode, 0)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
@@ -127,9 +139,9 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertIn("HARNESS_SKIP_PREWRITE", reason)
 
     def test_write_review_detail_inside_task_denies_with_shared_writer_owner(self):
-        with scratch_task_in_real_repo("pr1-review-detail") as task_dir:
+        with _isolated_task("pr1-review-detail") as (root, task_dir):
             target = os.path.join(task_dir, "REVIEWS.jsonl")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("C-05-protected-artifact", reason)
@@ -137,12 +149,12 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertIn("shared review-detail writer", reason)
 
     def test_symlink_alias_to_task_review_detail_is_still_protected(self):
-        with scratch_task_in_real_repo("pr1-review-detail-alias") as task_dir, \
-             tempfile.TemporaryDirectory(dir=REPO_ROOT) as alias_parent:
+        with _isolated_task("pr1-review-detail-alias") as (root, task_dir), \
+             tempfile.TemporaryDirectory(dir=root) as alias_parent:
             alias = os.path.join(alias_parent, "task-alias")
             os.symlink(task_dir, alias, target_is_directory=True)
             target = os.path.join(alias, "REVIEWS.jsonl")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         decision, reason = parse_decision(r.stdout)
         self.assertEqual(decision, "deny")
         self.assertIn("C-05-protected-artifact", reason)
@@ -159,15 +171,15 @@ class TestMultiEdit(unittest.TestCase):
 
     def test_multiedit_triggers_gate(self):
         """MultiEdit on a protected artifact must deny."""
-        with scratch_task_in_real_repo("pr1-multiedit") as task_dir:
+        with _isolated_task("pr1-multiedit") as (root, task_dir):
             plan = os.path.join(task_dir, "PLAN.md")
-            r = invoke_hook(GATE, "MultiEdit", {"file_path": plan})
+            r = invoke_hook(GATE, "MultiEdit", {"file_path": plan}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("PLAN.md", reason)
 
     def test_codex_apply_patch_checks_every_target(self):
-        with scratch_task_in_real_repo("pr1-apply-patch") as task_dir:
+        with _isolated_task("pr1-apply-patch") as (root, task_dir):
             plan = os.path.join(task_dir, "PLAN.md")
             patch = (
                 "*** Begin Patch\n"
@@ -177,13 +189,13 @@ class TestMultiEdit(unittest.TestCase):
                 "@@\n-old\n+new\n"
                 "*** End Patch"
             )
-            r = invoke_hook(GATE, "apply_patch", {"patch": patch})
+            r = invoke_hook(GATE, "apply_patch", {"patch": patch}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("PLAN.md", reason)
 
     def test_codex_apply_patch_crlf_target_is_not_bypassed(self):
-        with scratch_task_in_real_repo("pr1-apply-patch-crlf") as task_dir:
+        with _isolated_task("pr1-apply-patch-crlf") as (root, task_dir):
             plan = os.path.join(task_dir, "PLAN.md")
             patch = (
                 "*** Begin Patch\r\n"
@@ -193,7 +205,7 @@ class TestMultiEdit(unittest.TestCase):
                 "@@\r\n-old\r\n+new\r\n"
                 "*** End Patch\r\n"
             )
-            r = invoke_hook(GATE, "apply_patch", {"patch": patch})
+            r = invoke_hook(GATE, "apply_patch", {"patch": patch}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("PLAN.md", reason)
@@ -201,38 +213,42 @@ class TestMultiEdit(unittest.TestCase):
 
 class TestPlanFirst(unittest.TestCase):
     def test_no_plan_blocks_source_write(self):
-        with scratch_task_in_real_repo("pr1-noplan", plan=False) as task_dir:
+        with _isolated_task("pr1-noplan", plan=False) as (root, task_dir):
             # write target outside the task dir (source file)
-            target = os.path.join(REPO_ROOT, "some_src.py")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+            target = os.path.join(root, "some_src.py")
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("C-02-plan-first", reason)
 
     def test_maintenance_bypass_allows_source_write(self):
-        with scratch_task_in_real_repo("pr1-maint", plan=False, maintenance=True):
-            target = os.path.join(REPO_ROOT, "tmp_src.py")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
-            # MAINTENANCE marker → allow even without PLAN.md (source file path)
+        with _isolated_task("pr1-maint", plan=False, maintenance=True) as (root, task_dir):
+            target = os.path.join(root, "tmp_src.py")
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
+            # Maintenance skips the long plan, never execution assignment.
             self.assertEqual(r.returncode, 0)
-            self.assertEqual(r.stdout, "")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("wbs-execution-assignment", reason)
 
 
 class TestWorkflowControlSurface(unittest.TestCase):
     def test_non_maintenance_task_blocks_hooks_json(self):
-        with scratch_task_in_real_repo("pr1-wcs") as task_dir:
-            target = os.path.join(REPO_ROOT, "plugin/hooks/hooks.json")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+        with _isolated_task("pr1-wcs") as (root, task_dir):
+            target = os.path.join(root, "plugin/hooks/hooks.json")
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("workflow-control-surface", reason)
 
     def test_maintenance_task_allows_hooks_json(self):
-        with scratch_task_in_real_repo("pr1-wcs-maint", maintenance=True):
-            target = os.path.join(REPO_ROOT, "plugin/hooks/hooks.json")
-            r = invoke_hook(GATE, "Write", {"file_path": target})
+        with _isolated_task("pr1-wcs-maint", maintenance=True) as (root, task_dir):
+            target = os.path.join(root, "plugin/hooks/hooks.json")
+            r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
             self.assertEqual(r.returncode, 0)
-            self.assertEqual(r.stdout, "")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("wbs-execution-assignment", reason)
 
 
 class TestEnvEscape(unittest.TestCase):
@@ -282,10 +298,10 @@ class TestFailSafe(unittest.TestCase):
 
 class TestReasonFormat(unittest.TestCase):
     def test_every_deny_has_structured_tail(self):
-        with scratch_task_in_real_repo("pr1-tail") as task_dir:
+        with _isolated_task("pr1-tail") as (root, task_dir):
             for basename in ("PLAN.md", "RECEIPTS.jsonl", "REVIEWS.jsonl"):
                 target = os.path.join(task_dir, basename)
-                r = invoke_hook(GATE, "Write", {"file_path": target})
+                r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
                 decision, reason = parse_decision(r.stdout)
                 self.assertEqual(decision, "deny", f"{basename} did not deny")
                 self.assertRegex(reason, TAIL_RE,

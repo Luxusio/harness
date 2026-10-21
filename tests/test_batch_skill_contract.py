@@ -329,7 +329,7 @@ def test_pool_reserves_and_binds_before_authorizing_exact_worker():
 def test_pool_capacity_refill_and_serial_integration_keep_lifecycle_gates():
     _assert_all(_text(BATCH_SKILL), (
         "Default lead cap is 3", "Reserve at least one slot for independent review/QA",
-        "available_slots` (minimum zero)", "No free slot means no spawn",
+        "unique live/reserved id/role inventories", "No free slot means no spawn",
         "Integrate completed leads in completion order and refill through `prepare` without a whole-wave barrier",
         "Never run integrations concurrently",
         "dependencies release only after their predecessor integrates and cleanup completes",

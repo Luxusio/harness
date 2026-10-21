@@ -215,7 +215,8 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             })
             self.assertEqual(r.returncode, 0)
             decision, reason = _parse_decision(r.stdout)
-            self.assertNotEqual(decision, "deny", reason)
+            self.assertEqual(decision, "deny", reason)
+            self.assertIn("wbs-execution-assignment", reason)
 
     def test_micro_task_without_plan_is_recognized_from_nested_worktree(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -247,7 +248,8 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
 
             self.assertEqual(r.returncode, 0)
             decision, reason = _parse_decision(r.stdout)
-            self.assertNotEqual(decision, "deny", reason)
+            self.assertEqual(decision, "deny", reason)
+            self.assertIn("wbs-execution-assignment", reason)
             self.assertFalse(os.path.exists(os.path.join(task_dir, "PLAN.md")))
 
 if __name__ == "__main__":

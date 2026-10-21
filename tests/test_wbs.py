@@ -128,10 +128,10 @@ def test_dependency_must_be_verified_and_work_pack_preserves_graph(tmp_path):
     repo, td = baseline(tmp_path, [node("A"), node("B", depends_on=["A"])])
     with pytest.raises(ValueError, match="dependencies"):
         check(repo, td, "B")
-    pack = wbs.work_pack(str(td), str(repo), "run", ownership={"A": ["a.txt"], "B": ["b.txt"]})
-    first, second = pack["requests"]
-    assert second["depends_on"] == [first["slug"]]
-    assert "park" in pack["next_action"]
+    pack = wbs.work_pack(str(td), str(repo), "run", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
+    assert pack['route'] == 'direct'
+    assert pack['execution_admission']['selected'] == ['A']
+    assert dict(kind='dependency', outcome='B', predecessors=['A']) in pack['execution_admission']['serial_facts']
     check(repo, td)
     assert check(repo, td, "B")["passed"]
 
@@ -199,11 +199,11 @@ def test_dispatch_bounds_combined_evidence_not_only_the_pack(tmp_path, monkeypat
     repo, td = baseline(tmp_path, [node("A"), node("B")])
     import work_pack
     import batch_state
-    monkeypatch.setattr(batch_state, "main_boundary", lambda repo: None)
+    monkeypatch.setattr(batch_state, "main_boundary", lambda repo, **kwargs: None)
     monkeypatch.setattr(work_pack, "make_spec", lambda *args: dict(batch_id="test", requests=[], padding="x" * 1050000))
     before = (td / "WBS.json").read_bytes()
     with pytest.raises(ValueError, match="storage budget"):
-        wbs.work_pack(str(td), str(repo), "run", bind=True, ownership={"A": ["a.txt"], "B": ["b.txt"]})
+        wbs.work_pack(str(td), str(repo), "run", bind=True, ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
     assert (td / "WBS.json").read_bytes() == before
 
 
@@ -327,7 +327,7 @@ def test_public_dispatch_performs_parent_handoff_without_another_lifecycle(tmp_p
     nodes = [dict(id="A", title="First observable result", weight=1),
              dict(id="B", title="Second observable result", weight=1)]
     assert not call("plan", wbs_id=root, plan=plan(nodes)).get("isError")
-    result = call("dispatch", wbs_id=root, ownership={"A": ["a.txt"], "B": ["b.txt"]})
+    result = call("dispatch", wbs_id=root, ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
     assert not result.get("isError"), result
     assert result["structuredContent"]["execution"] == "awaiting_worktrees"
     assert call("context", wbs_id=root)["structuredContent"]["task_context"]["status"] == "blocked"
@@ -347,7 +347,7 @@ def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, mo
                   check=[sys.executable, "-c", "from pathlib import Path; assert Path('" + key.lower() + ".txt').read_text() == 'done'"])
              for key in ("A", "B")]
     assert not call("write_plan", task_id="parent", plan=plan(nodes)).get("isError")
-    result = call("task_wbs", task_id="parent", action="dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]})
+    result = call("task_wbs", task_id="parent", action="dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
     assert not result.get("isError"), result
     pack = result["structuredContent"]
     pool.batch = pack["batch_id"]

@@ -797,6 +797,11 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             )
             _deny("workflow-control-surface", file_path, "maintain-skill", human, repo_root)
             return 0
+        try:
+            from wbs import require_source_assignment
+            require_source_assignment(repo_root, os.path.basename(active_dir), _rel(file_path, repo_root))
+        except (OSError, ValueError, RuntimeError) as exc:
+            _deny("wbs-execution-assignment", file_path, "task-control-mcp", str(exc), repo_root)
         return 0
 
     # Source files require an active task with PLAN.md.
@@ -876,6 +881,11 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
     except Exception as exc:
         _log_gate_parse_fail(repo_root, f"scope-lock enforcement error: {exc}")
 
+    try:
+        from wbs import require_source_assignment
+        require_source_assignment(repo_root, os.path.basename(active_dir), rel)
+    except (OSError, ValueError, RuntimeError) as exc:
+        _deny("wbs-execution-assignment", file_path, "task-control-mcp", str(exc), repo_root)
     return 0
 
 

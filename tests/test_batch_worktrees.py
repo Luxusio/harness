@@ -35,7 +35,7 @@ def test_prepare_replay_and_exact_native_bind(tmp_path, monkeypatch):
     pool, spec = setup(tmp_path, monkeypatch)
     first = call(pool, spec, available_slots=1)
     handoff, = first['handoffs']
-    assert first['reasons'] == {'b': 'capacity'}
+    assert first['reasons']['b'].startswith('capacity: available=0')
     assert Path(handoff['worktree']).is_dir()
     assert Path(handoff['worktree'], '.harness-batch-bootstrap').is_file()
     replay = call(pool, spec, available_slots=0)
@@ -183,7 +183,7 @@ m.execute(sys.argv[2],spec,available_slots=1)
 def test_dependency_waits_and_readonly_status_preserves_state(tmp_path, monkeypatch):
     pool, spec = setup(tmp_path, monkeypatch, [request('a'), request('b', dependencies=['a'])])
     response = call(pool, spec)
-    assert response['reasons'] == {'b':'dependencies'}
+    assert response['reasons']['b'].startswith('dependencies: a')
     before = pool.state.read_bytes()
     response = call(pool, spec, operation='status')
     assert len(response['handoffs']) == 1

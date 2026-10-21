@@ -6,6 +6,15 @@ This sub-file covers Phase 3.0 / Phase 4.5 / Phase 6.6 / Phase 7 / Phase 7.7 par
 
 ## Parallel Fanout Convention
 
+For development, `ready-lanes.md` and public WBS `dispatch prepare` own the
+source assignment. Independent ready outcomes use managed worktrees, with
+execution ownership separate from progress WBS. Host observations and concrete
+serial facts replace optional small-task fallbacks. Start each finished lead's
+review/QA while siblings develop; after completion refresh host inventory and
+prepare the next ready lane immediately. Existing resource leases serialize
+only their conflicting execution, and one coordinator integrates serially.
+This takes precedence over older within-task fanout examples below.
+
 The orchestrator uses three Claude Code primitives. Pick the smallest primitive
 type that fits the work; do not reduce worker count for independent ACs.
 Parallel is the default posture. Mandatory parallel delegation is
@@ -13,8 +22,7 @@ capability/task-shape based: when `Agent(...)` is available and the work has
 independent lanes, spawn one worker per lane. This is mandatory
 capability/task-shape routing; the user does not need to request delegation.
 "User did not ask for delegation" is an invalid skip rationale. Sequential
-execution needs a declared dependency, unavailable Agent tool, or the narrow
-small-task exception below, and any sequential fallback after a matched fanout
+execution needs a declared dependency, unavailable Agent tool, or actual observed host/resource capacity, and any sequential fallback after a matched fanout
 trigger must be stated in the lane table before editing.
 Do not wait for the user to request delegation. User request is not a condition
 for parallel routing.
@@ -220,20 +228,19 @@ selected hunter attempts.
 
 Two ACs are **component-independent** iff one of the following holds:
 
-1. Their PLAN target file sets are disjoint: the union of `**Files:**` and
+1. Their current execution ownership sets are disjoint: the union of `**Files:**` and
    `**Tests:**` for one AC shares no path with the union for the other (A's
    `**Tests:**` must not overlap B's `**Files:**` either).
 2. Any shared file is factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
 
-Component-independence is a property of the PLAN AC matrix, not of the diff. The orchestrator computes it from `**Files:**` and `**Tests:**` declarations in PLAN.md, not from `git diff --name-only`. If the matrix is ambiguous, write an explicit dependency matrix artifact and flag the ambiguity as a Plan Challenge for the next plan cycle. Then run sequentially by declared dependency. Do not assign multiple possibly-independent ACs to one executor as a silent fallback.
+Component-independence uses the current execution ownership and WBS dependencies, not a mandatory initial file layout or the current diff. Resolve ambiguous ownership at dispatch time; declare actual prerequisites without inventing a progress-document artifact. Do not silently combine independent ready outcomes into one executor.
 
 ### Small-task edge case
 
-If the matrix says fanout but total edit volume is trivial (<10 lines combined,
-~15s total work), sequential is acceptable only with a concrete lane-table
-reason: AC ids, estimated lines, estimated runtime, and `reason:"small-task"`.
-The default is still parallel. If the user explicitly asks for aggressive
-subagent use or faster parallel execution, this opt-out is disabled.
+Use the existing WBS dispatch prepare facts: actual predecessor IDs, conflicting
+outcome scopes, observed capability and slot capacity. A small edit estimate
+never overrides a ready independent pair with capacity. Reject
+`reason:"small-task"` as an assignment bypass.
 
 ### Invalid skip rationales
 
@@ -243,7 +250,7 @@ QA lenses, or independent audit workers. Do not use `user-did-not-ask`, "user
 did not ask for delegation", "not requested", or equivalent wording to justify
 inline execution. If the trigger matches and the run goes sequential, record
 the concrete blocker in the lane table: declared dependency, unavailable Agent
-tool, or small-task estimate.
+tool, or actual observed capacity/resource conflict.
 
 ### Lane table requirement
 
@@ -253,10 +260,10 @@ above, then emit this table and use it as the routing contract:
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
 
-`Route` is `Agent(...)`, `sequential-prelude`, `sequential-dependent`, or
-`sequential-small-task`. Two or more independent `Agent(...)` rows trigger one
-parallel spawn batch. `sequential-small-task` requires lane-table values:
-`reason:"small-task"`, `estimated_lines`, and `estimated_seconds`.
+`Route` follows public dispatch prepare: managed handoffs or a direct assignment
+with concrete serial facts. Two independent ready lanes with capacity trigger
+parallel managed spawns. Choose ownership at execution time; progress WBS
+contains no mandatory implementation file list.
 
 ### Test-author lane
 

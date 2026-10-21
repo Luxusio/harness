@@ -99,10 +99,10 @@ current `task_id`, state "resuming from prior session" in the conversation.
 
 ### Phase 1: Load plan
 
-Read `doc/harness/tasks/<task_id>/`:
+Micro/maintenance still baseline one concise WBS outcome and publish dispatch prepare before source edits. Read `doc/harness/tasks/<task_id>/`:
 1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
-3. **Resume check:** `PROGRESS.md` → skip ACs listed in `completed_acs`. For each completed AC, compare target-file mtimes against `PROGRESS.md` mtime; files modified post-PROGRESS → mark "needs re-verification", do not blindly skip.
+3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
 4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, `AskUserQuestion` (run plan skill / check task_id / abort).
 
 **Durable Docs Preflight:** read PLAN.md `Durable Docs Decision` as a
@@ -141,7 +141,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Read `ready-lanes.md` for WBS measurement/worktree routing first. Build the contract from PLAN ownership and dependencies before
+Read `ready-lanes.md` and publish current WBS dispatch prepare admission before source edits. Choose execution ownership separately from progress WBS and use concrete dependencies before
 editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |
@@ -157,8 +157,8 @@ puts the display name in the `agentType` position, which loses a lens agent's
 receipt outright and makes every named lane look like a lost one.
 Use one Agent per independent AC. Do not assign multiple independent ACs to one
 executor. Disjoint ACs use one worker per lane when Agent is available.
-Sequential routes require a declared dependency, unavailable Agent, or a tiny
-evidenced batch. AC workers carry their own ladder copy in `plugin/agents/ac-worker.md` and stay inside explicit ownership. Do not edit PROGRESS.md; workers return changed paths, tests and blockers; their `AC-NNN:` status and a developer `Status:` line use the same tokens.
+Sequential routes require concrete dependency, file collision, shared resource
+or observed host capacity/capability facts. AC workers carry their own ladder copy in `plugin/agents/ac-worker.md` and stay inside explicit ownership. Do not edit PROGRESS.md; workers return changed paths, tests and blockers; their `AC-NNN:` status and a developer `Status:` line use the same tokens.
 Handle `needs-coordinator-review` before generic rollback: never retry with the
 same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep
 successful independent siblings promoted. Record a failed parallel lane and

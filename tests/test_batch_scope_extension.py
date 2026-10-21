@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from test_batch_state import RUN, _git, _head, task
-from test_managed_wbs import setup_parent
+from test_managed_wbs import setup_parent, host_snapshot
 from test_wbs import plan
 
 
@@ -15,12 +15,15 @@ def prepared(tmp_path, monkeypatch, slots=1, three=False):
         (pool.repo / name).write_text(name + "\n")
     _git("add", "a.txt", "b.txt", "c.txt", cwd=pool.repo)
     _git("commit", "-qm", "seed independent inputs", cwd=pool.repo)
-    if three:
-        assert not call("plan", plan=plan([
-            dict(id=k, title="Observable " + k, weight=1) for k in ("A", "B", "C")
-        ])).get("isError")
-    ownership = {k: [k.lower() + ".txt"] for k in (("A", "B", "C") if three else ("A", "B"))}
-    response = call("dispatch", ownership=ownership, available_slots=slots)
+    # A and C can start immediately; B waits for A so its newly discovered
+    # caller can legitimately be granted to A before B has a writer.
+    names = ('A', 'B', 'C') if three or slots == 1 else ('A', 'B')
+    assert not call("plan", plan=plan([
+        dict(id=k, title="Observable " + k, weight=1,
+             **({'depends_on': ['A']} if k == 'B' and slots == 1 else {})) for k in names
+    ])).get("isError")
+    ownership = {k: [k.lower() + ".txt"] for k in names}
+    response = call("dispatch", ownership=ownership, host=host_snapshot())
     assert not response.get("isError"), response
     body = response["structuredContent"]
     pool.batch = body["batch_id"]
@@ -61,9 +64,9 @@ def test_public_scope_grant_preserves_intent_and_refills_independent_work(tmp_pa
     recorded = pool.state.read_bytes()
     assert not extend(call, handoff, worktree, reason="x" * 2000).get("isError")
     assert pool.state.read_bytes() == recorded
-    refill = call("dispatch", available_slots=2)["structuredContent"]
+    refill = call('dispatch', host={**host_snapshot(), 'reserved_slots': [dict(id='reserved-c', role='implementation')]})["structuredContent"]
     assert {h["slug"].rsplit("-", 1)[1] for h in refill["handoffs"]} == {"C"}
-    assert refill["reasons"][handoff["slug"][:-1] + "B"] == "retained scope ownership"
+    assert refill["reasons"][handoff["slug"][:-1] + "B"].startswith("dependencies:")
     for name in ("a.txt", "b.txt"):
         (worktree / name).write_text("implemented\n")
     _git("add", "a.txt", "b.txt", cwd=worktree)
@@ -75,7 +78,7 @@ def test_public_scope_grant_preserves_intent_and_refills_independent_work(tmp_pa
                      worker_stopped=True, result=result)
     assert not completed.get("isError"), completed
     assert not worktree.exists()
-    refill = call("dispatch", available_slots=1)["structuredContent"]
+    refill = call('dispatch', host={**host_snapshot(), 'reserved_slots': [dict(id='reserved-c', role='implementation')]})["structuredContent"]
     assert any(h["slug"].endswith("-B") for h in refill["handoffs"])
 
 

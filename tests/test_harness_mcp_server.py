@@ -1083,7 +1083,9 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_task_dir = original_ctd
                 harness_server.find_repo_root = original_root
         ctx = start["structuredContent"]["task_context"]
-        self.assertTrue(ctx["source_write_allowed"])
+        self.assertFalse(ctx["source_write_allowed"])
+        self.assertEqual(ctx["routing"]["orchestration_mode"], "unassigned")
+        self.assertIn("execution assignment", ctx["why_source_write_blocked"])
         self.assertEqual(ctx["routing"]["execution_mode"], "micro")
         self.assertNotIn("PLAN.md", ctx["missing_for_close"])
         self.assertIn("subagent", ctx["next_action"])

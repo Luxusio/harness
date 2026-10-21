@@ -54,14 +54,14 @@ def test_worktree_source_requires_its_own_plan_from_main_cwd(tmp_path):
     assert result.get('permissionDecision') == 'deny'
     assert 'C-02-plan-first' in result['permissionDecisionReason']
     (task / 'PLAN.md').write_text('# Approved worktree scope\n')
-    assert check(main, worktree / 'engine.py') == {}
+    assert check(main, worktree / 'engine.py').get('permissionDecision') == 'deny'
 
 
-def test_worktree_plan_allows_source_even_when_main_has_no_task(tmp_path):
+def test_worktree_plan_alone_does_not_assign_source_when_main_has_no_task(tmp_path):
     main, worktree = setup(tmp_path)
     assert 'no-active-task' in check(main, worktree / 'engine.py')['permissionDecisionReason']
     active(worktree, plan=True)
-    assert check(main, worktree / 'engine.py') == {}
+    assert check(main, worktree / 'engine.py').get('permissionDecision') == 'deny'
 
 
 def test_worktree_and_sibling_protected_artifacts_stay_denied(tmp_path):
@@ -116,7 +116,7 @@ def test_foreign_and_unregistered_targets_keep_existing_policy(tmp_path):
     (fake / 'doc/harness/manifest.yaml').write_text('version: 5\n')
     (fake / '.git').write_text('gitdir: /nonexistent/worktree\n')
     active(fake)
-    assert check(main, fake / 'engine.py') == {}
+    assert check(main, fake / 'engine.py').get('permissionDecision') == 'deny'
 
 
 def test_symlink_outside_main_is_still_denied(tmp_path):
@@ -158,4 +158,4 @@ def test_direct_registered_worktree_outside_main_uses_own_plan(tmp_path):
     task = active(external)
     assert 'C-02-plan-first' in check(main, external / 'engine.py')['permissionDecisionReason']
     (task / 'PLAN.md').write_text('# Approved external worktree scope\n')
-    assert check(main, external / 'engine.py') == {}
+    assert check(main, external / 'engine.py').get('permissionDecision') == 'deny'

@@ -1,99 +1,82 @@
 # Ready-lane dispatch
 
-## WBS worktree routing takes precedence for independent development
+## Assign before source edits
 
-At active phase boundaries read `wbs(action="context").progress`. After two hours
-without earned weight, refine only unclear unfinished WBS outcomes through
-`wbs(action="plan")`, preserving weight while adapting actual next steps. Report real external blockers
-instead of recursively splitting waits. Use `wbs(action="check", node_id=...)` for ready outcomes. Report measured weight and concrete remaining
-outcomes with integration/review/QA separately; task additions, plan rewrites
-and splits earn nothing. One leaf is enough for small work. WBS exists to help
-delivery, not to generate progress-reporting work.
+WBS describes measurable outcomes, dependencies and acceptance. Keep file lists
+out of progress WBS. Choose literal execution ownership at dispatch time.
+PLAN/REQ preparation stays possible before assignment; maintenance and micro
+source work use the same assignment gate.
 
-Build dependencies from WBS outcomes; choose current ownership only when
-actually dispatching concurrent work, never to prescribe a layout for progress. Substantial
-independent outcomes run in separate worktrees through `harness:batch`, with
-development, independent review, QA and task close inside each lead. Use
-`wbs(action="dispatch", ownership={"<outcome id>":["<current scope>"]})`
-to bind the exact work pack for an already-open
-ordinary execution envelope. Dispatch parks the parent for the actual
-worktree handoff before pool admission; do no parent source writes
-while leads run. `wbs(action="open")` refuses resumption until that exact pool is
-integrated and closed. Then resume the same parent, verify WBS assertions in
-the integrated checkout and run combined review/QA. Never treat a proposed
-pack or a lead's narrative PASS as integrated progress.
-
-When independence is known at intake, open the WBS root and plan coarse
-outcomes first, then dispatch with current ownership. Dispatch parks that
-parent; reopen it only after integration. Native Goals use the same root and
-dispatch, with no second Goal queue. Use the shared pool's capacity,
-scope reservations, dependency-after-integration rule and serialized finish;
-do not run concurrent merges into one target branch. Refill as leads finish.
-Do not create worktrees for tiny or dependent work merely to satisfy a count.
-The scheduler below remains useful for bounded role pairing within a worktree
-and for small direct work; it does not authorize independent source writers
-sharing the parent checkout instead of this worktree route.
-
-## Bounded role admission
-
-Use `scripts/parallel_dispatch.py` on both runtimes to calculate which declared
-ACs can start. It returns proposals; the coordinator owns actual tool calls and
-must reserve the whole returned group against fresh host inventory before
-spawning. It never writes task state or receipts.
-
-Build an ephemeral JSON snapshot from PLAN and observed worker state:
+Call the public `wbs(action="dispatch", operation="prepare", ownership=...,
+host=...)` with the current pending outcome graph and actual observed host:
 
 ```json
 {
-  "repo": "/absolute/checkout",
-  "host_capacity": 4,
-  "ac_cap": 4,
-  "acs": [
-    {"id": "AC-001", "files": ["src/a.py"], "tests": ["tests/test_a.py"], "depends_on": []},
-    {"id": "AC-002", "files": ["src/b.py"], "tests": [], "depends_on": []}
-  ],
-  "progress": {},
-  "live_agents": [{"id": "root", "role": "coordinator"}]
+  "capacity": 6,
+  "live_agents": [{"id":"actual-coordinator-id","role":"coordinator"}],
+  "reserved_slots": [],
+  "verification_reserve": 1,
+  "spawn_available": true,
+  "continuation_available": true
 }
 ```
 
-Run `PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parallel_dispatch.py --input <snapshot>`.
-The snapshot can live in an ignored task work directory. Do not add fields to
-TASK.json or PROGRESS.md: this is disposable scheduling input, not new task
-authority. Use literal repo-relative paths and pass the checkout to resolve
-aliases. Unknown dependencies, cycles and unsafe paths refuse dispatch.
+Inventory includes every still-occupied host slot, including completed agents
+until the host releases them. `reserved_slots` contains distinct actual
+reservations with `id`/`role`, never invented placeholders or duplicates of live
+agents. Exactly one live coordinator is required. Keep at least one independent
+review/QA slot; an occupied/reserved supported review or QA lens satisfies that
+reserve once. Unknown roles count as occupied but do not satisfy it. The host
+snapshot is caller-observed capacity, not authentication or a host reservation.
+The MCP cannot independently discover a newly freed external agent slot.
 
-Read `develop.fanout_cap` once: absent/invalid -> 4; positive integer -> min(8,
-value), excluding booleans. Record the effective cap/source in the lane table.
-The host's actual total agent limit is a second, stricter bound. Inventory
-includes the coordinator, all live workers/reviewers, and reserved-but-not-yet-
-spawned slots. When finished agents still consume host capacity, keep them in
-inventory until the host releases them. If the host exposes no numerical
-capacity, do not invent a numeric snapshot: bypass parallel admission and run
-one scoped worker at a time (or inline if spawn is unavailable), explicitly
-unpaired, reporting the capability fallback. Never retry a failed spawn by
-blindly spawning more.
+Prepare derives assignment from the existing graph, ownership and capacity.
+Two independent ready outcomes plus usable slots require immediate managed
+parallel worktrees. It chooses a disjoint pair over a broad conflicting first
+request without rewriting the full immutable intake. One ready outcome,
+concrete file collisions/predecessors, unavailable capabilities and measured
+capacity constraints produce structural serial facts. Do not invent a serial
+reason, reduce capacity or use estimated size as a bypass.
 
-For each `dispatch` group, reserve its `slots` before issuing worker calls.
-`paired` requires an implementation worker and test-author together; prompts
-give each only its returned paths. With only one usable host worker slot, the
-explicit `unpaired` fallback assigns both sets to one worker. A temporarily busy
-host waits for pair capacity rather than silently weakening pairing.
+Managed handoffs name the owner task, base commit, branch, checkout, ownership,
+dependencies and acceptance command. Bind the actual worker before edits. Each
+lead develops, independently reviews, verifies and closes in its own managed
+checkout. Preserve user changes; use the existing batch resume/recovery flow.
+A direct assignment permits only its selected ownership; changing source bytes
+alone does not stale it. Changes to run, graph, checks, blocks or ownership
+require a fresh prepare. Unmeasured means current evidence was not measured;
+it does not request new implementation. Integrated parent verification uses
+its existing pack proof rather than creating another pool.
 
-After a worker result, release only slots the host has actually freed. Mark the
-AC `verifying` until its own implementation and test author finish; run scoped
-checks, then mark `completed` with `verified: true, workers_released: true`.
-Full-tree verification commands wait until all relevant writers stop. Do not
-wait for unrelated siblings before refilling ready lanes. Failed/blocked ACs
-keep dependents waiting; retained live writers keep their paths reserved.
-`reservation_failed` never triggers another spawn until the coordinator has
-observed what started, released only unused reservations, and reset the lane.
+## Completion-driven continuation
 
-Recompute after each completion, failure, release or host-capacity change.
-Keep running groups in inventory when a limit falls; start nothing above it.
-The coordinator remains the sole progress writer. Review-before-QA order and
-independent close evidence are unchanged; scheduler output is never a verdict.
+As soon as A finishes development, start A's own review then QA while B keeps
+developing. No whole-wave barrier. One coordinator integrates stopped, closed
+results serially through `dispatch complete`; it owns Git integration and
+cleanup. Every relevant completion, dependency release, failure, reservation
+release or host-capacity change requires a fresh actual host inventory and an
+immediate `dispatch prepare` for the SAME WBS. Consume its ready handoffs before
+waiting for unrelated siblings. In particular, after A integrates, prepare C
+while B remains running. The completion response explicitly requests this
+refill; it cannot spawn agents or fabricate a reservation itself.
 
-Nested workers need explicitly allocated spare slots from the coordinator's
-same inventory. A lane cap does not grant each worker its own fresh host cap.
-No assigned spare slots means no nested fanout.
+Keep unaffected review/QA and execution records bound to their exact input
+targets. Recheck only changed/affected inputs; documentation or missing cached
+artifacts alone do not invalidate unchanged product proofs. Existing verifier
+resource/output leases serialize the same VM, display, port or build output,
+while independent development continues. Resource wait is not a reason to stop
+unrelated source work. Never convert skip, missing attestation or failure to
+PASS. Source assignment is not review/QA evidence.
+
+## Nested helpers and progress
+
+The existing `parallel_dispatch.py` is a stateless proposal helper for bounded
+nested roles; it grants neither new capacity nor task ownership. Reserve from
+the coordinator's same observed inventory, not a fresh per-lead cap. Preserve
+independent review-before-QA order. Gate authority remains with owner MCP and
+prewrite; display routing uses stored state without runtime authentication.
+
+Use `wbs check` for earned outcome evidence. Plan additions, splits and
+assignment changes earn no progress. After two hours without earned progress,
+refine only unclear unfinished work without changing weights; report actual
+external blockers instead of recursively splitting waits. WBS serves delivery.

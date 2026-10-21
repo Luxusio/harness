@@ -774,48 +774,159 @@ def require_integrated_for_task(repo, task_id):
         require(batch_route(td, repo, state)["route"] == "integration", "work pack unfinished; integrate and close the pool before resuming parent")
 
 
-def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None):
-    """Deterministic request graph for the existing pool, never a spawn/merge."""
-    state = read_state(task_dir)
-    require(state is not None, "baseline WBS before dispatch")
-    if state.get("batch"):
-        return batch_route(task_dir, repo, state)
-    progress = task_progress(task_dir, repo, run_id, measure=False)
-    require(progress["status"] == "unmeasured", "valid stored WBS required")
-    done = {row["id"] for row in progress["outcomes"] if row.get("historical_verified")}
-    blocked = blocked_outcomes(state)
-    pending = [n for n in leaves(state["nodes"]) if n["id"] not in done and n["id"] not in blocked]
-    require(len(pending) >= 2, "use direct development for a single unfinished outcome")
-    require(isinstance(ownership, dict) and set(ownership) == {n["id"] for n in pending},
-            "declare current execution ownership for the actual worktree handoff, separately from progress WBS")
-    prefix = "wbs-" + digest([Path(task_dir).name, state["nodes"]])[:12]
-    slug = {n["id"]: prefix + "-" + n["id"] for n in pending}
-    def descendants(key):
-        children = [n["id"] for n in state["nodes"] if n["parent"] == key]
-        return [leaf for child in children for leaf in descendants(child)] if children else [key]
-    requests = []
-    index = {n["id"]: n for n in state["nodes"]}
-    for node in pending:
-        deps, ancestor = set(node["depends_on"]), node["parent"]
-        while ancestor:
-            deps.update(index[ancestor]["depends_on"])
-            ancestor = index[ancestor]["parent"]
-        requests.append(dict(slug=slug[node["id"]], request=node["title"] + ("\nVerify argv: " + json.dumps(node["check"]) if node.get("check") else "\nChoose outcome assertions during development."),
-                             scopes=ownership[node["id"]], depends_on=sorted({slug[d] for dep in deps for d in descendants(dep) if d in slug})))
-    # Existing validator owns path overlap/dependency admission and task IDs.
+def admission_definition(state, ownership, selected):
+    # Assignment freshness concerns control/intent, not changing source bytes.
+    return digest([state['run_id'], state['nodes'], state['checks'], state.get('blocks', {}), ownership, selected])
+
+
+def require_source_assignment(repo, task_id, path=None):
+    """Use a bound pool lead or a current owner-published direct assignment."""
+    from _lib import canonical_task_dir, read_task_control, task_control_status, resolve_registered_worktree
     import batch_state
-    batch_state.requests_valid(requests)
-    result = dict(batch_id=prefix, requests=requests,
-                next_action="Before dispatch park this open parent through wbs(action='block') for the worktree handoff. Run the existing batch workflow with these exact requests and --owner-task-id " + Path(task_dir).name + ". No parent source writes while leads run. Resume parent only after the pool is integrated; recheck outcomes and run combined review/QA.")
+    td = canonical_task_dir(task_id=task_id, repo_root=repo)
+    control = read_task_control(td)
+    require(control and task_control_status(td, control) == 'open', 'source assignment requires the same open task')
+    # Existing managed ownership is the authority for a lead; never create a
+    # nested pool merely because its own WBS has not measured its next check.
+    if Path(repo, '.git').is_file():
+        common = batch_state.finish_helper._git_out(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip()
+        root = str(Path(common).parent)
+        require(resolve_registered_worktree(root, str(Path(repo).resolve())), 'managed worktree binding required')
+        require(Path(root, 'doc/harness/runtime/batches').is_dir(),
+                'managed source assignment missing; owner must dispatch prepare and bind this exact lead')
+        with batch_state.locked_records(root, readonly=True) as (_, records):
+            for data in records.values():
+                for item in data['requests']:
+                    if item['task_id'] == task_id and item.get('worktree') == repo:
+                        require(not data['halted'] and item['status'] == 'running' and item.get('worker_id'),
+                                'managed lead is not currently bound for development')
+                        batch_state.bound(root, item)
+                        batch_state.control(item)
+                        scopes = batch_state.effective_scopes(item)
+                        require(path is None or any(covers(scope, path) for scope in scopes), 'source path outside managed ownership')
+                        return dict(mode='managed-lead', scopes=scopes)
+    state = read_state(td)
+    require(state and state['run_id'] == control['run_id'], 'baseline WBS and dispatch prepare before source edits')
+    assignment = state.get('execution_admission')
+    require(isinstance(assignment, dict) and assignment.get('run_id') == control['run_id']
+            and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected')),
+            'execution assignment missing or stale; refresh dispatch prepare with actual host inventory and ownership')
+    require(assignment.get('mode') == 'direct', 'source belongs to managed worktrees or verification only; use dispatch prepare')
+    scopes = [scope for key in assignment['selected'] for scope in assignment['ownership'][key]]
+    require(path is None or any(covers(scope, path) for scope in scopes), 'source path outside direct execution ownership')
+    return assignment
+
+
+def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
+    """Derive direct/managed admission within the existing owner's transaction."""
+    from parallel_dispatch import host_slots, independent_order, _paths
+    import batch_state
+    from _lib import _atomic_text_write
+    state = read_state(task_dir)
+    require(state is not None and state['run_id'] == run_id, 'baseline WBS before dispatch')
+    available = host_slots(host)
+    assignment = dict(run_id=run_id, host=host,
+                      ownership=ownership, selected=[], available_slots=available)
+    if state.get('batch'):
+        result = batch_route(task_dir, repo, state)
+        assignment.update(mode='verification' if result['route'] == 'integration' else 'managed',
+                          ownership={r['slug']: r['scopes'] for r in state['batch']['requests']})
+        if not host['spawn_available'] or not host['continuation_available']:
+            assignment['serial_facts'] = [dict(kind='capability',
+                spawn_available=host['spawn_available'], continuation_available=host['continuation_available'])]
+    else:
+        progress = task_progress(task_dir, repo, run_id, measure=False)
+        require(progress['status'] == 'unmeasured', 'valid stored WBS required')
+        done = {row['id'] for row in progress['outcomes'] if row.get('historical_verified')}
+        blocked = blocked_outcomes(state)
+        pending = [n for n in leaves(state['nodes']) if n['id'] not in done and n['id'] not in blocked]
+        if not pending:
+            assignment.update(mode='blocked' if blocked else 'verification', ownership={})
+            result = dict(route=assignment['mode'], next_action='Resolve recorded outcome blockers or measure existing proofs; unmeasured does not request new development.')
+        else:
+            require(isinstance(ownership, dict) and set(ownership) == {n['id'] for n in pending},
+                    'declare execution ownership for every pending outcome separately from progress WBS')
+            ownership = {key: _paths(paths, key, Path(repo).resolve()) for key, paths in ownership.items()}
+            require(all(ownership.values()), 'each pending outcome requires execution ownership')
+            assignment['ownership'] = ownership
+            prefix = 'wbs-' + digest([Path(task_dir).name, state['nodes']])[:12]
+            slug = {n['id']: prefix + '-' + n['id'] for n in pending}
+            index = {n['id']: n for n in state['nodes']}
+            def descendants(key):
+                children = [n['id'] for n in state['nodes'] if n['parent'] == key]
+                return [leaf for child in children for leaf in descendants(child)] if children else [key]
+            requests = []
+            for node in pending:
+                deps, ancestor = set(node['depends_on']), node['parent']
+                while ancestor:
+                    deps.update(index[ancestor]['depends_on'])
+                    ancestor = index[ancestor]['parent']
+                requests.append(dict(slug=slug[node['id']], request=node['title'] +
+                    ('\nVerify argv: ' + json.dumps(node['check']) if node.get('check') else '\nChoose outcome assertions during development.'),
+                    scopes=ownership[node['id']], depends_on=sorted({slug[d] for dep in deps for d in descendants(dep) if d in slug})))
+            batch_state.requests_valid(requests)
+            ready = [r for r in requests if not r['depends_on']]
+            ordered = independent_order(ready, lambda r: r['scopes'])
+            independent = len(ordered) >= 2 and not batch_state.overlap(ordered[0]['scopes'], ordered[1]['scopes'])
+            managed = independent and available >= 2 and host['spawn_available'] and host['continuation_available']
+            facts = []
+            def outcome(request):
+                return request['slug'][len(prefix)+1:]
+            if len(pending) == 1:
+                facts.append(dict(kind='single_outcome', outcome=outcome(requests[0])))
+            for request in requests:
+                if request['depends_on']:
+                    facts.append(dict(kind='dependency', outcome=outcome(request),
+                                      predecessors=[value[len(prefix)+1:] for value in request['depends_on']]))
+            if not independent and len(ready) > 1:
+                first = ready[0]
+                for other in ready[1:]:
+                    collision = next(([a, b] for a in first['scopes'] for b in other['scopes']
+                                      if batch_state.overlap([a], [b])), None)
+                    if collision:
+                        facts.append(dict(kind='file_collision', outcomes=[outcome(first), outcome(other)], scopes=collision))
+            if available < 2:
+                facts.append(dict(kind='host_capacity', capacity=host['capacity'],
+                                  live=len(host['live_agents']), reserved=len(host['reserved_slots']),
+                                  verification_reserve=host['verification_reserve'], available=available))
+            if not host['spawn_available'] or not host['continuation_available']:
+                facts.append(dict(kind='capability', spawn_available=host['spawn_available'],
+                                  continuation_available=host['continuation_available']))
+            assignment.update(mode='managed' if managed else 'direct' if ready else 'blocked',
+                              selected=[] if managed else [outcome(n) for n in ordered[:1]],
+                              serial_facts=facts)
+            if managed:
+                import work_pack as packs
+                if bind:
+                    batch_state.main_boundary(repo, scopes=batch_state.ordinary_admission_scopes(repo, requests, managed=True))
+                spec = (packs.make_spec(repo, Path(task_dir).name, requests) if bind
+                        else packs._spec(Path(task_dir).name, requests))
+                state['batch'] = spec
+                result = dict(route='batch', **spec)
+            else:
+                result = dict(route=assignment['mode'], next_action='Develop only the assigned direct scope; refresh prepare after control/ownership or host changes.')
+    assignment['definition'] = admission_definition(state, assignment['ownership'], assignment['selected'])
+    state['execution_admission'] = assignment
     if bind:
-        import work_pack
-        from _lib import _atomic_text_write
-        batch_state.main_boundary(repo, scopes=batch_state.ordinary_admission_scopes(repo, requests, managed=True))
-        spec = work_pack.make_spec(repo, Path(task_dir).name, requests)
-        state.update(batch=spec)
         _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
-        result.update(task_id=spec["task_id"], batch_id=spec["batch_id"])
-    return result
+    return dict(result, execution_admission=assignment, available_slots=available)
+
+
+def publish_handoffs(task_dir, run_id, expected, slugs):
+    """Owner-transaction publication after the pool returns real reservations."""
+    from _lib import _atomic_text_write
+    state = read_state(task_dir)
+    require(state and state['run_id'] == run_id and state.get('execution_admission') == expected,
+            'assignment changed during preparation; preserve pool and inspect status')
+    assignment = dict(expected)
+    ownership = {item['slug']: item['scopes'] for item in state['batch']['requests']}
+    require(isinstance(slugs, list) and len(set(slugs)) == len(slugs) and set(slugs) <= ownership.keys(),
+            'handoffs must identify exact managed intake')
+    assignment.update(ownership=ownership, selected=slugs)
+    assignment['definition'] = admission_definition(state, ownership, slugs)
+    state['execution_admission'] = assignment
+    _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+    return assignment
 
 
 def blocked_outcomes(state):
