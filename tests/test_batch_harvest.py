@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -17,6 +18,111 @@ assert SPEC and SPEC.loader
 mod = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
+
+
+def test_tree_entries_bounds_pending_hashes_and_preserves_walk_order(tmp_path, monkeypatch):
+    for index in range(9):
+        path = tmp_path / ("nested" if index % 2 else "") / str(index)
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(bytes([index]) * 17)
+    expected = {}
+    for parent, dirs, files in os.walk(tmp_path):
+        for name in dirs:
+            expected[os.path.relpath(os.path.join(parent, name), tmp_path)] = None
+        for name in files:
+            path = os.path.join(parent, name)
+            expected[os.path.relpath(path, tmp_path)] = mod._hash_file(path)
+
+    class DeferredExecutor:
+        pending = 0
+        maximum = 0
+        closed = False
+
+        def __init__(self, max_workers):
+            assert max_workers == 4
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.closed = True
+            assert self.pending == 0
+
+        def submit(self, function, path):
+            self.pending += 1
+            self.maximum = max(self.maximum, self.pending)
+            owner = self
+
+            class Future:
+                def result(self):
+                    owner.pending -= 1
+                    return function(path)
+
+            return Future()
+
+    pool = DeferredExecutor(4)
+    monkeypatch.setattr(mod, "ThreadPoolExecutor", lambda **kwargs: pool)
+    assert list(mod._tree_entries(str(tmp_path)).items()) == list(expected.items())
+    assert pool.maximum == 4
+    assert pool.closed
+
+
+def test_tree_entries_hashes_overlap_and_stream_identical_bytes(tmp_path, monkeypatch):
+    import hashlib
+
+    expected = {}
+    for index in range(4):
+        payload = bytes([index]) * (1024 * 1024 + 19)
+        (tmp_path / str(index)).write_bytes(payload)
+        expected[str(index)] = hashlib.sha256(payload).hexdigest()
+    original = mod._hash_file
+    barrier = threading.Barrier(4)
+
+    def synchronized_hash(path):
+        barrier.wait(timeout=10)
+        return original(path)
+
+    monkeypatch.setattr(mod, "_hash_file", synchronized_hash)
+    assert mod._tree_entries(str(tmp_path)) == expected
+
+
+def test_tree_entries_propagates_errors_and_joins_workers(tmp_path, monkeypatch):
+    import pytest
+    from concurrent.futures import ThreadPoolExecutor
+
+    pools = []
+
+    class TrackingExecutor(ThreadPoolExecutor):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            pools.append(self)
+
+    monkeypatch.setattr(mod, "ThreadPoolExecutor", TrackingExecutor)
+    (tmp_path / "file").write_bytes(b"evidence")
+
+    def failed_hash(path):
+        raise OSError("hash read failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(mod, "_hash_file", failed_hash)
+        with pytest.raises(OSError, match="hash read failed"):
+            mod._tree_entries(str(tmp_path))
+
+    original_scan = os.scandir
+    denied = tmp_path / "denied"
+    denied.mkdir()
+
+    def failed_scan(path):
+        if os.fspath(path) == str(denied):
+            raise PermissionError("scan failed")
+        return original_scan(path)
+
+    monkeypatch.setattr(os, "scandir", failed_scan)
+    with pytest.raises(PermissionError, match="scan failed"):
+        mod._tree_entries(str(tmp_path))
+    assert len(pools) == 2
+    assert all(pool._shutdown for pool in pools)
+    assert all(not thread.is_alive() for pool in pools for thread in pool._threads)
 
 
 def _git(*args, cwd):

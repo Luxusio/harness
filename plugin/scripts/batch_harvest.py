@@ -32,6 +32,8 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hashlib
 import json
@@ -142,14 +144,27 @@ def _hash_file(path: str) -> str:
 def _tree_entries(root: str) -> dict:
     """Map every relative path under `root` to a file hash, or None for a dir."""
     entries: dict = {}
-    for dirpath, dirnames, filenames in os.walk(root):
-        for name in dirnames:
-            rel = os.path.relpath(os.path.join(dirpath, name), root)
-            entries[rel] = None
-        for name in filenames:
-            full = os.path.join(dirpath, name)
-            rel = os.path.relpath(full, root)
-            entries[rel] = _hash_file(full)
+
+    def scan_error(error):
+        raise error
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        pending = deque()
+        for dirpath, dirnames, filenames in os.walk(root, onerror=scan_error):
+            for name in dirnames:
+                rel = os.path.relpath(os.path.join(dirpath, name), root)
+                entries[rel] = None
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                rel = os.path.relpath(full, root)
+                # Reserve traversal order before asynchronous completion.
+                entries[rel] = None
+                pending.append((rel, executor.submit(_hash_file, full)))
+                if len(pending) == 4:
+                    key, future = pending.popleft()
+                    entries[key] = future.result()
+        for key, future in pending:
+            entries[key] = future.result()
     return entries
 
 

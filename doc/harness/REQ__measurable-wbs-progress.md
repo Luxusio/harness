@@ -105,19 +105,27 @@ The agent refines only work whose next action or check is too coarse, using
 condition. This is activity-driven, with no background daemon, forced idle
 updates or recursive bookkeeping splits. Preserve the user's actual goal.
 
-Dependency-ready, independently owned substantial WBS work uses the existing
-batch pool and one linked worktree per request. Develop, review, test and close
+Dependency-ready, independently owned WBS work uses the existing batch pool
+whenever at least two independent ready outcomes and observed host capacity
+permit parallel admission, regardless of work size. Use one linked worktree
+per request. Develop, review, test and close
 each lead in its own checkout. Integrate completed leads through the pool's
 serialized rebase/fast-forward, evidence harvest and cleanup, then review and
 test the combined destination. Never run concurrent target-branch finish
 operations. Dependencies release only after integration. Keep blocked work and
-conflict recovery intact. Small or dependent work stays in one checkout.
+conflict recovery intact. A single ready outcome or concrete dependency,
+ownership conflict, capacity or capability constraint may use direct execution
+with the corresponding recorded facts; ready independent siblings continue.
 Declare concrete ownership only at the actual worktree handoff, separately
 from measured WBS outcomes. It protects concurrent writers and must follow
 the current code and discoveries, not prescribe an early implementation layout.
 
-Dispatch uses current execution ownership, checks the existing clean-destination
-boundary and durably parks the parent before admitting any lead. Its coordinator
+Dispatch uses current execution ownership and validates its destination boundary.
+Managed ordinary admission may preserve disjoint original destination dirt;
+overlapping or unsafe dirt remains refused, and legacy unscoped admission retains
+its clean-destination requirement. A managed route durably parks the parent
+before admitting any lead; direct and verification routes do not create a pool
+or park it. Its coordinator
 performs no source writes while parked. Reopen the same WBS after the pool
 finishes and check integrated outcomes, then apply independent review/QA.
 A parent awaiting worktree results remains unfinished. No new worktree manager
@@ -237,6 +245,13 @@ entry, listing, module-depth and time limits remain unchanged. Explicit-source
 siblings may share one validated parent handle chain within a traversal;
 switching parents closes and revalidates it. No persistent descriptor/hash
 cache replaces fresh reads or deny-before-open, inode and ancestor checks.
+
+Derived fresh-archive cost bound: the existing archive tree fingerprint may
+stream file hashes concurrently with at most four submitted unfinished reads
+per invocation. Every file and directory remains represented in traversal
+insertion order; existing nonregular checks and error propagation remain.
+The executor closes on success or failure. This changes neither archive schema
+nor fresh-proof authority and introduces no cached/skipped hashes or scheduler.
 
 Derived compact projection: owner context exposes an advisory `summary` of its
 existing outcome IDs/titles and evidence tiers: implemented, integrated,

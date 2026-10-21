@@ -37,7 +37,7 @@ Normal coordination uses the same public `wbs` tool, with
 
 | Operation | Inputs and observable behavior |
 |---|---|
-| `prepare` (default) | Initial `ownership` maps pending outcome IDs to literal scope lists; bound-pack retries may omit it. Optional `available_slots` limits admission. Bind the exact WBS pack, park its parent, initialize/reserve and create MCP-owned W/branch plus marker before returning handoffs. Existing reservations survive retries. |
+| `prepare` (default) | Required `host` supplies observed capacity, live agents, reserved slots and spawn/continuation capability; public `available_slots` is rejected. Initial `ownership` maps pending outcome IDs to literal scope lists; bound-pack retries may omit it. Direct/verification routes return without parking or creating a pool. A managed route binds the exact WBS pack, parks its parent, initializes/reserves and creates MCP-owned W/branch plus marker before returning handoffs. Existing reservations survive retries. |
 | `status` | Read stored state and current observations, including pending integration/disposal and exact next actions, without mutation. |
 | `bind` | `slug`, actual host `worker_id`; use recorded W/branch, prepare selected S1 modules, and return confirmed running binding. No caller-chosen checkout. |
 | `complete` | `slug`, bound `worker_id`, actual `result` object, explicit `worker_stopped=true`; validate result and task/run/close proof, then integrate, harvest, dispose and close an eligible pool. Blocked/failed work stays retained. |
