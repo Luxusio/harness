@@ -4764,7 +4764,7 @@ def nonparsing_completion_note(lenses):
 # ── Task context ─────────────────────────────────────────────────────────
 
 
-def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured_progress=None, measure_targets=False):
+def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured_progress=None, measure_targets=False, measured_target_inputs=None):
     """Build the canonical task pack with on-the-fly routing."""
     st = read_task_control(task_dir)
     if not st:
@@ -4902,7 +4902,7 @@ def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured
         next_action += " WBS has no earned progress for two hours: refine unclear unfinished work at this boundary without changing weights; report real external blockers instead of splitting them."
     from verification_target import applicability
     targets = applicability(task_dir, find_repo_root(task_dir), snapshot,
-                            measure=measure_wbs or measure_targets)
+                            measure=measure_wbs or measure_targets, measured_inputs=measured_target_inputs)
     if targets.get("missing_lenses"):
         missing_for_close.append("applicable verification target: " + ", ".join(targets["missing_lenses"]))
         # Applicability supplements lifecycle evidence; it cannot replace an

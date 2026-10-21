@@ -330,14 +330,17 @@ def _receipt_target(receipt, receipts):
     return match[1]
 
 
-def applicability(task_dir, repo, receipt_snapshot=None, *, measure=False):
-    """Stored-only by default. Lifecycle PASS remains independently authoritative."""
+def measure_inputs(task_dir, repo):
+    """Measure source outside receipt publication; retain exact owner authority."""
     from _lib import read_task_control
     state, control = wbs.read_state(task_dir), read_task_control(task_dir)
     index = state.get(FIELD) if state else None
-    if not index or not index.get("required"):
-        return dict(status="unbound", enforced=False, source_binding="lifecycle_only", targets=[])
-    # Status uses only the small active index; no metadata/source traversal.
+    rows = _input_rows(task_dir, repo, index, measure=True) if index and index.get("required") else []
+    return dict(task_dir=os.path.realpath(task_dir), repo=os.path.realpath(repo),
+                state=state, control=control, rows=rows)
+
+
+def _input_rows(task_dir, repo, index, *, measure):
     tokens = sorted({ref["token"] for ref in index["required"].values()})
     rows = []
     for token in tokens:
@@ -357,6 +360,26 @@ def applicability(task_dir, repo, receipt_snapshot=None, *, measure=False):
             except (OSError, ValueError, KeyError) as error:
                 row.update(status="unavailable", reason=str(error)[:400])
         rows.append(row)
+    return rows
+
+
+def applicability(task_dir, repo, receipt_snapshot=None, *, measure=False, measured_inputs=None):
+    """Stored-only by default. Lifecycle PASS remains independently authoritative."""
+    from _lib import read_task_control
+    if measure and measured_inputs is None:
+        measured_inputs = measure_inputs(task_dir, repo)
+    state, control = wbs.read_state(task_dir), read_task_control(task_dir)
+    if measured_inputs is not None:
+        _require(measured_inputs["task_dir"] == os.path.realpath(task_dir)
+                 and measured_inputs["repo"] == os.path.realpath(repo)
+                 and measured_inputs["state"] == state and measured_inputs["control"] == control,
+                 "authority or target index changed during measurement")
+        measure = True
+    index = state.get(FIELD) if state else None
+    if not index or not index.get("required"):
+        return dict(status="unbound", enforced=False, source_binding="lifecycle_only", targets=[])
+    # Final receipt association uses only already measured rows and small owner state.
+    rows = measured_inputs["rows"] if measured_inputs is not None else _input_rows(task_dir, repo, index, measure=False)
     missing = []
     if measure:
         from _lib import _completed_review_by_lens, _completed_qa_by_lens, required_review_lenses, _required_qa_lenses, receipt_snapshot as read_receipts

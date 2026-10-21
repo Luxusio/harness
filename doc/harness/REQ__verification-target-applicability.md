@@ -18,6 +18,16 @@ The response supplies a random token and persistent `snapshot_root`. Append `_vt
 - Existing lifecycle-only tasks are visibly `unbound`, retain their old lifecycle semantics and are never retroactively source-certified. Issuing an acceptance target enables future required-lens applicability for that task. Current native token association supports Codex; unbound runtime identities are reported rather than fabricated.
 - Full target manifests and historical copied inputs persist under task work storage. WBS keeps a small active lens index; old target history is not appended into PLAN or WBS. No lifetime 64-target cap, no new scheduler.
 
+Derived from preserving asynchronous receipt delivery: final explicit verify
+measures target input bytes and execution context outside the receipt-writer
+transaction. Final publication takes a fresh receipt snapshot under that
+transaction and associates its authentic tokens with the measured input proof.
+The task run, control, WBS and active target index must still match; stale or
+unavailable inputs and real negative verdicts still prevent acceptance. A source-phase
+completion must be able to append and be considered by that same verify call.
+The measurement is private in-memory state, not reusable external acceptance
+evidence; close and verified installation retain their fresh applicability gates.
+
 ## Input limits and errors
 Canonical WBS policy and streaming measurement budgets apply; required files are not removed to obtain PASS. Unsupported symlink/nonregular inputs, missing dependencies, unsafe ownership/modes, nested checkout roots and recursive task/runtime input scopes fail explicitly. Select concrete nested-module source inputs instead of silently omitting them. Target metadata is bounded to 1 MiB per immutable record; refine actual validation scope if that bound is exceeded. Source and artifact selection must match declared policy. Private copied data can be read-only, but Harness does not intercept arbitrary shell mutations.
 

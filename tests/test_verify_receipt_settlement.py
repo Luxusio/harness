@@ -263,3 +263,91 @@ def test_timeout_error_explains_action_specific_support(pending_task):
         rejected = server.call_tool("wbs", {"action": "check", "wbs_id": "settlement", "node_id": "A", "timeout": 301})
         assert rejected.get("isError") and "1..300" in str(rejected)
         assert command.call_count == 1
+
+
+def issued_target(pending_task):
+    import verification_target as targets
+    from test_wbs import node
+    from test_wbs_input_policy import policy_plan
+    server, lib, task, path, append, completion = pending_task
+    repo = Path(task).parents[3]
+    (repo / "src.txt").write_text("small actual target input\n")
+    text = policy_plan([node()], {"source": ["src.txt"]})
+    state = server.wbs.prepare(task, text, lib.read_task_control(task)["run_id"])
+    Path(task, "PLAN.md").write_text(text)
+    Path(task, "WBS.json").write_text(server.wbs.encode_state(state))
+    target = targets.issue_target(task, str(repo), dict(inputs={"source": ["src.txt"]},
+                                lenses=["review-code", "qa-cli"]))
+    def native(row):
+        row = dict(row)
+        row.update(source="codex_session_watcher:collaboration",
+                   agent_type=row["agent_type"].replace("harness:", "") + "_vt_" + target["token"],
+                   runtime_id="codex:root:event:" + row["agent_id"])
+        return row
+    path.write_text("".join(json.dumps(native(json.loads(line))) + "\n" for line in path.read_text().splitlines()))
+    return targets, repo, native(completion), target
+
+
+def test_target_measurement_allows_writer_and_uses_same_verify_snapshot(pending_task, monkeypatch):
+    server, _, _, _, append, _ = pending_task
+    targets, _, completion, _ = issued_target(pending_task)
+    measuring, finished = threading.Event(), threading.Event()
+    observed = []
+    original = targets._manifest
+    def measure(*args, **kwargs):
+        measuring.set()
+        observed.append(finished.wait(timeout=1))
+        return original(*args, **kwargs)
+    def writer():
+        if measuring.wait(timeout=2):
+            append(completion)
+            finished.set()
+    monkeypatch.setattr(targets, "_manifest", measure)
+    worker = threading.Thread(target=writer)
+    worker.start()
+    try:
+        result = payload(verify(server))
+    finally:
+        worker.join(timeout=2)
+    assert observed == [True], "receipt writer was blocked during actual target source measurement"
+    assert finished.is_set() and not worker.is_alive()
+    assert result["runtime_verdict"] == "PASS"
+    assert not result["verification_targets"]["missing_lenses"]
+    assert result["receipt_recording"]["counts"] == {"completion_recorded": 2}
+
+
+@pytest.mark.parametrize("change", ["control", "index", "stale", "FAIL", "BLOCKED_ENV"])
+def test_target_measurement_preserves_authority_staleness_and_negative_guards(pending_task, monkeypatch, change):
+    server, lib, task, path, append, _ = pending_task
+    targets, repo, completion, _ = issued_target(pending_task)
+    original = targets._manifest
+    def measure(*args, **kwargs):
+        if change == "stale":
+            (repo / "src.txt").write_text("changed input\n")
+        rows = original(*args, **kwargs)
+        if change == "control":
+            control = lib.read_task_control(task)
+            control["run_id"] = lib.new_uuid7()
+            Path(task, "TASK.json").write_text(json.dumps(control))
+        elif change == "index":
+            state = server.wbs.read_state(task)
+            state[targets.FIELD]["required"]["qa-cli"]["token"] = "0" * 16
+            Path(task, "WBS.json").write_text(server.wbs.encode_state(state))
+        else:
+            if change in {"FAIL", "BLOCKED_ENV"}:
+                verdict, summary = lib.normalize_receipt_completion("qa-cli", "VERDICT: " + change, change)
+                completion.update(verdict=verdict, summary=summary)
+            append(completion)
+        return rows
+    monkeypatch.setattr(targets, "_manifest", measure)
+    result = verify(server)
+    if change in {"control", "index"}:
+        assert result.get("isError") and "changed" in str(result), result
+    else:
+        assert not result.get("isError"), result
+        context = payload(result)
+        assert context["runtime_verdict"] == ("PENDING" if change == "stale" else change)
+        if change == "stale":
+            assert context["verification_targets"]["targets"][0]["status"] == "stale"
+            assert context["verification_targets"]["missing_lenses"] == ["review-code", "qa-cli"]
+        assert context["receipt_recording"]["counts"] == {"completion_recorded": 2}

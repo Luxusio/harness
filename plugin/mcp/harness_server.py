@@ -1858,6 +1858,8 @@ def handle_task_verify(args: dict) -> dict:
         )
     initial_wbs = wbs.read_state(td)
     progress = wbs.task_progress(td, _task_roots(args)[1], initial_control["run_id"], measure=True)
+    from verification_target import measure_inputs
+    target_inputs = measure_inputs(td, _task_roots(args)[1])
     _settled_receipt_snapshot(td, initial_control)
     # WBS work and settlement must not block the watcher receipt writer.
     # Only final publication uses the common transaction, with fresh evidence.
@@ -1866,7 +1868,7 @@ def handle_task_verify(args: dict) -> dict:
         if st != initial_control or wbs.read_state(td) != initial_wbs:
             return _err("task_verify refused: task authority or WBS changed during verification")
         snapshot = receipt_snapshot(td)
-        ctx = emit_compact_context(td, snapshot, measured_progress=progress, measure_targets=True)
+        ctx = emit_compact_context(td, snapshot, measured_progress=progress, measured_target_inputs=target_inputs)
         rv = ctx["runtime_verdict"]
         review_verdict = ctx["review_verdict"]
         status = _watcher_status(
