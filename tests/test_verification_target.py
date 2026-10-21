@@ -16,6 +16,28 @@ def specification(**extra):
                 lenses=["review-code", "qa-cli"], **extra)
 
 
+def test_owner_private_source_is_copied_without_changing_original_permissions(tmp_path):
+    from install_verified import _read_payload_file
+
+    repo, td, _, _ = public(tmp_path)
+    source = repo / "src.txt"
+    for mode in (0o600, 0o640, 0o400, 0o700, 0o750):
+        source.chmod(mode)
+        target = targets.issue_target(str(td), str(repo), specification())
+        copied = Path(target["snapshot_root"]) / "src.txt"
+        assert copied.read_bytes() == source.read_bytes()
+        assert copied.stat().st_mode & 0o777 == (0o555 if mode & 0o100 else 0o444)
+        assert source.stat().st_mode & 0o777 == mode
+        assert _read_payload_file(repo, "src.txt") is None  # installer stays strict
+        assert targets.applicability(str(td), str(repo), measure=True)["targets"][0]["status"] == "applicable"
+    for mode in (0o660, 0o666, 0o4600, 0o0410):
+        source.chmod(mode)
+        with unittest.TestCase().assertRaisesRegex(ValueError, "unsafe ownership/mode"):
+            targets.issue_target(str(td), str(repo), specification())
+        assert source.stat().st_mode & 0o7777 == mode
+    source.chmod(0o600)
+
+
 def test_private_source_view_survives_aba_and_content_restoration(tmp_path):
     repo, td, _, _ = public(tmp_path)
     target = targets.issue_target(str(td), str(repo), specification())

@@ -148,7 +148,7 @@ def test_init_idempotence_and_conflicting_intake(tmp_path, monkeypatch):
     pool.init()
     first = pool.state.read_bytes()
     data = json.loads(first)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 3
     assert data["requests"][0]["task_id"] == "TASK__a"
     pool.init()
     assert pool.state.read_bytes() == first
@@ -1065,7 +1065,7 @@ def test_s1_schema_intent_idempotence_and_empty_selection_v1(tmp_path, monkeypat
     pool.batch = "ordinary"
     pool.init([{**request("ordinary", "README.md"), "submodules": []}])
     ordinary = json.loads(pool.state.read_text())
-    assert ordinary["schema_version"] == 1
+    assert ordinary["schema_version"] == 3
     assert not {"submodules", "ownership_scopes", "submodule_manifest"} & ordinary["requests"][0].keys()
 
 

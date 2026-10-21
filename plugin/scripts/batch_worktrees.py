@@ -20,6 +20,7 @@ def _call(repo, spec, directory, records, command, **kwargs):
 
 
 def _save(directory, data):
+    batch.migrate_ordinary(data)
     data['updated_at'] = batch.now()
     batch.write_json(os.path.join(directory, data['batch_id'] + '.json'), data)
 
@@ -105,14 +106,15 @@ def _handoff(item):
         slug=item['slug'], task_id=item['task_id'], worktree=item.get('worktree') or intent.get('worktree'),
         branch=item.get('branch') or intent.get('branch'), spawn_head=item.get('spawn_head'),
         run_id=item.get('run_id'), worker_id=item.get('worker_id'), request=item['request'],
-        scopes=item['scopes'], off_limits=item.get('off_limits', []),
+        scopes=batch.effective_scopes(item), off_limits=item.get('off_limits', []),
         fresh_run=False, resuming=bool(item.get('resuming')),
         submodules=item.get('submodules'), submodule_manifest=item.get('submodule_manifest'),
     ).items() if value is not None}
 
 
 def execute(repo, spec, operation='prepare', slug=None, worker_id=None, result=None,
-            worker_stopped=False, available_slots=None, recovery_commit=None):
+            worker_stopped=False, available_slots=None, recovery_commit=None, scopes=None,
+            expected_head=None, expected_run_id=None, reason=None):
     """Execute one exact work-pack operation under the existing pool lock.
 
     prepare returns retained reservations as well as new capacity-ready handoffs.
@@ -123,7 +125,7 @@ def execute(repo, spec, operation='prepare', slug=None, worker_id=None, result=N
     import work_pack
     expected = work_pack._spec(spec.get('task_id'), spec.get('requests'), batch_id=spec.get('batch_id'))
     batch.require(expected == spec and batch.IDENT.fullmatch(spec['batch_id']), 'invalid managed batch spec')
-    batch.require(operation in {'prepare', 'bind', 'complete', 'resume', 'recover', 'status'}, 'unknown managed operation')
+    batch.require(operation in {'prepare', 'bind', 'complete', 'resume', 'recover', 'status', 'extend'}, 'unknown managed operation')
     batch.require(recovery_commit is None or operation == 'recover', 'recovery_commit requires explicit recover operation')
     if available_slots is not None:
         batch.require(type(available_slots) is int and available_slots >= 0, 'available slots must be a nonnegative integer')
@@ -146,6 +148,10 @@ def execute(repo, spec, operation='prepare', slug=None, worker_id=None, result=N
             for pending in data['requests']:
                 if pending['status'] == 'reserved' and not pending.get('resuming'):
                     _prepare_one(repo, directory, records, data, pending)
+        elif operation == 'extend':
+            answer = _call(repo, spec, directory, records, 'extend', slug=slug, worker_id=worker_id,
+                           worker_stopped=worker_stopped, scopes=scopes, expected_head=expected_head,
+                           expected_run_id=expected_run_id, reason=reason)
         elif operation == 'bind':
             batch.require(isinstance(worker_id, str) and worker_id.strip(), 'actual worker identity required')
             intent = item.get('creation_intent')

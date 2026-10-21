@@ -72,6 +72,15 @@ specific capability blocker instead of silently marking the pack complete.
 
 ## Collect, recover and refill
 
+When a lead discovers required scope outside its assignment, stop that lead and
+its nested writers. Call the existing dispatch owner with `operation="extend"`,
+the exact slug/bound worker, `worker_stopped=true`, observed `expected_head`,
+`expected_run_id`, added literal `scopes` and concrete `reason`. Require its
+successful effective-ownership handoff before amending that lead's PLAN and
+continuing the same agent. Original pack/W/branch/run/marker/evidence stay intact;
+prior out-of-scope work, held conflicts and S1 pools refuse. Independent work
+continues; queued overlaps wait. The shared batch recovery REQ owns details.
+
 Accept actual host completion only from the bound worker after all nested
 writers stop. Call `wbs(action="dispatch", wbs_id=<owner>, operation="complete",
 slug=S, worker_id=<bound ID>, result=<actual JSON object>, worker_stopped=true)`.

@@ -145,5 +145,9 @@ def test_schema_keeps_single_wbs_tool_with_lifecycle_operations():
     tools = harness_server.list_tools()
     assert [x["name"] for x in tools] == ["wbs"]
     properties = tools[0]["inputSchema"]["properties"]
-    assert set(properties["operation"]["enum"]) == {"prepare", "status", "bind", "complete", "resume", "recover"}
+    assert set(properties["operation"]["enum"]) == {"prepare", "status", "bind", "complete", "resume", "recover", "extend"}
     assert properties["worker_stopped"]["type"] == "boolean"
+    assert properties["scopes"]["minItems"] == 1
+    assert properties["expected_head"]["type"] == "string"
+    assert properties["expected_run_id"]["type"] == "string"
+    assert properties["reason"]["maxLength"] == 2000

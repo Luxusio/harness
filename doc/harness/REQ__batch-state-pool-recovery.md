@@ -100,8 +100,11 @@ optional `depends_on` and `submodules` (selected direct module paths). Scopes ar
 Unknown dependencies, dependency cycles, duplicate slugs and reused task/archive
 identities refuse intake. A batch has at most 100 requests. Selection, private preparation and guarded
 disposal follow [Selected submodules](REQ__batch-submodule-support.md). Batches
-with a nonempty selection use schema 2; ordinary batches retain schema 1. The
-new reader accepts both, while old readers refuse schema 2. Exact init
+with a nonempty selection use schema 2; new ordinary batches use schema 3. The
+reader accepts schemas 1/2/3. Ordinary legacy schema 1 is read without rewriting
+and migrates to 3 only on successful owner publication; schema 1 cannot contain
+execution extensions. Older owners refuse schema 3 rather than ignore its
+additional ownership. Exact init
 idempotence includes normalized selection; records cannot silently downgrade it.
 
 The effective cap is explicit `--max-leads`, then optional manifest
@@ -310,3 +313,34 @@ Every cache directory and regular file participates in the bounded identity
 inventory and deletion rechecks. Links, special entries and nested `.git`
 refuse; an unknown parent never becomes disposable because it contains a cache.
 The empty-gitlink requirement takes precedence over cache recognition.
+
+### Derived execution ownership adaptation
+
+When development discovers a required change outside the assigned ownership,
+the coordinator stops that lead and its nested writers, then uses the existing
+WBS dispatch owner with `operation="extend"`. The grant requires the exact
+worker, observed HEAD and task run, literal added scopes and a bounded reason.
+The same worktree, branch, task/run, original request/spec and marker remain.
+Only current execution ownership changes; no progress or acceptance is earned.
+
+Before granting, the owner checks prior committed, staged, working and untracked
+changes against the old effective ownership, including both rename endpoints.
+It rechecks pending path contents, modes and index entries before publication;
+only enumerated dirty/untracked files are streamed, not the whole checkout.
+Each observation refuses beyond4096paths,64MiB or10seconds; a changed or unsafe
+file refuses the grant without rewriting the pool.
+Metadata-only index inspection refuses `assume-unchanged` or `skip-worktree`
+flags that could conceal prior edits; the owner never clears those flags.
+Unknown or stale identity, prior out-of-scope work, held ownership collisions,
+integration/close effects and selected-module pools refuse without a grant.
+Queued overlaps wait on effective ownership; unrelated work can continue.
+Exact retries preserve the original grant. Ordinary records migrate to schema3
+on owner publication so older owners refuse rather than ignore added ownership;
+read-only inspection does not migrate records. Selected-module schema2 does not
+gain scope extension. This is a derived repair of the existing user-requested
+adaptive work flow, not an additional product requirement or completion claim.
+
+Public WBS `check` accepts an explicit assertion timeout of1..300seconds,
+default60. This accommodates real public lifecycle assertions under normal
+test-session guards without a custom test driver. Input-measurement budgets
+remain separate; `verify` does not accept a timeout argument.

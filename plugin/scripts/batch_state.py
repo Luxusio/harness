@@ -12,8 +12,10 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +23,7 @@ import batch_finish as finish_helper
 import batch_harvest
 import batch_preflight
 import batch_submodules
-from _lib import find_repo_root, read_task_control, task_control_status, resolve_registered_worktree
+from _lib import find_repo_root, read_task_control, task_control_status, resolve_registered_worktree, _trusted_git_env, uuid7_timestamp_ms
 
 LIMIT = 1024 * 1024
 MAX_BATCHES = 100
@@ -29,6 +31,12 @@ IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 STATES = {'queued', 'reserved', 'running', 'returned', 'integrating', 'integrated', 'blocked', 'failed', 'kept', 'abandoned', 'recovery-required'}
 LIVE = {'reserved', 'running', 'integrating'}
 FREE = {'queued', 'integrated'}
+EXTENSION_FIELDS = {'extra_scopes', 'scope_grants'}
+MAX_SCOPE_GRANTS = 16
+EXTENSION_DIRTY_PATH_LIMIT = 4096
+EXTENSION_DIRTY_BYTE_LIMIT = 64 * 1024 * 1024
+EXTENSION_SNAPSHOT_SECONDS = 10
+FULL_HEAD = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})')
 
 
 class Refusal(RuntimeError):
@@ -159,8 +167,44 @@ def requests_valid(items):
         visit(slug)
 
 
+def literal_scope(path):
+    return (isinstance(path, str) and 0 < len(path) <= 4096 and not os.path.isabs(path)
+            and '\x00' not in path and all(p not in ('', '.', '..', '.git') for p in path.split('/')))
+
+
+def grant_valid(grant):
+    require(isinstance(grant, dict) and set(grant) == {'scopes', 'expected_head', 'expected_run_id', 'worker_id', 'reason', 'granted_at'},
+            'invalid scope grant')
+    require(isinstance(grant['scopes'], list) and 0 < len(grant['scopes']) <= 100
+            and all(literal_scope(p) for p in grant['scopes'])
+            and len(set(grant['scopes'])) == len(grant['scopes']), 'invalid grant scopes')
+    require(isinstance(grant['expected_head'], str) and FULL_HEAD.fullmatch(grant['expected_head']), 'invalid grant HEAD')
+    uuid7_timestamp_ms(grant['expected_run_id'])
+    require(isinstance(grant['worker_id'], str) and 0 < len(grant['worker_id']) <= 256, 'invalid grant worker')
+    require(isinstance(grant['reason'], str) and 0 < len(grant['reason']) <= 2000 and grant['reason'].strip(), 'invalid grant reason')
+    require(isinstance(grant['granted_at'], str) and grant['granted_at'], 'invalid grant time')
+
+
+def validate_extensions(item, repo, schema):
+    if not EXTENSION_FIELDS.intersection(item):
+        return
+    require(schema == 3 and not item.get('submodules'), 'execution extensions require ordinary schema 3')
+    extras, grants = item.get('extra_scopes'), item.get('scope_grants')
+    require(isinstance(extras, dict) and extras and len(extras) <= 100 * MAX_SCOPE_GRANTS, 'invalid extra scopes')
+    require(isinstance(grants, list) and 0 < len(grants) <= MAX_SCOPE_GRANTS, 'invalid grant history')
+    for path, resolved in extras.items():
+        require(literal_scope(path) and path not in item['scopes'] and isinstance(resolved, str)
+                and os.path.isabs(resolved) and os.path.commonpath((repo, resolved)) == repo
+                and os.path.normpath(resolved) == resolved, 'invalid extra scope binding')
+    for grant in grants:
+        grant_valid(grant)
+        require(grant['expected_run_id'] == item.get('run_id') and set(grant['scopes']) <= set(extras),
+                'grant identity mismatch')
+    require(set(extras) == {p for grant in grants for p in grant['scopes']}, 'grant history differs from extra scopes')
+
+
 def validate(data, repo, batch_id):
-    require(isinstance(data, dict) and type(data.get('schema_version')) is int and data['schema_version'] in (1, 2), 'unknown state schema')
+    require(isinstance(data, dict) and type(data.get('schema_version')) is int and data['schema_version'] in (1, 2, 3), 'unknown state schema')
     require(data.get('repo') == repo and data.get('batch_id') == batch_id, 'state identity mismatch')
     require(data.get('owner_task_id') is None or isinstance(data['owner_task_id'], str) and batch_harvest.TASK_ID_RE.fullmatch(data['owner_task_id']), 'invalid pool owner')
     require(type(data.get('max_leads')) is int and 1 <= data['max_leads'] <= 8, 'invalid capacity')
@@ -169,6 +213,10 @@ def validate(data, repo, batch_id):
     for key in ('initial_head', 'created_at', 'updated_at', 'cap_source'):
         require(isinstance(data.get(key), str) and data[key], f'invalid {key}')
     requests_valid(data.get('requests'))
+    if data['schema_version'] != 3:
+        require(not EXTENSION_FIELDS.intersection(data)
+                and all(not EXTENSION_FIELDS.intersection(item) for item in data['requests']),
+                'execution extensions require schema 3')
     selected_batch = any(item.get('submodules') for item in data['requests'])
     require((data['schema_version'] == 2) == selected_batch, 'selected modules require schema 2')
     require(len(json.dumps(data).encode()) <= LIMIT, 'state exceeds 1 MiB')
@@ -178,6 +226,7 @@ def validate(data, repo, batch_id):
         require(item.get('status') in STATES and item.get('task_id') == 'TASK__' + item['slug'], 'invalid request state')
         require(isinstance(item.get('resolved_scopes'), list) and len(item['resolved_scopes']) == len(item['scopes'])
                 and all(isinstance(p, str) and os.path.isabs(p) and os.path.commonpath((repo, p)) == repo for p in item['resolved_scopes']), 'invalid scope bindings')
+        validate_extensions(item, repo, data['schema_version'])
         require(isinstance(item.get('depends_on'), list), 'missing dependency list')
         if item.get('submodules'):
             require(item.get('ownership_scopes') == module_ownership(repo, item), 'invalid whole-module ownership')
@@ -308,8 +357,18 @@ def module_ownership(repo, item):
     return result
 
 
+def effective_scopes(item):
+    return list(item['scopes']) + list(item.get('extra_scopes', {}))
+
+
 def ownership(item):
-    return item.get('ownership_scopes', item['resolved_scopes'])
+    return list(item.get('ownership_scopes', item['resolved_scopes'])) + list(item.get('extra_scopes', {}).values())
+
+
+def migrate_ordinary(data):
+    # Only a successful owner publication upgrades an ordinary legacy record.
+    if data['schema_version'] == 1:
+        data['schema_version'] = 3
 
 
 def normalize_requests(items):
@@ -336,13 +395,14 @@ def reconcile_modules(repo, item):
 
 
 def preflight(repo, item):
-    requests = {item['slug']: item['scopes']}
+    requests = {item['slug']: effective_scopes(item)}
     require(not batch_preflight._globs_and_lists(repo, requests), 'scope names no existing path and looks like a glob or comma list')
     report = (batch_preflight.preflight(repo, requests, {item['slug']: item['submodules']})
               if item.get('submodules') else batch_preflight.preflight(repo, requests))
     require(report['verdict'] == 'ok', 'preflight refused: ' + json.dumps(report))
     resolved = [x['resolved'] for x in report['scopes']]
-    require('resolved_scopes' not in item or resolved == item['resolved_scopes'], 'scope resolution changed')
+    expected = item.get('resolved_scopes', []) + list(item.get('extra_scopes', {}).values())
+    require('resolved_scopes' not in item or resolved == expected, 'scope resolution changed')
     if item.get('submodules'):
         boundaries = report['ownership_scopes'][item['slug']]
         require('ownership_scopes' not in item or item['ownership_scopes'] == boundaries, 'module ownership changed')
@@ -502,6 +562,200 @@ def require_unused_task_ids(repo, requests, records):
                 'task/archive identity already used')
 
 
+def _extension_git(worktree, *args):
+    """Read raw Git paths without optional index writes or caller Git overrides."""
+    try:
+        result = subprocess.run(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', *args],
+                                cwd=worktree, env=_trusted_git_env(), capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Refusal('cannot inspect scope extension Git state') from exc
+    require(result.returncode == 0 and not result.stderr, 'cannot inspect scope extension Git state')
+    return result.stdout
+
+
+def extension_witness(repo, data, item, head, run_id):
+    require(bound(repo, item) == head, 'expected HEAD differs from bound branch')
+    require(_extension_git(item['worktree'], 'rev-parse', '--verify', 'HEAD').strip().decode('ascii') == head,
+            'worktree HEAD differs from expected HEAD')
+    proof = control(item)
+    require(proof['run_id'] == run_id and task_control_status(
+        os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id']), proof) in {'open', 'blocked'},
+        'expected run must identify open or blocked task')
+    require(not proof.get('close_receipt_fingerprint'), 'task already has close evidence')
+    require(item.get('retention') == retention_contract(data['batch_id'], item), 'bootstrap retention identity missing')
+    finish_helper.validate_retention(item['worktree'], item['retention'])
+    no_git_operation(item['worktree'])
+    return proof
+
+
+def _extension_dirty_snapshot(worktree, paths):
+    """Witness only enumerated pending source bytes and index entries, or refuse."""
+    require(len(paths) <= EXTENSION_DIRTY_PATH_LIMIT, 'too many dirty paths for scope extension')
+    deadline = time.monotonic() + EXTENSION_SNAPSHOT_SECONDS
+    remaining = EXTENSION_DIRTY_BYTE_LIMIT
+    files, index = [], []
+    def within_deadline():
+        require(time.monotonic() <= deadline, 'dirty source snapshot time limit exceeded')
+    for offset in range(0, len(paths), 32):
+        within_deadline()
+        # Literal pathspecs preserve filenames containing Git pathspec metacharacters.
+        raw = _extension_git(worktree, '--literal-pathspecs', 'ls-files', '--stage', '-z', '--',
+                             *(os.fsdecode(p) for p in paths[offset:offset + 32]))
+        require(not raw or raw.endswith(b'\0'), 'invalid dirty index listing')
+        for entry in raw.split(b'\0')[:-1]:
+            fields, separator, path = entry.partition(b'\t')
+            metadata = fields.split(b' ')
+            require(separator and path in paths and len(metadata) == 3
+                    and metadata[0] in {b'100644', b'100755'} and metadata[2] == b'0'
+                    and FULL_HEAD.fullmatch(metadata[1].decode('ascii')), 'unsupported dirty index entry')
+        index.append(raw)
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+    for raw in paths:
+        within_deadline()
+        parts = os.fsdecode(raw).split('/')
+        directory = os.open(worktree, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptor = None
+        try:
+            try:
+                for part in parts[:-1]:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                    os.close(directory)
+                    directory = child
+                descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            except FileNotFoundError:
+                files.append((raw, None))
+                continue
+            except OSError as exc:
+                raise Refusal('cannot safely inspect dirty source path: ' + repr(os.fsdecode(raw))) from exc
+            before = os.fstat(descriptor)
+            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
+                    'dirty source must be a regular file without aliases')
+            require(before.st_size <= remaining, 'dirty source snapshot byte limit exceeded')
+            digest = hashlib.sha256()
+            with os.fdopen(descriptor, 'rb') as handle:
+                descriptor = None
+                while True:
+                    within_deadline()
+                    chunk = handle.read(65536)
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    require(remaining >= 0, 'dirty source snapshot byte limit exceeded')
+                    digest.update(chunk)
+                require(identity(before) == identity(os.fstat(handle.fileno())),
+                        'dirty source changed while reading')
+                # The pathname must still name the opened regular file.
+                require(identity(before) == identity(os.stat(parts[-1], dir_fd=directory, follow_symlinks=False)),
+                        'dirty source path changed while reading')
+            files.append((raw, identity(before), digest.digest()))
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            os.close(directory)
+    within_deadline()
+    return tuple(index), tuple(files)
+
+
+def extension_paths(repo, data, item, head):
+    worktree = item['worktree']
+    flags = _extension_git(worktree, 'ls-files', '-v', '-z')
+    require(not flags or flags.endswith(b'\0'), 'invalid Git index flag listing')
+    for entry in flags.split(b'\0')[:-1]:
+        require(len(entry) > 2 and entry[1:2] == b' ' and entry[0] in b'HSMRCK?hsmrck', 'invalid Git index flag listing')
+        require(entry[:1] != b'S' and not entry[:1].islower(),
+                'clear assume-unchanged and skip-worktree index flags before scope extension')
+    base = _extension_git(worktree, 'merge-base', data['destination_ref'], head).strip()
+    require(FULL_HEAD.fullmatch(base.decode('ascii')), 'invalid source/destination merge-base')
+    listings = [
+        _extension_git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', base.decode('ascii'), head, '--'),
+        _extension_git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--cached', '--'),
+        _extension_git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--'),
+        _extension_git(worktree, 'ls-files', '--others', '--exclude-standard', '-z'),
+    ]
+    old = ownership(item)
+    for listing in listings:
+        require(not listing or listing.endswith(b'\0'), 'invalid Git path listing')
+        for raw in listing.split(b'\0')[:-1]:
+            path = os.fsdecode(raw)
+            if path == finish_helper.RETENTION_MARKER:
+                continue  # marker witness was validated before inspecting paths
+            require(literal_scope(path), 'unsafe changed path before scope extension')
+            absolute = os.path.realpath(os.path.join(repo, path))
+            local = os.path.realpath(os.path.join(worktree, path))
+            require(os.path.relpath(local, worktree) == os.path.relpath(absolute, repo),
+                    'changed path resolves differently in worktree')
+            require(any(os.path.commonpath((absolute, scope)) == scope for scope in old),
+                    'prior changes exceed old execution ownership: ' + repr(path))
+    dirty = sorted({path for listing in listings[1:] for path in listing.split(b'\0')[:-1]
+                    if path != os.fsencode(finish_helper.RETENTION_MARKER)})
+    return tuple(listings), _extension_dirty_snapshot(worktree, dirty)
+
+
+def extend_scopes(repo, data, item, records, args, save):
+    require(data['schema_version'] in {1, 3} and not any(x.get('submodules') for x in data['requests']),
+            'scope extension requires an ordinary pool')
+    require(item['status'] == 'running' and not any(k in item for k in ('result', 'checkpoint', 'finish_result'))
+            and not item.get('close_fingerprint'), 'scope extension requires running pre-result work')
+    require(args.worker_stopped is True and args.worker_id == item.get('worker_id') and args.worker_id,
+            'scope extension requires exact stopped bound worker')
+    scopes = args.scopes
+    require(isinstance(scopes, list) and 0 < len(scopes) <= 100 and all(literal_scope(p) for p in scopes)
+            and len(set(scopes)) == len(scopes), 'invalid extension scopes')
+    grant = dict(scopes=list(scopes), expected_head=args.expected_head, expected_run_id=args.expected_run_id,
+                 worker_id=args.worker_id, reason=args.reason, granted_at=now())
+    grant_valid(grant)
+    require(item.get('run_id') in (None, args.expected_run_id), 'bound task generation changed')
+    no_main_task(repo)
+    no_git_operation(repo)
+    proof = extension_witness(repo, data, item, args.expected_head, args.expected_run_id)
+    paths = extension_paths(repo, data, item, args.expected_head)
+    replay = any(all(old[k] == grant[k] for k in grant if k != 'granted_at') for old in item.get('scope_grants', []))
+    if replay:
+        return {'status': 'running', 'request': copy.deepcopy(item), 'replayed': True,
+                'handoff': dict(scopes=effective_scopes(item), worker_id=item['worker_id'], run_id=args.expected_run_id,
+                                worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'])}
+    require(len(item.get('scope_grants', [])) < MAX_SCOPE_GRANTS, 'scope grant history limit reached')
+    require(not any(p in effective_scopes(item) for p in scopes), 'extension scope already granted')
+    requests = {item['slug']: scopes}
+    require(not batch_preflight._globs_and_lists(repo, requests), 'extension scopes must be literal paths')
+    report = batch_preflight.preflight(repo, requests)
+    require(report['verdict'] == 'ok', 'extension preflight refused: ' + json.dumps(report))
+    resolved = {}
+    modules = {m['path'] for m in report['submodules']}
+    for path, binding in zip(effective_scopes(item), ownership(item)):
+        current = batch_preflight.classify_scope(repo, path, modules)
+        local = batch_preflight.classify_scope(item['worktree'], path, modules)
+        require(current['class'] == local['class'] == 'tracked-area' and current['resolved'] == binding
+                and os.path.relpath(local['resolved'], item['worktree']) == os.path.relpath(binding, repo),
+                'old scope resolution changed')
+    for scope in report['scopes']:
+        path, absolute = scope['path'], scope['resolved']
+        require(scope['class'] == 'tracked-area', 'extension scope is outside ordinary source')
+        local = batch_preflight.classify_scope(item['worktree'], path, modules)
+        require(local['class'] == 'tracked-area' and os.path.relpath(local['resolved'], item['worktree'])
+                == os.path.relpath(absolute, repo), 'extension scope is unsafe in worktree')
+        require(not any(overlap([absolute], [os.path.join(repo, p)]) for p in report['off_limits']),
+                'extension scope overlaps excluded repository')
+        require(not any(overlap([absolute], ownership(other)) for other in held(records, item)),
+                'extension scope collides with retained owner')
+        resolved[path] = absolute
+    # Repeat the exact source/control/witness observations immediately before publication.
+    no_main_task(repo)
+    no_git_operation(repo)
+    require(proof == extension_witness(repo, data, item, args.expected_head, args.expected_run_id),
+            'task control changed during scope extension')
+    require(paths == extension_paths(repo, data, item, args.expected_head), 'source changed during scope extension')
+    item.setdefault('extra_scopes', {}).update(resolved)
+    item.setdefault('scope_grants', []).append(grant)
+    item['run_id'] = args.expected_run_id
+    save()
+    return {'status': 'running', 'request': copy.deepcopy(item), 'replayed': False,
+            'handoff': dict(scopes=effective_scopes(item), worker_id=item['worker_id'], run_id=item['run_id'],
+                            worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'])}
+
+
 def execute(args, directory, records):
     repo, batch_id = args.repo, args.batch_id
     path = os.path.join(directory, batch_id + '.json')
@@ -525,7 +779,7 @@ def execute(args, directory, records):
             task_id = 'TASK__' + item['slug']
             resolved, _ = preflight(repo, item)
             item.update(status='queued', task_id=task_id, resolved_scopes=resolved)
-        data = dict(schema_version=2 if any(x.get('submodules') for x in normalized) else 1, batch_id=batch_id, repo=repo, destination_ref=ref, initial_head=head,
+        data = dict(schema_version=2 if any(x.get('submodules') for x in normalized) else 3, batch_id=batch_id, repo=repo, destination_ref=ref, initial_head=head,
                     max_leads=maximum, cap_source=source, created_at=now(), updated_at=now(), status='open', halted=False, requests=normalized)
         if owner_task_id is not None:
             data['owner_task_id'] = owner_task_id
@@ -548,6 +802,7 @@ def execute(args, directory, records):
                 require(tip and finish_helper._git(repo, 'merge-base', '--is-ancestor', tip, data['destination_ref']).returncode == 0,
                         'destination no longer contains integrated predecessor: ' + completed['slug'])
     def save():
+        migrate_ordinary(data)
         data['updated_at'] = now()
         write_json(path, data)
     def capacity(target):
@@ -604,6 +859,8 @@ def execute(args, directory, records):
     if args.command in {'bootstrap', 'bind'} and item.get('creation_intent'):
         intent = item['creation_intent']
         require(args.worktree == intent['worktree'] and args.branch == intent['branch'], 'managed creation binding changed')
+    if args.command == 'extend':
+        return extend_scopes(repo, data, item, records, args, save)
     if args.command == 'bootstrap':
         require(not data['halted'] and item['status'] == 'reserved' and not item.get('resuming'), 'bootstrap requires fresh unhalted reservation')
         no_main_task(repo)
@@ -748,7 +1005,7 @@ def execute(args, directory, records):
         item.update(status='reserved', resuming=True, worker_stopped=True, run_id=run_id)
         save()
         handoff = dict(worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'], run_id=item.get('run_id'),
-                       worker_id=item['worker_id'], agent='task-lead-resume', fresh_run=False)
+                       worker_id=item['worker_id'], agent='task-lead-resume', fresh_run=False, scopes=effective_scopes(item))
         if item.get('submodule_manifest'):
             handoff.update(submodules=copy.deepcopy(item['submodules']), submodule_manifest=copy.deepcopy(item['submodule_manifest']))
         return {'status': 'reserved', 'handoff': handoff}

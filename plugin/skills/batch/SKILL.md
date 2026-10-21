@@ -112,6 +112,16 @@ links, tracking or other dirty files refuse; standalone finish has no exemption.
 
 ## d) Complete, recover and refill
 
+For a newly required scope, stop the affected lead and all its nested writers.
+Use `wbs(action="dispatch", operation="extend", slug=S, worker_id=<bound ID>,
+worker_stopped=true, expected_head=<observed full SHA>, expected_run_id=<same run>,
+scopes=[<added literal paths>], reason=<concrete discovery>)`. The owner rejects
+prior out-of-scope edits, stale identity, held conflicts and S1 pools. It keeps
+the original pack, checkout, marker and evidence; queued overlapping work waits.
+Update that lead's existing PLAN/current ownership and explicitly continue the
+same worker only after the grant. Unrelated work need not stop. See the existing
+batch-state recovery REQ for migration and refusal details.
+
 A lead returns its actual fenced JSON object with `task_id`, `worktree`,
 `branch`, `commit`, `verdict` and `blocked_reason`. Confirm through the host that
 that worker and all nested writers stopped. Silence or elapsed time is no proof.

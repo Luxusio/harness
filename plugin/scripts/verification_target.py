@@ -128,7 +128,7 @@ def _manifest(repo, paths, *, destination=None, readonly=False):
             if output is not None:
                 output.write(chunk)
         try:
-            record = _read_payload_file(Path(repo), relative, consume=consume, readonly=readonly)
+            record = _read_payload_file(Path(repo), relative, consume=consume, readonly=readonly, source_input=True)
         finally:
             if output is not None:
                 output.close()

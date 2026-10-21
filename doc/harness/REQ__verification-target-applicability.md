@@ -21,5 +21,13 @@ The response supplies a random token and persistent `snapshot_root`. Append `_vt
 ## Input limits and errors
 Canonical WBS policy and streaming measurement budgets apply; required files are not removed to obtain PASS. Unsupported symlink/nonregular inputs, missing dependencies, unsafe ownership/modes, nested checkout roots and recursive task/runtime input scopes fail explicitly. Select concrete nested-module source inputs instead of silently omitting them. Target metadata is bounded to 1 MiB per immutable record; refine actual validation scope if that bound is exceeded. Source and artifact selection must match declared policy. Private copied data can be read-only, but Harness does not intercept arbitrary shell mutations.
 
+Derived from preserving actual source inputs: owner-private readable source
+such as0600/0640 is valid without changing its original permissions. The existing
+descriptor reader retains ownership, single-link, no-follow and stability checks;
+source inputs reject group/other write, special permission bits, unreadable owner
+modes and executable bits without owner-execute. Copies remain private and
+read-only. This source-read policy does not relax canonical installer payload or
+frozen-copy permission checks.
+
 ## Verification
 Actual source-copy execution under checkout ABA; content restoration and documentation-only reuse; native first-generation versus followup association; changed build options; diagnostic isolation; missing snapshot; public target action and stored-only context; authoritative verify/close/install applicability. All tests preserve independent lifecycle receipt authenticity and ordering.

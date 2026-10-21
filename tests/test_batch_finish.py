@@ -17,11 +17,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "plugin/scripts/batch_finish.py"
-SPEC = importlib.util.spec_from_file_location("batch_finish", SCRIPT)
-assert SPEC and SPEC.loader
-mod = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = mod
-SPEC.loader.exec_module(mod)
+# Batch owners may already hold this dependency when helpers are imported
+# lazily. Keep one module so fault injection reaches the actual cleanup path.
+if "batch_finish" in sys.modules:
+    mod = sys.modules["batch_finish"]
+else:
+    SPEC = importlib.util.spec_from_file_location("batch_finish", SCRIPT)
+    assert SPEC and SPEC.loader
+    mod = importlib.util.module_from_spec(SPEC)
+    sys.modules[SPEC.name] = mod
+    SPEC.loader.exec_module(mod)
 
 IGNORES = (
     "doc/harness/tasks/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n"

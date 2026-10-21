@@ -253,6 +253,13 @@ def test_timeout_error_explains_action_specific_support(pending_task):
     assert result.get("isError")
     message = str(result)
     assert "action verify" in message and "allowed fields:" in message
-    assert "check (1..60 seconds)" in message
+    assert "check (1..300 seconds)" in message
     schema = server.TOOLS["wbs"]["inputSchema"]["properties"]["timeout"]
-    assert schema["maximum"] == 60 and "check only" in schema["description"]
+    assert schema["maximum"] == 300 and "check only" in schema["description"]
+    with mock.patch.object(server.wbs, "verify", return_value={"passed": True}) as command:
+        accepted = server.call_tool("wbs", {"action": "check", "wbs_id": "settlement", "node_id": "A", "timeout": 120})
+        assert not accepted.get("isError"), accepted
+        assert command.call_args.kwargs["timeout"] == 120
+        rejected = server.call_tool("wbs", {"action": "check", "wbs_id": "settlement", "node_id": "A", "timeout": 301})
+        assert rejected.get("isError") and "1..300" in str(rejected)
+        assert command.call_count == 1

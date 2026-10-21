@@ -104,7 +104,7 @@ def _normalize_payload_path(path: str) -> str:
     return raw
 
 
-def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=False) -> tuple[bytes, os.stat_result] | None:
+def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=False, source_input=False) -> tuple[bytes, os.stat_result] | None:
     """Read one stable regular file through descriptor-relative no-follow opens."""
     rel = _normalize_payload_path(path)
     if not rel:
@@ -135,11 +135,18 @@ def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=Fal
         )
         before = os.fstat(file_fd)
         mode = stat.S_IMODE(before.st_mode)
+        allowed_mode = mode in ({0o444, 0o555} if readonly else {0o644, 0o755})
+        if source_input and not readonly:
+            # Verification reads owner-private source; install payload modes
+            # remain canonical. Preserve executable identity in the copied view.
+            allowed_mode = bool(mode & 0o400) and not mode & 0o7022 and (
+                not mode & 0o111 or bool(mode & 0o100)
+            )
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.getuid()
             or before.st_nlink != 1
-            or mode not in ({0o444, 0o555} if readonly else {0o644, 0o755})
+            or not allowed_mode
         ):
             return None
         chunks = []

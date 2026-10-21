@@ -2090,6 +2090,9 @@ def _record_write(path: str, text: str, written: list[str], bytes_written: dict[
     bytes_written[name] = len(text.encode("utf-8"))
 
 
+WBS_CHECK_TIMEOUT_MAX = 300
+
+
 def handle_task_wbs(args: dict) -> dict:
     """Explicit bounded check or read-only work-pack proposal; never a verdict."""
     import wbs
@@ -2117,8 +2120,8 @@ def handle_task_wbs(args: dict) -> dict:
     if action != "verify":
         raise ValueError("task_wbs action must be context, verify or dispatch")
     timeout = args.get("timeout", 60)
-    if type(timeout) is not int or not 1 <= timeout <= 60:
-        raise ValueError("WBS verification timeout must be 1..60 seconds")
+    if type(timeout) is not int or not 1 <= timeout <= WBS_CHECK_TIMEOUT_MAX:
+        raise ValueError(f"WBS verification timeout must be 1..{WBS_CHECK_TIMEOUT_MAX} seconds")
     with receipt_stream_transaction(td):
         current = _validated_task_control(td)
         if current != control or task_control_status(td, current) != "open":
@@ -2141,20 +2144,31 @@ def _managed_dispatch(common: dict, args: dict) -> dict:
         "complete": {"slug", "worker_id", "result", "worker_stopped"},
         "resume": {"slug", "worker_stopped"},
         "recover": {"slug", "worker_stopped", "recovery_commit"},
+        "extend": {"slug", "worker_id", "worker_stopped", "scopes", "expected_head", "expected_run_id", "reason"},
     }
     if not isinstance(operation, str) or operation not in fields:
         raise ValueError("unknown worktree lifecycle operation")
     supplied = set(args) - {"action", "wbs_id", "workspace", "operation"}
     if supplied - fields[operation]:
         raise ValueError("unexpected fields for worktree operation: " + ", ".join(sorted(supplied - fields[operation])))
-    if operation in {"bind", "complete", "resume", "recover"}:
+    if operation in {"bind", "complete", "resume", "recover", "extend"}:
         _req(args, "slug")
-    if operation in {"bind", "complete"}:
+    if operation in {"bind", "complete", "extend"}:
         _req(args, "worker_id")
-    if operation in {"complete", "resume", "recover"} and args.get("worker_stopped") is not True:
+    if operation in {"complete", "resume", "recover", "extend"} and args.get("worker_stopped") is not True:
         raise ValueError("confirm the actual worker and all nested writers stopped with worker_stopped=true")
     if operation == "complete" and not isinstance(args.get("result"), dict):
         raise ValueError("complete requires the actual structured worker result")
+    if operation == "extend":
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", _req(args, "expected_head")):
+            raise ValueError("expected_head must be the exact observed full commit SHA")
+        _req(args, "expected_run_id")
+        if len(_req(args, "reason")) > 2000:
+            raise ValueError("scope extension reason exceeds 2000 characters")
+        scopes = args.get("scopes")
+        if (not isinstance(scopes, list) or not 1 <= len(scopes) <= 100
+                or any(not isinstance(path, str) or not path for path in scopes)):
+            raise ValueError("extend requires 1..100 literal relative scopes")
     if "recovery_commit" in args and (not isinstance(args["recovery_commit"], str)
                                      or not re.fullmatch(r"[0-9a-f]{40}", args["recovery_commit"])):
         raise ValueError("recovery_commit must acknowledge the exact reviewed resolved tip SHA")
@@ -2271,7 +2285,7 @@ def handle_wbs(args: dict) -> dict:
         "context": ("task_context", set()),
         "plan": ("write_plan", {"plan", "required_lenses"}),
         "check": ("task_wbs", {"timeout"}),
-        "dispatch": ("task_wbs", {"ownership", "operation", "slug", "worker_id", "result", "worker_stopped", "available_slots", "recovery_commit"}),
+        "dispatch": ("task_wbs", {"ownership", "operation", "slug", "worker_id", "result", "worker_stopped", "available_slots", "recovery_commit", "scopes", "expected_head", "expected_run_id", "reason"}),
         "verify": ("task_verify", set()),
         "close": ("task_close", set()),
         "block": ("task_blocked", {"blocked_reason", "unblock_condition"}),
@@ -2289,7 +2303,7 @@ def handle_wbs(args: dict) -> dict:
             allowed.add("node_id")
         if action == "open":
             allowed.add("objective")
-        hint = " timeout is supported only by check (1..60 seconds)." if "timeout" in unknown else ""
+        hint = f" timeout is supported only by check (1..{WBS_CHECK_TIMEOUT_MAX} seconds)." if "timeout" in unknown else ""
         raise ValueError(f"unexpected fields for WBS action {action}: "
                          + ", ".join(sorted(unknown))
                          + "; allowed fields: " + ", ".join(sorted(allowed)) + "." + hint)
@@ -2499,15 +2513,19 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "target": {"type": "object", "description": "target only: preissue a frozen source view before native review/QA. inputs (explicit WBS input policy), commands (argv arrays), lenses, purpose acceptance|diagnostic, optional environment key names, toolchain executables, and output_dirs outside selected inputs (not part of target identity). Use returned snapshot_root; append _vt_<token> to native task_name."},
          "required_lenses": {"type": "array", "items": {"type": "string"}},
          "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
-         "operation": {"type": "string", "enum": ["prepare", "status", "bind", "complete", "resume", "recover"], "description": "dispatch lifecycle operation. prepare (default) creates owned worktrees; bind admits the actual native worker; complete records its stopped result and integrates/disposes; status is read-only."},
+         "operation": {"type": "string", "enum": ["prepare", "status", "bind", "complete", "resume", "recover", "extend"], "description": "dispatch lifecycle operation. prepare creates owned worktrees; bind admits the actual worker; complete integrates/disposes stopped results; extend adds execution ownership for an exact stopped bound worker before integration; status is read-only."},
          "slug": {"type": "string", "description": "Exact request slug returned by managed dispatch."},
          "worker_id": {"type": "string", "description": "Actual native host worker identity, never inferred from lead text."},
          "result": {"type": "object", "description": "Actual structured stopped-worker result; existing task/run/close proof remains authoritative."},
          "worker_stopped": {"type": "boolean", "description": "Coordinator confirmed the native worker and all nested writers stopped; required for complete/resume/recover."},
          "recovery_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$", "description": "recover only: acknowledge the exact reviewed resolved rebase tip. Never accepted by normal completion; original result identity is preserved."},
+         "scopes": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}, "description": "extend only: added literal execution scopes; original WBS intent and assigned scopes remain intact."},
+         "expected_head": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$", "description": "extend only: exact observed bound worktree HEAD; stale observations refuse."},
+         "expected_run_id": {"type": "string", "description": "extend only: exact existing task run, preserved by the grant."},
+         "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "extend only: concrete reason for newly discovered execution ownership; grants earn no progress."},
          "available_slots": {"type": "integer", "minimum": 0, "description": "Actual free host slots after reserving review/QA capacity; bounds prepare reservations."},
-         "timeout": {"type": "integer", "minimum": 1, "maximum": 60,
-                     "description": "check only: assertion timeout in seconds (1..60, default 60); not accepted by verify or other actions."},
+         "timeout": {"type": "integer", "minimum": 1, "maximum": WBS_CHECK_TIMEOUT_MAX,
+                     "description": f"check only: assertion timeout in seconds (1..{WBS_CHECK_TIMEOUT_MAX}, default 60); not accepted by verify or other actions."},
          "apply": {"type": "boolean", "default": False, "description": "Explicitly apply previewed legacy-data migration."},
          "fresh_run": {"type": "boolean"}, "blocked_reason": {"type": "string"},
          "unblock_condition": {"type": "string"},
