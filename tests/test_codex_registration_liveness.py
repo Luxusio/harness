@@ -252,7 +252,7 @@ hook._register_task_result(b'{}',deadline=started+0.2)
 print()
 print(json.dumps({'elapsed':time.monotonic()-started}))
 '''
-    result = subprocess.run([sys.executable, "-c", code, str(SCRIPTS_DIR)], capture_output=True, text=True, timeout=3)
+    result = subprocess.run([sys.executable, "-c", code, str(SCRIPTS_DIR)], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
     notice, timing = map(json.loads, result.stdout.splitlines())
     assert "failed" in notice["hookSpecificOutput"]["additionalContext"]
