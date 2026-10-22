@@ -293,6 +293,27 @@ def test_mcp_completed_pack_closes_integration_child_and_goal(tmp_path, monkeypa
     assert not closed.get("isError"), closed
 
 
+def test_outcome_checks_preserve_source_proof_but_final_verify_remeasures_custody(tmp_path, monkeypatch):
+    pool, call, directory = mcp_integration(tmp_path, monkeypatch)
+    observed = []
+    original = work_pack.batch.fingerprint
+    def fingerprint(path):
+        observed.append(path)
+        return original(path)
+    monkeypatch.setattr(work_pack.batch, 'fingerprint', fingerprint)
+    damage_pack_proof(pool, 'archive')
+    checked = call('wbs', dict(action='check', wbs_id=CHILD, node_id='A'))
+    assert not checked.get('isError'), checked
+    assert checked['structuredContent']['passed']
+    assert checked['structuredContent']['progress']['custody_measurement'] == 'stored'
+    assert observed == []
+    verified = call('task_verify', dict(task_id=CHILD))
+    assert observed
+    # Authentic review/QA PASS is separate from fresh WBS custody acceptance.
+    assert not verified.get('isError'), verified
+    assert 'verified WBS outcomes' in verified['structuredContent']['missing_for_close']
+
+
 def test_mcp_close_refuses_damaged_pack_without_closing_child(tmp_path, monkeypatch, proof):
     pool, call, directory = mcp_integration(tmp_path, monkeypatch)
     goal_file = directory / "WBS.json"

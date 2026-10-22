@@ -139,6 +139,15 @@ entire host ends this cooperative lifetime guarantee. Missing or unsafe output
 after command success is executor failure.
 No Windows or real VM execution is claimed by the Linux CLI tests.
 
+Derived policy consistency: mandatory source/artifact roots cannot be excluded
+or denied. Reusable jobs share this static check with WBS and target issuance,
+refuse denied descendants before opening their bytes, and enforce source and
+artifact byte budgets during the existing streaming read. Policy errors and
+budget overflow are unavailable verification, never command success or reusable
+PASS. No second whole-source hash is required to enforce these limits.
+Each input observation also stays within the invocation's bounded timeout;
+this does not increase the declared source or artifact byte allowance.
+
 ## Verification
 
 `tests/test_verify_runner.py` retains legacy ordering/worktree behavior.

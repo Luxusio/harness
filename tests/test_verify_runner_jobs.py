@@ -74,6 +74,49 @@ def test_reuse_only_never_runs_a_missing_or_stale_command(tmp_path):
     assert stale["returncode"] is None and "output" not in stale and "reuse-only" in stale["error"]
 
 
+@pytest.mark.parametrize('boundary', ['deny', 'exclude'])
+def test_required_input_cannot_be_omitted_before_execution_or_reuse(tmp_path, monkeypatch, boundary):
+    item = job(tmp_path, 'check', "from pathlib import Path\nPath('ran').touch()\n")
+    required = tmp_path / 'required.py'
+    required.write_text('required input')
+    item['inputs']['source'].append(required.name)
+    assert execute(tmp_path, [item])['status'] == 'PASS'
+    (tmp_path / 'ran').unlink()
+    required.write_text('changed required input')
+    item['inputs'][boundary] = [required.name]
+    original = os.open
+    def opening(path, *args, **kwargs):
+        assert os.fspath(path) not in (required.name, str(required)), 'forbidden input opened'
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'open', opening)
+    for reuse_only in (False, True):
+        with pytest.raises(ValueError, match='required input is excluded or denied'):
+            execute(tmp_path, [item], 'invalid', reuse_only=reuse_only)
+    assert not (tmp_path / 'ran').exists()
+
+
+@pytest.mark.parametrize('category', ['source', 'artifact'])
+def test_streamed_input_budgets_refuse_commands_and_prior_success(tmp_path, monkeypatch, category):
+    import wbs
+    required = tmp_path / 'required.bin'
+    required.write_bytes(b'input')
+    item = job(tmp_path, 'check', "from pathlib import Path\nPath('ran').touch()\n",
+               artifacts=[required.name] if category == 'artifact' else [])
+    if category == 'source':
+        item['inputs']['source'].append(required.name)
+        item['inputs']['source_byte_limit'] = (tmp_path / 'check.py').stat().st_size + required.stat().st_size
+    assert execute(tmp_path, [item])['status'] == 'PASS'
+    (tmp_path / 'ran').unlink()
+    if category == 'artifact':
+        monkeypatch.setattr(wbs, 'MAX_ARTIFACT_BYTES', required.stat().st_size)
+    required.write_bytes(b'input changed')
+    result = execute(tmp_path, [item], 'over-budget')['commands'][0]
+    assert result['status'] == 'FAIL' and result['state'] == 'executor_error'
+    assert result['returncode'] is None and not result['reused']
+    assert category + ' bytes' in result['error'] and 'required.bin' in result['error']
+    assert not (tmp_path / 'ran').exists()
+
+
 def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     import verification_target as vt
     # A .git-free view nested inside a checkout must never walk to the main root.

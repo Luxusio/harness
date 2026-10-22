@@ -104,37 +104,60 @@ def _context(spec, repo):
                 environment={key: wbs.digest(os.environ.get(key)) for key in spec["environment"]})
 
 
-def _paths(repo, policy):
+def _paths(repo, policy, *, _deadline=None):
     """Enumerate explicit roots only; wbs owns policy/budgets and stable hashing."""
+    wbs.required_inputs(policy)
     pending = [Path(repo) / p for p in policy["source"] + policy["artifacts"]]
-    found = set()
+    found, listing_bytes = set(), 0
     while pending:
+        _require(_deadline is None or time.monotonic() < _deadline, "input measurement time budget exceeded")
         path = pending.pop()
         relative = path.relative_to(repo).as_posix()
         if any(wbs.covers(p, relative) for p in policy["exclude"]):
             continue
-        if any(wbs.covers(p, relative) for p in policy["deny"]):
-            continue
+        _require(not any(wbs.covers(p, relative) for p in policy["deny"]),
+                 "required input is denied: " + relative)
         if path.name == ".git":
             continue
         info = path.lstat()
         _require(not stat.S_ISLNK(info.st_mode), "symlink input unsupported: " + relative)
+        _require(relative not in policy['artifacts'] or stat.S_ISREG(info.st_mode),
+                 'required artifact must be a regular file: ' + relative)
         if stat.S_ISDIR(info.st_mode):
             _require(path == Path(repo) or not (path / ".git").exists(), "nested checkout unsupported; select its concrete inputs: " + relative)
-            pending.extend(path.iterdir())
+            for child in path.iterdir():
+                _require(_deadline is None or time.monotonic() < _deadline, "input measurement time budget exceeded")
+                listing_bytes += len(os.fsencode(child.name)) + 1
+                _require(listing_bytes <= wbs.MAX_LISTING_BYTES, 'input listing byte budget exceeded')
+                pending.append(child)
+                _require(len(found) + len(pending) <= wbs.MAX_EVIDENCE_ENTRIES, "input entry budget exceeded")
         else:
             _require(stat.S_ISREG(info.st_mode), "nonregular input unsupported: " + relative)
             found.add(relative)
         _require(len(found) + len(pending) <= wbs.MAX_EVIDENCE_ENTRIES, "input entry budget exceeded")
+    _require(all(any(wbs.covers(required, name) for name in found)
+                 for required in policy['source'] + policy['artifacts']),
+             'required input missing from evidence')
     return sorted(found)
 
 
-def _manifest(repo, paths, *, destination=None, readonly=False):
+def _manifest(repo, paths, *, destination=None, readonly=False, policy=None, _deadline=None):
     # One existing descriptor-relative reader, with streaming consumers shared
     # with verified installation; no second security walker.
     from install_verified import _read_payload_file
-    rows = []
+    rows, total = [], {'source': 0, 'artifact': 0}
     for relative in paths:
+        category = 'artifact' if policy and relative in policy['artifacts'] else 'source'
+        limit = ((policy or {}).get('source_byte_limit', wbs.MAX_EVIDENCE_BYTES)
+                 if category == 'source' else wbs.MAX_ARTIFACT_BYTES)
+        def budget():
+            _require(_deadline is None or time.monotonic() < _deadline, 'input measurement time budget exceeded')
+            _require(policy is None or total[category] <= limit,
+                     f'input measurement budget exceeded ({category} bytes; input {relative}; used {total[category]}; limit {limit})')
+        budget()
+        if policy is not None:
+            _require((Path(repo) / relative).lstat().st_size <= limit - total[category],
+                     f'input measurement budget exceeded ({category} bytes; input {relative}; limit {limit})')
         digest = hashlib.sha256()
         output = None
         if destination is not None:
@@ -142,6 +165,8 @@ def _manifest(repo, paths, *, destination=None, readonly=False):
             target.parent.mkdir(parents=True, exist_ok=True)
             output = target.open("xb")
         def consume(chunk):
+            total[category] += len(chunk)
+            budget()
             digest.update(chunk)
             if output is not None:
                 output.write(chunk)

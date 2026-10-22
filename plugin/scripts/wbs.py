@@ -151,6 +151,13 @@ def covers(root, path):
     return root == "." or path == root or path.startswith(root + "/")
 
 
+def required_inputs(policy):
+    """Check mandatory roots without touching their potentially denied bytes."""
+    for required in policy.get('source', []) + policy['artifacts']:
+        require(not any(covers(p, required) for p in policy['exclude'] + policy['deny']),
+                'required input is excluded or denied: ' + required)
+
+
 def transition(old, new):
     """Only refinement: stable nodes cannot disappear or silently change credit."""
     previous, current = {n["id"]: n for n in old}, {n["id"]: n for n in new}
@@ -276,8 +283,8 @@ def fingerprint(repo, policy=None, *, _deadline=None):
     denied = policy["deny"] if policy else []
     artifacts = policy["artifacts"] if policy else []
     seen = set()
-    for required in (selected or []) + artifacts:
-        require(not any(covers(p, required) for p in excludes + denied), "required input is excluded or denied: " + required)
+    if policy is not None:
+        required_inputs(policy)
     # Git can read ignore/config includes outside its enumerated candidate set.
     # Only explicit inputs can enforce a no-read boundary without invoking Git.
     require(not denied or selected is not None,
@@ -529,16 +536,17 @@ def scoped_source(sources, policy):
     return sources.get(digest(policy)) if isinstance(sources, dict) else sources
 
 
-def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=True, _state=None):
+def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=True, _state=None,
+                  _measure_custody=True):
     stamp = time.time() if now is None else now
     try:
         state = read_state(task_dir) if _state is None else _state
         if state is None:
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None)
         if state.get("pack_only"):
-            validate_history(task_dir, repo, state, measure=measure)
+            validate_history(task_dir, repo, state, measure=measure and _measure_custody)
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None,
-                        integration=batch_route(task_dir, repo, state, measure=measure))
+                        integration=batch_route(task_dir, repo, state, measure=measure and _measure_custody))
         plan_text = Path(task_dir, "PLAN.md").read_text()
         plan_nodes = from_plan(plan_text)
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
@@ -588,8 +596,8 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
         total = float(weight_sum(rows))
         earned = float(weight_sum(n for n in rows if n["verified"]))
         complete = all(n["verified"] for n in rows)
-        validate_history(task_dir, repo, state, measure=measure)
-        integration = batch_route(task_dir, repo, state, measure=measure) if state.get("batch") else None
+        validate_history(task_dir, repo, state, measure=measure and _measure_custody)
+        integration = batch_route(task_dir, repo, state, measure=measure and _measure_custody) if state.get("batch") else None
         if not measure:
             for row in rows:
                 row["historical_verified"], row["verified"] = row["verified"], False
@@ -606,7 +614,9 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
                     last_progress_at=state["last_progress_at"],
                     refinement_due=not complete and stamp - state["last_progress_at"] >= STALL_SECONDS,
                     integration=integration,
-                    next_action="Refine only unclear unfinished outcomes; preserve weights. Report real external blockers instead of recursive splitting.")
+                    custody_measurement="fresh" if _measure_custody else "stored",
+                    next_action="Refine only unclear unfinished outcomes; preserve weights. Report real external blockers instead of recursive splitting."
+                    if _measure_custody else "Source evidence measured; batch archive custody remains stored-only until final verify/close.")
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as exc:
         return _unavailable(exc)
 
@@ -701,7 +711,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     state = read_state(task_dir)
     require(state is not None and state["run_id"] == run_id, "baseline current task run first through wbs(action='plan')")
     if state.get("batch"):
-        require(batch_route(task_dir, repo, state)["route"] == "integration", "work pack is unfinished; preserve parked parent")
+        require(batch_route(task_dir, repo, state, measure=False)["route"] == "integration", "work pack is unfinished; preserve parked parent")
     plan_text = Path(task_dir, "PLAN.md").read_text()
     require(from_plan(plan_text) == state["nodes"], "plan/evidence mismatch")
     require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
@@ -715,7 +725,8 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     def aggregate(sources, current_state):
         try:
             complete_sources = measurement_sources(repo, current_state, observed=sources)
-            return task_progress(task_dir, repo, run_id, now=now, _source=complete_sources, _state=current_state)
+            return task_progress(task_dir, repo, run_id, now=now, _source=complete_sources,
+                                 _state=current_state, _measure_custody=False)
         except observation_errors as exc:
             return _unavailable(exc)
 
@@ -742,7 +753,8 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         before = scoped_source(before_sources, verification_inputs(state, node))
     except observation_errors as exc:
         return unavailable(exc, "before")
-    before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before_sources)
+    before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before_sources,
+                                    _measure_custody=False)
     if before_progress["status"] != "measured":
         return unavailable(before_progress.get("reason", "current measurement unavailable"), "before")
     verified = {row["id"] for row in before_progress["outcomes"] if row["verified"]}
@@ -757,7 +769,9 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         deps.update(index[ancestor]["depends_on"])
         ancestor = index[ancestor]["parent"]
     require(all(complete(dep) for dep in deps), "dependencies are not verified")
-    before_aggregate = aggregate(before_sources, state)
+    # Independent assertions must not wait for unrelated scopes to exist.
+    before_aggregate = (aggregate(before_sources, state)
+                        if any('inputs' in n for n in leaves(state['nodes'])) else before_progress)
     try:
         result = _execute(node["check"], repo, timeout)
     except OSError as exc:
@@ -766,7 +780,8 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     try:
         after_sources = measurement_sources(repo, state, only=needed)
         after_source = scoped_source(after_sources, verification_inputs(state, node))
-        after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_sources)
+        after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_sources,
+                                       _measure_custody=False)
         require(after_progress["status"] == "measured", after_progress.get("reason", "current measurement unavailable"))
     except observation_errors as exc:
         # Preserve the prior proof's fields, but prevent it from resurrecting

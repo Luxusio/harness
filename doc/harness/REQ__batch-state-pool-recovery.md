@@ -370,6 +370,12 @@ and timestamp. Unknown or duplicate fields, invalid types/identities and unsafe
 files continue to refuse disposal. Existing removal tests use real MCP-written
 payloads so producer changes cannot silently strand ordinary worktrees again.
 
+Outcome assertions freshly measure their declared source inputs, while checking
+stored archive identity, closed control, ancestry and actual disposal structurally.
+Their progress labels archive custody as stored-only. Pure aggregation does not
+rehash every historical archive again. Final verification and close still freshly
+hash complete archive custody; a modified archive prevents completion.
+
 Partial ordinary residue uses that same typed ancillary validation in read-only
 matching mode against its already-preserved disposal-context sidecars. Closed
 control comes from the immutable task archive when source control has already

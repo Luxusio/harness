@@ -96,6 +96,7 @@ def _scoped_call(code, value, root, env, held=()):
 
 def _job_spec(value, root):
     import verification_target as vt
+    import wbs
     allowed = {"job_id", "outcome_id", "kind", "argv", "inputs", "outputs", "resources", "requires", "environment", "toolchains"}
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError("unknown job fields")
@@ -106,6 +107,7 @@ def _job_spec(value, root):
         raise ValueError("kind must be producer or consumer")
     spec = vt._spec(dict(inputs=value.get("inputs"), commands=[value.get("argv")],
                          environment=value.get("environment", []), toolchains=value.get("toolchains", []), purpose="diagnostic"))
+    wbs.required_inputs(spec['inputs'])
     job = dict(value, spec=spec)
     for key in ("outputs", "resources", "requires"):
         items = value.get(key, [])
@@ -217,7 +219,9 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     return observed
                 context = observe_context()
                 def observe():
-                    return vt._manifest(root, vt._paths(root, spec["inputs"]))
+                    deadline = time.monotonic() + timeout
+                    return vt._manifest(root, vt._paths(root, spec["inputs"], _deadline=deadline),
+                                        policy=spec["inputs"], _deadline=deadline)
                 inputs = observe()
                 if job["kind"] == "consumer":
                     expected = {row[0]: row for p in producers for row in records[p["job_id"]].get("artifact_manifest", [])}
