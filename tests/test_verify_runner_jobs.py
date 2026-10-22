@@ -342,33 +342,46 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path):
 
 
 def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path):
-    server = socket.socket()
-    server.bind(("127.0.0.1", 0))
-    server.listen(2)
-    server.settimeout(8)
-    errors = []
-    def release_both():
-        connections = []
-        try:
-            connections = [server.accept()[0], server.accept()[0]]
-            for connection in connections:
-                connection.sendall(b"ok")
-        except Exception as exc:
-            errors.append(exc)
-        finally:
-            for connection in connections:
-                connection.close()
-            server.close()
-    worker = threading.Thread(target=release_both)
-    worker.start()
-    jobs = shared(tmp_path)
-    for item in jobs[1:]:
-        script = tmp_path / (item["job_id"] + ".py")
-        script.write_text(script.read_text() + f"import socket\ns = socket.create_connection(('127.0.0.1', {server.getsockname()[1]}), timeout=6)\nassert s.recv(2) == b'ok'\n")
-    declaration = tmp_path / "jobs.json"
-    declaration.write_text(json.dumps(jobs))
-    proc = subprocess.run([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "result.json"), "--task-id", "t", "--run-id", "r", "--generation", "g", "--max-workers", "2", "--timeout", "8"], capture_output=True, text=True, timeout=25)
-    worker.join(timeout=10)
-    assert not worker.is_alive() and not errors
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert len(json.loads(proc.stdout)["commands"]) == 3
+    from contextlib import ExitStack
+
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(2)
+        jobs = shared(tmp_path)
+        for item in jobs[1:]:
+            script = tmp_path / (item["job_id"] + ".py")
+            script.write_text(script.read_text() + f"import socket\nwith socket.create_connection(('127.0.0.1', {server.getsockname()[1]}), timeout=30) as s:\n s.sendall({item['job_id'].encode()!r} + b'\\n')\n assert s.recv(2) == b'ok'\n")
+        declaration = tmp_path / "jobs.json"
+        declaration.write_text(json.dumps(jobs))
+        arrivals, accepted, barrier_error = [], 0, None
+        with subprocess.Popen([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "result.json"), "--task-id", "t", "--run-id", "r", "--generation", "g", "--max-workers", "2", "--timeout", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            try:
+                with ExitStack() as sockets:
+                    connections = []
+                    # Imports, fingerprints and preparation precede the first
+                    # arrival; this is a startup bound, not an overlap measure.
+                    server.settimeout(30)
+                    for _ in range(2):
+                        connection = sockets.enter_context(server.accept()[0])
+                        accepted += 1
+                        connection.settimeout(15)
+                        connections.append(connection)
+                        with connection.makefile("rb") as stream:
+                            arrivals.append(stream.readline(16).decode().strip())
+                        server.settimeout(15)
+                    assert sorted(arrivals) == ["alpha", "beta"]
+                    # Neither consumer can finish before both distinct clients
+                    # arrive. A serialized executor cannot satisfy this barrier.
+                    for connection in connections:
+                        connection.sendall(b"ok")
+            except Exception as exc:
+                barrier_error = repr(exc)
+            try:
+                stdout, stderr = proc.communicate(timeout=90)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                stdout, stderr = proc.communicate(timeout=10)
+                barrier_error = f"{barrier_error}; CLI timeout: {exc}"
+        diagnostic = f"accepted={accepted}, arrivals={arrivals}, barrier_error={barrier_error}\nstdout={stdout}\nstderr={stderr}"
+        assert proc.returncode == 0 and barrier_error is None, diagnostic
+        assert len(json.loads(stdout)["commands"]) == 3, diagnostic
