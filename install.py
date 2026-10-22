@@ -109,6 +109,7 @@ class InstallResult:
     # Complete ordered instructions when a prerequisite must be repaired
     # before retrying (for example an unavailable runtime daemon).
     recovery: str | None = None
+    restart_required: bool = False
 
 
 PAYLOAD_SYNCHRONIZED = "SYNCHRONIZED"
@@ -1580,11 +1581,11 @@ def _reload_codex_daemon_hooks(socket_path: str, *, timeout: float = 10.0) -> No
             raise ValueError("Codex daemon did not confirm successful hook reload")
 
 
-def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str]:
+def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str, bool]:
     target = Path(config_path or DEFAULT_CODEX_CONFIG_PATH).resolve()
     runtime_home = Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_CONFIG_PATH.parent)
     if target != (runtime_home / "config.toml").resolve():
-        return True, "custom Codex config installed; use a new session with that config"
+        return True, "custom Codex config installed; use a new session with that config", True
     try:
         rc, out, err = _run(["codex", "app-server", "daemon", "version"], False)
         if rc:
@@ -1595,14 +1596,15 @@ def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str]:
                 entry = control_socket.lstat()
             except FileNotFoundError:
                 return True, ("no local Codex daemon endpoint; hooks will load in the next session; "
-                              + diagnostic)
+                              + diagnostic), True
             except OSError as exc:
                 endpoint_detail = f"cannot inspect control endpoint {control_socket}: {exc}"
             else:
                 try:
                     endpoint = control_socket.stat() if stat.S_ISLNK(entry.st_mode) else entry
                 except FileNotFoundError:
-                    endpoint_detail = f"control endpoint is a dangling symlink: {control_socket}"
+                    return True, ("control endpoint is a dangling symlink; hooks will load in the next session; "
+                                  + diagnostic), True
                 except OSError as exc:
                     endpoint_detail = f"cannot inspect control endpoint {control_socket}: {exc}"
                 else:
@@ -1610,7 +1612,7 @@ def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str]:
                                        if stat.S_ISSOCK(endpoint.st_mode) else
                                        f"control endpoint is not a Unix socket: {control_socket}")
             return False, ("Codex payload installed, but daemon discovery failed; "
-                           f"{diagnostic}; {endpoint_detail}; loaded hooks were not refreshed")
+                           f"{diagnostic}; {endpoint_detail}; loaded hooks were not refreshed"), False
         daemon = json.loads(out)
         if not isinstance(daemon, dict):
             raise ValueError("invalid daemon discovery result")
@@ -1618,8 +1620,8 @@ def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str]:
             raise ValueError("unknown daemon discovery status or endpoint")
         _reload_codex_daemon_hooks(daemon["socketPath"])
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        return False, f"Codex payload installed, but loaded hooks were not refreshed: {exc}"
-    return True, "running Codex sessions reloaded installed hook configuration"
+        return False, f"Codex payload installed, but loaded hooks were not refreshed: {exc}", False
+    return True, "running Codex sessions reloaded installed hook configuration", False
 
 
 def _codex_mcp_config(shared_plugin_root: Path) -> dict:
@@ -2034,7 +2036,7 @@ def install_codex(*, dry_run: bool, force: bool,
                              f"codex plugin marketplace add failed: {err.strip() or out.strip()}",
                              steps, backup_path=result["backup_path"])
     steps.append("codex plugin marketplace registered")
-    reload_ok, reload_message = _install_step("Codex hook reload", steps, lambda: _reload_codex_runtime(config_path))
+    reload_ok, reload_message, restart_required = _install_step("Codex hook reload", steps, lambda: _reload_codex_runtime(config_path))
     if not reload_ok:
         retry = ["python3", "install.py", "--codex-only", "--force"]
         if config_path is not None:
@@ -2048,7 +2050,7 @@ def install_codex(*, dry_run: bool, force: bool,
         )
     steps.append(reload_message)
     return InstallResult("codex", True, "Codex install complete", steps,
-                         backup_path=result["backup_path"])
+                         backup_path=result["backup_path"], restart_required=restart_required)
 
 
 def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
@@ -2307,6 +2309,8 @@ def main() -> int:
         else:
             outcome = "SUCCESS"
         print(f"{'Claude' if r.runtime == 'claude' else 'Codex'}: {outcome}")
+        if r.ok and r.restart_required and not args.dry_run:
+            print("  Start a new Codex session to load the installed hooks.")
         if args.verbose:
             for step in r.steps:
                 print(f"    · {step}")

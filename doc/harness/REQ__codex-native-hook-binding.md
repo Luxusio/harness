@@ -12,18 +12,23 @@ The local socket and connected peer must belong to the current user. The native
 symlink from the private control directory to the private runtime socket is
 supported; connection time, message size and notification count are bounded.
 
-A failed discovery with an existing control endpoint, malformed daemon metadata,
+A failed discovery with an existing socket or non-socket entry, malformed daemon metadata,
 or failed reload makes installation report failure after payload publication.
 Discovery diagnostics name `codex app-server daemon version`, its exit code,
 and stderr (stdout when stderr is empty, or an explicit no-output indication).
 The installer distinguishes an absent endpoint, a dangling control symlink,
 a non-socket entry, and a socket entry whose discovery failed; a socket entry
 does not prove the daemon is reachable. Only `FileNotFoundError` when inspecting
-the control path itself means absence. Permission and other inspection errors
-remain failures and retain the discovery diagnostics. A dangling link remains
-a failed refresh, rather than being treated as a daemon-free installation.
-When no local endpoint exists, hooks load in the next session and discovery
-diagnostics remain visible. Installing to a
+the control path itself, or when following an already identified symlink whose
+target is missing, permits deferred activation. Permission and other inspection
+errors remain failures and retain the discovery diagnostics. A dangling link
+is preserved without deleting it or starting a daemon. This is a point-in-time
+observation, not proof that every Codex session is stopped.
+When the endpoint or its symlink target is absent, installation succeeds with
+an English next-session notice; it does not claim loaded hooks were refreshed.
+Discovery diagnostics remain available in verbose output. This derived repair
+addresses the reported installer failure without weakening live reload checks.
+Installing to a
 config path different from the runtime's `CODEX_HOME/config.toml` (default
 `~/.codex/config.toml`) reports that a new session must use that config and never
 refreshes an unrelated daemon. An explicit path matching the runtime home does

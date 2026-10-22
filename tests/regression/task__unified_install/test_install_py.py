@@ -1244,7 +1244,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
         assert installed["plugins"]["harness@harness"]["enabled"] is True
         assert installed["hooks"]["state"]["harness@harness:hooks.json:post_tool_use:0:0"]["trusted_hash"]
         assert f"plugin marketplace add {codex_install_root}" in log.read_text().splitlines()
-        return reload_ok, "native daemon refresh result"
+        return reload_ok, "native daemon refresh result", False
 
     monkeypatch.setattr(module, "_reload_codex_runtime", reload_after_installed_state)
 

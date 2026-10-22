@@ -153,6 +153,8 @@ def _daemon(tmp_path, mode="success"):
 
 
 def pytest_generate_tests(metafunc):
+    if "missing_target" in metafunc.fixturenames:
+        metafunc.parametrize("missing_target", [False, True])
     if "failure_mode" in metafunc.fixturenames:
         metafunc.parametrize("failure_mode", ["bad_accept", "rpc_error", "timeout", "close", "malformed", "oversized", "failed_status", "masked", "fragmented", "nonobject", "missingresult", "exhausted"])
     if "success_mode" in metafunc.fixturenames:
@@ -213,8 +215,9 @@ def test_custom_config_never_refreshes_unrelated_native_daemon(tmp_path, monkeyp
         raise AssertionError("custom config must not discover or refresh the user's daemon")
     monkeypatch.setattr(module, "_run", forbidden)
     monkeypatch.setattr(module, "_reload_codex_daemon_hooks", forbidden)
-    ok, detail = module._reload_codex_runtime(str(tmp_path / "other.toml"))
+    ok, detail, restart_required = module._reload_codex_runtime(str(tmp_path / "other.toml"))
     assert ok, detail
+    assert restart_required
     assert detail
 
 
@@ -227,8 +230,9 @@ def test_discovery_refreshes_only_reported_native_socket(tmp_path, monkeypatch):
             calls.append((command, dry))
             return 0, json.dumps({"status": "running", "socketPath": path}), ""
         monkeypatch.setattr(module, "_run", discover)
-        ok, detail = module._reload_codex_runtime(None)
+        ok, detail, restart_required = module._reload_codex_runtime(None)
     assert ok, detail
+    assert not restart_required
     assert calls == [(["codex", "app-server", "daemon", "version"], False)]
     assert requests[-1]["params"] == {"edits": [], "reloadUserConfig": True}
 
@@ -243,7 +247,7 @@ def test_discovery_rejects_unknown_or_malformed_native_status(monkeypatch):
                    (0, "[]", ""), (0, '{"status":"unknown"}', ""),
                    (0, '{"status":"running","socketPath":4}', "")]:
         monkeypatch.setattr(module, "_run", lambda *args, value=result: value)
-        ok, detail = module._reload_codex_runtime(None)
+        ok, detail, restart_required = module._reload_codex_runtime(None)
         assert not ok, result
         assert detail
 
@@ -255,7 +259,7 @@ def test_discovery_reports_native_reload_failure(monkeypatch):
     def fail(*args, **kwargs):
         raise TimeoutError("test deadline")
     monkeypatch.setattr(module, "_reload_codex_daemon_hooks", fail)
-    ok, detail = module._reload_codex_runtime(None)
+    ok, detail, restart_required = module._reload_codex_runtime(None)
     assert not ok
     assert "test deadline" in detail
 
@@ -284,27 +288,31 @@ def test_no_daemon_endpoint_defers_hooks_to_next_session(tmp_path, monkeypatch):
     module = _installer()
     monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", tmp_path / "config.toml")
     monkeypatch.setattr(module, "_run", lambda *args: (1, "", "not running"))
-    ok, detail = module._reload_codex_runtime(None)
+    ok, detail, restart_required = module._reload_codex_runtime(None)
     assert ok, detail
     assert "next session" in detail
+    assert restart_required
     assert "codex app-server daemon version exited with code 1: not running" in detail
 
 
-def test_discovery_error_with_existing_endpoint_fails_closed(tmp_path, monkeypatch):
+def test_dangling_control_endpoint_defers_without_removing_link(tmp_path, monkeypatch):
     monkeypatch.delenv("CODEX_HOME", raising=False)
     module = _installer()
     monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", tmp_path / "config.toml")
     monkeypatch.setattr(module, "_run", lambda *args: (1, "", "permission denied"))
     endpoint = tmp_path / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir()
-    # A dangling native control symlink is still an endpoint needing repair.
     endpoint.symlink_to(tmp_path / "missing.sock")
-    ok, detail = module._reload_codex_runtime(None)
-    assert not ok
-    assert "not refreshed" in detail
+    target = endpoint.readlink()
+    monkeypatch.setattr(module, "_reload_codex_daemon_hooks", lambda *_: TestCase().fail("no socket to reload"))
+    ok, detail, restart_required = module._reload_codex_runtime(None)
+    assert ok
+    assert restart_required
+    assert "next session" in detail
     assert "dangling symlink" in detail
     assert "exited with code 1: permission denied" in detail
     assert endpoint.is_symlink()
+    assert endpoint.readlink() == target
 
 
 def test_failed_discovery_reports_diagnostic_and_present_endpoint(
@@ -324,7 +332,7 @@ def test_failed_discovery_reports_diagnostic_and_present_endpoint(
         else:
             endpoint.write_text("keep this file")
         with mock.patch.object(module, "_run", return_value=(7, stdout, stderr)) as discover:
-            ok, detail = module._reload_codex_runtime(str(tmp_path / "config.toml"))
+            ok, detail, restart_required = module._reload_codex_runtime(str(tmp_path / "config.toml"))
         discover.assert_called_once_with(["codex", "app-server", "daemon", "version"], False)
         assert not ok
         assert f"exited with code 7: {expected}" in detail
@@ -351,7 +359,7 @@ def test_endpoint_inspection_error_preserves_discovery_failure(tmp_path, monkeyp
 
     monkeypatch.setattr(Path, inspection, denied)
     monkeypatch.setattr(module, "_run", lambda *args: (1, "", "discovery error"))
-    ok, detail = module._reload_codex_runtime(str(tmp_path / "config.toml"))
+    ok, detail, restart_required = module._reload_codex_runtime(str(tmp_path / "config.toml"))
     assert not ok
     assert "exited with code 1: discovery error" in detail
     assert "cannot inspect control endpoint" in detail
@@ -359,7 +367,7 @@ def test_endpoint_inspection_error_preserves_discovery_failure(tmp_path, monkeyp
     assert "next session" not in detail
 
 
-def test_failed_daemon_install_renders_ordered_recovery_with_exact_retry(tmp_path, monkeypatch, capsys):
+def test_daemon_install_reports_deferred_or_failed_discovery(tmp_path, monkeypatch, capsys, missing_target):
     module = _installer()
     # Match the runtime config while exercising shell quoting in its parent path.
     config = tmp_path / "home with 'quotes' $dollar; semicolon" / "config.toml"
@@ -374,7 +382,10 @@ def test_failed_daemon_install_renders_ordered_recovery_with_exact_retry(tmp_pat
     monkeypatch.setattr(module, "_prune_bytecode_caches", lambda root: [])
     endpoint = config.parent / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir(parents=True)
-    endpoint.symlink_to(tmp_path / "missing-runtime.sock")
+    if missing_target:
+        endpoint.symlink_to(tmp_path / "missing-runtime.sock")
+    else:
+        endpoint.write_text("preserve invalid endpoint")
     error = "Error: failed to connect to control socket\nCaused by: No such file or directory (os error 2)"
 
     def cli(command, dry):
@@ -396,17 +407,25 @@ def test_failed_daemon_install_renders_ordered_recovery_with_exact_retry(tmp_pat
         }),
     ):
         result = module.install_codex(dry_run=False, force=True, config_path=str(config))
-    assert not result.ok
+    assert result.ok is missing_target
     assert result.backup_path == backup
     publish.assert_called_once()
     cache.assert_called_once()
     monkeypatch.setattr(module, "install_codex", lambda **kwargs: result)
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--force", "--config-path", str(config)])
+    if missing_target:
+        assert result.restart_required
+        assert module.main() == 0
+        assert capsys.readouterr().out == "Codex: SUCCESS\n  Start a new Codex session to load the installed hooks.\n"
+        assert endpoint.is_symlink()
+        assert endpoint.readlink() == tmp_path / "missing-runtime.sock"
+        assert any(error in step and "next session" in step for step in result.steps)
+        return
     assert module.main() == 1
     output = capsys.readouterr().out
     assert output.startswith("Codex: FAILED\n  Error: ")
     assert output.count(error) == 1
-    assert "dangling symlink" in output
+    assert "not a Unix socket" in output
     assert "same shell/runtime" not in output
     assert "only after it succeeds, retry:" not in output
 
@@ -414,13 +433,13 @@ def test_failed_daemon_install_renders_ordered_recovery_with_exact_retry(tmp_pat
     assert module.main() == 1
     output = capsys.readouterr().out
     assert output.count(error) == 1
-    assert "dangling symlink" in output
+    assert "not a Unix socket" in output
     assert "CODEX_HOME" in output and "same shell/runtime" in output
     assert output.index("repair the Codex daemon installation") < output.index("verify:") < output.index("retry:")
     assert "repair after correcting the reported cause" not in output
     retry = output.split("only after it succeeds, retry: ", 1)[1].splitlines()[0]
     assert shlex.split(retry) == ["python3", "install.py", "--codex-only", "--force", "--config-path", str(config)]
-    assert endpoint.is_symlink()
+    assert endpoint.read_text() == "preserve invalid endpoint"
 
 
 def test_native_reload_rejects_writable_endpoint_parent(tmp_path):
@@ -548,7 +567,7 @@ def test_explicit_config_matching_codex_home_refreshes_that_daemon(tmp_path, mon
     calls = []
     monkeypatch.setattr(module, "_run", lambda *args: (0, '{"status":"running","socketPath":"/test-only"}', ""))
     monkeypatch.setattr(module, "_reload_codex_daemon_hooks", lambda path: calls.append(path))
-    ok, detail = module._reload_codex_runtime(str(tmp_path / "config.toml"))
+    ok, detail, restart_required = module._reload_codex_runtime(str(tmp_path / "config.toml"))
     assert ok, detail
     assert calls == ["/test-only"]
 
@@ -559,7 +578,7 @@ def test_default_config_mismatching_codex_home_skips_daemon(tmp_path, monkeypatc
     def forbidden(*args, **kwargs):
         raise AssertionError("different runtime home must not be probed")
     monkeypatch.setattr(module, "_run", forbidden)
-    ok, detail = module._reload_codex_runtime(None)
+    ok, detail, restart_required = module._reload_codex_runtime(None)
     assert ok, detail
     assert "new session" in detail
 
@@ -570,6 +589,6 @@ def test_daemon_discovery_timeout_returns_failure(monkeypatch):
     def timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(["codex"], 1)
     monkeypatch.setattr(module, "_run", timeout)
-    ok, detail = module._reload_codex_runtime(None)
+    ok, detail, restart_required = module._reload_codex_runtime(None)
     assert not ok
     assert "not refreshed" in detail
