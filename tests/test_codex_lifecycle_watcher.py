@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
 import json
 import math
 import os
@@ -3136,7 +3137,9 @@ def _followup_events(child_id, agent_path, target=None, call_id="call_followup_1
     return events
 
 
-def _assert_native_followup(tmp_path, monkeypatch, target, *, delayed_child_completion=False):
+def _assert_native_followup(tmp_path, monkeypatch, target, *, delayed_child_completion=False,
+                            partial_terminal=False, failed_followup=False,
+                            accepted_followup_pending=False):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -3159,21 +3162,38 @@ def _assert_native_followup(tmp_path, monkeypatch, target, *, delayed_child_comp
         for event in _spawn_events(root_id, child_id, "code_review", agent_path):
             watcher.feed(event)
         watcher.feed(_delivery(agent_path, first))
+        if failed_followup:
+            failed = _followup_events(child_id, agent_path, target, call_id="call_failed_123456")
+            watcher.feed(failed[0])
+            watcher.feed(failed[2])
+            watcher.feed(_delivery(agent_path, first))
+            assert watcher.calls["call_runtime_123456"].get("completed")
+            assert not watcher.calls["call_runtime_123456"].get("invalid")
+            assert "root_final" not in watcher.calls["call_failed_123456"]
         # A real idle follow-up emits a second NEW_TASK in the same child,
         # an interacted activity and potentially empty tool output.
         next_boundary = _child_events(root_id, child_id, agent_path, str(repo))[-1:]
         _write_jsonl(child, initial + next_boundary)
-        for event in _followup_events(child_id, agent_path, target):
-            watcher.feed(event)
+        with mock.patch.object(mod, "_coordinator_identity", side_effect=mod._AncestryPending()) if accepted_followup_pending else contextlib.nullcontext():
+            for event in _followup_events(child_id, agent_path, target):
+                watcher.feed(event)
+        if accepted_followup_pending:
+            watcher.feed(_delivery(agent_path, second))
+            assert not watcher.calls["call_runtime_123456"].get("invalid")
+            assert watcher.calls["call_followup_123456"]["root_final"] == second
+            watcher.retry()
         assert [row.get("event") for row in receipts] == ["started", "completed", "started"]
         assert receipts[0]["runtime_id"] != receipts[2]["runtime_id"]
         assert receipts[1]["verdict"] == "PASS"
         if delayed_child_completion:
+            if partial_terminal:
+                partial = _child_events(root_id, child_id, agent_path, str(repo), second)[-3:-1]
+                _write_jsonl(child, initial + partial)
             watcher.feed(_delivery(agent_path, second))
             assert len(receipts) == 3
             assert not watcher.by_agent[agent_path].get("invalid")
         _write_jsonl(child, initial + _child_events(root_id, child_id, agent_path, str(repo), second)[-3:])
-        if delayed_child_completion:
+        if delayed_child_completion or accepted_followup_pending:
             watcher.retry()
         else:
             watcher.feed(_delivery(agent_path, second))
@@ -3195,6 +3215,86 @@ def test_native_followup_accepts_exact_relative_child_name(tmp_path, monkeypatch
 
 def test_root_completion_waits_for_child_generation_flush(tmp_path, monkeypatch):
     _assert_native_followup(tmp_path, monkeypatch, "code_review", delayed_child_completion=True)
+
+
+def test_partial_terminal_waits_for_task_complete(tmp_path, monkeypatch):
+    _assert_native_followup(tmp_path, monkeypatch, "code_review",
+                            delayed_child_completion=True, partial_terminal=True)
+
+
+def test_failed_followup_does_not_consume_generation_or_delivery(tmp_path, monkeypatch):
+    _assert_native_followup(tmp_path, monkeypatch, "code_review", failed_followup=True)
+
+
+def test_accepted_followup_delivery_waits_for_pending_start(tmp_path, monkeypatch):
+    _assert_native_followup(tmp_path, monkeypatch, "code_review", accepted_followup_pending=True)
+
+
+def _assert_accepted_followup_reservations(tmp_path, monkeypatch, *, identical_finals=False,
+                                          invalid_before_acceptance=False):
+    mod = _load()
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    task_dir = tmp_path / "repo/doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review"
+    watcher = mod.Watcher(str(tmp_path / "repo"), root_id)
+    receipts = []
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
+         mock.patch.object(mod, "_coordinator_identity", return_value={"agent_path": "/root"}), \
+         mock.patch.object(mod, "_child_status", return_value=("pending", None, "")), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=lambda _td, row: receipts.append(dict(row)) or row), \
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
+        for event in _spawn_events(root_id, child_id, "code_review", agent_path):
+            watcher.feed(event)
+        watcher.feed(_delivery(agent_path, "first"))
+        second = _followup_events(child_id, agent_path, call_id="call_second_123456")
+        third = _followup_events(child_id, agent_path, call_id="call_third_123456")
+        if invalid_before_acceptance:
+            watcher.feed(second[0])
+            bad_output = _spawn_events(root_id, child_id, "code_review", "/root/other_review",
+                                       call_id="call_second_123456")[2]
+            watcher.feed(bad_output)
+            assert watcher.calls["call_second_123456"].get("invalid")
+            assert "generation" not in watcher.calls["call_second_123456"]
+            assert "child_id" not in watcher.calls["call_second_123456"]
+        for event in (second[1:] if invalid_before_acceptance else second) + third:
+            watcher.feed(event)
+        assert watcher.calls["call_second_123456"]["generation"] == 2
+        assert watcher.calls["call_third_123456"]["generation"] == 3
+        assert not watcher.calls["call_second_123456"].get("started")
+        watcher.feed(second[1])  # Delayed duplicate cannot renumber generation2.
+        assert watcher.calls["call_second_123456"]["generation"] == 2
+        assert watcher.calls["call_second_123456"].get("invalid")
+        second_final = "VERDICT: PASS" if identical_finals else "second"
+        third_final = "VERDICT: PASS" if identical_finals else "third"
+        watcher.feed(_delivery(agent_path, second_final))
+        assert watcher.calls["call_second_123456"]["root_final"] == second_final
+        assert "root_final" not in watcher.calls["call_third_123456"]
+        watcher.feed(_delivery(agent_path, third_final))
+        assert watcher.calls["call_third_123456"]["root_final"] == third_final
+        for event in _followup_events(child_id, agent_path, call_id="call_fourth_123456"):
+            watcher.feed(event)
+        assert watcher.calls["call_fourth_123456"]["generation"] == 4
+        assert not receipts
+
+
+def test_accepted_followup_generations_stay_reserved_before_start(tmp_path, monkeypatch):
+    _assert_accepted_followup_reservations(tmp_path, monkeypatch)
+
+
+def test_accepted_followup_identical_finals_keep_delivery_positions(tmp_path, monkeypatch):
+    _assert_accepted_followup_reservations(tmp_path, monkeypatch, identical_finals=True)
+
+
+def test_accepted_followup_invalid_before_acceptance_reserves_turn(tmp_path, monkeypatch):
+    _assert_accepted_followup_reservations(tmp_path, monkeypatch, invalid_before_acceptance=True)
+
+
+def test_accepted_followup_invalid_before_acceptance_identical_finals(tmp_path, monkeypatch):
+    _assert_accepted_followup_reservations(tmp_path, monkeypatch, invalid_before_acceptance=True,
+                                          identical_finals=True)
 
 
 def test_interacted_activity_without_followup_call_is_not_authority(tmp_path, monkeypatch):

@@ -163,3 +163,13 @@ A root completion may arrive before its trusted child rollout has flushed
 identity mismatch. Only matched completed child/root evidence permits a receipt;
 invalid metadata or differing completed finals still fail closed. The watcher
 retries observation, never reruns the reviewer or test command.
+
+The derived acceptance boundary is native `interacted` activity matching the
+known child and path. Failed or unaccepted follow-up requests do not consume a
+generation or receive a completion delivery. Accepted invocations retain their
+generation even while ancestry/child flushing delays their start, or if other
+validation rejects them before or after that exact acceptance. Their root deliveries retain the same ordered position
+without granting a successful receipt, so they cannot be attributed to a later
+accepted invocation, even when both return identical text.
+A final-answer row without `task_complete` remains
+retryable; conflicting or duplicate completed evidence still fails closed.

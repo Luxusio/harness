@@ -1330,7 +1330,7 @@ def _child_status(
         return "invalid", path, ""
     if child_boundaries < generation:
         return "pending", path, ""
-    if not finals and not completes:
+    if len(finals) <= 1 and not completes:
         return "running", path, ""
     if len(finals) > 1 or len(completes) != 1:
         return "invalid", path, ""
@@ -1681,8 +1681,8 @@ class Watcher:
         if followup:
             call_id, target = followup
             prior = next((item for item in reversed(list(self.calls.values()))
-                          if (item.get("started") or item.get("followup_child")) and not item.get("invalid")
-                          and target in {item.get("agent_path"), item.get("followup_path"), item.get("task_name")}), None)
+                          if item.get("child_id") and item.get("agent_path")
+                          and target in {item.get("agent_path"), item.get("task_name")}), None)
             if prior is None:
                 return  # No authenticated original invocation in this stream.
             binding = _require_task_binding(
@@ -1700,7 +1700,6 @@ class Watcher:
                 task_run_id=prior["task_run_id"],
                 followup_child=prior.get("child_id") or prior["followup_child"],
                 followup_path=prior.get("agent_path") or prior["followup_path"],
-                generation=prior.get("generation", 1) + 1,
             )
             return
         spawn = _spawn_call(event)
@@ -1732,6 +1731,15 @@ class Watcher:
                     self._invalidate(item, "follow-up activity changed child identity")
                     return
                 self._set_once(item, "output_path", agent_path)
+                if "generation" not in item:
+                    item["generation"] = 1 + max(
+                        (entry.get("generation", 1) for entry in self.calls.values()
+                         if entry is not item and entry.get("child_id") == child_id
+                         and entry.get("agent_path") == agent_path
+                         and entry.get("task_dir") == item.get("task_dir")
+                         and entry.get("task_run_id") == item.get("task_run_id")),
+                        default=0,
+                    )
             elif interacted:
                 return  # Activity alone cannot create an invocation.
             self._set_once(item, "child_id", child_id)
@@ -1776,10 +1784,11 @@ class Watcher:
         # Native deliveries are ordered per child. Complete the oldest observed
         # invocation still awaiting a delivery, including a queued follow-up.
         item = next((entry for entry in self.calls.values()
-                     if (entry.get("agent_path") or entry.get("followup_path")) == agent_path
-                     and not entry.get("invalid") and entry.get("root_final") is None), None)
-        item = item or self.by_agent.get(agent_path) or next(
-            (entry for entry in self.calls.values() if entry.get("agent_path") == agent_path), None,
+                     if entry.get("child_id") and entry.get("agent_path") == agent_path
+                     and entry.get("root_final") is None), None)
+        item = item or next(
+            (entry for entry in reversed(list(self.calls.values()))
+             if entry.get("child_id") and entry.get("agent_path") == agent_path), None,
         )
         if not item:
             return None
