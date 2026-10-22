@@ -147,6 +147,11 @@ budget overflow are unavailable verification, never command success or reusable
 PASS. No second whole-source hash is required to enforce these limits.
 Each input observation also stays within the invocation's bounded timeout;
 this does not increase the declared source or artifact byte allowance.
+Producer output observations apply that same timeout and the existing aggregate
+artifact byte allowance, before reuse and after execution. Missing or invalid
+old output may be rebuilt, but only valid final output can PASS. Reuse requires
+the output manifest to remain unchanged through validation. Jobs with no declared
+outputs retain an empty manifest. Measurement failure releases job ownership.
 
 ## Verification
 

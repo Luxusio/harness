@@ -165,6 +165,103 @@ def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     assert invalid.returncode == 2 and "bounded jobs" in invalid.stderr
 
 
+def test_producer_output_real_budget_blocks_consumer_and_reuse(tmp_path):
+    item = job(tmp_path, "prepare", "from pathlib import Path\nwith Path('built').open('wb') as f: f.truncate(33554433)\n",
+               kind="producer", outputs=["built"])
+    consumer = job(tmp_path, "consume", "raise AssertionError('must not run')\n", artifacts=["built"])
+    result = execute(tmp_path, [item, consumer])["commands"]
+    assert result[0]["status"] == "FAIL" and result[0]["state"] == "executor_error"
+    assert "artifact bytes" in result[0]["error"]
+    assert result[1]["state"] == "blocked_dependency"
+    again = execute(tmp_path, [item], "two", reuse_only=True)["commands"][0]
+    assert again["status"] == "FAIL" and not again["reused"]
+
+
+def test_producer_output_aggregate_budget_and_bad_old_output_repair(tmp_path, monkeypatch):
+    import wbs
+    monkeypatch.setattr(wbs, "MAX_ARTIFACT_BYTES", 8)
+    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('a').write_bytes(b'12345')\nPath('b').write_bytes(b'67890')\n",
+               kind="producer", outputs=["a", "b"], resources=["output-budget:" + str(tmp_path)])
+    failed = execute(tmp_path, [item])["commands"][0]
+    assert failed["status"] == "FAIL" and "artifact bytes" in failed["error"]
+    (tmp_path / "prepare.py").write_text("from pathlib import Path\nPath('a').write_bytes(b'12')\nPath('b').write_bytes(b'34')\n")
+    repaired = execute(tmp_path, [item], "repaired")["commands"][0]
+    assert repaired["status"] == "PASS" and not repaired["reused"]
+    assert execute(tmp_path, [item], "reuse")["commands"][0]["reused"]
+    # Result, output and named resource ownership all released after failure.
+    (tmp_path / "a").write_bytes(b'oversized previous output')
+    assert execute(tmp_path, [item], "repair-again")["status"] == "PASS"
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_output_observation_deadline_failure_releases_leases(tmp_path, monkeypatch, reuse):
+    import verification_target as vt
+    import install_verified
+    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('built').write_text('valid')\n",
+               kind="producer", outputs=["built"], resources=["output-deadline:" + str(tmp_path)])
+    if reuse:
+        assert execute(tmp_path, [item])["status"] == "PASS"
+    original_manifest, original_read = vt._manifest, install_verified._read_payload_file
+    expired = []
+    def manifest(root, paths, **kwargs):
+        if kwargs.get('policy', {}).get('artifacts') == ['built']:
+            assert kwargs.get('_deadline') is not None
+            expired[:] = [kwargs['_deadline'] + 1]
+        return original_manifest(root, paths, **kwargs)
+    def read(root, name, **kwargs):
+        if name == 'built':
+            clock = vt.time.monotonic
+            try:
+                monkeypatch.setattr(vt.time, 'monotonic', lambda: expired[0])
+                return original_read(root, name, **kwargs)
+            finally:
+                monkeypatch.setattr(vt.time, 'monotonic', clock)
+        return original_read(root, name, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(vt, '_manifest', manifest)
+        patch.setattr(install_verified, '_read_payload_file', read)
+        failed = execute(tmp_path, [item], "expired")["commands"][0]
+    assert failed['status'] == 'FAIL' and not failed['reused']
+    assert 'time budget exceeded' in failed['error']
+    assert execute(tmp_path, [item], "recovered")['status'] == 'PASS'
+
+
+def test_producer_output_change_during_reuse_is_not_pass(tmp_path, monkeypatch):
+    import verification_target as vt
+    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('built').write_text('original')\n",
+               kind="producer", outputs=["built"])
+    assert execute(tmp_path, [item])["status"] == "PASS"
+    original, observations = vt._manifest, []
+    def manifest(root, paths, **kwargs):
+        if kwargs.get('policy', {}).get('artifacts') == ['built']:
+            observations.append(True)
+            if len(observations) == 2:
+                (tmp_path / 'built').write_text('changed')
+        return original(root, paths, **kwargs)
+    monkeypatch.setattr(vt, '_manifest', manifest)
+    failed = execute(tmp_path, [item], "changed")["commands"][0]
+    assert failed['status'] == 'FAIL' and not failed['reused']
+    assert 'outputs changed during reuse validation' in failed['error']
+
+
+def test_producer_output_fifo_fails_without_blocking_or_retaining_leases(tmp_path):
+    item = job(tmp_path, 'prepare', "import os\nos.mkfifo('built')\n",
+               kind='producer', outputs=['built'], resources=['fifo:' + str(tmp_path)])
+    declaration = tmp_path / 'fifo-job.json'
+    declaration.write_text(json.dumps([item]))
+    argv = [sys.executable, str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
+            '--jobs', str(declaration), '--results', str(tmp_path / 'results.json'),
+            '--task-id', 'task', '--run-id', 'run', '--generation', 'fifo', '--timeout', '5']
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 1, proc.stderr
+    failed = json.loads(proc.stdout)['commands'][0]
+    assert failed['state'] == 'executor_error' and failed['status'] == 'FAIL'
+    assert 'regular file' in failed['error']
+    (tmp_path / 'built').unlink()
+    (tmp_path / 'prepare.py').write_text("from pathlib import Path\nPath('built').write_text('repaired')\n")
+    assert execute(tmp_path, [item], 'repaired')['status'] == 'PASS'
+
+
 @pytest.mark.parametrize("mutation", ["duplicate", "two-producers", "traversal", "absolute", "source-overlap", "consumer-output", "unknown", "symlink", "source-symlink", "result-overlap"])
 def test_declarations_reject_before_execution(tmp_path, mutation):
     jobs = shared(tmp_path)

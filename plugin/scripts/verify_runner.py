@@ -231,7 +231,11 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                 record.update(input_fingerprint=_digest(inputs), context_fingerprint=fingerprint)
                 prior = old.get(job["job_id"], {})
                 def artifacts():
-                    return vt._manifest(root, job["outputs"])
+                    for name in job["outputs"]:
+                        _file_path(root, name)
+                    return vt._manifest(root, job["outputs"],
+                                        policy=dict(source=[], artifacts=job["outputs"]),
+                                        _deadline=time.monotonic() + timeout)
                 try:
                     output_hash = _digest(artifacts())
                 except (OSError, ValueError):
@@ -246,8 +250,11 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                         and prior.get("kind") == job["kind"] and prior.get("outputs") == job["outputs"]):
                     if inputs != observe() or context != observe_context():
                         raise ValueError("inputs/context changed during reuse validation")
+                    output_manifest = artifacts()
+                    if _digest(output_manifest) != output_hash:
+                        raise ValueError("outputs changed during reuse validation")
                     record.update(state="completed", status="PASS", returncode=0, reused=True,
-                                  artifact_fingerprint=output_hash, artifact_manifest=artifacts(), origin_generation=prior.get("origin_generation"))
+                                  artifact_fingerprint=output_hash, artifact_manifest=output_manifest, origin_generation=prior.get("origin_generation"))
                     return record
                 if reuse_only:
                     record.update(error="matching successful result unavailable (reuse-only)")
