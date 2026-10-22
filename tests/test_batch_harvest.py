@@ -868,7 +868,26 @@ def test_s1_full_removal_supports_preexisting_annotated_module_tag(tmp_path, mon
     assert (main / "doc/harness/archive/batch/TASK__lead/TASK.json").is_file()
 
 
-def _ordinary_snapshot_fixture(tmp_path):
+def _producer_diagnostics(work, task, sid, *, error_only=False):
+    from unittest import mock
+    from test_worktree_workspace import harness_server as server
+
+    def register(payload, *, status_out, **kwargs):
+        status_out.update(status=server._REGISTRATION_REGISTERED, thread_id=sid)
+        return True
+
+    # Exercise the actual producer payload; mock registration, not its writer.
+    # These advisory snapshots do not establish registration or attestation.
+    with mock.patch.object(server, '_SERVER', None), \
+            mock.patch.object(server, '_server_runtime', return_value='codex'), \
+            mock.patch.object(server, '_current_session_identity', return_value=sid), \
+            mock.patch.object(server, '_restore_watcher_registration', side_effect=register):
+        if not error_only:
+            server._register_task_start_watcher(str(work), str(task), {})
+        server._record_watcher_error('fixture watcher failure' if error_only else '', str(work))
+
+
+def _ordinary_snapshot_fixture(tmp_path, *, error_only=False):
     import test_batch_state as fixture
     repo = _main_repo(tmp_path)
     _ignore_task_evidence(repo)
@@ -886,7 +905,10 @@ def _ordinary_snapshot_fixture(tmp_path):
         session_id=sid, task_dir=str(task), task_id=task.name,
         run_id=fixture.RUN, updated='2026-10-21T00:00:00Z')))
     diagnostics = work / 'doc/harness/.watcher-diagnostics.json'
-    diagnostics.write_bytes(b'{"session_id":"session-snapshots", "updated":"2026-10-21T00:00:00Z", "registration_present":true}\n')
+    _producer_diagnostics(work, task, sid, error_only=error_only)
+    value = json.loads(diagnostics.read_bytes())
+    assert value['session_id'] == sid and 'last_watcher_error' in value
+    assert ('registration_present' in value) is not error_only
     checkpoint = work / 'doc/harness/checkpoints' / (task.name + '.md')
     checkpoint.parent.mkdir()
     checkpoint.write_text('# Checkpoint — ' + task.name + '\n\n- written: 2026-10-21T00:00:00Z\n\n## Task state\n\n- status: open\n\n## Progress\n\n- phase: implementation\n\n## Next action\n\nHistorical resume note\n')
@@ -922,13 +944,29 @@ def test_ordinary_snapshots_never_authorize_precious_ignored_content(tmp_path):
     assert checkpoint.exists() and diagnostics.exists()
 
 
+def test_ordinary_removal_preserves_first_producer_error_without_registration(tmp_path):
+    repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path, error_only=True)
+    raw = diagnostics.read_bytes()
+    assert set(json.loads(raw)) == {'session_id', 'updated', 'last_watcher_error'}
+    mod.ordinary_removal_proof(str(repo), str(work), task.name)
+    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == raw
+    _git('worktree', 'remove', str(work), cwd=repo)
+    assert not work.exists()
+
+
 def test_ordinary_snapshots_refuse_foreign_malformed_and_unsafe_inputs(tmp_path):
     repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
     raw = diagnostics.read_bytes()
+    invalid_fields = [('last_watcher_error', 1), ('root_thread_id', 1),
+                      ('root_thread_id', ''), ('root_thread_id', 'default'),
+                      ('root_thread_id', 'foreign/invalid')]
+    malformed = [json.dumps(dict(json.loads(raw), **{key: value})).encode()
+                 for key, value in invalid_fields]
     for replacement in (b'{}', raw.replace(b'session-snapshots', b'foreign/invalid'),
                         raw.replace(b'true', b'"true"'),
-                        raw[:-2] + b',"unexpected":"precious"}\n',
-                        raw[:-2] + b',"session_id":"session-snapshots"}\n'):
+                        raw.rstrip()[:-1] + b',"unexpected":"precious"}\n',
+                        raw.rstrip()[:-1] + b',"session_id":"session-snapshots"}\n',
+                        *malformed):
         diagnostics.write_bytes(replacement)
         with _raises(mod.HarvestError):
             mod.ordinary_removal_proof(str(repo), str(work), task.name)

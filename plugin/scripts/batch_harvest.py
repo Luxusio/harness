@@ -524,17 +524,25 @@ def _ordinary_ancillary(repo, worktree, task_id, *, control_dir=None, preserve=T
                     result[key] = value
                 return result
             value = json.loads(raw, object_pairs_hook=unique)
-            required = {'session_id', 'updated', 'registration_present'}
-            optional = {'last_registration_error', 'last_registration_note'}
+            required = {'session_id', 'updated'}
+            messages = {'last_registration_error', 'last_registration_note', 'last_watcher_error'}
+            optional = messages | {'registration_present', 'root_thread_id'}
+            # MCP may first report an error before registration. Its advisory
+            # root identity and error fields are also written after registration.
             _s1_require(isinstance(value, dict) and required <= set(value) <= required | optional
+                        and ('registration_present' in value or 'last_watcher_error' in value)
                         and isinstance(value['session_id'], str) and value['session_id']
                         and isinstance(value['updated'], str) and value['updated']
-                        and (value['registration_present'] is None or type(value['registration_present']) is bool)
-                        and all(isinstance(value[key], str) for key in optional & set(value)),
+                        and (value.get('registration_present') is None or type(value['registration_present']) is bool)
+                        and all(isinstance(value[key], str) for key in messages & set(value)),
                         'unknown watcher diagnostics schema')
             sid = value['session_id']
             _s1_require(sid != 'default' and sanitize_session_id(sid) == sid,
                         'watcher diagnostics have unsafe session identity')
+            root_sid = value.get('root_thread_id')
+            _s1_require(root_sid is None or isinstance(root_sid, str) and bool(root_sid)
+                        and root_sid != 'default' and sanitize_session_id(root_sid) == root_sid,
+                        'watcher diagnostics have unsafe root identity')
         else:
             text = raw.decode('utf-8')
             _s1_require(text.startswith('# Checkpoint — ' + task_id + '\n\n- written: ')

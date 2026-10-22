@@ -363,6 +363,13 @@ Managed repositories and unintegrated commits stay under the repository; tempora
 
 Known owning-task checkpoint and watcher diagnostics may be preserved byte-for-byte in a separate ancillary archive before disposal. They never authorize closure or modify closed evidence. Producer diagnostics/checkpoints lack task/run attribution; sidecar task/run names identify disposal context only, never provenance or verification evidence. Only exact known-schema, ownership/type-checked preserved entries are accounted for; unknown ignored user data retains the worktree.
 
+Derived producer/consumer correction: the known diagnostics include the MCP's
+optional safe `root_thread_id` and string `last_watcher_error`. A first watcher
+error may precede `registration_present`; it still requires a safe session ID
+and timestamp. Unknown or duplicate fields, invalid types/identities and unsafe
+files continue to refuse disposal. Existing removal tests use real MCP-written
+payloads so producer changes cannot silently strand ordinary worktrees again.
+
 Partial ordinary residue uses that same typed ancillary validation in read-only
 matching mode against its already-preserved disposal-context sidecars. Closed
 control comes from the immutable task archive when source control has already
