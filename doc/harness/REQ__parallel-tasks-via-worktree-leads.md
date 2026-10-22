@@ -818,6 +818,13 @@ managed lead binding, including micro/maintenance; PLAN/REQ preparation remains
 possible. Routing display reads stored state and does not authenticate runtime
 or acquire integration locks. Missing managed binding is not a permission PASS.
 
+Derived admission measurement boundary (2026-10-22): ordinary source prewrite
+checks stored current and historical work-pack structure without rehashing
+archived evidence. This keeps the source-assignment check within the existing
+hook budget; it does not skip that check or permit unfinished packs. Final
+verification and close still freshly measure archive custody and reject altered
+evidence. Stored admission alone never grants completion or fresh proof.
+
 A disjoint ready pair wins over a conflicting broad first request while the
 full request graph remains intact. Serial facts name actual predecessors,
 conflicting outcomes/scopes or observed capacity/capability. Actual pool

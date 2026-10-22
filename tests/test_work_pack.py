@@ -293,6 +293,64 @@ def test_mcp_completed_pack_closes_integration_child_and_goal(tmp_path, monkeypa
     assert not closed.get("isError"), closed
 
 
+def test_prewrite_stored_custody_preserves_assignment(tmp_path, monkeypatch):
+    import contextlib
+    import io
+    import pytest
+    import wbs
+    import prewrite_gate
+
+    def check(repo, target):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            prewrite_gate._check_path(dict(cwd=str(repo)), str(target))
+        return json.loads(output.getvalue())["hookSpecificOutput"] if output.getvalue().strip() else {}
+
+    pool, call, directory = mcp_integration(tmp_path, monkeypatch)
+    state = wbs.read_state(str(directory))
+    spec = state["batch_history"][0]["batch"]
+    # Use the existing direct-assignment owner; do not replace it with a PASS.
+    ownership = {"A": ["owned.py"]}
+    state["execution_admission"] = dict(
+        run_id=state["run_id"], mode="direct", ownership=ownership, selected=["A"],
+        definition=wbs.admission_definition(state, ownership, ["A"]),
+    )
+    original = work_pack.batch.fingerprint
+    def forbidden(*args, **kwargs):
+        pytest.fail("source prewrite freshly hashed archive custody")
+    monkeypatch.setattr(work_pack.batch, "fingerprint", forbidden)
+    monkeypatch.setattr(wbs, "fingerprint", forbidden)
+    observed = []
+    assignment = wbs.require_source_assignment
+    def require_assignment(*args, **kwargs):
+        observed.append(args[-1])
+        return assignment(*args, **kwargs)
+    monkeypatch.setattr(wbs, "require_source_assignment", require_assignment)
+    monkeypatch.setattr(prewrite_gate, "resolve_active_task_dir", lambda _: str(directory))
+    for active in (False, True):
+        current = dict(state)
+        if active:
+            current.update(batch=spec, batch_history=[])
+        (directory / "WBS.json").write_text(wbs.encode_state(current))
+        assert check(pool.repo, pool.repo / "owned.py") == {}
+        denied = check(pool.repo, pool.repo / "unowned.py")
+        assert denied["permissionDecision"] == "deny"
+        assert "wbs-execution-assignment" in denied["permissionDecisionReason"]
+    assert observed == ["owned.py", "unowned.py"] * 2
+    # Stored structure remains mandatory even without reading archive bytes.
+    archive = pool.repo / "doc/harness/archive/batch/TASK__a"
+    archive.rename(archive.with_name("moved"))
+    denied = check(pool.repo, pool.repo / "owned.py")
+    assert denied["permissionDecision"] == "deny"
+    assert "wbs-work-pack" in denied["permissionDecisionReason"]
+    assert observed == ["owned.py", "unowned.py"] * 2
+    archive.with_name("moved").rename(archive)
+    monkeypatch.setattr(work_pack.batch, "fingerprint", original)
+    damage_pack_proof(pool, "tampered")
+    with pytest.raises(ValueError, match="archive fingerprint"):
+        wbs.require_integrated_for_task(str(pool.repo), CHILD)
+
+
 def test_outcome_checks_preserve_source_proof_but_final_verify_remeasures_custody(tmp_path, monkeypatch):
     pool, call, directory = mcp_integration(tmp_path, monkeypatch)
     observed = []

@@ -849,7 +849,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
 
     try:
         from wbs import require_integrated_for_task
-        require_integrated_for_task(repo_root, os.path.basename(active_dir))
+        require_integrated_for_task(repo_root, os.path.basename(active_dir), measure=False)
     except (OSError, ValueError, RuntimeError) as exc:
         _deny("wbs-work-pack", file_path, "task-control-mcp", str(exc), repo_root)
         return 0
