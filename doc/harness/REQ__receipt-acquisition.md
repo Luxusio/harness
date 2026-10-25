@@ -52,8 +52,23 @@ proof remains an explicit failure; increasing a timeout alone does not repair
 the repeated locked read. No result from an unregistered past execution gains
 attestation through this repair.
 
-Known ceiling: Native authentication has a finite 6-second allowance — revisit
-if measured legitimate ancestry exceeds it.
+A parent can legitimately append after preparation and before publication.
+Only the resulting typed native-ancestry-pending condition permits one fresh
+full authentication outside all publication locks, followed by one final
+publication attempt. Native MCP, successful task-result binding and standalone
+restore share this bounded owner. Nested restore forwards the condition to its
+outer owner; it never authenticates while that owner's locks are held. Restore
+retains the originally resolved task/run across retry, and each publication
+rechecks its ownership. Invalid proof, task conflicts and other errors do not
+permit arbitrary retry. Attempt diagnostics describe only the terminal outcome;
+a successful retry clears the first attempt's transient failure.
+
+Known ceiling: At most two prepared-publication attempts share the original
+absolute caller deadline. Each authentication is capped at 6 seconds; the total
+allowance remains 6 seconds plus the caller's publication allowance (8 seconds
+for native MCP, or the smaller remaining hook allowance). Retrying grants no
+extra time. Repeated parent changes or exhausted time fail explicitly without
+reading full history under locks or promoting historical results.
 
 ## Verification
 

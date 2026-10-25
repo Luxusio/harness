@@ -570,3 +570,300 @@ def test_native_authentication_ceiling_also_covers_public_workspace_admission(re
     assert time.monotonic() - started < 0.5
     assert not watcher._state_path(str(main), LEAD).exists()
     assert not (main / "doc/harness/tasks/.active_sessions" / (LEAD + ".json")).exists()
+
+
+@pytest.fixture
+def native_append_registration(registration, monkeypatch):
+    """Observe real ancestry reads and both publication lock families."""
+    from test_codex_worktree_receipts import LEAD
+    from test_worktree_workspace import _call, harness_server as server
+    owner, watcher, main, root_id, payload, data = registration
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    watcher._PARENT_SPAWN_CACHE.clear()
+    marker = main / "doc/harness/tasks/.active_sessions" / (LEAD + ".json")
+    bound = json.loads(marker.with_name(root_id + ".json").read_text())
+    bound["session_id"] = LEAD
+    marker.write_text(json.dumps(bound))
+    envelope = json.loads(payload)
+    envelope["session_id"] = LEAD
+    payload = json.dumps(envelope).encode()
+    parent = watcher._find_rollout(root_id)
+    locks, reads = [], []
+    original_spool = watcher.tempfile.SpooledTemporaryFile
+
+    @contextlib.contextmanager
+    def tracked(factory, *args, **kwargs):
+        with factory(*args, **kwargs) as value:
+            locks.append(True)
+            try:
+                yield value
+            finally:
+                locks.pop()
+
+    for module in (owner, server):
+        for name in ("active_session_transaction", "receipt_stream_transaction"):
+            factory = getattr(module, name)
+            monkeypatch.setattr(module, name, lambda *a, _factory=factory, **kw: tracked(_factory, *a, **kw))
+
+    def read_history(*args, **kwargs):
+        reads.append(len(locks))
+        assert not locks, "reauthentication scanned parent history inside publication locks"
+        assert not watcher._PARENT_PROOFS_CACHE_ONLY.get()
+        return original_spool(*args, **kwargs)
+
+    monkeypatch.setattr(watcher.tempfile, "SpooledTemporaryFile", read_history)
+
+    def invoke(entry, status, **kwargs):
+        if entry == "native":
+            outcomes = []
+            apply_status = server._apply_task_start_registration_status
+
+            def observe_registration(watcher_status, registration, *args, **status_kwargs):
+                if registration is not None:
+                    outcomes.append(registration)
+                return apply_status(watcher_status, registration, *args, **status_kwargs)
+
+            # Observe only after the canonical public handler and registrar
+            # have finished all protected task-control writes.
+            with monkeypatch.context() as invocation:
+                invocation.setattr(server, "_apply_task_start_registration_status", observe_registration)
+                if "budget_seconds" in kwargs:
+                    invocation.setattr(server, "TASK_START_REGISTRATION_BUDGET_SECONDS", kwargs["budget_seconds"])
+                response = _call(main, "wbs", {"action": "open", "wbs_id": data["task_id"], "workspace": str(main)})
+            assert not response.get("isError"), response
+            assert len(outcomes) == 1, response
+            assert isinstance(outcomes[0], dict), response
+            status.clear()
+            status.update(outcomes[0])
+            return outcomes[0]["registered"]
+        if entry == "task_result":
+            return owner.register_task_result(payload, status_out=status, **kwargs)
+        return owner.restore_watcher_registration(payload, status_out=status, **kwargs)
+
+    yield owner, watcher, main, LEAD, data, parent, marker, locks, reads, invoke
+    assert not locks
+    assert not watcher._PARENT_PROOFS_CACHE_ONLY.get()
+
+
+@pytest.mark.parametrize("entry,seam,with_status", [
+    ("native", "binding", True), ("native", "ensure", True),
+    ("task_result", "binding", True), ("task_result", "binding", False),
+    ("task_result", "ensure", True), ("task_result", "ensure", False),
+    ("restore", "ensure", True), ("restore", "ensure", False),
+])
+def test_live_parent_append_reauthenticates_after_all_publication_locks_unwind(
+    native_append_registration, monkeypatch, entry, seam, with_status,
+):
+    owner, watcher, main, thread, data, parent, marker, locks, reads, invoke = native_append_registration
+    original = owner._coordinator_identity if seam == "binding" else owner._ensure_with_deadline
+    attempts = []
+
+    def append_at_publication(*args, **kwargs):
+        if seam == "ensure" or watcher._PARENT_PROOFS_CACHE_ONLY.get():
+            attempts.append(len(locks))
+            if len(attempts) == 1:
+                with parent.open("ab") as handle:
+                    handle.write(b'{"type":"unrelated"}\n')
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "_coordinator_identity" if seam == "binding" else "_ensure_with_deadline", append_at_publication)
+    status = {} if with_status else None
+    assert invoke(entry, status), status
+    assert reads == [0, 0], "the changed generation needs one fresh full proof"
+    assert len(attempts) == 2
+    if entry != "restore":
+        assert all(depth > 0 for depth in attempts), "exercise the locked nested owner"
+    if status is not None:
+        if entry == "native":
+            assert status["registered"] is True and not status.get("reason"), status
+        else:
+            assert status["status"] == "registered" and status["reason"] == "", status
+        assert "stage" not in status, "first-attempt failure leaked into successful diagnostics"
+    state_path = watcher._state_path(str(main), thread)
+    before = json.loads(state_path.read_text())
+    assert (before["task_id"], before["run_id"]) == (data["task_id"], data["run_id"])
+    rollout = watcher._find_rollout(thread)
+    assert before["offset"] == rollout.stat().st_size
+    with rollout.open("ab") as handle:
+        handle.write(b'{"type":"unrelated"}\n')
+    assert invoke(entry, status), status
+    after = json.loads(state_path.read_text())
+    assert (after["offset"], after["registered_at"]) == (before["offset"], before["registered_at"])
+    assert json.loads(marker.read_text())["run_id"] == data["run_id"]
+
+
+@pytest.mark.parametrize("entry", ["native", "task_result", "restore"])
+def test_continuously_appending_parent_stops_after_two_publications(
+    native_append_registration, monkeypatch, entry,
+):
+    owner, watcher, main, thread, _, parent, marker, _, reads, invoke = native_append_registration
+    original = owner._ensure_with_deadline
+    attempts = []
+    marker_before = marker.read_bytes()
+
+    def append_every_time(*args, **kwargs):
+        attempts.append(time.monotonic())
+        with parent.open("ab") as handle:
+            handle.write(b'{"type":"unrelated"}\n')
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "_ensure_with_deadline", append_every_time)
+    status = {}
+    started = time.monotonic()
+    assert not invoke(entry, status, budget_seconds=0.8), status
+    assert len(attempts) == 2 and reads == [0, 0]
+    assert time.monotonic() - started < 1.5
+    if entry == "native":
+        assert status["registered"] is False, status
+    else:
+        assert status["status"] == "failed" and status["stage"] == "registration publication", status
+    assert "native parent proof changed" in status["reason"], status
+    assert not watcher._state_path(str(main), thread).exists()
+    # Binding publication may refresh updated; it must retain the same focus.
+    before, after = json.loads(marker_before), json.loads(marker.read_text())
+    for key in ("task_dir", "task_id", "run_id", "session_id"):
+        assert after[key] == before[key]
+
+
+@pytest.mark.parametrize("change", ["run", "closed", "task", "conflict"])
+def test_standalone_retry_does_not_adopt_a_different_binding(
+    native_append_registration, monkeypatch, change,
+):
+    import _lib as lib
+    from test_codex_lifecycle_watcher import _write_exact_session_binding
+    owner, watcher, main, thread, data, parent, marker, _, reads, invoke = native_append_registration
+    original = owner._ensure_with_deadline
+    attempts = []
+    task_path = Path(data["task_dir"]) / "TASK.json"
+
+    def change_after_preparation(*args, **kwargs):
+        attempts.append((kwargs["task_id"], kwargs["run_id"]))
+        if len(attempts) == 1:
+            with parent.open("ab") as handle:
+                handle.write(b'{"type":"unrelated"}\n')
+        elif change in {"run", "closed"}:
+            control = json.loads(task_path.read_text())
+            if change == "run":
+                control["run_id"] = "replacement-run"
+                binding = json.loads(marker.read_text())
+                binding["run_id"] = control["run_id"]
+                marker.write_text(json.dumps(binding))
+            else:
+                control["close_receipt_fingerprint"] = lib.receipt_stream_fingerprint(data["task_dir"])
+            task_path.write_text(json.dumps(control))
+            if change == "closed":
+                assert lib.task_control_status(data["task_dir"]) == "closed"
+        elif change == "task":
+            _write_exact_session_binding(main, thread)
+        else:
+            binding = json.loads(marker.read_text())
+            binding["conflicts"] = [dict(task_dir=data["task_dir"], task_id=data["task_id"], run_id=data["run_id"])]
+            marker.write_text(json.dumps(binding))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "_ensure_with_deadline", change_after_preparation)
+    status = {}
+    assert not invoke("restore", status), status
+    assert reads == [0, 0] and attempts == [(data["task_id"], data["run_id"])] * 2
+    assert status["status"] == "failed" and status["stage"] == "registration publication", status
+    assert not watcher._state_path(str(main), thread).exists()
+
+
+def test_retry_respects_original_overall_deadline(native_append_registration, monkeypatch):
+    owner, watcher, main, thread, _, parent, _, _, reads, invoke = native_append_registration
+    original_ensure = owner._ensure_with_deadline
+    original_spool = watcher.tempfile.SpooledTemporaryFile
+    attempts = []
+
+    def append_before_ensure(*args, **kwargs):
+        attempts.append(True)
+        with parent.open("ab") as handle:
+            handle.write(b'{"type":"unrelated"}\n')
+        return original_ensure(*args, **kwargs)
+
+    def slow_real_history(*args, **kwargs):
+        result = original_spool(*args, **kwargs)
+        time.sleep(0.16 if len(reads) == 1 else 0.5)
+        return result
+
+    monkeypatch.setattr(owner, "_ensure_with_deadline", append_before_ensure)
+    monkeypatch.setattr(watcher.tempfile, "SpooledTemporaryFile", slow_real_history)
+    status = {}
+    started = time.monotonic()
+    assert not invoke("task_result", status, authentication_budget_seconds=0.2, budget_seconds=0.05), status
+    elapsed = time.monotonic() - started
+    assert reads == [0, 0] and len(attempts) == 1
+    assert elapsed < 0.32, "retry received a new overall authentication allowance"
+    assert status["status"] == "failed" and status["stage"] == "task binding", status
+    assert "deadline" in status["reason"], status
+    assert not watcher._state_path(str(main), thread).exists()
+
+
+def test_reauthentication_rejects_a_rewritten_native_spawn_edge(native_append_registration, monkeypatch):
+    owner, watcher, main, thread, _, parent, _, _, reads, invoke = native_append_registration
+    original = owner._ensure_with_deadline
+    attempts = []
+
+    def rewrite_at_publication(*args, **kwargs):
+        attempts.append(True)
+        before = parent.read_bytes()
+        # Preserve size while invalidating the exact native child edge. A
+        # refreshed stat token must never substitute for full authentication.
+        rewritten = before.replace(b'/root/lead', b'/root/fake')
+        assert rewritten != before and len(rewritten) == len(before)
+        parent.write_bytes(rewritten)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "_ensure_with_deadline", rewrite_at_publication)
+    status = {}
+    assert not invoke("task_result", status), status
+    assert reads == [0, 0] and len(attempts) == 1
+    assert status["status"] == "failed" and status["stage"] == "native authentication", status
+    assert "proof unavailable" in status["reason"], status
+    assert not watcher._state_path(str(main), thread).exists()
+
+
+def test_caller_alarm_interrupts_reauthentication_and_restores_signal_state(
+    native_append_registration, monkeypatch,
+):
+    import signal
+    owner, watcher, main, thread, _, parent, _, locks, reads, invoke = native_append_registration
+    original_ensure = owner._ensure_with_deadline
+    original_spool = watcher.tempfile.SpooledTemporaryFile
+    retry_entered = []
+
+    class CallerAlarm(BaseException):
+        pass
+
+    def caller_alarm(*_):
+        raise CallerAlarm()
+
+    def append_before_ensure(*args, **kwargs):
+        with parent.open("ab") as handle:
+            handle.write(b'{"type":"unrelated"}\n')
+        return original_ensure(*args, **kwargs)
+
+    def delayed_retry(*args, **kwargs):
+        if reads:
+            retry_entered.append(True)
+            time.sleep(0.5)
+        return original_spool(*args, **kwargs)
+
+    # The registration owner must restore and deliver an earlier caller alarm,
+    # even when its private stage alarm was the one installed during the scan.
+    previous_handler = signal.signal(signal.SIGALRM, caller_alarm)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+    monkeypatch.setattr(owner, "_ensure_with_deadline", append_before_ensure)
+    monkeypatch.setattr(watcher.tempfile, "SpooledTemporaryFile", delayed_retry)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 0.3)
+        with pytest.raises(CallerAlarm):
+            invoke("task_result", {})
+        assert retry_entered == [True], "the caller alarm must interrupt the fresh authentication"
+        assert signal.getsignal(signal.SIGALRM) is caller_alarm
+        assert not locks and not watcher._PARENT_PROOFS_CACHE_ONLY.get()
+        assert not watcher._state_path(str(main), thread).exists()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)

@@ -50,6 +50,10 @@ class _RegistrationTimeout(BaseException):
     pass
 
 
+class _RetryNativeProof(BaseException):
+    """Unwind publication locks before retrying an actual stale native proof."""
+
+
 def _harness_enabled_cwd(cwd: str) -> bool:
     """Return whether ``cwd`` belongs to an explicitly enabled workspace."""
     return bool(find_harness_root(cwd))
@@ -91,6 +95,8 @@ def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out
     except _RegistrationTimeout:
         return failed("deadline exhausted")
     except _AncestryPending as exc:
+        if _PARENT_PROOFS_CACHE_ONLY.get():
+            raise _RetryNativeProof(str(exc)) from exc
         return failed(str(exc) or "native ancestry changed; retry authentication")
     except Exception as exc:
         return failed(f"validation unavailable ({type(exc.__cause__ or exc).__name__})")
@@ -110,6 +116,55 @@ def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out
             signal.setitimer(signal.ITIMER_REAL, next_delay, previous_interval)
         if previous_due:
             signal.raise_signal(signal.SIGALRM)
+
+
+def _prepare_and_publish_registration(
+    authenticate, publish, *, deadline: float, authentication_seconds: float,
+    publication_seconds: float, status_out: dict | None,
+) -> bool:
+    """Retry one changed proof outside locks, sharing the original deadline."""
+    identity = {key: value for key, value in (status_out or {}).items()
+                if key not in {"status", "stage", "reason"}}
+    for attempt in range(2):
+        observation = dict(identity)
+        authenticated = _call_with_deadline(
+            authenticate, min(deadline, time.monotonic() + authentication_seconds),
+            status_out=observation, stage="native authentication",
+        )
+        if not authenticated:
+            if observation.get("status") != REGISTRATION_FAILED:
+                observation.update(status=REGISTRATION_FAILED, stage="native authentication",
+                                   reason="native authentication: proof unavailable")
+            break
+        publication_deadline = min(deadline, time.monotonic() + publication_seconds)
+        try:
+            registered = bool(_call_with_deadline(
+                lambda: publish(publication_deadline, observation), publication_deadline,
+                status_out=observation, stage="registration publication",
+            ))
+        except _RetryNativeProof as exc:
+            if time.monotonic() < deadline and attempt == 0:
+                continue
+            reason = ("deadline exhausted" if time.monotonic() >= deadline
+                      else f"native proof changed after two attempts; {exc}")
+            observation.update(status=REGISTRATION_FAILED, stage="registration publication",
+                               reason=f"registration publication: {reason}")
+            break
+        if registered:
+            observation.update(status=REGISTERED, reason="")
+            observation.pop("stage", None)
+            if status_out is not None:
+                status_out.clear()
+                status_out.update(observation)
+            return True
+        if "status" not in observation:
+            observation.update(status=REGISTRATION_FAILED, stage="registration publication",
+                               reason="registration publication: validation or publication refused")
+        break
+    if status_out is not None:
+        status_out.clear()
+        status_out.update(observation)
+    return False
 
 
 def _ensure_with_deadline(
@@ -399,22 +454,16 @@ def _register_task_result(
     if binding is None:
         return False
     cwd, thread_id, control_root, task_dir, task_id, run_id = binding
-    if not _call_with_deadline(
+    return _prepare_and_publish_registration(
         lambda: bool(_coordinator_identity(thread_id, os.path.realpath(cwd))),
-        min(deadline, time.monotonic() + max(0.0, float(authentication_budget_seconds))),
-        status_out=status_out, stage="native authentication",
-    ):
-        if status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
-            status_out.update(status=REGISTRATION_FAILED, stage="native authentication",
-                              reason="native authentication: proof unavailable")
-        return False
-    publication_deadline = min(deadline, time.monotonic() + max(0.0, float(budget_seconds)))
-    return bool(_call_with_deadline(
-        lambda: _bind_task_session(
+        lambda publication_deadline, observation: _bind_task_session(
             cwd, thread_id, control_root, task_dir, task_id, run_id,
-            publication_deadline, status_out,
-        ), publication_deadline, status_out=status_out, stage="task binding",
-    ))
+            publication_deadline, observation,
+        ),
+        deadline=deadline,
+        authentication_seconds=max(0.0, float(authentication_budget_seconds)),
+        publication_seconds=max(0.0, float(budget_seconds)), status_out=status_out,
+    )
 
 
 def register_native_task(
@@ -423,23 +472,17 @@ def register_native_task(
     *, budget_seconds: float = REGISTRATION_BUDGET_SECONDS, status_out: dict | None = None,
 ) -> bool:
     """Bind an authenticated process-owned native actor through the hook owner."""
-    # Native ancestry discovery is separately bounded by the trusted rollout
-    # reader. It can exceed the watcher budget for a long-running coordinator;
-    # authenticate before starting that budget, and always before publication.
-    if _call_with_deadline(
-        lambda: authenticate_native_session(thread_id, control_root),
-        time.monotonic() + AUTHENTICATION_BUDGET_SECONDS, "",
-        status_out=status_out, stage="native authentication",
-    ) != session_cwd:
-        if status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
-            status_out.update({"status": NOT_APPLICABLE, "reason": "native session proof was unavailable"})
-        return False
-    deadline = time.monotonic() + max(0.0, float(budget_seconds))
-    return bool(_call_with_deadline(
-        lambda: _bind_task_session(
-            session_cwd, thread_id, control_root, task_dir, task_id, run_id, deadline, status_out,
-        ), deadline, status_out=status_out, stage="task binding",
-    ))
+    publication_seconds = max(0.0, float(budget_seconds))
+    return _prepare_and_publish_registration(
+        lambda: authenticate_native_session(thread_id, control_root) == session_cwd,
+        lambda publication_deadline, observation: _bind_task_session(
+            session_cwd, thread_id, control_root, task_dir, task_id, run_id,
+            publication_deadline, observation,
+        ),
+        deadline=time.monotonic() + AUTHENTICATION_BUDGET_SECONDS + publication_seconds,
+        authentication_seconds=AUTHENTICATION_BUDGET_SECONDS,
+        publication_seconds=publication_seconds, status_out=status_out,
+    )
 
 
 def _bind_task_session(
@@ -558,15 +601,25 @@ def _bind_task_session(
                     status_out=status_out,
                 )
     except _AncestryPending as exc:
-        if status_out is not None:
-            status_out.update(status=REGISTRATION_FAILED, stage="registration publication",
-                              reason=f"registration publication: {exc}")
-        return False
+        raise _RetryNativeProof(str(exc)) from exc
     except Exception as exc:
         if status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
             status_out.update({"status": REGISTRATION_FAILED, "stage": "task binding",
                                "reason": f"task binding unavailable ({type(exc).__name__})"})
         return False
+
+
+def _restore_prepared_registration(
+    control_root: str, thread_id: str, cwd: str, task_id: str, run_id: str,
+    deadline: float, status_out: dict,
+) -> bool:
+    with _cached_parent_proofs():
+        return _ensure_with_deadline(
+            control_root, thread_id, deadline, session_cwd=cwd,
+            task_id=task_id, run_id=run_id, status_out=status_out,
+        )
+
+
 def restore_watcher_registration(
     payload: bytes,
     *,
@@ -681,16 +734,15 @@ def restore_watcher_registration(
             _record(NOT_APPLICABLE, "no open task is bound to this session")
             return False
     if prepare_proof:
-        if not _call_with_deadline(
+        return _prepare_and_publish_registration(
             lambda: bool(_coordinator_identity(thread_id, os.path.realpath(cwd))),
-            min(overall_deadline, time.monotonic() + authentication_seconds),
-            status_out=status_out, stage="native authentication",
-        ):
-            if status_out is None or status_out.get("status") != REGISTRATION_FAILED:
-                _record(REGISTRATION_FAILED, "native authentication: proof unavailable")
-                if status_out is not None:
-                    status_out["stage"] = "native authentication"
-            return False
+            lambda publication_deadline, observation: _restore_prepared_registration(
+                control_root, thread_id, cwd, task_id, run_id,
+                publication_deadline, observation,
+            ),
+            deadline=overall_deadline, authentication_seconds=authentication_seconds,
+            publication_seconds=max(0.0, float(budget_seconds)), status_out=status_out,
+        )
     deadline = min(overall_deadline, time.monotonic() + max(0.0, float(budget_seconds)))
     retry_deadline = min(deadline, time.monotonic() + max(0.0, float(retry_seconds)))
     while True:
