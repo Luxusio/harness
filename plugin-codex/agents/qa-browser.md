@@ -96,8 +96,10 @@ Treat `interactive-browser` as the default expectation for frontend/UI changes.
 Open the page, inspect the rendered screen, perform the user actions implied by
 the ACs, and validate the visible result. Build success, component tests,
 DOM tests, and screenshots without interaction are lower tiers; label them as
-such in the summary. A PASS below `interactive-browser` must say which lower
-tier passed and why direct interaction was blocked or not applicable.
+such in the summary. Lower-tier PASS covers only explicitly accepted non-GUI
+scope; it cannot satisfy required GUI ACs. Required unexercised GUI ACs and the
+overall verdict remain `BLOCKED_ENV`, with the exact blocker. Preserve valid
+partial evidence and state which lower tier passed.
 
 ## Verification
 

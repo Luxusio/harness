@@ -342,7 +342,7 @@ class TestCodifiableContractInAgentDocs(unittest.TestCase):
                     self.assertIn(needle, content)
 
     def test_qa_browser_docs_require_interactive_browser_depth(self):
-        """Frontend QA must open the screen and interact when feasible."""
+        """Lower-tier proof cannot pass required unexercised browser GUI ACs."""
         required = [
             "Browser verification depth is mandatory",
             "Browser verification depth: interactive-browser | render-only-browser | server-only | static-only | blocked-env",
@@ -354,12 +354,18 @@ class TestCodifiableContractInAgentDocs(unittest.TestCase):
             "Open the page, inspect the rendered screen, perform the user actions implied by",
             "Build success, component tests,",
             "DOM tests, and screenshots without interaction are lower tiers",
-            "A PASS below `interactive-browser` must say",
+            "Lower-tier PASS covers only explicitly accepted non-GUI",
+            "scope; it cannot satisfy required GUI ACs.",
+            "Required unexercised GUI ACs and the",
+            "overall verdict remain `BLOCKED_ENV`",
+            "Preserve valid",
+            "partial evidence and state which lower tier passed.",
         ]
         for path, content in self._read_qa_lens_docs("browser"):
             with self.subTest(path=path):
                 for needle in required:
                     self.assertIn(needle, content)
+                self.assertNotIn("why direct interaction was blocked or not applicable", content)
 
     def test_qa_cli_docs_require_executed_command_depth(self):
         """CLI QA must distinguish real command execution from lower-tier checks."""
