@@ -690,6 +690,9 @@ def test_task_result_workspace_echo_and_one_binding(tmp_path, monkeypatch):
     mod = load_hook("codex_hook_registration")
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     main, lead, sibling = worktrees(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    native_tree(home, main)
     task_id, run_id = _write_exact_session_binding(lead, LEAD)
     # Existing helper creates a marker: remove it so PostToolUse owns first bind.
     (lead / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json").unlink()
@@ -948,6 +951,9 @@ def test_three_successful_results_remain_fenced_after_only_one_is_parked(tmp_pat
     from test_worktree_workspace import _call
     hook = load_hook("codex_hook_registration")
     main, lead, _ = worktrees(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    native_tree(home, main)
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
     monkeypatch.setenv("HARNESS_RUNTIME", "codex")
     tasks = [_conflict_task(main, "TASK__" + name) for name in ("a", "b", "c")]
@@ -981,6 +987,9 @@ def test_conflict_union_overflow_stays_fenced_for_hook_and_eager_main(tmp_path, 
     from test_worktree_workspace import _call
     hook = load_hook("codex_hook_registration")
     main, _, _ = worktrees(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    native_tree(home, main)
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
     monkeypatch.setenv("HARNESS_RUNTIME", "codex")
     conflicts = [_conflict_task(main, f"TASK__overflow_{index}")
@@ -1007,6 +1016,9 @@ def test_oversized_existing_conflict_fences_cannot_be_read_as_empty(tmp_path, mo
     from test_codex_hook_wrappers import _load as load_hook
     hook = load_hook("codex_hook_registration")
     main, _, _ = worktrees(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    native_tree(home, main)
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
     candidate = _conflict_task(main, "TASK__candidate")
     oversized = ([candidate] * (hook.MAX_BINDING_CONFLICTS + 1),
@@ -1243,6 +1255,9 @@ def test_supported_hook_argument_envelopes_keep_worktree_constraints(tmp_path, m
     hook = load_hook("codex_hook_registration")
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     main, lead, sibling = worktrees(tmp_path)
+    home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    native_tree(home, main)
     tid, run = _write_exact_session_binding(lead, LEAD)
     marker = lead / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json"
     marker.unlink()

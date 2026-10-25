@@ -2668,7 +2668,7 @@ class TestTaskStartWatcherRegistration(unittest.TestCase):
         )
         self.assertLess(
             handler.index("_register_task_start_watcher("),
-            handler.index("status = _watcher_status("),
+            handler.index("_watcher_status("),
         )
 
     @contextlib.contextmanager
