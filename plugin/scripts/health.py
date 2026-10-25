@@ -12,7 +12,7 @@ Stdlib only.
 
 Invocation:
   python3 health.py              # run + print score
-  python3 health.py --dry-run    # accepted alias for stdout-only behavior
+  python3 health.py --dry-run    # list planned checks without executing them
 """
 from __future__ import annotations
 
@@ -99,10 +99,20 @@ def compute(repo_root: str) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Composite health score")
-    p.add_argument("--dry-run", action="store_true", help="Accepted alias; health is always stdout-only")
+    p.add_argument("--dry-run", action="store_true", help="List planned checks without executing them or computing a score")
     args = p.parse_args()
 
     repo_root = find_repo_root()
+
+    if args.dry_run:
+        components = _read_components(repo_root) or _default_components(repo_root)
+        if not components:
+            print("NOTE: no health_components and no test_command — declare in manifest")
+            return 1
+        print("Planned health checks (not executed):")
+        for c in components:
+            print(f"  {c['name']:20s} weight={c['weight']:>4}  command={c['command']}")
+        return 0
 
     payload = compute(repo_root)
     if payload.get("note"):

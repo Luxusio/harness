@@ -161,3 +161,22 @@ consumers, scoped reuse, restored views, lost/changed artifacts, invalid inputs,
 cross-process named contention with independent progress, output-leaf locks,
 capability/launch/command/timeout failures and descendant teardown. Normal
 conftest runtime-removal guards remain enabled; use a task-local pytest basetemp.
+
+## Derived health execution contract
+
+The user-approved QA flow repair (2026-10-25, parent task
+`TASK__fix-qa-flow-20261025`, HEALTH outcome) derives this behavior from the
+reuse intents above; it adds no new user requirement identity. Automatic task
+completion must not invoke `health.py` or `test_command` to obtain a score.
+It may reuse an already reported measurement applicable to the current scope;
+otherwise the completion report omits the score. An unmeasured result is never
+reported as zero or PASS.
+
+Explicit manual `health.py` retains weighted component execution, falling back
+to manifest `test_command` when no `health_components` are declared. Component
+failures contribute zero points; a measured score still exits 0. With no
+configured checks, the command prints a NOTE and exits 1. `--dry-run` lists the
+planned names, commands and weights without launching checks, computing a score
+or printing PASS/FAIL results. It retains exit 1 when no checks are configured.
+`tests/test_health.py` verifies these CLI behaviors through isolated temporary
+repositories and command sentinel side effects.

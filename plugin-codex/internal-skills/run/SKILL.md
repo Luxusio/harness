@@ -289,15 +289,15 @@ _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","runtime":"codex","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-### Phase 4.5: Health score snapshot
+### Phase 4.5: Health reporting
 
-If Phase 3 did not already capture it, capture the final project health score:
+Reuse an already reported health measurement only when it applies to the current
+scope. Otherwise omit the health score from the completion report. Never invent
+a zero score or report an unmeasured result as PASS.
 
-```bash
-PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
-```
-
-Store the printed score for inclusion in the completion report.
+Do not launch `health.py`, `test_command`, or component checks to obtain a score
+at completion. Explicit manual health execution remains available; `--dry-run`
+only lists planned checks and produces no measurement.
 
 ### Phase 5: Close
 
@@ -365,7 +365,7 @@ Runtime: codex
 
 Phases completed: WBS open, plan, develop, QA, close
 Runtime verdict:  PASS
-Health score:     <score>/10
+Health score:     <score>/10 (only if an applicable measurement was already reported; otherwise omit this line)
 Files changed:    <count>
 Doc:              doc/changes/<date>-<slug>.md
 ```

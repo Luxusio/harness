@@ -1251,7 +1251,7 @@ Phase 3   Skill(harness:develop)
 Phase 4   verify 복구 (develop 이 close 전에 돌아왔을 때만)
             FAIL → A) 수정  B) Override — accept current state  C) abort
             최대 3 cycle, 이후 DONE_WITH_CONCERNS
-Phase 4.5 health.py --dry-run (health 스냅샷)
+Phase 4.5 기존의 적용 가능한 health 측정값만 재사용; 없으면 점수 생략
 Phase 5   WBS close
 이후      self-improvement → (harness 저장소) 커밋 → 완료 보고
 ```
@@ -1906,7 +1906,7 @@ context probe (manifest 존재? version 7 대비 UPGRADE_AVAILABLE)
 
 **어떤 코드도 읽지 않는 키(산문 전용)**: 런타임의 `qa.*_supported`(스킬 산문만 읽음), `browser.*`, `teams.*`, `tooling.*`, `profiles.*`, `project_meta.*`, `registered_roots`, `capabilities.delegation_mode`, `capabilities.strict_compliance_requires_delegation`(중첩 형태), `smoke_command`, `healthcheck_command`, `coverage_minimum`/`coverage_target`.
 
-이 저장소의 manifest에는 `capabilities:` 아래에 `strict_compliance_requires_delegation: true`가 있지만, 중첩 형태라 gate가 읽지 않는다(§5.4). `test_command: "uv run pytest tests/ -x --tb=short"`는 있고 `health_components`는 없다. 그래서 `health.py`는 test_command로 대체되고, run Phase 4.5가 full suite를 한 번 더 돈다.
+이 저장소의 manifest에는 `capabilities:` 아래에 `strict_compliance_requires_delegation: true`가 있지만, 중첩 형태라 gate가 읽지 않는다(§5.4). `test_command: "uv run pytest tests/ -x --tb=short"`는 있고 `health_components`는 없다. 명시적으로 `health.py`를 실행하면 test_command로 대체된다. run Phase 4.5는 새 명령을 실행하지 않고, 이미 보고된 적용 가능한 측정값이 없으면 점수를 생략한다.
 
 manifest의 `ux_review_supported` 주석은 ux-* 영수증이 close를 막는다고 설명한다. 그러나 ux-*는 SUPPORTED_LENSES에 없어서 `required_lenses`에 선언할 수 없고, 따라서 close 게이트가 될 수 없다(`_lib.py:46-52, 1311-1322`).
 
@@ -2068,7 +2068,7 @@ root CLAUDE.md의 `## Memory` 규칙:
 
 ### 13.8 health, hygiene
 
-- `health.py`는 manifest `health_components`(`{name, command, weight}`)를 쓰고, 없으면 `test_command`로 대체한다. 각 컴포넌트를 repo root에서 셸로 실행하고 timeout은 300초다. 점수는 `10 × 통과 weight / 전체 weight`다. 선언된 것이 없으면 NOTE를 출력하고 exit 1. `--dry-run`은 아무 효과 없는 별칭이고, `health-history.jsonl`은 쓰지 않는다(`health.py:6, 31-118`).
+- `health.py`는 manifest `health_components`(`{name, command, weight}`)를 쓰고, 없으면 `test_command`로 대체한다. 각 컴포넌트를 repo root에서 셸로 실행하고 timeout은 300초다. 점수는 `10 × 통과 weight / 전체 weight`다. 선언된 것이 없으면 NOTE를 출력하고 exit 1. 명시적인 일반 실행은 컴포넌트 실패를 0점으로 반영해도 exit 0이다. `--dry-run`은 이름·명령·weight만 나열하고 컴포넌트 실행이나 점수 계산은 하지 않는다. 설정이 없으면 dry-run도 NOTE와 exit 1이다. `health-history.jsonl`은 쓰지 않는다(`health.py`, `tests/test_health.py`).
 - 문서 보관·계약 드리프트를 다루던 hygiene 서브시스템은 제거됐다(`doc/harness/ADR__remove-hygiene-subsystem.md`). `promote_learnings.py`의 stale-file/contradiction 점검(`[hygiene] …` 출력)과 [auto-maintenance](patterns/auto-maintenance.md)는 유지된다. `HARNESS_DISABLE_HYGIENE`를 읽는 코드는 없으며 현재 runtime 문서는 이 스위치를 안내하지 않는다.
 
 ### 13.9 runtime services
@@ -2197,12 +2197,12 @@ python3 plugin/scripts/install_verified.py --task-dir doc/harness/tasks/TASK__fi
 → verified delivery PASS for <RECEIPTS.jsonl 스트림 fingerprint>
 ```
 
-**8. 마무리 — 8.5~8.7 → health → close.**
+**8. 마무리 — 8.5~8.7 → 기존 health 측정값 보고(있을 때만) → close.**
 
 - 8.5: learnings 분류, runbook 후보.
 - 8.6: durable docs(REQ/GUIDE/ADR/POLICY가 바뀌었으면 documentation-review). 여기서 `wbs(action="verify")`를 다시 부른다.
 - 8.7: 필요하면 `doc/changes/<date>-fix-parser-crash.md`.
-- run Phase 4.5: `health.py --dry-run`. 이 저장소에는 `health_components`가 없으므로 test_command로 full suite를 한 번 더 돈다.
+- run Phase 4.5: 이미 보고된 적용 가능한 health 측정값만 재사용하고 없으면 점수를 생략한다. 점수를 얻기 위해 `health.py`, `test_command` 또는 컴포넌트 검사를 실행하지 않는다. 측정하지 않은 결과를 0점이나 PASS로 보고하지 않는다.
 
 ```json
 wbs {"action": "close", "wbs_id": "TASK__fix-parser-crash"}
