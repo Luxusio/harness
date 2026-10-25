@@ -75,6 +75,30 @@ See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 
 ## Step 1: Run test commands from PLAN.md
 
+Before issuing a frozen target or starting native roles, identify writable
+operational outputs from the actual command and framework. Declare bounded
+runtime-only `output_dirs` outside selected inputs; in this repository pytest's
+session marker guard needs `output_dirs:["doc/harness/tasks"]`. An output cannot
+overlap or contain selected inputs, and an output inside a selected source root
+must be explicitly excluded. Exclude only actual runtime outputs, keeping every
+required source, dependency and configuration input selected and read-only.
+Route caches and temporary fixture artifacts to external paths or disable
+optional caches before target issuance. For pytest use an absolute external
+`--basetemp`, `-p no:cacheprovider`, `PYTHONDONTWRITEBYTECODE=1`, and explicit
+bounded workers (`-n 4` or lower here). Execute against the latest returned
+`snapshot_root` with that exact cwd; reissued preparation may reconstruct a
+different path for the same token. Never chmod frozen sources or fall back to
+the mutable checkout to make verification writable.
+
+If execution fails because runtime output preparation is missing, retain the
+failed attempt and repair that environment-only cause through scoped target
+preparation. Applicable completed source-bound reviews remain valid when selected
+bytes, commands, selected environment, toolchains and review scope are unchanged;
+rerun only affected blocked execution after repair. Changing argv (including
+cache flags) or relevant context requires the appropriate new target and affected
+evidence. Preserve failed history and authentic review-before-QA ordering;
+successful roles are never rerun solely to repair receipt recording.
+
 Run the highest available verification tier without asking the user to opt in.
 For shared preparation, use `verify_runner.py --jobs <group.json> --root <exact
 source-view> --results <task-work/group-results.json> --task-id <task> --run-id

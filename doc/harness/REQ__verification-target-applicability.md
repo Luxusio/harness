@@ -11,6 +11,20 @@ The response supplies a random token, persistent `snapshot_root`, and acceptance
 name for each role and direct it to read and execute against snapshot_root.
 Source files are copied without hardlinks and made read-only; source checkout changes cannot change that view. Runtime command output belongs outside selected inputs. Optional `output_dirs` prepare bounded writable runtime-only directories (for example `doc/harness/tasks` for the existing pytest session guard). Every selected input file remains read-only; output paths cannot overlap or be ancestors of selected inputs, and cannot be inside a selected source root unless explicitly excluded. These output paths are not target identity. Commands and explicit snapshot roots must be passed to execution tools; repository autodiscovery may walk outside a copied view and must not select mutable source. The snapshot is a declared controlled role view, not an OS sandbox or proof of every arbitrary tool read; same-UID hostile owners are outside this protection.
 
+Derived from readonly selected inputs and reusable input-bound evidence: before
+native roles start, recipes declare the actual command/framework runtime outputs
+through `output_dirs` and place caches and temporary fixture artifacts outside
+selected inputs (or disable optional caches). In this repository pytest needs
+`output_dirs:["doc/harness/tasks"]` for its existing session marker guard. Use
+the latest returned `snapshot_root` as the exact execution cwd, including after
+reissuing output preparation: a reconstructed view can keep the same token at
+a different path. Do not chmod frozen sources or omit required inputs to repair
+an output failure. Output preparation alone preserves applicable completed
+reviews when selected bytes, commands, selected environment, toolchains and
+review scope are unchanged; retain the failed attempt and rerun only affected
+blocked execution. A changed command or relevant context needs an appropriate
+new target and affected evidence; receipt absence alone never warrants reruns.
+
 Derived from the existing requirement to bind future native roles before
 execution: target issuance accepts only canonical `SUPPORTED_LENSES`. Each
 handoff name round-trips through the existing receipt-lens classifier and
