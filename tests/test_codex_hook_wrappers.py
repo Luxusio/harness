@@ -1398,7 +1398,7 @@ def test_posttool_binding_budget_includes_session_and_receipt_lock_admission(tmp
                                          input=payload, cwd=repo, capture_output=True, timeout=15)
             assert actual_hook.returncode == 0 and not actual_hook.stderr
             notice = json.loads(actual_hook.stdout)["hookSpecificOutput"]["additionalContext"]
-            assert "task binding: deadline exhausted" in notice
+            assert "registration publication: deadline exhausted" in notice
             assert marker.read_bytes() == before_marker
             assert watcher.registrations(str(repo)) == before_registration
             assert not (task / "RECEIPTS.jsonl").exists()
