@@ -1233,28 +1233,30 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
                     "task focus refused: another worktree owns this Codex coordinator",
                     data={"next_action": "Finish or park the bound worktree task before activating another task."},
                 )
-        # Workspace execution creates/reads the run without publishing exact
-        # authority. The shared binder rechecks it after these nonreentrant
-        # focus locks and the task receipt lock have been released.
-        binding_handoff = {} if workspace else None
+        # Workspace execution defers binding; main execution keeps its existing
+        # focus admission and marker behavior. Both authenticate/register only
+        # after these focus locks and the task receipt lock have been released.
+        binding_handoff = {}
         if workspace:
             result = operation(args, defer_binding=True, binding_handoff=binding_handoff)
         else:
-            result = operation(args, defer_binding=True) if fenced else operation(args)
-    if not workspace or result.get("isError"):
+            result = operation(
+                args, defer_binding=fenced, binding_handoff=binding_handoff,
+            )
+    if result.get("isError"):
         return result
     data = result.get("structuredContent", {})
     task_dir = str(data.get("task_dir") or "")
     control = read_task_control(task_dir)
+    registration = None
     if (
-        task_control_status(task_dir, control, snapshot=binding_handoff["snapshot"]) != "open"
-        or control.get("run_id") != data.get("run_id")
+        task_control_status(task_dir, control, snapshot=binding_handoff["snapshot"]) == "open"
+        and control.get("run_id") == data.get("run_id")
     ):
-        return result
-    registration = _register_task_start_watcher(
-        repo_root, task_dir, control, session_cwd=native_cwd,
-        diagnostics_root=control_root,
-    )
+        registration = _register_task_start_watcher(
+            repo_root, task_dir, control, session_cwd=native_cwd,
+            diagnostics_root=control_root,
+        )
     status = _watcher_status(
         task_dir=task_dir, task_id=str(data.get("task_id") or ""),
         run_id=str(data.get("run_id") or ""), snapshot=binding_handoff["snapshot"],
@@ -1650,7 +1652,7 @@ def _handle_task_start(
             transaction_stack.close()
         raise
 
-    registration = None if (codex_workspace or defer_binding) else _register_task_start_watcher(repo_root, task_dir, resumed)
+    registration = None if (codex_workspace or defer_binding or binding_handoff is not None) else _register_task_start_watcher(repo_root, task_dir, resumed)
     if registration is not None and not registration["registered"]:
         warnings.append({
             "code": "RECEIPT_WATCHER_REGISTRATION_FAILED",
@@ -1713,7 +1715,7 @@ def _handle_task_start(
             "retry_action": ctx.get("next_action", ""),
         })
 
-    status = _watcher_status(
+    status = {} if binding_handoff is not None else _watcher_status(
         task_dir=task_dir, task_id=tid, run_id=str(resumed.get("run_id") or ""),
         snapshot=preserved_snapshot,
     )
@@ -1833,7 +1835,7 @@ def _handle_task_context(
         context_run_id = str(read_task_control(td).get("run_id") or "")
     except Exception:
         context_run_id = ""
-    status = _watcher_status(
+    status = {} if binding_handoff is not None else _watcher_status(
         task_dir=td, task_id=ti, run_id=context_run_id, snapshot=snapshot,
     )
     if binding_handoff is not None:

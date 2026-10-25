@@ -39,7 +39,9 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
     registered = False
     bounded_call = None
     try:
-        from codex_hook_registration import REGISTRATION_BUDGET_SECONDS, _call_with_deadline
+        from codex_hook_registration import (
+            REGISTRATION_BUDGET_SECONDS, AUTHENTICATION_BUDGET_SECONDS, _call_with_deadline,
+        )
         bounded_call = _call_with_deadline
         if register_task_result is None:
             from codex_hook_registration import register_task_result as callback  # type: ignore
@@ -47,6 +49,10 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
         registered = register_task_result(
             payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
                                         max(0.0, deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS)),
+            authentication_budget_seconds=min(
+                AUTHENTICATION_BUDGET_SECONDS,
+                max(0.0, deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS - REGISTRATION_BUDGET_SECONDS),
+            ),
             status_out=status,
         )
     except Exception as exc:
@@ -75,8 +81,8 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
     if bounded_call is not None:
         bounded_call(persist, deadline, stage="diagnostic publication")
 
-HOOK_TIMEOUT_SECONDS = 3.0
-TOTAL_BUDGET_SECONDS = 2.4
+HOOK_TIMEOUT_SECONDS = 10.0
+TOTAL_BUDGET_SECONDS = 9.4
 CHILD_TIMEOUT_SECONDS = 1.5
 DEADLINE_MARGIN_SECONDS = 0.4  # Leave time to publish registration diagnostics.
 def _receipt_control_root(cwd: str) -> str:

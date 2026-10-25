@@ -27,6 +27,8 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 
@@ -299,6 +301,17 @@ def _coordinator_identity(thread_id: str, session_cwd: str, seen=()) -> dict[str
 # file. Descriptor identity and path safety are checked even on cache hits.
 _PARENT_SPAWN_CACHE: dict[tuple[str, str, str], tuple[tuple[int, ...], bool]] = {}
 _PARENT_SPAWN_LOCK = threading.Lock()
+_PARENT_PROOFS_CACHE_ONLY = ContextVar("parent_proofs_cache_only", default=False)
+
+
+@contextmanager
+def _cached_parent_proofs():
+    """Publication may revalidate prepared proofs, never scan history under locks."""
+    token = _PARENT_PROOFS_CACHE_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _PARENT_PROOFS_CACHE_ONLY.reset(token)
 
 
 def _file_generation(info: Any) -> tuple[int, ...]:
@@ -324,6 +337,10 @@ def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool
             if _file_generation(os.fstat(handle.fileno())) != generation:
                 raise _AncestryPending()
             return cached[1]
+        if _PARENT_PROOFS_CACHE_ONLY.get():
+            raise _AncestryPending(
+                "native parent proof changed; retry authentication before publication"
+            )
         # The live coordinator legitimately appends while a child authenticates.
         # Parse one copied complete prefix, not two different moving EOFs.
         captured_size = info.st_size
@@ -345,8 +362,13 @@ def _parent_spawn_proof(parent_id: str, thread_id: str, agent_path: str) -> bool
         def prefix_unchanged():
             if not _path_matches_handle(path, _sessions_root(), handle, max_size=MAX_PARENT_BYTES):
                 return False
-            if os.fstat(handle.fileno()).st_size < captured_size:
+            current = os.fstat(handle.fileno())
+            if current.st_size < captured_size:
                 return False
+            # The same complete generation is already the cache's authority.
+            # Only a changed generation needs a second full prefix read.
+            if _file_generation(current) == generation:
+                return True
             handle.seek(0)
             observed, remaining = hashlib.sha256(), captured_size
             while remaining:
@@ -425,6 +447,8 @@ def _root_meta_from_handle(handle: Any, thread_id: str, session_cwd: str) -> boo
         try:
             return bool(_coordinator_identity(thread_id, session_cwd))
         except _AncestryPending:
+            if _PARENT_PROOFS_CACHE_ONLY.get():
+                raise
             return False
     return bool(meta.get("id") == thread_id and meta.get("session_id") == thread_id
                 and not meta.get("parent_thread_id")

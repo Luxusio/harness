@@ -136,8 +136,9 @@ def test_post_tool_failure_is_visible_and_parent_budget_is_respected(tmp_path, m
     import hook_pre_tool_use as pre
     payload = json.dumps(dict(cwd=str(tmp_path), tool_name="wbs", tool_input={"action": "open"})).encode()
     seen = []
-    def register(raw, *, budget_seconds, status_out):
+    def register(raw, *, budget_seconds, authentication_budget_seconds, status_out):
         assert raw == payload and 0 < budget_seconds <= 0.25
+        assert authentication_budget_seconds == 0
         if raised:
             raise OSError("private details")
         status_out.update(status="failed", stage="workspace binding discovery", reason="workspace binding discovery: deadline exhausted")
@@ -164,13 +165,14 @@ def test_confirmed_conflict_and_absent_binding_are_not_timeouts(registration, mo
     assert status["status"] == "not_applicable" and "no open task" in status["reason"]
 
 
-@pytest.mark.parametrize("module,elapsed", [("hook_pre_tool_use", 3.85), ("hook_session_start", 19.85)])
-def test_registration_budget_intersects_parent_startup_time(tmp_path, monkeypatch, module, elapsed):
+@pytest.mark.parametrize("module", ["hook_pre_tool_use", "hook_session_start"])
+def test_registration_budget_intersects_parent_startup_time(tmp_path, monkeypatch, module):
     import importlib
     hook = importlib.import_module(module)
     from test_codex_hook_wrappers import _BytesStdin
     payload = json.dumps(dict(cwd=str(tmp_path), tool_name="collaboration.spawn_agent"))
-    monkeypatch.setattr(hook, "_IMPORT_SECONDS", elapsed)
+    margin = 1.0 if module == "hook_pre_tool_use" else 0.2
+    monkeypatch.setattr(hook, "_IMPORT_SECONDS", hook.HOOK_TIMEOUT_SECONDS - margin - 0.15)
     calls = []
     def restore(*args, budget_seconds, **kwargs):
         calls.append(budget_seconds)
@@ -178,7 +180,7 @@ def test_registration_budget_intersects_parent_startup_time(tmp_path, monkeypatc
     monkeypatch.setattr(hook, "restore_watcher_registration", restore)
     monkeypatch.setattr(hook.sys, "stdin", _BytesStdin(payload))
     if module == "hook_session_start":
-        monkeypatch.setattr(hook, "_run", lambda *_: b"")
+        monkeypatch.setattr(hook, "_run", lambda *_, **kw: b"")
     assert hook.main() == 0
     assert len(calls) == 1 and 0 < calls[0] <= 0.15
 
@@ -216,7 +218,7 @@ def test_post_tool_empty_registry_at_each_publication_read_is_visible(registrati
     assert status["status"] == "failed" and status["stage"] == "workspace registry discovery"
     calls.clear()
     with contextlib.redirect_stdout(io.StringIO()) as output:
-        hook._register_task_result(payload, deadline=time.monotonic() + 2)
+        hook._register_task_result(payload, deadline=time.monotonic() + hook.TOTAL_BUDGET_SECONDS)
     assert "workspace registry discovery" in output.getvalue()
 
 
@@ -353,7 +355,7 @@ def test_conflict_helpers_reuse_locked_registry_and_reject_unavailable_discovery
 
 
 def test_mcp_focus_uses_locked_registry_without_false_overflow(registration, monkeypatch):
-    from test_worktree_workspace import harness_server as server
+    from test_worktree_workspace import _call, harness_server as server
     _, watcher, main, thread, _, data = registration
     roots = watcher.workspace_roots(str(main))
     monkeypatch.setattr(server, "_task_roots", lambda args: (str(main), str(main)))
@@ -370,8 +372,201 @@ def test_mcp_focus_uses_locked_registry_without_false_overflow(registration, mon
         assert roots
         return helper(root, marker, roots=roots)
     monkeypatch.setattr(server, "_codex_live_conflicts", conflicts)
-    result = server._with_codex_main_focus(
-        {"task_id": data["task_id"]}, lambda args: {"ok": True},
-    )
-    assert result == {"ok": True}
+    result = _call(main, "wbs", {"action": "context", "wbs_id": data["task_id"]})
+    assert not result.get("isError"), result
+    assert result["structuredContent"]["task_id"] == data["task_id"]
     assert len(calls) == 2
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="forked actor and POSIX registration locks")
+def test_parent_proof_preparation_does_not_block_another_linked_actor(registration, monkeypatch):
+    """A slow real child proof must not monopolize repository binding locks."""
+    import multiprocessing
+    from test_codex_worktree_receipts import LEAD
+    owner, watcher, main, root_id, root_payload, data = registration
+    context = multiprocessing.get_context("fork")
+    entered, release = context.Event(), context.Event()
+    results = context.Queue()
+    original_spool = watcher.tempfile.SpooledTemporaryFile
+    original_session = owner.active_session_transaction
+    original_receipt = owner.receipt_stream_transaction
+
+    def child():
+        os.environ["CODEX_THREAD_ID"] = LEAD
+        watcher._PARENT_SPAWN_CACHE.clear()
+        locks = []
+        proof_lock_depths = []
+
+        @contextlib.contextmanager
+        def tracked(factory, *args, **kwargs):
+            with factory(*args, **kwargs) as value:
+                locks.append(True)
+                try:
+                    yield value
+                finally:
+                    locks.pop()
+
+        def slow_proof(*args, **kwargs):
+            proof_lock_depths.append(len(locks))
+            entered.set()
+            if not release.wait(8):
+                raise RuntimeError("test coordinator did not release proof")
+            return original_spool(*args, **kwargs)
+
+        owner.active_session_transaction = lambda *a, **kw: tracked(original_session, *a, **kw)
+        owner.receipt_stream_transaction = lambda *a, **kw: tracked(original_receipt, *a, **kw)
+        watcher.tempfile.SpooledTemporaryFile = slow_proof
+        payload = json.dumps(dict(cwd=str(main), session_id=LEAD,
+            tool_name="mcp__harness__wbs", tool_input={"action": "open"},
+            tool_response={"structuredContent": data})).encode()
+        status = {}
+        try:
+            success = owner.register_task_result(payload, budget_seconds=2, status_out=status)
+            results.put((success, status, proof_lock_depths))
+        except BaseException as error:
+            results.put((False, {"error": repr(error)}, proof_lock_depths))
+
+    actor = context.Process(target=child)
+    actor.start()
+    try:
+        assert entered.wait(5), "child never reached the real parent-history reader"
+        status = {}
+        # This executes real marker, conflict, registry and watcher admission.
+        # The other process remains paused in its actual ancestry reader.
+        concurrent = owner.register_task_result(root_payload, budget_seconds=0.7, status_out=status)
+        release.set()
+        actor.join(10)
+        assert not actor.is_alive(), "child registration did not finish"
+        success, child_status, lock_depths = results.get(timeout=2)
+        assert concurrent, status
+        assert success, child_status
+        assert lock_depths == [0], "ancestry was reread or scanned inside shared publication locks"
+        root_state = json.loads(watcher._state_path(str(main), root_id).read_text())
+        child_state = json.loads(watcher._state_path(str(main), LEAD).read_text())
+        assert root_state["run_id"] == child_state["run_id"] == data["run_id"]
+        assert child_state["task_id"] == data["task_id"]
+    finally:
+        release.set()
+        actor.join(2)
+        if actor.is_alive():
+            actor.terminate()
+            actor.join(2)
+        results.close()
+
+
+@pytest.mark.parametrize("change", ["append", "rewrite", "replace", "missing"])
+def test_cache_only_parent_proof_refuses_generation_changes_without_reading(registration, monkeypatch, change):
+    from test_codex_worktree_receipts import LEAD
+    owner, watcher, main, _, _, _ = registration
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    watcher._PARENT_SPAWN_CACHE.clear()
+    assert owner.authenticate_native_session(LEAD, str(main)) == str(main)
+    parent = watcher._find_rollout(registration[3])
+    assert parent is not None
+    original = parent.read_bytes()
+    if change == "append":
+        with parent.open("ab") as handle:
+            handle.write(b'{"type":"unrelated"}\n')
+    elif change == "rewrite":
+        # Same size: a size-only cache must not authorize the changed parent.
+        parent.write_bytes(original.replace(b'"thread_source": "user"', b'"thread_source": "fake"'))
+        assert parent.stat().st_size == len(original)
+    elif change == "replace":
+        replacement = parent.with_suffix(".replacement")
+        replacement.write_bytes(original)
+        os.replace(replacement, parent)
+    else:
+        watcher._PARENT_SPAWN_CACHE.clear()
+    with mock.patch.object(watcher.tempfile, "SpooledTemporaryFile", side_effect=AssertionError("full ancestry read during publication")):
+        with watcher._cached_parent_proofs():
+            assert owner.authenticate_native_session(LEAD, str(main)) == ""
+    # Exiting the restricted invocation must allow genuine fresh preparation.
+    if change == "rewrite":
+        parent.write_bytes(original)
+    assert owner.authenticate_native_session(LEAD, str(main)) == str(main)
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+def test_cache_only_proof_mode_resets_after_exception(registration, monkeypatch, error_type):
+    from test_codex_worktree_receipts import LEAD
+    owner, watcher, main, _, _, _ = registration
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    watcher._PARENT_SPAWN_CACHE.clear()
+    with pytest.raises(error_type):
+        with watcher._cached_parent_proofs():
+            assert owner.authenticate_native_session(LEAD, str(main)) == ""
+            raise error_type("cancel publication")
+    assert owner.authenticate_native_session(LEAD, str(main)) == str(main)
+
+
+@pytest.mark.parametrize("explicit_workspace", [False, True])
+def test_prepared_native_registration_keeps_future_only_offset(registration, monkeypatch, explicit_workspace):
+    from test_codex_worktree_receipts import LEAD
+    from test_worktree_workspace import _call, harness_server as server
+    owner, watcher, main, _, _, data = registration
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    watcher._PARENT_SPAWN_CACHE.clear()
+    locks, history_reads = [], []
+    original_spool = watcher.tempfile.SpooledTemporaryFile
+
+    @contextlib.contextmanager
+    def tracked(factory, *args, **kwargs):
+        with factory(*args, **kwargs) as value:
+            locks.append(True)
+            try:
+                yield value
+            finally:
+                locks.pop()
+
+    for module in (server, owner):
+        for name in ("active_session_transaction", "receipt_stream_transaction"):
+            factory = getattr(module, name)
+            monkeypatch.setattr(module, name, lambda *a, _factory=factory, **kw: tracked(_factory, *a, **kw))
+
+    def read_history(*args, **kwargs):
+        history_reads.append(len(locks))
+        assert not locks, "public native open scanned ancestry under focus/receipt locks"
+        return original_spool(*args, **kwargs)
+
+    monkeypatch.setattr(watcher.tempfile, "SpooledTemporaryFile", read_history)
+    # Native binding is an internal owner invoked by the public MCP boundary.
+    args = {"action": "open", "wbs_id": data["task_id"]}
+    if explicit_workspace:
+        args["workspace"] = str(main)
+    response = _call(main, "wbs", args)
+    assert not response.get("isError"), response
+    assert history_reads == [0]
+    state_path = watcher._state_path(str(main), LEAD)
+    before = json.loads(state_path.read_text())
+    rollout = watcher._find_rollout(LEAD)
+    with rollout.open("ab") as handle:
+        handle.write(b'{"type":"unrelated"}\n')
+    args["action"] = "context"
+    response = _call(main, "wbs", args)
+    assert not response.get("isError"), response
+    after = json.loads(state_path.read_text())
+    assert (before["offset"], before["registered_at"]) == (after["offset"], after["registered_at"])
+
+
+@pytest.mark.parametrize("public_entry", [False, True])
+def test_native_authentication_ceiling_also_covers_public_workspace_admission(registration, monkeypatch, public_entry):
+    from test_codex_worktree_receipts import LEAD
+    from test_worktree_workspace import _call
+    owner, watcher, main, _, _, data = registration
+    monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
+    monkeypatch.setattr(owner, "AUTHENTICATION_BUDGET_SECONDS", 0.02)
+    original = owner._coordinator_identity
+
+    def slow_identity(*args, **kwargs):
+        time.sleep(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "_coordinator_identity", slow_identity)
+    started = time.monotonic()
+    if public_entry:
+        _call(main, "wbs", {"action": "context", "wbs_id": data["task_id"], "workspace": str(main)})
+    else:
+        assert owner.authenticate_native_session(LEAD, str(main)) == ""
+    assert time.monotonic() - started < 0.5
+    assert not watcher._state_path(str(main), LEAD).exists()
+    assert not (main / "doc/harness/tasks/.active_sessions" / (LEAD + ".json")).exists()

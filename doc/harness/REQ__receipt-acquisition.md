@@ -31,6 +31,30 @@ immutable future-only offset and review-before-QA completion gate remain the
 receipt authorities. Historical unrecorded results are not backfilled. Tests
 cover the real production callback route, not just a fake successful registrar.
 
+Native ancestry authentication must finish before acquiring the shared
+cross-workspace session and task-receipt locks. Publication may reuse only an
+already verified parent-spawn proof whose full file generation and trusted
+path still match. A stale or missing proof must fail without rereading the
+parent history while those locks are held. This restriction is private to the
+registration invocation and is cleared on every exit, including interruption.
+Current native metadata, task/run ownership and conflict fences remain checked.
+An unchanged complete descriptor generation can validate the just-read prefix
+without reading the entire parent a second time. A changed generation still
+requires the existing prefix-integrity check; append alone is not trusted.
+
+This is derived from reliable acquisition above, following the user's
+2026-10-25 correction, “그것도 원인 규명해야지”. The observed long-lived parent
+rollout was about 104 MiB and required 3.7–4.3 seconds to authenticate. The
+previous registration path repeated that work inside all-workspace locks and
+a two-second hook budget. Preparation and publication therefore need separate,
+finite allowances within the installed hook timeout. A timeout or changed
+proof remains an explicit failure; increasing a timeout alone does not repair
+the repeated locked read. No result from an unregistered past execution gains
+attestation through this repair.
+
+Known ceiling: Native authentication has a finite 6-second allowance — revisit
+if measured legitimate ancestry exceeds it.
+
 ## Verification
 
 Exercise a real stdio MCP open with process-owned thread identity; confirm the

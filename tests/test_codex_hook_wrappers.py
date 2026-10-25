@@ -189,6 +189,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         child_names = [Path(call["cmd"][1]).name for call in calls]
         restore.assert_called_once_with(
             payload.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS,
+            authentication_budget_seconds=mod.AUTHENTICATION_BUDGET_SECONDS,
         )
         self.assertNotIn("codex_lifecycle_watcher.py", child_names)
         self.assertNotIn("hygiene_scan.py", child_names)
@@ -273,7 +274,8 @@ class TestCodexHookWrappers(unittest.TestCase):
                  mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(mod.main(), 0)
-        restore.assert_called_once_with(raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS)
+        restore.assert_called_once_with(raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS,
+                                        authentication_budget_seconds=mod.AUTHENTICATION_BUDGET_SECONDS)
 
         for name in ("hook_post_tool_use", "hook_user_prompt_submit"):
             self.assertFalse(hasattr(_load(name), "restore_watcher_registration"), name)
@@ -332,6 +334,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
             payload_bytes = json.dumps({"cwd": repo, "session_id": root_id}).encode()
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
+            ), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ):
                 self.assertFalse(mod.restore_watcher_registration(payload_bytes))
@@ -369,6 +373,8 @@ class TestCodexHookWrappers(unittest.TestCase):
                 }},
             }).encode()
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
+            ), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ):
                 self.assertTrue(mod.register_task_result(payload))
@@ -391,6 +397,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
             expected = {}
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
+            ), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ):
                 for index, session_id in enumerate(session_ids):
@@ -447,6 +455,8 @@ class TestCodexHookWrappers(unittest.TestCase):
                     }},
                 }).encode())
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
+            ), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ) as ensure_mock:
                 self.assertTrue(mod.register_task_result(payloads[1]))
@@ -477,6 +487,8 @@ class TestCodexHookWrappers(unittest.TestCase):
                     yield
 
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
+            ), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ), mock.patch.object(
                 mod, "receipt_stream_transaction", side_effect=traced_transaction,
@@ -535,6 +547,8 @@ class TestCodexHookWrappers(unittest.TestCase):
                 }).encode())
 
             with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
+            ), mock.patch.object(
                 mod, "_ensure_with_deadline", return_value=True,
             ) as ensure_mock:
                 self.assertTrue(mod.register_task_result(payloads[1]))
@@ -824,7 +838,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
                     mod, "resolve_session_task_binding",
                     return_value={"task_dir": str(Path(repo) / "doc/harness/tasks/TASK__alarm"), "run_id": "run"},
-                ):
+                ), mock.patch.object(mod, "_coordinator_identity", return_value={"session_id": "alarm-unit-fixture"}):
                     with self.assertRaisesRegex(CallerDeadline, "caller deadline"):
                         mod.restore_watcher_registration(
                             payload,
@@ -959,6 +973,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 self.assertEqual(mod.main(), 0)
             restore.assert_called_once_with(
                 raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS, status_out=mock.ANY,
+                authentication_budget_seconds=mod.AUTHENTICATION_BUDGET_SECONDS,
             )
             # The hook must ask for the tri-state outcome, not just the bool:
             # reporting a not-applicable registration as a failure fabricates a
@@ -1099,6 +1114,10 @@ class TestCodexHookWrappers(unittest.TestCase):
             mod = _load(name)
             outer = config["hooks"][event][0]["hooks"][0]["timeout"]
             self.assertEqual(mod.HOOK_TIMEOUT_SECONDS, outer)
+            if event in {"PreToolUse", "PostToolUse"}:
+                from codex_hook_registration import AUTHENTICATION_BUDGET_SECONDS, REGISTRATION_BUDGET_SECONDS
+                self.assertLessEqual(outer, 10)
+                self.assertLess(AUTHENTICATION_BUDGET_SECONDS + REGISTRATION_BUDGET_SECONDS, outer)
             if hasattr(mod, "TOTAL_BUDGET_SECONDS"):
                 self.assertLess(mod.TOTAL_BUDGET_SECONDS, outer)
             self.assertLess(mod.CHILD_TIMEOUT_SECONDS, outer)

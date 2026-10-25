@@ -1242,7 +1242,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                         {
                             "type": "command",
                             "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['PreToolUse']))}",
-                            "timeout": 5,
+                            "timeout": 10,
                             "statusMessage": "Checking harness gates",
                         }
                     ]
@@ -1270,7 +1270,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                         {
                             "type": "command",
                             "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['PostToolUse']))}",
-                            "timeout": 3,
+                            "timeout": 10,
                             "statusMessage": "Checking harness routing and QA completion",
                         }
                     ],

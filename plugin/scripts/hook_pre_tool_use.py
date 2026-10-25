@@ -18,6 +18,7 @@ try:
         NOT_APPLICABLE,
         REGISTRATION_FAILED,
         REGISTRATION_BUDGET_SECONDS,
+        AUTHENTICATION_BUDGET_SECONDS,
         _call_with_deadline,
         restore_watcher_registration,
         _registration_identity,
@@ -28,6 +29,7 @@ except Exception:  # pragma: no cover - registration recovery is best effort
     NOT_APPLICABLE = "not_applicable"
     REGISTRATION_FAILED = "failed"
     REGISTRATION_BUDGET_SECONDS = 0.0
+    AUTHENTICATION_BUDGET_SECONDS = 0.0
     _call_with_deadline = None
 
 try:
@@ -142,7 +144,7 @@ def _invalid_review_spawn_name(payload: bytes) -> str:
     )
 
 
-HOOK_TIMEOUT_SECONDS = 5.0
+HOOK_TIMEOUT_SECONDS = 10.0
 
 WATCHER_DIAGNOSTICS_RELPATH = "doc/harness/.watcher-diagnostics.json"
 
@@ -381,6 +383,10 @@ def main() -> int:
                 payload,
                 budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
                                    max(0.0, registration_deadline - time.monotonic())),
+                authentication_budget_seconds=min(
+                    AUTHENTICATION_BUDGET_SECONDS,
+                    max(0.0, registration_deadline - time.monotonic() - REGISTRATION_BUDGET_SECONDS),
+                ),
                 status_out=status,
             )
         except Exception as exc:

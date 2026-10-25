@@ -13,10 +13,14 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 try:
-    from codex_hook_registration import restore_watcher_registration, REGISTRATION_BUDGET_SECONDS  # type: ignore
+    from codex_hook_registration import (  # type: ignore
+        restore_watcher_registration, REGISTRATION_BUDGET_SECONDS,
+        AUTHENTICATION_BUDGET_SECONDS,
+    )
 except Exception:  # pragma: no cover - hook must fail open
     restore_watcher_registration = None
     REGISTRATION_BUDGET_SECONDS = 0.0
+    AUTHENTICATION_BUDGET_SECONDS = 0.0
 
 _IMPORT_SECONDS = time.monotonic() - _IMPORT_STARTED_AT
 HOOK_TIMEOUT_SECONDS = 20.0
@@ -35,14 +39,17 @@ def _payload_cwd(payload: bytes) -> str | None:
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
 
-def _run(args: list[str], payload: bytes) -> bytes:
+def _run(args: list[str], payload: bytes, *, deadline: float) -> bytes:
+    remaining = deadline - time.monotonic() - 0.2
+    if remaining <= 0:
+        return b""
     try:
         proc = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, args[0]), *args[1:]],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=8,
+            timeout=min(8.0, remaining),
             cwd=_payload_cwd(payload),
         )
         return proc.stdout or b""
@@ -55,14 +62,20 @@ def main() -> int:
     payload = sys.stdin.buffer.read()
     chunks: list[str] = []
     if restore_watcher_registration is not None:
-        restore_watcher_registration(payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
-                                    max(0.0, deadline - time.monotonic())))
+        restore_watcher_registration(
+            payload,
+            budget_seconds=min(REGISTRATION_BUDGET_SECONDS, max(0.0, deadline - time.monotonic() - 0.2)),
+            authentication_budget_seconds=min(
+                AUTHENTICATION_BUDGET_SECONDS,
+                max(0.0, deadline - time.monotonic() - REGISTRATION_BUDGET_SECONDS - 0.2),
+            ),
+        )
     commands = [
         ["verification_gap_check.py"],
         ["project_format_check.py"],
     ]
     for command in commands:
-        out = _run(command, payload)
+        out = _run(command, payload, deadline=deadline)
         if out:
             chunks.append(out.decode("utf-8", errors="replace").strip())
     context = "\n".join(chunk for chunk in chunks if chunk)
