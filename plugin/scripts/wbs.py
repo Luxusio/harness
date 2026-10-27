@@ -854,20 +854,32 @@ def require_source_assignment(repo, task_id, path=None):
     if Path(repo, '.git').is_file():
         common = batch_state.finish_helper._git_out(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip()
         root = str(Path(common).parent)
-        require(resolve_registered_worktree(root, str(Path(repo).resolve())), 'managed worktree binding required')
-        require(Path(root, 'doc/harness/runtime/batches').is_dir(),
-                'managed source assignment missing; owner must dispatch prepare and bind this exact lead')
-        with batch_state.locked_records(root, readonly=True) as (_, records):
-            for data in records.values():
-                for item in data['requests']:
-                    if item['task_id'] == task_id and item.get('worktree') == repo:
-                        require(not data['halted'] and item['status'] == 'running' and item.get('worker_id'),
-                                'managed lead is not currently bound for development')
-                        batch_state.bound(root, item)
-                        batch_state.control(item)
-                        scopes = batch_state.effective_scopes(item)
-                        require(path is None or any(covers(scope, path) for scope in scopes), 'source path outside managed ownership')
-                        return dict(mode='managed-lead', scopes=scopes)
+        require(resolve_registered_worktree(root, str(Path(repo).resolve())), 'linked worktree binding required')
+        batches = Path(root, 'doc/harness/runtime/batches')
+        existing = batches
+        while True:
+            try:
+                existing.lstat()
+                break
+            except FileNotFoundError:
+                existing = existing.parent
+        if existing != batches:
+            # Genuine absence permits direct admission; unsafe ancestors do not.
+            batch_state.parents(str(existing))
+        else:
+            with batch_state.locked_records(root, readonly=True) as (_, records):
+                for data in records.values():
+                    for item in data['requests']:
+                        owned = item.get('worktree') or item.get('creation_intent', {}).get('worktree')
+                        if owned == repo:
+                            require(item['task_id'] == task_id, 'source belongs to another managed task')
+                            require(not data['halted'] and item['status'] == 'running' and item.get('worker_id'),
+                                    'managed lead is not currently bound for development')
+                            batch_state.bound(root, item)
+                            batch_state.control(item)
+                            scopes = batch_state.effective_scopes(item)
+                            require(path is None or any(covers(scope, path) for scope in scopes), 'source path outside managed ownership')
+                            return dict(mode='managed-lead', scopes=scopes)
     state = read_state(td)
     require(state and state['run_id'] == control['run_id'], 'baseline WBS and dispatch prepare before source edits')
     assignment = state.get('execution_admission')
