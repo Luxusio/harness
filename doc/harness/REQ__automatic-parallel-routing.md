@@ -24,6 +24,16 @@ worker and scope checks. Another task's direct assignment cannot override it.
 Invalid Git registration or existing unsafe/corrupt batch metadata remains a
 denial, rather than being treated as absent ownership.
 
+User-explicit follow-up (2026-10-27): “batches가 없음” must not trigger
+main-repository ancestor ownership/mode checks. When that metadata path is
+absent, shared or foreign-owned main roots do not prevent the linked checkout's
+existing direct admission. This includes a runtime ancestor pointing to an
+empty external directory. Existing batch entries still use the batch runtime's
+path validation; a final batches symlink is an existing entry, not absence.
+Derived preservation: only a missing-path error permits this fallback; access
+errors and other filesystem failures remain denials. This does not add a new
+blanket restriction on main-root modes when batch metadata exists.
+
 Call `wbs(action="dispatch", wbs_id=..., ownership=...)` after planning the
 observable outcomes and their dependencies. Dispatch normalizes the exact
 request graph, validates path ownership and unused lead identities, binds its
