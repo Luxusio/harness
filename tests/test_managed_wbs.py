@@ -1,6 +1,8 @@
 """Public WBS worktree ownership, admission and completion with real Git."""
 from pathlib import Path
 
+import pytest
+
 from test_batch_state import Pool, RUN, task, _git, _head
 from test_wbs import plan
 
@@ -350,6 +352,152 @@ def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_pa
     assert call('context')['structuredContent']['task_context']['routing']['orchestration_mode'] == 'direct'
     assert not call('block', blocked_reason='Observed prerequisite unavailable', unblock_condition='Restore that prerequisite').get('isError')
     assert call('context')['structuredContent']['task_context']['source_write_allowed'] is False
+
+
+def _linked_direct(pool, worktree=None):
+    from test_harness_mcp_server import HarnessMcpServerTests
+    tree = worktree or pool.tmp / 'ordinary-linked'
+    if worktree is None:
+        _git('worktree', 'add', '-qb', 'ordinary-linked', str(tree), cwd=pool.repo)
+    server = HarnessMcpServerTests()
+
+    def call(action, **args):
+        return server._call_in_repo(str(tree), 'wbs', dict(action=action, wbs_id='ordinary', **args))
+
+    assert not call('open').get('isError')
+    assert not call('plan', plan=plan([dict(id='A', title='Assigned source', weight=1)])).get('isError')
+    return tree, tree / 'doc/harness/tasks/TASK__ordinary', call
+
+
+def _admit_linked_direct(call):
+    assigned = call('dispatch', ownership={'A': ['a.py']}, host=host_snapshot())
+    assert not assigned.get('isError'), assigned
+    assert assigned['structuredContent']['execution_admission']['mode'] == 'direct'
+
+
+def test_ordinary_linked_direct_requires_fresh_assignment_and_scope(tmp_path, monkeypatch):
+    import json
+    import wbs
+    from test_codex_worktree_prewrite import check
+    pool = Pool(tmp_path, monkeypatch)
+    tree, directory, call = _linked_direct(pool)
+    assert not (pool.repo / 'doc/harness/runtime/batches').exists()
+    assert check(pool.repo, tree / 'a.py').get('permissionDecision') == 'deny'
+    _admit_linked_direct(call)
+    assert wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')['mode'] == 'direct'
+    assert check(pool.repo, tree / 'a.py') == {}
+    from test_prewrite_gate_dormant import _invoke_payload
+    with monkeypatch.context() as runtime:
+        runtime.setenv('HARNESS_RUNTIME', 'codex')
+        runtime.delenv('HARNESS_DISABLE_SCOPE_LOCK', raising=False)
+        written = _invoke_payload(str(tree), dict(cwd=str(tree), session_id='codex-prewrite-fixture',
+                                  tool_name='Write', tool_input=dict(file_path=str(tree / 'a.py'), content='x = 1\n')))
+    assert written.returncode == 0 and not written.stderr, written.stderr
+    assert not written.stdout.strip(), written.stdout
+    denied = check(pool.repo, tree / 'outside.py')
+    assert denied.get('permissionDecision') == 'deny'
+    assert 'outside direct execution ownership' in denied['permissionDecisionReason']
+    original = (directory / 'WBS.json').read_bytes()
+    for mutation in ('run', 'definition'):
+        state = json.loads(original)
+        if mutation == 'run':
+            state['execution_admission']['run_id'] = RUN
+        else:
+            state['nodes'][0]['title'] = 'Changed accepted intent'
+        (directory / 'WBS.json').write_text(json.dumps(state))
+        denied = check(pool.repo, tree / 'a.py')
+        assert denied.get('permissionDecision') == 'deny'
+        assert 'missing or stale' in denied['permissionDecisionReason']
+    (directory / 'WBS.json').write_bytes(original)
+    assert check(pool.repo, tree / 'a.py') == {}
+    assert not (pool.repo / 'doc/harness/runtime/batches').exists()
+
+
+def test_ordinary_linked_direct_with_unrelated_batch(tmp_path, monkeypatch):
+    import wbs
+    from test_batch_state import request
+    from test_codex_worktree_prewrite import check
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init([request('unrelated')])
+    pool.claim()
+    before = pool.state.read_bytes()
+    tree, _, call = _linked_direct(pool)
+    _admit_linked_direct(call)
+    assert wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')['mode'] == 'direct'
+    assert check(pool.repo, tree / 'a.py') == {}
+    assert check(pool.repo, tree / 'outside.py').get('permissionDecision') == 'deny'
+    assert pool.state.read_bytes() == before
+
+
+@pytest.mark.parametrize('stage', ['reserved', 'creation-intent'])
+def test_managed_checkout_cannot_escape_through_foreign_direct_task(tmp_path, monkeypatch, stage):
+    import json
+    import wbs
+    import batch_worktrees as managed
+    from test_batch_worktrees import setup, call as prepare
+    from test_codex_worktree_prewrite import check
+    pool, spec = setup(tmp_path, monkeypatch)
+    if stage == 'creation-intent':
+        original = managed._call
+
+        def stop(repo, spec, directory, records, command, **kwargs):
+            if command == 'bootstrap':
+                raise RuntimeError('after Git creation before bootstrap binding')
+            return original(repo, spec, directory, records, command, **kwargs)
+
+        with monkeypatch.context() as fault:
+            fault.setattr(managed, '_call', stop)
+            with pytest.raises(RuntimeError, match='after Git creation'):
+                prepare(pool, spec, available_slots=1)
+        owner = json.loads(pool.state.read_bytes())['requests'][0]
+        assert not owner.get('worktree')
+        tree = Path(owner['creation_intent']['worktree'])
+    else:
+        handoff, = prepare(pool, spec, available_slots=1)['handoffs']
+        tree = Path(handoff['worktree'])
+    task(tree)
+    with pytest.raises(ValueError, match='managed lead is not currently bound'):
+        wbs.require_source_assignment(str(tree), 'TASK__a', 'a.py')
+    tree, directory, call = _linked_direct(pool, tree)
+    _admit_linked_direct(call)
+    before = pool.state.read_bytes()
+    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    denied = check(pool.repo, tree / 'a.py')
+    assert denied.get('permissionDecision') == 'deny'
+    assert 'managed' in denied['permissionDecisionReason']
+    assert pool.state.read_bytes() == before
+    assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+
+
+@pytest.mark.parametrize('unsafe', ['file', 'dangling-symlink', 'ancestor'])
+def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypatch, unsafe):
+    import os
+    from test_codex_worktree_prewrite import check
+    pool = Pool(tmp_path, monkeypatch)
+    tree, directory, call = _linked_direct(pool)
+    _admit_linked_direct(call)
+    batches = pool.repo / 'doc/harness/runtime/batches'
+    if unsafe == 'ancestor':
+        external = tmp_path / 'external-runtime'
+        external.mkdir()
+        batches.parent.symlink_to(external, target_is_directory=True)
+        evidence = batches.parent
+    else:
+        batches.parent.mkdir()
+        if unsafe == 'file':
+            batches.write_bytes(b'precious invalid batch directory\x00\xff')
+        else:
+            batches.symlink_to(tmp_path / 'missing-batches', target_is_directory=True)
+        evidence = batches
+    content = os.readlink(evidence) if evidence.is_symlink() else evidence.read_bytes()
+    before = os.lstat(evidence)
+    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    assert check(pool.repo, tree / 'a.py').get('permissionDecision') == 'deny'
+    after = os.lstat(evidence)
+    assert (after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == (
+        before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns)
+    assert (os.readlink(evidence) if evidence.is_symlink() else evidence.read_bytes()) == content
+    assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
 
 
 def test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair(tmp_path, monkeypatch):
