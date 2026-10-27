@@ -469,7 +469,96 @@ def test_managed_checkout_cannot_escape_through_foreign_direct_task(tmp_path, mo
     assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
 
 
-@pytest.mark.parametrize('unsafe', ['file', 'dangling-symlink', 'ancestor'])
+@pytest.mark.parametrize('ancestor', ['writable-main', 'foreign-main', 'symlink-runtime'])
+def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tmp_path, monkeypatch, ancestor):
+    import os
+    import shutil
+    import subprocess
+    import wbs
+    from test_codex_worktree_prewrite import check
+    from test_prewrite_gate_dormant import _invoke_payload
+    pool = Pool(tmp_path, monkeypatch)
+    tree, directory, call = _linked_direct(pool)
+    _admit_linked_direct(call)
+    batches = pool.repo / 'doc/harness/runtime/batches'
+    original = pool.repo.stat()
+    elevated = []
+    if ancestor == 'foreign-main':
+        if os.getuid() != 0:
+            sudo = shutil.which('sudo')
+            if not sudo or subprocess.run([sudo, '-n', 'true'], capture_output=True).returncode:
+                pytest.skip('changing isolated main-root ownership requires root or passwordless sudo')
+            elevated = [sudo, '-n']
+    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    try:
+        if ancestor == 'symlink-runtime':
+            external = tmp_path / 'external-runtime'
+            external.mkdir()
+            batches.parent.symlink_to(external, target_is_directory=True)
+        else:
+            # Make main itself the nearest existing ancestor; the linked tree
+            # retains its own manifest and admitted task throughout the check.
+            (pool.repo / 'doc').rename(tmp_path / 'main-doc')
+            if ancestor == 'writable-main':
+                pool.repo.chmod(0o777)
+            else:
+                foreign_uid = 0 if os.getuid() != 0 else 1
+                subprocess.run([*elevated, 'chown', str(foreign_uid), str(pool.repo)],
+                               capture_output=True, text=True, check=True)
+                assert pool.repo.stat().st_uid != os.getuid()
+        with pytest.raises(FileNotFoundError):
+            batches.lstat()
+        assert wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')['mode'] == 'direct'
+        assert check(tree, tree / 'a.py') == {}
+        denied = check(tree, tree / 'outside.py')
+        assert denied.get('permissionDecision') == 'deny'
+        assert 'outside direct execution ownership' in denied['permissionDecisionReason']
+        with monkeypatch.context() as runtime:
+            runtime.setenv('HARNESS_RUNTIME', 'codex')
+            runtime.delenv('HARNESS_DISABLE_SCOPE_LOCK', raising=False)
+            written = _invoke_payload(str(tree), dict(cwd=str(tree), session_id='codex-prewrite-fixture',
+                                      tool_name='Write', tool_input=dict(file_path=str(tree / 'a.py'), content='x = 1\n')))
+        assert written.returncode == 0 and not written.stderr, written.stderr
+        assert not written.stdout.strip(), written.stdout
+        with pytest.raises(FileNotFoundError):
+            batches.lstat()
+        assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+    finally:
+        if ancestor == 'foreign-main':
+            subprocess.run([*elevated, 'chown', f'{original.st_uid}:{original.st_gid}', str(pool.repo)],
+                           capture_output=True, text=True, check=True)
+        pool.repo.chmod(original.st_mode & 0o7777)
+
+
+def test_ordinary_linked_direct_rejects_inaccessible_batch_ancestor(tmp_path, monkeypatch):
+    import os
+    import wbs
+    from test_codex_worktree_prewrite import check
+    if os.getuid() == 0:
+        pytest.skip('root bypasses the real directory search-permission check')
+    pool = Pool(tmp_path, monkeypatch)
+    tree, directory, call = _linked_direct(pool)
+    _admit_linked_direct(call)
+    batches = pool.repo / 'doc/harness/runtime/batches'
+    batches.parent.mkdir()
+    original_mode = batches.parent.stat().st_mode & 0o7777
+    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    try:
+        batches.parent.chmod(0)
+        with pytest.raises(PermissionError):
+            batches.lstat()
+        with pytest.raises(PermissionError):
+            wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')
+        denied = check(tree, tree / 'a.py')
+        assert denied.get('permissionDecision') == 'deny'
+        assert 'Permission denied' in denied['permissionDecisionReason']
+        assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+    finally:
+        batches.parent.chmod(original_mode)
+    assert not batches.exists()
+
+
+@pytest.mark.parametrize('unsafe', ['file', 'dangling-symlink', 'ancestor', 'writable-runtime'])
 def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypatch, unsafe):
     import os
     from test_codex_worktree_prewrite import check
@@ -480,23 +569,29 @@ def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypa
     if unsafe == 'ancestor':
         external = tmp_path / 'external-runtime'
         external.mkdir()
+        (external / 'batches').mkdir()
         batches.parent.symlink_to(external, target_is_directory=True)
         evidence = batches.parent
     else:
         batches.parent.mkdir()
         if unsafe == 'file':
             batches.write_bytes(b'precious invalid batch directory\x00\xff')
-        else:
+        elif unsafe == 'dangling-symlink':
             batches.symlink_to(tmp_path / 'missing-batches', target_is_directory=True)
-        evidence = batches
-    content = os.readlink(evidence) if evidence.is_symlink() else evidence.read_bytes()
+        else:
+            batches.mkdir()
+            batches.parent.chmod(0o777)
+        evidence = batches.parent if unsafe == 'writable-runtime' else batches
+    content = (os.readlink(evidence) if evidence.is_symlink() else
+               sorted(os.listdir(evidence)) if evidence.is_dir() else evidence.read_bytes())
     before = os.lstat(evidence)
     controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
     assert check(pool.repo, tree / 'a.py').get('permissionDecision') == 'deny'
     after = os.lstat(evidence)
     assert (after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == (
         before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns)
-    assert (os.readlink(evidence) if evidence.is_symlink() else evidence.read_bytes()) == content
+    assert (os.readlink(evidence) if evidence.is_symlink() else
+            sorted(os.listdir(evidence)) if evidence.is_dir() else evidence.read_bytes()) == content
     assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
 
 
