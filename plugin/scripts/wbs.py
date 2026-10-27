@@ -856,16 +856,11 @@ def require_source_assignment(repo, task_id, path=None):
         root = str(Path(common).parent)
         require(resolve_registered_worktree(root, str(Path(repo).resolve())), 'linked worktree binding required')
         batches = Path(root, 'doc/harness/runtime/batches')
-        existing = batches
-        while True:
-            try:
-                existing.lstat()
-                break
-            except FileNotFoundError:
-                existing = existing.parent
-        if existing != batches:
-            # Genuine absence permits direct admission; unsafe ancestors do not.
-            batch_state.parents(str(existing))
+        try:
+            batches.lstat()
+        except FileNotFoundError:
+            # No batch metadata is consumed; direct admission is worktree-local.
+            pass
         else:
             with batch_state.locked_records(root, readonly=True) as (_, records):
                 for data in records.values():
