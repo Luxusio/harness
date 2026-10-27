@@ -9,6 +9,21 @@ from progress planning: measurement does not prescribe implementation paths.
 
 ## WBS/MCP contract
 
+### Ordinary linked worktrees
+
+User-explicit bug report (2026-10-27): “linked worktree에서는 직접 배정(direct)이
+있어도 모든 소스 쓰기가 막힘”; classify as managed only when a batch request
+actually owns that checkout. A registered user-created linked worktree without
+a matching request uses the existing direct assignment checks, including the
+current task/run, admission definition and assigned source scope. An absent
+batch directory or an unrelated pool must not itself prevent direct writes.
+
+Derived preservation of existing ownership protections: a matching request,
+including its reserved creation-intent worktree, retains managed task, binding,
+worker and scope checks. Another task's direct assignment cannot override it.
+Invalid Git registration or existing unsafe/corrupt batch metadata remains a
+denial, rather than being treated as absent ownership.
+
 Call `wbs(action="dispatch", wbs_id=..., ownership=...)` after planning the
 observable outcomes and their dependencies. Dispatch normalizes the exact
 request graph, validates path ownership and unused lead identities, binds its
