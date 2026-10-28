@@ -86,12 +86,7 @@ def test_recovery_outputs_from_gate_registration_and_checkpoint(tmp_path, monkey
         assert expected in reason
 
     hook = importlib.import_module("hook_pre_tool_use")
-    with mock.patch.object(hook, "_update_diagnostics"):
-        hook._report_registration_failure(b"{}", "Registration failed")
-    warning = capsys.readouterr().err
-    assert "wbs(action='verify') once" in warning
-    assert "wbs(action='block') if required evidence is missing" in warning
-    assert "task_blocked" not in warning
+    assert not hasattr(hook, "_report_registration_failure")
 
     fixture = importlib.import_module("test_harness_mcp_server")
     helper = fixture.HarnessMcpServerTests()
@@ -99,12 +94,12 @@ def test_recovery_outputs_from_gate_registration_and_checkpoint(tmp_path, monkey
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     td = helper._make_task(str(repo), "TASK__checkpoint")
-    helper._write_subagent_receipt(td)
     checkpoint = importlib.import_module("write_checkpoint")
     path = checkpoint.write_checkpoint(td)
     saved = Path(path).read_text()
-    assert "runtime_verdict PASS" in saved
-    assert "wbs(action='close')" in saved
+    assert "receipt" not in saved.lower()
+    assert "complete independent review and QA" in saved
+    assert "run WBS checks and close" in saved
     assert "run task_close" not in saved
 
 
@@ -116,8 +111,8 @@ def test_shipped_runtime_rules_expose_only_current_wbs_actions():
         assert f'wbs(action="{action}")' in tool_section
     assert not re.search(r"\b(?:task_(?:start|context|verify|close|blocked)|write_plan)\b", rules)
     assert "Goal child" not in rules
-    assert "fresh_run" in rules and "empty-stream" in rules
-    assert "plugin/scripts/_lib.py" in rules
+    assert "fresh_run" in rules
+    assert "empty-stream" not in rules
 
 
 def test_generated_routing_uses_same_wbs_and_preserves_user_content():
@@ -150,5 +145,6 @@ def test_current_operational_docs_use_supported_recovery_actions():
     assert not re.search(r"`(?:task_(?:start|context|verify|close|blocked)|write_plan)(?:\([^`]*\))?`(?:를|을|로|나)", faq)
     for action in ("open", "context", "plan", "verify", "block"):
         assert f'wbs(action="{action}")' in faq
-    assert "fresh_run" in faq and "NON-ATTESTING" in faq
+    assert "fresh_run" in faq
+    assert "NON-ATTESTING" not in faq
     assert "정말 작은 작업이면 `execution_mode" not in faq

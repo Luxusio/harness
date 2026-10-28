@@ -895,7 +895,7 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
         _s1_require(isinstance(checkpoint, dict) and checkpoint.get('stage') == 'harvested'
                     and checkpoint.get('destination_ref') == data.get('destination_ref')
                     and checkpoint.get('run_id') == item.get('run_id')
-                    and checkpoint.get('close_fingerprint') == item.get('close_fingerprint'), 'missing harvested generation checkpoint')
+                    and checkpoint.get('closed') is True and item.get('closed') is True, 'missing harvested generation checkpoint')
         tip = checkpoint.get('integrated_tip')
         _s1_require(isinstance(tip, str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', tip)
                     and checkpoint.get('branch_tip') == tip, 'invalid integrated tip')
@@ -914,7 +914,7 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
             control = read_task_control(directory)
             _s1_require(control and task_control_status(directory, control) == 'closed'
                         and control.get('run_id') == item.get('run_id')
-                        and control.get('close_receipt_fingerprint') == item.get('close_fingerprint'),
+                        and control['closed'] is True and item.get('closed') is True,
                         'task source/archive is not the exact closed generation')
         source_entries, archive_entries = _tree_entries(source), _tree_entries(archive)
         fingerprint = 'sha256:' + hashlib.sha256(json.dumps(archive_entries, sort_keys=True).encode()).hexdigest()

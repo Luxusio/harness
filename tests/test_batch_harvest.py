@@ -580,15 +580,15 @@ def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, pree
     harvested = mod.harvest(str(main), str(work), "TASK__lead")
     batch_state.sync_harvest(str(main), harvested["archived"])
     checkpoint = dict(stage="harvested", destination_ref="refs/heads/main", branch_tip=tip,
-                      integrated_tip=tip, run_id=control["run_id"],
-                      close_fingerprint=control["close_receipt_fingerprint"], harvest=harvested,
+                      integrated_tip=tip, run_id=control["run_id"], closed=True,
+                      harvest=harvested,
                       archive_fingerprint=batch_state.fingerprint(harvested["archived"]))
     request = dict(slug="lead", request="module edit", scopes=[paths[0]], depends_on=[],
                    resolved_scopes=[str(main / paths[0])], ownership_scopes=[str(main / paths[0])],
                    submodules=[paths[0]], submodule_manifest=copy.deepcopy(manifest),
                    status="integrating", task_id="TASK__lead", worker_id="worker-lead",
                    worktree=str(work), branch="lead", spawn_head=manifest["spawn_head"],
-                   run_id=control["run_id"], close_fingerprint=control["close_receipt_fingerprint"],
+                   run_id=control["run_id"], closed=True,
                    checkpoint=copy.deepcopy(checkpoint),
                    result=dict(verdict="closed", task_id="TASK__lead", worktree=str(work), branch="lead", commit=tip))
     state = dict(schema_version=2, batch_id=manifest["batch_id"], repo=str(main),
@@ -631,7 +631,7 @@ def test_s1_guarded_removal_requires_exact_persisted_state(tmp_path, monkeypatch
         variants.append(changed)
     for key, value in (("status", "returned"), ("task_id", "TASK__foreign"), ("spawn_head", "0" * 40),
                        ("worktree", str(tmp_path / "foreign")), ("branch", "foreign"),
-                       ("run_id", "foreign"), ("close_fingerprint", "sha256:" + "0" * 64)):
+                       ("run_id", "foreign"), ("closed", False)):
         changed = copy.deepcopy(state)
         changed["requests"][0][key] = value
         variants.append(changed)
@@ -868,23 +868,14 @@ def test_s1_full_removal_supports_preexisting_annotated_module_tag(tmp_path, mon
     assert (main / "doc/harness/archive/batch/TASK__lead/TASK.json").is_file()
 
 
-def _producer_diagnostics(work, task, sid, *, error_only=False):
-    from unittest import mock
-    from test_worktree_workspace import harness_server as server
-
-    def register(payload, *, status_out, **kwargs):
-        status_out.update(status=server._REGISTRATION_REGISTERED, thread_id=sid)
-        return True
-
-    # Exercise the actual producer payload; mock registration, not its writer.
-    # These advisory snapshots do not establish registration or attestation.
-    with mock.patch.object(server, '_SERVER', None), \
-            mock.patch.object(server, '_server_runtime', return_value='codex'), \
-            mock.patch.object(server, '_current_session_identity', return_value=sid), \
-            mock.patch.object(server, '_restore_watcher_registration', side_effect=register):
-        if not error_only:
-            server._register_task_start_watcher(str(work), str(task), {})
-        server._record_watcher_error('fixture watcher failure' if error_only else '', str(work))
+def _historical_diagnostics(work, task, sid, *, error_only=False):
+    # Historical advisory bytes remain precious after collector removal.
+    # These fixtures never establish task closure or review/QA evidence.
+    value = dict(session_id=sid, updated="2026-10-21T00:00:00Z",
+                 last_watcher_error="historical watcher failure" if error_only else "")
+    if not error_only:
+        value["registration_present"] = True
+    (work / "doc/harness/.watcher-diagnostics.json").write_text(json.dumps(value) + "\n")
 
 
 def _ordinary_snapshot_fixture(tmp_path, *, error_only=False):
@@ -905,7 +896,7 @@ def _ordinary_snapshot_fixture(tmp_path, *, error_only=False):
         session_id=sid, task_dir=str(task), task_id=task.name,
         run_id=fixture.RUN, updated='2026-10-21T00:00:00Z')))
     diagnostics = work / 'doc/harness/.watcher-diagnostics.json'
-    _producer_diagnostics(work, task, sid, error_only=error_only)
+    _historical_diagnostics(work, task, sid, error_only=error_only)
     value = json.loads(diagnostics.read_bytes())
     assert value['session_id'] == sid and 'last_watcher_error' in value
     assert ('registration_present' in value) is not error_only
@@ -944,7 +935,7 @@ def test_ordinary_snapshots_never_authorize_precious_ignored_content(tmp_path):
     assert checkpoint.exists() and diagnostics.exists()
 
 
-def test_ordinary_removal_preserves_first_producer_error_without_registration(tmp_path):
+def test_ordinary_removal_preserves_historical_error_without_registration(tmp_path):
     repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path, error_only=True)
     raw = diagnostics.read_bytes()
     assert set(json.loads(raw)) == {'session_id', 'updated', 'last_watcher_error'}

@@ -83,16 +83,9 @@ def _python_hook_cmd() -> str:
     Every process that imports from the installed `scripts/` tree must run with
     this set, not only the ones registered in `plugin/hooks/hooks.json`.
 
-    The importer sets overlap, so no single launcher explains the 2026-09-16
-    caches. `_lib` is imported by seven hooks.json commands, by the MCP server,
-    and by most `scripts/*.py` entrypoints. `codex_hook_registration` and
-    `codex_lifecycle_watcher` are imported by the generated Codex hook
-    entrypoints and by the MCP server. `hook_tree_health` is imported by the MCP
-    server. That is why coverage is applied to every launcher — hook commands,
-    both MCP registrations, and the `scripts/*.py` invocations documented in
-    skill and agent files — rather than to whichever one seemed responsible.
-
-    See `doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md`.
+    Hook entrypoints and the MCP server import the same installed scripts.
+    Disable bytecode writing on every launcher so a cached interpreter-specific
+    module cannot interfere with canonical source validation.
     """
     return f"{NO_BYTECODE_ENV} {shlex.quote(_python_cmd())}"
 
@@ -580,8 +573,7 @@ def _mcp_block(plugin_root: str) -> str:
         f'command = "{_python_cmd()}"\n'
         f'args = ["{plugin_root}/mcp/harness_server.py"]\n'
         # PYTHONDONTWRITEBYTECODE is load-bearing, not tidiness: this server
-        # imports `_lib`, `hook_tree_health`, `codex_hook_registration`, and
-        # `codex_lifecycle_watcher` from the installed scripts tree, which is
+        # imports `_lib` and `codex_hook_registration` from the installed scripts tree, which is
         # how four of the six caches were poisoned on 2026-09-16. This TOML
         # block is the registration Codex actually launches; the JSON
         # `_codex_mcp_config` is the sibling writer and carries the same key.
@@ -804,7 +796,7 @@ def _reject_real_install_root_under_test(path: Path) -> None:
     the live runtime, and the damage is normally invisible: on 2026-09-09 a
     review round widened `_prune_bytecode_caches` to `rmtree(cache.parent)` and
     the suite deleted the installed `plugin/scripts` and `plugin/mcp`, silently
-    killing receipt recording for the session that ran it.
+    disabling runtime task operations for the session that ran it.
 
     The user's home comes from the password database, not `Path.home()`: a test
     that points `HOME` at `tmp_path` is exactly the isolated case this guard
@@ -833,14 +825,9 @@ def _reject_real_install_root_under_test(path: Path) -> None:
 def _prune_bytecode_caches(root: Path) -> list[str]:
     """Delete `__pycache__` directories inside an installer-owned tree.
 
-    A `.pyc` that no longer matches its source disables the entire receipt
-    subsystem: `subagent_lifecycle` binds its receipt adapter at import time and
-    `_lib` rejects a module whose code object does not match a fresh compile of
-    the file, so `background_hook` dies before `main()` and no receipt is ever
-    written. Payload comparison lists `__pycache__` in `_VOLATILE_DIR_NAMES`, so
-    such a tree still reports SYNCHRONIZED and the default run — the harness's own
-    delivery path — skips the install that would have replaced it. The bad cache
-    then survives every subsequent run. Pruning here is what breaks that loop.
+    A stale `.pyc` can prevent canonical source validation. Payload comparison
+    treats bytecode caches as volatile, so synchronized payloads still need
+    this cleanup before their installed runtime is exercised.
 
     Scope is deliberately narrow (the plan's stated risk): only `__pycache__`
     directories, only under a tree the installer already writes, and only real
@@ -872,16 +859,8 @@ def _normalize_payload_modes(root: Path) -> list[str]:
     The payload is copied with `shutil.copytree(..., copy2)`, which preserves
     source modes. On a checkout bind-mounted from a Windows host every file
     reads as `0o777`, so the installed runtime lands world-writable — and
-    `_lib`'s two canonical-import guards refuse exactly that: `bind()` has
-    `before.st_mode & 0o022` in its refusal conjunction and the receipt-adapter
-    bind has `not (info.st_mode & 0o022)` inside `structural`. The MCP server
-    then cannot open a task and no hook can record a receipt. The runtime smoke
-    catches that, so the install reports ERROR rather than success — but it
-    reported the cause as a stale `__pycache__`, which sent the field report
-    into a `--force` loop that clears caches and nothing else. Reproduced
-    2026-09-17: a clean `HEAD` copy passes
-    the runtime smoke, the same copy at `chmod -R 777` fails it identically to
-    the field report, and `chmod -R go-w` restores it.
+    canonical source validation refuses writable runtime modules. Normalize
+    installed modes before smoke testing, including synchronized payloads.
 
     Normalizing here rather than relaxing the guards is deliberate. The mode
     check is a real security property — a world-writable module is one any local
@@ -937,13 +916,8 @@ def _normalize_payload_modes(root: Path) -> list[str]:
 def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple[bool, list[str]]:
     """Drive the tree that was just installed and report what it produced.
 
-    The suite exercises the source tree; hooks run from this one. When the two
-    diverge — one stale `.pyc` is enough — the suite stays green while every
-    receipt silently disappears, which is the state that survived a month twice
-    over. `plugin/scripts/install_smoke.py` imports each installed hook module
-    and drives the selected runtime owner in an isolated fixture repository
-    (including Codex native registration and completion); see
-    `doc/harness/REQ__guards-are-verified-where-they-run.md`.
+    Import installed hook modules and exercise actual WBS checks, source scope
+    and session binding in an isolated fixture repository.
 
     Run in a subprocess so a smoke crash is reported as a failed install rather
     than an installer traceback, and so the probe cannot inherit this process's
@@ -1173,7 +1147,7 @@ def _stamp_claude_plugin_version(plugin_root: Path) -> str:
     (`<config>/plugins/cache/harness/harness/<version>`), not from this mirror,
     and `claude plugin update` only refreshes that cache when the version
     string changes. With a fixed `2.3.0`, a same-version install synced the
-    mirror while the runtime kept executing the old copy (2026-09-25: a receipt
+    mirror while the runtime kept executing the old copy (2026-09-25: a runtime
     fix reached the hooks only after a manual uninstall/install). Hashing the
     payload makes every content change a new version, so the supported
     `claude plugin update` path installs it into a fresh cache directory while
@@ -1229,7 +1203,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                         {
                             "type": "command",
                             "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['SessionStart']))}",
-                            "timeout": 20,
+                            "timeout": 10,
                             "statusMessage": "Loading harness context",
                         }
                     ]
@@ -1237,7 +1211,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PreToolUse": [
                 {
-                    "matcher": "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent",
+                    "matcher": "Write|Edit|MultiEdit|apply_patch",
                     "hooks": [
                         {
                             "type": "command",
@@ -1271,7 +1245,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                             "type": "command",
                             "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['PostToolUse']))}",
                             "timeout": 10,
-                            "statusMessage": "Checking harness routing and QA completion",
+                            "statusMessage": "Checking harness task routing",
                         }
                     ],
                 }
@@ -1465,7 +1439,7 @@ def _reload_codex_daemon_hooks(socket_path: str, *, timeout: float = 10.0) -> No
 
     Updating the cache and trust hashes alone leaves existing sessions holding
     their previous hook snapshot. Empty edits reload that snapshot without
-    changing configuration or creating any receipt/session authority.
+    changing configuration or creating any session authority.
     """
     endpoint = Path(socket_path)
     for parent in {endpoint.absolute().parent, endpoint.resolve().parent}:
@@ -1634,8 +1608,7 @@ def _codex_mcp_config(shared_plugin_root: Path) -> dict:
                 "env": {
                     "HARNESS_PLUGIN_ROOT": str(plugin_root),
                     "CLAUDE_PLUGIN_ROOT": str(plugin_root),
-                    # This server imports `_lib`, `hook_tree_health`,
-                    # `codex_hook_registration`, and `codex_lifecycle_watcher`
+                    # This server imports `_lib` and `codex_hook_registration`
                     # from the installed scripts tree. Importer sets overlap —
                     # hook commands import `_lib` and the Codex entrypoints too
                     # — so no single launcher explains the 2026-09-16 caches.
@@ -1929,7 +1902,7 @@ def install_codex(*, dry_run: bool, force: bool,
                         return InstallResult(
                             "codex", False,
                             "installed Codex runtime failed its smoke test — "
-                            "hooks cannot record receipts from this tree",
+                            "installed runtime task operations are unavailable",
                             steps,
                         )
             return InstallResult(
@@ -1979,7 +1952,7 @@ def install_codex(*, dry_run: bool, force: bool,
             return InstallResult(
                 "codex", False,
                 "installed Codex runtime failed its smoke test — hooks cannot "
-                "record receipts from this tree",
+                "perform task operations from this tree",
                 steps,
             )
 
@@ -2069,7 +2042,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     installed_plugin_root = claude_install_root / "plugin"
     # Before the staleness decision, not after: payload comparison treats
     # __pycache__ as volatile, so a tree whose bytecode cache has disabled the
-    # receipt subsystem still answers SYNCHRONIZED and skips the sync.
+    # runtime still answers SYNCHRONIZED and skips the sync.
     if not dry_run:
         steps.extend(_prune_bytecode_caches(claude_install_root))
         # Same placement reason as the prune: a tree left world-writable by an
@@ -2113,7 +2086,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
                 return InstallResult(
                     "claude", False,
                     "installed Claude runtime failed its smoke test — hooks "
-                    "cannot record receipts from this tree",
+                    "cannot perform task operations from this tree",
                     steps,
                 )
             return InstallResult(
@@ -2144,7 +2117,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
             return InstallResult(
                 "claude", False,
                 "installed Claude runtime failed its smoke test — hooks cannot "
-                "record receipts from this tree",
+                "perform task operations from this tree",
                 steps,
             )
 

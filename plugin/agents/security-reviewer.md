@@ -60,7 +60,7 @@ also review these boundaries when applicable:
   working directory control, stdin/stdout trust, timeout, signal, exit-status,
   and partial-failure handling;
 - hook, model, and tool output as untrusted input, including lifecycle identity,
-  task/thread binding, receipt provenance, snapshot freshness, and replay or
+  task/thread binding, source ownership, snapshot freshness, and replay or
   stale-result risks.
 
 Do not turn this list into theoretical hardening. A finding needs a concrete

@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
-"""Best-effort Codex root-rollout registration at startup and before spawn."""
+"""Bind trusted Codex task results to exact session/task/run source focus."""
 from __future__ import annotations
 
 import json
 import os
 import re
 import signal
+import stat
+from datetime import datetime
+from itertools import islice
+from pathlib import Path
 import sys
 import time
 from contextlib import ExitStack
-from typing import Callable
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from codex_lifecycle_watcher import (
-    ensure, invalidate_registration, workspace_roots,
-    _find_rollout, _open_trusted_file, _sessions_root, _native_meta,
-    _path_matches_handle, _coordinator_identity, MAX_PARENT_BYTES,
-    _cached_parent_proofs, _PARENT_PROOFS_CACHE_ONLY, _AncestryPending,
-)
 from _lib import (
     active_session_transaction,
-    MAX_BINDING_CONFLICTS, MAX_CONFLICT_BYTES,
+    MAX_BINDING_CONFLICTS,
     _binding_conflicts_overflow as _conflicts_overflow,
     _live_binding_conflicts, _BindingConflictOverflow,
     _has_binding_conflict_fence, clear_binding_conflict_fence,
@@ -30,7 +27,9 @@ from _lib import (
     is_codex_task_binding_tool,
     read_active_session_marker,
     read_task_control,
-    receipt_stream_transaction,
+    task_control_transaction,
+    _read_regular_text_file,
+    uuid7_timestamp_ms,
     resolve_session_task_binding,
     resolve_registered_worktree,
     task_control_status,
@@ -44,23 +43,15 @@ THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 TASK_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
 REGISTRATION_BUDGET_SECONDS = 2.0
 AUTHENTICATION_BUDGET_SECONDS = 6.0
+NATIVE_METADATA_MAX_BYTES = 1024 * 1024
 
 
 class _RegistrationTimeout(BaseException):
     pass
 
 
-class _RetryNativeProof(BaseException):
-    """Unwind publication locks before retrying an actual stale native proof."""
-
-
-def _harness_enabled_cwd(cwd: str) -> bool:
-    """Return whether ``cwd`` belongs to an explicitly enabled workspace."""
-    return bool(find_harness_root(cwd))
-
-
-def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out=None, stage="registration"):
-    """Run in-process registration work inside the remaining hard budget."""
+def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out=None, stage="task binding"):
+    """Run in-process task binding inside the remaining hard budget."""
     def failed(reason):
         if status_out is not None and status_out.get("status") != "failed":
             status_out.update(status="failed", stage=stage, reason=f"{stage}: {reason}")
@@ -94,10 +85,6 @@ def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out
         return callback()
     except _RegistrationTimeout:
         return failed("deadline exhausted")
-    except _AncestryPending as exc:
-        if _PARENT_PROOFS_CACHE_ONLY.get():
-            raise _RetryNativeProof(str(exc)) from exc
-        return failed(str(exc) or "native ancestry changed; retry authentication")
     except Exception as exc:
         return failed(f"validation unavailable ({type(exc.__cause__ or exc).__name__})")
     finally:
@@ -118,80 +105,6 @@ def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out
             signal.raise_signal(signal.SIGALRM)
 
 
-def _prepare_and_publish_registration(
-    authenticate, publish, *, deadline: float, authentication_seconds: float,
-    publication_seconds: float, status_out: dict | None,
-) -> bool:
-    """Retry one changed proof outside locks, sharing the original deadline."""
-    identity = {key: value for key, value in (status_out or {}).items()
-                if key not in {"status", "stage", "reason"}}
-    for attempt in range(2):
-        observation = dict(identity)
-        authenticated = _call_with_deadline(
-            authenticate, min(deadline, time.monotonic() + authentication_seconds),
-            status_out=observation, stage="native authentication",
-        )
-        if not authenticated:
-            if observation.get("status") != REGISTRATION_FAILED:
-                observation.update(status=REGISTRATION_FAILED, stage="native authentication",
-                                   reason="native authentication: proof unavailable")
-            break
-        publication_deadline = min(deadline, time.monotonic() + publication_seconds)
-        try:
-            registered = bool(_call_with_deadline(
-                lambda: publish(publication_deadline, observation), publication_deadline,
-                status_out=observation, stage="registration publication",
-            ))
-        except _RetryNativeProof as exc:
-            if time.monotonic() < deadline and attempt == 0:
-                continue
-            reason = ("deadline exhausted" if time.monotonic() >= deadline
-                      else f"native proof changed after two attempts; {exc}")
-            observation.update(status=REGISTRATION_FAILED, stage="registration publication",
-                               reason=f"registration publication: {reason}")
-            break
-        if registered:
-            observation.update(status=REGISTERED, reason="")
-            observation.pop("stage", None)
-            if status_out is not None:
-                status_out.clear()
-                status_out.update(observation)
-            return True
-        if "status" not in observation:
-            observation.update(status=REGISTRATION_FAILED, stage="registration publication",
-                               reason="registration publication: validation or publication refused")
-        break
-    if status_out is not None:
-        status_out.clear()
-        status_out.update(observation)
-    return False
-
-
-def _ensure_with_deadline(
-    control_root: str,
-    thread_id: str,
-    deadline: float,
-    *,
-    session_cwd: str | None = None,
-    task_id: str = "",
-    run_id: str = "",
-    status_out: dict | None = None,
-) -> bool:
-    """Interrupt the complete registration attempt at its wall-clock budget."""
-    return bool(_call_with_deadline(
-        lambda: ensure(
-            control_root, thread_id,
-            session_cwd=session_cwd or control_root,
-            task_id=task_id,
-            run_id=run_id,
-            deadline=deadline,
-        ),
-        deadline,
-        False,
-        status_out=status_out, stage="registration publication",
-    ))
-
-
 def _payload_data(payload: bytes) -> dict:
     try:
         value = json.loads(payload.decode("utf-8") or "{}")
@@ -205,11 +118,10 @@ def _registration_identity(payload: bytes) -> tuple[str, str]:
     cwd = data.get("cwd")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
         return "", ""
-    payload_ids = {
-        str(data.get(key) or "")
-        for key in ("session_id", "thread_id")
-        if data.get(key)
-    }
+    if any(key in data and data[key] is not None and not isinstance(data[key], str)
+           for key in ("session_id", "thread_id")):
+        return "", ""
+    payload_ids = {data[key] for key in ("session_id", "thread_id") if data.get(key)}
     if len(payload_ids) > 1:
         return "", ""
     payload_id = next(iter(payload_ids), "")
@@ -225,59 +137,89 @@ def _registration_identity(payload: bytes) -> tuple[str, str]:
     return (cwd, thread_id) if thread_id else ("", "")
 
 
-def authenticate_native_session(thread_id: str, control_root: str) -> str:
-    """Return a process-owned actor's trusted native cwd in this repository.
+def workspace_roots(control_root: str) -> list[str]:
+    """Enumerate only revalidated linked worktrees with a bounded registry scan."""
+    root = os.path.realpath(control_root)
+    gitfile = Path(root) / ".git"
+    if gitfile.is_file():
+        try:
+            target = _read_regular_text_file(str(gitfile), max_size=4096).strip().removeprefix("gitdir: ")
+            common = (Path(root) / target).resolve().parent.parent
+            main = str(common.parent)
+            if resolve_registered_worktree(main, root) == root:
+                root = main
+        except (OSError, ValueError, RuntimeError):
+            return []
+    found = [root]
+    registry = Path(root) / ".git" / "worktrees"
+    if registry.is_dir() and not registry.is_symlink():
+        entries = list(islice(registry.iterdir(), 257))
+        if len(entries) > 256:
+            return []
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    continue
+                target = str(Path(_read_regular_text_file(str(entry / "gitdir"), max_size=4096).strip()).parent)
+                if target not in found and resolve_registered_worktree(root, target) == target:
+                    found.append(target)
+            except (OSError, ValueError, RuntimeError):
+                continue
+    return found
 
-    The environment supplies only a candidate ID. Native descriptor metadata
-    and every parent spawn edge must authenticate it before fresh authority.
-    """
-    return _call_with_deadline(
-        lambda: _authenticate_native_session(thread_id, control_root),
-        time.monotonic() + AUTHENTICATION_BUDGET_SECONDS, "",
-        stage="native authentication",
-    )
 
-
-def _authenticate_native_session(thread_id: str, control_root: str) -> str:
+def _native_session_cwd(thread_id: str) -> str:
+    """Read only native session metadata, never tool events or agent results."""
     if not THREAD_RE.fullmatch(thread_id) or os.environ.get("CODEX_THREAD_ID") != thread_id:
         return ""
+    sessions = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
     try:
-        path = _find_rollout(thread_id)
-        opened = _open_trusted_file(path, _sessions_root(), max_size=MAX_PARENT_BYTES) if path else None
-        if opened is None:
+        created = datetime.fromtimestamp(uuid7_timestamp_ms(thread_id) / 1000).astimezone()
+        candidates = list((sessions / f"{created:%Y/%m/%d}").glob(f"rollout-*{thread_id}.jsonl"))
+        if len(candidates) != 1:
             return ""
-        handle, _ = opened
+        path = candidates[0]
+        cursor = sessions
+        for component in (None, *path.relative_to(sessions).parts[:-1]):
+            if component is not None:
+                cursor = cursor / component
+            info = os.lstat(cursor)
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+                return ""
+        fd = None
         try:
-            meta = _native_meta(handle)
-            raw_cwd = meta.get("cwd")
-            if not isinstance(raw_cwd, str) or not os.path.isabs(raw_cwd):
-                return ""
-            cwd = os.path.realpath(raw_cwd)
-            roots = workspace_roots(control_root)
-            native_root = find_harness_root(cwd)
-            if not roots or not native_root or os.path.realpath(native_root) not in roots:
-                return ""
-            if not _coordinator_identity(thread_id, cwd):
-                return ""
-            return cwd if _path_matches_handle(path, _sessions_root(), handle, max_size=MAX_PARENT_BYTES) else ""
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as handle:
+                fd = None
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink != 1:
+                    return ""
+                raw = handle.readline(NATIVE_METADATA_MAX_BYTES + 1)
+                if not raw.endswith(b"\n") or len(raw) > NATIVE_METADATA_MAX_BYTES:
+                    return ""
+                event = json.loads(raw)
+                meta = event.get("payload") if isinstance(event, dict) and event.get("type") == "session_meta" else None
+                current = os.lstat(path)
+                if stat.S_ISLNK(current.st_mode) or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                    return ""
         finally:
-            handle.close()
-    except Exception:
+            if fd is not None:
+                os.close(fd)
+        if not isinstance(meta, dict) or meta.get("id") != thread_id:
+            return ""
+        cwd = meta.get("cwd")
+        return os.path.realpath(cwd) if isinstance(cwd, str) and os.path.isabs(cwd) else ""
+    except (OSError, ValueError, TypeError, OverflowError):
         return ""
 
 
-def _bound_workspace_roots(control_root: str, thread_id: str) -> list[str] | None:
-    roots = workspace_roots(control_root)
-    if not roots:
-        raise RuntimeError("workspace registry unavailable")
-    bound = []
-    for root in roots:
-        marker = read_active_session_marker(root, thread_id, strict=True)
-        if _has_binding_conflict_fence(marker):
-            return None
-        if marker and resolve_session_task_binding(root, thread_id, strict=True):
-            bound.append(root)
-    return bound
+def authenticate_native_session(thread_id: str, control_root: str) -> str:
+    """Authenticate a process-owned native identity and its registered checkout."""
+    def authenticate():
+        cwd = _native_session_cwd(thread_id)
+        root = find_harness_root(cwd) if cwd else ""
+        return cwd if root and os.path.realpath(root) in workspace_roots(control_root) else ""
+    return _call_with_deadline(authenticate, time.monotonic() + AUTHENTICATION_BUDGET_SECONDS, "", stage="native authentication")
 
 
 def _conflict_roots(control_root: str, roots: list[str] | None) -> list[str]:
@@ -318,17 +260,6 @@ def _conflict_task_dirs(control_root: str, marker: dict, *, roots=None) -> list[
 REGISTERED = "registered"
 NOT_APPLICABLE = "not_applicable"
 REGISTRATION_FAILED = "failed"
-
-
-def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool:
-    """Accept only an already exact session binding.
-
-    The shared default/legacy marker is compatibility state, not provenance.
-    Exact binding is published by PostToolUse, where the hook has both the
-    current root-session identity and the successful MCP task result.
-    """
-    return bool(resolve_session_task_binding(control_root, thread_id, strict=True))
-
 
 
 def _task_arguments(data: dict) -> dict | None:
@@ -387,19 +318,18 @@ def register_task_result(
     *,
     budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
     status_out: dict | None = None,
-    authentication_budget_seconds: float = AUTHENTICATION_BUDGET_SECONDS,
 ) -> bool:
     """Bind a successful Harness task result to this exact Codex session."""
-    deadline = time.monotonic() + max(0.0, float(authentication_budget_seconds)) + max(0.0, float(budget_seconds))
+    deadline = time.monotonic() + max(0.0, float(budget_seconds))
     result = bool(_call_with_deadline(
         lambda: _register_task_result(payload, deadline, status_out,
-                                     budget_seconds, authentication_budget_seconds), deadline,
+                                     budget_seconds), deadline,
         status_out=status_out, stage="task binding",
     ))
     if not result and time.monotonic() >= deadline and status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
         status_out.update({
             "status": REGISTRATION_FAILED,
-            "reason": "task binding did not complete within its registration budget",
+            "reason": "task binding did not complete within its binding budget",
         })
     return result
 
@@ -444,7 +374,6 @@ def _task_result_binding(payload: bytes, status_out: dict | None):
 def _register_task_result(
     payload: bytes, deadline: float, status_out: dict | None,
     budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
-    authentication_budget_seconds: float = AUTHENTICATION_BUDGET_SECONDS,
 ) -> bool:
     binding = _call_with_deadline(
         lambda: _task_result_binding(payload, status_out),
@@ -454,16 +383,7 @@ def _register_task_result(
     if binding is None:
         return False
     cwd, thread_id, control_root, task_dir, task_id, run_id = binding
-    return _prepare_and_publish_registration(
-        lambda: bool(_coordinator_identity(thread_id, os.path.realpath(cwd))),
-        lambda publication_deadline, observation: _bind_task_session(
-            cwd, thread_id, control_root, task_dir, task_id, run_id,
-            publication_deadline, observation,
-        ),
-        deadline=deadline,
-        authentication_seconds=max(0.0, float(authentication_budget_seconds)),
-        publication_seconds=max(0.0, float(budget_seconds)), status_out=status_out,
-    )
+    return _bind_task_session(cwd, thread_id, control_root, task_dir, task_id, run_id, deadline, status_out)
 
 
 def register_native_task(
@@ -472,22 +392,18 @@ def register_native_task(
     *, budget_seconds: float = REGISTRATION_BUDGET_SECONDS, status_out: dict | None = None,
 ) -> bool:
     """Bind an authenticated process-owned native actor through the hook owner."""
-    publication_seconds = max(0.0, float(budget_seconds))
-    return _prepare_and_publish_registration(
-        lambda: authenticate_native_session(thread_id, control_root) == session_cwd,
-        lambda publication_deadline, observation: _bind_task_session(
-            session_cwd, thread_id, control_root, task_dir, task_id, run_id,
-            publication_deadline, observation,
-        ),
-        deadline=time.monotonic() + AUTHENTICATION_BUDGET_SECONDS + publication_seconds,
-        authentication_seconds=AUTHENTICATION_BUDGET_SECONDS,
-        publication_seconds=publication_seconds, status_out=status_out,
-    )
+    if authenticate_native_session(thread_id, control_root) != os.path.realpath(session_cwd):
+        return False
+    deadline = time.monotonic() + max(0.0, float(budget_seconds))
+    def publish():
+        return _bind_task_session(session_cwd, thread_id, control_root, task_dir, task_id, run_id,
+                                  deadline, status_out, native=True)
+    return bool(_call_with_deadline(publish, deadline, status_out=status_out, stage="task binding"))
 
 
 def _bind_task_session(
     cwd: str, thread_id: str, control_root: str, task_dir: str,
-    task_id: str, run_id: str, deadline: float, status_out: dict | None,
+    task_id: str, run_id: str, deadline: float, status_out: dict | None, *, native: bool = False,
 ) -> bool:
     """One cross-workspace lock/fence/marker owner for hooks and native MCP."""
     roots = workspace_roots(control_root)
@@ -507,7 +423,7 @@ def _bind_task_session(
     ):
         return False
     try:
-        with _cached_parent_proofs(), active_session_transaction(roots[0]), ExitStack() as workspace_locks:
+        with active_session_transaction(roots[0]), ExitStack() as workspace_locks:
             roots = workspace_roots(roots[0])
             if not roots:
                 if status_out is not None:
@@ -525,7 +441,6 @@ def _bind_task_session(
                 for root in roots:
                     if root == control_root or markers[root]:
                         write_binding_conflict_fence(root, thread_id, [], overflow=True)
-                        invalidate_registration(root, thread_id)
                 if status_out is not None:
                     status_out.update({"status": NOT_APPLICABLE,
                                        "reason": "coordinator conflict fence overflow requires a new coordinator"})
@@ -538,11 +453,11 @@ def _bind_task_session(
                     lock_dirs.add(bindings[root]["task_dir"])
             with ExitStack() as locks:
                 for locked_task in sorted(lock_dirs):
-                    locks.enter_context(receipt_stream_transaction(locked_task))
-                if not _coordinator_identity(thread_id, os.path.realpath(cwd)):
+                    locks.enter_context(task_control_transaction(locked_task))
+                if native and _native_session_cwd(thread_id) != os.path.realpath(cwd):
                     if status_out is not None:
-                        status_out.update(status=REGISTRATION_FAILED, stage="registration publication",
-                                          reason="registration publication: native proof unavailable")
+                        status_out.update(status=REGISTRATION_FAILED, stage="task binding publication",
+                                          reason="task binding publication: native identity unavailable")
                     return False
                 control = read_task_control(canonical_task)
                 if (
@@ -570,7 +485,6 @@ def _bind_task_session(
                             write_binding_conflict_fence(
                                 root, thread_id, [] if overflow else conflicts, overflow=overflow,
                             )
-                            invalidate_registration(root, thread_id)
                     if status_out is not None:
                         status_out.update({
                             "status": NOT_APPLICABLE,
@@ -578,30 +492,18 @@ def _bind_task_session(
                         })
                     return False
                 if any(_has_binding_conflict_fence(marker) for marker in markers.values()):
-                    # No fence is acknowledged until every old offset is gone.
-                    # Interruption during either loop must never revive a survivor.
-                    for root in roots:
-                        if not invalidate_registration(root, thread_id):
-                            return False
                     for root in roots:
                         if _has_binding_conflict_fence(markers[root]):
                             clear_binding_conflict_fence(root, thread_id)
-                existing = resolve_session_task_binding(control_root, thread_id, strict=True)
-                if not existing and not invalidate_registration(control_root, thread_id):
-                    return False
                 write_active_marker(
                     control_root,
                     canonical_task,
                     session_id=thread_id,
                     publish_legacy=False,
                 )
-                return restore_watcher_registration(
-                    json.dumps({"cwd": cwd, "session_id": thread_id}).encode("utf-8"),
-                    budget_seconds=max(0.0, deadline - time.monotonic()),
-                    status_out=status_out,
-                )
-    except _AncestryPending as exc:
-        raise _RetryNativeProof(str(exc)) from exc
+                if status_out is not None:
+                    status_out.update(status=REGISTERED, reason="")
+                return True
     except Exception as exc:
         if status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
             status_out.update({"status": REGISTRATION_FAILED, "stage": "task binding",
@@ -609,175 +511,6 @@ def _bind_task_session(
         return False
 
 
-def _restore_prepared_registration(
-    control_root: str, thread_id: str, cwd: str, task_id: str, run_id: str,
-    deadline: float, status_out: dict,
-) -> bool:
-    with _cached_parent_proofs():
-        return _ensure_with_deadline(
-            control_root, thread_id, deadline, session_cwd=cwd,
-            task_id=task_id, run_id=run_id, status_out=status_out,
-        )
-
-
-def restore_watcher_registration(
-    payload: bytes,
-    *,
-    retry_seconds: float = 0.0,
-    budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
-    ensure_fn: Callable[[str, str], bool] = ensure,
-    bind_fn: Callable[[str, str], bool] | None = None,
-    status_out: dict | None = None,
-    authentication_budget_seconds: float = AUTHENTICATION_BUDGET_SECONDS,
-) -> bool:
-    """Restore registration without changing an existing immutable offset.
-
-    A late recovery starts at the then-current rollout offset, so it can attest
-    only future subagent starts. It never reconstructs already-finished work.
-
-    The bool return is unchanged for existing callers, but False conflates two
-    very different situations. Registration is *not applicable* when this is not
-    a Codex rollout, when no thread identity is present, or when there is no
-    open task to bind — none of which is a failure, and none of which should be
-    reported to the user as one. It has genuinely *failed* only when an attempt
-    was made and did not succeed. Callers that report the result pass
-    ``status_out`` and receive ``{"status": ..., "reason": ...}``; reporting
-    every False as a timeout sends the user to repair a timeout that never
-    happened.
-    """
-    def _record(status: str, reason: str) -> None:
-        if status_out is not None:
-            status_out["status"] = status
-            status_out["reason"] = reason
-
-    _record(NOT_APPLICABLE, "registration was not attempted")
-    if status_out is not None:
-        status_out.pop("stage", None)
-    started = time.monotonic()
-    prepare_proof = ensure_fn is ensure and not _PARENT_PROOFS_CACHE_ONLY.get()
-    authentication_seconds = max(0.0, float(authentication_budget_seconds)) if prepare_proof else 0.0
-    overall_deadline = started + max(0.0, float(budget_seconds)) + authentication_seconds
-    deadline = started + max(0.0, float(budget_seconds))
-    cwd, thread_id = _registration_identity(payload)
-    if status_out is not None and thread_id:
-        status_out["thread_id"] = thread_id
-    control_root = (
-        _call_with_deadline(lambda: find_harness_root(cwd), deadline, "",
-                            status_out=status_out, stage="harness root discovery")
-        if cwd else ""
-    )
-    if not cwd or not thread_id or not control_root:
-        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
-            return False
-        # Report against the payload, not the collapsed identity tuple:
-        # `_registration_identity` returns ("", "") when the thread id is
-        # missing, discarding a perfectly good cwd. Blaming the cwd sends
-        # someone to debug a field that was correct.
-        payload_cwd = ""
-        try:
-            payload_cwd = str((json.loads(payload.decode("utf-8")) or {}).get("cwd") or "")
-        except Exception:
-            payload_cwd = ""
-        missing = (
-            "no working directory in the payload" if not payload_cwd
-            else "no Codex thread identity for this session" if not thread_id
-            else "no harness root above the session directory"
-        )
-        _record(NOT_APPLICABLE, missing)
-        return False
-    # An extra binding validator must not erase the production generation.
-    # The MCP eager path supplies exact_bind, but the manager still requires
-    # the same task/run as the ordinary PostToolUse registration path.
-    generation_bound = ensure_fn is ensure
-    bound_roots = (_call_with_deadline(
-        lambda: _bound_workspace_roots(control_root, thread_id), deadline, None,
-        status_out=status_out, stage="workspace binding discovery",
-    ) if generation_bound else [])
-    if bound_roots is None or len(bound_roots) > 1:
-        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
-            return False
-        _record(NOT_APPLICABLE, "conflicting workspace bindings")
-        return False
-    if bound_roots:
-        control_root = bound_roots[0]
-    if bind_fn is None:
-        bind_fn = (
-            _bind_active_task_to_root_session
-            if ensure_fn is ensure
-            else lambda _root, _thread: True
-        )
-    # Resolve the existing task binding before expensive native authentication.
-    # A missing registration can be retried safely from the next pre-spawn hook.
-    if not bool(_call_with_deadline(
-        lambda: bind_fn(control_root, thread_id), deadline, False,
-        status_out=status_out, stage="current task binding",
-    )):
-        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
-            return False
-        # No open task to bind to. Spawning a subagent before task_start is
-        # ordinary, not broken, so this is not a registration failure.
-        _record(NOT_APPLICABLE, "no open task is bound to this session")
-        return False
-    task_id = ""
-    run_id = ""
-    if generation_bound:
-        binding = _call_with_deadline(
-            lambda: resolve_session_task_binding(control_root, thread_id, strict=True), deadline, {},
-            status_out=status_out, stage="current run resolution",
-        )
-        if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
-            return False
-        task_dir = str(binding.get("task_dir") or "")
-        task_id = os.path.basename(os.path.normpath(task_dir)) if task_dir else ""
-        run_id = str(binding.get("run_id") or "")
-        if not task_id or not run_id:
-            _record(NOT_APPLICABLE, "no open task is bound to this session")
-            return False
-    if prepare_proof:
-        return _prepare_and_publish_registration(
-            lambda: bool(_coordinator_identity(thread_id, os.path.realpath(cwd))),
-            lambda publication_deadline, observation: _restore_prepared_registration(
-                control_root, thread_id, cwd, task_id, run_id,
-                publication_deadline, observation,
-            ),
-            deadline=overall_deadline, authentication_seconds=authentication_seconds,
-            publication_seconds=max(0.0, float(budget_seconds)), status_out=status_out,
-        )
-    deadline = min(overall_deadline, time.monotonic() + max(0.0, float(budget_seconds)))
-    retry_deadline = min(deadline, time.monotonic() + max(0.0, float(retry_seconds)))
-    while True:
-        if ensure_fn is ensure:
-            with _cached_parent_proofs():
-                restored = _ensure_with_deadline(
-                    control_root, thread_id, deadline, session_cwd=cwd,
-                    task_id=task_id, run_id=run_id, status_out=status_out,
-                )
-        else:
-            try:
-                restored = ensure_fn(control_root, thread_id)
-            except Exception as exc:
-                restored = False
-                _record(REGISTRATION_FAILED, f"registration publication unavailable ({type(exc).__name__})")
-                if status_out is not None:
-                    status_out["stage"] = "registration publication"
-        if restored:
-            _record(REGISTERED, "")
-            return True
-        if time.monotonic() >= retry_deadline:
-            if status_out is not None and status_out.get("status") == REGISTRATION_FAILED:
-                return False
-            # An attempt was made against a real identity and a real root and
-            # did not succeed. This one is a genuine failure.
-            _record(
-                REGISTRATION_FAILED,
-                "registration validation or publication was refused",
-            )
-            if status_out is not None:
-                status_out["stage"] = "registration publication"
-            return False
-        time.sleep(min(0.05, max(0.0, retry_deadline - time.monotonic())))
-
-
-_bind_control_writer(restore_watcher_registration)
 _bind_control_writer(register_task_result)
+_bind_control_writer(register_native_task)
 del _bind_control_writer

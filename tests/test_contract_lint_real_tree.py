@@ -244,7 +244,7 @@ class DurableDocsOnlyReferenceRealTests(unittest.TestCase):
             blind = self.lint.check_doc_test_references(str(ROOT))
         self.assertGreater(len(blind), 20, blind)
         self.assertTrue(
-            any("REQ__receipt-subsystem-failures-are-observable.md" in item
+            any("REQ__receipt-free-execution-and-completion.md" in item
                 for item in blind),
             "the durable REQ docs were not among the files scanned",
         )

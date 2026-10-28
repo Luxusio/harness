@@ -1,23 +1,4 @@
-"""The installed runtime is smoke-tested, and the smoke test can actually fail.
-
-`tests/` exercises the source tree. Hooks execute from the installed tree, and
-when the two diverge the suite is green while every receipt disappears — the
-state that persisted for a month, twice
-(`doc/harness/REQ__receipt-subsystem-failures-are-observable.md`).
-`plugin/scripts/install_smoke.py` is the only check that inspects what actually
-runs, so its failure case is the part that has to be proven.
-
-The failure planted here is the real one: a `.pyc` whose header mtime and size
-match the source while its marshalled body does not. Arbitrary garbage in the
-`.pyc` does not reproduce the outage — the loader rejects it and silently falls
-back to the source, so a test built on garbage bytecode passes against a
-runtime that is dead.
-
-Nothing here touches a real install root: each "installed" tree is a copy of
-`plugin/` under `tmp_path`. Copies and smoke runs are the whole cost of this
-file, so they are shared where the tree stays clean and made per-test only
-where one is deliberately corrupted.
-"""
+"""Installed imports, actual WBS execution, source scope and cleanup."""
 
 from __future__ import annotations
 
@@ -76,13 +57,11 @@ def _load(name: str, path: Path):
 def _plant_stale_pyc(source: Path) -> Path:
     """Write bytecode the loader accepts but that no longer matches `source`.
 
-    The header carries the source's real mtime and size, so the import system
-    considers the cache current and never recompiles. The body is the source
-    plus one extra statement, which is enough for `_lib`'s adapter-identity
-    check to reject `subagent_lifecycle` — the exact 2026-08-26/2026-09-09
-    outage.
+    The header carries the source's real mtime and size, so Python accepts the
+    cache. Its body raises during import, proving the installed import probe
+    catches executable bytecode corruption and pruning restores source loading.
     """
-    text = source.read_text(encoding="utf-8") + "\n_STALE_MARKER = True\n"
+    text = source.read_text(encoding="utf-8") + "\nraise RuntimeError('stale cached module')\n"
     code = compile(text, str(source), "exec")
     info = source.stat()
     target = Path(importlib.util.cache_from_source(str(source)))
@@ -109,7 +88,7 @@ def test_a_clean_installed_tree_passes_and_is_not_written_to():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ok import:" in result.stdout
-    assert "ok receipt: bound subagent produced a started row" in result.stdout
+    assert "ok WBS: installed task/session ownership" in result.stdout
 
     # A probe that leaves bytecode behind can disable the runtime it just
     # certified: an entry written by another interpreter build fails the same
@@ -122,41 +101,25 @@ def test_the_installer_runs_the_smoke_on_the_tree_it_installed():
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     ok, steps = install._smoke_installed_runtime(clean_tree)
     assert ok, steps
-    assert any("ok receipt" in step for step in steps), steps
+    assert any("ok WBS" in step for step in steps), steps
     assert all(step.startswith("runtime smoke: ") for step in steps), steps
 
 
 def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path):
-    """Both halves of AC-2 on one tree: detection, then the installer's repair.
-
-    The receipt half no longer fails alongside the import half. `background_hook`
-    now prunes the offending `__pycache__` when its import hits the stale-cache
-    shape, so by the time the smoke's receipt probe runs the cache is gone and
-    the probe succeeds. That is the intended behavior of
-    `doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md`: a stale cache
-    must not be able to keep the receipt subsystem down.
-
-    The install still fails, and must: the import probe observed a tree that
-    could not import, and the installer is not entitled to certify a runtime on
-    the strength of its own self-repair. Detection stays; only the blast radius
-    shrank.
-    """
+    """An import failure fails delivery; pruning repairs stale bytecode."""
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     plugin_root = _installed_tree(tmp_path)
-    pyc = _plant_stale_pyc(plugin_root / "scripts" / "subagent_lifecycle.py")
+    pyc = _plant_stale_pyc(plugin_root / "scripts" / "prewrite_gate.py")
     assert pyc.is_file()
 
     ok, steps = install._smoke_installed_runtime(plugin_root)
     report = "\n".join(steps)
     assert not ok, report
     assert "FAIL import:" in report
-    # Self-heal already ran during the failing import, so the cache is gone.
-    assert not pyc.exists(), report
+    assert pyc.exists(), report
 
     steps = install._prune_bytecode_caches(plugin_root)
-    # Pruning an already-clean tree is a no-op, not an error. The installer's
-    # prune remains the belt to the hook's braces: it also covers trees whose
-    # hooks never ran.
+    # Pruning removes stale caches without touching their adjacent sources.
     assert all("could not remove" not in step for step in steps), steps
 
     ok, steps = install._smoke_installed_runtime(plugin_root)
@@ -174,7 +137,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     installed = tmp_path / "installed" / "plugin"
     installed.mkdir(parents=True)
-    failure = (False, ["runtime smoke: FAIL receipt: no receipt row"])
+    failure = (False, ["runtime smoke: FAIL WBS: task operation unavailable"])
 
     monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "claude-dest"))
     with (
@@ -189,7 +152,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
     claude_smoke.assert_called_once_with(installed)
     assert not result.ok
     assert "smoke test" in result.summary
-    assert any("FAIL receipt" in step for step in result.steps), result.steps
+    assert any("FAIL WBS" in step for step in result.steps), result.steps
 
     cached = tmp_path / "codex-cache" / "plugin"
     cached.mkdir(parents=True)
@@ -227,7 +190,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     path: ~0.5s per runtime.
     """
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
-    failure = (False, ["runtime smoke: FAIL receipt: no receipt row"])
+    failure = (False, ["runtime smoke: FAIL WBS: task operation unavailable"])
 
     claude_root = tmp_path / "claude-dest"
     (claude_root / "plugin").mkdir(parents=True)
@@ -318,8 +281,8 @@ def test_the_smoke_covers_every_registered_hook_module():
     registered = set(install_smoke.HOOK_SCRIPT_REFERENCE.findall(hooks_json))
     assert registered, "no hook scripts found in hooks.json"
     assert registered <= set(modules), sorted(registered - set(modules))
-    # The two modules whose import-time binding is what actually breaks.
-    assert {"_lib", "subagent_lifecycle"} <= set(modules)
+    # Include shared task control and the session-binding owner.
+    assert {"_lib", "codex_hook_registration"} <= set(modules)
 
 
 def test_an_absent_or_partial_tree_reports_a_failure_not_a_crash(tmp_path):
@@ -337,13 +300,7 @@ def test_an_absent_or_partial_tree_reports_a_failure_not_a_crash(tmp_path):
 
 
 def test_the_probe_environment_is_pinned_to_the_runtime_interpreter(monkeypatch):
-    """`sys.executable` is not interchangeable with the runtime's `python3`.
-
-    Bytecode written by one CPython 3.12.13 build is rejected by another when
-    `_lib` compares the imported code object against a fresh compile, so a
-    probe run under the venv interpreter would both mis-report and, if it wrote
-    bytecode, break the tree it inspected. Measured 2026-09-09.
-    """
+    """The smoke inherits the same pinned interpreter as generated launchers."""
     # conftest exports PYTHONDONTWRITEBYTECODE suite-wide; without this the
     # assertion below would pass even if `_probe_env` stopped setting it.
     monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
@@ -351,7 +308,7 @@ def test_the_probe_environment_is_pinned_to_the_runtime_interpreter(monkeypatch)
     env = install_smoke._probe_env("/nonexistent/plugin", "sid")
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "PYTEST_CURRENT_TEST" not in env
-    assert os.path.basename(install_smoke._runtime_python()).startswith("python")
+    assert install_smoke._runtime_python() == os.path.realpath(sys.executable)
 
 
 def _codex_tree(destination):
@@ -361,7 +318,7 @@ def _codex_tree(destination):
     return root
 
 
-def test_codex_smoke_drives_native_start_and_completed_identity_without_payload_writes(tmp_path):
+def test_codex_smoke_drives_task_source_checks_without_payload_writes(tmp_path):
     import hashlib
     root = _codex_tree(tmp_path)
     smoke = _load("codex_native_smoke", SMOKE)
@@ -371,34 +328,23 @@ def test_codex_smoke_drives_native_start_and_completed_identity_without_payload_
     before = inventory()
     ok, lines = smoke.smoke_installed_runtime(str(root), timeout=10)
     assert ok, lines
-    assert any("isolated native fixture" in line and "completed PASS" in line for line in lines)
-    assert not any("ok receipt: bound subagent" in line for line in lines)
+    assert any("ok WBS:" in line for line in lines)
+    assert not any("ok WBS: bound subagent" in line for line in lines)
     assert inventory() == before
     assert not list(root.rglob("__pycache__"))
 
 
-def test_codex_smoke_rejects_broken_generation_manager_and_completion(tmp_path):
-    smoke = _load("codex_broken_native_smoke", SMOKE)
-    failures = {
-        "generation": ("codex_hook_registration.py", "generation_bound = ensure_fn is ensure", "generation_bound = False"),
-        "manager": ("codex_lifecycle_watcher.py", "def start(self)", "def start(self)"),
-        "post_tool": ("codex_hook_registration.py", '    """Bind a successful Harness task result to this exact Codex session."""',
-                      '    """Bind a successful Harness task result to this exact Codex session."""\n    return False'),
-        "completion": ("codex_lifecycle_watcher.py", 'payload.get("type") != "agent_message"', 'payload.get("type") != "disabled_fixture_delivery"'),
-    }
-    for name, (script, old, new) in failures.items():
-        root = _codex_tree(tmp_path / name)
-        path = root / "scripts" / script
-        text = path.read_text()
-        if name == "manager":
-            # Stop admission, without changing the parser or forging receipts.
-            old = 'def registrations(repo_root: str) -> list[dict[str, Any]]:'
-            new = old + '\n    return []'
-        assert old in text
-        path.write_text(text.replace(old, new, 1))
-        ok, lines = smoke.smoke_installed_runtime(str(root), timeout=4)
-        assert not ok, (name, lines)
-        assert any("FAIL codex receipt" in line for line in lines), (name, lines)
+def test_smoke_rejects_broken_installed_source_assignment(tmp_path):
+    smoke = _load("broken_source_smoke", SMOKE)
+    root = _codex_tree(tmp_path)
+    path = root / "scripts/wbs.py"
+    text = path.read_text()
+    old = "def require_source_assignment(repo, task_id, path=None):"
+    assert old in text
+    path.write_text(text.replace(old, old + "\n    return {}", 1))
+    ok, lines = smoke.smoke_installed_runtime(str(root), timeout=20)
+    assert not ok, lines
+    assert any("FAIL WBS" in line for line in lines), lines
 
 
 def test_codex_probe_timeout_cleans_worker_owned_scratch_too(tmp_path, monkeypatch):
@@ -413,9 +359,9 @@ def test_codex_probe_timeout_cleans_worker_owned_scratch_too(tmp_path, monkeypat
                 "time.sleep(2)")
     server.write_text(server.read_text().replace("from __future__ import annotations", injected, 1))
     monkeypatch.setattr(smoke.tempfile, "tempdir", str(tmp_path))
-    ok, lines = smoke._codex_receipt_probe(str(root), timeout=0.5)
+    ok, lines = smoke._wbs_probe(str(root), timeout=0.5)
     assert not ok and any("did not complete" in line for line in lines)
-    assert not list(tmp_path.glob("harness-codex-*")), "killed worker leaked fixture directories"
+    assert not list(tmp_path.glob("harness-wbs-*")), "killed worker leaked fixture directories"
     if child_pid.exists():
         pid = int(child_pid.read_text())
         stat = Path(f"/proc/{pid}/stat")

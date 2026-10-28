@@ -256,7 +256,7 @@ def test_test_author_writes_only_tests_from_plan_intent():
                 "including an import of a new symbol PLAN.md names, fail until the AC lands",
                 "never make a red test green by loosening its assertion",
                 "once the whole batch returns",
-                "Do not write `PLAN.md`, `TASK.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.",
+                "Do not write `PLAN.md`, `TASK.json`, or `PROGRESS.md`.",
                 "Do not call harness MCP artifact writers.",
                 spawn_rule,
                 "Do not run full-suite QA.",
@@ -271,22 +271,6 @@ def test_test_author_writes_only_tests_from_plan_intent():
     assert "Write only inside the `**Tests:**` paths your prompt assigns." in _text(TEST_AUTHOR)
 
 
-def test_test_author_names_map_to_no_receipt_lens():
-    """A test author owes no verdict, so no spelling of its name may bind a lens.
-
-    Codex infers the lens from a free-text `task_name`; a slugged name such as
-    `test_author_ux-cli-copy` would infer `ux-cli`. That is why the Codex line
-    fixes the name to digits after `test_author_ac_`.
-    """
-    lib = _load("within_task_width_lib", "plugin/scripts/_lib.py")
-    for name in (
-        "harness:test-author",
-        "test-author",
-        "test_author_ac_001",
-        "test_author_ac_001_2",
-    ):
-        assert lib._infer_receipt_lens(name) == "", name
-    assert lib._infer_receipt_lens("test_author_ux-cli-copy") == "ux-cli"
 
 
 def test_fanout_pairs_test_author_and_reconciles_after_the_batch():
@@ -359,7 +343,6 @@ def test_codex_test_author_mirror_and_phase_30_line():
         (
             "> **Codex runtime overlay:**",
             '`spawn_agent(task_name="test_author_ac_<NNN>")`',
-            "so the lifecycle watcher infers no receipt lens from it",
             "Use `apply_patch` only inside the `**Tests:**` paths your prompt assigns.",
         ),
         "Codex test-author mirror",
@@ -462,8 +445,6 @@ def test_ac_worker_never_spawns_lens_agents():
             'Always pass `subagent_type="harness:ac-worker"`. Never omit it',
             "a general-purpose agent that inherits every tool, including harness MCP writers",
             "Never `harness:developer`, `harness:task-lead`, or `harness:test-author`.",
-            "a nested lens would enter the task's receipt stream outside the coordinator's "
-            "review-before-QA order",
             "- Do not spawn any agent type other than `harness:ac-worker`, "
             "and only under Sub-split.",
         ),

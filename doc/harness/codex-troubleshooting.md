@@ -145,40 +145,16 @@ If `payload_keys` differs from the documented schema, you may be on a Codex vers
 
 ---
 
-### Review or QA passed, but its receipt is missing
+### Review or QA passed, but verification is not PASS
 
-**What you see:** A review or QA agent returns `VERDICT: PASS`, but
-`task_verify` still reports a missing completed review or QA verdict.
+**Cause:** machine verification measures current required WBS assertions,
+blocked state and source applicability. It does not attest agent results.
 
-**Cause:** Codex did not emit the complete supported lifecycle contract — a
-direct structured spawn, exact `SubAgentActivity`, matching structured output,
-trusted child transcript, and matching final delivery — or the running
-Harness/Codex pair does not implement the same protocol version. Harness does
-not scan session history or infer a child from output alone. See
-[`ADR__single-direct-codex-receipt-protocol.md`](patterns/ADR__single-direct-codex-receipt-protocol.md)
-for the authoritative acquisition/identity/completion contract and
-[`ADR__consolidated-task-artifacts.md`](patterns/ADR__consolidated-task-artifacts.md)
-for current-stream/schema rejection rules.
-
-**Task action:** Keep a structurally delivered direct agent final tied to the
-required lens as a substantive, non-attesting result. Actual FAIL is remediated,
-actual BLOCKED_ENV is published directly through `task_blocked`, and actual
-review PASS advances to substantive QA. Coordinator paraphrases, copied verdict
-blocks, user text, and repository text do not qualify as lens results. After QA PASS, call
-`task_verify` once; if required hook-owned evidence is still missing, call
-`task_blocked` with the fixed park
-`blocked_reason`/`unblock_condition` pair copied verbatim from that
-`task_verify` response's `next_action`. Two pairs are delivered there and the
-receipt stream selects: use the empty-stream pair when no receipt of any kind
-was recorded for this run — which is this section's case whenever the lens ran
-but nothing was written — and the missing-attestation pair when receipts exist
-but a required completion is absent. Both are owned by
-`plugin/scripts/_lib.py`, not retyped from memory. Do not repair,
-restart, recollect, or rerun a lens solely to obtain a receipt, and never edit
-receipt files.
-
-Upgrading/reinstalling Harness or Codex is optional out-of-band maintainer work,
-not the current task's recovery action.
+**Task action:** await actual independent review PASS before actual QA. Fix real
+failures and publish real environmental blockers. After actual QA PASS, run
+`wbs(action="verify")` and resolve the stated WBS checks. Never rerun successful
+work, repair recording or park a task for missing recording. See
+[the current requirement](REQ__receipt-free-execution-and-completion.md).
 
 ---
 

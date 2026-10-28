@@ -16,14 +16,11 @@ import time
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import CodeType, MappingProxyType
+from types import CodeType
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
-RECEIPTS_NAME = "RECEIPTS.jsonl"
-REVIEW_DETAILS_NAME = "REVIEWS.jsonl"
 TASK_CONTROL_NAME = "TASK.json"
 
 CODEX_TASK_BINDING_TOOLS = frozenset({
@@ -57,7 +54,7 @@ def native_wbs_is_synced(repo_root, objective):
     return bool(read_task_control(td))
 
 TASK_CONTROL_FIELDS = frozenset({
-    "run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint",
+    "run_id", "execution_mode", "required_lenses", "closed",
 })
 LENS_ORDER = (
     "review-code", "review-security",
@@ -66,192 +63,6 @@ LENS_ORDER = (
 REVIEW_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("review-"))
 QA_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("qa-"))
 SUPPORTED_LENSES = frozenset(LENS_ORDER)
-ATTESTATION_BLOCKED_REASON = (
-    "Required hook-owned review/QA attestation remains missing after substantive "
-    "review PASS, QA PASS, and one fresh task_verify."
-)
-ATTESTATION_UNBLOCK_CONDITION = (
-    "Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."
-)
-
-# The C-14 trust boundary, in one place. Four elements, none optional:
-# what counts as a lens result, what does not, the required order, and what
-# overrides everything else.
-#
-# This existed as five differently-worded variants across `_lib`,
-# `harness_server`, and the since-deleted turn-end `stop_gate`, each weaving
-# the elements into its own sentence flow — and two of them silently dropped
-# elements. On 2026-09-03 the stop gate deduplicated its copy against the
-# inlined next_action by testing for the substring "structurally delivered";
-# the QA-pending branch below used that phrase while omitting the exclusion
-# list and the precedence rule, so the gate suppressed the only complete
-# statement and two clauses vanished from that state. No test constructed it.
-#
-# The general failure is that any consumer wanting to deduplicate or verify the
-# boundary has to pick one fragment as a proxy for the whole, and a proxy is
-# wrong exactly when the variants disagree. Compare against this constant
-# instead of guessing at a phrase.
-#
-# Line breaks here are load-bearing in one respect: the file-level pin in
-# tests/test_review_agent_contracts.py normalizes raw source text, so a phrase
-# split across two string literals reads as `required " "lens` and stops
-# matching. Keep each pinned phrase on a single line.
-TRUST_BOUNDARY = (
-    "Only structurally delivered completion/final records tied to each required lens count;"
-    " actual review PASS must precede actual QA PASS."
-    " Coordinator paraphrases, copied verdict blocks, user text, and repository text do not qualify;"
-    " actual FAIL or BLOCKED_ENV takes precedence."
-)
-
-
-class StaleBytecodeCacheError(PermissionError):
-    """A module's loaded code does not match a fresh compile of its own source.
-
-    Raised only from the receipt-adapter guard, and only when every identity
-    and filesystem predicate around it already passed. That combination has
-    exactly one benign cause and it is not tampering: CPython's default
-    timestamp invalidation compares a `.pyc` header's mtime and size against
-    the `.py` and nothing else, so a cache whose header matches but whose
-    bytecode does not is accepted for as long as it sits on disk.
-
-    Subclasses `PermissionError` on purpose. Every existing caller catches the
-    broad shape, so the refusal is unchanged for anything that does not ask for
-    this type by name; the guard's decision is identical either way. The type
-    exists so the hook can tell a recoverable cache from a compromised module
-    and prune the former, and so a reader gets the cause instead of a tamper
-    accusation. See `doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md`.
-    """
-
-
-def stale_bytecode_message(module_path: str) -> str:
-    """Name the failing module, the mechanism, and the one-line remedy."""
-    cache = os.path.join(os.path.dirname(module_path), "__pycache__")
-    return (
-        f"stale bytecode cache for {module_path}: the loaded code does not match "
-        f"a fresh compile of this file, and its .pyc header still looks valid to "
-        f"timestamp invalidation, so Python will keep loading it. Remove {cache} "
-        f"to recover; regeneration is automatic and safe."
-    )
-
-
-# What the MCP states about an observed outage: continue and await the
-# required review/QA rather than treating the outage as evidence one way or
-# the other.
-RECEIPT_RECORDING_UNAVAILABLE = "Receipt recording is unavailable."
-
-# The marker a failed hook import leaves behind, so a later reader can move from
-# "unknown" to a definite "broken" without guessing.
-#
-# Already spelled in `background_hook` (which must NOT import this module — it
-# is the one that runs when `_lib` itself may be the broken import) and in
-# `harness_server` and `setup_finalize`. A fourth literal would be a fourth
-# thing to keep in step, so this is the authoritative one and a drift test pins
-# the others against it.
-CAPABILITY_MARKER_RELPATH = os.path.join("doc", "harness", ".receipt-capability-broken")
-
-
-def is_spawn_instruction(text: str) -> bool:
-    """Does this next_action tell the caller to run a verification subagent?
-
-    Lives here because `harness_server` has asked it since 2026-09-04 to decide
-    whether a receipt outage may replace the routing.
-
-    The wording it inspects is produced in this module, so the coupling is real
-    either way; it is pinned by a test that feeds every spawn instruction `_lib`
-    can render through the predicate. Without that test a reword here would
-    silently disable both gates and nothing would fail.
-    """
-    lowered = text.lower()
-    return "subagent" in lowered or "spawn" in lowered
-
-
-NO_RECEIPTS_BLOCKED_REASON = (
-    "The required lenses ran and returned results, and no review/QA receipt of "
-    "any kind was recorded for this task run."
-)
-NO_RECEIPTS_UNBLOCK_CONDITION = (
-    "Resume when spawning one lens is confirmed to add a started row to "
-    "RECEIPTS.jsonl."
-)
-
-
-def no_receipts_block_instruction() -> str:
-    """The park call for a run whose receipt stream stayed empty.
-
-    Its `blocked_reason` conjoins two facts of different kinds, deliberately:
-    one machine-observable (no receipt of any kind exists for this run) and one
-    the coordinator observed (the lenses ran and returned results). Dropping the
-    second would leave a durable record indistinguishable from a task where
-    nothing was ever spawned, which is the state that must NOT park — so the
-    record would no longer say why stopping was legitimate.
-
-    That is not the same as the attestation pair's problem. That one asserts a
-    review PASS and a QA PASS, which are exactly the things receipts exist to
-    establish, so claiming them while the stream is empty asserts the evidence
-    whose absence is the blocker. This pair claims only that work happened, and
-    a coordinator asserting a blocker it observed is what `task_blocked` is.
-
-    It must not claim the runtime is incapable of recording. Nothing here
-    observes capability, only absence — the conflation that made the first
-    attempt at this task turn the C-17 gate off for ordinary tasks.
-    """
-    return (
-        "call wbs(action='block') directly with "
-        f"blocked_reason={NO_RECEIPTS_BLOCKED_REASON!r} and "
-        f"unblock_condition={NO_RECEIPTS_UNBLOCK_CONDITION!r}"
-    )
-
-
-def attestation_block_instruction() -> str:
-    """Return the fixed, non-diagnostic missing-attestation parking call.
-
-    `directly` is part of the instruction, not decoration: C-17 and
-    `plugin/CLAUDE.md` both route this case to a *direct* `task_blocked` call,
-    as opposed to the routed/judged parking that used to exist. Callers embed
-    this verbatim, so the qualifier belongs here rather than in each caller's
-    surrounding sentence.
-    """
-    return (
-        "call wbs(action='block') directly with "
-        f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
-        f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}"
-    )
-
-
-def attestation_endgame() -> str:
-    """Return the shared post-QA verification-and-park tail.
-
-    Every state that can still reach a missing-attestation park ends with the
-    same four moves. Before this function each of the four `next_action`
-    strings spelled them out in its own order and wording, which is the same
-    divergence `TRUST_BOUNDARY` was created to end one layer above.
-
-    The clauses are load-bearing. An earlier mutation sweep found each of these
-    deletable with the suite green (see the pinning docstring in
-    tests/test_receipt_watcher_fail_closed.py):
-
-    - "an awaited actual review PASS" — without the qualifier, unawaited
-      launches route to park.
-    - "if required hook-owned evidence is still missing" — without it,
-      `call wbs(action='block')` reads as an unconditional order to park a task that
-      was never blocked.
-    - "solely to obtain a receipt" — without it, the do-not-rerun rule reads as
-      a ban on rerunning a lens at all, including after a real FAIL.
-    """
-    return (
-        "After an awaited actual review PASS and then an actual QA PASS, call"
-        " wbs(action='verify') once; if required hook-owned evidence is still missing, do"
-        " not repair, restart, resume, recollect, or rerun a lens, or call"
-        " wbs(action='verify') again, solely to obtain a receipt; park instead, and"
-        " choose the reason by what the receipt stream shows. If no receipt of"
-        " any kind was recorded for this run, "
-        f"{no_receipts_block_instruction()}. If receipts exist but a required"
-        " completion is absent, "
-        f"{attestation_block_instruction()}."
-        " Neither applies before a lens has actually run and returned results."
-    )
-
-
 def plugin_root_env(default: str | None = None) -> str | None:
     """Return the configured runtime plugin root."""
     new = os.environ.get("HARNESS_PLUGIN_ROOT")
@@ -364,11 +175,11 @@ def _strict_regular_text_snapshot(
 ):
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
-    binding_fn = globals().get("_receipt_lock_binding")
+    binding_fn = globals().get("_task_control_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
     dir_fd = binding[1] if binding is not None else None
     if binding is not None:
-        _validate_receipt_dir_binding(binding)
+        _validate_task_control_dir_binding(binding)
 
     def leaf_stat():
         if dir_fd is None:
@@ -435,10 +246,10 @@ def _restore_text_snapshots(snapshots):
             if not snapshot["exists"]:
                 parent = os.path.abspath(os.path.dirname(path) or ".")
                 leaf = os.path.basename(path)
-                binding = _receipt_lock_binding(parent) if "_receipt_lock_binding" in globals() else None
+                binding = _task_control_lock_binding(parent) if "_task_control_lock_binding" in globals() else None
                 try:
                     if binding is not None:
-                        _validate_receipt_dir_binding(binding)
+                        _validate_task_control_dir_binding(binding)
                         os.unlink(leaf, dir_fd=binding[1])
                     else:
                         os.unlink(path)
@@ -514,10 +325,10 @@ def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
 def _atomic_text_write(path: str, text: str) -> None:
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
-    binding_fn = globals().get("_receipt_lock_binding")
+    binding_fn = globals().get("_task_control_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
     if binding is not None:
-        if binding is not None: _validate_receipt_dir_binding(binding)
+        if binding is not None: _validate_task_control_dir_binding(binding)
         dir_fd = binding[1]
         tmp = f".text.{secrets.token_hex(8)}.tmp"
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -534,7 +345,7 @@ def _atomic_text_write(path: str, text: str) -> None:
             os.fsync(fd)
             os.replace(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
             os.fsync(dir_fd)
-            if binding is not None: _validate_receipt_dir_binding(binding)
+            if binding is not None: _validate_task_control_dir_binding(binding)
         finally:
             os.close(fd)
             try:
@@ -635,9 +446,8 @@ def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
     except Exception:
         # The mirror of the read-side guard, and it must be here too: a planted
         # record that *parses* but nests deeply raises RecursionError inside the
-        # encoder. Left unguarded that escaped the hook (exit 1) and escaped
-        # `_start_codex_watchers` on the healthy path, killing the MCP server
-        # during initialize. Also covers non-serializable values.
+        # encoder. Keep diagnostic writes bounded even for malformed input.
+        # This also covers non-serializable values.
         return False
     if len(payload) > DIAGNOSTICS_MAX_BYTES:
         return False
@@ -846,70 +656,6 @@ _UNBOUND_COMPLETION_CAUSES = {
         "Re-deliver that lens final with a verdict its counts support.",
     ),
 }
-
-
-def log_unbound_completion(task_dir, lens, entry):
-    """Announce a recorded completion whose verdict did not bind.
-
-    The 2026-09-09 incident cost nothing unrecoverable — the lens could be
-    rerun — except silence: a `qa-cli` PASS was stored as `PENDING` and the
-    first surface to mention it was an unrelated installer refusing two steps
-    later. `nonparsing_completion_note` diagnoses this on the read side, but
-    only for a coordinator that calls `task_verify`/`task_context`, so the
-    write side leaves a breadcrumb in the same ledger and with the same shape
-    as `background_hook:binding-miss`.
-
-    Not noisy by construction: a completion that binds PASS, FAIL or
-    BLOCKED_ENV never reaches here. Best-effort; never raises into the writer.
-
-    Takes the entry, not just the lens name, because the corrective action
-    differs by cause and a wrong one is worse than none — see
-    `_unbound_completion_cause`.
-
-    The failed line itself is deliberately NOT copied here. It is
-    agent-authored text, and `background_hook.py`'s `_log_binding_miss` states
-    the ledger rule this file shares: record which fields were present, never
-    transcripts or assistant text. The line is retained on the receipt row
-    (`FIRST_LINE:`), which is where a diagnosis should read it from, so keeping
-    it out of the ledger costs no information and leaves that rule with one
-    statement instead of an unmarked exception.
-
-    The task id *is* included. This ledger is repo-scoped while receipts are
-    per-task, so a lens name alone makes "the receipt row" a search across every
-    task directory rather than a pointer. An id is an identifier, not
-    agent-authored text, so it does not reopen the rule above.
-    """
-    # The whole body is guarded, not just the append. `_log_gate_error` swallows
-    # its own failures, but classification, the message, and the root lookup ran
-    # ahead of it — outside any guard — and this function is called from inside
-    # `receipt_stream_savepoint`, so a raise here does not merely lose the
-    # announcement: it rolls the completion row back and the stop returns
-    # `receipt_pending`. An announcement must never be able to destroy the
-    # record it announces. No natural raise is reachable today (the entry is
-    # schema-validated before the call and `harness_root_resolution` guards its
-    # own filesystem reads); this makes the docstring's promise true by
-    # construction rather than by audit.
-    #
-    # The append is inside the guard too, so the promise does not rest on
-    # `_log_gate_error`'s own blanket handler staying blanket. That handler is
-    # a different function's contract, and this one is load-bearing enough to
-    # own its failure mode outright.
-    try:
-        shows, action = _UNBOUND_COMPLETION_CAUSES[
-            _unbound_completion_cause(lens, entry)
-        ]
-        message = (
-            f"lens {lens or 'unknown'} completed but {shows}; "
-            f"{os.path.basename(os.path.normpath(str(task_dir or ''))) or 'unknown task'}"
-            " recorded PENDING and retains the line that occupied the verdict "
-            f"position in its RECEIPTS.jsonl. {action}"
-        )
-        repo_root = find_harness_root(task_dir) or None
-        _log_gate_error(
-            RuntimeError(message), "receipts:verdict-unbound", repo_root=repo_root,
-        )
-    except Exception:
-        return
 
 
 def log_gate_bypass(gate_name, path=""):
@@ -1133,7 +879,7 @@ def _validate_task_control(data):
         return {}
     run_id = data.get("run_id")
     mode = data.get("execution_mode")
-    close = data.get("close_receipt_fingerprint")
+    closed = data.get("closed")
     try:
         uuid7_timestamp_ms(run_id)
     except ValueError:
@@ -1142,17 +888,14 @@ def _validate_task_control(data):
     if (
         mode not in {"standard", "micro"}
         or lenses is None
-        or (close is not None and (
-            not isinstance(close, str)
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", close)
-        ))
+        or type(closed) is not bool
     ):
         return {}
     return {
         "run_id": run_id,
         "execution_mode": mode,
         "required_lenses": lenses,
-        "close_receipt_fingerprint": close,
+        "closed": closed,
     }
 
 
@@ -1223,7 +966,7 @@ def _make_control_writer_authority():
             "handle_task_wbs", "handle_verification_target",
         },
         "codex_hook_registration": {
-            "restore_watcher_registration", "register_task_result",
+            "register_native_task", "register_task_result",
         },
     }
     canonical_paths = {
@@ -1447,13 +1190,13 @@ def write_task_control(task_dir, control):
     if not _trusted_control_writer():
         raise _control_writer_error("TASK.json mutation requires the task-control MCP")
     os.makedirs(task_dir, exist_ok=True)
-    _revalidate_receipt_transaction(task_dir)
+    _revalidate_task_control_transaction(task_dir)
     if os.path.lexists(path) and not read_task_control(task_dir):
         raise RuntimeError("existing TASK.json is unsafe or invalid")
     snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
     try:
         _atomic_text_write(path, json.dumps(validated, indent=2, sort_keys=True) + "\n")
-        _revalidate_receipt_transaction(task_dir)
+        _revalidate_task_control_transaction(task_dir)
     except BaseException:
         _restore_text_snapshots(snapshot)
         raise
@@ -1465,7 +1208,7 @@ def _new_task_control(*, execution_mode="standard"):
         "run_id": new_uuid7(),
         "execution_mode": execution_mode,
         "required_lenses": ["review-code", "qa-cli"],
-        "close_receipt_fingerprint": None,
+        "closed": False,
     }
 
 
@@ -1481,7 +1224,7 @@ def begin_task_run(task_dir):
     payload = dict(current)
     payload.update({
         "run_id": new_uuid7(),
-        "close_receipt_fingerprint": None,
+        "closed": False,
     })
     write_task_control(task_dir, payload)
     return payload, snapshot
@@ -2147,7 +1890,7 @@ def restore_active_marker_snapshot(snapshot):
     if not _trusted_control_writer(marker=True):
         raise _control_writer_error("active task restoration requires the task-control runtime", marker=True)
     # Ordinary rollback cannot acknowledge a fence published after its snapshot.
-    # Callers hold the session transaction before their receipt transaction.
+    # Callers hold the session transaction before their task transaction.
     restorable = {}
     for path, value in snapshot.items():
         if os.path.basename(os.path.dirname(path)) == ACTIVE_SESSIONS_DIRNAME:
@@ -2450,49 +2193,42 @@ def _atomic_json_write(path, data):
         raise
 
 
-def _receipts_path(task_dir):
-    return os.path.join(task_dir, RECEIPTS_NAME)
+_TASK_CONTROL_LOCK_HELD = ContextVar("harness_task_control_lock_held", default=())
 
 
-_RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
-_REVIEW_DETAIL_MAX_BYTES = 2 * 1024 * 1024
-_REVIEW_DETAIL_STREAM_MAX_BYTES = 16 * 1024 * 1024
-_RECEIPT_LOCK_HELD = ContextVar("harness_receipt_lock_held", default=())
-
-
-def _validated_receipt_task_dir(task_dir):
+def _validated_task_control_dir(task_dir):
     task_dir = os.path.abspath(os.fspath(task_dir))
     current = task_dir
     for _ in range(4):
         try:
             info = os.lstat(current)
         except OSError as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
+            raise RuntimeError("task storage integrity unavailable") from exc
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise RuntimeError("receipt storage integrity unavailable")
+            raise RuntimeError("task storage integrity unavailable")
         current = os.path.dirname(current)
     task_info = os.lstat(task_dir)
     if task_info.st_uid != os.getuid() or stat.S_IMODE(task_info.st_mode) & 0o022:
-        raise RuntimeError("receipt storage integrity unavailable")
+        raise RuntimeError("task storage integrity unavailable")
     return task_dir
 
 
-def _receipt_lock_binding(task_dir):
+def _task_control_lock_binding(task_dir):
     task_dir = os.path.abspath(os.fspath(task_dir))
-    for binding in reversed(_RECEIPT_LOCK_HELD.get()):
+    for binding in reversed(_TASK_CONTROL_LOCK_HELD.get()):
         if binding[0] == task_dir:
             return binding
     return None
 
 
-def _validate_receipt_dir_binding(binding):
+def _validate_task_control_dir_binding(binding):
     task_dir, fd, identity, components = binding
     for path, component_fd, component_identity in components:
         try:
             opened = os.fstat(component_fd)
             current = os.lstat(path)
         except OSError as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
+            raise RuntimeError("task storage integrity unavailable") from exc
         if (
             not stat.S_ISDIR(opened.st_mode)
             or (opened.st_dev, opened.st_ino) != component_identity
@@ -2500,41 +2236,41 @@ def _validate_receipt_dir_binding(binding):
             or not stat.S_ISDIR(current.st_mode)
             or (current.st_dev, current.st_ino) != component_identity
         ):
-            raise RuntimeError("receipt storage integrity unavailable")
+            raise RuntimeError("task storage integrity unavailable")
     task_opened = os.fstat(fd)
     if (
         (task_opened.st_dev, task_opened.st_ino) != identity
         or task_opened.st_uid != os.getuid()
         or stat.S_IMODE(task_opened.st_mode) & 0o022
     ):
-        raise RuntimeError("receipt storage integrity unavailable")
+        raise RuntimeError("task storage integrity unavailable")
 
 
-def _revalidate_receipt_transaction(task_dir):
-    """Fail if a task directory changes during an enclosing receipt transaction."""
-    binding = _receipt_lock_binding(task_dir)
+def _revalidate_task_control_transaction(task_dir):
+    """Fail if a task directory changes during an enclosing task transaction."""
+    binding = _task_control_lock_binding(task_dir)
     if binding is not None:
-        _validate_receipt_dir_binding(binding)
+        _validate_task_control_dir_binding(binding)
 
 
-def _receipt_dir_fd(task_dir):
-    binding = _receipt_lock_binding(task_dir)
+def _task_control_dir_fd(task_dir):
+    binding = _task_control_lock_binding(task_dir)
     if binding is None:
-        raise RuntimeError("receipt transaction required")
-    _validate_receipt_dir_binding(binding)
+        raise RuntimeError("task transaction required")
+    _validate_task_control_dir_binding(binding)
     return binding[1]
 
 
 @contextmanager
-def _receipt_stream_lock(task_dir):
+def _task_control_lock(task_dir):
     task_dir = os.path.abspath(os.fspath(task_dir))
-    nested = _receipt_lock_binding(task_dir)
+    nested = _task_control_lock_binding(task_dir)
     if nested is not None:
-        _validate_receipt_dir_binding(nested)
+        _validate_task_control_dir_binding(nested)
         yield
-        _validate_receipt_dir_binding(nested)
+        _validate_task_control_dir_binding(nested)
         return
-    task_dir = _validated_receipt_task_dir(task_dir)
+    task_dir = _validated_task_control_dir(task_dir)
     component_paths = []
     current = task_dir
     for _ in range(4):
@@ -2558,7 +2294,7 @@ def _receipt_stream_lock(task_dir):
                 or (component_info.st_dev, component_info.st_ino)
                 != (current_info.st_dev, current_info.st_ino)
             ):
-                raise RuntimeError("receipt storage integrity unavailable")
+                raise RuntimeError("task storage integrity unavailable")
             components[-1] = (
                 path, component_fd, (component_info.st_dev, component_info.st_ino),
             )
@@ -2566,7 +2302,7 @@ def _receipt_stream_lock(task_dir):
         for _, component_fd, _ in components:
             os.close(component_fd)
         if isinstance(exc, OSError):
-            raise RuntimeError("receipt storage integrity unavailable") from exc
+            raise RuntimeError("task storage integrity unavailable") from exc
         raise
     fd = components[-1][1]
     try:
@@ -2576,58 +2312,37 @@ def _receipt_stream_lock(task_dir):
             or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) & 0o022
         ):
-            raise RuntimeError("receipt storage integrity unavailable")
+            raise RuntimeError("task storage integrity unavailable")
         try:
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
+            raise RuntimeError("task storage integrity unavailable") from exc
         binding = (
             task_dir, fd, (info.st_dev, info.st_ino), tuple(components),
         )
-        _validate_receipt_dir_binding(binding)
-        token = _RECEIPT_LOCK_HELD.set(_RECEIPT_LOCK_HELD.get() + (binding,))
+        _validate_task_control_dir_binding(binding)
+        token = _TASK_CONTROL_LOCK_HELD.set(_TASK_CONTROL_LOCK_HELD.get() + (binding,))
         try:
             yield
-            _validate_receipt_dir_binding(binding)
+            _validate_task_control_dir_binding(binding)
         finally:
-            _RECEIPT_LOCK_HELD.reset(token)
+            _TASK_CONTROL_LOCK_HELD.reset(token)
     finally:
         for _, component_fd, _ in reversed(components):
             os.close(component_fd)
 
 
-def _receipt_stream_info(path):
-    task_dir = os.path.dirname(os.path.abspath(path))
-    dir_fd = _receipt_dir_fd(task_dir)
-    try:
-        info = os.stat(RECEIPTS_NAME, dir_fd=dir_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise RuntimeError("receipt storage integrity unavailable") from exc
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.getuid()
-        or info.st_nlink != 1
-        or info.st_mode & 0o022
-        or info.st_size > _RECEIPT_STREAM_MAX_BYTES
-    ):
-        raise RuntimeError("receipt storage integrity unavailable")
-    return info
-
-
 @contextmanager
-def receipt_stream_transaction(task_dir):
-    """Hold the receipt stream stable across verdict and state publication."""
-    with _receipt_stream_lock(task_dir):
+def task_control_transaction(task_dir):
+    """Hold the task directory stable across state publication."""
+    with _task_control_lock(task_dir):
         yield
 
 
 @contextmanager
-def receipt_stream_transaction_fd(task_fd):
-    """Hold a receipt transaction on an already-bound task directory fd."""
+def task_control_transaction_fd(task_fd):
+    """Hold a task transaction on an already-bound task directory fd."""
     locked_fd = os.dup(task_fd)
     task_dir = os.path.abspath(f"/proc/self/fd/{task_fd}")
     try:
@@ -2637,1108 +2352,24 @@ def receipt_stream_transaction_fd(task_fd):
             or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) & 0o022
         ):
-            raise RuntimeError("receipt storage integrity unavailable")
+            raise RuntimeError("task storage integrity unavailable")
         try:
             import fcntl
             fcntl.flock(locked_fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
+            raise RuntimeError("task storage integrity unavailable") from exc
         binding = (
             task_dir, locked_fd, (info.st_dev, info.st_ino), (),
         )
-        _validate_receipt_dir_binding(binding)
-        token = _RECEIPT_LOCK_HELD.set(_RECEIPT_LOCK_HELD.get() + (binding,))
+        _validate_task_control_dir_binding(binding)
+        token = _TASK_CONTROL_LOCK_HELD.set(_TASK_CONTROL_LOCK_HELD.get() + (binding,))
         try:
             yield
-            _validate_receipt_dir_binding(binding)
+            _validate_task_control_dir_binding(binding)
         finally:
-            _RECEIPT_LOCK_HELD.reset(token)
+            _TASK_CONTROL_LOCK_HELD.reset(token)
     finally:
         os.close(locked_fd)
-
-
-_REVIEW_DETAIL_FIELDS = frozenset({"detail_sha256", "detail"})
-_REVIEW_DETAIL_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def _review_detail_integrity_error(exc=None):
-    error = RuntimeError("review detail storage integrity unavailable")
-    if exc is not None:
-        error.__cause__ = exc
-    return error
-
-
-def _review_detail_bytes(detail):
-    if not isinstance(detail, str):
-        raise ValueError("review detail must be text")
-    try:
-        raw = detail.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError("review detail must be valid UTF-8 text") from exc
-    if not raw:
-        raise ValueError("review detail must not be empty")
-    if len(raw) > _REVIEW_DETAIL_MAX_BYTES:
-        raise ValueError("review detail exceeds the 2 MiB limit")
-    return raw
-
-
-def _review_detail_payload(detail):
-    raw = _review_detail_bytes(detail)
-    digest = hashlib.sha256(raw).hexdigest()
-    row = {"detail_sha256": digest, "detail": detail}
-    payload = (
-        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
-    return digest, payload
-
-
-def _review_detail_stream_info(task_dir):
-    dir_fd = _receipt_dir_fd(task_dir)
-    try:
-        info = os.stat(REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise _review_detail_integrity_error(exc)
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.getuid()
-        or info.st_nlink != 1
-        or stat.S_IMODE(info.st_mode) != 0o600
-        or info.st_size > _REVIEW_DETAIL_STREAM_MAX_BYTES
-    ):
-        raise _review_detail_integrity_error()
-    return info
-
-
-def _parse_review_detail_row(raw_line):
-    if not raw_line or not raw_line.endswith(b"\n"):
-        raise _review_detail_integrity_error()
-    try:
-        text = raw_line[:-1].decode("utf-8")
-
-        def unique_object(pairs):
-            row = {}
-            for key, value in pairs:
-                if key in row:
-                    raise ValueError("duplicate review detail field")
-                row[key] = value
-            return row
-
-        row = json.loads(text, object_pairs_hook=unique_object)
-    except (RecursionError, TypeError, UnicodeError, ValueError) as exc:
-        raise _review_detail_integrity_error(exc)
-    if (
-        not isinstance(row, dict)
-        or set(row) != _REVIEW_DETAIL_FIELDS
-        or not all(isinstance(row[field], str) for field in _REVIEW_DETAIL_FIELDS)
-        or not _REVIEW_DETAIL_DIGEST_RE.fullmatch(row["detail_sha256"])
-    ):
-        raise _review_detail_integrity_error()
-    try:
-        detail_raw = _review_detail_bytes(row["detail"])
-    except ValueError as exc:
-        raise _review_detail_integrity_error(exc)
-    if hashlib.sha256(detail_raw).hexdigest() != row["detail_sha256"]:
-        raise _review_detail_integrity_error()
-    return row
-
-
-def _scan_review_details_unlocked(task_dir, wanted_digest=""):
-    """Validate the full JSONL stream while retaining at most one selected row."""
-    dir_fd = _receipt_dir_fd(task_dir)
-    prior = _review_detail_stream_info(task_dir)
-    if prior is None:
-        return None, None
-    flags = os.O_RDONLY
-    flags |= (
-        getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    try:
-        fd = os.open(REVIEW_DETAILS_NAME, flags, dir_fd=dir_fd)
-    except OSError as exc:
-        raise _review_detail_integrity_error(exc)
-    found = None
-    seen = set()
-    try:
-        opened = os.fstat(fd)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_uid != os.getuid()
-            or opened.st_nlink != 1
-            or stat.S_IMODE(opened.st_mode) != 0o600
-            or opened.st_size > _REVIEW_DETAIL_STREAM_MAX_BYTES
-            or (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
-            or opened.st_size != prior.st_size
-            or opened.st_mtime_ns != prior.st_mtime_ns
-            or opened.st_ctime_ns != prior.st_ctime_ns
-        ):
-            raise _review_detail_integrity_error()
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1
-            while True:
-                raw_line = handle.readline(_REVIEW_DETAIL_STREAM_MAX_BYTES + 1)
-                if not raw_line:
-                    break
-                if len(raw_line) > _REVIEW_DETAIL_STREAM_MAX_BYTES:
-                    raise _review_detail_integrity_error()
-                row = _parse_review_detail_row(raw_line)
-                digest = row["detail_sha256"]
-                if digest in seen:
-                    raise _review_detail_integrity_error()
-                seen.add(digest)
-                if digest == wanted_digest:
-                    found = row["detail"]
-            final = os.fstat(handle.fileno())
-        try:
-            final_path = os.stat(
-                REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False,
-            )
-        except OSError as exc:
-            raise _review_detail_integrity_error(exc)
-        if (
-            (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
-            or final.st_size != opened.st_size
-            or final.st_mtime_ns != opened.st_mtime_ns
-            or final.st_ctime_ns != opened.st_ctime_ns
-            or final.st_uid != os.getuid()
-            or final.st_nlink != 1
-            or stat.S_IMODE(final.st_mode) != 0o600
-            or not stat.S_ISREG(final_path.st_mode)
-            or final_path.st_uid != os.getuid()
-            or final_path.st_nlink != 1
-            or stat.S_IMODE(final_path.st_mode) != 0o600
-            or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
-        ):
-            raise _review_detail_integrity_error()
-    except OSError as exc:
-        raise _review_detail_integrity_error(exc)
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    return found, final
-
-
-def _append_review_detail_unlocked(task_dir, detail):
-    """Append one exact review final while an enclosing receipt lock is held."""
-    digest, payload = _review_detail_payload(detail)
-    found, prior = _scan_review_details_unlocked(task_dir, digest)
-    if found is not None:
-        if found != detail:
-            raise _review_detail_integrity_error()
-        return digest
-    if prior is not None and prior.st_size + len(payload) > _REVIEW_DETAIL_STREAM_MAX_BYTES:
-        raise RuntimeError("review detail store exceeds the 16 MiB limit")
-
-    dir_fd = _receipt_dir_fd(task_dir)
-    created = prior is None
-    flags = os.O_APPEND | os.O_WRONLY
-    flags |= (
-        getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    if created:
-        flags |= os.O_CREAT | os.O_EXCL
-    try:
-        fd = os.open(REVIEW_DETAILS_NAME, flags, 0o600, dir_fd=dir_fd)
-    except OSError as exc:
-        raise _review_detail_integrity_error(exc)
-    appended = False
-    try:
-        opened = os.fstat(fd)
-        start_size = opened.st_size
-        try:
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or opened.st_uid != os.getuid()
-                or opened.st_nlink != 1
-                or stat.S_IMODE(opened.st_mode) != 0o600
-                or opened.st_size + len(payload) > _REVIEW_DETAIL_STREAM_MAX_BYTES
-                or (
-                    prior is not None
-                    and (
-                        (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
-                        or opened.st_size != prior.st_size
-                        or opened.st_mtime_ns != prior.st_mtime_ns
-                        or opened.st_ctime_ns != prior.st_ctime_ns
-                    )
-                )
-                or (prior is None and opened.st_size != 0)
-            ):
-                raise _review_detail_integrity_error()
-            view = memoryview(payload)
-            while view:
-                written = os.write(fd, view)
-                if written <= 0:
-                    raise _review_detail_integrity_error()
-                appended = True
-                view = view[written:]
-            os.fsync(fd)
-            final = os.fstat(fd)
-            final_path = os.stat(
-                REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False,
-            )
-            if (
-                not stat.S_ISREG(final.st_mode)
-                or final.st_uid != os.getuid()
-                or final.st_nlink != 1
-                or stat.S_IMODE(final.st_mode) != 0o600
-                or final.st_size != start_size + len(payload)
-                or not stat.S_ISREG(final_path.st_mode)
-                or final_path.st_uid != os.getuid()
-                or final_path.st_nlink != 1
-                or stat.S_IMODE(final_path.st_mode) != 0o600
-                or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
-                or final_path.st_size != final.st_size
-            ):
-                raise _review_detail_integrity_error()
-            if created:
-                os.fsync(dir_fd)
-            _revalidate_receipt_transaction(task_dir)
-        except BaseException:
-            try:
-                if appended:
-                    os.ftruncate(fd, start_size)
-                    os.fsync(fd)
-                if created:
-                    current = os.stat(
-                        REVIEW_DETAILS_NAME, dir_fd=dir_fd, follow_symlinks=False,
-                    )
-                    if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-                        raise _review_detail_integrity_error()
-                    os.unlink(REVIEW_DETAILS_NAME, dir_fd=dir_fd)
-                    os.fsync(dir_fd)
-            except FileNotFoundError:
-                if not created:
-                    raise _review_detail_integrity_error()
-            except BaseException as rollback_exc:
-                raise _review_detail_integrity_error(rollback_exc)
-            raise
-    except OSError as exc:
-        raise _review_detail_integrity_error(exc)
-    finally:
-        os.close(fd)
-    return digest
-
-
-def append_review_detail(task_dir, detail):
-    """Store exact review text by digest without changing lifecycle authority."""
-    task_dir = _validated_receipt_task_dir(task_dir)
-    with receipt_stream_transaction(task_dir):
-        control = read_task_control(task_dir)
-        if not control:
-            raise RuntimeError("review detail storage requires a valid TASK.json")
-        if task_control_status(task_dir, control) != "open":
-            raise RuntimeError("review detail storage is terminal")
-        return _append_review_detail_unlocked(task_dir, detail)
-
-
-def read_review_detail(task_dir, digest):
-    """Return one exact review final; never expose unrelated detail rows."""
-    digest = str(digest or "")
-    if not _REVIEW_DETAIL_DIGEST_RE.fullmatch(digest):
-        raise ValueError("review detail digest must be 64 lowercase hexadecimal characters")
-    task_dir = _validated_receipt_task_dir(task_dir)
-    with receipt_stream_transaction(task_dir):
-        found, _ = _scan_review_details_unlocked(task_dir, digest)
-    if found is None:
-        raise FileNotFoundError("review detail not found")
-    return found
-
-
-RECEIPT_FIELDS = frozenset({
-    "ts", "event", "source", "task_run_id", "runtime_id", "agent_id",
-    "agent_type", "lens", "verdict", "summary",
-})
-RECEIPT_EVENTS = frozenset({"started", "completed"})
-_RECEIPT_RUNTIME_ID_RE = re.compile(
-    r"^(?P<namespace>[a-z][a-z0-9_-]*):"
-    r"(?P<components>[A-Za-z0-9._/@+-]+(?::[A-Za-z0-9._/@+-]+)*)$"
-)
-
-
-def parse_receipt_runtime_id(value):
-    """Return a namespaced runtime identity as components, or reject it."""
-    runtime_id = str(value or "").strip()
-    if not runtime_id:
-        return ()
-    if len(runtime_id) > 500:
-        raise ValueError("runtime_id must not exceed 500 characters")
-    match = _RECEIPT_RUNTIME_ID_RE.fullmatch(runtime_id)
-    if not match:
-        raise ValueError("runtime_id must be a namespaced colon-separated identity")
-    return (match.group("namespace"), *match.group("components").split(":"))
-
-
-def _validate_receipt_runtime_id(source, runtime_id):
-    parsed = parse_receipt_runtime_id(runtime_id)
-    normalized_source = str(source or "")
-    if not parsed:
-        raise ValueError("receipt requires a namespaced runtime_id")
-    if normalized_source not in {
-        "codex_session_watcher:collaboration", "claude_hook",
-    }:
-        raise ValueError("receipt runtime_id source must be a supported runtime authority")
-    if normalized_source == "codex_session_watcher:collaboration" and (
-        len(parsed) != 4 or parsed[0] != "codex"
-    ):
-        raise ValueError(
-            "Codex receipt runtime_id namespace/shape must be codex:<root>:<event>:<child>"
-        )
-    if normalized_source == "claude_hook" and (
-        len(parsed) != 3 or parsed[0] != "claude"
-    ):
-        raise ValueError(
-            "Claude receipt runtime_id namespace/shape must be claude:<session>:<agent>"
-        )
-    return parsed
-
-
-_RECEIPT_DIGEST_RE = re.compile(r"^DETAIL_SHA256:[0-9a-f]{64}$")
-
-
-def _receipt_entry_semantics_valid(item):
-    """Validate the exact persisted receipt contract, not only its key set."""
-    try:
-        uuid7_timestamp_ms(item["task_run_id"])
-        _validate_receipt_runtime_id(item["source"], item["runtime_id"])
-    except (RecursionError, TypeError, ValueError):
-        return False
-    if (
-        not item["ts"] or not item["source"] or not item["agent_id"] or not item["agent_type"]
-        or item["lens"] not in SUPPORTED_LENSES
-    ):
-        return False
-    if item["event"] == "started":
-        return item["verdict"] == "" and item["summary"] == ""
-    if item["verdict"] not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
-        return False
-    lines = item["summary"].splitlines()
-    expected_lines = 3 if item["lens"].startswith("review-") else 2
-    # One optional extra line, only on `PENDING`: the retained verdict-position
-    # line (see `_unbound_first_line_slot`). Optional rather than required so
-    # receipts written before it existed still read; second-to-last so the
-    # counts slot stays `lines[1]` and the digest stays `lines[-1]`.
-    if len(lines) == expected_lines + 1:
-        if item["verdict"] != "PENDING" or not _FIRST_LINE_RE.fullmatch(lines[-2]):
-            return False
-    elif len(lines) != expected_lines:
-        return False
-    if lines[0] != f"VERDICT: {item['verdict']}":
-        return False
-    if item["lens"].startswith("review-") and not (
-        _COUNTS_UNBOUND_RE.fullmatch(lines[1]) or _FINDING_COUNTS_RE.fullmatch(lines[1])
-    ):
-        return False
-    if item["lens"].startswith("review-") and not _COUNTS_UNBOUND_RE.fullmatch(lines[1]):
-        counts = _FINDING_COUNTS_RE.fullmatch(lines[1])
-        parsed_counts = _parse_finding_counts(counts)
-        if parsed_counts is None:
-            return False
-        fix_now, investigate, _optional = parsed_counts
-        if _counts_contradict_verdict(item["verdict"], fix_now, investigate):
-            return False
-    return bool(_RECEIPT_DIGEST_RE.fullmatch(lines[-1]))
-
-
-@dataclass(frozen=True)
-class ReceiptSnapshot:
-    """One immutable view and fingerprint of the current receipt stream."""
-
-    entries: tuple
-    fingerprint: str
-
-    @property
-    def reviews(self):
-        return tuple(
-            item for item in self.entries
-            if str(item.get("lens") or "").startswith("review-")
-        )
-
-    @property
-    def subagents(self):
-        return tuple(
-            item for item in self.entries
-            if not str(item.get("lens") or "").startswith("review-")
-        )
-
-
-def _read_receipt_bytes_unlocked(path):
-    task_dir = os.path.dirname(os.path.abspath(path))
-    dir_fd = _receipt_dir_fd(task_dir)
-    prior = _receipt_stream_info(path)
-    if prior is None:
-        return None
-    flags = os.O_RDONLY
-    flags |= (
-        getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    try:
-        fd = os.open(RECEIPTS_NAME, flags, dir_fd=dir_fd)
-    except OSError as exc:
-        raise RuntimeError("receipt storage integrity unavailable") from exc
-    try:
-        opened = os.fstat(fd)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_uid != os.getuid()
-            or opened.st_nlink != 1
-            or opened.st_mode & 0o022
-            or opened.st_size > _RECEIPT_STREAM_MAX_BYTES
-            or (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
-        ):
-            raise RuntimeError("receipt storage integrity unavailable")
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1
-            raw = handle.read(_RECEIPT_STREAM_MAX_BYTES + 1)
-            final = os.fstat(handle.fileno())
-        final_path = os.stat(RECEIPTS_NAME, dir_fd=dir_fd, follow_symlinks=False)
-        if (
-            len(raw) > _RECEIPT_STREAM_MAX_BYTES
-            or (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
-            or final.st_size != opened.st_size
-            or final.st_mtime_ns != opened.st_mtime_ns
-            or final.st_ctime_ns != opened.st_ctime_ns
-            or final.st_uid != os.getuid()
-            or final.st_nlink != 1
-            or final.st_mode & 0o022
-            or not stat.S_ISREG(final_path.st_mode)
-            or final_path.st_uid != os.getuid()
-            or final_path.st_nlink != 1
-            or final_path.st_mode & 0o022
-            or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
-        ):
-            raise RuntimeError("receipt storage integrity unavailable")
-    except OSError as exc:
-        raise RuntimeError("receipt storage integrity unavailable") from exc
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    return raw
-
-
-def _make_receipt_rollback_api():
-    class ResetCapability:
-        __slots__ = ()
-
-    pending = {}
-
-    def restore_unlocked(task_dir, raw):
-        """Restore only bytes captured by this closure from the same task leaf."""
-        dir_fd = _receipt_dir_fd(task_dir)
-        if raw is None:
-            _receipt_stream_info(_receipts_path(task_dir))
-            try:
-                os.unlink(RECEIPTS_NAME, dir_fd=dir_fd)
-            except FileNotFoundError:
-                pass
-            _revalidate_receipt_transaction(task_dir)
-            return
-        if not isinstance(raw, bytes) or len(raw) > _RECEIPT_STREAM_MAX_BYTES:
-            raise RuntimeError("receipt storage integrity unavailable")
-        _receipt_stream_info(_receipts_path(task_dir))
-        temp_name = f".{RECEIPTS_NAME}.{secrets.token_hex(8)}.tmp"
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(temp_name, flags, 0o600, dir_fd=dir_fd)
-        try:
-            view = memoryview(raw)
-            while view:
-                written = os.write(fd, view)
-                if written <= 0:
-                    raise RuntimeError("receipt storage integrity unavailable")
-                view = view[written:]
-            os.fsync(fd)
-            os.fchmod(fd, 0o644)
-            os.replace(temp_name, RECEIPTS_NAME, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-            os.fsync(dir_fd)
-        finally:
-            os.close(fd)
-            try:
-                os.unlink(temp_name, dir_fd=dir_fd)
-            except FileNotFoundError:
-                pass
-        _revalidate_receipt_transaction(task_dir)
-
-    @contextmanager
-    def savepoint(task_dir):
-        with _receipt_stream_lock(task_dir):
-            raw = _read_receipt_bytes_unlocked(_receipts_path(task_dir))
-            try:
-                yield
-            except BaseException:
-                restore_unlocked(task_dir, raw)
-                raise
-
-    def reset(task_dir):
-        task_dir = _validated_receipt_task_dir(task_dir)
-        with _receipt_stream_lock(task_dir):
-            raw = _read_receipt_bytes_unlocked(_receipts_path(task_dir))
-            capability = ResetCapability()
-            pending[id(capability)] = (capability, task_dir, raw)
-            try:
-                os.unlink(RECEIPTS_NAME, dir_fd=_receipt_dir_fd(task_dir))
-            except FileNotFoundError:
-                pass
-            except BaseException:
-                pending.pop(id(capability), None)
-                restore_unlocked(task_dir, raw)
-                raise
-            _revalidate_receipt_transaction(task_dir)
-        return capability
-
-    def restore(capability):
-        saved = pending.pop(id(capability), None)
-        if saved is None or saved[0] is not capability:
-            raise PermissionError("receipt reset restoration requires its opaque capability")
-        _, task_dir, raw = saved
-        with _receipt_stream_lock(task_dir):
-            restore_unlocked(task_dir, raw)
-
-    def release(capability):
-        saved = pending.pop(id(capability), None)
-        if saved is None or saved[0] is not capability:
-            raise PermissionError("receipt reset release requires its opaque capability")
-
-    return savepoint, reset, restore, release
-
-
-(
-    receipt_stream_savepoint, reset_receipt_streams_for_new_run,
-    restore_receipt_streams, release_receipt_stream_reset,
-) = (
-    _make_receipt_rollback_api()
-)
-del _make_receipt_rollback_api
-
-
-_RECEIPT_SCHEMA_REASONS = frozenset({
-    "unknown-field-set", "non-string-value", "unknown-event", "entry-semantics",
-})
-
-
-def _receipt_schema_error(lineno, reason):
-    """Build the rejection for one unreadable receipt line.
-
-    Two properties are load-bearing.
-
-    It names *which* line and *why*, using a fixed reason code from
-    `_RECEIPT_SCHEMA_REASONS`. Never the line's content: receipt summaries carry
-    assistant text, and this string reaches hook feedback and MCP error
-    payloads.
-
-    It does not tell the caller to reset the receipts. The previous text —
-    "start a fresh task run to reset receipts" — was emitted identically for
-    every rejection, including the one observed on 2026-09-10 where the file was
-    entirely valid and the *reader* was stale: an MCP server started at 09:51
-    rejecting entries written after the 12:09 build that taught it a new
-    verdict. Following that advice would have destroyed a legitimate
-    review-then-QA PASS pair. A reader cannot distinguish "the writer is
-    corrupt" from "I am older than the writer", so it must not recommend the
-    destructive branch of that ambiguity.
-    """
-    reason = reason if reason in _RECEIPT_SCHEMA_REASONS else "unknown"
-    return RuntimeError(
-        f"RECEIPTS.jsonl line {int(lineno)} rejected by this runtime ({reason}). "
-        "If these receipts were written by a newer harness build, this reader is "
-        "stale — reload the runtime and retry. Resetting the task run discards "
-        "the receipts and is not the first thing to try."
-    )
-
-
-def _receipt_snapshot_unlocked(task_dir):
-    path = _receipts_path(task_dir)
-    raw = _read_receipt_bytes_unlocked(path)
-    h = hashlib.sha256()
-    h.update(RECEIPTS_NAME.encode("utf-8"))
-    h.update(b"\0")
-    if raw is None:
-        h.update(b"<missing>\0")
-        text = ""
-    else:
-        h.update(raw)
-        h.update(b"\0")
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeError as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
-    entries = []
-
-    def unique_object(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate receipt key: {key}")
-            result[key] = value
-        return result
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line, object_pairs_hook=unique_object)
-        except Exception as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
-        if not isinstance(item, dict):
-            raise RuntimeError("receipt storage integrity unavailable")
-        if set(item) != RECEIPT_FIELDS:
-            raise _receipt_schema_error(lineno, "unknown-field-set")
-        if any(not isinstance(value, str) for value in item.values()):
-            raise _receipt_schema_error(lineno, "non-string-value")
-        if item.get("event") not in RECEIPT_EVENTS:
-            raise _receipt_schema_error(lineno, "unknown-event")
-        if not _receipt_entry_semantics_valid(item):
-            raise _receipt_schema_error(lineno, "entry-semantics")
-        entries.append(MappingProxyType(item))
-    return ReceiptSnapshot(tuple(entries), "sha256:" + h.hexdigest())
-
-
-def receipt_snapshot(task_dir):
-    with _receipt_stream_lock(task_dir):
-        return _receipt_snapshot_unlocked(task_dir)
-
-
-def _receipt_short(value, limit=2000):
-    text = str(value or "").strip()
-    return text[:limit]
-
-
-def _receipt_now_iso():
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-_QA_VERDICT_RE = re.compile(r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)$")
-# Line 1 only. The bare form above stays the contract every agent definition
-# states, but a lens that has already filed one good report and is then invoked
-# again answers with a restatement — `VERDICT: PASS — report complete.` was
-# measured in the field. Under a fullmatch that binds nothing, and a PENDING
-# receipt reads exactly like a lens that never ran. The trailing text is
-# commentary on a verdict the line has already named, so it binds.
-#
-# The tail must be empty or start with punctuation. That keeps the token whole —
-# `VERDICT: PASSING`, `VERDICT: PASSable now`, `VERDICT: PASS_LATER` name
-# something this contract does not define — and it also refuses a hedge that
-# continues the sentence: `VERDICT: PASS if you accept the failures below`.
-# A case-insensitive letter test alone would bind all four. The distinction
-# matters most on `qa-*` lenses, which store no counts line to contradict a
-# wrongly bound PASS and whose verdict is the last gate before close.
-#
-# Deliberately NOT used for the later-line conflict scan below. That scan asks
-# "does another line claim a different verdict", and relaxing it would let
-# `VERDICT: FAIL was last round's result` void a report — reintroducing the
-# exact self-destroying-review failure the bare-only rule was written to end.
-# One relaxation, one position.
-_QA_VERDICT_HEAD_RE = re.compile(
-    r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)[ \t]*($|[—–\-:.!?()\[\]])"
-)
-# Deliberately looser than the head pattern: this one answers "did line 1 try to
-# name a verdict", not "does line 1 bind". `_offposition_negative` uses it to
-# stop scanning a report that already said PASS in the authoritative position,
-# however badly punctuated.
-_VERDICT_SELFDESCRIBE_RE = re.compile(r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)(?![A-Za-z_])")
-_FINDING_COUNTS_RE = re.compile(
-    r"^FINDING_COUNTS: FIX_NOW=(\d+) INVESTIGATE=(\d+) OPTIONAL=(\d+)$"
-)
-_REVIEW_DETAIL_PREFIX = "REVIEW_DETAIL: "
-_FORMAL_REVIEW_DETAIL_FIELDS = frozenset({"blocker", "findings"})
-_FORMAL_REVIEW_FINDING_FIELDS = frozenset({"anchor", "issue", "evidence", "fix"})
-
-
-def _parse_finding_counts(match):
-    """Parse a matched count line without inheriting Python's digit-limit error."""
-    if match is None:
-        return None
-    try:
-        return tuple(int(value) for value in match.groups())
-    except ValueError:
-        return None
-
-
-def _formal_code_review_detail(summary_lines):
-    """Return structured code-review detail, or a validity sentinel.
-
-    ``None`` means the optional third-line extension is absent, preserving
-    completions emitted before this contract. ``False`` means a third-line
-    ``REVIEW_DETAIL:`` marker was attempted but is malformed. A valid mapping
-    is returned unchanged so the normalizer can cross-check its mechanically
-    implied verdict and counts against the two authoritative envelope lines.
-    """
-    if len(summary_lines) < 3:
-        return None
-    line = summary_lines[2]
-    attempted = re.match(r"^\s*REVIEW_DETAIL\s*:", line, re.IGNORECASE)
-    if attempted is None:
-        return False if any(
-            re.match(r"^\s*REVIEW_DETAIL\s*:", later, re.IGNORECASE)
-            for later in summary_lines[3:]
-        ) else None
-    if not line.startswith(_REVIEW_DETAIL_PREFIX):
-        return False
-
-    def unique_object(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate formal review detail field")
-            result[key] = value
-        return result
-
-    try:
-        detail = json.loads(
-            line[len(_REVIEW_DETAIL_PREFIX):], object_pairs_hook=unique_object,
-        )
-    except (RecursionError, TypeError, ValueError):
-        return False
-    if not isinstance(detail, dict) or set(detail) != _FORMAL_REVIEW_DETAIL_FIELDS:
-        return False
-    blocker = detail["blocker"]
-    if blocker is not None and (not isinstance(blocker, str) or not blocker.strip()):
-        return False
-    findings = detail["findings"]
-    if not isinstance(findings, list):
-        return False
-    for finding in findings:
-        if (
-            not isinstance(finding, dict)
-            or set(finding) != _FORMAL_REVIEW_FINDING_FIELDS
-            or any(
-                not isinstance(finding[field], str) or not finding[field].strip()
-                for field in _FORMAL_REVIEW_FINDING_FIELDS
-            )
-        ):
-            return False
-    if any(
-        re.match(r"^\s*REVIEW_DETAIL\s*:", later, re.IGNORECASE)
-        for later in summary_lines[3:]
-    ):
-        return False
-    return detail
-
-# The Claude Code binary prepends this notice to a subagent final when its own
-# output scanner flags instruction-shaped text. Measured, not inferred: the
-# literal lives in `~/.local/bin/claude` and nowhere under `plugin/`, and the
-# sanitized final is assembled there as `f"{notice}\n\n{original}"` — one
-# notice line, one blank line, then the agent's text verbatim. The harness
-# cannot suppress or reorder it, so only the binder can tolerate it.
-#
-# "harness" in that notice is the runtime's own name for that scanner and is
-# unrelated to this plugin; the collision is why the 2026-09-09 incident was
-# first misdiagnosed as harness code.
-#
-# A literal prefix, deliberately not a "looks like a notice" pattern. Skipping
-# arbitrary preamble would let any agent bury a verdict under prose and still
-# bind it, which is the forgery surface C-14 rests on.
-_RUNTIME_OUTPUT_NOTICE_PREFIX = "[harness: subagent output matched instruction-shaped pattern(s): "
-
-
-def _verdict_aligned_lines(value):
-    """The final's lines, with the verdict position at index 0.
-
-    Every positional reader in this module addresses the same origin through
-    this one accessor. That is not tidiness: the first version of this change
-    advanced only `extract_qa_verdict` and left
-    `normalize_receipt_completion` reading `summary_lines[1]` for the counts,
-    so a wrapped *review* final read the runtime's own blank separator as its
-    counts line and demoted an already-bound PASS to PENDING — with a receipt
-    row that recorded `FIRST_LINE: VERDICT: PASS` while telling the lens to
-    move its verdict to line 1, which it already was. A compliant re-delivery
-    reproduced the same row. Two origins made that miss reviewable-in-principle
-    and missed twice in practice; one origin makes it impossible.
-
-    Only the blank line(s) the runtime itself inserts between its notice and
-    the original text travel with the notice. A horizontal rule or a sentence
-    of agent prose is agent-authored content and still voids the verdict; that
-    is why tolerating the notice alone did not fix the observed incident, whose
-    final also carried a preamble.
-    """
-    lines = str(value or "").splitlines()
-    if not lines or not lines[0].strip().startswith(_RUNTIME_OUTPUT_NOTICE_PREFIX):
-        return lines
-    index = 1
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-    return lines[index:]
-
-
-def extract_qa_verdict(value):
-    """Accept the first-line verdict; only a conflicting bare verdict line voids it.
-
-    Authority is positional: line 1 or nothing, where line 1 is located by
-    `_verdict_aligned_lines` so the runtime's own output-scanner notice —
-    framing this plugin cannot remove — does not destroy a compliant verdict.
-    Line 1 may carry trailing commentary after the verdict token (see
-    `_QA_VERDICT_HEAD_RE`); later lines
-    are read strictly, and one voids the result only when it is itself a bare
-    verdict line naming a *different* verdict — genuine ambiguity about which
-    one binds. A repeated identical verdict line is harmless, and prose that
-    merely mentions the token is not a verdict at all. Rejecting on any second
-    occurrence made a report that quotes or discusses the verdict contract
-    destroy its own verdict, which is precisely what a review of this subsystem
-    must be free to do.
-    """
-    lines = _verdict_aligned_lines(value)
-    if not lines:
-        return ""
-    first = _QA_VERDICT_HEAD_RE.match(lines[0].strip())
-    if not first:
-        return ""
-    for line in lines[1:]:
-        other = _QA_VERDICT_RE.fullmatch(line.strip())
-        if other and other.group(1) != first.group(1):
-            return ""
-    return first.group(1)
-
-
-def _counts_conflict(line, counts_match):
-    """Is `line` a bare counts line disagreeing with the authoritative one?"""
-    other = _FINDING_COUNTS_RE.fullmatch(line.strip())
-    return bool(other) and other.groups() != counts_match.groups()
-
-
-# Counts-slot values for a review completion that bound no verdict.
-# `INVALID` — nothing was readable, not even the line-1 verdict token.
-# `UNREADABLE <TOKEN>` — the verdict token WAS readable and was <TOKEN>; the
-#   counts line was not. The token is retained, not merely its presence: the
-#   selector must know *what* the lens said, because a restatement of an
-#   already-bound PASS and a fresh `FAIL` are both "readable" and only one of
-#   them may displace an earlier verdict. Recording presence alone made
-#   `VERDICT: PASS — report complete.` — the field observation that motivated
-#   this whole module — evict the verdict it was restating.
-# Owned by doc/harness/patterns/ADR__consolidated-task-artifacts.md.
-_COUNTS_INVALID = "FINDING_COUNTS: INVALID"
-_COUNTS_UNREADABLE = "FINDING_COUNTS: UNREADABLE"
-_COUNTS_UNBOUND_RE = re.compile(
-    r"^FINDING_COUNTS: (?:INVALID|UNREADABLE (?:PASS|FAIL|BLOCKED_ENV))$"
-)
-
-# Additive retention for a completion that bound no verdict. Compaction keeps
-# only the verdict, the counts slot and a digest, so when a bind failed the
-# text that failed was unrecoverable — the 2026-09-09 incident could only be
-# diagnosed from a notification the user happened to still have. One bounded
-# line, the one the binder actually read, tells a wrapped final from a preamble
-# from a misspelled token without storing a report body.
-#
-# Written only for `PENDING`, and optional in the persisted-schema validator:
-# receipts already on disk predate it, and demanding it on read would poison
-# every in-flight task's stream.
-_RECEIPT_FIRST_LINE_MAX = 120
-_FIRST_LINE_PREFIX = "FIRST_LINE:"
-_FIRST_LINE_RE = re.compile(r"^FIRST_LINE:(?: \S.{0,%d})?$" % (_RECEIPT_FIRST_LINE_MAX - 1))
-
-
-def _unbound_first_line_slot(value):
-    """The verdict-position line of a completion that bound nothing, bounded.
-
-    Deliberately the line the binder read, not the first non-blank line of the
-    final: a verdict buried under a preamble and a misspelled verdict token
-    need different fixes, and the first non-blank line cannot tell them apart.
-    `splitlines` guarantees the retained text carries no line break, so the
-    slot stays exactly one line.
-
-    An empty verdict position is itself the diagnosis and renders as the bare
-    prefix rather than as a fabricated quotation.
-    """
-    lines = _verdict_aligned_lines(value)
-    text = lines[0].strip()[:_RECEIPT_FIRST_LINE_MAX].strip() if lines else ""
-    return f"{_FIRST_LINE_PREFIX} {text}" if text else _FIRST_LINE_PREFIX
-
-
-def _offposition_negative(summary_lines):
-    """Find a negative anywhere in a report that bound nothing positionally.
-
-    Returns ``(verdict_token, counts_line)``. Both are advisory: they never bind
-    a verdict, they only stop an older PASS from masking a report that said the
-    work is not done. Ambiguity yields nothing — disagreeing bare verdict lines
-    or disagreeing bare counts lines are exactly the case positional authority
-    exists to settle, so this scan declines rather than guessing.
-
-    Only `FAIL`/`BLOCKED_ENV` and `FIX_NOW > 0` count. A stray `VERDICT: PASS`
-    further down a report cannot displace anything, which keeps this from
-    becoming a second, weaker way to claim success.
-    """
-    # A line 1 that names a non-negative verdict without binding — `VERDICT:
-    # PASS, no blockers found` misses the tail class by a comma — has already
-    # self-described, and the scan's entire justification is that nothing
-    # positional was available. Scanning on regardless let a fenced `VERDICT:
-    # FAIL` *quoted as an example* revoke a genuine PASS, and every review of
-    # this subsystem quotes exactly that. Fail-closed, but the coordinator is
-    # then told to route findings that do not exist, and the receipt keeps only
-    # a digest so it cannot discover otherwise.
-    head = summary_lines[0].strip() if summary_lines else ""
-    self_described = _VERDICT_SELFDESCRIBE_RE.match(head)
-    if self_described and self_described.group(1) not in {"FAIL", "BLOCKED_ENV"}:
-        return "", ""
-    verdicts, counts = set(), set()
-    for line in summary_lines:
-        stripped = line.strip()
-        match = _QA_VERDICT_RE.fullmatch(stripped)
-        if match:
-            verdicts.add(match.group(1))
-        counts_match = _FINDING_COUNTS_RE.fullmatch(stripped)
-        if counts_match:
-            counts.add(counts_match.group(0))
-    token = ""
-    if len(verdicts) == 1:
-        only = verdicts.pop()
-        token = only if only in {"FAIL", "BLOCKED_ENV"} else ""
-    counts_line = ""
-    if len(counts) == 1:
-        only = counts.pop()
-        match = _FINDING_COUNTS_RE.fullmatch(only)
-        parsed_counts = _parse_finding_counts(match)
-        if parsed_counts is not None and parsed_counts[0]:
-            counts_line = only
-    return token, counts_line
-
-
-def _counts_contradict_verdict(verdict, fix_now, investigate):
-    """The single place a verdict is judged against its own finding counts.
-
-    This rule existed in two copies — here and in the persisted-schema
-    validator — and they drifted the moment one was corrected. The binder began
-    binding `PASS` beside `INVESTIGATE>0` while the validator still rejected it,
-    so a compliant review's receipt failed schema validation and was never
-    written at all: strictly worse than the PENDING it replaced, because a lens
-    with no record reads as a lens that never ran. One caller may relax the rule
-    only by relaxing it for both.
-
-    Only `FIX_NOW` contradicts `PASS`. `INVESTIGATE` is by definition a finding
-    that does not block, and the reviewer definitions say so; whether an
-    unresolved INVESTIGATE should block is the reviewer's call, expressed as
-    `BLOCKED_ENV`.
-    """
-    if verdict == "PASS":
-        return bool(fix_now)
-    if verdict == "FAIL":
-        return not fix_now
-    if verdict == "BLOCKED_ENV":
-        return not investigate
-    return False
-
-
-def normalize_receipt_completion(lens, value, supplied_verdict=""):
-    """Validate a completion and retain only verdict/counts plus a detail digest."""
-    raw_summary = str(value or "")
-    verdict = _receipt_short(supplied_verdict, 40).upper()
-    if verdict and verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"}:
-        verdict = "UNKNOWN"
-    summary_verdict = extract_qa_verdict(raw_summary)
-    if not summary_verdict or (verdict and verdict != summary_verdict):
-        verdict = "PENDING"
-    else:
-        verdict = summary_verdict
-
-    is_review = str(lens or "").startswith("review-")
-    # Aligned, not `raw_summary.splitlines()`. The counts slot, the conflict
-    # scan that starts below it and `_offposition_negative`'s line-1 check are
-    # all positional, and all three read the runtime's notice and its blank
-    # separator as content when they address the raw list.
-    summary_lines = _verdict_aligned_lines(raw_summary)
-    # `.strip()` like line 0 and lines 3+. Without it this one line was
-    # whitespace-strict, so a trailing space or an indent on an otherwise
-    # perfect counts line discarded the whole review.
-    counts_match = (
-        _FINDING_COUNTS_RE.fullmatch(summary_lines[1].strip())
-        if len(summary_lines) > 1 else None
-    )
-    # Same positional rule as the verdict line: only a second bare counts line
-    # with *different* numbers is ambiguous. A prose mention of the token is not
-    # a counts line, and treating it as one voided reviews of this very code.
-    counts_reported = bool(counts_match) and not any(
-        _counts_conflict(line, counts_match) for line in summary_lines[2:]
-    )
-    # Bound below rather than only inside the branch: the counts-slot decision
-    # further down reads it, and a conditionally-assigned name there would be a
-    # NameError waiting for the next edit to the surrounding condition.
-    fix_now = investigate = optional = 0
-    if is_review:
-        if not counts_reported:
-            verdict = "PENDING"
-        else:
-            parsed_counts = _parse_finding_counts(counts_match)
-            if parsed_counts is None:
-                counts_reported = False
-                verdict = "PENDING"
-            else:
-                fix_now, investigate, optional = parsed_counts
-                if _counts_contradict_verdict(verdict, fix_now, investigate):
-                    verdict = "PENDING"
-        if str(lens or "") == "review-code":
-            structured = _formal_code_review_detail(summary_lines)
-            if structured is False:
-                verdict = "PENDING"
-            elif structured is not None:
-                finding_count = len(structured["findings"])
-                blocker = structured["blocker"] is not None
-                expected_verdict = (
-                    "BLOCKED_ENV" if blocker else "FAIL" if finding_count else "PASS"
-                )
-                expected_counts = (finding_count, 1 if blocker else 0, 0)
-                if (
-                    summary_verdict != expected_verdict
-                    or (fix_now, investigate, optional) != expected_counts
-                ):
-                    verdict = "PENDING"
-
-    compact = [f"VERDICT: {verdict}"]
-    if is_review:
-        # Three distinct counts-slot values, because the downstream selector has
-        # to tell "nothing was readable" from "the verdict was readable and
-        # negative, the counts were not". Collapsing the latter into INVALID let
-        # a rerun reporting `VERDICT: FAIL — three blockers found.` be discarded
-        # as an unreadable restatement, so the previous round's PASS survived and
-        # the task closed over a live objection.
-        #
-        # A surviving counts line therefore means exactly one thing downstream:
-        # the report carries a contradiction or a blocker. Both are substantive,
-        # so both may displace an earlier bound verdict.
-        #
-        # A report whose line 1 was unreadable keeps its counts only when
-        # `FIX_NOW > 0` — that is what says the findings block, and dropping
-        # those counts masked a reviewer who listed three blockers without a
-        # parseable verdict line. `INVESTIGATE`-only is non-blocking by the same
-        # rule and correctly stays a shape failure.
-        #
-        # When nothing bound positionally, the report is scanned for a negative
-        # anywhere in it. Positional authority decides what *binds* and is not
-        # relaxed — a verdict on line 5 still binds nothing. It must not also
-        # decide whether an unbound report was negative: a block pushed off
-        # position by one line (an observed field failure, recorded in
-        # REQ__lens-verdict-contract-ownership.md) loses its verdict token AND
-        # its counts, so a review reporting FIX_NOW=3 blockers read as an
-        # unreadable restatement and could not displace the previous round's
-        # PASS. The scan can only refuse to mask a negative; it can never grant
-        # one, so widening it here is safe in the only direction that matters.
-        off_verdict, off_counts = _offposition_negative(summary_lines)
-        # `fix_now` is back, and it is not redundant with the scan below. Line 2
-        # is where the contract puts the counts and `counts_reported` has
-        # already validated it, so this is the *authoritative* position — it
-        # must never depend on the off-position scan, which carries a veto for
-        # self-described reports that this position has no business obeying.
-        # Routing it through the scan inverted the discriminator: a report
-        # naming PASS beside FIX_NOW=3 was masked while one naming nothing was
-        # not. Two paths to one outcome disarmed a mutation; one path with a
-        # veto attached masked a blocker. The fix is separate paths for separate
-        # positions, not a single shared one.
-        if counts_reported and (summary_verdict or fix_now):
-            compact.append(counts_match.group(0))
-        elif summary_verdict:
-            compact.append(f"{_COUNTS_UNREADABLE} {summary_verdict}")
-        elif off_verdict:
-            compact.append(f"{_COUNTS_UNREADABLE} {off_verdict}")
-        elif off_counts:
-            compact.append(off_counts)
-        else:
-            compact.append(_COUNTS_INVALID)
-    if verdict == "PENDING":
-        compact.append(_unbound_first_line_slot(raw_summary))
-    compact.append("DETAIL_SHA256:" + hashlib.sha256(raw_summary.encode("utf-8")).hexdigest())
-    return verdict, "\n".join(compact)
 
 
 def _declared_lenses(task_dir, prefix, *, control=None):
@@ -3751,14 +2382,6 @@ def _declared_lenses(task_dir, prefix, *, control=None):
 def required_review_lenses(task_dir, state=None):
     """Return task-declared review lenses without inspecting source state."""
     return _declared_lenses(task_dir, "review-", control=state)
-
-
-def _receipt_stream_fingerprint_unlocked(task_dir):
-    return _receipt_snapshot_unlocked(task_dir).fingerprint
-
-
-def receipt_stream_fingerprint(task_dir, snapshot=None):
-    return (snapshot or receipt_snapshot(task_dir)).fingerprint
 
 
 def _blocked_artifact_valid(task_dir):
@@ -3775,1175 +2398,87 @@ def _blocked_artifact_valid(task_dir):
     )
 
 
-def task_control_status(task_dir, control=None, snapshot=None):
-    """Derive open/blocked/closed; malformed terminal evidence is invalid."""
+def task_control_status(task_dir, control=None):
+    """Derive state from exact task control and its safe parking artifact."""
     control = control or read_task_control(task_dir)
     if not control:
         return "invalid"
-    blocked_path = os.path.join(task_dir, "BLOCKED.md")
-    if os.path.lexists(blocked_path):
-        if not _blocked_artifact_valid(task_dir):
+    if os.path.lexists(os.path.join(task_dir, "BLOCKED.md")):
+        if not _blocked_artifact_valid(task_dir) or control["closed"]:
             return "invalid"
-        return "invalid" if control.get("close_receipt_fingerprint") else "blocked"
-    expected = control.get("close_receipt_fingerprint")
-    if expected:
-        try:
-            return "closed" if receipt_stream_fingerprint(task_dir, snapshot) == expected else "invalid"
-        except RuntimeError:
-            return "invalid"
-    return "open"
+        return "blocked"
+    return "closed" if control["closed"] else "open"
 
 
-def publish_task_close(task_dir, control, *, receipt_fingerprint):
-    """Atomically publish current receipt bytes as the sole close authority."""
+def publish_task_close(task_dir, control):
+    """Publish closure through the task-control owner."""
     if not _trusted_control_writer():
         raise _control_writer_error("task close publication requires the task-control MCP")
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt_fingerprint or "")):
-        raise ValueError("invalid task close receipt fingerprint")
-    updated = dict(control)
-    updated["close_receipt_fingerprint"] = receipt_fingerprint
+    updated = dict(control, closed=True)
     write_task_control(task_dir, updated)
     return updated
 
 
-UNNAMED_AGENT_ID_RE = re.compile(r"^a[0-9a-f]{16}$")
-"""Agent-id shape of a spawn that passed no `name=`, per this CLI's encoding.
-
-An unnamed spawn's id is `a` + 16 hex (`a6b82fbc186344eb9`); a named spawn's
-embeds the display name (`areview-code-3-32d77a6e778ff60c`). Owned here rather
-than in `subagent_lifecycle` because both the write side (choosing between
-silence and a breadcrumb) and the read side (`nonparsing_completion_note`,
-naming why a verdict did not bind) discriminate on it, and two copies of a CLI
-encoding the harness does not own would drift apart silently.
-
-Advisory on both sides: it selects diagnostic wording, never whether a receipt
-is admitted or refused. If the encoding changes, the cost is a misworded
-sentence, not a lost PASS.
-"""
-
-
-def _infer_receipt_lens(agent_type, explicit_lens=""):
-    lens = _receipt_short(explicit_lens, 80).lower()
-    if lens:
-        return lens
-    kind = _receipt_short(agent_type, 300).lower()
-    match = re.search(r"(?:^|[:/_-])(qa|ux)[-_:](cli|api|browser|desktop)(?:$|[:/_-])", kind)
-    if match:
-        return f"{match.group(1)}-{match.group(2)}"
-    match = re.search(r"(?:^|[:/_-])(cli|api|browser|desktop)(?:$|[:/_-])", kind)
-    if match and ("qa" in kind or "ux" in kind):
-        prefix = "ux" if "ux" in kind else "qa"
-        return f"{prefix}-{match.group(1)}"
-    tokens = [token for token in re.split(r"[:/_\-\s]+", kind) if token]
-    for left, right in zip(tokens, tokens[1:]):
-        pair = {left.removesuffix("er"), right.removesuffix("er")}
-        if pair == {"code", "review"}:
-            return "review-code"
-        if pair == {"security", "review"}:
-            return "review-security"
-    return ""
-
-
-def _make_runtime_receipt_writer():
-    allowed_names = {
-        "claude_hook": {
-            ("subagent_lifecycle", "register_subagent_start"),
-            ("subagent_lifecycle", "mark_subagent_stop"),
-        },
-        "codex_session_watcher:collaboration": {
-            ("codex_lifecycle_watcher", "watch"),
-        },
-    }
-    bound_callers = {}
-
-    def module_proof(module):
-        found = set()
-        pending = []
-        class_members = []
-        for value in vars(module).values():
-            if inspect.isfunction(value) and value.__globals__ is vars(module):
-                pending.append(value.__code__)
-            elif inspect.isclass(value) and value.__module__ == module.__name__:
-                for name, item in vars(value).items():
-                    member = item.__func__ if isinstance(item, (staticmethod, classmethod)) else item
-                    if inspect.isfunction(member) and member.__globals__ is vars(module):
-                        pending.append(member.__code__)
-                        class_members.append((value, name, item))
-        while pending:
-            code = pending.pop()
-            if code in found:
-                continue
-            found.add(code)
-            pending.extend(item for item in code.co_consts if isinstance(item, CodeType))
-        dependencies = tuple(
-            (name, vars(module)[name])
-            for name in sorted({name for code in found for name in code.co_names})
-            if name in vars(module)
-        )
-        return found, dependencies, tuple(class_members)
-
-    def bind(source, function):
-        identity = (function.__module__, function.__qualname__)
-        if identity not in allowed_names.get(source, ()):
-            raise PermissionError("unsupported receipt lifecycle adapter")
-        caller = inspect.currentframe().f_back
-        try:
-            module = sys.modules.get(function.__module__)
-            expected_path = os.path.realpath(os.path.join(
-                os.path.dirname(__file__), function.__module__ + ".py",
-            ))
-            module_path = os.path.realpath(str(getattr(module, "__file__", "") or ""))
-            spec = getattr(module, "__spec__", None)
-            loader = getattr(spec, "loader", None)
-            canonical_loader = (
-                any(name == function.__module__ for name, _ in allowed_names[source])
-                and isinstance(loader, importlib.machinery.SourceFileLoader)
-                and os.path.realpath(str(getattr(spec, "origin", "") or "")) == expected_path
-                and os.path.realpath(loader.get_filename(function.__module__)) == expected_path
-            )
-            owner = module
-            for part in function.__qualname__.split("."):
-                owner = getattr(owner, part, None)
-                if owner is None:
-                    break
-            info = os.lstat(expected_path)
-            source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-            source_flags |= getattr(os, "O_NOFOLLOW", 0)
-            source_fd = os.open(expected_path, source_flags)
-            try:
-                opened_info = os.fstat(source_fd)
-                chunks = []
-                while True:
-                    chunk = os.read(source_fd, 64 * 1024)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                final_info = os.fstat(source_fd)
-            finally:
-                os.close(source_fd)
-            source_identity = lambda value: (
-                value.st_dev, value.st_ino, value.st_size, value.st_mode,
-                value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
-            )
-            final_path_info = os.lstat(expected_path)
-            if (
-                (info.st_dev, info.st_ino) != (opened_info.st_dev, opened_info.st_ino)
-                or source_identity(opened_info) != source_identity(final_info)
-                or (final_path_info.st_dev, final_path_info.st_ino) != (info.st_dev, info.st_ino)
-            ):
-                raise PermissionError("receipt adapter source changed during binding")
-            canonical_root = compile(b"".join(chunks), expected_path, "exec")
-            candidates = []
-            pending = [canonical_root]
-            while pending:
-                candidate = pending.pop()
-                if candidate.co_qualname == function.__qualname__:
-                    candidates.append(candidate)
-                pending.extend(
-                    value for value in candidate.co_consts
-                    if isinstance(value, CodeType)
-                )
-            # The same conjunction as before, split into the two questions it
-            # was answering at once. Both halves still refuse; only the error
-            # identity differs. Widening what binds is NOT the goal and would
-            # be a security regression: an attacker who swaps the `.py` after a
-            # good import also lands in the code-mismatch half, so that half
-            # must stay a refusal. What it buys is a name for the benign shape,
-            # because a generic "requires its canonical module import" sent
-            # three separate sessions hunting for tampering that never existed.
-            #
-            # `structural` covers loader identity, module ownership, filesystem
-            # shape, and source unambiguity — none of which bytecode staleness
-            # can disturb. `code_matches` covers the two comparisons against a
-            # fresh compile of the current source, which staleness disturbs and
-            # nothing else in this conjunction does.
-            structural = (
-                caller is not None
-                and caller.f_code.co_name == "<module>"
-                and module is not None
-                and canonical_loader
-                and caller.f_globals is vars(module)
-                and function.__globals__ is vars(module)
-                and module_path == expected_path
-                and os.path.realpath(function.__code__.co_filename) == expected_path
-                and owner is function
-                and len(candidates) == 1
-                and stat.S_ISREG(info.st_mode)
-                and info.st_uid == os.getuid()
-                and info.st_nlink == 1
-                and not (info.st_mode & 0o022)
-            )
-            code_matches = bool(
-                caller is not None
-                and caller.f_code == canonical_root
-                and len(candidates) == 1
-                and candidates[0] == function.__code__
-            )
-            if structural and not code_matches:
-                raise StaleBytecodeCacheError(stale_bytecode_message(expected_path))
-            if not (structural and code_matches):
-                raise PermissionError("receipt adapter binding requires its canonical module import")
-        finally:
-            del caller
-        existing = bound_callers.get((source, identity))
-        adapter_codes, dependencies, class_members = module_proof(module)
-        library_codes, _, _ = module_proof(sys.modules[__name__])
-        allowed_frames = {
-            **{code: vars(module) for code in adapter_codes},
-            **{code: globals() for code in library_codes},
-        }
-        binding = (
-            function.__code__, function.__globals__, dependencies,
-            allowed_frames, class_members,
-        )
-        if existing is not None and existing != binding:
-            raise PermissionError("receipt lifecycle adapter is already bound")
-        bound_callers[(source, identity)] = binding
-
-    def authorized(source):
-        frame = inspect.currentframe()
-        caller = frame.f_back.f_back if frame and frame.f_back else None
-        try:
-            while caller is not None:
-                identity = (str(caller.f_globals.get("__name__") or ""), caller.f_code.co_qualname)
-                binding = bound_callers.get((source, identity))
-                if binding is not None:
-                    return bool(
-                        caller.f_code is binding[0]
-                        and caller.f_globals is binding[1]
-                        and all(caller.f_globals.get(name) is value for name, value in binding[2])
-                        and all(vars(owner).get(name) is value for owner, name, value in binding[4])
-                    )
-                candidates = [
-                    value for (candidate_source, _), value in bound_callers.items()
-                    if candidate_source == source
-                ]
-                if not any(
-                    value[3].get(caller.f_code) is caller.f_globals for value in candidates
-                ):
-                    return False
-                caller = caller.f_back
-            return False
-        finally:
-            del caller
-            del frame
-
-    def record(task_dir, receipt):
-        """Validate and append one runtime-owned structured lifecycle receipt."""
-        if not isinstance(receipt, dict):
-            raise ValueError("receipt must be an object")
-        agent_id = _receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
-        if not agent_id:
-            raise ValueError("agent_id required")
-        source = _receipt_short(receipt.get("source") or "spawn_agent", 100)
-        if not authorized(source):
-            raise PermissionError("receipt append requires a runtime-owned lifecycle adapter")
-        agent_type = _receipt_short(receipt.get("agent_type"), 300)
-        verdict = _receipt_short(receipt.get("verdict") or "", 40).upper()
-        lens = _infer_receipt_lens(agent_type, receipt.get("lens"))
-        event = _receipt_short(receipt.get("event"), 20).lower()
-        if event not in RECEIPT_EVENTS:
-            raise ValueError("event must be started or completed")
-        now = _receipt_now_iso()
-        raw_summary = str(receipt.get("summary") or "")
-        if event != "completed":
-            verdict = ""
-            summary = ""
-        else:
-            verdict, summary = normalize_receipt_completion(lens, raw_summary, verdict)
-        current_run = read_task_control(task_dir)
-        if not current_run:
-            raise RuntimeError("valid TASK.json required for receipt append")
-        supplied_run_id = _receipt_short(receipt.get("task_run_id"), 64)
-        task_run_id = str(current_run["run_id"])
-        if supplied_run_id and supplied_run_id != task_run_id:
-            raise RuntimeError("receipt task_run_id does not match current task run")
-        runtime_id = str(receipt.get("runtime_id") or "").strip()
-        _validate_receipt_runtime_id(source, runtime_id)
-        entry = {
-            "ts": now, "event": event, "source": source,
-            "task_run_id": task_run_id, "runtime_id": runtime_id,
-            "agent_id": agent_id, "agent_type": agent_type, "lens": lens,
-            "verdict": verdict, "summary": summary,
-        }
-        if not _receipt_entry_semantics_valid(entry):
-            raise ValueError("receipt does not satisfy the exact persisted schema")
-        path = _receipts_path(task_dir)
-        _validated_receipt_task_dir(task_dir)
-        payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-        with receipt_stream_transaction(task_dir):
-            control = read_task_control(task_dir)
-            if str(control.get("run_id") or "") != task_run_id:
-                raise RuntimeError("receipt task run changed before append")
-            if task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
-                raise RuntimeError("receipt stream is terminal")
-            if event == "completed" and lens.startswith("review-"):
-                detail_digest = _append_review_detail_unlocked(task_dir, raw_summary)
-                if summary.splitlines()[-1] != f"DETAIL_SHA256:{detail_digest}":
-                    raise RuntimeError("review detail digest does not match compact receipt")
-            dir_fd = _receipt_dir_fd(task_dir)
-            prior = _receipt_stream_info(path)
-            created = prior is None
-            flags = os.O_APPEND | os.O_WRONLY
-            flags |= (
-                getattr(os, "O_CLOEXEC", 0)
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_NONBLOCK", 0)
-            )
-            if created:
-                flags |= os.O_CREAT | os.O_EXCL
-            try:
-                fd = os.open(RECEIPTS_NAME, flags, 0o644, dir_fd=dir_fd)
-            except OSError as exc:
-                raise RuntimeError("receipt storage integrity unavailable") from exc
-            appended = False
-            try:
-                opened = os.fstat(fd)
-                if (
-                    not stat.S_ISREG(opened.st_mode)
-                    or opened.st_uid != os.getuid()
-                    or opened.st_nlink != 1
-                    or opened.st_mode & 0o022
-                    or opened.st_size + len(payload) > _RECEIPT_STREAM_MAX_BYTES
-                    or (prior is not None and (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino))
-                    or (prior is None and opened.st_size != 0)
-                ):
-                    raise RuntimeError("receipt storage integrity unavailable")
-                start_size = opened.st_size
-                try:
-                    view = memoryview(payload)
-                    while view:
-                        written = os.write(fd, view)
-                        if written <= 0:
-                            raise RuntimeError("receipt storage integrity unavailable")
-                        appended = True
-                        view = view[written:]
-                    os.fsync(fd)
-                    final = os.fstat(fd)
-                    final_path = os.stat(
-                        RECEIPTS_NAME, dir_fd=dir_fd, follow_symlinks=False,
-                    )
-                    if (
-                        not stat.S_ISREG(final.st_mode)
-                        or final.st_uid != os.getuid()
-                        or final.st_nlink != 1
-                        or final.st_mode & 0o022
-                        or final.st_size != start_size + len(payload)
-                        or not stat.S_ISREG(final_path.st_mode)
-                        or final_path.st_uid != os.getuid()
-                        or final_path.st_nlink != 1
-                        or final_path.st_mode & 0o022
-                        or (final_path.st_dev, final_path.st_ino)
-                        != (opened.st_dev, opened.st_ino)
-                        or final_path.st_size != final.st_size
-                    ):
-                        raise RuntimeError("receipt storage integrity unavailable")
-                    if created:
-                        os.fsync(dir_fd)
-                    _revalidate_receipt_transaction(task_dir)
-                except BaseException:
-                    try:
-                        if appended:
-                            os.ftruncate(fd, start_size)
-                            os.fsync(fd)
-                        if created:
-                            current = os.stat(
-                                RECEIPTS_NAME, dir_fd=dir_fd,
-                                follow_symlinks=False,
-                            )
-                            if (current.st_dev, current.st_ino) != (
-                                opened.st_dev, opened.st_ino,
-                            ):
-                                raise RuntimeError(
-                                    "receipt storage integrity unavailable"
-                                )
-                            os.unlink(RECEIPTS_NAME, dir_fd=dir_fd)
-                            os.fsync(dir_fd)
-                    except FileNotFoundError:
-                        if not created:
-                            raise RuntimeError(
-                                "receipt storage integrity unavailable"
-                            )
-                    except BaseException as rollback_exc:
-                        raise RuntimeError(
-                            "receipt storage integrity unavailable"
-                        ) from rollback_exc
-                    raise
-            finally:
-                os.close(fd)
-        if entry["verdict"] == "PENDING":
-            # Announced after the durable append, so the breadcrumb only ever
-            # describes a completion that really was recorded, and announced
-            # here because every runtime path — the Claude SubagentStop hook,
-            # the Codex watcher — converges on this writer.
-            log_unbound_completion(task_dir, lens, entry)
-        return entry
-
-    return record, bind
-
-
-record_subagent_receipt, _bind_runtime_receipt_adapter = _make_runtime_receipt_writer()
-del _make_runtime_receipt_writer
-
-
-def _lens_events_by_lens(receipts, prefix, current_run_id):
-    """Group this run's receipts for `prefix` lenses, preserving stream order."""
-    grouped = {}
-    for item in receipts:
-        lens = str(item.get("lens") or "").lower()
-        if lens.startswith(prefix) and item.get("task_run_id") == current_run_id:
-            grouped.setdefault(lens, []).append(item)
-    return grouped
-
-
-def receipt_recording_status(snapshot, run_id):
-    """Describe persisted executions from the caller's coherent snapshot.
-
-    Missing completion is not evidence of process liveness or response receipt.
-    This bounded projection neither changes authentication nor authorizes PASS.
-    """
-    identities = ("source", "runtime_id", "agent_id", "agent_type", "lens")
-    groups = {}
-    for index, entry in enumerate(snapshot.entries):
-        if entry["task_run_id"] != run_id:
-            continue
-        key = tuple(entry[field] for field in identities)
-        if key not in groups:
-            groups[key] = dict(zip(identities, key), started_records=0,
-                               completed_records=0, verdict=None)
-        row = groups[key]
-        row[entry["event"] + "_records"] += 1
-        row["last_record_index"] = index
-        if entry["event"] == "completed":
-            row["verdict"] = entry["verdict"]
-    counts = {}
-    for row in groups.values():
-        starts, ends = row["started_records"], row["completed_records"]
-        if starts > 1 or ends > 1:
-            state = "conflicting_records"
-            row["verdict"] = None
-        elif not starts:
-            state = "completion_without_start"
-        elif not ends:
-            state = "awaiting_completion_record"
-        elif row["verdict"] == "PENDING":
-            state = "completion_unbound"
-        else:
-            state = "completion_recorded"
-        row["recording_status"] = state
-        counts[state] = counts.get(state, 0) + 1
-    latest = sorted(groups.values(), key=lambda row: row["last_record_index"], reverse=True)[:32]
-    for row in latest:
-        del row["last_record_index"]
-    return {
-        "basis": "persisted_receipts", "task_run_id": run_id,
-        "snapshot_fingerprint": snapshot.fingerprint,
-        "total_executions": len(groups), "counts": counts,
-        "truncated": len(groups) > len(latest), "executions": latest,
-    }
-
-
-def _rerun_in_flight(events):
-    """True when the lens's newest receipt is a start, i.e. it is running again.
-
-    An in-flight rerun still suppresses any earlier completion. That is not the
-    overwrite this module had to fix: a lens currently re-reviewing has not
-    reported yet, and treating its previous PASS as current could close a task
-    mid-review. Only completion-versus-completion selection changed.
-    """
-    return bool(events) and events[-1].get("event") == "started"
-
-
-def _completed_review_by_lens(task_dir, snapshot=None):
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    receipts = snapshot.entries
-    current_run_id = str(read_task_control(task_dir).get("run_id") or "")
-    if not current_run_id:
-        return {}
-    completed = {}
-    for lens, events in _lens_events_by_lens(receipts, "review-", current_run_id).items():
-        if _rerun_in_flight(events):
-            continue
-        item = _effective_completion(lens, events, receipts)
-        if item is not None:
-            completed[lens] = item
-    return completed
-
-
-def _pending_completion_kind(lens, item):
-    """Why did this completion bind no verdict — unreadable, or contradictory?
-
-    The kinds land on the same `PENDING` but mean opposite things, and the
-    difference is stored in the counts slot.
-
-    `shape` — nothing actionable can be read out of this report, so it must not
-    displace a verdict that was readable. Three cases reach it: a QA lens, which
-    stores no counts line at all; `INVALID`, where not even the verdict token
-    parsed; and `UNREADABLE PASS`, which is a lens restating a non-negative
-    verdict without its counts line. That last one is the field-measured
-    restatement (`VERDICT: PASS — report complete.`), and reading it as
-    substantive is how this module once evicted the verdict being restated.
-
-    `inconsistent` — the lens reported something that contradicts completion:
-    a counts line that disagrees with its own verdict, or a readable `FAIL` /
-    `BLOCKED_ENV` whose counts line could not be read. A human said "not done",
-    and that must outlive an earlier PASS even though it binds nothing.
-    """
-    if not str(lens or "").startswith("review-"):
-        return "shape"
-    slot = _unbound_counts_slot(item)
-    if slot is None:
-        # A real counts line survives only when the report was substantive:
-        # either line 1 was readable and disagreed with the counts, or the
-        # counts themselves report a blocker (`FIX_NOW > 0`) with no readable
-        # verdict line. Both are `inconsistent`. That invariant is established
-        # by the writer, not inferred here — see `normalize_receipt_completion`,
-        # which drops counts it cannot attach to either signal and stores
-        # INVALID instead.
-        return "inconsistent"
-    if slot == _COUNTS_INVALID:
-        return "shape"
-    return "shape" if _retained_verdict_token(item) == "PASS" else "inconsistent"
-
-
-def _unbound_counts_slot(item):
-    """The counts-slot line when it records a reason instead of counts.
-
-    Scanning is equivalent to indexing line 2 because
-    `_receipt_entry_semantics_valid` pins a review summary to exactly three
-    lines plus, on `PENDING`, the retained verdict-position line, and
-    `receipt_snapshot` raises on anything else. That retained line carries the
-    `FIRST_LINE:` prefix, so it cannot match this pattern whatever the agent
-    wrote. If a future schema adds an unprefixed summary line, this scan
-    becomes permissive with nothing failing — index deliberately, then.
-    """
-    for line in str(item.get("summary") or "").splitlines():
-        if _COUNTS_UNBOUND_RE.fullmatch(line):
-            return line
-    return None
-
-
-def _retained_first_line(item):
-    """The verdict-position line a `PENDING` row retained, or "" if absent.
-
-    Absent on rows written before that slot existed, which is why every reader
-    of it must tolerate "".
-    """
-    for line in str(item.get("summary") or "").splitlines():
-        if line.startswith(_FIRST_LINE_PREFIX):
-            return line[len(_FIRST_LINE_PREFIX):].strip()
-    return ""
-
-
-def _unbound_completion_cause(lens, entry):
-    """Which slot of a just-recorded `PENDING` failed. Three causes.
-
-    Read off the stored row rather than recomputed, so it can only describe
-    what a later reader will also see.
-
-    Deliberately not `_pending_completion_kind`, which answers a different
-    question — may this row evict an earlier verdict — and folds
-    `UNREADABLE PASS`, where the verdict line *did* read, into the same bucket
-    as a row where nothing read at all.
-
-    The retained line is the discriminator rather than the counts slot alone,
-    because the counts slot is ambiguous in both directions: a surviving counts
-    line means either a bound verdict contradicting it or an unreadable verdict
-    line beside `FIX_NOW > 0`, and an `UNREADABLE <token>` slot carries a token
-    that may have come from the off-position scan rather than from the verdict
-    position. When the retained line is absent (a row from before the slot
-    existed) the unreadable case is the safe answer: its action — deliver one
-    verdict block on line 1 — is correct for any row, merely redundant for the
-    two where more is wrong.
-    """
-    if not _QA_VERDICT_HEAD_RE.match(_retained_first_line(entry)):
-        return "verdict"
-    if not str(lens or "").startswith("review-"):
-        # A QA lens stores no counts slot, so nothing else can be named. Reached
-        # only when a supplied verdict disagreed with a readable one.
-        return "verdict"
-    slot = _unbound_counts_slot(entry)
-    if slot == _COUNTS_INVALID:
-        # Nothing was usable: not the verdict, not the counts, not the
-        # off-position scan. Reached with a readable retained line when two bare
-        # verdict lines named different verdicts and voided each other — which
-        # is why the action for this cause says *exactly one* verdict block.
-        return "verdict"
-    return "counts" if slot else "contradiction"
-
-
-def _retained_verdict_token(item):
-    """The line-1 verdict this completion reported, when the pair bound nothing.
-
-    Empty when the report yielded no readable verdict token. Presence alone was
-    not enough to decide eviction — see `_pending_completion_kind`.
-    """
-    slot = _unbound_counts_slot(item) or ""
-    prefix = _COUNTS_UNREADABLE + " "
-    return slot[len(prefix):].strip() if slot.startswith(prefix) else ""
-
-
-def _effective_completion(lens, events, receipts):
-    """The completion a lens should be judged by. Last *readable* one wins.
-
-    Selecting the newest record and validating it afterwards meant a lens that
-    had already bound a verdict lost it the moment it was invoked again and
-    answered with a restatement the binder could not read. A rerun that does
-    bind still supersedes — remediation genuinely produces a newer result.
-
-    Only a `shape`-class PENDING fails to displace an earlier bound verdict,
-    because only that one carries no information: the report could not be read.
-    An `inconsistent`-class PENDING *was* read and reported something negative —
-    a reviewer writing `VERDICT: FAIL`, whether beside a counts line that
-    disagrees or beside none at all, is still telling us the work is not done.
-    Letting the previous round's PASS outlive it would close a task over a live
-    objection, and no surface would mention it. That is strictly worse than the
-    deadlock this function fixes, so a record that reported something negative
-    wins even when the pair as a whole binds nothing.
-
-    What decides is the verdict the lens named, not whether it named one. A
-    readable `PASS` with no counts line is a restatement of a verdict already
-    bound and must not win — those are the field strings this module exists
-    because of. A readable `FAIL` or `BLOCKED_ENV` must. Using readability alone
-    made every restatement evict the verdict it was restating; using the counts
-    line alone made `VERDICT: FAIL — three blockers found.` look like one.
-    `_pending_completion_kind` owns that rule.
-    """
-    fallback = None
-    for item in reversed(events):
-        if not _valid_completion(item, receipts):
-            continue
-        if str(item.get("verdict") or "").upper() != "PENDING":
-            return item
-        if _pending_completion_kind(lens, item) == "inconsistent":
-            return item
-        if fallback is None:
-            fallback = item
-    return fallback
-
-
-def _valid_completion(item, receipts):
-    """Is `item` a completion this run may rely on? Identity rules unchanged."""
-    if item.get("event") != "completed":
-        return False
-    if str(item.get("verdict") or "").upper() not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
-        return False
-    if sum(
-        prior.get("event") == "completed"
-        and _receipt_runtime_identity_matches(prior, item)
-        for prior in receipts
-    ) != 1:
-        return False
-    completion_index = receipts.index(item)
-    return any(
-        prior is not item
-        and prior.get("event") == "started"
-        and _receipt_runtime_identity_matches(prior, item)
-        for prior in receipts[:completion_index]
-    )
-
-
-def _receipt_runtime_identity_matches(start, completion):
-    """Require exact lifecycle correlation across every stable identity."""
-    keys = (
-        "source", "task_run_id", "runtime_id", "agent_id", "agent_type", "lens",
-    )
-    return all(str(start.get(key) or "") == str(completion.get(key) or "") for key in keys)
-
-
-def _latest_review_pass_index(task_dir, state=None, snapshot=None):
-    st = state or read_task_control(task_dir)
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    if receipt_review_verdict(task_dir, st, snapshot) != "PASS":
-        return -1
-    completed = _completed_review_by_lens(task_dir, snapshot)
-    return max(
-        (snapshot.entries.index(completed[lens]) for lens in required_review_lenses(task_dir, st)),
-        default=-1,
-    )
-
-
-def _qa_started_after_review(snapshot, lens, completion, review_index):
-    agent_id = completion.get("agent_id")
-    receipts = snapshot.entries
-    try:
-        completion_index = receipts.index(completion)
-    except ValueError:
-        return False
-    return any(
-        item.get("lens") == lens
-        and item.get("agent_id") == agent_id
-        and item.get("event") == "started"
-        and _receipt_runtime_identity_matches(item, completion)
-        and index > review_index
-        for index, item in enumerate(receipts[:completion_index])
-    )
-
-
-def receipt_review_verdict(task_dir, state=None, snapshot=None):
-    st = state or read_task_control(task_dir)
-    if not _validate_task_control(st):
-        return "PENDING"
-    required = required_review_lenses(task_dir, st)
-    if not required:
-        return "NOT_APPLICABLE"
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    completed = _completed_review_by_lens(task_dir, snapshot)
-    verdicts = []
-    missing = False
-    for lens in required:
-        item = completed.get(lens)
-        if not item:
-            missing = True
-            continue
-        verdicts.append(str(item.get("verdict") or "").upper())
-    if any(verdict == "FAIL" for verdict in verdicts):
-        return "FAIL"
-    if any(verdict == "BLOCKED_ENV" for verdict in verdicts):
-        return "BLOCKED_ENV"
-    if missing:
-        return "PENDING"
-    return "PASS" if all(verdict == "PASS" for verdict in verdicts) else "PENDING"
-
-
 def _required_qa_lenses(task_dir, state=None):
-    """Return plan-declared QA lenses without inspecting changed paths."""
+    """Return workflow declarations, not machine-tracked role results."""
     return _declared_lenses(task_dir, "qa-", control=state)
 
 
-def _completed_qa_by_lens(task_dir, snapshot=None):
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    current_run_id = str(read_task_control(task_dir).get("run_id") or "")
-    if not current_run_id:
-        return {}
-    receipts = snapshot.subagents
-    latest = {}
-    for lens, events in _lens_events_by_lens(receipts, "qa-", current_run_id).items():
-        if _rerun_in_flight(events):
-            continue
-        # Same "last binding wins" rule as the review selector above.
-        item = _effective_completion(lens, events, receipts)
-        if item is not None:
-            latest[lens] = item
-    return latest
-
-
-def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
-    """Compute runtime verdict without letting missing evidence mask negatives."""
-    st = state or read_task_control(task_dir)
-    if _blocked_artifact_valid(task_dir):
-        return "BLOCKED_ENV"
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    review_verdict = receipt_review_verdict(task_dir, st, snapshot)
-    if review_verdict in {"FAIL", "BLOCKED_ENV"}:
-        return review_verdict
-    required = _required_qa_lenses(task_dir, st)
-    completed = _completed_qa_by_lens(task_dir, snapshot)
-    completed_verdicts = [
-        str(completed[lens].get("verdict") or "").upper()
-        for lens in required if lens in completed
-    ]
-    # A valid current-run QA terminal negative is useful defect/blocker evidence
-    # even when the preceding review receipt was lost. Ordering remains mandatory
-    # for PASS below; missing attestation must never conceal an observed negative.
-    if any(verdict == "FAIL" for verdict in completed_verdicts):
-        return "FAIL"
-    if any(verdict == "BLOCKED_ENV" for verdict in completed_verdicts):
-        return "BLOCKED_ENV"
-    if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
-        return "PENDING"
-    review_index = _latest_review_pass_index(task_dir, st, snapshot)
-    valid = {
-        lens: completed[lens] for lens in required
-        if (
-            lens in completed
-            and _qa_started_after_review(snapshot, lens, completed[lens], review_index)
-        )
-    }
-    verdicts = [str(valid[lens].get("verdict") or "").upper() for lens in required if lens in valid]
-    if len(verdicts) == len(required) and all(verdict == "PASS" for verdict in verdicts):
-        return "PASS"
-    return "PENDING"
-
-
-def nonparsing_completion_lenses(task_dir, state=None, snapshot=None):
-    """Lenses that completed for this run but whose final failed the verdict contract.
-
-    `normalize_receipt_completion` records `PENDING` when the final message does
-    not carry `VERDICT: PASS|FAIL|BLOCKED_ENV` at the verdict position — line 1,
-    or the line after the runtime's own output-scanner notice, see
-    `_verdict_aligned_lines` — (and, for review lenses, `FINDING_COUNTS:` on the
-    line below it). The lens did run and did report —
-    the shape was rejected — but a bare `PENDING` reads exactly like "never ran",
-    so a coordinator re-derives the whole cycle before noticing. Naming it is
-    diagnostic only: a non-parsing completion stays non-attesting either way.
-    """
-    st = state or read_task_control(task_dir)
-    current_run_id = str(st.get("run_id") or "")
-    if not current_run_id:
-        return {}
-    # Any supported lens, not only the declared ones: a lens whose declaration
-    # is still missing can burn the same cycle, and the note is advisory.
-    # `entries`, not `subagents`: the latter is the non-review view, and a
-    # review lens is the one this most often fires for. Advisory only, so a
-    # snapshot carrying no records yields no note rather than an error on a
-    # path whose whole purpose is explaining a PENDING.
-    receipts = getattr(snapshot or receipt_snapshot(task_dir), "entries", None) or []
-    grouped = {
-        lens: events
-        for lens, events in _lens_events_by_lens(receipts, "", current_run_id).items()
-        if lens in SUPPORTED_LENSES
-    }
-    # When nothing bound, report the newest completion record whether or not it
-    # passed identity validation. An untrusted completion is still a lens that
-    # ran and reported, and dropping it here would restore the bare PENDING this
-    # whole diagnostic exists to explain — but it gets its own kind, because its
-    # cause is a receipt-pairing failure and every word of the format advice
-    # would be false for it.
-    kinds = {}
-    for lens, events in grouped.items():
-        if _rerun_in_flight(events):
-            continue
-        bound = _effective_completion(lens, events, receipts)
-        if bound is not None and str(bound.get("verdict") or "").upper() != "PENDING":
-            # The bound verdict stands and the coordinator has nothing to fix.
-            # But if an unreadable follow-up arrived after it, staying silent
-            # means a report nobody can read is also a report nobody is told
-            # about. For a `qa-*` lens there is no datum separating a harmless
-            # restatement from a new finding, so eviction would reinstate the
-            # deadlock — naming it does not, because this kind is advisory and
-            # asks for a confirmation rather than a rerun.
-            completions = [i for i in events if i.get("event") == "completed"]
-            if completions and completions[-1] is not bound:
-                # A follow-up that also failed identity validation is a pairing
-                # failure first. Calling it `stale_followup` lands on advice that
-                # happens to be harmless, but never names the receipt problem —
-                # the same wrong-diagnosis-costs-a-loop failure one level down.
-                kinds[lens] = (
-                    "stale_followup"
-                    if _valid_completion(completions[-1], receipts)
-                    else "unpaired"
-                )
-            continue
-        newest_completion = next(
-            (item for item in reversed(events) if item.get("event") == "completed"),
-            None,
-        )
-        if newest_completion is None:
-            continue
-        # Three different failures land on the same absence of a verdict, and
-        # each sends its coordinator somewhere different. Diagnosing the wrong
-        # one is what turned this diagnostic into a loop.
-        # An untrusted newest record is a pairing failure regardless of which
-        # branch reaches it. Asking `_pending_completion_kind` first would read
-        # its report shape and send the coordinator to route findings and
-        # respawn, when the actual fault is that no `SubagentStart` was
-        # recorded — a rerun loop that cannot terminate. The sibling branch
-        # above already checks this; checking it in only one place fixed the
-        # misdiagnosis for a bound lens and left it for a pending one.
-        if bound is None or not _valid_completion(newest_completion, receipts):
-            kinds[lens] = "unpaired"
-        else:
-            kind = _pending_completion_kind(lens, newest_completion)
-            # A named spawn lands on `shape` because that is what the report
-            # looks like from here, and every word of the `shape` advice is
-            # wrong for it: the format was never the fault, respawning with the
-            # same `name=` reproduces it exactly, and the second failure
-            # escalates to a park on a task that is finished. Measured
-            # 2026-09-17: five named spawns returned substantive verdicts and
-            # bound none, one unnamed spawn bound immediately.
-            # Gated on the Claude source. The id shape is that CLI's encoding,
-            # verified against its own transcript filenames; a Codex row's id
-            # comes from a different runtime and matches the unnamed pattern
-            # only by accident, so applying this test to one would tell every
-            # Codex coordinator to drop a `name=` argument it never passed.
-            if (
-                kind == "shape"
-                and str(newest_completion.get("source") or "") == "claude_hook"
-                and not UNNAMED_AGENT_ID_RE.match(
-                    str(newest_completion.get("agent_id") or "")
-                )
-            ):
-                kind = "shape_named"
-            kinds[lens] = kind
-    return dict(sorted(kinds.items()))
-
-
-def nonparsing_completion_note(lenses):
-    """Advisory sentence naming lenses whose completion could not bind a verdict."""
-    if not lenses:
-        return ""
-    kinds = lenses if isinstance(lenses, dict) else {lens: "shape" for lens in lenses}
-    parts = []
-    shape = [lens for lens, kind in kinds.items() if kind == "shape"]
-    shape_named = [lens for lens, kind in kinds.items() if kind == "shape_named"]
-    inconsistent = [lens for lens, kind in kinds.items() if kind == "inconsistent"]
-    unpaired = [lens for lens, kind in kinds.items() if kind == "unpaired"]
-    stale_followup = [lens for lens, kind in kinds.items() if kind == "stale_followup"]
-    if shape:
-        parts.append(
-            f"Recorded but unusable: {', '.join(shape)} completed for this run but no "
-            "verdict could be bound — its verdict block was not in the position and "
-            "shape the agent definition requires, the report carried conflicting "
-            "verdict or counts lines, or the lens ended its turn while its own work "
-            "was still running, so an interim message was recorded as its "
-            "completion (doc/harness/REQ__subagent-lifecycle-receipt-boundaries.md). "
-            "This is not an unrun lens and not a missing receipt. Spawn that lens fresh rather than sending another message to "
-            "the one that already reported: a follow-up turn answers with a "
-            "restatement, and a restatement is what failed to bind. Do not restate, "
-            "relocate, or paraphrase the verdict format in the spawn prompt — the "
-            "agent definition owns it. If a fresh spawn also fails to bind, that is "
-            "the missing-attestation case, not a lens to run a third time."
-        )
-    if shape_named:
-        # Separate branch, not a sentence appended to `shape`: the generic text
-        # ends by routing a second failure to the missing-attestation park, and
-        # for this cause that park would record a false statement about a task
-        # whose lens never had a chance to attest.
-        parts.append(
-            f"Recorded but unusable: {', '.join(shape_named)} completed for this run "
-            "but no verdict could be bound, and the completion's agent id carries a "
-            "display name — the shape a spawn that passed `name=` produces. The "
-            "report is not the fault and its format is not the fault. The CLI puts "
-            "the display name in the agent-type position and drops the resolved "
-            "type, so what the hook records is not what the lens definition would "
-            "have supplied; a name that happens to encode a lens still infers one, "
-            "which is why a receipt row exists at all. Spawn that lens again with no "
-            "`name=` argument and put the lane label in the prompt instead — see "
-            "`plugin/skills/develop/parallel-fanout.md`. Do not reformat the report, "
-            "do not restate the verdict contract in the spawn prompt, and do not "
-            "treat a second failure as the missing-attestation case until an "
-            "unnamed spawn has also failed to bind."
-        )
-    if inconsistent:
-        # Deliberately enumerated rather than diagnosed. This branch knows the
-        # verdict line was readable but not what it said, nor whether the counts
-        # line existed at all. Naming a single cause would be a guess; the
-        # sentence lists the reachable ones and leads with the common one.
-        #
-        # An `inconsistent` row does carry the bounded `FIRST_LINE:` slot — it
-        # is written for every `PENDING` — and this branch still does not read
-        # it. Not because it is missing (an earlier version of this comment said
-        # so and was wrong), but because it is bounded and normalized while this
-        # sentence is coordinator-facing prose: naming what the line was would
-        # still not say which of the enumerated causes applied. The write-side
-        # breadcrumb has the whole entry and does discriminate; see
-        # `_unbound_completion_cause`.
-        parts.append(
-            f"Recorded but unusable: {', '.join(inconsistent)} reported something "
-            "substantive but no verdict could be bound — its verdict and finding "
-            "counts contradict each other, its counts line was missing or ambiguous, "
-            "more than one conflicting verdict line was present, or its counts line "
-            "reported a blocker with no readable verdict line. This lens said "
-            "something; it is not a restatement. "
-            "The usual cause is a PASS reported beside FIX_NOW>0. Route the reported "
-            "findings first — resolving them is the coordinator's move here — then "
-            "spawn that lens fresh so it reports on the remediated state. Note that "
-            "INVESTIGATE and OPTIONAL counts do not contradict PASS; only FIX_NOW does."
-        )
-    if unpaired:
-        # Neither of the sentences above is true here, and saying either one
-        # sends the reader to re-read a report whose text was never the problem.
-        parts.append(
-            f"Recorded but unusable: {', '.join(unpaired)} completed for this run but "
-            "the completion could not be bound to exactly one start/stop pair for the "
-            "same agent identity — either no matching start receipt exists, or more "
-            "than one completion was recorded for that identity — so nothing about it "
-            "can be trusted, including its verdict. This is a receipt-pairing failure, "
-            "not a report the lens wrote badly: re-reading or reformatting the report "
-            "cannot fix it. Check both — whether the loaded hook tree records "
-            "SubagentStart as well as SubagentStop, and whether a completion was "
-            "replayed for an identity that already had one."
-        )
-    if stale_followup:
-        # The only kind here that reports a *usable* verdict. It exists so that
-        # "a report arrived and nobody could read it" is never silent, even when
-        # the right thing to do with it is nothing.
-        parts.append(
-            f"Bound verdict stands for {', '.join(stale_followup)}, but a later "
-            "completion for the same lens could not be read. That follow-up changes "
-            "nothing — whatever the bound verdict requires still applies, and no "
-            "rerun is needed to restore it. Confirm the follow-up was a restatement "
-            "of the verdict already bound and not a new finding; if it was a new "
-            "finding, spawn the lens fresh so it can report in the required shape."
-        )
-    return " ".join(parts) + " "
-
-
-# ── Task context ─────────────────────────────────────────────────────────
-
-
-def emit_compact_context(task_dir, snapshot=None, *, measure_wbs=False, measured_progress=None, measure_targets=False, measured_target_inputs=None):
-    """Build the canonical task pack with on-the-fly routing."""
+def emit_compact_context(task_dir, *, measure_wbs=False, measured_progress=None, measure_targets=False, measured_target_inputs=None):
+    """Report WBS check readiness; independent role results remain workflow-owned."""
     st = read_task_control(task_dir)
     if not st:
-        return {
-            "error": "missing or invalid exact four-field TASK.json",
-            "task_dir": task_dir,
-            "next_action": "Call wbs(action='open') to initialize a fresh TASK.json run.",
-        }
-
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    routing = compile_routing(task_dir)
-    runtime_verdict = receipt_runtime_verdict(task_dir, st, snapshot)
-
-    micro_loop = _is_micro_loop_state(st)
-    has_plan = artifact_exists(task_dir, "PLAN.md")
-    task_open = st.get('close_receipt_fingerprint') is None and not artifact_exists(task_dir, 'BLOCKED.md')
-    source_write_allowed = task_open and routing['orchestration_mode'] == 'direct'
-    why_blocked = "" if source_write_allowed else "Fresh execution assignment required: dispatch prepare with current host inventory and ownership"
-    if task_open and routing['orchestration_mode'] == 'unassigned' and os.path.isfile(os.path.join(find_repo_root(task_dir), '.git')):
-        source_write_allowed = None
-        why_blocked = 'Status does not authenticate managed lead ownership; prewrite validates its existing pool binding.'
-
-    missing_for_close = []
-    if not has_plan and not micro_loop:
-        missing_for_close.append("PLAN.md")
-    required_reviews = required_review_lenses(task_dir, st)
-    review_verdict = receipt_review_verdict(task_dir, st, snapshot)
-    nonparsing_kinds = nonparsing_completion_lenses(task_dir, st, snapshot)
-    nonparsing_note = nonparsing_completion_note(nonparsing_kinds)
-    completed_reviews = _completed_review_by_lens(task_dir, snapshot)
-    missing_reviews = [lens for lens in required_reviews if lens not in completed_reviews]
-    if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
-        if missing_reviews:
-            missing_for_close.append("completed review verdict: " + ", ".join(missing_reviews))
-        else:
-            missing_for_close.append("completed review verdict PASS for current task run")
-    required_qa_lenses = _required_qa_lenses(task_dir, st)
-    completed_qa = _completed_qa_by_lens(task_dir, snapshot)
-    missing_qa_lenses = [lens for lens in required_qa_lenses if lens not in completed_qa]
-    if runtime_verdict != "PASS":
-        if missing_qa_lenses:
-            missing_for_close.append("completed QA verdict: " + ", ".join(missing_qa_lenses))
-        else:
-            missing_for_close.append("completed QA verdict PASS")
-
-    remedied_fail_guidance = (
-        " Only if the finding has already been remedied and subsequent required "
-        "review PASS followed by QA PASS actually arrived, with no unresolved "
-        "actual FAIL or BLOCKED_ENV, may missing remedial receipts take the "
-        "missing-attestation path. Label unreceipted finals NON-ATTESTING; they "
-        "do not change receipt-derived FAIL or authorize task_close. "
-        f"{TRUST_BOUNDARY} {attestation_endgame()}"
-    )
-    if not has_plan and not micro_loop:
-        next_action = "Create PLAN.md via plan skill before source writes."
-    elif review_verdict == "FAIL":
-        next_action = (
-            "A required review receipt reports FAIL. Remediate the finding and "
-            "run a fresh review because the implementation changed; do not start QA "
-            "until actual required review PASS."
-            + remedied_fail_guidance
-        )
-    elif review_verdict == "BLOCKED_ENV":
-        next_action = (
-            "A required review receipt reports BLOCKED_ENV. Call wbs(action='block') "
-            "directly with the concrete blocker and an actionable unblock "
-            "condition; do not start QA."
-        )
-    elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
-        next_action = nonparsing_note + (
-            "Run and await the required read-only review subagent(s) if a required "
-            "review has not actually completed. "
-            "If its actual PASS final already arrived without a receipt, label it "
-            "NON-ATTESTING and proceed to substantive QA once; do not rerun "
-            "review solely for a receipt. "
-            f"{TRUST_BOUNDARY} {attestation_endgame()}"
-        )
-    elif runtime_verdict == "FAIL":
-        next_action = (
-            "A required QA receipt reports FAIL. Remediate the finding, then restore "
-            "fresh ordered review and QA evidence because the implementation changed."
-            + remedied_fail_guidance
-        )
-    elif runtime_verdict == "BLOCKED_ENV":
-        next_action = (
-            "A required QA receipt reports BLOCKED_ENV. Call wbs(action='block') directly "
-            "with the concrete blocker and an actionable unblock condition."
-        )
-    elif runtime_verdict != "PASS":
-        next_action = nonparsing_note + (
-            "Run and await the required QA subagent(s) if required QA has not "
-            "actually completed. If its "
-            "actual PASS final already arrived without a receipt, label it "
-            # The boundary sits directly after the NON-ATTESTING instruction,
-            # mirroring the review-pending branch above. Placing it after the
-            # park instruction instead left "label it NON-ATTESTING -> verify ->
-            # park" reading as unconditional, with the disqualifying sentence
-            # arriving two clauses late — the failure shape
-            # test_every_normative_clause_in_both_next_actions_is_pinned records
-            # for the park guard.
-            f"NON-ATTESTING. {TRUST_BOUNDARY} {attestation_endgame()}"
-        )
-    else:
-        # `stale_followup` only — not the whole note. It is the one kind whose
-        # sentence is advisory ("that follow-up changes nothing, no rerun is
-        # needed"), and the one kind that can coexist with a closable task,
-        # because it requires a lens that already bound a non-PENDING verdict.
-        #
-        # The other three are work orders. An undeclared lens can reach this
-        # branch — `nonparsing_completion_lenses` deliberately covers every
-        # supported lens, not only the declared ones, and `review-security`
-        # routinely runs undeclared — so prefixing the whole note printed
-        # "route the findings and respawn" immediately before "run wbs(action='close')",
-        # with nothing marking which governs. A coordinator either burns a
-        # remediation round on a lens that gates nothing, or learns the prefix
-        # is noise, which destroys the signal this branch was restoring.
-        followup = {
-            lens: kind for lens, kind in nonparsing_kinds.items()
-            if kind == "stale_followup"
-        }
-        next_action = (
-            nonparsing_completion_note(followup)
-            + "Completed QA verdicts present — run wbs(action='close')."
-        )
-    from wbs import task_progress
-    progress = measured_progress if measured_progress is not None else task_progress(
-        task_dir, find_repo_root(task_dir), st["run_id"], measure=measure_wbs,
-    )
-    if progress.get("status") != "unbaselined" and (
-        progress.get("status") != "measured" or not all(row["verified"] for row in progress["outcomes"])
-    ):
-        missing_for_close.append("verified WBS outcomes")
-    if progress.get("integration") and progress["integration"]["route"] != "integration":
-        source_write_allowed = False
-        why_blocked = "WBS work pack owns source writes; park parent and complete isolated leads first"
-        missing_for_close.append("integrated WBS work pack")
-        next_action = "Park this parent through wbs(action='block') before batch admission; finish its exact work pack before resuming."
-    if progress.get("refinement_due"):
-        next_action += " WBS has no earned progress for two hours: refine unclear unfinished work at this boundary without changing weights; report real external blockers instead of splitting them."
+        return {"error": "missing or invalid exact four-field TASK.json", "task_dir": task_dir,
+                "next_action": "Use wbs(action='migrate') preview/apply for old controls, or open a new task."}
+    from wbs import task_progress, summary
     from verification_target import applicability
-    targets = applicability(task_dir, find_repo_root(task_dir), snapshot,
-                            measure=measure_wbs or measure_targets, measured_inputs=measured_target_inputs)
-    if targets.get("missing_lenses"):
-        missing_for_close.append("applicable verification target: " + ", ".join(targets["missing_lenses"]))
-        # Applicability supplements lifecycle evidence; it cannot replace an
-        # actual FAIL/BLOCKED result or turn missing attestation into a rerun.
-        if runtime_verdict == "PASS":
-            if not (progress.get("integration") and progress["integration"]["route"] != "integration"):
-                next_action = "Verification target is stale, unavailable or unbound. Preserve lifecycle history; issue a target for changed inputs and run only affected required lenses against its frozen source view."
-            runtime_verdict = "PENDING"
-    context = {
-        "task_id": os.path.basename(task_dir),
-        "status": task_control_status(task_dir, st, snapshot),
-        "task_dir": task_dir,
-        "routing": routing,
-        "runtime_verdict": runtime_verdict,
-        "receipt_recording": receipt_recording_status(snapshot, st["run_id"]),
-        "verification_targets": targets,
-        "progress": progress,
-        "source_write_allowed": source_write_allowed,
-        "why_source_write_blocked": why_blocked,
-        "review_verdict": review_verdict,
-        "required_review_lenses": required_reviews,
-        "required_qa_lenses": required_qa_lenses,
-        "missing_for_close": missing_for_close,
-        "next_action": next_action,
-        "report_path": f"doc/harness/tasks/{os.path.basename(task_dir)}/{RECEIPTS_NAME}",
-        "effective_close_gate": "micro" if micro_loop else "standard",
-    }
-    from wbs import summary
+    repo = find_repo_root(task_dir)
+    progress = measured_progress if measured_progress is not None else task_progress(
+        task_dir, repo, st["run_id"], measure=measure_wbs)
+    targets = applicability(task_dir, repo, measure=measure_wbs or measure_targets,
+                            measured_inputs=measured_target_inputs)
+    status = task_control_status(task_dir, st)
+    routing = compile_routing(task_dir)
+    has_plan = artifact_exists(task_dir, "PLAN.md")
+    source_allowed = status == "open" and has_plan and routing["orchestration_mode"] == "direct"
+    why = "" if source_allowed else "Create PLAN.md before source writes." if not has_plan else "Fresh execution assignment required: dispatch prepare with current host inventory and ownership"
+    if status == "open" and has_plan and routing["orchestration_mode"] == "unassigned" and os.path.isfile(os.path.join(repo, ".git")):
+        source_allowed = None
+        why = "Status does not authenticate managed lead ownership; prewrite validates its existing pool binding."
+    missing = []
+    if not has_plan:
+        missing.append("PLAN.md")
+    complete = progress.get("status") == "measured" and bool(progress.get("outcomes")) and all(row["verified"] for row in progress["outcomes"])
+    if not complete:
+        missing.append("verified WBS outcomes")
+    integration = progress.get("integration")
+    if integration and integration["route"] != "integration":
+        missing.append("integrated WBS work pack")
+        source_allowed = False
+        why = "WBS work pack owns source writes; complete isolated leads first."
+    if targets.get("enforced") and targets.get("status") != "applicable":
+        missing.append("applicable verification target inputs")
+    if status == "blocked":
+        missing.append("task is blocked")
+    if status == "invalid":
+        missing.append("valid task state")
+    verdict = "BLOCKED_ENV" if status == "blocked" else "PASS" if not missing else "PENDING"
+    next_action = "Run wbs(action='close') after awaited independent review and actual QA succeed." if not missing else "Run the declared WBS checks against current inputs; resolve the listed blockers."
+    if not has_plan:
+        next_action = "Create PLAN.md via wbs(action='plan') before source writes."
+    elif status == "blocked":
+        next_action = "Resolve the blocker, then resume this same task with wbs(action='open')."
+    elif integration and integration["route"] != "integration":
+        next_action = "Finish integration and disposal of this exact WBS work pack before resuming."
+    context = dict(task_id=os.path.basename(task_dir), task_dir=task_dir, status=status,
+                   routing=routing, runtime_verdict=verdict, verification_basis="current_wbs_checks",
+                   workflow_verification="Independent review and QA results are awaited by the workflow and are not machine-tracked.",
+                   progress=progress, verification_targets=targets,
+                   source_write_allowed=source_allowed, why_source_write_blocked=why,
+                   required_review_lenses=required_review_lenses(task_dir, st),
+                   required_qa_lenses=_required_qa_lenses(task_dir, st),
+                   missing_for_close=missing, next_action=next_action,
+                   effective_close_gate="micro" if _is_micro_loop_state(st) else "standard")
     context["summary"] = summary(context)
     return context
 
@@ -4987,28 +2522,6 @@ def _git_changed_paths(repo_root):
 
 def artifact_exists(task_dir, filename):
     return os.path.isfile(os.path.join(task_dir, filename))
-
-
-def provenance_from_artifacts(task_dir, snapshot=None):
-    """Derive provenance from artifact existence."""
-    snapshot = snapshot or receipt_snapshot(task_dir)
-    has_subagent = bool(snapshot.entries)
-    completed = _completed_qa_by_lens(task_dir, snapshot)
-    reviews = _completed_review_by_lens(task_dir, snapshot)
-    return {
-        "plan-skill": artifact_exists(task_dir, "PLAN.md"),
-        "subagent-start-hook": has_subagent,
-        "code-reviewer": reviews.get("review-code", {}).get("verdict") == "PASS",
-        "security-reviewer": reviews.get("review-security", {}).get("verdict") == "PASS",
-        "qa-browser": completed.get("qa-browser", {}).get("verdict") == "PASS",
-        "qa-api": completed.get("qa-api", {}).get("verdict") == "PASS",
-        "qa-cli": completed.get("qa-cli", {}).get("verdict") == "PASS",
-        "qa-desktop": completed.get("qa-desktop", {}).get("verdict") == "PASS",
-        "ux-browser": has_subagent,
-        "ux-api": has_subagent,
-        "ux-cli": has_subagent,
-        "ux-desktop": has_subagent,
-    }
 
 
 # ── Atomic JSON state helpers ─────────────────────────────────────────────

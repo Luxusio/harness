@@ -64,7 +64,7 @@ For an existing open/blocked task, call
 `wbs(action="open", workspace=W, wbs_id=existing_id)` without `fresh_run`, then
 `wbs(action="context", workspace=W, wbs_id=existing_id)`. Require the same run id as
 recorded before continuing the normal lifecycle at its pending phase. Preserve
-receipts and evidence; never restart solely to manufacture a PASS. If no task
+measured checks and evidence; never restart solely to manufacture a PASS. If no task
 existed at bootstrap, start only the expected task slug in W after binding.
 A closed task goes back to the coordinator for integration/recovery: do not
 repeat close or review/QA solely for cleanup.

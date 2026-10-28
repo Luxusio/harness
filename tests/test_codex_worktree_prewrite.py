@@ -72,7 +72,7 @@ def test_worktree_and_sibling_protected_artifacts_stay_denied(tmp_path):
     active(worktree, plan=True)
     active(sibling, plan=True)
     for root in (worktree, sibling):
-        for name in ('TASK.json', 'PLAN.md', 'RECEIPTS.jsonl', 'REVIEWS.jsonl'):
+        for name in ('TASK.json', 'PLAN.md', 'WBS.json'):
             result = check(main, root / 'doc/harness/tasks/TASK__lead' / name)
             assert result.get('permissionDecision') == 'deny'
             assert 'C-05-protected-artifact' in result['permissionDecisionReason']

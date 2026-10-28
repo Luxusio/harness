@@ -37,55 +37,35 @@ def _register_task_result(payload: bytes, *, deadline: float) -> None:
     global register_task_result
     status = {}
     registered = False
-    bounded_call = None
     try:
         from codex_hook_registration import (
-            REGISTRATION_BUDGET_SECONDS, AUTHENTICATION_BUDGET_SECONDS, _call_with_deadline,
+            REGISTRATION_BUDGET_SECONDS,
         )
-        bounded_call = _call_with_deadline
         if register_task_result is None:
             from codex_hook_registration import register_task_result as callback  # type: ignore
             register_task_result = callback
         registered = register_task_result(
             payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
                                         max(0.0, deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS)),
-            authentication_budget_seconds=min(
-                AUTHENTICATION_BUDGET_SECONDS,
-                max(0.0, deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS - REGISTRATION_BUDGET_SECONDS),
-            ),
             status_out=status,
         )
     except Exception as exc:
         registered = False
         status.update(status="failed", stage="task binding",
                       reason=f"task binding unavailable ({type(exc).__name__})")
-    # Reuse the existing session-scoped advisory writer. It never creates a
-    # receipt or gives diagnostics authority over the native actor identity.
     reason = " ".join(str(status.get("reason") or "task binding failed").split())[:200]
     if not registered and status.get("status") == "failed":
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse",
-            "additionalContext": f"[harness] Receipt watcher registration failed: {reason}. Registration grants no review/QA evidence; do not hand-author receipts.",
+            "additionalContext": f"[harness] Task focus binding failed: {reason}. Resume the intended task before source edits.",
         }}))
         sys.stdout.flush()
-
-    def persist():
-        from hook_pre_tool_use import _update_diagnostics, _report_registration_not_applicable
-        if registered:
-            _update_diagnostics(payload, {"registration_present": True,
-                                         "last_registration_error": "", "last_registration_note": ""})
-        elif status.get("status") == "failed":
-            _update_diagnostics(payload, {"registration_present": False, "last_registration_error": reason})
-        else:
-            _report_registration_not_applicable(payload, str(status.get("reason") or "task result was not bindable"))
-    if bounded_call is not None:
-        bounded_call(persist, deadline, stage="diagnostic publication")
 
 HOOK_TIMEOUT_SECONDS = 10.0
 TOTAL_BUDGET_SECONDS = 9.4
 CHILD_TIMEOUT_SECONDS = 1.5
-DEADLINE_MARGIN_SECONDS = 0.4  # Leave time to publish registration diagnostics.
-def _receipt_control_root(cwd: str) -> str:
+DEADLINE_MARGIN_SECONDS = 0.4  # Leave time to publish binding guidance.
+def _task_control_root(cwd: str) -> str:
     root = find_harness_root(cwd) if find_harness_root is not None else ""
     if root:
         return root
@@ -140,7 +120,7 @@ def _goal_routing_hint(payload: bytes) -> str:
     if not _is_create_goal_tool(str(data.get("tool_name") or data.get("tool") or "")):
         return ""
     try:
-        repo_root = _receipt_control_root(_payload_cwd(payload) or os.getcwd())
+        repo_root = _task_control_root(_payload_cwd(payload) or os.getcwd())
         if not repo_root:
             return ""
         if not is_harness_enabled_repo(repo_root):

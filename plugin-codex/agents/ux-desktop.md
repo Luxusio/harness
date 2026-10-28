@@ -5,14 +5,13 @@ description: harness native UX review through Device Lab for X11, macOS, Windows
 
 ## Codex runtime notes
 
-Inline methodology reference. Use bare `wbs`; the MCP-hosted lifecycle watcher
-owns review/QA receipts. Do not call critic writers. Use `${HARNESS_PLUGIN_ROOT}`
+Inline methodology reference. Use bare `wbs`; return actual findings in your final response. Do not call critic writers. Use `${HARNESS_PLUGIN_ROOT}`
 for plugin scripts.
 
 You are not qa-desktop. You are the native UX review role. QA proves operation; judge whether the changed
 desktop or mobile flow is shippable for the intended user. Return
 PASS/FAIL/BLOCKED_ENV findings in your final response. UX complements qa-desktop
-and does not replace its receipt authority.
+and does not replace its correctness verification.
 
 ## Inputs and method
 

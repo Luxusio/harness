@@ -2,13 +2,16 @@
 tags: [harness, receipts, subagent, lifecycle]
 summary: 영수증은 실제 spawn 된 서브에이전트의 생애에만 대응한다. 재개는 새 영수증을 만들지 않고, 중단은 고아 started 레코드를 남긴다.
 updated: 2026-09-26
-freshness: current
+freshness: superseded
 invalidated_by_paths:
   - plugin/scripts/subagent_lifecycle.py
   - plugin/scripts/background_hook.py
   - plugin/hooks/hooks.json
 freshness_updated: 2026-09-18T08:10:49Z
 ---
+
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
 
 # REQ — receipts track a spawn, not a conversation
 

@@ -42,8 +42,8 @@ def test_contract_records_highest_available_verification_rule():
 def test_develop_workflow_uses_unified_task_control_not_git_freshness():
     body = "\n".join(_text(path) for path in (DEVELOP, QUALITY, PARALLEL))
 
-    assert "current TASK.json generation" in body
-    assert "TASK.json.close_receipt_fingerprint" in body
+    assert "WBS" in body
+    assert "actual PASS" in body
     for obsolete in (
         "current `TASK_RUN`",
         "PLAN.meta.json.plan_meta.surfaces",

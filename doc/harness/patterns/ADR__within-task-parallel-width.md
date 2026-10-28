@@ -97,8 +97,8 @@ AC routed to `harness:ac-worker` that declares both `**Files:**` and
   runs unpaired and owns both sets.
 
 The Route vocabulary is unchanged; the pair shares its AC's `Agent(...)` row.
-The name maps to no receipt lens: `_lib._infer_receipt_lens` returns `""` for
-`harness:test-author`, `test-author`, and `test_author_ac_001`.
+Names such as `test_author_ac_001` identify work for operators and grant no
+verification authority.
 
 ### 5. ac-worker sub-split (Claude only)
 
@@ -110,9 +110,8 @@ spawned in one message, keeping any remainder.
   general-purpose agent inherits every tool, including harness MCP writers.
   Never `harness:developer`, `harness:task-lead`, or `harness:test-author`.
   Never a lens agent: `code-reviewer`, `security-reviewer`, `defect-hunter`,
-  any `qa-*`, any `ux-*`, `dogfooder`. Lifecycle hooks record a nested spawn
-  against the task like any other, so a nested lens would enter the receipt
-  stream outside the coordinator's review-before-QA order.
+  any `qa-*`, any `ux-*`, `dogfooder`. Independent review and QA belong to the coordinator, preserving actual
+  review-before-QA order.
 - Splits go one level deep only. Each sub-worker prompt says
   `Sub-worker of AC-NNN: do not split further`, and the Sub-split section tells
   an ac-worker whose prompt carries that marker that it never spawns.
@@ -136,9 +135,7 @@ spawned in one message, keeping any remainder.
 
 The Codex line spawns the test author with
 `spawn_agent(task_name="test_author_ac_<NNN>")`, adding `_<n>` digits on a
-retry. The Codex watcher infers a lens from the free-text task name, and a
-slugged name such as `test_author_ux-cli-copy` infers `ux-cli`, so only digits
-follow the prefix.
+retry for operator readability. Names have no lens-binding authority.
 
 ## Rejected alternatives
 
@@ -165,9 +162,8 @@ follow the prefix.
   and the spawn allowlist remain workflow rules. No hook or MCP tool enforces them. Frontmatter grants `Agent` as a
   whole, so an ac-worker that ignored its allowlist could still start another
   agent type. A sub-worker reads the same agent file and keeps the same
-  `Agent` tool, so only the prompt marker stops it from splitting again, and
-  `harness:ac-worker` records no receipt, so an extra level would leave no
-  trace in the task's evidence. Both residual risks are accepted.
+  `Agent` tool, so only the prompt marker stops it from splitting again, so an extra level is not mechanically prevented. These residual risks are
+  accepted.
 - `tests/test_within_task_parallel_width.py` pins the text of every rule
-  above, the lens inference for the new names, and setup's preservation of the
+  above, the readable task-name convention, and setup's preservation of the
   key.

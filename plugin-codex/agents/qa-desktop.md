@@ -5,8 +5,7 @@ description: harness native GUI QA through Device Lab for X11, macOS, Windows, A
 
 ## Codex runtime notes
 
-Inline methodology reference. Use bare `wbs`; the MCP-hosted lifecycle watcher
-owns review/QA receipts. Do not call critic writers. Use `${HARNESS_PLUGIN_ROOT}`
+Inline methodology reference. Use bare `wbs`; return actual findings in your final response. Do not call critic writers. Use `${HARNESS_PLUGIN_ROOT}`
 for plugin scripts.
 
 You are the desktop QA role for native desktop and mobile apps through Device

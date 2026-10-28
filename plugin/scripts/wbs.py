@@ -628,18 +628,18 @@ def _unavailable(reason):
 def summary(context):
     """Pure advisory projection of owner-assembled facts; never close authority.
 
-    QA receipts attest software checks, not an implementation milestone or a
-    real deployment/device test. Those tiers stay unknown without such facts.
+    Current WBS assertions establish measured software checks. Independent role
+    results and real deployment/device tests are not tracked here.
     """
     progress = context.get("progress", {})
     integration = progress.get("integration") or {}
-    verdicts = (context.get("review_verdict"), context.get("runtime_verdict"))
+    verdicts = (context.get("runtime_verdict"),)
     if "FAIL" in verdicts:
         software = "failed"
     elif "BLOCKED_ENV" in verdicts:
         software = "blocked"
-    elif verdicts[0] in {"PASS", "NOT_APPLICABLE"} and verdicts[1] == "PASS":
-        software = "current" if context.get("verification_targets", {}).get("status") == "applicable" else "stored"
+    elif verdicts[0] == "PASS":
+        software = "current" if progress.get("status") == "measured" else "stored"
     else:
         software = "pending"
     return dict(advisory=True, task_id=context.get("task_id"), task_status=context.get("status"),
@@ -1051,7 +1051,7 @@ def ready_outcomes(state, progress):
 
 
 def block_outcome(task_dir, node_id, *, run_id, reason=None, unblock_condition=None, clear=False):
-    """Local WBS parking; the task owner holds the existing receipt transaction."""
+    """Local WBS parking; the task owner holds the existing task transaction."""
     from _lib import _atomic_text_write
     state = read_state(task_dir)
     require(state is not None and node_id in {n["id"] for n in state["nodes"]}, "unknown outcome")

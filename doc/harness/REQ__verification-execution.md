@@ -106,7 +106,7 @@ their argv on a miss; the job returns `executor_error` with no exit code and an
 explicit reuse-only diagnostic. It still measures inputs and probes toolchain
 identity. Use this mode for later bookkeeping assertions that must not repeat
 product tests. A missing or stale proof does not pass.
-Execution JSON is advisory data: it neither creates native QA receipts nor grants
+Execution JSON is advisory data: it neither supplies independent QA results nor grants
 WBS credit, runtime PASS or close authority. Independent roles still own review
 and QA and the existing WBS gates still decide admission.
 

@@ -2,7 +2,7 @@
 tags: [harness, receipts, attestation, task-blocked, c-17]
 summary: park 사유는 관측되지 않은 전제를 단언하지 않는다. 그리고 하네스는 "렌즈를 안 돌렸다"와 "돌렸는데 기록이 안 됐다"를 구별할 수 없다 — 그 판단은 조정자 몫이다.
 updated: 2026-09-18
-freshness: current
+freshness: superseded
 invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/mcp/harness_server.py
@@ -15,6 +15,9 @@ invalidated_by_paths:
   - CONTRACTS.md
 freshness_updated: 2026-10-19T06:06:13Z
 ---
+
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
 
 # REQ — park 사유는 관측되지 않은 전제를 단언하지 않는다
 

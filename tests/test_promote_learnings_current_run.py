@@ -46,15 +46,8 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
         run_id = run_id or self.harness_lib.new_uuid7()
         task_dir = os.path.join(root, "doc", "harness", "tasks", name)
         os.makedirs(task_dir, exist_ok=True)
-        receipts = os.path.join(task_dir, self.harness_lib.RECEIPTS_NAME)
-        with open(receipts, "w", encoding="utf-8"):
-            pass
-        fingerprint = self.harness_lib.receipt_stream_fingerprint(task_dir)
-        close = fingerprint if status == "closed" else None
-        if status == "stale":
-            close = "sha256:" + "0" * 64
         control = {
-            "close_receipt_fingerprint": close,
+            "closed": status == "closed",
             "execution_mode": "standard",
             "required_lenses": ["review-code", "qa-cli"],
             "run_id": run_id,
@@ -193,7 +186,7 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
             before = self._bytes(ledger)
             task_path = os.path.join(root, "doc", "harness", "tasks", "TASK__current")
             displaced = task_path + "-original"
-            original_transaction = self.module.receipt_stream_transaction_fd
+            original_transaction = self.module.task_control_transaction_fd
             swapped = False
 
             @contextlib.contextmanager
@@ -206,13 +199,13 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
                 with original_transaction(task_fd):
                     yield
 
-            self.module.receipt_stream_transaction_fd = swap_then_transact
+            self.module.task_control_transaction_fd = swap_then_transact
             try:
                 result, output, _ = self._run(
                     root, threshold=1, task="TASK__current", run_id=run_id
                 )
             finally:
-                self.module.receipt_stream_transaction_fd = original_transaction
+                self.module.task_control_transaction_fd = original_transaction
 
             self.assertEqual(result, 2)
             self.assertTrue(swapped)

@@ -1,5 +1,5 @@
 ---
-freshness: current
+freshness: superseded
 invalidated_by_paths:
   - plugin/scripts/hook_tree_health.py
   - plugin/scripts/drift_warn.py
@@ -7,6 +7,9 @@ invalidated_by_paths:
   - plugin/hooks/hooks.json
 freshness_updated: 2026-10-19T06:06:13Z
 ---
+
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
 
 # REQ — a harness that cannot record receipts must say so
 

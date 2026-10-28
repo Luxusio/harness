@@ -25,8 +25,6 @@ def test_codex_run_browser_qa_is_availability_gated():
 
     assert "browser tools are available" in body
     assert "qa-browser" in body
-    assert "RECEIPTS.jsonl" in body
-    assert "watcher-recorded QA completions" in body
 
 
 def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():
@@ -54,7 +52,6 @@ def test_claude_policy_still_requires_qa_browser_delegation():
     develop_body = _text(CLAUDE_DEVELOP)
 
     assert "MUST spawn qa-browser" in run_body
-    assert "Skipping leaves no completed qa-browser receipt" in run_body
     assert "Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`)" in develop_body
     assert "inline use is allowed" in develop_body
     assert "harness:qa-browser" in develop_body

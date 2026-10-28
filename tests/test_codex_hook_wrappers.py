@@ -38,8 +38,6 @@ def _load(name: str):
     spec.loader.exec_module(module)
     if name in {"codex_hook_registration", "_lib"}:
         _CANONICAL_MODULES[name] = module
-    if name == "hook_post_tool_use":
-        module.RECEIPT_EVENT_MODE = "sync"
     return module
 
 
@@ -165,47 +163,6 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         self.assertEqual(output.getvalue(), "")
 
-    def test_session_start_runs_children_from_payload_cwd(self):
-        mod = _load("hook_session_start")
-        calls: list[dict] = []
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-
-        def fake_run(*args, **kwargs):
-            kwargs["cmd"] = args[0]
-            calls.append(kwargs)
-            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
-
-        with tempfile.TemporaryDirectory() as repo:
-            payload = json.dumps({"cwd": repo, "session_id": root_id})
-            with mock.patch.dict("os.environ", {}, clear=True), \
-                 mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                 mock.patch("subprocess.run", side_effect=fake_run):
-                with mock.patch.object(sys, "stdin", _BytesStdin(payload)):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(mod.main(), 0)
-
-        self.assertTrue(calls)
-        self.assertTrue(all(call.get("cwd") == repo for call in calls))
-        child_names = [Path(call["cmd"][1]).name for call in calls]
-        restore.assert_called_once_with(
-            payload.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS,
-            authentication_budget_seconds=mod.AUTHENTICATION_BUDGET_SECONDS,
-        )
-        self.assertNotIn("codex_lifecycle_watcher.py", child_names)
-        self.assertNotIn("hygiene_scan.py", child_names)
-        self.assertNotIn("contract_lint.py", child_names)
-
-    def test_session_start_rejects_mismatched_payload_and_environment_identity(self):
-        mod = _load("codex_hook_registration")
-        payload_id = "019f834e-1e91-7662-9024-f548103d751e"
-        env_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-        with tempfile.TemporaryDirectory() as repo:
-            payload = json.dumps({"cwd": repo, "session_id": payload_id}).encode()
-            with mock.patch.dict("os.environ", {"CODEX_THREAD_ID": env_id}, clear=True), \
-                 mock.patch.object(mod, "ensure") as ensure:
-                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
-
-        ensure.assert_not_called()
 
     def test_thread_id_selects_active_marker_without_runtime_flag(self):
         lib = _load("_lib")
@@ -220,7 +177,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             (task / "TASK.json").write_text(json.dumps({
                 "run_id": lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             sid = lib.current_session_id()
             sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
@@ -264,592 +221,6 @@ class TestCodexHookWrappers(unittest.TestCase):
             ):
                 self.assertEqual(lib.current_session_id(), "codex-session")
 
-    def test_only_session_start_wrapper_restores_registration(self):
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        mod = _load("hook_session_start")
-        with tempfile.TemporaryDirectory() as repo:
-            raw = json.dumps({"cwd": repo, "session_id": root_id})
-            with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                 mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")), \
-                 mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(mod.main(), 0)
-        restore.assert_called_once_with(raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS,
-                                        authentication_budget_seconds=mod.AUTHENTICATION_BUDGET_SECONDS)
-
-        for name in ("hook_post_tool_use", "hook_user_prompt_submit"):
-            self.assertFalse(hasattr(_load(name), "restore_watcher_registration"), name)
-
-    def test_registration_helper_retries_and_late_recovery_is_future_only(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        attempts = []
-        with tempfile.TemporaryDirectory() as repo:
-            (Path(repo) / ".git").mkdir()
-            manifest = Path(repo) / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("type: cli\n", encoding="utf-8")
-            payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
-
-            def ensure(repo_root, thread_id):
-                attempts.append((repo_root, thread_id))
-                return len(attempts) == 2
-
-            with mock.patch.dict("os.environ", {}, clear=True), \
-                 mock.patch.object(
-                     mod.time, "monotonic",
-                     side_effect=[index / 100 for index in range(50)],
-                 ), \
-                 mock.patch.object(mod.time, "sleep"):
-                self.assertTrue(mod.restore_watcher_registration(
-                    payload, retry_seconds=0.1, ensure_fn=ensure,
-                ))
-        self.assertEqual(attempts, [(repo, root_id), (repo, root_id)])
-        self.assertIn("only future subagent starts", mod.restore_watcher_registration.__doc__)
-
-    def test_pre_spawn_registration_does_not_promote_default_task(self):
-        mod = _load("codex_hook_registration")
-        lib = _load("_lib")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            task = Path(repo) / "doc/harness/tasks/TASK__root-binding"
-            task.mkdir(parents=True)
-            (task / "TASK.json").write_text(json.dumps({
-                "run_id": lib.new_uuid7(), "execution_mode": "standard",
-                "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
-            }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
-            sessions.mkdir(parents=True, exist_ok=True)
-            (sessions / "default.json").write_text(json.dumps({
-                "session_id": "default", "task_dir": str(task), "task_id": task.name,
-                "run_id": lib.read_task_control(task)["run_id"], "updated": lib.now_iso(),
-            }) + "\n", encoding="utf-8")
-            (Path(repo) / "doc/harness/tasks/.active").write_text(
-                str(task) + "\n", encoding="utf-8",
-            )
-
-            manifest = Path(repo) / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True, exist_ok=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            payload_bytes = json.dumps({"cwd": repo, "session_id": root_id}).encode()
-            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
-            ), mock.patch.object(
-                mod, "_ensure_with_deadline", return_value=True,
-            ):
-                self.assertFalse(mod.restore_watcher_registration(payload_bytes))
-
-            marker = (
-                Path(repo)
-                / "doc/harness/tasks/.active_sessions"
-                / f"{root_id}.json"
-            )
-            self.assertFalse(marker.exists())
-
-    def test_post_task_result_binds_exact_session_without_legacy_publish(self):
-        mod = _load("codex_hook_registration")
-        lib = _load("_lib")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            task = root / "doc/harness/tasks/TASK__post-bind"
-            task.mkdir(parents=True)
-            run_id = lib.new_uuid7()
-            (task / "TASK.json").write_text(json.dumps({
-                "run_id": run_id, "execution_mode": "standard",
-                "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
-            }) + "\n", encoding="utf-8")
-            payload = json.dumps({"tool_input": {"action": "open"},
-                "cwd": repo, "session_id": root_id,
-                "tool_name": 'mcp__harness__wbs', "tool_use_id": "call_post_bind",
-                "tool_response": {"structuredContent": {
-                    "task_dir": str(task), "task_id": task.name, "run_id": run_id,
-                }},
-            }).encode()
-            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
-            ), mock.patch.object(
-                mod, "_ensure_with_deadline", return_value=True,
-            ):
-                self.assertTrue(mod.register_task_result(payload))
-            marker = root / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
-            self.assertEqual(json.loads(marker.read_text())["run_id"], run_id)
-            self.assertFalse((root / "doc/harness/tasks/.active").exists())
-
-    def test_post_task_result_keeps_concurrent_session_bindings_distinct(self):
-        mod = _load("codex_hook_registration")
-        lib = _load("_lib")
-        session_ids = (
-            "019f834e-1e91-7662-9024-f548103d751e",
-            "019f834e-1e91-7662-9024-f548103d751f",
-        )
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            expected = {}
-            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
-            ), mock.patch.object(
-                mod, "_ensure_with_deadline", return_value=True,
-            ):
-                for index, session_id in enumerate(session_ids):
-                    task = root / f"doc/harness/tasks/TASK__post-bind-{index}"
-                    task.mkdir(parents=True)
-                    run_id = lib.new_uuid7()
-                    expected[session_id] = (task.name, run_id)
-                    (task / "TASK.json").write_text(json.dumps({
-                        "run_id": run_id, "execution_mode": "standard",
-                        "required_lenses": ["review-code", "qa-cli"],
-                        "close_receipt_fingerprint": None,
-                    }) + "\n", encoding="utf-8")
-                    payload = json.dumps({"tool_input": {"action": "open"},
-                        "cwd": repo, "session_id": session_id,
-                        "tool_name": 'wbs', "tool_use_id": f"call_session_{index}",
-                        "tool_response": {"structuredContent": {
-                            "task_dir": str(task), "task_id": task.name,
-                            "run_id": run_id,
-                        }},
-                    }).encode()
-                    self.assertTrue(mod.register_task_result(payload))
-            for session_id, (task_id, run_id) in expected.items():
-                marker = root / "doc/harness/tasks/.active_sessions" / f"{session_id}.json"
-                data = json.loads(marker.read_text())
-                self.assertEqual((data["task_id"], data["run_id"]), (task_id, run_id))
-
-    def test_conflicting_task_result_invalidates_open_session_binding(self):
-        mod = _load("codex_hook_registration")
-        lib = _load("_lib")
-        session_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-
-            payloads = []
-            for name in ("older", "newer"):
-                task = root / f"doc/harness/tasks/TASK__{name}"
-                task.mkdir(parents=True)
-                run_id = lib.new_uuid7()
-                (task / "TASK.json").write_text(json.dumps({
-                    "run_id": run_id, "execution_mode": "standard",
-                    "required_lenses": ["review-code", "qa-cli"],
-                    "close_receipt_fingerprint": None,
-                }) + "\n", encoding="utf-8")
-                payloads.append(json.dumps({"tool_input": {"action": "open"},
-                    "cwd": repo, "session_id": session_id,
-                    "tool_name": 'wbs', "tool_use_id": f"call_conflict_{name}",
-                    "tool_response": {"structuredContent": {
-                        "task_dir": str(task), "task_id": task.name,
-                        "run_id": run_id,
-                    }},
-                }).encode())
-            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
-            ), mock.patch.object(
-                mod, "_ensure_with_deadline", return_value=True,
-            ) as ensure_mock:
-                self.assertTrue(mod.register_task_result(payloads[1]))
-                self.assertFalse(mod.register_task_result(payloads[0]))
-                self.assertFalse(mod.register_task_result(payloads[0]))
-
-            marker = root / "doc/harness/tasks/.active_sessions" / f"{session_id}.json"
-            self.assertEqual(len(json.loads(marker.read_text())["conflicts"]), 2)
-            self.assertEqual(lib.resolve_session_task_binding(repo, session_id), {})
-            self.assertEqual(ensure_mock.call_count, 1)
-
-            spawn_payload = json.dumps({
-                "cwd": repo, "session_id": session_id,
-                "tool_name": "collaboration.spawn_agent",
-            }).encode()
-            with mock.patch.object(mod, "_ensure_with_deadline") as retry_mock:
-                self.assertFalse(mod.restore_watcher_registration(spawn_payload))
-            retry_mock.assert_not_called()
-
-            recovery_payload = payloads[1]
-            locked_tasks = []
-            original_transaction = mod.receipt_stream_transaction
-
-            @contextlib.contextmanager
-            def traced_transaction(task_dir):
-                locked_tasks.append(os.path.realpath(task_dir))
-                with original_transaction(task_dir):
-                    yield
-
-            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
-            ), mock.patch.object(
-                mod, "_ensure_with_deadline", return_value=True,
-            ), mock.patch.object(
-                mod, "receipt_stream_transaction", side_effect=traced_transaction,
-            ):
-                self.assertFalse(mod.register_task_result(recovery_payload))
-                (root / "doc/harness/tasks/TASK__older/BLOCKED.md").write_text(
-                    "blocked\n", encoding="utf-8",
-                )
-                recovery_status = {}
-                self.assertTrue(
-                    mod.register_task_result(recovery_payload, status_out=recovery_status),
-                    recovery_status,
-                )
-            self.assertEqual(
-                set(locked_tasks),
-                {
-                    str(root / "doc/harness/tasks/TASK__older"),
-                    str(root / "doc/harness/tasks/TASK__newer"),
-                },
-            )
-            binding = lib.resolve_session_task_binding(repo, session_id)
-            self.assertEqual(binding["task_dir"], str(root / "doc/harness/tasks/TASK__newer"))
-
-    def test_terminal_stale_task_result_preserves_current_session_binding(self):
-        mod = _load("codex_hook_registration")
-        lib = _load("_lib")
-        session_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-
-            payloads = []
-            tasks = []
-            runs = []
-            for name in ("stale", "current"):
-                task = root / f"doc/harness/tasks/TASK__{name}"
-                task.mkdir(parents=True)
-                run_id = lib.new_uuid7()
-                (task / "TASK.json").write_text(json.dumps({
-                    "run_id": run_id, "execution_mode": "standard",
-                    "required_lenses": ["review-code", "qa-cli"],
-                    "close_receipt_fingerprint": None,
-                }) + "\n", encoding="utf-8")
-                tasks.append(task)
-                runs.append(run_id)
-                payloads.append(json.dumps({"tool_input": {"action": "open"},
-                    "cwd": repo, "session_id": session_id,
-                    "tool_name": 'wbs', "tool_use_id": f"call_terminal_{name}",
-                    "tool_response": {"structuredContent": {
-                        "task_dir": str(task), "task_id": task.name,
-                        "run_id": run_id,
-                    }},
-                }).encode())
-
-            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                mod, "_coordinator_identity", return_value={"session_id": "binding-unit-fixture"},
-            ), mock.patch.object(
-                mod, "_ensure_with_deadline", return_value=True,
-            ) as ensure_mock:
-                self.assertTrue(mod.register_task_result(payloads[1]))
-                (tasks[0] / "BLOCKED.md").write_text("blocked\n", encoding="utf-8")
-                self.assertFalse(mod.register_task_result(payloads[0]))
-
-            binding = lib.resolve_session_task_binding(repo, session_id)
-            self.assertEqual(binding, {"task_dir": str(tasks[1]), "run_id": runs[1]})
-            self.assertEqual(ensure_mock.call_count, 1)
-
-    def test_post_task_result_rejects_failed_or_mismatched_response(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            payload = json.dumps({"tool_input": {"action": "open"},
-                "cwd": repo, "session_id": root_id, "tool_name": 'wbs',
-                "tool_use_id": "call_failed_result",
-                "tool_response": {"status": "failed", "structuredContent": {
-                    "task_dir": str(root / "doc/harness/tasks/TASK__missing"),
-                    "task_id": "TASK__missing", "run_id": "wrong",
-                }},
-            }).encode()
-            self.assertFalse(mod.register_task_result(payload))
-            marker = root / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
-            self.assertFalse(marker.exists())
-
-    def test_foreign_task_suffix_cannot_bind_exact_session(self):
-        registration = _load("codex_hook_registration")
-        wrapper = _load("hook_post_tool_use")
-        lib = _load("_lib")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            task = root / "doc/harness/tasks/TASK__foreign-tool"
-            task.mkdir(parents=True)
-            run_id = lib.new_uuid7()
-            (task / "TASK.json").write_text(json.dumps({
-                "run_id": run_id, "execution_mode": "standard",
-                "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
-            }) + "\n", encoding="utf-8")
-            payload = json.dumps({
-                "cwd": repo, "session_id": root_id,
-                "tool_name": "mcp__untrusted_connector__task_context",
-                "tool_use_id": "call_foreign_context",
-                "tool_response": {"structuredContent": {
-                    "task_dir": str(task), "task_id": task.name, "run_id": run_id,
-                }},
-            }).encode()
-
-            self.assertFalse(wrapper._is_task_binding_tool(
-                "mcp__untrusted_connector__task_context"
-            ))
-            with mock.patch.object(registration, "_ensure_with_deadline") as ensure_mock:
-                self.assertFalse(registration.register_task_result(payload))
-            ensure_mock.assert_not_called()
-            marker = root / "doc/harness/tasks/.active_sessions" / f"{root_id}.json"
-            self.assertFalse(marker.exists())
-
-    def test_post_task_result_revalidates_after_concurrent_run_rotation(self):
-        mod = _load("codex_hook_registration")
-        lib = _load("_lib")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            manifest = root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            task = root / "doc/harness/tasks/TASK__rotate-race"
-            task.mkdir(parents=True)
-            old_run = lib.new_uuid7()
-            control = {
-                "run_id": old_run, "execution_mode": "standard",
-                "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
-            }
-            task_control = task / "TASK.json"
-            task_control.write_text(json.dumps(control) + "\n", encoding="utf-8")
-            payload = json.dumps({"tool_input": {"action": "open"},
-                "cwd": repo, "session_id": root_id, "tool_name": 'wbs',
-                "tool_use_id": "call_rotate_result",
-                "tool_response": {"structuredContent": {
-                    "task_dir": str(task), "task_id": task.name, "run_id": old_run,
-                }},
-            }).encode()
-
-            exact_bind = mod._bind_active_task_to_root_session
-
-            def rotate_then_check(control_root, thread_id):
-                control["run_id"] = lib.new_uuid7()
-                task_control.write_text(json.dumps(control) + "\n", encoding="utf-8")
-                return exact_bind(control_root, thread_id)
-
-            with mock.patch.dict("os.environ", {}, clear=True), \
-                 mock.patch.object(
-                     mod, "_bind_active_task_to_root_session",
-                     side_effect=rotate_then_check,
-                 ), mock.patch.object(mod, "_ensure_with_deadline", return_value=True):
-                self.assertFalse(mod.register_task_result(payload))
-            self.assertEqual(lib.resolve_session_task_binding(repo, root_id), {})
-
-    def test_post_tool_use_routes_task_result_registration_fail_open(self):
-        mod = _load("hook_post_tool_use")
-        callback = mock.Mock(side_effect=RuntimeError("watcher unavailable"))
-        payload = json.dumps({"tool_input": {"action": "context"},
-            "cwd": str(REPO_ROOT), "session_id": "019f834e-1e91-7662-9024-f548103d751e",
-            "tool_name": 'mcp__harness__wbs', "tool_use_id": "call_route_context",
-            "tool_response": {"structuredContent": {
-                "task_dir": "/ignored", "task_id": "TASK__ignored", "run_id": "run",
-            }},
-        })
-        output = io.StringIO()
-        with mock.patch.object(mod, "register_task_result", callback), \
-             mock.patch("hook_pre_tool_use._update_diagnostics"), \
-             mock.patch.object(sys, "stdin", _BytesStdin(payload)), \
-             contextlib.redirect_stdout(output):
-            self.assertEqual(mod.main(), 0)
-        callback.assert_called_once()
-        self.assertIn("task binding unavailable (RuntimeError)", output.getvalue())
-
-    def test_registration_binds_before_rollout_discovery(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        order: list[str] = []
-        with tempfile.TemporaryDirectory() as repo:
-            (Path(repo) / ".git").mkdir()
-            manifest = Path(repo) / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("type: cli\n", encoding="utf-8")
-            payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
-
-            with mock.patch.dict("os.environ", {}, clear=True):
-                self.assertTrue(mod.restore_watcher_registration(
-                    payload,
-                    ensure_fn=lambda _root, _thread: order.append("ensure") or True,
-                    bind_fn=lambda _root, _thread: order.append("bind") or True,
-                ))
-
-        self.assertEqual(order, ["bind", "ensure"])
-
-    def test_registration_helper_noops_without_harness_manifest(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
-            ensure = mock.Mock(return_value=True)
-            with mock.patch.dict("os.environ", {}, clear=True):
-                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
-        ensure.assert_not_called()
-
-    def test_registration_helper_does_not_inherit_outer_repo_manifest(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as outer:
-            outer_root = Path(outer)
-            (outer_root / ".git").mkdir()
-            manifest = outer_root / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("type: cli\n", encoding="utf-8")
-            inner = outer_root / "plain-project"
-            (inner / ".git").mkdir(parents=True)
-            payload = json.dumps({"cwd": str(inner), "session_id": root_id}).encode()
-            ensure = mock.Mock(return_value=True)
-            with mock.patch.dict("os.environ", {}, clear=True):
-                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
-        ensure.assert_not_called()
-
-    def test_registration_helper_uses_physical_symlinked_cwd(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            outer = base / "outer"
-            external = base / "external"
-            (outer / ".git").mkdir(parents=True)
-            manifest = outer / "doc/harness/manifest.yaml"
-            manifest.parent.mkdir(parents=True)
-            manifest.write_text("type: cli\n", encoding="utf-8")
-            (external / ".git").mkdir(parents=True)
-            link = outer / "plain-project"
-            link.symlink_to(external, target_is_directory=True)
-            payload = json.dumps({"cwd": str(link), "session_id": root_id}).encode()
-            ensure = mock.Mock(return_value=True)
-            with mock.patch.dict("os.environ", {}, clear=True):
-                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
-        ensure.assert_not_called()
-
-    def test_registration_attempt_has_a_hard_wall_clock_deadline(self):
-        mod = _load("codex_hook_registration")
-
-        def slow_ensure(*_args, **_kwargs):
-            time.sleep(1.0)
-            return True
-
-        started = time.monotonic()
-        with mock.patch.object(mod, "ensure", side_effect=slow_ensure):
-            restored = mod._ensure_with_deadline(
-                "/tmp", "019f834e-1e91-7662-9024-f548103d751e", started + 0.05,
-            )
-        self.assertFalse(restored)
-        self.assertLess(time.monotonic() - started, 0.5)
-
-    def test_registration_root_resolution_uses_the_same_hard_deadline(self):
-        mod = _load("codex_hook_registration")
-        root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        with tempfile.TemporaryDirectory() as repo:
-            payload = json.dumps({
-                "cwd": repo,
-                "session_id": root_id,
-            }).encode()
-
-            def slow_root(_cwd):
-                time.sleep(1.0)
-                return repo
-
-            started = time.monotonic()
-            with mock.patch.object(mod, "find_harness_root", side_effect=slow_root):
-                restored = mod.restore_watcher_registration(
-                    payload, budget_seconds=0.05
-                )
-        self.assertFalse(restored)
-        self.assertLess(time.monotonic() - started, 0.5)
-
-    def test_registration_preserves_a_shorter_existing_alarm(self):
-        mod = _load("codex_hook_registration")
-        delivered: list[int] = []
-
-        def previous_handler(signum, _frame):
-            delivered.append(signum)
-
-        def slow_ensure(*_args, **_kwargs):
-            time.sleep(1.0)
-            return True
-
-        original_handler = signal.signal(signal.SIGALRM, previous_handler)
-        signal.setitimer(signal.ITIMER_REAL, 0.05)
-        try:
-            with mock.patch.object(mod, "ensure", side_effect=slow_ensure):
-                restored = mod._ensure_with_deadline(
-                    "/tmp", "019f834e-1e91-7662-9024-f548103d751e",
-                    time.monotonic() + 0.5,
-                )
-            self.assertFalse(restored)
-            self.assertEqual(delivered, [signal.SIGALRM])
-            self.assertIs(signal.getsignal(signal.SIGALRM), previous_handler)
-        finally:
-            signal.setitimer(signal.ITIMER_REAL, 0.0)
-            signal.signal(signal.SIGALRM, original_handler)
-
-    def test_registration_does_not_swallow_a_restored_alarm_exception(self):
-        mod = _load("codex_hook_registration")
-
-        class CallerDeadline(Exception):
-            pass
-
-        def previous_handler(_signum, _frame):
-            raise CallerDeadline("caller deadline")
-
-        def slow_ensure(*_args, **_kwargs):
-            time.sleep(1.0)
-            return True
-
-        original_ensure = mod.ensure
-        original_handler = signal.signal(signal.SIGALRM, previous_handler)
-        signal.setitimer(signal.ITIMER_REAL, 0.05)
-        try:
-            mod.ensure = slow_ensure
-            with tempfile.TemporaryDirectory() as repo:
-                (Path(repo) / ".git").mkdir()
-                manifest = Path(repo) / "doc/harness/manifest.yaml"
-                manifest.parent.mkdir(parents=True)
-                manifest.write_text("type: cli\n", encoding="utf-8")
-                payload = json.dumps({
-                    "cwd": repo,
-                    "session_id": "019f834e-1e91-7662-9024-f548103d751e",
-                }).encode()
-                with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
-                    mod, "resolve_session_task_binding",
-                    return_value={"task_dir": str(Path(repo) / "doc/harness/tasks/TASK__alarm"), "run_id": "run"},
-                ), mock.patch.object(mod, "_coordinator_identity", return_value={"session_id": "alarm-unit-fixture"}):
-                    with self.assertRaisesRegex(CallerDeadline, "caller deadline"):
-                        mod.restore_watcher_registration(
-                            payload,
-                            budget_seconds=0.5,
-                            ensure_fn=slow_ensure,
-                            bind_fn=lambda _root, _thread: True,
-                        )
-        finally:
-            mod.ensure = original_ensure
-            signal.setitimer(signal.ITIMER_REAL, 0.0)
-            signal.signal(signal.SIGALRM, original_handler)
 
     def test_child_dispatching_wrappers_use_payload_cwd(self):
         modules = [
@@ -894,7 +265,6 @@ class TestCodexHookWrappers(unittest.TestCase):
 
     def test_codex_wrapper_budgets_fit_outer_hook_timeouts(self):
         pre = _load("hook_pre_tool_use")
-        self.assertLess(pre.REGISTRATION_BUDGET_SECONDS, pre.HOOK_TIMEOUT_SECONDS)
         self.assertLess(pre.CHILD_TIMEOUT_SECONDS, pre.HOOK_TIMEOUT_SECONDS)
         # The prewrite child got more than the old 1.5 s, and the rest of the
         # outer budget still covers start-up plus the protected-artifact
@@ -954,139 +324,6 @@ class TestCodexHookWrappers(unittest.TestCase):
                     self.assertEqual(mod.main(), 0)
                 self.assertEqual(calls, child_names, tool_name)
 
-    def test_pre_tool_registration_runs_only_for_spawn(self):
-        mod = _load("hook_pre_tool_use")
-        with tempfile.TemporaryDirectory() as repo:
-            for tool_name in ("Read", "Write", "Bash"):
-                raw = json.dumps({"cwd": repo, "tool_name": tool_name})
-                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                     mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")), \
-                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                     contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-                restore.assert_not_called()
-            raw = json.dumps({"cwd": repo, "tool_name": "collaboration.spawn_agent"})
-            with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                 mock.patch("subprocess.run") as run_child, \
-                 mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(mod.main(), 0)
-            restore.assert_called_once_with(
-                raw.encode(), budget_seconds=mod.REGISTRATION_BUDGET_SECONDS, status_out=mock.ANY,
-                authentication_budget_seconds=mod.AUTHENTICATION_BUDGET_SECONDS,
-            )
-            # The hook must ask for the tri-state outcome, not just the bool:
-            # reporting a not-applicable registration as a failure fabricates a
-            # timeout that never happened.
-            self.assertIsInstance(restore.call_args.kwargs["status_out"], dict)
-            run_child.assert_not_called()
-
-            for tool_name in ("multi_agent_v1__spawn_agent", "functions.spawn_agent"):
-                raw = json.dumps({"cwd": repo, "tool_name": tool_name})
-                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                     mock.patch("subprocess.run") as run_child, \
-                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                     contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-                restore.assert_not_called()
-                run_child.assert_not_called()
-
-    def test_pre_tool_rejects_unbindable_review_name_before_spawn(self):
-        mod = _load("hook_pre_tool_use")
-        with tempfile.TemporaryDirectory() as repo:
-            for task_name in (
-                "review_architecture_code", "review_final", "reviewer_final",
-                "review_final_qa_cli", "review_code_qa_cli",
-            ):
-                raw = json.dumps({
-                    "cwd": repo,
-                    "tool_name": "collaboration.spawn_agent",
-                    "tool_input": {"task_name": task_name},
-                })
-                output = io.StringIO()
-                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                     contextlib.redirect_stdout(output):
-                    self.assertEqual(mod.main(), 0)
-                restore.assert_not_called()
-                envelope = json.loads(output.getvalue())
-                decision = envelope["hookSpecificOutput"]
-                self.assertEqual(decision["permissionDecision"], "deny")
-                self.assertIn("agent was not started", decision["permissionDecisionReason"])
-                self.assertIn("review_code_<suffix>", decision["permissionDecisionReason"])
-
-    def test_pre_tool_allows_symmetric_review_name_aliases(self):
-        mod = _load("hook_pre_tool_use")
-        for task_name in (
-            "code_review_final", "review_code_final",
-            "security_review_final", "review_security_final",
-        ):
-            raw = json.dumps({
-                "tool_name": "collaboration.spawn_agent",
-                "tool_input": {"task_name": task_name},
-            }).encode()
-            self.assertEqual(mod._invalid_review_spawn_name(raw), "", task_name)
-
-    def test_target_tagged_invalid_role_refused_before_spawn_but_helpers_unchanged(self):
-        mod = _load("hook_pre_tool_use")
-        token = "0123456789abcdef"
-        for name in ("progress_security", "progress_code", "progress_qa", "ux_browser"):
-            raw = json.dumps({"tool_name": "collaboration.spawn_agent",
-                              "tool_input": {"task_name": name + "_vt_" + token}})
-            output = io.StringIO()
-            with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                 mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                 contextlib.redirect_stdout(output):
-                self.assertEqual(mod.main(), 0)
-            restore.assert_not_called()
-            decision = json.loads(output.getvalue())["hookSpecificOutput"]
-            self.assertEqual(decision["permissionDecision"], "deny")
-            self.assertIn("role_handoffs", decision["permissionDecisionReason"])
-        import verification_target
-        from _lib import SUPPORTED_LENSES
-        target = dict(token=token, spec=dict(purpose="acceptance", lenses=sorted(SUPPORTED_LENSES)))
-        names = [row["task_name"] for row in verification_target.role_handoffs(target)]
-        names += ["progress_security", "progress_code", "qa_investigation", "build_catalog_vt_" + token,
-                  "diagnostic_security_vt_" + token, "diagnostic_qa_vt_" + token,
-                  "progress_security_vt_not_a_target"]
-        for name in names:
-            raw = json.dumps({"tool_input": {"task_name": name}}).encode()
-            self.assertEqual(mod._invalid_review_spawn_name(raw), "", name)
-
-    def test_pre_tool_registration_failure_warns_without_denying_agents(self):
-        mod = _load("hook_pre_tool_use")
-
-        def failing(_payload, **kwargs):
-            kwargs["status_out"].update({
-                "status": mod.REGISTRATION_FAILED,
-                "reason": "watcher unavailable",
-            })
-            return False
-
-        with tempfile.TemporaryDirectory() as repo:
-            (Path(repo) / "doc" / "harness").mkdir(parents=True)
-            (Path(repo) / "doc" / "harness" / "manifest.yaml").write_text(
-                "project: test\n", encoding="utf-8",
-            )
-            for task_name in (
-                "implementation_worker",
-                "code_review_final",
-                "qa_cli_final",
-            ):
-                raw = json.dumps({
-                    "cwd": repo,
-                    "session_id": "01a04738-80e6-7851-833f-614d59ae3621",
-                    "tool_name": "collaboration.spawn_agent",
-                    "tool_input": {"task_name": task_name},
-                })
-                output = io.StringIO()
-                with mock.patch.object(mod, "restore_watcher_registration", failing), \
-                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                     contextlib.redirect_stdout(output), \
-                     contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-                envelope = output.getvalue()
-                self.assertNotIn("permissionDecision", envelope, task_name)
 
     def test_wrapper_constants_match_installed_outer_timeouts(self):
         spec = importlib.util.spec_from_file_location(
@@ -1099,7 +336,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         config = install._codex_hooks_config(REPO_ROOT / "installed")
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["matcher"],
-            "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent",
+            "Write|Edit|MultiEdit|apply_patch",
         )
         self.assertEqual(
             config["hooks"]["PostToolUse"][0]["matcher"],
@@ -1253,44 +490,6 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_production_registration_keeps_generation_with_extra_binding_validator(tmp_path, monkeypatch):
-    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
-    mod = _load("codex_hook_registration")
-    import codex_lifecycle_watcher as watcher
-    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    home = tmp_path / "codex"
-    repo = tmp_path / "repo"
-    (repo / ".git").mkdir(parents=True)
-    manifest = repo / "doc/harness/manifest.yaml"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text("version: 5\ntype: library\n")
-    task_id, run_id = _write_exact_session_binding(repo, root_id)
-    rollout = _rollout_path(home, root_id)
-    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
-        "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
-    }}])
-    monkeypatch.setenv("CODEX_HOME", str(home))
-    monkeypatch.setenv("CODEX_THREAD_ID", root_id)
-    payload = json.dumps({"cwd": str(repo), "session_id": root_id}).encode()
-    status = {}
-    assert mod.restore_watcher_registration(
-        payload, bind_fn=lambda root, thread: root == str(repo) and thread == root_id,
-        budget_seconds=2, status_out=status,
-    )
-    assert status["status"] == mod.REGISTERED
-    registrations = watcher.registrations(str(repo))
-    assert len(registrations) == 1
-    assert (registrations[0]["task_id"], registrations[0]["run_id"]) == (task_id, run_id)
-    offset = registrations[0]["offset"]
-    assert offset == rollout.stat().st_size
-    assert mod.restore_watcher_registration(payload, bind_fn=lambda *_: True, budget_seconds=2)
-    assert watcher.registrations(str(repo))[0]["offset"] == offset
-    assert not mod.restore_watcher_registration(payload, bind_fn=lambda *_: False, budget_seconds=2)
-    # Even a permissive extra callback cannot manufacture a missing generation.
-    (repo / "doc/harness/tasks/.active_sessions" / f"{root_id}.json").unlink()
-    assert not mod.restore_watcher_registration(payload, bind_fn=lambda *_: True, budget_seconds=2)
-
-
 def test_installed_matcher_routes_only_bindable_public_wbs_results():
     import re
     spec = importlib.util.spec_from_file_location("install_for_wbs_routing", REPO_ROOT / "install.py")
@@ -1350,65 +549,6 @@ def test_codex_wrappers_safely_ignore_nonobject_and_malformed_json_payloads(tmp_
             assert not list(tmp_path.iterdir()), (name, payload, "malformed hook changed scratch state")
 
 
-def test_posttool_binding_budget_includes_session_and_receipt_lock_admission(tmp_path, monkeypatch):
-    mod = _load("codex_hook_registration")
-    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
-    import codex_lifecycle_watcher as watcher
-    import select
-
-    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-    for kind in ("session", "receipt"):
-        repo, home = tmp_path / kind / "repo", tmp_path / kind / "codex"
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        manifest = repo / "doc/harness/manifest.yaml"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text("type: library\n")
-        task_id, run_id = _write_exact_session_binding(repo, root_id)
-        task = repo / "doc/harness/tasks" / task_id
-        rollout = _rollout_path(home, root_id)
-        _write_jsonl(rollout, [{"type": "session_meta", "payload": {
-            "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
-        }}])
-        monkeypatch.setenv("CODEX_HOME", str(home))
-        payload = json.dumps({"cwd": str(repo), "session_id": root_id, "tool_name": "wbs",
-                              "arguments": {"action": "context", "wbs_id": task_id},
-                              "tool_response": {"structuredContent": {
-                                  "task_dir": str(task), "task_id": task_id, "run_id": run_id,
-                              }}}).encode()
-        assert mod.register_task_result(payload, budget_seconds=2)
-        marker = repo / "doc/harness/tasks/.active_sessions" / (root_id + ".json")
-        before_marker, before_registration = marker.read_bytes(), watcher.registrations(str(repo))
-        locked = marker.parent if kind == "session" else task
-        locker = subprocess.Popen([
-            sys.executable, "-u", "-c",
-            "import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDONLY); "
-            "fcntl.flock(fd,fcntl.LOCK_EX); print('ready',flush=True); sys.stdin.readline(); os.close(fd)",
-            str(locked),
-        ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            assert select.select([locker.stdout], [], [], 5)[0], "lock holder did not start"
-            assert locker.stdout.readline().strip() == b"ready"
-            status = {}
-            started = time.monotonic()
-            assert not mod.register_task_result(payload, budget_seconds=0.1, status_out=status)
-            assert time.monotonic() - started < 1
-            assert status["status"] == mod.REGISTRATION_FAILED
-            actual_hook = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
-                                         input=payload, cwd=repo, capture_output=True, timeout=15)
-            assert actual_hook.returncode == 0 and not actual_hook.stderr
-            notice = json.loads(actual_hook.stdout)["hookSpecificOutput"]["additionalContext"]
-            assert "registration publication: deadline exhausted" in notice
-            assert marker.read_bytes() == before_marker
-            assert watcher.registrations(str(repo)) == before_registration
-            assert not (task / "RECEIPTS.jsonl").exists()
-        finally:
-            locker.communicate(b"release\n", timeout=5)
-        assert locker.returncode == 0
-        assert mod.register_task_result(payload, budget_seconds=2)
-        assert watcher.registrations(str(repo)) == before_registration
-
-
 def test_posttool_binding_discovery_shares_hard_budget_and_preserves_caller_alarm(tmp_path):
     mod = _load("codex_hook_registration")
     payload = json.dumps({"cwd": str(tmp_path), "session_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42"}).encode()
@@ -1445,130 +585,137 @@ def test_deeply_nested_encoded_arguments_are_rejected_before_binding(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_registration_timeout_closes_partially_opened_receipt_directory_fds(tmp_path):
-    mod = _load("codex_hook_registration")
-    import errno
-    import _lib as lib
-    task = tmp_path / "doc/harness/tasks/TASK__interrupted"
-    task.mkdir(parents=True)
-    original_open, original_fstat = os.open, os.fstat
-    opened = []
-    def track_open(*args, **kwargs):
-        fd = original_open(*args, **kwargs)
-        opened.append(fd)
-        return fd
-    def slow_metadata(fd):
-        if os.readlink("/proc/self/fd/" + str(fd)) == str(task):
-            time.sleep(1)
-        return original_fstat(fd)
-    def admission():
-        with lib.receipt_stream_transaction(str(task)):
-            return True
-    with mock.patch.object(os, "open", side_effect=track_open), \
-            mock.patch.object(os, "fstat", side_effect=slow_metadata):
-        assert not mod._call_with_deadline(admission, time.monotonic() + 0.05)
-    assert len(opened) == 4
-    for fd in opened:
-        try:
-            original_fstat(fd)
-        except OSError as exc:
-            assert exc.errno == errno.EBADF
-        else:
-            os.close(fd)
-            raise AssertionError("interrupted receipt admission leaked a descriptor")
-
-
-def test_binding_deadline_closes_watcher_admission_descriptors_and_can_retry(tmp_path, monkeypatch):
-    mod = _load("codex_hook_registration")
-    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
-    import codex_lifecycle_watcher as watcher
-    import errno
-
-    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-    for stage in ("invalidate_lock", "ensure_lock", "trusted_rollout"):
-        repo, home = tmp_path / stage / "repo", tmp_path / stage / "codex"
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        manifest = repo / "doc/harness/manifest.yaml"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text("type: library\n")
-        task_id, run_id = _write_exact_session_binding(repo, root_id)
-        task = repo / "doc/harness/tasks" / task_id
-        rollout = _rollout_path(home, root_id)
-        _write_jsonl(rollout, [{"type": "session_meta", "payload": {
-            "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
-        }}])
-        monkeypatch.setenv("CODEX_HOME", str(home))
-        payload = json.dumps({"cwd": str(repo), "session_id": root_id, "tool_name": "wbs",
-                              "arguments": {"action": "context", "wbs_id": task_id},
-                              "tool_response": {"structuredContent": {
-                                  "task_dir": str(task), "task_id": task_id, "run_id": run_id,
-                              }}}).encode()
-        assert mod.register_task_result(payload, budget_seconds=2)
-        if stage == "invalidate_lock":
-            (repo / "doc/harness/tasks/.active_sessions" / (root_id + ".json")).unlink()
-        elif stage == "ensure_lock":
-            watcher._state_path(str(repo), root_id).unlink()
-        target = rollout if stage == "trusted_rollout" else watcher._lock_path(str(repo), root_id)
-        interrupted, original_fstat = [], os.fstat
-        def slow_metadata(fd):
-            if os.readlink("/proc/self/fd/" + str(fd)) == str(target):
-                interrupted.append(fd)
-                time.sleep(1)
-            return original_fstat(fd)
-        status = {}
-        with mock.patch.object(os, "fstat", side_effect=slow_metadata):
-            assert not mod.register_task_result(payload, budget_seconds=0.1, status_out=status)
-        assert status["status"] == mod.REGISTRATION_FAILED, stage
-        assert interrupted, stage
-        for fd in interrupted:
-            try:
-                original_fstat(fd)
-            except OSError as exc:
-                assert exc.errno == errno.EBADF
-            else:
-                os.close(fd)
-                raise AssertionError("watcher admission leaked a descriptor: " + stage)
-        assert not (task / "RECEIPTS.jsonl").exists()
-        assert mod.register_task_result(payload, budget_seconds=2), stage
-        assert watcher.registrations(str(repo))[0]["run_id"] == run_id
-
-
-def test_long_native_coordinator_metadata_binding(tmp_path, monkeypatch):
-    from test_codex_lifecycle_watcher import _write_exact_session_binding, _rollout_path, _write_jsonl
-    mod = _load("codex_hook_registration")
-    import codex_lifecycle_watcher as watcher
-    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    home, repo = tmp_path / "codex", tmp_path / "repo"
-    (repo / ".git").mkdir(parents=True)
+def _binding_task(repo: Path, name: str):
+    lib = _load("_lib")
+    (repo / ".git").mkdir(parents=True, exist_ok=True)
     manifest = repo / "doc/harness/manifest.yaml"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text("type: library\n")
-    _write_exact_session_binding(repo, root_id)
-    rollout = _rollout_path(home, root_id)
-    metadata = {"type": "session_meta", "payload": {
-        "id": root_id, "session_id": root_id, "cwd": str(repo), "thread_source": "user",
-    }}
-    monkeypatch.setenv("CODEX_HOME", str(home))
-    monkeypatch.setenv("CODEX_THREAD_ID", root_id)
-    for size, expected in ((watcher.MAX_CHILD_BYTES + 1, str(repo)),
-                           (watcher.MAX_PARENT_BYTES, str(repo)),
-                           (watcher.MAX_PARENT_BYTES + 1, "")):
-        _write_jsonl(rollout, [metadata])
-        with rollout.open("r+b") as handle:
-            handle.truncate(size)  # Sparse history: authenticate only the bounded first metadata line.
-        assert mod.authenticate_native_session(root_id, str(repo)) == expected
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("version: 5\ntype: library\n")
+    task = repo / "doc/harness/tasks" / name
+    task.mkdir(parents=True)
+    control = {"run_id": lib.new_uuid7(), "execution_mode": "standard",
+               "required_lenses": ["review-code", "qa-cli"], "closed": False}
+    (task / "TASK.json").write_text(json.dumps(control) + "\n")
+    (task / "PLAN.md").write_text("# Plan\n")
+    return task, control
 
-    _write_jsonl(rollout, [metadata])
-    with rollout.open("r+b") as handle:
-        handle.truncate(watcher.MAX_CHILD_BYTES + 1)
-    rollout.chmod(0o622)
-    assert mod.authenticate_native_session(root_id, str(repo)) == ""
-    rollout.chmod(0o600)
-    foreign = dict(metadata, payload=dict(metadata["payload"], cwd=str(tmp_path / "foreign")))
-    _write_jsonl(rollout, [foreign])
-    with rollout.open("r+b") as handle:
-        handle.truncate(watcher.MAX_CHILD_BYTES + 1)
-    assert mod.authenticate_native_session(root_id, str(repo)) == ""
-    _write_jsonl(rollout, [dict(metadata, payload=dict(metadata["payload"], session_id="foreign"))])
-    assert mod.authenticate_native_session(root_id, str(repo)) == ""
+
+def _binding_payload(repo: Path, task: Path, control: dict, sid: str, **extra):
+    data = {"cwd": str(repo), "session_id": sid, "tool_name": "wbs",
+            "tool_input": {"action": "context", "wbs_id": task.name},
+            "tool_response": {"structuredContent": {
+                "task_dir": str(task), "task_id": task.name, "run_id": control["run_id"]}}}
+    data.update(extra)
+    return json.dumps(data).encode()
+
+
+def test_hook_result_binds_exact_session_and_preserves_legacy_focus(tmp_path, monkeypatch):
+    mod, lib = _load("codex_hook_registration"), _load("_lib")
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    repo = tmp_path / "repo"
+    task, control = _binding_task(repo, "TASK__bound")
+    legacy = repo / "doc/harness/tasks/.active"
+    legacy.write_text("unrelated legacy pointer\n")
+    sid = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    status = {}
+    assert mod.register_task_result(_binding_payload(repo, task, control, sid), status_out=status), status
+    assert lib.resolve_session_task_binding(str(repo), sid)["run_id"] == control["run_id"]
+    assert legacy.read_text() == "unrelated legacy pointer\n"
+    assert not (repo / "doc/harness/.codex-watcher").exists()
+    assert not (task / "RECEIPTS.jsonl").exists()
+
+
+def test_hook_result_keeps_sessions_separate_and_fences_conflicting_tasks(tmp_path, monkeypatch):
+    mod, lib = _load("codex_hook_registration"), _load("_lib")
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    repo = tmp_path / "repo"
+    a, ac = _binding_task(repo, "TASK__a")
+    b, bc = _binding_task(repo, "TASK__b")
+    sa, sb = "019f825b-f25f-70c3-8ee8-071f79fa1c42", "019f834e-1e91-7662-9024-f548103d751e"
+    assert mod.register_task_result(_binding_payload(repo, a, ac, sa))
+    assert mod.register_task_result(_binding_payload(repo, b, bc, sb))
+    assert lib.resolve_session_task_binding(str(repo), sa)["task_dir"] == str(a)
+    assert lib.resolve_session_task_binding(str(repo), sb)["task_dir"] == str(b)
+    assert not mod.register_task_result(_binding_payload(repo, b, bc, sa))
+    assert not lib.resolve_session_task_binding(str(repo), sa)
+    assert len(lib.read_active_session_marker(str(repo), sa)["conflicts"]) == 2
+    assert lib.resolve_session_task_binding(str(repo), sb)["task_dir"] == str(b)
+    bc["closed"] = True
+    (b / "TASK.json").write_text(json.dumps(bc) + "\n")
+    assert mod.register_task_result(_binding_payload(repo, a, ac, sa))
+    assert lib.resolve_session_task_binding(str(repo), sa)["task_dir"] == str(a)
+
+
+def test_hook_result_rejects_failed_stale_foreign_and_conflicting_identity(tmp_path, monkeypatch):
+    mod, lib = _load("codex_hook_registration"), _load("_lib")
+    repo = tmp_path / "repo"
+    task, control = _binding_task(repo, "TASK__bound")
+    sid = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    good = json.loads(_binding_payload(repo, task, control, sid))
+    variants = []
+    for key, value in (("run_id", lib.new_uuid7()), ("task_id", "TASK__wrong"),
+                       ("task_dir", str(tmp_path / "other/doc/harness/tasks" / task.name))):
+        data = json.loads(json.dumps(good))
+        data["tool_response"]["structuredContent"][key] = value
+        variants.append(data)
+    failed = json.loads(json.dumps(good)); failed["tool_response"]["isError"] = True
+    variants.append(failed)
+    wrong_tool = json.loads(json.dumps(good)); wrong_tool["tool_name"] = "mcp__foreign__wbs"
+    variants.append(wrong_tool)
+    wrong_ids = json.loads(json.dumps(good)); wrong_ids["thread_id"] = "019f834e-1e91-7662-9024-f548103d751e"
+    variants.append(wrong_ids)
+    for data in variants:
+        assert not mod.register_task_result(json.dumps(data).encode())
+        assert not lib.resolve_session_task_binding(str(repo), sid)
+    monkeypatch.setenv("CODEX_THREAD_ID", "019f834e-1e91-7662-9024-f548103d751e")
+    assert not mod.register_task_result(json.dumps(good).encode())
+    assert not lib.resolve_session_task_binding(str(repo), sid)
+
+
+def test_spawn_names_never_invoke_a_collector_or_gate(tmp_path):
+    mod = _load("hook_pre_tool_use")
+    for name in ("reviewer", "qa_cli", "arbitrary helper"):
+        payload = json.dumps({"cwd": str(tmp_path), "tool_name": "collaboration.spawn_agent",
+                              "tool_input": {"task_name": name}})
+        with mock.patch.object(mod.subprocess, "run", side_effect=AssertionError("spawn dispatched work")), \
+             mock.patch.object(sys, "stdin", _BytesStdin(payload)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            assert mod.main() == 0
+        assert not output.getvalue()
+
+
+def test_session_start_only_runs_recovery_and_project_format_from_payload_cwd(tmp_path):
+    mod = _load("hook_session_start")
+    calls = []
+    def run(args, **kwargs):
+        calls.append((Path(args[1]).name, kwargs["cwd"]))
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+    with mock.patch.object(mod.subprocess, "run", side_effect=run), \
+         mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": str(tmp_path)}))):
+        assert mod.main() == 0
+    assert calls == [("verification_gap_check.py", str(tmp_path)), ("project_format_check.py", str(tmp_path))]
+
+
+def test_native_session_auth_uses_only_owned_metadata_and_exact_env_identity(tmp_path, monkeypatch):
+    from datetime import datetime
+    mod, lib = _load("codex_hook_registration"), _load("_lib")
+    repo = tmp_path / "repo"
+    _binding_task(repo, "TASK__native")
+    sid = lib.new_uuid7()
+    home = tmp_path / "codex"
+    created = datetime.fromtimestamp(lib.uuid7_timestamp_ms(sid) / 1000).astimezone()
+    path = home / "sessions" / f"{created:%Y/%m/%d}" / f"rollout-test-{sid}.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(repo)}}) + "\n")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("CODEX_THREAD_ID", sid)
+    assert mod.authenticate_native_session(sid, str(repo)) == str(repo)
+    path.write_text(json.dumps({"type": "session_meta", "payload": {"id": "different", "cwd": str(repo)}}) + "\n")
+    assert not mod.authenticate_native_session(sid, str(repo))
+    path.write_text(json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(repo)}}) + "\n")
+    path.chmod(0o666)
+    assert not mod.authenticate_native_session(sid, str(repo))
+    path.chmod(0o600)
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    assert not mod.authenticate_native_session(sid, str(repo))

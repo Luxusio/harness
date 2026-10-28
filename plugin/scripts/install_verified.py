@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a stable, freshly reviewed Harness payload without persistent state."""
+"""Install a stable Harness payload after current WBS checks without persistent state."""
 from __future__ import annotations
 
 import argparse
@@ -27,11 +27,8 @@ from _lib import (  # type: ignore  # noqa: E402
     find_repo_root,
     read_session_hint,
     read_task_control,
-    receipt_snapshot,
-    receipt_review_verdict,
-    receipt_runtime_verdict,
-    receipt_stream_fingerprint,
-    receipt_stream_transaction,
+    emit_compact_context,
+    task_control_transaction,
 )
 
 CANONICAL_REMOTE = "https://github.com/Luxusio/harness"
@@ -64,17 +61,22 @@ def _trusted_harness_repo(repo_root: Path) -> tuple[bool, str]:
 
 
 def _verification_state(task_dir: Path) -> tuple[bool, str, str]:
+    import wbs
     state = read_task_control(str(task_dir))
-    snapshot = receipt_snapshot(str(task_dir))
-    fingerprint = receipt_stream_fingerprint(str(task_dir), snapshot)
-    if receipt_review_verdict(str(task_dir), state, snapshot) != "PASS":
-        return False, "fresh review PASS required", fingerprint
-    if receipt_runtime_verdict(str(task_dir), state, snapshot) != "PASS":
-        return False, "fresh QA PASS after review required", fingerprint
-    from verification_target import applicability
-    applicable = applicability(str(task_dir), str(find_repo_root(str(task_dir))), snapshot, measure=True)
-    if applicable.get("missing_lenses"):
-        return False, "applicable verification target required: " + ", ".join(applicable["missing_lenses"]), fingerprint
+    context = emit_compact_context(str(task_dir), measure_wbs=True)
+    basis = {
+        "task": state,
+        "wbs": wbs.read_state(str(task_dir)),
+        "verification_targets": context.get("verification_targets"),
+    }
+    fingerprint = "sha256:" + hashlib.sha256(
+        json.dumps(basis, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if context.get("error"):
+        return False, context["error"], fingerprint
+    missing = context.get("missing_for_close", [])
+    if context.get("runtime_verdict") != "PASS" or missing:
+        return False, "current WBS checks required: " + ", ".join(missing), fingerprint
     return True, "", fingerprint
 
 
@@ -361,7 +363,7 @@ def install_verified(task_dir: Path) -> int:
         if not trusted:
             print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
             return 2
-        with receipt_stream_transaction(str(task_dir)):
+        with task_control_transaction(str(task_dir)):
             valid_task, reason = _validate_task_dir(repo_root, task_dir, session_id)
             if not valid_task:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)

@@ -2,10 +2,8 @@
 
 `shutil.copytree(..., copy2)` preserves source modes. On a checkout bind-mounted
 from a Windows host every file reads `0o777`, so the installed runtime tree is
-group/other-writable — and both canonical-import guards in `_lib` refuse exactly
-that (`bind` on `before.st_mode & 0o022`, the receipt-adapter bind on the same
-term inside `structural`). The install reports success, the MCP server cannot
-open a task, and no hook records a receipt.
+group/other-writable. Canonical source validation refuses unsafe imported
+modules, so the installer must normalize modes before reporting success.
 
 These tests pin both halves of the fix against a real payload copy:
 the installer normalizes the modes, and when a tree is nonetheless writable the
@@ -160,7 +158,7 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
 
     plugin_root = install.sync_claude_payload(install_root)
-    victim = plugin_root / "scripts" / "subagent_lifecycle.py"
+    victim = plugin_root / "scripts" / "_lib.py"
     os.chmod(victim, 0o777)
 
     with (
@@ -174,7 +172,7 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
     # Normalization runs before the staleness decision, so whichever branch the
     # comparison then takes, no world-writable module survives the run — and
     # the runtime smoke inside `install_claude` is what proves the resulting
-    # tree can actually record a receipt.
+    # tree can perform actual task operations.
     assert not stat.S_IMODE(os.lstat(victim).st_mode) & 0o022, (
         "the install left a world-writable module the import guards refuse"
     )
@@ -200,7 +198,7 @@ def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path)
     victims = []
     for scripts in (mirror, cached):
         scripts.mkdir(parents=True)
-        module_file = scripts / "subagent_lifecycle.py"
+        module_file = scripts / "_lib.py"
         module_file.write_text("ok\n", encoding="utf-8")
         os.chmod(module_file, 0o777)
         victims.append(module_file)

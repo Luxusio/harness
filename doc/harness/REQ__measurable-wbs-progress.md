@@ -14,14 +14,14 @@ verification (“서로 다른 worktree를 파고, worktree에서 개발, 검증
 Specific API actions, weight/fingerprint/storage formats, clock boundaries,
 process limits and migration formats below are derived implementation
 choices. Their basis is the requested measurable progress plus the existing
-receipt/worktree safety contracts. They are not quoted user requirements.
+task/worktree safety contracts. They are not quoted user requirements.
 See [requirement provenance](REQ__requirement-provenance.md).
 
 One WBS tree contains any objective and its outcome breakdown. `wbs` is the
 only callable Harness MCP entry point: open, context, plan, check, next,
 dispatch, verify, close and block operate on that same root. Native Goals
 provide the objective and continuation context, not a second planning ledger.
-Internal tasks retain execution identity and receipt ownership for existing runs.
+Internal tasks retain execution identity and source ownership for existing runs.
 Retired Goal/task tool names are rejected. The user explicitly requested removal
 of compatibility code with “호환성용 코드는 최대한 버리고싶은데... 기존꺼는
 마이그레이션 하는 방향만 남겨두고.” Existing Goal records and old work-pack
@@ -78,7 +78,7 @@ run and an internally observed checkout fingerprint. A failed, stale, missing or
 earns no credit. A passing assertion is evidence of that assertion, not proof
 that the chosen assertion covers the user's intent; independent review and QA
 remain responsible for adequacy. Verified weight and task/Goal completion are
-separate fields. Receipt-backed close and integrated batch proof remain the
+separate fields. Measured WBS close and integrated batch proof remain the
 completion authority. Unknown historical baselines report a null percentage.
 
 There is no separate Goal baseline, task queue or manually duplicated outcome
@@ -165,8 +165,8 @@ error; that marker withholds current credit until a conclusive rerun. Thus a
 prior PASS cannot revive merely because measurement becomes available again.
 No separate attempt ledger or task generation is created. A conclusive failed/start-
 failed assertion or changed source earns no credit. Historical evidence never
-substitutes for a current successful measurement; review/QA receipts remain
-separate from WBS outcome proofs.
+substitutes for a current successful measurement; actual independent review and QA remain
+workflow requirements separate from WBS outcome proofs.
 Before starting an assertion, check reserves capacity for the largest bounded
 inconclusive publication in the existing 1 MiB evidence file. If preserving
 history leaves insufficient capacity, return `not_run` with the storage-budget
@@ -257,7 +257,7 @@ Derived compact projection: owner context exposes an advisory `summary` of its
 existing outcome IDs/titles and evidence tiers: implemented, integrated,
 software_verified, actual_environment and complete. Unsupported implementation
 or actual-environment facts remain `unknown`; software QA alone never proves
-them. `stored` distinguishes historical/receipt facts from `current` measured
+them. `stored` distinguishes historical/control facts from `current` measured
 facts, and a valid closed control record supplies only stored completion.
 The summary creates no WBS IDs, edited percentages, second ledger or close
 authority. These API details implement the existing measurable-progress and
@@ -271,7 +271,7 @@ introduced by this change.
 
 Unchanged-run resume validates fallible response/context preparation within its
 publication rollback boundary. Failure preserves the original blocked artifact,
-run, receipts and ownership. `block` with `node_id` parks only that outcome in
+run, measured checks and ownership. `block` with `node_id` parks only that outcome in
 the same WBS; `open` with `node_id` clears that local blocker. Local blockers
 and their dependency/ancestor effects withhold credit and scheduling, while
 independent work remains available from next. These operations neither close
@@ -311,7 +311,7 @@ not hash any scope and never present historical credit as current measurement.
 
 This binds declared assertion evidence only. It does not authenticate the
 source seen by independent reviewers or QA and cannot substitute for their
-separate target-applicability and ordered receipt requirements.
+separate target-applicability and actual review-before-QA requirements.
 
 An explicit leaf check requires measurable target and prerequisite scopes. An
 unrelated missing input or artifact cannot prevent that check or erase its

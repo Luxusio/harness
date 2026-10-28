@@ -97,7 +97,7 @@ worktree or rotate the existing run.
   - Operate only the lead WBS in your worktree. The coordinator owns its
     parent WBS and resumes it after the exact pool integrates.
   - Pass `-n 4` (or the cap given in your prompt) to any `pytest` invocation.
-  - Spawn nested review/QA subagents normally from `W`; their receipts bind to
+  - Spawn nested review/QA subagents normally from `W`; their work remains scoped to
     the task in your worktree because they inherit your cwd.
   - The harness hooks, MCP server, and skills you run are the installed
     plugin, not the `plugin/` tree in `W`. Editing and testing files under

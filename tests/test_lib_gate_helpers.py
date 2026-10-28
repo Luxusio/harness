@@ -20,53 +20,6 @@ sys.path.insert(0, SCRIPTS)
 import _lib  # noqa: E402
 
 
-def _write_completed_lenses(repo: str, task_id: str, lenses: list[tuple[str, str]]) -> None:
-    """Write paired lifecycle rows for isolated gate-helper tests."""
-    task_dir = Path(repo) / "doc/harness/tasks" / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    control_path = task_dir / "TASK.json"
-    if not control_path.exists():
-        control_path.write_text(json.dumps({
-            "run_id": _lib.new_uuid7(),
-            "execution_mode": "standard",
-            "required_lenses": ["review-code", "qa-cli"],
-            "close_receipt_fingerprint": None,
-        }), encoding="utf-8")
-    (task_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
-    run_id = _lib.read_task_control(str(task_dir))["run_id"]
-    rows = []
-    for index, (lens, verdict) in enumerate(lenses):
-        agent_id = f"agent-{index}"
-        common = {
-            "source": "claude_hook",
-            "task_run_id": run_id,
-            "runtime_id": f"claude:test-session:{agent_id}",
-            "agent_id": agent_id,
-            "agent_type": f"harness:{lens}",
-            "lens": lens,
-        }
-        rows.append({
-            **common, "ts": _lib.now_iso(), "event": "started",
-            "verdict": "", "summary": "",
-        })
-        summary = f"VERDICT: {verdict}"
-        if lens.startswith("review-"):
-            summary += (
-                "\nFINDING_COUNTS: FIX_NOW=" + ("1" if verdict == "FAIL" else "0")
-                + " INVESTIGATE=" + ("1" if verdict == "BLOCKED_ENV" else "0")
-                + " OPTIONAL=0"
-            )
-        normalized_verdict, normalized_summary = _lib.normalize_receipt_completion(
-            lens, summary, verdict,
-        )
-        rows.append({
-            **common, "ts": _lib.now_iso(), "event": "completed",
-            "verdict": normalized_verdict, "summary": normalized_summary,
-        })
-    (task_dir / "RECEIPTS.jsonl").write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
 
 
 def _mark_harness_enabled(path: str) -> None:
@@ -276,7 +229,7 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             "run_id": _lib.new_uuid7(),
             "execution_mode": "standard",
             "required_lenses": ["review-code", "qa-cli"],
-            "close_receipt_fingerprint": None,
+            "closed": False,
         }
 
     def _both_refusals(self):
@@ -295,7 +248,7 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             f"sys.path.insert(0, {os.path.join(REPO_ROOT, 'plugin', 'mcp')!r});"
             "import _lib;"
             "ctl={'run_id':_lib.new_uuid7(),'execution_mode':'standard',"
-            "'required_lenses':['review-code','qa-cli'],'close_receipt_fingerprint':None};"
+            "'required_lenses':['review-code','qa-cli'],'closed':False};"
             "\ndef attempt():\n"
             "    try:\n"
             "        _lib.write_task_control('/tmp/harness-refusal-probe', ctl)\n"
@@ -360,7 +313,7 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             f"sys.path.insert(0, {SCRIPTS!r});"
             "import _lib, codex_hook_registration;"
             "ctl={'run_id':_lib.new_uuid7(),'execution_mode':'standard',"
-            "'required_lenses':['review-code','qa-cli'],'close_receipt_fingerprint':None};"
+            "'required_lenses':['review-code','qa-cli'],'closed':False};"
             "\ntry:\n"
             "    _lib.write_task_control('/tmp/harness-refusal-probe', ctl)\n"
             "    print('NONE')\n"
@@ -382,263 +335,7 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             _lib.write_task_control("/tmp/harness-refusal-probe", self._control())
 
 
-class TrustBoundaryReachesEveryPendingNextAction(unittest.TestCase):
-    """`emit_compact_context` must state the C-14 boundary wherever a lens is
-    still pending.
-
-    Callers read `task_verify`'s `next_action` directly, so the boundary has to
-    be in that string on its own account. Asserting it only through the stop
-    gate hides a real loss: the gate appends its own copy when the next_action
-    lacks one, so dropping the boundary here leaves the gate's message intact
-    while the MCP response silently loses it. That compensation is why the
-    2026-09-03 defect — a QA-pending branch that stated the boundary partially —
-    survived a suite that already exercised the gate.
-    """
-
-    def _context(self, *, review_done: bool):
-        """Build a real task dir; receipts come from the proven test helper.
-
-        Hand-rolled receipt rows do not satisfy `_receipt_entry_semantics_valid`,
-        and a fixture that silently fails validation would test the error path
-        instead of the branch.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, "doc", "harness", "tasks"))
-            task_id = "TASK__pending"
-            task_dir = os.path.join(tmp, "doc", "harness", "tasks", task_id)
-            if review_done:
-                _write_completed_lenses(tmp, task_id, [("review-code", "PASS")])
-            else:
-                os.makedirs(task_dir)
-                with open(os.path.join(task_dir, "TASK.json"), "w", encoding="utf-8") as handle:
-                    json.dump({
-                        "run_id": _lib.new_uuid7(),
-                        "execution_mode": "standard",
-                        "required_lenses": ["review-code", "qa-cli"],
-                        "close_receipt_fingerprint": None,
-                    }, handle)
-                with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as handle:
-                    handle.write("# Plan\n")
-            return _lib.emit_compact_context(task_dir) or {}
-
-    def test_review_pending_next_action_states_the_boundary(self):
-        action = self._context(review_done=False).get("next_action", "")
-        self.assertIn(_lib.TRUST_BOUNDARY, action, action)
-
-    def test_qa_pending_next_action_states_the_boundary(self):
-        action = self._context(review_done=True).get("next_action", "")
-        self.assertIn(_lib.TRUST_BOUNDARY, action, action)
-
-    def test_both_pending_next_actions_carry_the_shared_endgame(self):
-        """The park route is the same in both states, so it has one text.
-
-        The now-deleted turn-end gate (`stop_gate.py`) used to compose its own
-        copy when the context omitted one; asserting the endgame here on the MCP
-        response — which no gate rewrites — guards it independently of that.
-        """
-        for review_done in (False, True):
-            with self.subTest(review_done=review_done):
-                action = self._context(review_done=review_done).get("next_action", "")
-                self.assertIn(_lib.attestation_endgame(), action, action)
-
-    # No test here asserts `directly` on its own. One was drafted during this
-    # task and dropped before it was ever committed, so do not go looking for
-    # it in history. Removing `directly` from
-    # `attestation_block_instruction()` already reddens the endgame equality
-    # assertion in test_review_agent_contracts.py and the clause pin in
-    # test_receipt_watcher_fail_closed.py; a mutation sweep confirmed it was
-    # the only guard on this diff with no unique detector. C-17's "call
-    # task_blocked directly" is still enforced elsewhere — removing `directly`
-    # reddens test_review_agent_contracts.py::test_lib_owns_exactly_one_literal_trust_boundary
-    # and test_receipt_watcher_fail_closed.py::test_every_normative_clause_in_both_next_actions_is_pinned
-    # (a third guard, in the now-deleted test_stop_gate.py, confirmed the same thing).
-    # Named rather than counted: this comment justifies a deletion, so a stale
-    # number here is worse than none.
-
-    def test_both_pending_heads_label_a_receiptless_final_non_attesting(self):
-        """The NON-ATTESTING label is the head's own instruction, not the block's.
-
-        QA found it deletable with the whole suite green, in both states and at
-        `3ec78a7` — pre-existing, not a regression from consolidation. Deleting
-        it does not merely drop a word: the head ends "…without a receipt, label
-        it" and the boundary follows, so the shipped text reads "label it Only
-        structurally delivered completion/final records…". Incoherent, and
-        silently shippable.
-
-        This is the label that keeps a real but unattested lens result usable
-        for defect discovery while denying it close authority, so losing it
-        collapses the distinction C-14 is built on.
-        """
-        for review_done in (False, True):
-            with self.subTest(review_done=review_done):
-                action = self._context(review_done=review_done).get("next_action", "")
-                self.assertIn("NON-ATTESTING", action, action)
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class ParkReasonsDoNotAssertUnobservedPreconditions(unittest.TestCase):
-    """Field report A: a fixed park reason forced a false statement into BLOCKED.md.
-
-    The attestation pair says attestation is missing *after* a substantive
-    review PASS, a QA PASS, and a fresh task_verify. That is the right sentence
-    when those happened. When the receipt stream is empty it is a claim nothing
-    supports, and the coordinator either writes it anyway or abandons the fixed
-    pair — both of which the protocol was meant to prevent.
-    """
-
-    def _lib(self):
-        import sys
-        from conftest import SCRIPTS_DIR  # type: ignore
-
-        sys.path.insert(0, SCRIPTS_DIR)
-        import _lib  # type: ignore
-
-        return _lib
-
-    def test_the_empty_stream_reason_asserts_only_what_was_observed(self):
-        """It may report the absence and what the coordinator saw run.
-
-        It may not claim a verdict occurred, and it may not claim the runtime
-        is incapable of recording — no code here observes capability, only
-        absence. The first attempt at this task failed on exactly that
-        conflation, so the distinction is normative rather than stylistic.
-        """
-        lib = self._lib()
-        reason = lib.NO_RECEIPTS_BLOCKED_REASON
-        self.assertIn("no review/QA receipt of any kind was recorded", reason)
-        self.assertIn("ran and returned results", reason)
-        for claim in ("PASS", "substantive", "task_verify", "attestation"):
-            with self.subTest(forbidden=claim):
-                self.assertNotIn(claim, reason)
-        # Capability framing, in the wordings that would carry it.
-        for claim in ("cannot", "incapable", "does not record", "unable"):
-            with self.subTest(capability=claim):
-                self.assertNotIn(claim, reason.lower())
-
-    def test_the_empty_stream_unblock_names_a_check_not_a_diagnosis(self):
-        """`Resume on a runtime that records receipts` presupposes the current
-        one does not — the capability claim again, one string over. The resume
-        test has to be something the operator can run and observe.
-        """
-        lib = self._lib()
-        condition = lib.NO_RECEIPTS_UNBLOCK_CONDITION
-        self.assertIn("RECEIPTS.jsonl", condition)
-        self.assertIn("started row", condition)
-        for claim in ("a runtime that records", "incapable", "cannot"):
-            with self.subTest(capability=claim):
-                self.assertNotIn(claim, condition.lower())
-
-    def test_the_attestation_reason_still_states_its_preconditions(self):
-        """The counter-case: the other pair must keep saying what it means.
-
-        Weakening it to match the empty-stream pair would make one text cover
-        both states and lose the distinction this task exists to restore.
-        """
-        lib = self._lib()
-        for claim in ("review PASS", "QA PASS", "task_verify"):
-            with self.subTest(claim=claim):
-                self.assertIn(claim, lib.ATTESTATION_BLOCKED_REASON)
-
-    def test_the_endgame_leads_with_the_discriminator(self):
-        """Pair 1's guard is also true in the empty-stream state.
-
-        Presenting pair 1 first and correcting afterwards means a coordinator
-        who stops reading at the first `task_blocked(...)` call lands on the
-        wrong pair — the failure this task exists to fix. The stream question
-        must come before either call.
-        """
-        lib = self._lib()
-        endgame = lib.attestation_endgame()
-        discriminator = endgame.index("choose the reason by what the receipt stream shows")
-        self.assertLess(discriminator, endgame.index(lib.NO_RECEIPTS_BLOCKED_REASON))
-        self.assertLess(discriminator, endgame.index(lib.ATTESTATION_BLOCKED_REASON))
-        self.assertLess(
-            endgame.index("no receipt of any kind was recorded for this run"),
-            endgame.index("receipts exist but a required completion is absent"),
-        )
-
-    def test_the_endgame_offers_both_pairs_each_with_its_condition(self):
-        lib = self._lib()
-        endgame = lib.attestation_endgame()
-        self.assertIn(lib.ATTESTATION_BLOCKED_REASON, endgame)
-        self.assertIn(lib.NO_RECEIPTS_BLOCKED_REASON, endgame)
-        self.assertIn("If no receipt of any kind was recorded for this run", endgame)
-        self.assertIn("If receipts exist but a required completion is absent", endgame)
-
-    def test_the_endgame_disclaimer_does_not_negate_the_required_route(self):
-        """C-17 makes the direct task_blocked call mandatory once pair 1's guard
-        holds. An unscoped "neither is an instruction" let a coordinator in that
-        state decline the route the contract requires; scoping it to the
-        pre-lens case removes the contradiction without weakening the guard.
-        """
-        lib = self._lib()
-        endgame = lib.attestation_endgame()
-        self.assertIn(
-            "Neither applies before a lens has actually run and returned results",
-            endgame,
-        )
-        self.assertNotIn("Neither is an instruction", endgame)
-
-
-class SingleSourceTests(unittest.TestCase):
-    """No clause may get a second home (REQ__runtime-normative-text-has-one-source).
-
-    Relocated from tests/test_stop_gate_receipt_outage.py 2026-09-23 when the
-    turn-end gate was deleted; this coverage does not depend on stop_gate.py.
-    """
-
-    def test_every_holder_of_the_marker_path_agrees(self):
-        # Three holders, and one of them cannot be deduplicated: background_hook
-        # must not import _lib, because it is the hook that still has to run
-        # when _lib is the broken import. So the literals stay and this pins
-        # them together instead.
-        import importlib.util
-
-        ROOT = Path(REPO_ROOT)
-        spec = importlib.util.spec_from_file_location(
-            "background_hook_probe", str(ROOT / "plugin" / "scripts" / "background_hook.py"),
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        sys.path.insert(0, str(ROOT / "plugin" / "mcp"))
-        import harness_server
-
-        setup_finalize_src = (
-            ROOT / "plugin" / "scripts" / "setup_finalize.py"
-        ).read_text(encoding="utf-8")
-
-        with self.subTest(holder="background_hook"):
-            self.assertEqual(module.CAPABILITY_MARKER_RELPATH, _lib.CAPABILITY_MARKER_RELPATH)
-        with self.subTest(holder="harness_server"):
-            self.assertEqual(harness_server._HOOK_CAPABILITY_MARKER, _lib.CAPABILITY_MARKER_RELPATH)
-        with self.subTest(holder="setup_finalize"):
-            self.assertIn(
-                _lib.CAPABILITY_MARKER_RELPATH.replace(os.sep, "/"), setup_finalize_src,
-            )
-
-    def test_the_mcp_string_is_unchanged_by_the_extraction(self):
-        # The constant moved to composition; the emitted advice must not shift.
-        # This is the text a caller of task_verify reads, and it is normative.
-        ROOT = Path(REPO_ROOT)
-        sys.path.insert(0, str(ROOT / "plugin" / "mcp"))
-        import harness_server
-
-        # The whole string, written out here independently, not a prefix. The
-        # REQ claims this text is unchanged by the extraction; a prefix check
-        # would leave that claim wider than what runs, and everything after the
-        # extracted head is exactly the part a prefix check cannot see.
-        expected = (
-            "Receipt recording is unavailable. Continue and await the required "
-            "review and QA: their results are substantive but NON-ATTESTING and "
-            "cannot authorize task_close. Remediate an actual FAIL and publish "
-            "an actual BLOCKED_ENV through wbs(action='block'). Recording is "
-            "unavailable in every state here, so do not repair, restart, "
-            "resume, recollect, or rerun a lens solely to obtain a receipt at "
-            "any point. "
-            f"{_lib.TRUST_BOUNDARY} {_lib.attestation_endgame()}"
-        )
-        self.assertEqual(harness_server.RECEIPT_UNAVAILABLE_NEXT_ACTION, expected)

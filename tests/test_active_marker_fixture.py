@@ -67,15 +67,12 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
     def _task(self, repo: str, task_id: str, status: str) -> str:
         task = os.path.join(repo, "doc", "harness", "tasks", task_id)
         os.makedirs(task, exist_ok=True)
-        close = None
-        if status == "closed":
-            close = "sha256:" + hashlib.sha256(b"RECEIPTS.jsonl\0<missing>\0").hexdigest()
         with open(os.path.join(task, "TASK.json"), "w", encoding="utf-8") as f:
             json.dump({
                 "run_id": "0198c349-5800-7000-8000-000000000001",
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": close,
+                "closed": status == "closed",
             }, f)
         return task
 

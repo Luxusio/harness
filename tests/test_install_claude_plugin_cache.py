@@ -68,7 +68,7 @@ def test_mirror_version_is_a_deterministic_payload_hash(tmp_path):
     assert source_manifest.read_bytes() == source_before, "the source manifest must stay unstamped"
 
     # Any payload change is a new version, and re-stamping keeps one suffix.
-    (second / "scripts" / "subagent_lifecycle.py").write_text("# changed\n", encoding="utf-8")
+    (second / "scripts" / "_lib.py").write_text("# changed\n", encoding="utf-8")
     restamped = install._stamp_claude_plugin_version(second)
     assert restamped != _manifest_version(first)
     assert restamped.count("+") == 1

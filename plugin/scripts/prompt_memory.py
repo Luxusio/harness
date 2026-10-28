@@ -26,8 +26,6 @@ try:
         read_hook_input,
         read_task_control,
         task_control_status,
-        receipt_review_verdict,
-        receipt_runtime_verdict,
         find_repo_root,
         is_harness_enabled_repo,
         TASK_DIR,
@@ -51,22 +49,12 @@ DOC_GATE = (
     "[harness-doc-gate] Durable decisions require doc/ update before final; "
     "if no doc applies, keep the PLAN durable-doc rationale specific."
 )
-QA_GATE = (
-    "[harness-qa] PENDING: ALL_TOOLS→spawn_agent(QA lenses)→await status-map "
-    "completion; use available list_agents only if wait omitted identities "
-    "→explicit VERDICT→wbs(action='verify'); start≠PASS."
-)
 REVIEW_GATE = (
-    "[harness-review] PENDING: spawn+await structural completions for required "
-    "reviewers; available list_agents is fallback only; fresh PASS before QA; "
-    "start≠PASS."
-)
-REVIEW_RECORDED_GATE = (
-    "[harness-review/qa] RECORDED review PASS only; task_verify must validate "
-    "lenses/freshness, then run required QA. Do not respawn solely from this hint."
+    "[harness-review/qa] Await independent review PASS before actual QA; "
+    "then verify current WBS checks and close."
 )
 RESTORE_INJECT_CAP = 1400
-RESTORE_ARTIFACTS = ("RECEIPTS.jsonl", "BLOCKED.md")
+RESTORE_ARTIFACTS = ("BLOCKED.md",)
 
 
 def _build_goal_block(repo_root: str) -> str:
@@ -101,35 +89,11 @@ def _build_block(task_dir: str) -> str:
         return ""
     task_id = os.path.basename(task_dir)
     status = task_control_status(task_dir, control)
-    verdict = receipt_runtime_verdict(task_dir, control)
 
     pieces: list = [PREFIX, f"task={task_id}", f"status={status}"]
-    pieces.append(f"recorded_verdict={verdict}")
 
     block = " ".join(pieces)
     return _truncate(block)
-
-
-def _build_qa_gate(task_dir: str) -> str:
-    """Derive the current verdict; task_verify remains authoritative."""
-    try:
-        control = read_task_control(task_dir)
-        return "" if receipt_runtime_verdict(task_dir, control) == "PASS" else QA_GATE
-    except Exception:
-        return QA_GATE
-
-
-def _build_review_gate(task_dir: str) -> str:
-    """Report the receipt-derived review state without source-path heuristics."""
-    try:
-        control = read_task_control(task_dir)
-        if receipt_runtime_verdict(task_dir, control) == "PASS":
-            return ""
-        if receipt_review_verdict(task_dir, control) == "PASS":
-            return REVIEW_RECORDED_GATE
-        return REVIEW_GATE
-    except Exception:
-        return REVIEW_GATE
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -212,13 +176,7 @@ def main() -> int:
     # Prompt submission is advisory and deliberately performs no Git queries.
     # Authoritative freshness/fingerprint checks remain in task_verify/task_close.
     if task_dir:
-        review_gate = _build_review_gate(task_dir)
-        if review_gate:
-            output_parts.append(review_gate)
-        else:
-            qa_gate = _build_qa_gate(task_dir)
-            if qa_gate:
-                output_parts.append(qa_gate)
+        output_parts.append(REVIEW_GATE)
         block = _build_block(task_dir)
         if block:
             output_parts.append(block)

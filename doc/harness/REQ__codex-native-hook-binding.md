@@ -49,27 +49,19 @@ The ordinary synchronized-payload fast path does not repeat installation or
 repair configuration and must not be used as evidence that a failed reload
 has recovered.
 
-Successful native task-start/context completion binds the exact hook session to
-the returned open task generation. The validation, conflict fencing and
-future-only watcher rules remain defined in
-[the receipt protocol](patterns/ADR__single-direct-codex-receipt-protocol.md).
-Outer JavaScript, printed tool results and compatibility markers are not
-substitutes for native identity. Existing unregistered work is never replayed
-into receipts.
+Successful native WBS open/context completion binds the exact hook session to
+the returned open task generation. Validate native identity, task/run and
+registered workspace under the existing conflict fences. Outer JavaScript,
+printed results and compatibility markers do not substitute for native identity.
+There is no watcher registration or lifecycle collection requirement. See
+[receipt-free execution](REQ__receipt-free-execution-and-completion.md).
 
-Derived reliability constraint from the existing receipt protocol: native
-session authentication reads bounded metadata using the same 256MiB parent
-history limit as coordinator ancestry authentication. A valid long-lived
-coordinator between64MiB and256MiB must not lose task binding merely because
-the metadata reader used the separate child-transcript limit. Parent histories
-above256MiB still refuse, and child completion reads retain their64MiB limit.
-Ownership, link, descriptor/path identity, native cwd and ancestry checks remain
-required. This does not authorize replay of already completed unregistered work.
+Native session authentication remains bounded and validates ownership, link,
+descriptor/path identity, native cwd and ancestry. These checks authorize source
+ownership, not machine-attested review or QA.
 
-Verification must cover installed routing and a real native task-result event,
-then fresh required review and QA started/completed receipts. Missing event
-delivery must remain distinguishable from rejected task binding; configuration
-or unit-test success alone cannot establish working receipt acquisition.
-After the source task closes, installation validation must also exercise the
-next task in the same running session: its native task result replaces the previous binding
-without a daemon restart, and its fresh lens must record lifecycle receipts.
+Verification covers installed routing and a real native task-result event,
+distinguishing missing event delivery from rejected binding. The next task in a
+running session replaces the previous closed binding without a daemon restart.
+Actual independent review PASS before actual QA and measured WBS checks remain
+separately required.

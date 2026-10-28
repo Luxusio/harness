@@ -134,8 +134,7 @@ Then call:
 This records the exact result and, for genuinely closed leads, runs serial
 rebase, fast-forward, evidence harvest, worktree removal and `git branch -d`.
 It closes an eligible fully disposed pool without another remembered close
-call. It never infers closure from narrative PASS, an archive, or an unreceipted
-review result. Replayed completion must match the recorded result even when W
+call. It never infers closure from narrative PASS, an archive, or a review result alone. Replayed completion must match the recorded result even when W
 has already been removed. Partial success retains its checkpoint and exact
 remaining action; `integrated_tip` always takes precedence over a cleanup error.
 No manual force removal, stash, merge-commit fallback or forced branch deletion.
@@ -164,7 +163,7 @@ Git cleanup or grants permission. Confirm stopped writers before either:
   W/branch/task/run. Prefer the original agent; otherwise use non-isolating
   `harness:task-lead-resume` bootstrap-only, obtain its real ID and bind through
   MCP before continuation. Preserve existing evidence; never `fresh_run` merely
-  to resume or obtain missing receipts.
+  to resume.
 
 Blocked/failed leads remain retained with exact blockers. Unknown liveness
 never authorizes unlocking, expiry or disposal. Only an explicit user choice permits abandonment: it retains source, branch,
@@ -200,7 +199,7 @@ because the recovery task closed.
    owner recovery, then complete remaining leads before combined verification.
 2. Run the full suite (e.g. `uv run pytest tests/ -q`).
 3. Run fresh `review-code`, conditional `review-security`, then `qa-cli` in
-   receipt-backed review-before-QA order. Scope `review-code` by § Batch integration
+   actual review-before-QA order. Scope `review-code` by § Batch integration
    review scope in `plugin/skills/develop/quality-audit-pipeline.md`: give the
    reviewer each lead's `old_base`, `old_tip`, `new_base`, and `new_tip`, its
    patch-id result, and carried or residual status.

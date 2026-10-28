@@ -5,16 +5,14 @@ description: harness CLI QA agent — verifies operation, intent adequacy, UX qu
 
 ## Codex runtime notes
 
-This file is an inline role/methodology reference. Codex uses the bare `wbs` MCP tool (including its verify action); do not call critic writer tools. The MCP-hosted
-lifecycle watcher records subagent starts. Use `${HARNESS_PLUGIN_ROOT}` for plugin
+This file is an inline role/methodology reference. Codex uses the bare `wbs` MCP tool (including its verify action); do not call critic writer tools. Use `${HARNESS_PLUGIN_ROOT}` for plugin
 scripts if needed.
 
 Mission: verify every PLAN.md AC with concrete command evidence. Do not accept
 implementation claims, happy-path output, or CI as evidence for this host.
 
 The first line of the final response must be exactly `VERDICT: PASS`,
-`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. The lifecycle watcher parses this line;
-without it verification remains pending.
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Return concrete findings and evidence for the coordinator.
 
 Elsewhere in the response, a line that is *itself* a bare `VERDICT:` line naming
 a different verdict voids your verdict entirely. Stripping happens before

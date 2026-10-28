@@ -1,4 +1,4 @@
-"""Tests for the receipt-backed self-improvement retro trigger (AC-008)."""
+"""Tests for the published-close self-improvement retro trigger (AC-008)."""
 import hashlib
 import importlib.util
 import json
@@ -23,14 +23,6 @@ RETRO = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RETRO)
 
 
-def _receipt_fingerprint(raw: bytes = b"") -> str:
-    digest = hashlib.sha256()
-    digest.update(b"RECEIPTS.jsonl\0")
-    digest.update(raw)
-    digest.update(b"\0")
-    return "sha256:" + digest.hexdigest()
-
-
 def _write_task(
     repo: str,
     name: str,
@@ -40,15 +32,8 @@ def _write_task(
 ) -> Path:
     task = Path(repo, "doc", "harness", "tasks", f"TASK__{name}")
     task.mkdir(parents=True)
-    receipt = task / "RECEIPTS.jsonl"
-    receipt.write_bytes(b"")
-    close = _receipt_fingerprint()
-    if state in {"open", "blocked", "reopened"}:
-        close = None
-    elif state == "stale-fingerprint":
-        close = "sha256:" + "f" * 64
     control = {
-        "close_receipt_fingerprint": close,
+        "closed": state == "closed",
         "execution_mode": "standard",
         "required_lenses": ["review-code", "qa-cli"],
         "run_id": "018f0000-0000-7000-8000-000000000001",
@@ -120,12 +105,12 @@ class TestRetroTriggerThreshold(unittest.TestCase):
         self.assertEqual(count, 0)
 
     def test_only_verified_task_json_publications_count(self):
-        """Open, blocked, reopened, invalid, stale, and touched-only tasks stay out."""
+        """Open, blocked, reopened, invalid, and touched-only tasks stay out."""
         with tempfile.TemporaryDirectory() as d:
             now = datetime.now(timezone.utc).timestamp()
             cutoff = now - 100
             included = _write_task(d, "closed", now - 10)
-            for state in ("open", "blocked", "reopened", "invalid", "stale-fingerprint"):
+            for state in ("open", "blocked", "reopened", "invalid"):
                 _write_task(d, state, now - 10, state=state)
 
             old = _write_task(d, "touched-only", cutoff - 10)
@@ -223,7 +208,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             finally:
                 os.close(task_fd)
 
-    def test_receipt_writer_cannot_race_after_closed_classification(self):
+    def test_control_writer_cannot_race_after_closed_classification(self):
         with tempfile.TemporaryDirectory() as d:
             task = _write_task(d, "closed", datetime.now(timezone.utc).timestamp())
             attempted = threading.Event()
@@ -233,7 +218,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
 
             def write_after_classification():
                 attempted.set()
-                with RETRO.receipt_stream_transaction(str(task)):
+                with RETRO.task_control_transaction(str(task)):
                     acquired.set()
 
             def status_then_race(task_dir, control):

@@ -1,4 +1,4 @@
-"""Copied verification inputs and applicability; never lifecycle receipt authority.
+"""Copied verification inputs and applicability.
 
 Native roles consume the issued source view. The association authenticates the
 invocation's declared target, not arbitrary tool reads or hostile same-UID code.
@@ -21,7 +21,6 @@ import time
 import wbs
 
 FIELD = "verification_targets"
-TOKEN = re.compile(r"_vt_([0-9a-f]{16})(?:_|$)")
 
 
 def _require(ok, message):
@@ -62,21 +61,6 @@ def _spec(value):
         _require(isinstance(names, list) and len(names) <= 32 and all(isinstance(n, str) and (re.fullmatch(r"[A-Za-z0-9_.+-]+", n) or key == "toolchains" and os.path.isabs(n) and "\0" not in n) for n in names), "invalid " + key)
         result[key] = sorted(set(names))
     return result
-
-
-def role_handoffs(target):
-    """Ephemeral names for future roles, never native identity or evidence."""
-    from _lib import _infer_receipt_lens
-    if target["spec"]["purpose"] != "acceptance":
-        return []
-    nonce, rows = secrets.token_hex(8), []
-    for lens in target["spec"]["lenses"]:
-        name = lens.replace("-", "_") + "_" + nonce + "_vt_" + target["token"]
-        match = TOKEN.search(name)
-        _require(_infer_receipt_lens(name) == lens and match and match[1] == target["token"],
-                 "role handoff cannot bind declared lens and target")
-        rows.append(dict(lens=lens, task_name=name))
-    return rows
 
 
 def _context(spec, repo):
@@ -355,26 +339,8 @@ def ensure_snapshot(task_dir, token, repo=None, *, output_dirs=()):
     return dict(record, snapshot_root=str(root))
 
 
-def _receipt_target(receipt, receipts):
-    """Consume existing authenticated native identity; no new writer/protocol.
-
-    Only first native invocation of the exact agent/type/task is supported.
-    Later followups inherit names but cannot inherit source certification.
-    """
-    if receipt.get("source") != "codex_session_watcher:collaboration":
-        return None
-    match = TOKEN.search(receipt.get("agent_type", ""))
-    if not match:
-        return None
-    starts = [item for item in receipts if item.get("event") == "started" and
-              all(item.get(k) == receipt.get(k) for k in ("source", "agent_id", "agent_type", "task_run_id", "lens"))]
-    if not starts or starts[0].get("runtime_id") != receipt.get("runtime_id"):
-        return None
-    return match[1]
-
-
 def measure_inputs(task_dir, repo):
-    """Measure source outside receipt publication; retain exact owner authority."""
+    """Measure source outside task publication; retain exact owner authority."""
     from _lib import read_task_control
     state, control = wbs.read_state(task_dir), read_task_control(task_dir)
     index = state.get(FIELD) if state else None
@@ -394,9 +360,13 @@ def _input_rows(task_dir, repo, index, *, measure):
                 row.update(purpose=record["spec"]["purpose"], lenses=record["spec"]["lenses"])
                 root = _root(task_dir, token)
                 paths = [r[0] for r in record["manifest"]]
-                # Copied views are regenerable after completion. The immutable
-                # owner manifest plus authentic invocation retains provenance.
-                row["snapshot_available"] = root.is_dir()
+                # Copies are regenerable. Validate every present byte, while
+                # current declared inputs/context determine applicability.
+                present = [path for path in paths if os.path.lexists(root / path)]
+                row["snapshot_available"] = root.is_dir() and len(present) == len(paths)
+                expected_present = [entry for entry in record["manifest"] if entry[0] in present]
+                _require(_manifest(root, present, readonly=True) == expected_present,
+                         "frozen snapshot changed; preserve the view and investigate")
                 wbs.fingerprint(repo, record["spec"]["inputs"])
                 current = _manifest(repo, _paths(Path(repo), record["spec"]["inputs"]))
                 row["status"] = "applicable" if current == record["manifest"] and _context(record["spec"], repo) == record["context"] else "stale"
@@ -406,8 +376,8 @@ def _input_rows(task_dir, repo, index, *, measure):
     return rows
 
 
-def applicability(task_dir, repo, receipt_snapshot=None, *, measure=False, measured_inputs=None):
-    """Stored-only by default. Lifecycle PASS remains independently authoritative."""
+def applicability(task_dir, repo, *, measure=False, measured_inputs=None):
+    """Measure declared snapshot inputs without claiming any role ran."""
     from _lib import read_task_control
     if measure and measured_inputs is None:
         measured_inputs = measure_inputs(task_dir, repo)
@@ -420,21 +390,14 @@ def applicability(task_dir, repo, receipt_snapshot=None, *, measure=False, measu
         measure = True
     index = state.get(FIELD) if state else None
     if not index or not index.get("required"):
-        return dict(status="unbound", enforced=False, source_binding="lifecycle_only", targets=[])
-    # Final receipt association uses only already measured rows and small owner state.
+        return dict(status="unbound", enforced=False, source_binding="wbs_inputs", targets=[])
     rows = measured_inputs["rows"] if measured_inputs is not None else _input_rows(task_dir, repo, index, measure=False)
+    by_token = {row["token"]: row for row in rows}
     missing = []
     if measure:
-        from _lib import _completed_review_by_lens, _completed_qa_by_lens, required_review_lenses, _required_qa_lenses, receipt_snapshot as read_receipts
-        receipts = receipt_snapshot or read_receipts(task_dir)
-        completed = {**_completed_review_by_lens(task_dir, receipts), **_completed_qa_by_lens(task_dir, receipts)}
-        by_token = {row["token"]: row for row in rows}
-        for lens in required_review_lenses(task_dir, control) + _required_qa_lenses(task_dir, control):
-            receipt = completed.get(lens) or {}
-            token = _receipt_target(receipt, receipts.entries)
-            target = by_token.get(token, {})
-            expected = index["required"].get(lens, {}).get("token")
-            if not (token == expected and receipt.get("task_run_id") == control["run_id"] and target.get("purpose") == "acceptance" and target.get("status") == "applicable"):
+        for lens, reference in index["required"].items():
+            row = by_token.get(reference["token"], {})
+            if index.get("run_id") != control.get("run_id") or row.get("purpose") != "acceptance" or row.get("status") != "applicable":
                 missing.append(lens)
     return dict(status=("stale" if missing else "applicable") if measure else "unmeasured", enforced=True,
-                source_binding="issued_snapshot_role_view", missing_lenses=missing, targets=rows)
+                source_binding="issued_snapshot_inputs", missing_lenses=missing, targets=rows)

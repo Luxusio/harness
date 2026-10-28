@@ -250,7 +250,7 @@ def test_resumed_scope_grant_preserves_historical_result_and_evidence(tmp_path, 
     assert {name: (directory / name).read_bytes() for name in original_evidence} == original_evidence
 
 
-@pytest.mark.parametrize("evidence", ["unresumed", "closed", "checkpoint", "finish_result", "close_fingerprint"])
+@pytest.mark.parametrize("evidence", ["unresumed", "closed", "checkpoint", "finish_result", "closed_control"])
 def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, monkeypatch, evidence):
     pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch)
     result = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
@@ -267,12 +267,13 @@ def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, m
     elif evidence == "closed":
         owner["result"]["verdict"] = "closed"
     elif evidence == "checkpoint":
+        owner["closed"] = True
         owner["checkpoint"] = dict(stage="started", destination_ref=state["destination_ref"],
-                                   run_id=RUN, close_fingerprint=None, branch_tip=_head(worktree))
+                                   run_id=RUN, closed=True, branch_tip=_head(worktree))
     elif evidence == "finish_result":
         owner["finish_result"] = {"status": "kept"}
     else:
-        owner["close_fingerprint"] = "sha256:existing-close-proof"
+        owner["closed"] = True
     pool.state.write_text(json.dumps(state))
     before = pool.state.read_bytes()
     original_control = (directory / "TASK.json").read_bytes()

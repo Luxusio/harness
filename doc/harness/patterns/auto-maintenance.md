@@ -15,7 +15,7 @@ Automatic reporting requires at least one validated learning row bound to the
 just-closed task id and TASK.json run_id. Knowledge rows use an allowlisted type,
 canonical timestamp, bounded key and human insight; feedback rules also contain
 trigger, action, and verification. One valid row from each distinct
-receipt-verified closed task/run may meet the repetition threshold, but backlog
+verified closed task/run may meet the repetition threshold, but backlog
 alone cannot trigger a run and duplicate rows from one run count once.
 Diagnostic gate/crash/bypass/stop/codifier rows are not candidates. The raw
 learnings ledger is append-only and the close-time pass never rewrites or prunes
@@ -24,12 +24,12 @@ writes. Applying a candidate requires a separately reviewed Harness task.
 
 ## Retro auto-trigger semantics
 
-Threshold: `>= 3 receipt-verified tasks closed since the mtime of the most recent doc/harness/retros/*.md`.
+Threshold: `>= 3 verified tasks closed since the mtime of the most recent doc/harness/retros/*.md`.
 
 - If no prior retros exist: threshold seeds from first task close (first 3 closes triggers first retro).
-- A close counts only when TASK.json is safely readable, its fingerprint matches
-  RECEIPTS.jsonl, and TASK.json publication mtime is newer than the cutoff. The
-  TASK/status/TASK identity check stays inside one receipt transaction.
+- A close counts only when TASK.json is safely readable, `closed` is true,
+  and TASK.json publication mtime is newer than the cutoff. The
+  TASK/status/TASK identity check stays inside one task-control transaction.
 - Open, blocked, reopened, invalid, unsafe, and merely touched task directories do not count.
 - The tasks root is descriptor-bound and rejects symlink, writable, or rebound state.
 - The auto-trigger and retro report share `retro.py`'s verified-close predicate.

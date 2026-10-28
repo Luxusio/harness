@@ -38,12 +38,12 @@ Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록�
    hook은 Goal 장부나 task를 생성하지 않는다. 에이전트가
    `wbs(action="open", objective=...)`으로 일반 요청과 같은 실행을 연다.
 2. Turn-end 자체는 hook으로 강제되지 않는다. 태스크가 `in_progress`인 동안
-   완결로 인정되는 것은 receipt-backed `runtime_verdict: PASS` 를 거친
+   완결로 인정되는 것은 current measured WBS checks의 `runtime_verdict: PASS` 를 거친
    `task_close` 뿐이다 (C-04, C-17).
 3. `/goal` 조건에 close 조건을 넣으면 native Stop hook이 그 조건이
    충족될 때까지 자동 재개시킨다: `/goal harness task <task_id>이 닫힐
-   때까지 진행. PLAN.md의 acceptance intent를 충족하고, 필수 review/QA
-   lifecycle receipt로 runtime_verdict=PASS를 만든 뒤 wbs(action="close") 성공.`
+   때까지 진행. PLAN.md의 acceptance intent를 충족하고, 실제 independent review PASS 뒤 실제 QA PASS를 받고 current required WBS
+   checks로 runtime_verdict=PASS를 만든 뒤 wbs(action="close") 성공.`
 4. Task가 `.active`로 열린 채 turn이 끝나면, 태스크는 다음 turn 또는 다음
    session에서 `wbs(action="open")`/`wbs(action="context")`로 재개된다 — 이것이 native
    `/goal`을 쓰지 않는 경우의 지속 경로다. `/goal`을 쓰면 native Stop hook의

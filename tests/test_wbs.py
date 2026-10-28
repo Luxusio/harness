@@ -269,7 +269,7 @@ def test_mcp_plan_bundle_and_explicit_check(tmp_path):
     result = server._call_in_repo(str(repo), "task_wbs", {"task_id": "sample", "action": "verify", "leaf_id": "A"})
     assert not result.get("isError"), result
     assert result["structuredContent"]["progress"]["percentage"] == 100
-    assert set(json.loads((td / "TASK.json").read_text())) == {"run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint"}
+    assert set(json.loads((td / "TASK.json").read_text())) == {"run_id", "execution_mode", "required_lenses", "closed"}
 
 
 def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
@@ -293,11 +293,11 @@ def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
     assert context["tree"][0]["id"] == "A"
     assert call("next")["structuredContent"]["ready"] == []
     assert not call("verify").get("isError")
-    assert call("close").get("isError")  # check PASS never substitutes for independent review/QA.
     assert call("context", plan="unexpected").get("isError")
     assert not call("block", blocked_reason="Waiting for external fixture service", unblock_condition="Restore fixture service").get("isError")
     assert call("context")["structuredContent"]["task_context"]["status"] == "blocked"
     assert call("open")["structuredContent"]["run_id"] == run
+    assert not call("close").get("isError")  # Actual review/QA remain workflow-owned.
 
 
 def test_only_wbs_open_and_context_bind_hook_results(name, encoded):
@@ -476,7 +476,6 @@ def test_retired_aliases_fail_over_actual_mcp_protocol(tmp_path, monkeypatch):
                for _, result in replies)
     assert list(tmp_path.iterdir()) == before
     assert set(harness_server.TOOLS) == {tool['name'] for tool in harness_server.TOOL_DEFS} == {'wbs'}
-    server.close()
 
 
 def test_public_migration_is_explicit_and_owner_authorized(tmp_path, monkeypatch):

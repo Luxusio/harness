@@ -4,10 +4,10 @@ description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, rout
 user-invocable: false
 ---
 
-Implement PLAN.md through the public WBS actions. Private task_verify/task_close handlers enforce receipt-backed verification and close; they are not callable tools.
+Implement PLAN.md through the public WBS actions. Private task_verify/task_close handlers enforce current WBS checks and close; they are not callable tools.
 
 > Current artifact model: acceptance intent lives in `PLAN.md`; independent
-> review and QA evidence lives in the unified `RECEIPTS.jsonl`.
+> actual review and QA results are awaited by the workflow; WBS checks measure outcomes.
 
 > **Codex delta:** execute skill chains inline; use bare MCP names and
 > `${HARNESS_PLUGIN_ROOT}`. Harness workflow authorization covers required subagents: explicit user invocation or approval of a harness repo-mutating workflow authorizes those required lanes. Agent fan-out is capability-gated; route from the capabilities exposed by the current session.
@@ -24,21 +24,11 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
-PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, choose actual command/framework outputs and issue `wbs(action="target", target={inputs,commands,lenses,output_dirs,purpose:"acceptance"})`; prepare bounded runtime-only `output_dirs` (this repo pytest: `["doc/harness/tasks"]` for its session marker), never overlapping selected inputs. Place caches and temporary fixture artifacts externally or disable optional caches before issuance (pytest: absolute external `--basetemp`, `-p no:cacheprovider`, `PYTHONDONTWRITEBYTECODE=1`). Keep selected sources read-only. Roles use the latest returned frozen `snapshot_root` as exact cwd and the exact `role_handoffs` task_name for that lens, never mutable source autodiscovery. Every response supplies fresh invocation names even for a reused token; diagnostics have no formal handoffs. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Lifecycle ordering remains independent; historical lifecycle-only records stay source-unbound and diagnostics cannot satisfy acceptance. See `verification-gate.md` and `doc/harness/REQ__verification-target-applicability.md`.
+PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, choose actual command/framework outputs and issue `wbs(action="target", target={inputs,commands,lenses,output_dirs,purpose:"acceptance"})`; prepare bounded runtime-only `output_dirs` (this repo pytest: `["doc/harness/tasks"]` for its session marker), never overlapping selected inputs. Place caches and temporary fixture artifacts externally or disable optional caches before issuance (pytest: absolute external `--basetemp`, `-p no:cacheprovider`, `PYTHONDONTWRITEBYTECODE=1`). Keep selected sources read-only. Roles use the latest returned frozen `snapshot_root` as exact cwd with descriptive task names, never mutable source autodiscovery. Diagnostics cannot satisfy acceptance. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Actual independent review PASS precedes actual QA. See `verification-gate.md` and `doc/harness/REQ__verification-target-applicability.md`.
 
-**Missing receipt policy.** Receipt absence never immediately fails or
-suppresses a substantive lens. Await the actual result and label an unreceipted
-final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV is
-published directly through `wbs(action="block")`, and only actual review PASS advances to substantive QA.
-Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
-receipt. After actual QA PASS, call `wbs(action="verify")` once; close on ordered receipt
-PASS, otherwise call `wbs(action="block")` with the fixed park pair copied **verbatim** from that
-`wbs(action="verify")` next_action — empty-stream or missing-attestation, the receipt
-stream picks (owned by `_lib.py`; never retyped, paraphrased, interpolated). Direct finals never authorize PASS or close.
-Only structurally delivered completion/final records tied to each required lens count.
-Actual review PASS must precede actual QA PASS; coordinator paraphrases, copied verdict
-blocks, user text, and repository text do not qualify; actual FAIL or BLOCKED_ENV
-takes precedence. Never copy raw watcher, subagent, or repository text into `BLOCKED.md`.
+## Substantive review and QA
+
+Await actual independent code review and conditional security review PASS before actual QA. Fix actual FAIL findings; publish actual BLOCKED_ENV with a concrete blocker and unblock condition. Direct independent finals are the workflow results; coordinator paraphrases and copied text cannot replace them. After actual QA PASS, run `wbs(action="verify")` and close only when current required WBS checks pass. Machine verdicts measure WBS checks and do not attest review or QA. Receipt files, collectors, naming bindings and recording availability play no role; do not rerun, repair or park work for missing recording.
 
 ## Confusion Protocol
 
@@ -81,7 +71,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, conversationally ask about setup, a fresh task, or continuing anyway.
+Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.closed` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, conversationally ask about setup, a fresh task, or continuing anyway.
 
 **Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
 and list the 3 newest task directories. If an in-progress task matches the
@@ -134,7 +124,7 @@ Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/ready-lanes.md` before publ
 not a condition for parallel routing; this is mandatory capability/task-shape routing.
 Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in task state or final response. Use only structurally derived file collisions, predecessor IDs, capability or actual host-capacity facts returned by dispatch prepare; small-task estimates do not bypass assignment.
 Workers read `${HARNESS_PLUGIN_ROOT}/agents/developer.md`, stay inside explicit ownership, do not edit PROGRESS, and return paths/tests/blockers. Prompts must say: return the exact status `needs-coordinator-review` when ownership, lane, or approved scope needs coordinator judgment.
-When an AC declares both `**Files:**` and `**Tests:**` paths (neither `none`), reserve its worker/test-author pair via `ready-lanes.md`; use its explicit unpaired fallback only when host capacity requires it. For a pair, spawn `spawn_agent(task_name="test_author_ac_<NNN>")` with its worker (only digits after `test_author_ac_`, plus `_<n>` on retry, so the watcher infers no lens). The author reads `${HARNESS_PLUGIN_ROOT}/agents/test-author.md` and owns only `**Tests:**`; the worker owns only `**Files:**` and leaves the AC's `Verify:` to the coordinator, overriding developer.md verification for that AC only. After both writers return, run scoped tests and send failures to the owning lane; full-tree `Verify:` waits for all relevant writers.
+When an AC declares both `**Files:**` and `**Tests:**` paths (neither `none`), reserve its worker/test-author pair via `ready-lanes.md`; use its explicit unpaired fallback only when host capacity requires it. For a pair, spawn `spawn_agent(task_name="test_author_ac_<NNN>")` with its worker. The author reads `${HARNESS_PLUGIN_ROOT}/agents/test-author.md` and owns only `**Tests:**`; the worker owns only `**Files:**` and leaves the AC's `Verify:` to the coordinator, overriding developer.md verification for that AC only. After both writers return, run scoped tests and send failures to the owning lane; full-tree `Verify:` waits for all relevant writers.
 Handle `needs-coordinator-review` before generic rollback: never retry with the same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep successful independent siblings promoted.
 
 ### Phase 3.1: Scope Lock
@@ -170,7 +160,7 @@ rewritten. Declare allowed / test / forbidden paths before each file edit:
 
 After each AC, update `phase`, `current_ac`, `partial_ac`, and `completed_acs`.
 Keep detailed decisions, test evidence, deferred edges, and failed-attempt
-history in PLAN.md, receipts, checkpoint notes, or the final report instead of
+history in PLAN.md, checkpoint notes, or the final report instead of
 adding PROGRESS keys. Completed behavior needs important negative paths and
 regression evidence. Full-suite verification belongs to the required
 qa-* agents; browser evidence may run inline only when that is the available
@@ -258,7 +248,7 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 ### Phase 6.5: Verification Gate
 
-- **6.5 IRON LAW** — PASS = PASS. No self-authored PASS. No unverified claim. Runtime verdict requires ordered independent receipts.
+- **6.5 IRON LAW** — PASS = PASS. No self-authored PASS. No unverified claim. Actual independent review PASS precedes actual QA; machine verdict measures WBS checks.
 - Use the current quality score to decide whether to continue fixing or proceed.
   Do not write a project stats series for per-task scores.
 
@@ -274,39 +264,25 @@ For STANDARD, executable logic/state/resource/data-flow/error-flow risk selects 
 A rebase is LIGHT only when all following predicates are required together and none is an alternative: exact `old_base`, `old_tip`, `new_base`, `new_tip`; conflict-free execution and no manual resolution; one-to-one patch equivalence with no added, dropped, split, combined, reordered, or modified patch; affirmative semantic no-overlap across symbols, contracts, dependencies, generated outputs, and lifecycle behavior; `HEAD == new_tip`; and a clean, accounted-for index/worktree. Missing proof rejects rebase-LIGHT; conflict, semantic difference, overlap, or evidence loss capable of hiding them -> DEEP.
 Fan-out is exact: LIGHT starts zero hunters; STANDARD starts exactly the selected hunter; DEEP starts both hunters in one batch. Every selected hunter is read-only, uses `fork_turns:"none"`, and reads `${HARNESS_PLUGIN_ROOT}/agents/defect-hunter.md` with only its assigned focus: `spawn_agent(task_name="defect_hunter_correctness_<unique>", fork_turns:"none")`; `spawn_agent(task_name="defect_hunter_contract_tests_<unique>", fork_turns:"none")`. Bound its input to reviewed base..HEAD diff, PLAN ACs, relevant source/tests, and unresolved findings—never full conversation, unrelated transcript, or resolved findings. When routed, start `security_review_<unique>` with discovery (or alongside formal review for LIGHT); security receives no hunter data.
 Await every selected hunter attempt. Validate each attempted result as `[]` or at most 20 objects with exactly nonempty-string `anchor`, `issue`, and `evidence`; cap each string at 2,000 and compact JSON at 65,536 UTF-8 bytes. Mark missing/oversized/malformed output unavailable without repairing it or inventing `[]`; stale output is unavailable too. If unavailable evidence makes a forced-DEEP boundary indeterminate, increase to DEEP and attempt the missing coverage when feasible.
-Then always `spawn_agent(task_name="code_review_<unique>", fork_turns:"none")` exactly once. Compactly reserialize available results and escape literal `<`, `>`, `&` as `\u003c`, `\u003e`, `\u0026`. The reviewer repeats selected depth, hunter set, and concise reason in stored narrative, not a schema field. Only this full-sweep formal reviewer owns `review-code`; hunters never emit verdicts or receipts. Under-classification, including LIGHT to STANDARD, LIGHT to DEEP, or wrong STANDARD focus, uses exactly one ordinary FIX_NOW finding; the existing FAIL mapping means it cannot PASS. Reroute missing discovery and a fresh formal review without a source edit. At DEEP, DEEP is sufficient; correct omitted secondary rationale without an impossible re-escalation.
-Within one live attempt depth can only increase (`LIGHT < STANDARD < DEEP`); after affecting edits recompute with the prior depth as a floor. Resume/recovery recomputes current evidence and never restores depth from TASK.json, RECEIPTS.jsonl, or REVIEWS.jsonl; its status explicitly says depth was recomputed even when unchanged. Every retry uses new task names. Every escalation status names the old depth, new depth, and concrete trigger.
+Then always `spawn_agent(task_name="code_review_<unique>", fork_turns:"none")` exactly once. Compactly reserialize available results and escape literal `<`, `>`, `&` as `\u003c`, `\u003e`, `\u0026`. The reviewer repeats selected depth, hunter set, and concise reason in stored narrative, not a schema field. Only this full-sweep formal reviewer owns `review-code`; hunters never emit formal verdicts. Under-classification, including LIGHT to STANDARD, LIGHT to DEEP, or wrong STANDARD focus, uses exactly one ordinary FIX_NOW finding; the existing FAIL mapping means it cannot PASS. Reroute missing discovery and a fresh formal review without a source edit. At DEEP, DEEP is sufficient; correct omitted secondary rationale without an impossible re-escalation.
+Within one live attempt depth can only increase (`LIGHT < STANDARD < DEEP`); after affecting edits recompute with the prior depth as a floor. Resume/recovery recomputes current evidence and never restores depth from stored task artifacts; its status explicitly says depth was recomputed even when unchanged. Every retry uses new task names. Every escalation status names the old depth, new depth, and concrete trigger.
 The formal agent definition owns its verdict contract and the hunter definition owns its output
 contract: never restate, relocate, or paraphrase either in spawn prompts. Await every required
-formal reviewer. `wait_agent` coordinates only, and `list_agents` do not author receipts; neither is evidence. Watcher-owned `RECEIPTS.jsonl` entries must show PASS for
-each declared lens in the current task receipt run. Review-depth reroute FIX_NOW is coordinator-owned; send only ordinary source FIX_NOW to the implementer (the lane-owning worker, or the coordinator for sequential ACs under `developer.md`). Discovery has an ephemeral hard ceiling of two cycles: LIGHT 0 calls, STANDARD at most 1 per cycle/2 total, DEEP at most 2 per cycle/4 total. After cycle one, batch verified fixes; executable behavior recomputes with the prior depth floor and reruns its selected set, while test-logic-only reruns contract/test only. Docs/HEAD/test-count/command text uses deterministic checks only and checkpoint/receipt wording uses task verification only; both no-hunter branches forfeit the remaining budget. After cycle two or that forfeit, select or retain DEEP, spawn no hunter, and use one fresh formal reviewer on final diff plus prior remediation evidence with reason `discovery budget exhausted`; on recovery when prior count is unavailable select or retain DEEP and use `discovery budget unknown and treated as exhausted`. Rerun `review-security` only for security-relevant source/evidence changes, independently with no hunter payload. Depth/budget add no task, receipt, or review-detail field. Inline self-review is no fallback.
-Normally receipt-backed review PASS precedes Phase 7. Under the Missing receipt
-policy, actual reviewer PASS finals permit one substantive QA run, but review
-and QA remain NON-ATTESTING and can only lead to the generic blocked path unless
-ordered receipts arrive.
+formal reviewer. Await actual PASS finals before QA. Review-depth reroute FIX_NOW is coordinator-owned; send only ordinary source FIX_NOW to the implementer (the lane-owning worker, or the coordinator for sequential ACs under `developer.md`). Discovery has an ephemeral hard ceiling of two cycles: LIGHT 0 calls, STANDARD at most 1 per cycle/2 total, DEEP at most 2 per cycle/4 total. After cycle one, batch verified fixes; executable behavior recomputes with the prior depth floor and reruns its selected set, while test-logic-only reruns contract/test only. Docs/HEAD/test-count/command text uses deterministic checks only and checkpoint wording uses task verification only; both no-hunter branches forfeit the remaining budget. After cycle two or that forfeit, select or retain DEEP, spawn no hunter, and use one fresh formal reviewer on final diff plus prior remediation evidence with reason `discovery budget exhausted`; on recovery when prior count is unavailable select or retain DEEP and use `discovery budget unknown and treated as exhausted`. Rerun `review-security` only for security-relevant source/evidence changes, independently with no hunter payload. Depth/budget add no task or review-detail field. Inline self-review is no fallback.
+Start Phase 7 QA only after actual PASS finals from all required reviewers.
 
 Apply the parent run skill's subagent wait UX rule: finish useful local work, then wait in one
 interval of up to 60 seconds; never use rapid short polling or agent-status tools as a poll.
 After a timeout, emit one compact user status before waiting again.
 
-Use a valid formal-review `task_name` containing `code_review`/`review_code` or `security_review`/`review_security`;
-the agent-owned verdict contract stays on the first line; a first message line is readable context only.
-Preflight rejects unbindable review-looking names. Hunter names must contain neither formal-review
-identity. Do not use a generic worker name for a required reviewer. The MCP-hosted watcher
-solely owns lifecycle evidence. Follow
-`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
-acquisition/identity/completion and
-`doc/harness/patterns/ADR__consolidated-task-artifacts.md` for stream/gate
-semantics. Late observation cannot recover a completed reviewer.
+Use clear, distinct task names for operator visibility. Names do not authorize review or completion.
 
 ### Phase 7: Verification Gate
 
 Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/verification-gate.md` for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
 
 Only begin this QA phase after all required Phase 6.6 reviewer finals actually
-PASS. QA started before those finals is invalid substantive sequencing. Without
-a receipt-backed review PASS, any later QA receipt remains out of order for
-close even though the QA final is still useful under the Missing receipt policy.
+PASS. QA started before those finals is invalid substantive sequencing.
 
 **On Codex:** run the required QA lenses declared in `TASK.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
 
@@ -323,20 +299,14 @@ spawn_agent {
 ```
 
 After awaiting QA/UX, run `wbs(action="verify")`.
-`wait_agent` and `list_agents` are coordination-only; the Codex watcher records
-direct lifecycle events automatically. If no subagent path exists, run
+`wait_agent` and `list_agents` are coordination-only; await actual lens finals. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
 
 Use the same wait UX for QA/UX: useful local work first, one wait interval of
 up to 60 seconds and one status update after timeout.
 
-Use structured QA/UX `task_name` values. These names are the runtime-visible
-lens binding when delegated prompt bodies are encrypted in Codex rollouts.
-Use a fresh task name for every QA run. Its prefix must be exactly `qa_cli_`,
-`qa_api_`, `qa_browser_`, or `qa_desktop_`, followed by a short sanitized task
-slug and run id. This preserves lens inference while avoiding name collisions
-across sequential tasks. Run at most one agent per required lens in one cycle.
+Use clear, distinct QA/UX task names for operator visibility; names have no gate authority.
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 
@@ -348,7 +318,7 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
   - `critical` AND confidence >= 7
   - `high` AND confidence >= 8
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
-- **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, retain evidence in the review/QA receipt stream.
+- **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, report concrete evidence and run existing WBS assertions.
 
 ### Phase 7.7: Dogfood (post-QA, pre-close)
 
@@ -371,8 +341,7 @@ Visual dogfooder browser screenshots follow the same availability gate: capture 
 ### Phase 7.8: Harness source auto-install (post-QA, pre-close)
 
 When the repository being changed is the harness plugin source itself (root
-`install.py` plus `plugin/` and `plugin-codex/` are present), terminal ordered
-review+QA PASS receipts MUST immediately run:
+`install.py` plus `plugin/` and `plugin-codex/` are present), actual independent review and QA PASS MUST immediately run:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/install_verified.py \
@@ -385,7 +354,7 @@ prevent the task from reaching the close gate. Capture the installer exit code
 and runtime summaries. The trusted helper may inspect the concrete install
 payload and Git state because installation is an explicit operation; those
 checks are not lifecycle gates. It verifies canonical harness identity and
-ordered review+QA receipts before it invokes the snapshot's
+current WBS applicability and trusted task/source ownership before it invokes the snapshot's
 `python3 install.py` (the default conditional run). The installer builds
 each canonical runtime projection, leaves synchronized runtimes untouched, and
 refreshes only stale runtimes. Comparison errors or failed refreshes block completion; never claim
@@ -393,8 +362,7 @@ the source is deployed. Payload synchronization does not diagnose external
 config/registry-only drift; `python3 install.py --force` remains the explicit
 repair path. Do not rerun installation for docs-only edits after this step. The
 current process may retain already-loaded MCP/hooks, so report when a
-new thread is required without forging receipts. The helper writes no install
-receipt or deduplication state; retrying after interruption recomputes payload
+new thread is required to load changed runtime code. The helper writes no deduplication state; retrying after interruption recomputes payload
 equality from a fresh verified snapshot.
 
 ### Phase 8: Completion preparation
@@ -405,8 +373,8 @@ Prepare these completion checks now; the final phase revalidates them after
 durable-doc and learning work:
 
 1. PLAN.md acceptance criteria are addressed or explicitly deferred.
-2. `wbs(action="verify")` reports PASS from the required ordered receipt sequence.
-3. Required QA/UX subagents were spawned when the runtime exposed them; watcher-owned receipts prove start and explicit completion.
+2. `wbs(action="verify")` reports PASS from current required WBS checks.
+3. Required independent review/QA and applicable UX results were awaited, and actual review PASS preceded actual QA.
 4. User corrections are reflected in PLAN.md or durable documentation.
 5. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, or reusable guidance.
 
@@ -483,10 +451,9 @@ Report retained originals and their next action; never silently leave them.
 
 Phase 9 is the only normal owner of `wbs(action="close")` and the user-facing completion
 response. Target-aware gates invalidate affected source applicability after relevant edits;
-lifecycle receipts remain authentic history. Preserve unaffected result scope. Rerun the verified source
+prior actual results retain their original scope. Preserve unaffected result scope. Rerun the verified source
 installer when its concrete install payload changed; installer-local payload
-checks remain allowed. Call `wbs(action="verify")` once after the final required receipt
-sequence is complete.
+checks remain allowed. Call `wbs(action="verify")` once after actual independent review and QA PASS.
 
 Recheck every Phase 8 completion condition. Then call `wbs(action="close")` exactly once.
 Before `wbs(action="close")`, confirm the final `wbs(action="verify")` result is PASS and any

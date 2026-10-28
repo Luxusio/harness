@@ -64,61 +64,11 @@ def test_codex_subagent_waiting_avoids_rapid_polling_noise():
     assert "rapid 10/20/30-second wait loops" in run
     assert "one compact status update" in run
     assert "Use `wait_agent` only to coordinate" in run
-    assert "`wait_agent` and `list_agents` output do not author receipts" in run
     assert "never use rapid short polling" in develop
-    assert "and `list_agents` do not author receipts" in develop
 
 
-def test_spawn_prompts_must_not_restate_the_verdict_contract():
-    """The agent definition owns the verdict shape; a prompt that repeats it loses lenses.
-
-    Twice observed: a coordinator prompt relocated `VERDICT:` off the first line
-    and a finished review bound as PENDING and was discarded. See
-    doc/harness/REQ__lens-verdict-contract-ownership.md.
-    """
-    for rel in (
-        "plugin/skills/develop/SKILL.md",
-        "plugin/skills/run/SKILL.md",
-        "plugin-codex/internal-skills/develop/SKILL.md",
-        "plugin-codex/internal-skills/run/SKILL.md",
-    ):
-        body = (REPO / rel).read_text(encoding="utf-8")
-        assert "verdict contract" in body, rel
-        assert "first line" in body, rel
-        for phrase in ("restate", "spawn prompt"):
-            assert phrase in body, f"{rel}: missing {phrase!r}"
 
 
-def test_lens_definitions_warn_about_the_residual_voiding_rule():
-    """The lens definition is the only text the lens actually reads.
-
-    A differing bare verdict or counts line elsewhere in the message still
-    voids the verdict, and fences and indentation give no exemption. Five
-    reviews died to the pre-fix version of this rule while it was documented
-    only in doc/harness/REQ__lens-verdict-contract-ownership.md.
-    """
-    for rel in (
-        "plugin/agents/code-reviewer.md",
-        "plugin/agents/security-reviewer.md",
-        "plugin/agents/qa-cli.md",
-        "plugin/agents/qa-api.md",
-        "plugin/agents/qa-browser.md",
-        "plugin/agents/qa-desktop.md",
-        "plugin-codex/agents/code-reviewer.md",
-        "plugin-codex/agents/security-reviewer.md",
-        "plugin-codex/agents/qa-cli.md",
-        "plugin-codex/agents/qa-api.md",
-        "plugin-codex/agents/qa-browser.md",
-        "plugin-codex/agents/qa-desktop.md",
-    ):
-        # Normalized: the sentences are hard-wrapped differently per file.
-        body = " ".join((REPO / rel).read_text(encoding="utf-8").split())
-        for phrase in (
-            "voids your verdict entirely",
-            "fenced or indented example line is not exempt",
-            "Quote differing examples inline",
-        ):
-            assert phrase in body, f"{rel}: missing {phrase!r}"
 
 
 def test_claude_lens_agents_stay_in_the_foreground():

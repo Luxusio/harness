@@ -12,6 +12,9 @@ invalidated_by_paths:
 freshness_updated: 2026-09-07T04:13:35Z
 ---
 
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
+
 # REQ — normative runtime text is composed, not restated
 
 > **2026-09-23:** `plugin/scripts/stop_gate.py` was deleted; the MCP

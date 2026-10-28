@@ -310,10 +310,7 @@ class KnownRedClaimsTests(unittest.TestCase):
         revived = {node for _text, node in
                    known_red_claims([t.replace(SUPERSEDED, "") for t in texts])}
         self.assertTrue(revived, "the known-red pattern matches nothing in the real file")
-        self.assertTrue(
-            any("test_receipt_watcher_fail_closed" in (node or "") for node in revived),
-            revived,
-        )
+
 
     def test_extractor_recognises_a_claim_and_honours_supersession(self):
         live = "Known pre-existing RED at master 90a7afe: tests/test_x.py::C::test_y."

@@ -433,7 +433,7 @@ def _entries(repo, relative):
 def _control(repo, relative):
     from _lib import _validate_task_control
     raw = _read(repo, relative)
-    return _validate_task_control(_json(raw)) if raw is not None else {}
+    return _migration_control(_json(raw)) if raw is not None else {}
 
 
 def _open_lock(repo, relative, *, directory=False):
@@ -664,7 +664,7 @@ def _manifest(repo):
 
 
 @_pinned
-def preview(repo_root):
+def _preview_goals(repo_root):
     repo = Path(repo_root).resolve(strict=True)
     journal = _manifest(repo)
     if journal:
@@ -675,7 +675,7 @@ def preview(repo_root):
 
 
 @_pinned
-def apply(repo_root):
+def _apply_goals(repo_root):
     repo = Path(repo_root).resolve(strict=True)
     # Refuse all bad inputs before creating archive/lock state.
     initial = _manifest(repo)
@@ -709,7 +709,7 @@ def apply(repo_root):
                 fcntl.flock(batch_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ValueError("Goal migration: batch writer active; retry after it exits") from exc
-        # WBS writers use the same task-directory flock for their receipt
+        # WBS writers use the same task-directory flock for their task-state
         # transaction. Hold it across hash recheck and metadata replacement.
         for relative in sorted(planned_destinations):
             if relative.endswith("/WBS.json"):
@@ -794,3 +794,419 @@ def apply(repo_root):
             if goal_fd is not None:
                 os.close(goal_fd)
             os.close(fd)
+
+
+CONTROL_ARCHIVE = "doc/harness/archive/task-control-migration"
+CONTROL_MANIFEST = CONTROL_ARCHIVE + "/manifest.json"
+
+
+def _migration_control(value):
+    """Only explicit migration accepts the retired control schema."""
+    from _lib import _validate_task_control
+    current = _validate_task_control(value)
+    if current:
+        return current
+    if not isinstance(value, dict) or set(value) != {"run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint"}:
+        return {}
+    fingerprint = value["close_receipt_fingerprint"]
+    if fingerprint is not None and (not isinstance(fingerprint, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint)):
+        return {}
+    return _validate_task_control({key: val for key, val in value.items() if key != "close_receipt_fingerprint"}
+                                  | {"closed": fingerprint is not None})
+
+
+def _historical_control(value):
+    """Recognize pre-UUIDv7 history without granting it lifecycle authority."""
+    from datetime import datetime
+    from _lib import _task_control_lenses
+    fields = {"task_run_id", "started_at", "execution_mode", "review_lenses",
+              "qa_lenses", "close_receipt_fingerprint"}
+    if not isinstance(value, dict) or set(value) != fields:
+        return False
+    if (not isinstance(value["task_run_id"], str)
+            or not re.fullmatch(r"[0-9a-f]{32}", value["task_run_id"])
+            or value["execution_mode"] not in ("standard", "micro")):
+        return False
+    started = value["started_at"]
+    if not isinstance(started, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", started):
+        return False
+    try:
+        datetime.fromisoformat(started)
+    except ValueError:
+        return False
+    review, qa = value["review_lenses"], value["qa_lenses"]
+    if (not isinstance(review, list) or not isinstance(qa, list)
+            or any(not isinstance(lens, str) or not lens.startswith("review-") for lens in review)
+            or any(not isinstance(lens, str) or not lens.startswith("qa-") for lens in qa)
+            or _task_control_lenses(review + qa) is None):
+        return False
+    fingerprint = value["close_receipt_fingerprint"]
+    return fingerprint is None or isinstance(fingerprint, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint) is not None
+
+
+def _control_json(raw, path):
+    try:
+        return _json(raw)
+    except ValueError as exc:
+        raise ValueError(str(exc) + ": " + str(path)) from exc
+
+
+def _control_bindings(repo):
+    """Inspect raw bindings: normal readers deliberately reject old runs."""
+    references = set()
+    legacy = _read(repo, "doc/harness/tasks/.active", 4096)
+    if legacy and legacy.strip():
+        first = legacy.decode("utf-8").strip().splitlines()[0]
+        references.add(Path(first.rstrip("/")).name)
+    for name, _ in _entries(repo, "doc/harness/tasks/.active_sessions") or []:
+        if not name.endswith(".json"):
+            continue
+        value = _json(_read(repo, "doc/harness/tasks/.active_sessions/" + name))
+        _require(isinstance(value, dict), "invalid active session binding: " + name)
+        # Conflict fences also retain task identities and must not be ignored.
+        conflicts = value.get("conflicts", [])
+        _require(isinstance(conflicts, list) and not value.get("conflicts_overflow"),
+                 "unresolved active session conflict: " + name)
+        for binding in [value] + conflicts:
+            _require(isinstance(binding, dict), "invalid active session conflict: " + name)
+            for key in ("task_id", "task_dir"):
+                if isinstance(binding.get(key), str):
+                    references.add(Path(binding[key].rstrip("/")).name)
+    return references
+
+
+def _without_close_fingerprint(data):
+    """Convert only retired pool fields, preserving run and Git/archive proof."""
+    value = copy.deepcopy(data)
+    for item in value.get("requests", []):
+        if "close_fingerprint" in item:
+            fingerprint = item.pop("close_fingerprint")
+            _require(fingerprint is None or isinstance(fingerprint, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint), "invalid retired pool close fingerprint")
+            _require("closed" not in item or item["closed"] == (fingerprint is not None), "conflicting pool closure")
+            item["closed"] = fingerprint is not None
+        checkpoint = item.get("checkpoint")
+        if isinstance(checkpoint, dict) and "close_fingerprint" in checkpoint:
+            fingerprint = checkpoint.pop("close_fingerprint")
+            _require(isinstance(fingerprint, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint), "invalid retired checkpoint close fingerprint")
+            checkpoint["closed"] = True
+    return value
+
+
+@contextmanager
+def _control_workspace(repo, root):
+    """Use the existing descriptor-bound migration I/O for registered worktrees."""
+    from _lib import resolve_registered_worktree
+    root = Path(root)
+    if root != repo:
+        _require(resolve_registered_worktree(str(repo), str(root)) == str(root), "unregistered migration worktree")
+    if root == repo:
+        yield root
+        return
+    token = _ROOT.set(None)
+    fd = None
+    try:
+        fd = _root_fd(root)
+        bound = _ROOT.set((str(root), fd))
+        try:
+            yield root
+        finally:
+            _ROOT.reset(bound)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        _ROOT.reset(token)
+
+
+def _control_read(repo, entry):
+    with _control_workspace(repo, entry["root"]) as root:
+        return _read_publication(root, entry["path"], 16 * LIMIT)
+
+
+def _control_write(repo, entry, data, expected):
+    with _control_workspace(repo, entry["root"]) as root:
+        _write(root, entry["path"], data, expected=expected)
+
+
+def _control_changes(repo):
+    """Prevalidate whole archive custody before planning any converted byte."""
+    import batch_state as batch
+    changes, archives, pools, retained = {}, {}, [], []
+    pool_tasks = set()
+    roots = {str(repo)}
+    for name, info in _entries(repo, "doc/harness/runtime/batches") or []:
+        if name == ".lock":
+            continue
+        _require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json", name) and stat.S_ISREG(info.st_mode), "unsafe pool migration input")
+        path = "doc/harness/runtime/batches/" + name
+        raw = _read(repo, path)
+        original = _json(raw)
+        value = _without_close_fingerprint(original)
+        batch.validate(value, str(repo), name[:-5])
+        pools.append((path, raw, value))
+        for item in value["requests"]:
+            pool_tasks.add(item["task_id"])
+            worktree = item.get("worktree")
+            if worktree and os.path.isdir(worktree):
+                from _lib import resolve_registered_worktree
+                _require(resolve_registered_worktree(str(repo), worktree) == worktree, "unregistered pool worktree")
+                roots.add(worktree)
+            checkpoint = item.get("checkpoint") or {}
+            if checkpoint.get("archive_fingerprint"):
+                archive = str(repo / ("doc/harness/archive/batch/" + item["task_id"]))
+                _require((checkpoint.get("harvest") or {}).get("archived") == archive, "archive identity mismatch")
+                # This generic custody check includes historical RECEIPTS/REVIEWS bytes.
+                expected = checkpoint["archive_fingerprint"]
+                if archive in archives:
+                    _require(archives[archive][0] == expected, "conflicting archive proof")
+                else:
+                    entries = batch._fingerprint_entries(archive)
+                    observed = "sha256:" + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
+                    _require(observed == expected, "preexisting archive fingerprint drift")
+                    archives[archive] = (expected, entries)
+    def add(root, path, before, after):
+        if before != after:
+            changes[(str(root), path)] = dict(root=str(root), path=path,
+                before=base64.b64encode(before).decode(), after=base64.b64encode(after).decode())
+    for root in sorted(roots):
+        with _control_workspace(repo, root) as source:
+            references = pool_tasks | _control_bindings(source)
+            for name, info in _entries(source, "doc/harness/tasks") or []:
+                if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    continue
+                _require(IDENT.fullmatch(name), "invalid task identity")
+                path = "doc/harness/tasks/" + name + "/TASK.json"
+                raw = _read(source, path)
+                if raw is None:
+                    continue
+                original = _control_json(raw, source / path)
+                value = _migration_control(original)
+                if not value and _historical_control(original) and name not in references:
+                    retained.append(dict(path=str(source / path), reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle"))
+                    continue
+                _require(value, "invalid or referenced historical task control during explicit migration: " + str(source / path))
+                if "close_receipt_fingerprint" in original:
+                    add(source, path, raw, _encode(value))
+    # Archived controls are format consumers too; preserve every other archived byte.
+    for name, info in _entries(repo, "doc/harness/archive/batch") or []:
+        if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            continue
+        path = "doc/harness/archive/batch/" + name + "/TASK.json"
+        raw = _read(repo, path)
+        if raw is None:
+            continue
+        value = _migration_control(_control_json(raw, repo / path))
+        _require(value, "invalid archived task control: " + str(repo / path))
+        if "close_receipt_fingerprint" in _json(raw):
+            after = _encode(value)
+            add(repo, path, raw, after)
+            archive = str(repo / ("doc/harness/archive/batch/" + name))
+            if archive in archives:
+                archives[archive][1]["TASK.json"] = _hash(after)
+    archive_rows = []
+    for archive, (before, entries) in sorted(archives.items()):
+        after = "sha256:" + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
+        archive_rows.append(dict(path=archive, before=before, after=after))
+    hashes = {row["path"]: row["after"] for row in archive_rows}
+    for path, raw, value in pools:
+        for item in value["requests"]:
+            checkpoint = item.get("checkpoint") or {}
+            if checkpoint.get("archive_fingerprint"):
+                checkpoint["archive_fingerprint"] = hashes[checkpoint["harvest"]["archived"]]
+        if _json(raw) != value:
+            add(repo, path, raw, _encode(value))
+    # Task controls precede pools so a retry must understand the mixed journal state.
+    result = dict(version=1, status="prepared", destinations=sorted(changes.values(), key=lambda row: (row["path"].endswith(".json") and "/runtime/batches/" in row["path"], row["root"], row["path"])), archives=archive_rows)
+    if retained:
+        result["retained_historical_controls"] = retained
+    return result
+
+
+def _control_journal(repo):
+    raw = _read_publication(repo, CONTROL_MANIFEST, 16 * LIMIT)
+    if raw is None:
+        return None
+    value = _json(raw)
+    _require(isinstance(value, dict) and set(value) - {"retained_historical_controls"} == {"version", "status", "destinations", "archives"}
+             and value["version"] == 1 and value["status"] in {"prepared", "complete"}
+             and isinstance(value["destinations"], list) and len(value["destinations"]) <= MAX_RECORDS * 4
+             and isinstance(value["archives"], list), "invalid task-control migration journal")
+    retained = value.get("retained_historical_controls", [])
+    _require(isinstance(retained, list) and len(retained) <= MAX_RECORDS * 4
+             and all(isinstance(row, dict) and set(row) == {"path", "reason"}
+                     and isinstance(row["path"], str) and os.path.isabs(row["path"])
+                     and str(Path(row["path"])) == row["path"] and ".." not in Path(row["path"]).parts
+                     and re.fullmatch(r"TASK__[A-Za-z0-9_.-]{1,180}", Path(row["path"]).parent.name)
+                     and Path(row["path"]).name == "TASK.json"
+                     and Path(row["path"]).parent.parent.parts[-3:] == ("doc", "harness", "tasks")
+                     and row["reason"] == "pre-UUIDv7 historical control retained; unavailable to current lifecycle"
+                     for row in retained), "invalid historical control report")
+    keys = set()
+    for entry in value["destinations"]:
+        _require(isinstance(entry, dict) and set(entry) == {"root", "path", "before", "after"}, "invalid control migration entry")
+        _require(isinstance(entry["root"], str) and os.path.isabs(entry["root"]), "invalid migration root")
+        _require(re.fullmatch(r"doc/harness/(?:tasks/TASK__[A-Za-z0-9_.-]{1,180}/TASK.json|archive/batch/TASK__[A-Za-z0-9_.-]{1,180}/TASK.json|runtime/batches/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json)", entry["path"]), "invalid control migration destination")
+        _require((entry["root"], entry["path"]) not in keys, "duplicate migration destination")
+        keys.add((entry["root"], entry["path"]))
+        decoded = {}
+        for field in ("before", "after"):
+            try:
+                data = base64.b64decode(entry[field], validate=True)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("Goal migration: invalid task-control journal bytes") from exc
+            _require(len(data) <= LIMIT, "oversized migration entry")
+            decoded[field] = _json(data)
+        before, after = decoded["before"], decoded["after"]
+        if entry["path"].endswith("/TASK.json"):
+            _require("close_receipt_fingerprint" in before and _migration_control(before) == after,
+                     "journal changes task identity or closure")
+        else:
+            import batch_state as batch
+            expected = _without_close_fingerprint(before)
+            # Archive hashes may change only by the declared TASK conversion.
+            archive_map = {row.get("path"): row for row in value["archives"] if isinstance(row, dict)}
+            for item in expected.get("requests", []):
+                checkpoint = item.get("checkpoint") or {}
+                if checkpoint.get("archive_fingerprint"):
+                    archive = archive_map.get((checkpoint.get("harvest") or {}).get("archived"), {})
+                    _require(checkpoint["archive_fingerprint"] == archive.get("before"), "journal archive source mismatch")
+                    checkpoint["archive_fingerprint"] = archive.get("after")
+            _require(expected == after, "journal changes unrelated pool state")
+            batch.validate(after, str(repo), Path(entry["path"]).stem)
+    for archive in value["archives"]:
+        _require(isinstance(archive, dict) and set(archive) == {"path", "before", "after"}
+                 and isinstance(archive["path"], str)
+                 and Path(archive["path"]).parent == repo / "doc/harness/archive/batch"
+                 and IDENT.fullmatch(Path(archive["path"]).name)
+                 and all(isinstance(archive[key], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", archive[key]) for key in ("before", "after")),
+                 "invalid migration archive proof")
+    return value
+
+
+def _control_report(journal):
+    report = dict(status=journal["status"], destinations=[str(Path(row["root"]) / row["path"]) for row in journal["destinations"]])
+    if journal.get("retained_historical_controls"):
+        report["retained_historical_controls"] = journal["retained_historical_controls"]
+    return report
+
+
+def _check_retained_controls(repo, journal):
+    """A prepared journal cannot exempt history that acquired a live reference."""
+    retained = journal.get("retained_historical_controls", [])
+    if not retained or journal["status"] == "complete":
+        return
+    import batch_state as batch
+    pool_tasks = set()
+    for name, _ in _entries(repo, "doc/harness/runtime/batches") or []:
+        if name == ".lock":
+            continue
+        _require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json", name), "unsafe pool migration input")
+        value = _without_close_fingerprint(_json(_read(repo, "doc/harness/runtime/batches/" + name)))
+        batch.validate(value, str(repo), name[:-5])
+        pool_tasks.update(item["task_id"] for item in value["requests"])
+    bindings = {}
+    for row in retained:
+        path = Path(row["path"])
+        root = path.parents[4]
+        with _control_workspace(repo, root) as source:
+            if root not in bindings:
+                bindings[root] = _control_bindings(source) | pool_tasks
+            raw = _read(source, str(path.relative_to(source)))
+            _require(raw is not None and _historical_control(_json(raw))
+                     and path.parent.name not in bindings[root],
+                     "invalid or referenced historical task control during explicit migration: " + str(path))
+
+
+def _control_preview(repo):
+    journal = _control_journal(repo)
+    if journal is not None:
+        _check_retained_controls(repo, journal)
+        return _control_report(journal)
+    value = _control_changes(repo)
+    return dict(_control_report(value), status="preview" if value["destinations"] else "complete")
+
+
+def _control_apply(repo):
+    from _lib import active_session_transaction
+    # Session focus locks precede task state locks, including migration.
+    journal = _control_journal(repo)
+    if journal is None:
+        journal = _control_changes(repo)
+    if journal["status"] == "complete" or not journal["destinations"]:
+        return dict(_control_report(journal), status="complete")
+    roots = [str(repo)] + sorted({row["root"] for row in journal["destinations"]} - {str(repo)})
+    from _lib import resolve_registered_worktree
+    for root in roots:
+        _require(root == str(repo) or resolve_registered_worktree(str(repo), root) == root, "unregistered migration worktree")
+    with ExitStack() as stack:
+        for root in roots:
+            stack.enter_context(active_session_transaction(root))
+        lock = _open_lock(repo, CONTROL_ARCHIVE + "/.lock")
+        stack.callback(os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        batch_lock = _open_lock(repo, "doc/harness/runtime/batches/.lock")
+        stack.callback(os.close, batch_lock)
+        fcntl.flock(batch_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for entry in journal["destinations"]:
+            if entry["path"].endswith("/TASK.json"):
+                with _control_workspace(repo, entry["root"]) as root:
+                    fd, _ = stack.enter_context(_directory(root, _parts(entry["path"])[:-1]))
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current = _control_journal(repo)
+        if current is None:
+            _require(journal == _control_changes(repo), "migration inputs changed before preparation")
+            _require(len(journal["destinations"]) <= MAX_RECORDS * 4 and len(_encode(journal)) <= 16 * LIMIT,
+                     "task-control migration exceeds record/storage budget")
+            _write(repo, CONTROL_MANIFEST, _encode(journal))
+        else:
+            _require(current == journal, "migration journal changed")
+        _check_retained_controls(repo, journal)
+        # Validate all before/after pairs before any new publication. A prepared
+        # journal permits exactly its own intermediate formats, never unrelated drift.
+        for entry in journal["destinations"]:
+            before = base64.b64decode(entry["before"], validate=True)
+            after = base64.b64decode(entry["after"], validate=True)
+            observed = _control_read(repo, entry)
+            if journal["status"] == "complete":
+                # Tasks/pools legitimately evolve after completed migration.
+                continue
+            _require(observed in (before, after), "task-control migration destination drift")
+        if journal["status"] == "complete":
+            return _control_report(journal)
+        # Archive integrity on retry allows precisely the journal's own TASK
+        # conversion, so interruption before pool fingerprint update is safe.
+        import batch_state as batch
+        for archive in journal["archives"]:
+            _require(isinstance(archive, dict) and set(archive) == {"path", "before", "after"}, "invalid migration archive proof")
+            observed = batch.fingerprint(archive["path"])
+            _require(observed in {archive["before"], archive["after"]}, "archive drift during task-control migration")
+        for entry in journal["destinations"]:
+            before = base64.b64decode(entry["before"], validate=True)
+            after = base64.b64decode(entry["after"], validate=True)
+            observed = _control_read(repo, entry)
+            if observed == before:
+                _control_write(repo, entry, after, _hash(before))
+        for archive in journal["archives"]:
+            _require(batch.fingerprint(archive["path"]) == archive["after"], "archive changed during task-control migration")
+        journal["status"] = "complete"
+        _write(repo, CONTROL_MANIFEST, _encode(journal))
+        return _control_report(journal)
+
+
+@_pinned
+def preview(repo_root):
+    repo = Path(repo_root)
+    controls = _control_preview(repo)
+    # Legacy Goal inspection may rely on the controls being converted; its own
+    # importer accepts both exact forms only within this explicit migration.
+    legacy = _preview_goals(repo)
+    if legacy["status"] == "complete" and controls["status"] != "complete":
+        legacy = dict(legacy, status=controls["status"], next_action="Apply this explicit task-control migration.")
+    return dict(legacy, task_control_migration=controls)
+
+
+@_pinned
+def apply(repo_root):
+    repo = Path(repo_root)
+    controls = _control_apply(repo)
+    legacy = _apply_goals(repo)
+    return dict(legacy, task_control_migration=controls)

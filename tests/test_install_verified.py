@@ -46,7 +46,7 @@ def test_trusted_repo_rejects_noncanonical_remote(tmp_path):
     assert "origin is not canonical" in reason
 
 
-def test_install_requires_fresh_review_and_qa(tmp_path):
+def test_install_requires_current_wbs_checks(tmp_path):
     repo, task = _repo(tmp_path)
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
@@ -55,29 +55,41 @@ def test_install_requires_fresh_review_and_qa(tmp_path):
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
-        mock.patch.object(mod, "_verification_state", return_value=(False, "fresh QA PASS required", "fp")),
+        mock.patch.object(mod, "_verification_state", return_value=(False, "current WBS checks required", "fp")),
         mock.patch.object(mod.subprocess, "run") as run,
     ):
         assert mod.install_verified(task) == 3
     run.assert_not_called()
 
 
-def test_verification_state_uses_one_receipt_snapshot(tmp_path):
+def test_verification_state_tracks_actual_task_wbs_and_target_applicability(tmp_path):
+    import wbs
     _, task = _repo(tmp_path)
-    snapshot = object()
+    control = {"run_id": "run", "closed": False}
+    state = {"checks": {"A": "current"}}
+    context = {"runtime_verdict": "PASS", "missing_for_close": [],
+               "verification_targets": {"status": "applicable"}}
     with (
-        mock.patch.object(mod, "read_task_control", return_value={}),
-        mock.patch.object(mod, "receipt_snapshot", return_value=snapshot) as read_snapshot,
-        mock.patch.object(mod, "receipt_stream_fingerprint", return_value="sha256:" + "a" * 64) as fingerprint,
-        mock.patch.object(mod, "receipt_review_verdict", return_value="PASS") as review,
-        mock.patch.object(mod, "receipt_runtime_verdict", return_value="PASS") as runtime,
+        mock.patch.object(mod, "read_task_control", return_value=control),
+        mock.patch.object(mod, "emit_compact_context", return_value=context) as measured,
+        mock.patch.object(wbs, "read_state", return_value=state),
     ):
-        assert mod._verification_state(task) == (True, "", "sha256:" + "a" * 64)
-
-    read_snapshot.assert_called_once_with(str(task))
-    assert fingerprint.call_args.args[-1] is snapshot
-    assert review.call_args.args[-1] is snapshot
-    assert runtime.call_args.args[-1] is snapshot
+        ready, reason, fingerprint = mod._verification_state(task)
+        assert ready and not reason
+        assert mod._verification_state(task)[2] == fingerprint
+        state["checks"]["A"] = "changed"
+        assert mod._verification_state(task)[2] != fingerprint
+        state["checks"]["A"] = "current"
+        control["run_id"] = "new-run"
+        assert mod._verification_state(task)[2] != fingerprint
+        control["run_id"] = "run"
+        context["verification_targets"]["status"] = "stale"
+        assert mod._verification_state(task)[2] != fingerprint
+        context["runtime_verdict"] = "PENDING"
+        context["missing_for_close"] = ["current WBS checks"]
+        ready, reason, _ = mod._verification_state(task)
+        assert not ready and "current WBS checks" in reason
+    measured.assert_called_with(str(task), measure_wbs=True)
 
 
 def test_stateless_installer_rechecks_every_call_with_conditional_mode(tmp_path):
@@ -162,7 +174,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
         return subprocess.CompletedProcess([], 0)
 
     def mutate_authority():
-        with mod.receipt_stream_transaction(str(task)):
+        with mod.task_control_transaction(str(task)):
             assert installer_finished.is_set()
             assert final_verification_finished.is_set()
             (task / "TASK.json").write_text('{"mutated": true}\n', encoding="utf-8")
@@ -184,7 +196,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
         mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
-        mock.patch.object(mod, "receipt_stream_transaction", side_effect=task_transaction),
+        mock.patch.object(mod, "task_control_transaction", side_effect=task_transaction),
         mock.patch.object(mod.subprocess, "run", side_effect=run_installer),
     )
     for patcher in patches:
@@ -318,7 +330,7 @@ def test_task_dir_requires_open_exact_session_generation(tmp_path):
         "run_id": "0198c349-5800-7000-8000-000000000001",
         "execution_mode": "standard",
         "required_lenses": ["review-code", "qa-cli"],
-        "close_receipt_fingerprint": None,
+        "closed": False,
     }
     with (
         mock.patch.object(mod, "read_task_control", return_value=control),

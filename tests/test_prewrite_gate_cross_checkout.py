@@ -5,7 +5,7 @@ A ``harness:batch`` lead runs with its cwd in a linked worktree
 worktree, so the main checkout and sibling worktrees are outside it. For such
 an out-of-root target the gate resolves the target's own Harness root and
 applies only the protected-artifact rules there: TASK.json, PLAN.md,
-RECEIPTS.jsonl, task-local REVIEWS.jsonl, goal control JSON, and the focus
+TASK.json, PLAN.md, goal control JSON, and the focus
 markers are denied; plan-first and scope lock are not applied to another
 checkout. See doc/harness/patterns/prewrite-gate.md "Cross-checkout protection".
 """
@@ -36,8 +36,6 @@ TASKS = "doc/harness/tasks"
 PROTECTED = (
     (f"{TASKS}/TASK__x/TASK.json", "task-control-mcp"),
     (f"{TASKS}/TASK__x/PLAN.md", "plan-skill"),
-    (f"{TASKS}/TASK__x/RECEIPTS.jsonl", "receipt-lifecycle-hook"),
-    (f"{TASKS}/TASK__x/REVIEWS.jsonl", "review-detail-writer"),
     (f"{TASKS}/.active_sessions/{SID}.json", "task-control-runtime"),
     (f"{TASKS}/.active", "task-control-runtime"),
     ("doc/harness/goals/current.json", "legacy-data-migration"),
@@ -182,12 +180,11 @@ class TestWorktreeCwdProtectsOtherCheckouts(CrossCheckoutFixture):
 
     def test_out_of_root_symlink_to_foreign_artifact_denied(self):
         # Neither alias basename is protected: only the realpath candidate
-        # matches, and task-local REVIEWS.jsonl needs the realpath'd root.
+        # matches, and task-local TASK.json needs the realpath'd root.
         outside = self.base / "plain-links"
         outside.mkdir(exist_ok=True)
         for name, rel, owner in (
-            ("receipts-alias.json", f"{TASKS}/TASK__x/RECEIPTS.jsonl", "receipt-lifecycle-hook"),
-            ("reviews-alias.json", f"{TASKS}/TASK__x/REVIEWS.jsonl", "review-detail-writer"),
+            ("reviews-alias.json", f"{TASKS}/TASK__x/TASK.json", "task-control-mcp"),
         ):
             with self.subTest(rel=rel):
                 alias = outside / name

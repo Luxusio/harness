@@ -6,7 +6,7 @@ period (default 7 days) into a structured report.
 
 Sections:
   1. Commits — count, authors, top changed files
-  2. Tasks — receipt-backed task closures published in the period
+  2. Tasks — published task closures published in the period
   3. Learnings — new entries by type, key highlights
   4. Patterns — what repeated, what improved, what regressed
 
@@ -37,8 +37,8 @@ from _lib import (
     canonical_task_dir,
     find_repo_root,
     read_task_control,
-    receipt_stream_transaction,
-    receipt_stream_transaction_fd,
+    task_control_transaction,
+    task_control_transaction_fd,
     task_control_status,
 )
 
@@ -271,7 +271,7 @@ def _verified_close_publication_fd(task_fd: int) -> float | None:
     """Verify one close generation relative to its bound task directory."""
     task_dir = f"/proc/self/fd/{task_fd}"
     try:
-        with receipt_stream_transaction_fd(task_fd):
+        with task_control_transaction_fd(task_fd):
             before = os.stat("TASK.json", dir_fd=task_fd, follow_symlinks=False)
             if (
                 not stat.S_ISREG(before.st_mode)
@@ -396,7 +396,7 @@ def _markdown_task_name(name: str) -> str:
 def verified_closed_tasks_since(
     repo_root: str, cutoff_ts: float,
 ) -> list[tuple[float, str]]:
-    """List receipt-verified task closures published after ``cutoff_ts``."""
+    """List published task closures published after ``cutoff_ts``."""
     root = os.path.join(repo_root, TASKS)
     opened_root = _safe_tasks_root(root)
     if opened_root is None:

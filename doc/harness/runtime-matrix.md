@@ -59,7 +59,7 @@ Legend:
 | **Codex CLI version pin** | N/A | ✅ (AC-008) | `plugin-codex/.codex-version` minimum version; setup refuses registration if installed Codex < pin. Bounds the test matrix. |
 | **Opt-in / opt-out** | installed when `claude` is on `PATH` | installed when `codex` is on `PATH` | `install.py` installs on every runtime whose CLI is on `PATH`; `--claude-only` or `--codex-only` selects one. The Claude marketplace source is `./plugin` only, so `claude plugin update` never brings `plugin-codex/` to Claude users; that separation is the opt-out. `plugin/.claude-plugin/plugin.json` carries `features.codex_enabled: false`, but no runtime code reads it. |
 | **`AGENTS.md` import / `project_doc_fallback_filenames`** | N/A | 🟡 user-config | Codex supports `project_doc_fallback_filenames = ["CLAUDE.md"]` in `~/.codex/config.toml`. User-opt-in bridge during migration. Documented in `README.codex.md`. |
-| **Cross-runtime task handoff (Claude start, Codex resume)** | N/A | 🚧 v3 | Current runtimes share atomic `TASK.json` publication and receipt locking, but concurrent orchestration policy remains single-active-session. v3 may support concurrent ownership. |
+| **Cross-runtime task handoff (Claude start, Codex resume)** | N/A | 🚧 v3 | Current runtimes share atomic `TASK.json` publication and task-control locking, but concurrent orchestration policy remains single-active-session. v3 may support concurrent ownership. |
 
 ---
 

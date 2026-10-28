@@ -1,9 +1,11 @@
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
 # REQ receipt capability diagnosis
 
 summary: how to tell why receipts are not being recorded, and why hook_tree_health.py's answer is not sufficient
 status: accepted
 updated: 2026-09-25
-freshness: current
+freshness: superseded
 confidence: high
 kind: process
 source: 2026-08-26 — three consecutive sessions parked tasks at BLOCKED_ENV citing three different causes, two of them wrong.

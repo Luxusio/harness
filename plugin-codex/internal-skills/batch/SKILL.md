@@ -38,10 +38,9 @@ inventory, never a new per-lead host limit. At a host capacity too small for
 one coordinator, one lead and an independent reviewer, report the capability
 blocker before reservations rather than creating an unfinishable lead.
 
-The shared MCP and receipt watcher must support authenticated worktree task
-bindings. An old installed runtime rejecting workspace, missing native
+The shared MCP must support authenticated worktree task bindings. An old installed runtime rejecting workspace, missing native
 ancestry, or unavailable independent evidence is a concrete blocker. Do not
-drop `workspace` or manufacture receipts to get around it. If no pool has been
+drop `workspace` or bypass task ownership to get around it. If no pool has been
 declared yet, dependent or unavailable work uses the ordinary sequential task
 route. Once a WBS work pack is declared, preserve its intent and report its
 specific capability blocker instead of silently marking the pack complete.
@@ -90,7 +89,7 @@ The same owner validates the result, serializes rebase/fast-forward, harvests
 proof and disposes W/branch; it closes a fully disposed eligible pool. No
 separate remembered result, finish or close call. Matching retries resume saved
 checkpoints, including after worktree deletion. Actual closed task/run evidence
-is required; narrative PASS or missing receipts never authorizes integration.
+is required; narrative PASS alone never authorizes integration.
 
 Inspect read-only `operation="status"` on interruption. After actual stopped
 writer confirmation, use `operation="recover"` for integration checkpoints or
@@ -104,7 +103,7 @@ returned next action and bind real worker identity before continuation. Context,
 next and session/prompt discovery surface pending pools even with no active
 task; they do not mutate Git or assert worker liveness. Preserve shared S1 proof,
 conflict/error/retention rules and no-force disposal. Do not rerun a lens solely
-for a missing receipt. Recompute slots and refill via `prepare` without a wave
+for missing recording. Recompute slots and refill via `prepare` without a wave
 barrier, but never run integration concurrently or past an unresolved halt.
 
 After all requests integrate and cleanup succeeds, reopen the same WBS root for

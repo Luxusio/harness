@@ -224,7 +224,7 @@ bounded nonempty `key` and human-readable `insight`, plus matching `task` and
 `task_run_id`. Feedback rules also require `trigger`, `action`, and
 `verification`. Diagnostic gate/crash/bypass/stop/codifier rows are retained
 but never promoted. A valid current-run key may count at most
-one valid row from each distinct receipt-verified closed task/run for that key
+one valid row from each distinct verified closed task/run for that key
 toward the threshold. Caller/row assertions, open or stale-fingerprint tasks,
 and duplicate rows from one run do not count. With no valid current-run signal,
 candidate reporting is a no-write no-op. Even with qualifying signals, the

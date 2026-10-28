@@ -11,10 +11,8 @@ Use this skill as the single public Codex entry point for repository mutation.
 2. Execute that workflow in the current conversation. Do not merely summarize it.
 3. Discover the current tool surface before declaring subagents unavailable.
 4. Start or resume the Harness task before source changes. If a native Goal is active, open or resume that objective’s same WBS as directed by the canonical workflow.
-5. Use the required independent code reviewer, conditional security reviewer, and QA subagents when `spawn_agent` is available. Await their final verdicts; a start receipt is not a PASS.
-6. Let `wbs(action="verify")` and `wbs(action="close")` enforce fresh review and QA evidence. Never write receipt files or invent a fallback PASS.
-   Normative receipt acquisition and storage/gate contracts live in
-   `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` and
-   `doc/harness/patterns/ADR__consolidated-task-artifacts.md` respectively.
+5. Use the required independent code reviewer, conditional security reviewer, and QA subagents when `spawn_agent` is available. Await actual reviewer PASS finals before actual QA.
+6. Run `wbs(action="verify")` and `wbs(action="close")` against current required WBS checks. Their machine verdicts do not attest review or QA. Do not invent a fallback PASS.
+   The active contract is `doc/harness/REQ__receipt-free-execution-and-completion.md`.
 
 The internal plan, develop, review, and QA prompts remain implementation details. Load them only through the canonical run workflow.

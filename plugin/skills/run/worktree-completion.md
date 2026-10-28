@@ -5,7 +5,7 @@ worktree is not a permanent deliverable: integrate its intended changes and
 remove it and its disposable branch before reporting the overall work done.
 Managed WBS packs use `wbs(action="dispatch", operation="complete")` for
 integration/disposal; their owning WBS completion checks archive, ancestry and
-actual absence of owned W/branch. Source-task close remains a separate receipt
+actual absence of owned W/branch. Source-task close remains a separate measured WBS
 gate. Standalone temporary checkout recovery follows the procedure below.
 
 ## Ownership and timing
@@ -116,7 +116,7 @@ permission to silently bypass the original lifecycle by copying into main.
 For work already recovered into the destination, use a separate recovery task
 to finish the disposition. A formerly blocked/failed lead is not kept forever
 once recovery is complete, but do not fabricate a closed lead result for
-`batch_finish.py`, edit original task status/receipts, or carry original PASS
+`batch_finish.py`, edit original task control, or carry original PASS
 evidence. No duplicate or empty commit is needed to pretend already-landed
 changes went through rebase.
 

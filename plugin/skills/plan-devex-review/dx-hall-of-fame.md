@@ -119,7 +119,7 @@ Use when reviewing plans for Claude Code skills, MCP servers, or AI agent tools.
 
 - [ ] **AskUserQuestion design**: One issue per call. Re-ground context (project, branch, task). 4-rule body (Re-ground / Simplify / Recommend / Options). Hard cap at 4 options.
 - [ ] **State storage**: PLAN.md owns final planning decisions; `/tmp/` or working context is transient; learnings.jsonl remains the staging stream.
-- [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md and TASK.json lens declarations = plan skill through `wbs(action="plan")`; RECEIPTS.jsonl = runtime lifecycle hook.
+- [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md and TASK.json lens declarations = plan skill through `wbs(action="plan")`; task closure = WBS execution owner.
 - [ ] **Auto-resume**: A completed PLAN.md Review Status resumes into develop; incomplete planning is reviewed again instead of replaying a side ledger.
 - [ ] **Graceful degradation**: Missing tools skip cleanly, log reason to learnings.jsonl type `operational`. Never install missing tools automatically.
 - [ ] **Kill switches**: HARNESS_DISABLE_* env vars for every auto-behavior. Honored before CLI detection.

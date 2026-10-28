@@ -23,7 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
-    find_repo_root, now_iso, read_task_control, receipt_runtime_verdict,
+    find_repo_root, now_iso, read_task_control,
     task_control_status,
 )
 
@@ -55,12 +55,11 @@ def _git_context(repo_root: str) -> dict:
 
 def _next_action(task_dir: str, control: dict) -> str:
     status = task_control_status(task_dir, control)
-    verdict = receipt_runtime_verdict(task_dir, control)
     if not os.path.isfile(os.path.join(task_dir, "PLAN.md")) and control.get("execution_mode") != "micro":
         return "Open plan skill — PLAN.md not yet created."
-    if verdict != "PASS":
-        return "Resume the current PROGRESS.md step, then run ordered review and QA verification."
-    return "runtime_verdict PASS — run wbs(action='close') with this task's wbs_id."
+    if status == "closed":
+        return "Task closed."
+    return "Resume the current PROGRESS.md step, complete independent review and QA, then run WBS checks and close."
 
 
 def _progress_summary(task_dir: str) -> list[str]:
@@ -85,7 +84,6 @@ def write_checkpoint(task_dir: str, note: str = "") -> str:
     progress = _progress_summary(task_dir)
     next_act = _next_action(task_dir, control)
     status = task_control_status(task_dir, control)
-    verdict = receipt_runtime_verdict(task_dir, control) if control else "PENDING"
 
     ck_dir = os.path.join(repo_root, "doc", "harness", "checkpoints")
     os.makedirs(ck_dir, exist_ok=True)
@@ -102,7 +100,6 @@ def write_checkpoint(task_dir: str, note: str = "") -> str:
         "## Task state",
         "",
         f"- status: {status}",
-        f"- runtime_verdict: {verdict}",
         f"- execution_mode: {control.get('execution_mode') or 'unknown'}",
         "",
         "## Progress",

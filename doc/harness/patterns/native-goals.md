@@ -33,7 +33,7 @@ The importer preserves original records in an archive before publishing
 hash-bound destinations and retires sources last. Retry uses that manifest and
 refuses externally changed sources or destinations. Historical objectives and
 child intake become provenance-labelled notes, not an executable queue or
-confirmed user requirements. Existing TASK, receipt and pool identities remain
+confirmed user requirements. Existing TASK, run and pool identities remain
 unchanged; completion still requires current proof. A migrated unstarted pack
 has no invented task/run or measured progress. The report supplies its exact
 retained pool intake for recovery. First planning waits for pack integration.

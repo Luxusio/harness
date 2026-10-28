@@ -67,7 +67,7 @@ Conflict-history recovery also defers exact-main binding to a successful native
 task result: invalidate every old registration before acknowledging fences,
 then create a fresh checkpoint; parking another task alone restores no authority.
 Missing native capabilities are reported explicitly; they never authorize
-fabricated receipts, concurrent ownership of one task binding, or an early close.
+fabricated independent results, concurrent ownership of one task binding, or an early close.
 For native shared-cwd edits, the prewrite gate resolves a validated linked
 target checkout before operational-path exemptions and applies that checkout's
 PLAN and protected-artifact rules. Nesting a worktree beneath `.claude/` must
@@ -83,7 +83,7 @@ combined tree in the required order.
 
 Verification: behavioral WBS/batch integration, hostile native rollout identity,
 ready-lane capacity and refill tests, plus existing real-Git batch recovery,
-receipt ordering, runtime payload and contract regressions.
+actual review-before-QA ordering, runtime payload and contract regressions.
 
 ## Known ceiling
 
@@ -101,4 +101,5 @@ protocol handling, not a live end-to-end worktree run or measured throughput.
 Native ancestry validation remains bounded by depth 16 and 64 MiB rollout
 inputs; worktree discovery refuses more than 256 registry entries. Long cold
 ancestry reads can exceed the hook's existing registration budget and then
-fail closed. The shared watcher manager retains its maximum of 16 workers.
+fail closed. Receipt watcher startup and registration are removed; native identity
+and source ownership remain required.

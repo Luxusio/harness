@@ -29,8 +29,7 @@ trees — `~/.claude/harness-dev`, the Claude plugin cache
 from, `~/.codex/harness`, and the Codex plugin cache entry
 `~/.codex/plugins/cache/harness/harness` that Codex actually loads — and a
 test, script, or mutation experiment that reaches one can delete the runtime
-that records receipts. When that happens every later symptom is an absence, so
-review and QA check all four roots, not only task artifacts.
+needed by subsequent work. Review and QA check all four roots, not only task artifacts.
 
 ```bash
 snapshot() { for r in "$HOME/.claude/harness-dev" \
@@ -97,7 +96,7 @@ bytes, commands, selected environment, toolchains and review scope are unchanged
 rerun only affected blocked execution after repair. Changing argv (including
 cache flags) or relevant context requires the appropriate new target and affected
 evidence. Preserve failed history and authentic review-before-QA ordering;
-successful roles are never rerun solely to repair receipt recording.
+successful roles are reused when their applicable inputs remain unchanged.
 
 Run the highest available verification tier without asking the user to opt in.
 For shared preparation, use `verify_runner.py --jobs <group.json> --root <exact
@@ -114,7 +113,7 @@ invalidating consumers of byte-identical artifacts. Legacy shell commands do not
 gain reuse authority. Use `--reuse-only` for a later outcome assertion to validate
 that scoped proof without rerunning product commands on a cache miss. Typed execution
 JSON is advisory and never replaces native
-review/QA receipts or WBS gates. See
+actual independent review/QA or WBS gates. See
 `doc/harness/REQ__verification-execution.md` for declarations, capability preflight,
 failure states and ownership boundaries.
 If this task created or unblocked a live/API/browser/CLI verification path, use
@@ -413,6 +412,6 @@ deferral is not permitted.
 ## Step 4: Record the verification result
 
 Keep acceptance intent in PLAN.md and verification evidence in the ordered
-review/QA entries of `RECEIPTS.jsonl`. A failed AC loops back to the fix cycle;
+current WBS outcome checks and concrete QA evidence. A failed AC loops back to the fix cycle;
 an explicitly deferred AC is named with its reason in the final response.
-`wbs(action="close")` relies on the current task-run receipt verdict, not a second AC ledger.
+`wbs(action="close")` relies on current required WBS checks, not a second AC ledger.

@@ -171,7 +171,7 @@ The compact branch performs a single code/context assessment, asks only
 unresolved material decisions, and then publishes the same canonical PLAN.md contract. It
 must include objective, in/out scope, stable ACs, allowed/test/forbidden paths,
 verification, and Durable Docs Decision. Runtime review, conditional security
-review, QA, receipts, close fingerprint, Goal continuation, and install checks
+review, QA, measured WBS checks, Goal continuation, and install checks
 are identical to full planning.
 
 Before compact publication, inspect the named code/docs and check each

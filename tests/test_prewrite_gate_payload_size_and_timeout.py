@@ -47,8 +47,6 @@ EVERY_WRITE = "applies to every write while set in the runtime's environment"
 PROTECTED = (
     f"{TASKS}/TASK__x/TASK.json",
     f"{TASKS}/TASK__x/PLAN.md",
-    f"{TASKS}/TASK__x/RECEIPTS.jsonl",
-    f"{TASKS}/TASK__x/REVIEWS.jsonl",
     f"{TASKS}/.active",
     "doc/harness/goals/current.json",
 )
@@ -378,7 +376,7 @@ class CodexWrapperFallback(_TmpRepoCase):
     def test_spawn_failure_denies_protected(self):
         def unspawnable(args, **kwargs):
             raise OSError("exec failed")
-        rel = f"{TASKS}/TASK__x/RECEIPTS.jsonl"
+        rel = f"{TASKS}/TASK__x/TASK.json"
         _rc, out = _call_wrapper(self.mod, _write(self.repo, rel, size=10), run=unspawnable)
         self._assert_c05(out, rel)
 
@@ -490,15 +488,6 @@ class ProtectedOnlyDecision(_TmpRepoCase):
         payload["tool_input"]["file_path"] = str(other / "README.md")
         self.assertEqual(self._decide(payload), (None, ""))
 
-    def test_runtime_provenance_is_denied(self):
-        config = self.base / "claude-config"
-        target = config / "projects/p/s/subagents/agent-x.jsonl"
-        payload = _write(self.repo, "README.md", size=10)
-        payload["tool_input"]["file_path"] = str(target)
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(config)}):
-            decision, reason = self._decide(payload)
-        self.assertEqual(decision, "deny")
-        self.assertIn("runtime-owned receipt provenance", reason)
 
     def test_symlink_escape_is_not_a_protected_denial(self):
         outside = self.base / "outside"

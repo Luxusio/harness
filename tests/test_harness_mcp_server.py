@@ -64,35 +64,6 @@ def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -
     )
 
 
-def _record_receipt_fixture(task_dir, receipt):
-    source = harness_lib._receipt_short(receipt.get("source") or "claude_hook", 100)
-    agent_id = harness_lib._receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
-    agent_type = harness_lib._receipt_short(receipt.get("agent_type"), 300)
-    lens = harness_lib._infer_receipt_lens(agent_type, receipt.get("lens"))
-    event = harness_lib._receipt_short(receipt.get("event"), 20).lower()
-    verdict = harness_lib._receipt_short(receipt.get("verdict") or "", 40).upper()
-    raw_summary = str(receipt.get("summary") or "")
-    if event == "completed":
-        verdict, summary = harness_lib.normalize_receipt_completion(lens, raw_summary, verdict)
-    else:
-        verdict, summary = "", ""
-    control = harness_lib.read_task_control(task_dir)
-    entry = {
-        "ts": harness_lib._receipt_now_iso(), "event": event, "source": source,
-        "task_run_id": str(control["run_id"]),
-        "runtime_id": str(receipt.get("runtime_id") or "").strip(),
-        "agent_id": agent_id, "agent_type": agent_type, "lens": lens,
-        "verdict": verdict, "summary": summary,
-    }
-    harness_lib._validate_receipt_runtime_id(source, entry["runtime_id"])
-    assert harness_lib._receipt_entry_semantics_valid(entry)
-    if harness_lib.task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
-        raise RuntimeError("receipt stream is terminal")
-    with (Path(task_dir) / harness_lib.RECEIPTS_NAME).open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
-    return entry
-
-
 class HarnessMcpServerTests(unittest.TestCase):
     def _run_git(self, cwd: str, *args: str) -> None:
         subprocess.run(
@@ -111,7 +82,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
@@ -129,49 +100,14 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def _close_fixture(self, task_dir: str) -> None:
         control = harness_server.read_task_control(task_dir)
-        control["close_receipt_fingerprint"] = harness_server.receipt_stream_fingerprint(task_dir)
+        control["closed"] = True
         self._write_control_fixture(task_dir, control)
 
     def _write_marker_fixture(self, repo_root: str, task_dir: str, session_id: str = "") -> None:
         _write_marker_fixture(repo_root, task_dir, session_id)
 
-    def _write_subagent_receipt(
-        self,
-        task_dir: str,
-        *,
-        agent_id: str = "agent-1",
-        agent_type: str = "harness:qa-cli",
-        source: str = "claude_hook",
-    ) -> None:
-        if not harness_lib.read_task_control(task_dir):
-            raise AssertionError("test task requires valid TASK.json")
-        for payload in (
-            {
-                "agent_id": "review-1", "agent_type": "harness:review-code",
-                "lens": "review-code", "event": "started", "source": source,
-                "runtime_id": "claude:test-session:review-1",
-            },
-            {
-                "agent_id": "review-1", "agent_type": "harness:review-code",
-                "lens": "review-code",
-                "event": "completed", "verdict": "PASS",
-                "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
-                "source": source,
-                "runtime_id": "claude:test-session:review-1",
-            },
-            {
-                "agent_id": agent_id, "agent_type": agent_type,
-                "lens": "qa-cli", "event": "started", "source": source,
-                "runtime_id": f"claude:test-session:{agent_id}",
-            },
-            {
-                "agent_id": agent_id, "agent_type": agent_type, "event": "completed",
-                "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
-                "source": source,
-                "runtime_id": f"claude:test-session:{agent_id}",
-            },
-        ):
-            _record_receipt_fixture(task_dir, payload)
+    def _write_historical_receipts(self, task_dir: str) -> None:
+        Path(task_dir, "RECEIPTS.jsonl").write_bytes(b"opaque historical receipt bytes\n")
 
     def test_server_info_is_harness(self):
         self.assertEqual(harness_server.SERVER_INFO["name"], "harness")
@@ -218,7 +154,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }
 
             def confused_helper(*_args, **_kwargs):
@@ -247,7 +183,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }
             (task / "TASK.json").write_text(
                 json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
@@ -264,7 +200,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_lib._bind_control_writer(harness_server.handle_task_start)
 
 
-    def test_lifecycle_handlers_never_enter_git_snapshot_helpers(self):
+    def test_start_and_context_never_enter_git_snapshot_helpers(self):
         def forbidden(*_args, **_kwargs):
             raise AssertionError("lifecycle Git snapshot helper was called")
 
@@ -282,61 +218,13 @@ class HarnessMcpServerTests(unittest.TestCase):
                 )
                 self.assertNotIn("isError", started)
                 (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
-                self._write_subagent_receipt(str(task_dir))
+                self._write_historical_receipts(str(task_dir))
                 context = harness_server.handle_task_context(
-                    {"task_id": "TASK__no-git-handlers"}
-                )
-                verified = harness_server.handle_task_verify(
-                    {"task_id": "TASK__no-git-handlers"}
-                )
-                closed = harness_server.handle_task_close(
                     {"task_id": "TASK__no-git-handlers"}
                 )
                 os.chdir(prior_cwd)
             self.assertNotIn("isError", context)
-            self.assertNotIn("isError", verified)
-            self.assertNotIn("isError", closed)
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
-            with self.assertRaisesRegex(RuntimeError, "receipt stream is terminal"):
-                _record_receipt_fixture(
-                    str(task_dir),
-                    {
-                        "agent_id": "late-agent", "agent_type": "harness:qa-cli",
-                        "lens": "qa-cli", "event": "started",
-                        "source": "claude_hook", "runtime_id": "claude:test-session:late-agent",
-                    },
-                )
-
-    def test_context_and_close_use_one_snapshot_verify_refreshes_after_settlement(self):
-        handlers = (
-            harness_server.handle_task_context,
-            harness_server.handle_task_verify,
-            harness_server.handle_task_close,
-        )
-        for index, handler in enumerate(handlers):
-            with self.subTest(handler=handler.__name__), tempfile.TemporaryDirectory() as tmp:
-                manifest = Path(tmp) / "doc/harness/manifest.yaml"
-                manifest.parent.mkdir(parents=True)
-                manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-                (Path(tmp) / ".git").mkdir()
-                task_id = f"TASK__one-snapshot-{index}"
-                task_dir = Path(tmp) / "doc/harness/tasks" / task_id
-                prior_cwd = os.getcwd()
-                os.chdir(tmp)
-                try:
-                    harness_server.handle_task_start({"task_id": task_id})
-                    (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
-                    self._write_subagent_receipt(str(task_dir))
-                    with mock.patch.object(
-                        harness_lib,
-                        "_receipt_snapshot_unlocked",
-                        wraps=harness_lib._receipt_snapshot_unlocked,
-                    ) as snapshot:
-                        result = handler({"task_id": task_id})
-                finally:
-                    os.chdir(prior_cwd)
-                self.assertNotIn("isError", result)
-                self.assertEqual(snapshot.call_count, 2 if handler is harness_server.handle_task_verify else 1)
 
     def test_tool_registry_matches_expected_tool_surface(self):
         tools = {tool["name"] for tool in harness_server.list_tools()}
@@ -355,69 +243,6 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(properties["apply"]["default"], False)
         self.assertEqual(set(harness_server.TOOLS), {"wbs"})
 
-    def test_start_only_receipt_does_not_produce_runtime_pass(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__start-only")
-            _record_receipt_fixture(task_dir, {
-                "agent_id": "qa-1", "agent_type": "harness:qa-cli",
-                "lens": "qa-cli", "event": "started",
-                "source": "claude_hook", "runtime_id": "claude:test-session:qa-1",
-            })
-            self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
-
-    def test_completed_qa_fail_controls_runtime_verdict(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__qa-fail")
-            for payload in (
-                {
-                    "agent_id": "review-1", "agent_type": "harness:review-code",
-                    "lens": "review-code", "event": "started",
-                    "source": "claude_hook", "runtime_id": "claude:test-session:review-1",
-                },
-                {
-                    "agent_id": "review-1", "agent_type": "harness:review-code",
-                    "lens": "review-code",
-                    "event": "completed", "verdict": "PASS",
-                    "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
-                    "source": "claude_hook", "runtime_id": "claude:test-session:review-1",
-                },
-                {
-                    "agent_id": "qa-1", "agent_type": "harness:qa-cli",
-                    "lens": "qa-cli", "event": "started",
-                    "source": "claude_hook", "runtime_id": "claude:test-session:qa-1",
-                },
-            ):
-                _record_receipt_fixture(task_dir, payload)
-            _record_receipt_fixture(
-                task_dir,
-                {
-                    "agent_id": "qa-1",
-                    "agent_type": "harness:qa-cli",
-                    "lens": "qa-cli",
-                    "event": "completed",
-                    "verdict": "FAIL",
-                    "summary": "VERDICT: FAIL",
-                    "source": "claude_hook",
-                    "runtime_id": "claude:test-session:qa-1",
-                },
-            )
-            self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "FAIL")
-
-    def test_new_qa_start_invalidates_older_completed_pass(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__qa-restarted")
-            self._write_subagent_receipt(task_dir, agent_id="qa-old")
-            _record_receipt_fixture(
-                task_dir,
-                {
-                    "agent_id": "qa-new",
-                    "agent_type": "harness:qa-cli",
-                    "event": "started",
-                    "summary": "rerun started",
-                    "source": "claude_hook", "runtime_id": "claude:test-session:qa-new",
-                },
-            )
-            self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
 
     def test_unknown_tool_returns_error_payload(self):
         result = call_execution(harness_server, "does_not_exist", {})
@@ -525,7 +350,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "execution_mode": "standard",
                 "review_lenses": ["review-code"],
                 "qa_lenses": ["qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }) + "\n", encoding="utf-8")
             before = state.read_bytes()
 
@@ -647,7 +472,6 @@ class HarnessMcpServerTests(unittest.TestCase):
         ):
             server.handle_request(server._read())
             stdout.flush()
-            server.close()
 
         raw = stdout_bytes.getvalue()
         self.assertTrue(raw.startswith(b"Content-Length: "), raw)
@@ -677,15 +501,13 @@ class HarnessMcpServerTests(unittest.TestCase):
             stdout.flush()
 
         response = json.loads(stdout_bytes.getvalue().decode())
-        server.close()
         instructions = response["result"]["instructions"]
         self.assertIn("WBS-first control plane", instructions)
         self.assertIn("wbs", instructions)
         self.assertIn("plain repo-mutating request", instructions)
         self.assertIn("hooks do not create tasks automatically", instructions)
-        self.assertIn("task_start preserves", instructions)
+        self.assertIn("Task open preserves", instructions)
         self.assertIn("fresh_run=true", instructions)
-        self.assertIn("discard", instructions)
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
         self.assertIn("get_goal", instructions)
@@ -700,41 +522,6 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("do not use Claude display prefixes", instructions)
         self.assertNotIn("write_critic_runtime", instructions)
 
-    def test_codex_initialize_hosts_and_closes_watcher_manager(self):
-        manager = mock.Mock()
-        manager.start.return_value = manager
-        server = harness_server.McpServer()
-        with (
-            mock.patch.object(harness_server, "_WatcherManager", return_value=manager) as factory,
-            mock.patch.object(harness_server, "find_repo_root", return_value="/trusted/repo"),
-            mock.patch.object(server, "_reply"),
-        ):
-            server.handle_request({
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"clientInfo": {"name": "codex-cli"}},
-            })
-            server.close()
-        factory.assert_called_once_with("/trusted/repo")
-        manager.start.assert_called_once_with()
-        manager.stop.assert_called_once_with()
-
-    def test_watcher_manager_failure_does_not_break_codex_initialize(self):
-        server = harness_server.McpServer()
-        with (
-            mock.patch.object(harness_server, "_WatcherManager", side_effect=RuntimeError("boom")),
-            # Without this the real writer persists "RuntimeError: boom" into the
-            # developer's own doc/harness/.watcher-diagnostics.json, and every
-            # later task_context in that repo reports the test's failure as live
-            # session state.
-            mock.patch.object(harness_server, "_record_watcher_error"),
-            mock.patch.object(server, "_reply") as reply,
-        ):
-            server.handle_request({
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"clientInfo": {"name": "codex-cli"}},
-            })
-        self.assertIsNone(server.watcher_manager)
-        reply.assert_called_once()
 
     def test_initialize_instructions_match_current_claude_mcp_contract(self):
         request = {
@@ -921,62 +708,14 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_task_dir = original_ctd
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
-            self.assertEqual(
-                set(structured), {
-                    "task_dir", "task_id", "run_id", "task_context", "watcher_status",
-                },
-            )
+            self.assertEqual(structured["task_id"], "TASK__mcp")
             context = structured["task_context"]
             self.assertEqual(context["task_id"], "TASK__mcp")
-            self.assertEqual(set(context), {
-                "task_id", "status", "task_dir", "routing", "runtime_verdict",
-                "source_write_allowed", "why_source_write_blocked", "review_verdict",
-                "required_review_lenses", "required_qa_lenses", "missing_for_close",
-                "next_action", "report_path", "effective_close_gate",
-                "progress", "summary", "receipt_recording", "verification_targets",
-            })
-            self.assertNotIn("subagent_receipts", context)
-            self.assertNotIn("review_receipts", context)
-            self.assertNotIn("subagent_receipts", structured)
-            self.assertNotIn("review_receipts", structured)
-            self.assertEqual(
-                context["report_path"],
-                "doc/harness/tasks/TASK__mcp/RECEIPTS.jsonl",
-            )
+            self.assertEqual(context["verification_basis"], "current_wbs_checks")
+            for removed in ("watcher_status", "review_verdict", "receipt_recording", "report_path"):
+                self.assertNotIn(removed, context)
+                self.assertNotIn(removed, structured)
 
-    def test_task_verify_reports_the_watcher_status_it_gated_on(self):
-        """The key-set test above proves presence; this proves it is the same
-        observation the handler acted on.
-
-        `handle_task_verify` computes `_watcher_status` and passes it to
-        `_gate_next_action`, which can rewrite next_action entirely. Returning a
-        conclusion while withholding the observation left a caller unable to
-        distinguish an unreadable watcher from a healthy one — on the surface
-        the protocol treats as most authoritative, and unlike `task_start` and
-        `task_context`, which both report it.
-        """
-        unreadable = {
-            "receipts_recordable": None,
-            "receipts_unrecordable_reason": "worker_state_unreadable",
-            "receipts_unrecordable_summary": "watcher worker state could not be read",
-            "receipt_capability_warning": "",
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__verifywatcher")
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                with mock.patch.object(
-                    harness_server, "_watcher_status", return_value=unreadable,
-                ), mock.patch.object(harness_lib, "find_repo_root", return_value=tmp):
-                    verify = self._call_in_repo(
-                        tmp, "task_verify", {"task_id": "TASK__verifywatcher"},
-                    )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-
-        self.assertNotIn("isError", verify)
-        self.assertEqual(verify["structuredContent"]["watcher_status"], unreadable)
 
     def test_critic_tools_are_not_exposed(self):
         for tool in ("write_critic_document", "write_critic_qa", "write_critic_ux"):
@@ -1004,69 +743,8 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("Unknown tool", result["structuredContent"]["error"])
 
-    def test_record_subagent_receipt_is_not_exposed_and_task_verify_is_compact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__subagentreceipt")
-            self._write_subagent_receipt(
-                task_dir,
-                agent_id="agent-123",
-                agent_type="harness:qa-cli",
-            )
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                result = call_execution(harness_server,
-                    "record_subagent_receipt",
-                    {
-                        "task_id": "TASK__subagentreceipt",
-                        "source": "spawn_agent",
-                        "agent_id": "agent-123",
-                        "agent_type": "harness:qa-cli",
-                        "verdict": "PASS",
-                        "summary": "qa-cli passed focused checks",
-                    },
-                )
-                with mock.patch.object(harness_lib, "find_repo_root", return_value=tmp):
-                    verify = self._call_in_repo(
-                        tmp, "task_verify", {"task_id": "TASK__subagentreceipt"},
-                    )
-                receipt_path = Path(task_dir) / "RECEIPTS.jsonl"
-                receipt_exists = receipt_path.is_file()
-                receipt = next(
-                    (
-                        item for item in (
-                            json.loads(line)
-                            for line in receipt_path.read_text(encoding="utf-8").splitlines()
-                        )
-                        if item.get("agent_id") == "agent-123"
-                    ),
-                    {},
-                ) if receipt_exists else {}
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-        self.assertTrue(result.get("isError"))
-        self.assertIn("Unknown tool", result["structuredContent"]["error"])
-        self.assertTrue(receipt_exists)
-        self.assertEqual(receipt["agent_id"], "agent-123")
-        self.assertEqual(receipt["lens"], "qa-cli")
-        self.assertNotIn("subagent_receipts", verify["structuredContent"])
-        self.assertNotIn("review_receipts", verify["structuredContent"])
-        self.assertNotIn("review_report_path", verify["structuredContent"])
-        # `watcher_status` joins the compact set rather than breaking it: it is
-        # the bounded dict `task_start` and `task_context` already return, and
-        # `task_verify` gates its own next_action on it.
-        self.assertEqual(set(verify["structuredContent"]), {
-            "task_dir", "runtime_verdict", "next_action", "missing_for_close",
-            "report_path", "review_verdict", "required_review_lenses",
-            "required_qa_lenses", "watcher_status", "receipt_recording", "verification_targets",
-        })
-        self.assertEqual(verify["structuredContent"]["required_qa_lenses"], ["qa-cli"])
-        self.assertEqual(
-            verify["structuredContent"]["report_path"],
-            "doc/harness/tasks/TASK__subagentreceipt/RECEIPTS.jsonl",
-        )
 
-    def test_micro_execution_mode_allows_no_plan_but_still_requires_verify(self):
+    def test_micro_execution_mode_requires_plan_and_measured_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__micro"
             original_ctd = harness_server.canonical_task_dir
@@ -1085,12 +763,12 @@ class HarnessMcpServerTests(unittest.TestCase):
         ctx = start["structuredContent"]["task_context"]
         self.assertFalse(ctx["source_write_allowed"])
         self.assertEqual(ctx["routing"]["orchestration_mode"], "unassigned")
-        self.assertIn("execution assignment", ctx["why_source_write_blocked"])
+        self.assertIn("PLAN.md", ctx["why_source_write_blocked"])
         self.assertEqual(ctx["routing"]["execution_mode"], "micro")
-        self.assertNotIn("PLAN.md", ctx["missing_for_close"])
-        self.assertIn("subagent", ctx["next_action"])
+        self.assertIn("PLAN.md", ctx["missing_for_close"])
+        self.assertIn("PLAN.md", ctx["next_action"])
         self.assertTrue(close.get("isError"))
-        self.assertIn("completed QA verdict: qa-cli", close["structuredContent"]["missing_for_close"])
+        self.assertTrue(close["structuredContent"]["missing_for_close"])
 
     def test_task_blocked_records_pause_state_and_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1118,12 +796,10 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("wbs(action='open')", body)
             self.assertIn("fresh_run", body)
             self.assertIn("preserv", body.lower())
-            self.assertIn("discard", body.lower())
             payload = result["structuredContent"]
             self.assertIn("wbs(action='open')", payload["next_action"])
             self.assertIn("fresh_run", payload["next_action"])
             self.assertIn("preserv", payload["next_action"].lower())
-            self.assertIn("discard", payload["next_action"].lower())
             self.assertEqual(
                 harness_server.task_control_status(
                     task_dir, harness_server.read_task_control(task_dir)
@@ -1226,7 +902,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                         server.handle_request(server._read())
                         server.handle_request(server._read())
                         stdout.flush()
-                        server.close()
 
                     raw_output = stdout_bytes.getvalue()
                     if mode == "framed":
@@ -1345,7 +1020,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                     ):
                         server.handle_request(server._read())
                         stdout.flush()
-                        server.close()
                     response_body = stdout_bytes.getvalue().split(b"\r\n\r\n", 1)[1]
                     result = json.loads(response_body.decode("utf-8"))["result"]
 
@@ -1576,7 +1250,7 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_task_start_explicitly_resumes_blocked_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-blocked")
-            self._write_subagent_receipt(task_dir)
+            self._write_historical_receipts(task_dir)
             (Path(task_dir) / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
             control_before = Path(task_dir, "TASK.json").read_bytes()
             receipts_before = Path(task_dir, "RECEIPTS.jsonl").read_bytes()
@@ -1596,7 +1270,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("isError", result)
             context = result["structuredContent"]["task_context"]
             self.assertEqual(context["status"], "open")
-            self.assertEqual(context["runtime_verdict"], "PASS")
+            self.assertEqual(context["runtime_verdict"], "PENDING")
             self.assertFalse(result["structuredContent"]["task_created"])
             self.assertTrue(result["structuredContent"]["resumed"])
             self.assertEqual(result["structuredContent"]["run_action"], "preserved")
@@ -1611,7 +1285,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 ), "open",
             )
 
-    def test_task_start_reopens_closed_task_and_clears_close_attestation(self):
+    def test_task_start_requires_fresh_run_for_closed_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-closed")
             self._close_fixture(task_dir)
@@ -1629,14 +1303,14 @@ class HarnessMcpServerTests(unittest.TestCase):
 
             self.assertTrue(result.get("isError"))
             self.assertIn("fresh_run", result["structuredContent"]["next_action"])
-            self.assertIsNotNone(
-                harness_server.read_task_control(task_dir)["close_receipt_fingerprint"]
+            self.assertTrue(
+                harness_server.read_task_control(task_dir)["closed"]
             )
 
-    def test_task_start_fresh_run_reopens_closed_task_and_clears_close_attestation(self):
+    def test_task_start_fresh_run_reopens_closed_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__fresh-closed")
-            self._write_subagent_receipt(task_dir)
+            self._write_historical_receipts(task_dir)
             self._close_fixture(task_dir)
             old_run_id = harness_server.read_task_control(task_dir)["run_id"]
 
@@ -1651,42 +1325,16 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["run_action"], "reset")
             self.assertEqual(payload["previous_run_id"], old_run_id)
             self.assertNotEqual(payload["run_id"], old_run_id)
-            self.assertIsNone(
-                harness_server.read_task_control(task_dir)["close_receipt_fingerprint"]
+            self.assertFalse(
+                harness_server.read_task_control(task_dir)["closed"]
             )
-            self.assertFalse(Path(task_dir, "RECEIPTS.jsonl").exists())
+            self.assertTrue(Path(task_dir, "RECEIPTS.jsonl").exists())
 
-    def test_task_start_fresh_run_refuses_closed_receipt_fingerprint_mismatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__fresh-invalid-closed"))
-            self._write_subagent_receipt(str(task_dir))
-            self._close_fixture(str(task_dir))
-            receipts_path = task_dir / "RECEIPTS.jsonl"
-            late_entry = json.loads(receipts_path.read_text(encoding="utf-8").splitlines()[0])
-            late_entry["agent_id"] = "late-agent"
-            late_entry["runtime_id"] = "claude:test-session:late-agent"
-            with receipts_path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(late_entry, sort_keys=True) + "\n")
-            before = {
-                path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()
-            }
-
-            result = self._call_in_repo(
-                tmp,
-                "task_start",
-                {"task_id": task_dir.name, "fresh_run": True},
-            )
-
-            self.assertTrue(result.get("isError"))
-            after = {
-                path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()
-            }
-            self.assertEqual(after, before)
 
     def test_task_start_rejects_mutating_existing_options_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(self._make_task(tmp, "TASK__preserve-options"))
-            self._write_subagent_receipt(str(task_dir))
+            self._write_historical_receipts(str(task_dir))
             request = Path(tmp, "replacement.md")
             request.write_text("replacement\n", encoding="utf-8")
 
@@ -1754,15 +1402,10 @@ class HarnessMcpServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-open")
             old_run_id = harness_server.read_task_control(task_dir)["run_id"]
-            self._write_subagent_receipt(task_dir)
+            self._write_historical_receipts(task_dir)
             control_before = Path(task_dir, "TASK.json").read_bytes()
             receipts_before = Path(task_dir, "RECEIPTS.jsonl").read_bytes()
-            self.assertEqual(
-                harness_server.receipt_runtime_verdict(
-                    task_dir, harness_server.read_task_control(task_dir)
-                ),
-                "PASS",
-            )
+
 
             result = self._call_in_repo(
                 tmp, "task_start", {"task_id": "TASK__resume-open"},
@@ -1776,37 +1419,16 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["run_id"], resumed["run_id"])
             self.assertEqual(payload["run_action"], "preserved")
             self.assertTrue(payload["evidence_preserved"])
-            self.assertEqual(payload["task_context"]["runtime_verdict"], "PASS")
+            self.assertEqual(payload["task_context"]["runtime_verdict"], "PENDING")
             self.assertEqual(Path(task_dir, "TASK.json").read_bytes(), control_before)
             self.assertEqual(Path(task_dir, "RECEIPTS.jsonl").read_bytes(), receipts_before)
 
-    def test_task_start_preserving_resume_reads_one_receipt_snapshot(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__resume-one-snapshot")
-            self._write_subagent_receipt(task_dir)
 
-            with mock.patch.object(
-                harness_lib,
-                "_receipt_snapshot_unlocked",
-                wraps=harness_lib._receipt_snapshot_unlocked,
-            ) as snapshot:
-                result = self._call_in_repo(
-                    tmp, "task_start", {"task_id": "TASK__resume-one-snapshot"},
-                )
-
-            self.assertNotIn("isError", result)
-            # Readiness diagnostics may inspect other live-checkout tasks.
-            # The resume contract is one snapshot for this task, not globally.
-            resumed_reads = [
-                call for call in snapshot.call_args_list if call.args == (task_dir,)
-            ]
-            self.assertEqual(len(resumed_reads), 1)
-
-    def test_task_start_fresh_run_rotates_generation_and_discards_old_evidence(self):
+    def test_task_start_fresh_run_rotates_generation_and_preserves_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__fresh-open")
             old_run_id = harness_server.read_task_control(task_dir)["run_id"]
-            self._write_subagent_receipt(task_dir)
+            self._write_historical_receipts(task_dir)
 
             result = self._call_in_repo(
                 tmp,
@@ -1820,17 +1442,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse(payload["evidence_preserved"])
             self.assertEqual(payload["previous_run_id"], old_run_id)
             self.assertNotEqual(payload["run_id"], old_run_id)
-            self.assertFalse((Path(task_dir) / "RECEIPTS.jsonl").exists())
-            warning = next(
-                item for item in payload["warnings"]
-                if item["code"] == "EVIDENCE_RUN_SUPERSEDED"
-            )
-            self.assertIn(old_run_id, warning["message"])
+            self.assertTrue((Path(task_dir) / "RECEIPTS.jsonl").exists())
 
-    def test_task_start_fresh_run_rotates_blocked_task_and_discards_old_evidence(self):
+    def test_task_start_fresh_run_rotates_blocked_task_and_preserves_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(self._make_task(tmp, "TASK__fresh-blocked"))
-            self._write_subagent_receipt(str(task_dir))
+            self._write_historical_receipts(str(task_dir))
             (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
             old_run_id = harness_server.read_task_control(str(task_dir))["run_id"]
 
@@ -1845,7 +1462,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["run_action"], "reset")
             self.assertEqual(payload["previous_run_id"], old_run_id)
             self.assertNotEqual(payload["run_id"], old_run_id)
-            self.assertFalse((task_dir / "RECEIPTS.jsonl").exists())
+            self.assertTrue((task_dir / "RECEIPTS.jsonl").exists())
             self.assertFalse((task_dir / "BLOCKED.md").exists())
 
     def test_task_start_blocked_preserve_restores_blocker_when_marker_publish_fails(self):
@@ -1928,77 +1545,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("rollback was incomplete", result["structuredContent"]["error"])
             marker_restore.assert_called_once()
 
-    def test_task_start_fresh_run_refuses_unsupported_legacy_receipt_schema(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__resume-legacy-receipts")
-            legacy = {
-                "task_run_id": harness_server.read_task_control(task_dir)["run_id"],
-                "receipt_id": "legacy-receipt", "ts": "2026-08-12T00:00:00Z",
-                "event": "completed", "source": "legacy",
-                "agent_id": "legacy-agent", "agent_type": "harness:qa-cli",
-                "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
-                "transcript_path": "/tmp/legacy", "transcript_sha256": "0" * 64,
-                "runtime_session_id": "legacy-session",
-                "runtime_thread_id": "legacy-thread", "runtime_event_id": "legacy-event",
-            }
-            receipts = Path(task_dir) / "RECEIPTS.jsonl"
-            receipts.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
-            control_before = Path(task_dir, "TASK.json").read_bytes()
-            receipts_before = receipts.read_bytes()
-
-            result = self._call_in_repo(
-                tmp,
-                "task_start",
-                {"task_id": "TASK__resume-legacy-receipts", "fresh_run": True},
-            )
-
-            self.assertTrue(result.get("isError"))
-            self.assertIn("receipt", result["structuredContent"]["error"].lower())
-            self.assertEqual(Path(task_dir, "TASK.json").read_bytes(), control_before)
-            self.assertEqual(receipts.read_bytes(), receipts_before)
-
-    def test_task_start_default_refuses_unsupported_receipts_without_reset(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__preserve-legacy-receipts"))
-            receipts = task_dir / "RECEIPTS.jsonl"
-            receipts.write_text('{"legacy":true}\n', encoding="utf-8")
-            control_before = (task_dir / "TASK.json").read_bytes()
-            receipts_before = receipts.read_bytes()
-
-            result = self._call_in_repo(
-                tmp,
-                "task_start",
-                {"task_id": task_dir.name},
-            )
-
-            self.assertTrue(result.get("isError"))
-            self.assertIn("receipt", result["structuredContent"]["error"].lower())
-            self.assertEqual((task_dir / "TASK.json").read_bytes(), control_before)
-            self.assertEqual(receipts.read_bytes(), receipts_before)
-
-    def test_verify_and_close_reject_duplicate_receipt_keys(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_id = "TASK__duplicate-receipt-keys"
-            task_dir = self._make_task(tmp, task_id)
-            run_id = harness_server.read_task_control(task_dir)["run_id"]
-            (Path(task_dir) / "RECEIPTS.jsonl").write_text(
-                '{"ts":"2026-08-12T00:00:00Z","event":"started",'
-                '"event":"completed","source":"test_fixture",'
-                f'"task_run_id":"{run_id}","runtime_id":"test:dup",'
-                '"agent_id":"dup","agent_type":"qa-cli","lens":"qa-cli",'
-                '"verdict":"PASS","summary":"VERDICT: PASS\\nDETAIL_SHA256:'
-                + "0" * 64 + '"}\n',
-                encoding="utf-8",
-            )
-
-            for tool in ("task_verify", "task_close"):
-                with self.subTest(tool=tool):
-                    result = self._call_in_repo(tmp, tool, {"task_id": task_id})
-                    self.assertTrue(result["isError"])
-                    self.assertIn(
-                        "receipt storage integrity unavailable",
-                        result["content"][0]["text"],
-                    )
 
     def test_task_start_resume_waits_for_task_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2013,7 +1559,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 ))
                 finished.set()
 
-            with harness_server.receipt_stream_transaction(task_dir):
+            with harness_server.task_control_transaction(task_dir):
                 worker = threading.Thread(target=resume)
                 worker.start()
                 time.sleep(0.1)
@@ -2128,7 +1674,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._write_control_fixture(str(task_dir), {
                 "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             })
 
             with (
@@ -2157,10 +1703,10 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "run_id": harness_lib.new_uuid7(),
                     "execution_mode": "standard",
                     "required_lenses": ["review-code", "qa-cli"],
-                    "close_receipt_fingerprint": None,
+                    "closed": False,
                 })
                 if terminal_status in {"open", "closed"}:
-                    self._write_subagent_receipt(str(task_dir))
+                    self._write_historical_receipts(str(task_dir))
                 if terminal_status == "closed":
                     self._close_fixture(str(task_dir))
                 elif terminal_status == "blocked":
@@ -2219,7 +1765,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }
             self._write_control_fixture(str(terminal_task), original)
             with (
@@ -2281,7 +1827,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._write_control_fixture(str(task_dir), {
                 "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             })
             self._write_marker_fixture(tmp, str(task_dir))
             real_replace = harness_lib.os.replace
@@ -2320,7 +1866,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._write_control_fixture(str(task_a), {
                 "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             })
             self._write_marker_fixture(tmp, str(task_a))
             prior_cwd = os.getcwd()
@@ -2416,11 +1962,8 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_terminal_task_rejects_plan_and_blocked_mutations(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__terminal-mutators")
-            self._write_subagent_receipt(task_dir)
-            closed = self._call_in_repo(
-                tmp, "task_close", {"task_id": "TASK__terminal-mutators"},
-            )
-            self.assertNotIn("isError", closed)
+            self._write_historical_receipts(task_dir)
+            self._close_fixture(task_dir)
             plan_path = Path(task_dir) / "PLAN.md"
             control_path = Path(task_dir) / "TASK.json"
             original_plan = plan_path.read_bytes()
@@ -2445,10 +1988,10 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(control_path.read_bytes(), original_control)
             self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
 
-    def test_plan_and_blocked_mutators_use_receipt_transaction(self):
+    def test_plan_and_blocked_mutators_use_task_control_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__serialized-mutators")
-            original_transaction = harness_server.receipt_stream_transaction
+            original_transaction = harness_server.task_control_transaction
             entered = []
 
             from contextlib import contextmanager
@@ -2460,7 +2003,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     yield
 
             with mock.patch.object(
-                harness_server, "receipt_stream_transaction",
+                harness_server, "task_control_transaction",
                 side_effect=observed_transaction,
             ):
                 plan = self._call_in_repo(tmp, "write_plan", {
@@ -2502,395 +2045,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(after, before)
             self.assertFalse((Path(task_dir) / "AUDIT_TRAIL.md").exists())
 
-class HarnessMcpServerPR2CloseGate(unittest.TestCase):
-    """Receipt and runtime-stale gates in task_close / task_verify."""
-
-    def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
-        with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
-            return call_execution(harness_server, name, args)
-
-    def _prepare_task(self, base: str, task_id: str, *, checks_yaml: str | None,
-                      write_receipt: bool = True, write_handoff: bool = True,
-                      touched_paths: list[str] | None = None,
-                      handoff_body: str | None = None) -> str:
-        repo = Path(base)
-        git_dir = repo / ".git"
-        if git_dir.is_dir() and not (git_dir / "HEAD").exists():
-            git_dir.rmdir()
-        if not git_dir.exists():
-            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "mcp@test"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.name", "MCP Test"], cwd=repo, check=True)
-        (repo / ".gitignore").write_text("TASK__*/\n", encoding="utf-8")
-        for rel in (
-            "plugin/skills/run/self-improvement.md",
-            "plugin/scripts/_lib.py",
-            "plugin/scripts/health.py",
-            "plugin/CLAUDE.md",
-            "README.md",
-        ):
-            p = Path(base) / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            if not p.exists():
-                p.write_text("# fixture\n", encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo)
-        if staged.returncode != 0:
-            subprocess.run(["git", "commit", "-qm", "fixture baseline"], cwd=repo, check=True)
-        head_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-            capture_output=True, text=True,
-        ).stdout.strip()
-        task_dir = Path(base) / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
-        (task_dir / "TASK.json").write_text(
-            json.dumps({
-                "run_id": harness_lib.new_uuid7(),
-                "execution_mode": "standard",
-                "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
-            }, indent=2, sort_keys=True) + "\n", encoding="utf-8",
-        )
-        (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
-        if write_handoff:
-            default_handoff = "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n"
-            body = handoff_body or default_handoff
-            if "Self-Healing Candidates" not in body:
-                body = body.rstrip() + "\n\n## Self-Healing Candidates\n\nStatus: none\n"
-            (task_dir / "HANDOFF.md").write_text(
-                body,
-                encoding="utf-8",
-            )
-        if write_receipt:
-            review_types = {
-                "review-code": "harness:code-reviewer",
-                "review-security": "harness:security-reviewer",
-            }
-            for lens in harness_server.required_review_lenses(task_dir):
-                for status, verdict in (("started", ""), ("completed", "PASS")):
-                    _record_receipt_fixture(task_dir, {
-                        "source": "claude_hook",
-                        "runtime_id": f"claude:test-session:{lens}-{task_id}",
-                        "event": status,
-                        "agent_id": f"{lens}-{task_id}",
-                        "agent_type": review_types[lens],
-                        "verdict": verdict,
-                        "summary": (
-                            "VERDICT: PASS\n"
-                            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
-                            if verdict else "review started"
-                        ),
-                    })
-            for status, verdict in (("started", ""), ("completed", "PASS")):
-                _record_receipt_fixture(task_dir, {
-                    "source": "claude_hook",
-                    "runtime_id": f"claude:test-session:agent-{task_id}",
-                    "event": status,
-                    "agent_id": f"agent-{task_id}",
-                    "agent_type": "harness:qa-cli",
-                    "verdict": verdict,
-                    "summary": f"VERDICT: {verdict}" if verdict else "qa started",
-                })
-        if checks_yaml is not None:
-            (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
-        return str(task_dir)
-
-    def _patch(self, task_dir: str):
-        """Patch canonical_task_dir to isolate the lifecycle fixture."""
-        self._orig_ctd = harness_server.canonical_task_dir
-        harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-
-    def _unpatch(self):
-        harness_server.canonical_task_dir = self._orig_ctd
-
-    def _patch_repo_root_for_context(self, repo_root: str):
-        self._orig_context_find_repo_root = harness_server.emit_compact_context.__globals__["find_repo_root"]
-        self._orig_context_git_changed_paths = harness_server.emit_compact_context.__globals__["_git_changed_paths"]
-        harness_server.emit_compact_context.__globals__["find_repo_root"] = (
-            lambda *args, **kw: repo_root
-        )
-
-    def _set_context_git_changed_paths(self, paths: list[str]):
-        harness_server.emit_compact_context.__globals__["_git_changed_paths"] = (
-            lambda repo_root, *args, **kwargs: (
-                {path: "sha256:test" for path in paths}
-                if kwargs.get("with_fingerprints")
-                else set(paths)
-            )
-        )
-
-    def _unpatch_repo_root_for_context(self):
-        harness_server.emit_compact_context.__globals__["find_repo_root"] = (
-            self._orig_context_find_repo_root
-        )
-        harness_server.emit_compact_context.__globals__["_git_changed_paths"] = (
-            self._orig_context_git_changed_paths
-        )
-
-    def test_legacy_conversation_file_has_no_close_authority(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__conversation-open",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-            )
-            Path(td, "CONVERSATION.md").write_text(
-                "# Conversation\n\n"
-                "<!-- harness:conversation-log v1 -->\n\n"
-                "## 2026-06-23T00:00:00Z - User\n"
-                "사용자가 새 요구사항을 말했다.\n"
-                "<!-- item: type=requirement status=open key=reader-back-stack -->\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = call_execution(harness_server,
-                    "task_close", {"task_id": "TASK__conversation-open"}
-                )
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_ignores_legacy_checks_artifact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__pr2-002",
-                checks_yaml=(
-                    '- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n'
-                    '- id: AC-002\n  title: "y"\n  status: deferred\n  kind: functional\n'
-                ),
-            )
-            self._patch(td)
-            try:
-                result = call_execution(harness_server, "task_close", {"task_id": "TASK__pr2-002"})
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_uses_subagent_receipt_not_ux_critic_file_for_cli_surface(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / ".git").mkdir(exist_ok=True)
-            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
-            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
-                "type: cli\nqa:\n  ux_review_supported: true\n",
-                encoding="utf-8",
-            )
-            source = Path(tmp) / "src/cli/main.py"
-            source.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text("print('hi')\n", encoding="utf-8")
-            td = self._prepare_task(
-                tmp, "TASK__ux-cli-required",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                touched_paths=["src/cli/main.py"],
-            )
-            self._patch(td)
-            self._patch_repo_root_for_context(tmp)
-            try:
-                result = call_execution(harness_server,
-                    "task_close", {"task_id": "TASK__ux-cli-required"}
-                )
-            finally:
-                self._unpatch_repo_root_for_context()
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_accepts_required_ux_cli_pass(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / ".git").mkdir(exist_ok=True)
-            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
-            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
-                "type: cli\nqa:\n  ux_review_supported: true\n",
-                encoding="utf-8",
-            )
-            source = Path(tmp) / "src/cli/main.py"
-            source.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text("print('hi')\n", encoding="utf-8")
-            td = self._prepare_task(
-                tmp, "TASK__ux-cli-pass",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                touched_paths=["src/cli/main.py"],
-            )
-            self._patch(td)
-            self._patch_repo_root_for_context(tmp)
-            try:
-                result = call_execution(harness_server, "task_close", {"task_id": "TASK__ux-cli-pass"})
-            finally:
-                self._unpatch_repo_root_for_context()
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_ignores_absent_or_stale_ux_critic_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / ".git").mkdir(exist_ok=True)
-            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
-            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
-                "type: cli\nqa:\n  ux_review_supported: true\n",
-                encoding="utf-8",
-            )
-            source = Path(tmp) / "src/cli/main.py"
-            source.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text("print('hi')\n", encoding="utf-8")
-            td = self._prepare_task(
-                tmp, "TASK__ux-cli-stale",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                touched_paths=["src/cli/main.py"],
-            )
-            critic = Path(td) / "CRITIC__ux.md"
-            critic.write_text("stale legacy critic\n", encoding="utf-8")
-            future = os.path.getmtime(Path(td) / "RECEIPTS.jsonl") + 10
-            os.utime(critic, (future, future))
-            self._patch(td)
-            self._patch_repo_root_for_context(tmp)
-            try:
-                result = call_execution(harness_server, "task_close", {"task_id": "TASK__ux-cli-stale"})
-            finally:
-                self._unpatch_repo_root_for_context()
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_does_not_require_ux_for_non_applicable_library_task(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / ".git").mkdir(exist_ok=True)
-            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
-            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
-                "type: library\nqa:\n  ux_review_supported: false\n",
-                encoding="utf-8",
-            )
-            td = self._prepare_task(
-                tmp, "TASK__ux-not-applicable",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                touched_paths=["plugin/scripts/_lib.py"],
-            )
-            self._patch(td)
-            self._patch_repo_root_for_context(tmp)
-            try:
-                result = call_execution(harness_server,
-                    "task_close", {"task_id": "TASK__ux-not-applicable"}
-                )
-            finally:
-                self._unpatch_repo_root_for_context()
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_passes_without_legacy_checks_artifact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(tmp, "TASK__pr2-003", checks_yaml=None)
-            self._patch(td)
-            try:
-                result = call_execution(harness_server, "task_close", {"task_id": "TASK__pr2-003"})
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    # ---- AC-006: task_verify derives PASS from subagent receipt ----
-    def test_verify_reports_receipt_pass_without_legacy_state_outputs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__pr2-006",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["plugin/scripts/health.py"],
-            )
-            self._patch(td)
-            try:
-                result = self._call_in_repo(tmp, "task_verify", {"task_id": "TASK__pr2-006"})
-            finally:
-                self._unpatch()
-        s = result["structuredContent"]
-        self.assertEqual(s["runtime_verdict"], "PASS")
-        self.assertNotIn("stale", s)
-        self.assertNotIn("stale_path", s)
-        self.assertNotIn("touched_paths", s)
-
-
-    def test_close_rolls_back_when_control_publication_fails(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__close-attestation-failure",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-            )
-            before = harness_server.read_task_control(td)
-            self._patch(td)
-            try:
-                with mock.patch.object(
-                    harness_server, "publish_task_close",
-                    side_effect=OSError("control publication unavailable"),
-                ):
-                    result = call_execution(harness_server,
-                        "task_close",
-                        {"task_id": "TASK__close-attestation-failure"},
-                    )
-            finally:
-                self._unpatch()
-
-            self.assertTrue(result.get("isError"))
-            restored = harness_server.read_task_control(td)
-            self.assertEqual(restored, before)
-            self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
-
-    def test_close_rolls_back_on_marker_cleanup_io_failure(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__close-marker-io",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-            )
-            before = harness_server.read_task_control(td)
-            _write_marker_fixture(tmp, td)
-            self._patch(td)
-            try:
-                with mock.patch.object(
-                    harness_server,
-                    "clear_active_marker",
-                    side_effect=OSError("marker cleanup unavailable"),
-                ):
-                    result = call_execution(harness_server,
-                        "task_close", {"task_id": "TASK__close-marker-io"}
-                    )
-            finally:
-                self._unpatch()
-            self.assertTrue(result.get("isError"))
-            restored = harness_server.read_task_control(td)
-            self.assertEqual(restored, before)
-            self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
-            legacy_marker = Path(tmp, "doc/harness/tasks/.active")
-            self.assertEqual(
-                Path(legacy_marker.read_text(encoding="utf-8").strip()).resolve(),
-                Path(td).resolve(),
-            )
-
-
-    def test_close_evaluates_each_success_gate_once(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__single-pass-close",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            clean = {
-                "missing_for_close": [],
-                "next_action": "close",
-            }
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "emit_compact_context", return_value=clean) as context,
-                mock.patch.object(
-                    harness_server,
-                    "receipt_stream_fingerprint",
-                    return_value="sha256:" + "b" * 64,
-                ) as receipts,
-            ):
-                result = harness_server.handle_task_close(
-                    {"task_id": "TASK__single-pass-close"}
-                )
-
-            self.assertNotIn("isError", result)
-            for gate in (context, receipts):
-                self.assertEqual(gate.call_count, 1)
 
 if __name__ == "__main__":
     unittest.main()

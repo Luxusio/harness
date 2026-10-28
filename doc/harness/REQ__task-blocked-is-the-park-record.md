@@ -21,9 +21,10 @@ freshness_updated: 2026-10-19T06:06:13Z
 - Parking is not completion. A parked task grants no PASS, does not satisfy or
   bypass C-04, and does not close the task. It stays in `blocked` status,
   which `task_close` refuses, until plain `task_start` resumes it with the run
-  and its review/QA receipts preserved.
-- Close stays PASS-only: `task_close` requires receipt-backed
-  `runtime_verdict: PASS` (C-04, C-14).
+  and measured WBS checks preserved.
+- Close stays PASS-only: `task_close` requires current measured WBS checks
+  `runtime_verdict: PASS` (C-04). Actual independent review PASS before actual QA
+  remains required by the workflow (C-14).
 - No Claude `Stop` hook gates turn-end. A turn may end while a task is open;
   continuation across turns is native `/goal` with the close condition in the
   goal condition (C-17, `doc/harness/patterns/auto-loop.md`).

@@ -1,15 +1,4 @@
-"""Regression tests for Claude session -> active marker -> receipt binding.
-
-Background: Claude Code passes no session id into the MCP server environment,
-so ``current_session_id()`` resolved to ``default`` there and ``task_start``
-wrote ``.active_sessions/default.json``. The SubagentStart/SubagentStop hooks
-receive the real session id and read only ``<sid>.json``, so binding always
-failed and ``RECEIPTS.jsonl`` was never written — silently, because the
-lifecycle functions return ``{}`` without raising.
-
-These tests pin the hint mechanism that keeps the marker filename and the
-hook's session id in agreement.
-"""
+"""Regression tests for exact session hints and active task markers."""
 from __future__ import annotations
 
 def call_execution(*args, **kwargs):

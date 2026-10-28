@@ -72,7 +72,7 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     develop = (REPO / "plugin-codex/internal-skills/develop/SKILL.md").read_text(encoding="utf-8")
     assert "Phase 9 is the only normal owner of `wbs(action=\"close\")`" in develop
     assert develop.index("### Phase 8.7: Distilled Change Doc") < develop.index("### Phase 9:")
-    assert "current task receipt run" in develop
+    assert "current WBS applicability and trusted task/source ownership" in develop
     assert "checks are not lifecycle gates" in develop
     assert "Do not rerun installation for docs-only edits" in develop
 

@@ -45,9 +45,7 @@ def test_positive_guidance_replacements_are_present():
     combined = "\n".join(path.read_text(encoding="utf-8") for path in OPERATIONAL_DOCS)
 
     expected = [
-        "Verification is recognized by watcher-recorded QA completions",
-        "QA completion receipts are the close-gate verification signal",
-        "RECEIPTS.jsonl",
+        "Await actual independent code review and conditional security review PASS before actual QA",
         "Reserve this protocol for high-stakes planning ambiguity",
         "EUREKA — re-scope AC-004 to a smaller addition. Surface before writing PLAN.md.",
         "Log only concrete, reusable facts at discovery time",

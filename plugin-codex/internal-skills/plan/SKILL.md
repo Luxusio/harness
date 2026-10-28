@@ -34,7 +34,7 @@ Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${H
 ## Invariants (Codex variant)
 
 - **Independent reviewer by capability.** Where the Claude source says "independent reviewer subagent via Agent", use `spawn_agent` when exposed. Otherwise run ONE inline critical-reviewer pass and record the phase as `coordinator-only` in PLAN.md `Review Status`.
-- **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
+- **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
 - **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
@@ -287,7 +287,7 @@ public API or observable UI behavior, destructive operations, dependency/
 platform/configuration/workflow-control changes, unclear acceptance or a
 material user choice, cross-component scope, and high-risk maintenance.
 Unknown means full; file count alone never proves low risk. Both procedures
-retain the same runtime review, conditional security review, QA, receipts,
+retain the same runtime review, conditional security review, QA,
 close fingerprint, Goal continuation, and verified installation boundaries.
 
 ---

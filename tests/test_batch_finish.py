@@ -1043,7 +1043,7 @@ def _s1_finish_fixture(tmp_path, monkeypatch):
                    submodules=paths, submodule_manifest=copy.deepcopy(manifest),
                    status="integrating", task_id="TASK__lead", worker_id="worker-lead",
                    worktree=str(work), branch="lead", spawn_head=manifest["spawn_head"],
-                   run_id=control["run_id"], close_fingerprint=control["close_receipt_fingerprint"],
+                   run_id=control["run_id"], closed=True,
                    checkpoint=None,
                    result=dict(verdict="closed", task_id="TASK__lead", worktree=str(work), branch="lead", commit=tip))
     state = dict(schema_version=2, batch_id=manifest["batch_id"], repo=str(main),
@@ -1062,7 +1062,7 @@ def _s1_finish_fixture(tmp_path, monkeypatch):
     def checkpoint(stage, result):
         record = dict(stage=stage, destination_ref=result["destination_ref"],
                       branch_tip=result["branch_tip"], integrated_tip=result["integrated_tip"],
-                      run_id=control["run_id"], close_fingerprint=control["close_receipt_fingerprint"])
+                      run_id=control["run_id"], closed=True)
         if stage == "harvested":
             batch_state.sync_harvest(str(main), result["harvest"]["archived"])
             record.update(harvest=result["harvest"],

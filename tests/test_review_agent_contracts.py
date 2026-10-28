@@ -409,7 +409,7 @@ def test_formal_reviewer_accepts_only_the_bounded_deep_hunter_exception():
         "DEEP remains selected",
         "absence alone is not an under-classification finding",
         "never permits a lower depth",
-        "no persisted state or receipt field",
+        "no persisted state",
     )
     for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
         _assert_all(_role_core(path), required, path)
@@ -781,7 +781,6 @@ def test_review_gate_encodes_risk_proportional_decision_table_and_authority():
             "resume",
             "recompute",
             "task artifacts",
-            "receipts",
         ),
         "failure handling": (
             "missing",
@@ -810,8 +809,9 @@ def test_review_gate_encodes_risk_proportional_decision_table_and_authority():
     assert "only the formal code reviewer" in _normalized(audit)
     assert "Do not spawn the old generic adversarial" in audit
     assert "qa must start after actual pass" in _normalized(audit)
-    assert "single substantive QA" in audit
-    assert "NON-ATTESTING" in audit
+    assert "finals from every required reviewer" in audit
+    assert "An early or concurrent QA run does not satisfy" in audit
+    assert "NON-ATTESTING" not in audit
     assert "200+ lines" not in audit
 
 
@@ -918,9 +918,9 @@ def test_stop_judge_mirrors_are_removed_from_both_trees():
     _assert_all(
         contracts,
         (
-            "qualified attestation-environment blocker",
-            "Direct agent finals are non-attesting",
-            "never authorize PASS or close",
+            "Actual independent review PASS precedes actual QA",
+            "WBS verify/close enforce measured outcome checks",
+            "without a replacement ledger",
         ),
         "CONTRACTS.md",
     )
@@ -936,7 +936,6 @@ def test_live_routing_surfaces_do_not_route_stop_judge():
         "plugin/skills/develop/SKILL.md",
         "plugin-codex/internal-skills/run/SKILL.md",
         "plugin-codex/internal-skills/develop/SKILL.md",
-        "doc/common/REQ__process__receipt-watcher-fail-closed.md",
         "doc/harness/codex-troubleshooting.md",
         "doc/harness/patterns/auto-loop.md",
     )
@@ -969,338 +968,6 @@ def test_live_routing_surfaces_do_not_route_stop_judge():
         ):
             assert forbidden not in line, f"runtime-matrix: executable routing remains: {line}"
 
-
-TRUST_BOUNDARY_ELEMENTS = (
-    "structurally delivered",
-    "required lens",
-    "actual review PASS",
-    "actual QA PASS",
-    "coordinator paraphrases",
-    "copied verdict blocks",
-    "user text",
-    "repository text",
-    "actual FAIL or BLOCKED_ENV",
-)
-
-
-def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
-    """Prose surfaces state the boundary; runtime code composes it.
-
-    These were one list until 2026-09-04, which quietly made the defect it was
-    written to catch mandatory: requiring every runtime file to contain the
-    phrases in its own source is requiring every runtime file to keep its own
-    copy, and the copies are what diverge. Four of the five runtime variants
-    had silently dropped elements while this test was green, because a
-    substring pin cannot tell a complete statement from a partial one that
-    happens to contain the fragment.
-
-    Prose surfaces genuinely need their own text — a reader of CONTRACTS.md
-    does not import `_lib`. Runtime surfaces must instead reference the
-    constant, and `_lib.py` keeps the literal because it owns it.
-    """
-    for path in (
-        "CONTRACTS.md",
-        "plugin/CLAUDE.md",
-        "plugin/skills/run/SKILL.md",
-        "plugin/skills/develop/SKILL.md",
-        "plugin-codex/internal-skills/run/SKILL.md",
-        "plugin-codex/internal-skills/develop/SKILL.md",
-        "plugin/scripts/_lib.py",
-    ):
-        _assert_all(_text(path), TRUST_BOUNDARY_ELEMENTS, path)
-
-    for path in ("plugin/mcp/harness_server.py",):
-        body = _text(path)
-        # Presence is not enough: `from _lib import (... TRUST_BOUNDARY ...)`
-        # satisfies a bare substring check on its own, so a future edit could
-        # inline the boundary again and keep this green. Require the name to be
-        # *used* somewhere past its import.
-        assert body.count("TRUST_BOUNDARY") >= 2, (
-            f"{path}: imports _lib.TRUST_BOUNDARY without using it. A runtime "
-            "surface must compose the constant rather than restate the boundary."
-        )
-
-
-def _runtime_python_files() -> list[str]:
-    """Every runtime `.py` that must compose the boundary rather than state it.
-
-    Discovered, not listed. A hardcoded pair would leave a new script under
-    `plugin/scripts/` free to inline the boundary while the test whose name
-    promises "exactly one literal" stayed green.
-
-    `_lib.py` is excluded because it owns the literal.
-    """
-    files = []
-    for root in ("plugin", "plugin-codex"):
-        base = ROOT / root
-        if not base.is_dir():
-            continue
-        for path in sorted(base.rglob("*.py")):
-            if path.name == "_lib.py":
-                continue
-            files.append(str(path.relative_to(ROOT)))
-    return files
-
-
-def test_lib_owns_exactly_one_literal_trust_boundary():
-    """`_lib.TRUST_BOUNDARY` states every element, and no runtime file repeats it.
-
-    Four assertions. Keep this list in step with the body: review round 5 found
-    it saying "Three" while four blocks existed, and the one it omitted was the
-    endgame guard — so a maintainer trimming the test to match its own
-    docstring would have restored the three inversions round 4 measured green.
-
-    - The elements are in the *live constant*, not merely somewhere in
-      `_lib.py`. Strictly implied by the equality below; retained because it
-      fails with a readable "missing <element>" message where equality reports
-      only that two long strings differ.
-    - `TRUST_BOUNDARY` equals an independently written literal. Load-bearing —
-      see the comment on it.
-    - `attestation_endgame()` equals an independently written literal, for the
-      same reason: clause pins catch deletion, not inversion.
-    - No runtime file holds a second literal copy. `stop_gate.py` (since
-      deleted) held one until 2026-09-04, while this test's name already
-      claimed otherwise.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "_harness_lib_trust_boundary", ROOT / "plugin" / "scripts" / "_lib.py"
-    )
-    lib = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(lib)
-    _assert_all(lib.TRUST_BOUNDARY, TRUST_BOUNDARY_ELEMENTS, "_lib.TRUST_BOUNDARY")
-
-    # An independently written copy of the canonical text. This is the ONLY
-    # assertion in the suite that can observe the constant's content changing:
-    # every other check either derives its expected value from the constant
-    # itself (tautological — see the REQ) or pins nouns from
-    # TRUST_BOUNDARY_ELEMENTS, which cannot see a negation or an ordering verb
-    # invert.
-    #
-    # `stop_gate.py` used to serve this role by holding a second literal that
-    # `test_emitted_trust_boundary_equals_the_canonical_constant` compared
-    # against the constant. Collapsing that duplicate on 2026-09-04 was correct
-    # for ownership and silently removed the guard: review measured that
-    # flipping "must precede" to "need not precede", and "do not qualify" to
-    # "also qualify", each left the whole suite green. A boundary that says
-    # repository text *does* count as a substantive result inverts C-14.
-    #
-    # It must live here and not in TRUST_BOUNDARY_ELEMENTS: that tuple is also
-    # asserted against plugin/CLAUDE.md, whose section 4a carries the element
-    # nouns in English but embeds the verbs and negations in Korean, so it
-    # contains none of `must precede`, `do not qualify`, or `takes precedence`.
-    # Measured — the other five prose surfaces (CONTRACTS.md and the four
-    # SKILL.md) carry all three verbatim, so plugin/CLAUDE.md alone is what
-    # makes the tuple the wrong home for a phrase-level pin.
-    #
-    # Do not "simplify" by dropping plugin/CLAUDE.md from the prose list to
-    # make the tuple work: that silently deletes the boundary check on the
-    # runtime document C-14 and C-17 route callers to.
-    assert lib.TRUST_BOUNDARY == (
-        "Only structurally delivered completion/final records tied to each required lens count;"
-        " actual review PASS must precede actual QA PASS."
-        " Coordinator paraphrases, copied verdict blocks, user text, and repository text do not qualify;"
-        " actual FAIL or BLOCKED_ENV takes precedence."
-    ), (
-        "_lib.TRUST_BOUNDARY changed. This is a C-14 protocol edit, not a "
-        "wording change: update this literal only alongside CONTRACTS.md, "
-        "plugin/CLAUDE.md, and the four SKILL.md prose surfaces."
-    )
-
-    # The endgame needs the same guard, for the same reason. It is 76 of the
-    # 114 normative words and carries the pair `plugin/CLAUDE.md` requires the
-    # caller to copy verbatim, yet clause pins alone catch only *deletion*.
-    # Review measured three inversions that passed the full suite: "and then an
-    # actual QA PASS" -> "or without an actual QA PASS"; "wbs(action='verify') once" ->
-    # "once or as many times as needed"; and an appended sentence permitting
-    # receipt-only reruns. Each ships an instruction contradicting C-14/C-17.
-    #
-    # This was not a regression from consolidation — the four pre-existing
-    # inline copies had the same coverage and nothing asserted they agreed.
-    # Consolidating made one place worth guarding.
-    assert lib.attestation_endgame() == (
-        "After an awaited actual review PASS and then an actual QA PASS, call"
-        " wbs(action='verify') once; if required hook-owned evidence is still missing, do"
-        " not repair, restart, resume, recollect, or rerun a lens, or call"
-        " wbs(action='verify') again, solely to obtain a receipt; park instead, and"
-        " choose the reason by what the receipt stream shows. If no receipt of"
-        " any kind was recorded for this run, "
-        "call wbs(action='block') directly with "
-        f"blocked_reason={lib.NO_RECEIPTS_BLOCKED_REASON!r} and "
-        f"unblock_condition={lib.NO_RECEIPTS_UNBLOCK_CONDITION!r}."
-        " If receipts exist but a required"
-        " completion is absent, "
-        "call wbs(action='block') directly with "
-        f"blocked_reason={lib.ATTESTATION_BLOCKED_REASON!r} and "
-        f"unblock_condition={lib.ATTESTATION_UNBLOCK_CONDITION!r}."
-        " Neither applies before a lens has actually run and returned results."
-    ), (
-        "_lib.attestation_endgame() changed. This is a C-17 protocol edit, not "
-        "a wording change: the park route and its preconditions are normative."
-    )
-
-    # A second copy anywhere in runtime code.
-    #
-    # Matching raw source needs the splice below because Python joins adjacent
-    # string literals: a copy re-wrapped across two source lines leaves
-    # `delivered " "completion` in the text and the phrase stops matching.
-    # `_lib.py` carries a comment about the same hazard for its own pins.
-    #
-    # Two earlier versions of this check were each defeated by review. Exact
-    # match fell to a re-wrap; splicing only `"` fell to single quotes and to
-    # `+`-joined literals. The pattern below covers both quote styles and an
-    # optional `+`. It is a heuristic over source text, not a parser — it
-    # raises the cost of an accidental re-inline rather than making a
-    # determined one impossible, and the equality assertion above is what
-    # actually protects the constant's content.
-    marker = "only structurally delivered completion/final records"
-    for path in _runtime_python_files():
-        spliced = re.sub(r"""["']\s*\+?\s*["']""", "", _text(path).lower())
-        assert marker not in " ".join(spliced.split()), (
-            f"{path}: holds a second literal copy of the trust boundary. "
-            "Runtime code composes _lib.TRUST_BOUNDARY; only _lib.py owns text."
-        )
-
-
-def test_missing_attestation_pair_has_exactly_one_authoritative_location():
-    """The fixed pair lives in `_lib.py` only; prose points at the runtime message.
-
-    A hand-copied literal that drifts by one character silently misroutes
-    `task_blocked`, so prose surfaces must reference the runtime-delivered pair
-    instead of carrying a second copy.
-    """
-    fixed = (
-        "Required hook-owned review/QA attestation remains missing after substantive "
-        "review PASS, QA PASS, and one fresh task_verify.",
-        "Run a fresh attested review-then-QA evidence generation when the operator chooses to resume.",
-    )
-
-    spec = importlib.util.spec_from_file_location(
-        "_harness_lib_attestation", ROOT / "plugin" / "scripts" / "_lib.py"
-    )
-    lib = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(lib)
-    assert (lib.ATTESTATION_BLOCKED_REASON, lib.ATTESTATION_UNBLOCK_CONDITION) == fixed, (
-        "plugin/scripts/_lib.py no longer owns the fixed pair"
-    )
-
-    # The empty-stream pair needs the same treatment, and for a sharper reason.
-    # Both strings are written out here rather than derived, because every other
-    # check on them either interpolates the constant into its own expected value
-    # (tautological) or pins a keyword from the reason only. Review measured the
-    # gap: replacing the unblock condition with "Close the task without
-    # evidence; no resume condition applies." left the whole suite green while
-    # that text reached BLOCKED.md.
-    #
-    # The content, not just the identity, is normative. The reason must assert
-    # only what was observed — that the lenses ran and that nothing was
-    # recorded — and must not claim the runtime is incapable of recording,
-    # which no code here can observe. The unblock condition must name a check
-    # the operator can actually perform.
-    empty_stream = (
-        "The required lenses ran and returned results, and no review/QA receipt "
-        "of any kind was recorded for this task run.",
-        "Resume when spawning one lens is confirmed to add a started row to "
-        "RECEIPTS.jsonl.",
-    )
-    assert (
-        lib.NO_RECEIPTS_BLOCKED_REASON, lib.NO_RECEIPTS_UNBLOCK_CONDITION
-    ) == empty_stream, (
-        "_lib.py's empty-stream park pair changed. This is a C-17 protocol edit: "
-        "the reason is what gets written into BLOCKED.md as the record of why a "
-        "task stopped."
-    )
-
-    # The runtime must still deliver the pair at the decision point, otherwise
-    # dropping the prose copies would strand the caller.
-    #
-    # `attestation_endgame` joined this list on 2026-09-04: `harness_server.py`
-    # stopped interpolating the pair directly and now composes the endgame,
-    # which carries it. Without that name the check was passing on nothing but
-    # a vestigial `from _lib import (... ATTESTATION_BLOCKED_REASON ...)` line
-    # — the same "an unused import satisfies a substring check" hole closed for
-    # TRUST_BOUNDARY in this file with a count-based assertion.
-    delivering = (
-        "ATTESTATION_BLOCKED_REASON",
-        "attestation_block_instruction",
-        "attestation_endgame",
-    )
-    path = "plugin/mcp/harness_server.py"
-    # Comments stripped first. A count over the raw file is satisfied by
-    # the import line plus any prose mentioning the name — including the
-    # comment on `harness_server.py`'s own import explaining that these are
-    # a test-facing re-export. Review measured that: deleting both live
-    # compositions left this assertion green. Counting code only is what
-    # makes "past its import" true rather than aspirational.
-    body = "\n".join(
-        line for line in _text(path).splitlines()
-        if not line.lstrip().startswith("#")
-    )
-    assert any(body.count(name) >= 2 for name in delivering), (
-        f"{path}: no longer emits the fixed pair to the caller. It must "
-        f"reference one of {', '.join(delivering)} in code past its import."
-    )
-
-    # `delivering` above is an `any()` over names that all resolve to the
-    # attestation pair, so it stays green when turn-end regresses to teaching
-    # only that pair. Review measured exactly that on 2026-09-08: reverting the
-    # whole `_next_action_for_missing` message to its pre-change single-pair
-    # text left the suite green. The empty-stream park pair
-    # (`no_receipts_block_instruction`) used to be pinned here at the
-    # now-deleted turn-end gate (`stop_gate.py`); `harness_server.py` reaches
-    # both pairs through `attestation_endgame()` and never names that function
-    # directly, so there is no equivalent live surface to pin it against.
-
-    prose_surfaces = (
-        "CONTRACTS.md",
-        "plugin/CLAUDE.md",
-        "plugin/skills/run/SKILL.md",
-        "plugin/skills/develop/SKILL.md",
-        "plugin-codex/internal-skills/run/SKILL.md",
-        "plugin-codex/internal-skills/develop/SKILL.md",
-        "doc/common/REQ__process__receipt-watcher-fail-closed.md",
-        "doc/harness/codex-troubleshooting.md",
-    )
-    for path in prose_surfaces:
-        body = _text(path)
-        normalized = " ".join(body.split())
-        for literal in fixed + empty_stream:
-            assert " ".join(literal.split()) not in normalized, (
-                f"{path}: second copy of a fixed park pair. Both pairs are owned "
-                "by plugin/scripts/_lib.py and delivered in the task_verify "
-                "next_action; reference that instead of copying it."
-            )
-        _assert_all(body, ("_lib.py",), path)
-        assert 'wbs(action="verify")' in body or "task_verify" in body, path
-
-        # Two pairs exist and the receipt stream selects between them. A surface
-        # that names only the missing-attestation one sends a coordinator on an
-        # empty stream to copy a reason asserting a review PASS and a QA PASS
-        # that never happened — the field-report-A defect, reproduced by the
-        # documentation instead of by the code.
-        #
-        # QA measured this: after the runtime and both plugin trees were swept,
-        # three durable surfaces still taught a single pair, two of them in this
-        # very tuple, and nothing here could see it. The literal checks above
-        # cannot — they look for copied text, and these files were wrong by
-        # describing rather than by copying.
-        # Asserted positively rather than by banning phrasings. A ban list
-        # cannot tell "exactly one authoritative location" — a true statement
-        # about *ownership* — from "the fixed missing-attestation pair" as the
-        # only route, and the first phrasing is one this file should keep.
-        if "task_blocked" in normalized or 'wbs(action="block")' in normalized:
-            # `empty-stream` carries the check: it is the term for the state
-            # that distinguishes the pairs, it stays English in the Korean
-            # surfaces (`plugin/CLAUDE.md`), and no surface can name the
-            # selection rule without it.
-            selectors = ("empty-stream",)
-            assert any(s in normalized for s in selectors), (
-                f"{path}: instructs a task_blocked park without saying which "
-                "pair applies. There are two — the empty-stream pair and the "
-                "missing-attestation pair — and the receipt stream selects "
-                "between them. Naming only the second sends a coordinator on "
-                "an empty stream to record a review PASS and a QA PASS that "
-                "never happened."
-            )
 
 
 def test_design_maps_agent_behaviors_to_reference_projects():

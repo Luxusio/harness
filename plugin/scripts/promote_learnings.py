@@ -32,7 +32,7 @@ from _lib import (
     canonical_task_dir,
     find_repo_root,
     read_task_control,
-    receipt_stream_transaction_fd,
+    task_control_transaction_fd,
     task_control_status,
 )
 
@@ -599,7 +599,7 @@ def _verified_closed_run(storage: _SafeRepoStorage, task: str, task_run_id: str)
             before = storage._leaf_info(task_fd, "TASK.json")
             if before is None:
                 return False
-            with receipt_stream_transaction_fd(task_fd):
+            with task_control_transaction_fd(task_fd):
                 control = read_task_control(bound_task_dir)
                 verified = bool(
                     control

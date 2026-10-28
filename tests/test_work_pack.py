@@ -249,7 +249,6 @@ def test_symlinked_missing_state_parent_is_refused(tmp_path, monkeypatch):
 
 def mcp_integration(tmp_path, monkeypatch):
     from test_automatic_parallel_routing_contract import make_context, declare
-    from test_harness_mcp_server import HarnessMcpServerTests
 
     context = make_context(tmp_path, monkeypatch)
     pool, call, _ = context
@@ -269,13 +268,12 @@ def mcp_integration(tmp_path, monkeypatch):
     assert before_due["percentage"] == 0 and not before_due["refinement_due"]
     assert wbs.task_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7200)["refinement_due"]
     directory = pool.repo / "doc/harness/tasks" / CHILD
-    # Established isolated receipt fixture, never production attestation.
-    HarnessMcpServerTests()._write_subagent_receipt(str(directory))
     checked = call("wbs", {"action":"check", "wbs_id":CHILD, "node_id":"A"})
     assert not checked.get("isError"), checked
     verified = call("task_verify", {"task_id": CHILD})
     assert not verified.get("isError"), verified
     assert verified["structuredContent"]["runtime_verdict"] == "PASS"
+    assert verified["structuredContent"]["verification_basis"] == "current_wbs_checks"
     return pool, call, directory
 
 

@@ -1,7 +1,6 @@
 """Intent-based, real-Git checks for the durable batch coordinator CLI."""
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -46,7 +45,7 @@ def pytest_generate_tests(metafunc):
         "unsafe": ["symlink", "hardlink", "directory", "schema", "duplicate"],
         "mismatch": ["worker", "task_id", "worktree", "branch", "run_id", "commit"],
         "stage": ["rebase", "integrated", "harvested"],
-        "archive_corrupt": [False, True],
+        "archive_corrupt": [False, True, "historical-receipt"],
         "bad_marker": ["wrong", "symlink", "hardlink", "directory", "ignored", "tracked"],
         "sync_failure": [False, True],
         "literal_scope": ["literal[ab].txt", "literal*.txt", "literal,part.txt"],
@@ -120,14 +119,9 @@ def request(slug, scope=None, dependencies=()):
 
 def task(worktree, slug="a", closed=False):
     directory = worktree / "doc/harness/tasks" / ("TASK__" + slug)
+    # Isolated batch fixture: lifecycle owner publishes this strict boolean.
     control = {"run_id": RUN, "execution_mode": "standard",
-               "required_lenses": ["review-code", "qa-cli"],
-               "close_receipt_fingerprint": None}
-    if closed:
-        # Same isolated fixture mechanism as test_prewrite_gate_dormant:
-        # task_control_status validates the exact missing receipt-stream bytes.
-        control["close_receipt_fingerprint"] = "sha256:" + hashlib.sha256(
-            b"RECEIPTS.jsonl\0<missing>\0").hexdigest()
+               "required_lenses": ["review-code", "qa-cli"], "closed": closed}
     _write(directory / "TASK.json", json.dumps(control))
     _write(directory / "PLAN.md", "# Fixture task\n")
     return directory
@@ -288,16 +282,21 @@ def test_result_identity_is_bound_to_worker_and_task(tmp_path, monkeypatch, mism
     assert worktree.exists()
 
 
-def test_closed_label_without_valid_fingerprint_refuses(tmp_path, monkeypatch):
+def test_closed_label_requires_strict_closed_control(tmp_path, monkeypatch):
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
     pool.claim()
     worktree, branch = pool.bind()
-    directory = task(worktree)
-    pool.cli(*pool.result("a", worktree, branch, "closed"), ok=False)
+    _write(worktree / "a.txt", "implemented\n")
+    _git("add", "a.txt", cwd=worktree)
+    _git("commit", "-qm", "a", "--trailer", "Harness-Task: TASK__a", cwd=worktree)
+    for invalid in (False, "true", 1, None):
+        directory = task(worktree, closed=invalid)
+        before = pool.state.read_bytes()
+        pool.cli(*pool.result("a", worktree, branch, "closed", run_id=RUN), ok=False)
+        assert pool.state.read_bytes() == before
     task(worktree, closed=True)
-    _write(directory / "RECEIPTS.jsonl", "{}\n")
-    pool.cli(*pool.result("a", worktree, branch, "closed"), ok=False)
+    pool.cli(*pool.result("a", worktree, branch, "closed", run_id=RUN))
 
 
 def test_blocked_resume_preserves_exact_worktree_task_and_run(tmp_path, monkeypatch):
@@ -364,16 +363,30 @@ def test_finished_dependency_refills_from_current_head_and_closes(tmp_path, monk
     assert _git("rev-list", "--merges", "HEAD", cwd=pool.repo) == ""
 
 
-def test_close_proof_is_rechecked_before_finish(tmp_path, monkeypatch):
+def test_closed_control_is_rechecked_before_finish(tmp_path, monkeypatch):
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
     pool.claim()
     worktree, branch, directory = complete(pool)
     old_head = _head(pool.repo)
-    _write(directory / "RECEIPTS.jsonl", "{}\n")
+    task(worktree, closed=False)
     pool.cli("finish", "--slug", "a", ok=False)
     assert _head(pool.repo) == old_head and worktree.exists()
     assert _git("branch", "--list", branch, cwd=pool.repo)
+
+
+def test_corrupt_historical_receipts_do_not_block_closed_lead_finish(tmp_path, monkeypatch):
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    worktree, branch, directory = complete(pool)
+    historical = b"invalid historical receipt bytes\x00\n"
+    (directory / "RECEIPTS.jsonl").write_bytes(historical)
+    pool.cli("finish", "--slug", "a")
+    archived = pool.repo / "doc/harness/archive/batch/TASK__a/RECEIPTS.jsonl"
+    assert archived.read_bytes() == historical
+    assert not worktree.exists()
+    assert not _git("branch", "--list", branch, cwd=pool.repo)
 
 
 def test_checkpoint_interruption_preserves_then_recovers(tmp_path, monkeypatch, capsys, stage):
@@ -415,6 +428,8 @@ def test_process_death_after_cleanup_recovers_from_exact_archive(tmp_path, monke
     pool.claim()
     worktree, branch, directory = complete(pool)
     original_control = (directory / "TASK.json").read_bytes()
+    historical = b"malformed historical receipt bytes\n"
+    (directory / "RECEIPTS.jsonl").write_bytes(historical)
     # Advance the destination first so the durable tip must be post-rebase.
     returned_tip = _head(worktree)
     _write(pool.repo / "main-only.txt", "destination advanced\n")
@@ -444,8 +459,10 @@ batch_state.main(sys.argv[1:])
     assert not worktree.exists()
     archive = pool.repo / "doc/harness/archive/batch/TASK__a"
     assert (archive / "TASK.json").read_bytes() == original_control
+    assert (archive / "RECEIPTS.jsonl").read_bytes() == historical
     if archive_corrupt:
-        (archive / "PLAN.md").write_text("tampered after harvest\n")
+        damaged = "RECEIPTS.jsonl" if archive_corrupt == "historical-receipt" else "PLAN.md"
+        (archive / damaged).write_text("tampered after harvest\n")
         pool.cli("recover", "--slug", "a", "--worker-stopped", ok=False)
         pool.cli("close", ok=False)
         assert _head(pool.repo) == integrated_tip

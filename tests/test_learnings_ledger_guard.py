@@ -46,11 +46,6 @@ HISTORY = [
 
 # One row per writer the live session runs in the checkout; all must be ignored.
 LIVE_ROWS = [
-    {"type": "gate-error", "source": "background_hook:binding-miss", "error": "live"},
-    {"type": "gate-crash", "source": "background_hook:import", "error": "live"},
-    {"type": "gate-crash", "script": "background_hook", "error": "live"},
-    {"type": "gate-error", "source": "subagent_lifecycle", "error": "live"},
-    {"type": "gate-error", "source": "receipts:verdict-unbound", "error": "live"},
     {"type": "gate-error", "source": "prompt_memory", "error": "live"},
     {"type": "gate-error", "source": "tool_routing", "error": "live"},
 ]

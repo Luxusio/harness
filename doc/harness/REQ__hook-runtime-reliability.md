@@ -35,40 +35,31 @@ before accessing fields. Existing namespace, result, task/run, workspace,
 conflict-fence and immutable-offset checks remain authoritative.
 
 The registration budget covers the whole task-result callback, starting before
-input decoding and repository discovery, including session/receipt lock admission.
+input decoding and repository discovery, including session/task-control lock admission.
 Contention must return within the budget rather than leave the hook waiting for
 its external timeout. Actual expiry reports registration failure, grants no new
-receipt authority and releases acquired locks; a later successful call may bind
-future work through the unchanged registration protocol. Preserve existing caller
-alarms and exact bindings. The watcher restoration step receives only the
-remaining budget. Deeply nested encoded arguments that exceed the JSON decoder's
+source authority and releases acquired locks; a later successful call may bind
+future work through the task binding protocol. Preserve existing caller
+alarms and exact bindings. No watcher restoration remains. Deeply nested encoded arguments that exceed the JSON decoder's
 recursion limit are invalid inputs and must be rejected without a traceback.
 
 The installed PostToolUse matcher must cover the canonical binding-tool
 allowlist. Contract tests compare those surfaces directly so a new public tool
 cannot silently miss registration routing.
 
-A Codex installation self-test must exercise installed native registration,
-manager admission and matching started/completed PASS records in a unique
-temporary repository and CODEX_HOME. Exercise both process-owned eager binding
-and the installed PostToolUse wrapper. The parent supervisor owns cleanup if
-a timed-out worker is killed before its own finally block. Fixture rollouts are test inputs only;
-never place them in the real runtime or treat their receipts as evidence for
-current production work. Real current-task independent review and QA remain
-separately required. Register before fixture spawn; do not replay historical
-proof. Bound the probe and stop its manager before removing fixtures. Broken
-registration, manager or completion must fail installation self-test. Preserve
-the existing Claude smoke path and avoid writes into installed payloads.
+An installation self-test exercises installed native task binding, the
+PostToolUse wrapper and the receipt-free public WBS lifecycle in a unique
+temporary repository and CODEX_HOME. Fixture native events are test inputs,
+never independent review/QA evidence for production work. A parent supervisor
+owns cleanup when a timed-out worker cannot run its finally block. Broken
+binding or lifecycle must fail the self-test. Do not write into installed payloads.
 
 ## Verification
 
-Exercise all argument keys/object-string forms with real linked worktrees,
-including malformed/conflicting aliases, failed results, nonbinding actions
-and workspace mismatches. Compare exact matcher coverage with canonical tool
-IDs. Verify a clean Codex projection self-test passes and that broken registrar,
-manager or completion fails. Run existing hook/watcher/worktree/install
-contracts and full independent QA, then inspect actual current-task receipts.
-Exercise both session and receipt lock contention with real subprocesses,
-unchanged existing binding/registration, bounded return and recovery after release.
-Check deeply nested string arguments through the classifier, registrar and actual
-PostToolUse wrapper, alongside the existing caller-alarm regressions.
+Exercise argument aliases and object/string envelopes with linked worktrees,
+malformed/conflicting inputs, failed results, nonbinding actions and workspace
+mismatches. Compare matcher coverage with canonical tool IDs. Test session and
+task-control contention, bounded return, unchanged binding on failure and
+recovery after release. Test deeply nested encoded arguments without tracebacks.
+Run affected hook/worktree/install contracts and actual independent review
+before actual QA. No recording collection is required.

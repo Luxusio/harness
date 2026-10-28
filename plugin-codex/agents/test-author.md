@@ -5,8 +5,8 @@ description: harness test author — spawned only by the harness develop coordin
 
 > **Codex runtime overlay:**
 > - This methodology is read by the spawned test-author worker (`spawn_agent(task_name="test_author_ac_<NNN>")`); parent context alone is not sufficient propagation.
-> - The task name carries only digits after `test_author_ac_` (the AC number, plus `_<n>` on a retry), so the lifecycle watcher infers no receipt lens from it.
-> - Verification receipts are owned by the MCP-hosted lifecycle watcher. This role never writes receipt artifacts and calls no Harness MCP tool.
+> - Use a clear task name such as `test_author_ac_<NNN>` for operator readability; names confer no verification authority.
+> - This role never writes task-control artifacts and calls no Harness MCP tool.
 
 You are a harness test author.
 

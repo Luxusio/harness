@@ -24,31 +24,6 @@ PROMPT_WRAPPER = SCRIPTS / "hook_user_prompt_submit.py"
 RUN_ID = "0198c349-5800-7000-8000-000000000001"
 
 
-def _receipt(*, event: str, lens: str, agent_id: str, verdict: str = "") -> dict:
-    summary = "" if event == "started" else f"VERDICT: {verdict}"
-    if lens.startswith("review-") and event == "completed":
-        fix_now = 1 if verdict == "FAIL" else 0
-        investigate = 1 if verdict == "BLOCKED_ENV" else 0
-        summary += (
-            f"\nFINDING_COUNTS: FIX_NOW={fix_now} "
-            f"INVESTIGATE={investigate} OPTIONAL=0"
-        )
-    if event == "completed":
-        summary += "\nDETAIL_SHA256:" + "0" * 64
-    return {
-        "ts": "2026-08-12T00:00:00Z",
-        "event": event,
-        "source": "claude_hook",
-        "task_run_id": RUN_ID,
-        "runtime_id": f"claude:test-session:{agent_id}",
-        "agent_id": agent_id,
-        "agent_type": agent_id,
-        "lens": lens,
-        "verdict": verdict,
-        "summary": summary,
-    }
-
-
 def _invoke(repo_root: str, *, env_extra=None, payload: dict | None = None) -> subprocess.CompletedProcess:
     """Run prompt_memory.py with stdin payload, cwd = the scratch repo."""
     env = os.environ.copy()
@@ -69,7 +44,6 @@ def _build_scratch_repo(base: Path, *,
                         task_state: str | None = None,
                         plan: bool = True,
                         checks_yaml: str | None = None,
-                        write_receipt: bool = False,
                         touched_paths: list[str] | None = None,
                         suspect_notes: dict[str, str] | None = None,
                         ignored_note: bool = False) -> Path:
@@ -88,7 +62,7 @@ def _build_scratch_repo(base: Path, *,
             "run_id": RUN_ID,
             "execution_mode": "standard",
             "required_lenses": ["review-code", "qa-cli"],
-            "close_receipt_fingerprint": None,
+            "closed": False,
         }
         if "security" in active_task_id:
             control["required_lenses"].insert(1, "review-security")
@@ -107,11 +81,6 @@ def _build_scratch_repo(base: Path, *,
                 (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
         else:
             (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
-        if write_receipt:
-            (task_dir / "RECEIPTS.jsonl").write_text(
-                json.dumps(_receipt(event="started", lens="qa-cli", agent_id="agent-1")) + "\n",
-                encoding="utf-8",
-            )
         if checks_yaml is not None:
             (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
         (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
@@ -234,7 +203,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("[harness-context] ", r.stdout)
         self.assertIn("task=TASK__happy", r.stdout)
         self.assertIn("status=open", r.stdout)
-        self.assertIn("recorded_verdict=PENDING", r.stdout)
+        self.assertNotIn("recorded_verdict", r.stdout)
         # No CHECKS / notes → omit those sections
         self.assertNotIn("open=", r.stdout)
         self.assertNotIn("suspect=", r.stdout)
@@ -253,10 +222,10 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
 
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-review]", r.stdout)
-        self.assertIn("spawn+await", r.stdout)
+        self.assertIn("[harness-review/qa]", r.stdout)
+        self.assertIn("Await independent review PASS before actual QA", r.stdout)
         self.assertNotIn("[harness-qa]", r.stdout)
-        self.assertIn("start≠PASS", r.stdout)
+        self.assertNotIn("RECORDED", r.stdout)
 
     def test_prompt_hook_never_invokes_git(self):
         state = (
@@ -281,88 +250,9 @@ class TestPromptMemory(unittest.TestCase):
             git_was_called = marker.exists()
 
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-review]", r.stdout)
+        self.assertIn("[harness-review/qa]", r.stdout)
         self.assertFalse(git_was_called)
 
-    def test_matched_review_pass_emits_neutral_verify_then_qa_hint(self):
-        state = (
-            "task_id: TASK__recorded-review\nstatus: implementing\n"
-            "runtime_verdict: pending\ntouched_paths:\n  - src/app.py\n"
-            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__recorded-review", task_state=state,
-            )
-            task_dir = base / "doc/harness/tasks/TASK__recorded-review"
-            start = _receipt(event="started", lens="review-code", agent_id="reviewer-1")
-            completion = _receipt(
-                event="completed", lens="review-code", agent_id="reviewer-1", verdict="PASS"
-            )
-            (task_dir / "RECEIPTS.jsonl").write_text(
-                json.dumps(start) + "\n" + json.dumps(completion) + "\n",
-                encoding="utf-8",
-            )
-            r = _invoke(str(base))
-
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-review/qa]", r.stdout)
-        self.assertIn("RECORDED review PASS", r.stdout)
-        self.assertIn("task_verify", r.stdout)
-        self.assertIn("required QA", r.stdout)
-        self.assertNotIn("spawn+await", r.stdout)
-
-    def test_recorded_security_failure_keeps_review_pending(self):
-        state = (
-            "task_id: TASK__security-fail\nstatus: implementing\n"
-            "runtime_verdict: pending\ntouched_paths:\n  - src/auth.py\n"
-            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__security-fail", task_state=state,
-            )
-            task_dir = base / "doc/harness/tasks/TASK__security-fail"
-            events = []
-            for lens, agent, verdict in (
-                ("review-code", "code-1", "PASS"),
-                ("review-security", "security-1", "FAIL"),
-            ):
-                events.extend((
-                    _receipt(event="started", lens=lens, agent_id=agent),
-                    _receipt(event="completed", lens=lens, agent_id=agent, verdict=verdict),
-                ))
-            (task_dir / "RECEIPTS.jsonl").write_text(
-                "".join(json.dumps(item) + "\n" for item in events), encoding="utf-8",
-            )
-            r = _invoke(str(base))
-
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-review] PENDING", r.stdout)
-        self.assertNotIn("RECORDED review PASS", r.stdout)
-
-    def test_stored_review_pass_cannot_hide_review_before_verified_runtime_pass(self):
-        state = (
-            "task_id: TASK__stored-review\nstatus: implementing\n"
-            "runtime_verdict: pending\ntouched_paths:\n  - src/app.py\n"
-            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__stored-review", task_state=state,
-            )
-            task_dir = base / "doc/harness/tasks/TASK__stored-review"
-            (task_dir / "RECEIPTS.jsonl").write_text(
-                json.dumps(_receipt(
-                    event="completed", lens="review-code", agent_id="review-stale", verdict="PASS"
-                )) + "\n",
-                encoding="utf-8",
-            )
-            r = _invoke(str(base))
-
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-review]", r.stdout)
-        self.assertNotIn("[harness-qa]", r.stdout)
 
     def test_does_not_capture_without_active_task_or_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

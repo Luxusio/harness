@@ -70,21 +70,17 @@ Rebase-LIGHT additionally requires exact endpoints, conflict-free one-to-one
 patch equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and
 a clean, accounted-for index/worktree. Discovery is capped at two cycles (four
 hunter calls maximum at DEEP); exhausted recovery proceeds to one fresh formal
-reviewer without another hunter. Receipts stay compact. To retrieve only
-the exact formal review named by a receipt's `DETAIL_SHA256`:
+reviewer without another hunter.
 
-```bash
-PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
-  --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
-```
-
-An old receipt can legitimately return not found because prior runtimes did not
-persist the detail appendix; no fresh task run or migration is required.
+Actual independent review PASS precedes actual QA. Await their direct finals;
+`wbs(action="verify")` and close measure current required WBS checks, not review
+attestation. Missing recording never requires reruns, repair or parking. See
+[receipt-free completion](doc/harness/REQ__receipt-free-execution-and-completion.md).
 
 If a skill returns "tool not found", check that the MCP server registered: `codex mcp test harness`. If hooks don't fire (e.g. `prewrite_gate.py` doesn't intercept a write to `PLAN.md`), refresh the plugin-local hook install with `python3 install.py --codex-only --force`.
 
-After updating Harness, start a new Codex session before relying on review
-storage or lifecycle changes. The already-running MCP process does not
+After updating Harness, start a new Codex session before relying on runtime
+or lifecycle changes. The already-running MCP process does not
 hot-reload replaced plugin files.
 
 ## Where to look when things break

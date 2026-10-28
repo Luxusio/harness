@@ -14,6 +14,11 @@ invalidated_by_paths:
 freshness_updated: 2026-09-18T08:10:49Z
 ---
 
+> Receipt watcher examples and tests below describe the retired implementation.
+> Current verification reports measured WBS checks; source/task ownership remains
+> required. [Receipt-free completion](REQ__receipt-free-execution-and-completion.md)
+> supersedes watcher diagnostics, collection and attestation requirements.
+
 # REQ — recorded claims must stay falsifiable
 
 ## Context

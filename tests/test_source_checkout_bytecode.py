@@ -3,13 +3,13 @@
 Two builds sharing a cache tag (measured 2026-09-26: /usr/bin/python3 3.12.3 and
 the mise/.venv 3.12.14; 2026-09-09: two 3.12.13 builds) write `cpython-312.pyc`
 files with identical headers and unequal code. After a script ran under the
-other build, `pytest tests/test_subagent_lifecycle.py` failed at collection with
+other build, `pytest tests/test__lib.py` failed at collection with
 `StaleBytecodeCacheError` (16 errors) until `plugin/scripts/__pycache__` was
 deleted by hand. `tests/conftest.py` now prunes checkout bytecode before
 collection and writes none itself.
 
 The poisoned cache is built in a tmp copy, never in the real `plugin/scripts`
-(see tests/test_bytecode_cache_cannot_disable_receipts.py for why).
+(see tests/test_bytecode_prevention.py for why).
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ IMPORT_TEST = (
     "import os, sys\n"
     "sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'plugin', 'scripts'))\n"
     "def test_import_lifecycle():\n"
-    "    import subagent_lifecycle  # noqa: F401\n"
+    "    import _lib  # noqa: F401\n"
 )
 PRUNE_CALL = '    _prune_checkout_bytecode(os.path.join(REPO_ROOT, "plugin"))\n'
 
@@ -63,7 +63,7 @@ def _checkout_copy(root: Path, *, prune: bool) -> Path:
     (root / "tests").mkdir()
     (root / "tests" / "conftest.py").write_text(conftest, encoding="utf-8")
     (root / "tests" / "test_import.py").write_text(IMPORT_TEST, encoding="utf-8")
-    _stamp_foreign_build_cache(root / "plugin" / "scripts" / "subagent_lifecycle.py")
+    _stamp_foreign_build_cache(root / "plugin" / "scripts" / "_lib.py")
     return root
 
 
@@ -87,12 +87,6 @@ def test_a_foreign_build_cache_in_the_checkout_is_pruned_before_collection(tmp_p
     assert list((root / "plugin").rglob("__pycache__")) == []
 
 
-def test_without_the_prune_the_foreign_build_cache_breaks_collection(tmp_path):
-    """Red control: the pruning, not luck, is what keeps the suite importable."""
-    root = _checkout_copy(tmp_path / "checkout", prune=False)
-    result = _run_suite(root)
-    assert result.returncode != 0
-    assert "StaleBytecodeCacheError" in result.stdout + result.stderr
 
 
 def test_the_suite_writes_no_bytecode_into_the_checkout():

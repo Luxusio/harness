@@ -24,16 +24,16 @@ The sole public MCP tool is `wbs`. One outcome tree owns planning and measured
 progress for ordinary requests and native Goal continuation alike.
 
 - `wbs(action="open")` creates or resumes the root; existing open/blocked work
-  preserves its run and receipts. Only explicit `fresh_run: true` starts a new
-  generation and discards that evidence.
+  preserves its run and measured checks. Only explicit `fresh_run: true` starts a new
+  generation.
 - `wbs(action="context")` refreshes state; `wbs(action="next")` returns ready outcomes.
 - `wbs(action="plan")` publishes PLAN.md, the outcome tree and required lenses.
 - `wbs(action="check")` executes one declared outcome assertion; planning alone
   earns no progress.
 - `wbs(action="dispatch")` hands independent work to the isolated worktree pool
   and parks the parent until its exact pool integrates.
-- `wbs(action="verify")` derives ordered independent review/QA verification;
-  `wbs(action="close")` still requires that evidence and verified outcomes.
+- `wbs(action="verify")` measures current required WBS checks;
+  `wbs(action="close")` requires those checks to PASS.
 - `wbs(action="block")` parks unfinished work with a real blocker and actionable
   unblock condition. Resume with open while preserving the same run.
 - `wbs(action="migrate")` previews retired records; only explicit `apply: true`
@@ -52,15 +52,11 @@ prescribe edited files to calculate progress. Refine unclear unfinished work
 after two hours without earned progress; report real external blockers instead
 of recursively splitting them.
 
-Static review and runtime QA provenance share compact `RECEIPTS.jsonl`.
-Codex/Claude lifecycle hooks own it. Exact formal review finals are stored in
-the non-authoritative task-local `REVIEWS.jsonl` appendix and can be selected
-only by `DETAIL_SHA256`; no lifecycle gate reads that appendix. Applicable lenses come from
-`TASK.json`; receipts do not bind Git state. The normative contracts are
-`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
-acquisition/identity/completion and
-`doc/harness/patterns/ADR__consolidated-task-artifacts.md` for
-storage/schema/gates.
+Actual independent code review and conditional security review must PASS before
+actual QA begins. Await direct independent final results; coordinator summaries
+and copied text cannot replace them. Machine verification measures WBS checks
+and does not attest review or QA. Missing recording never requires a rerun,
+repair or parking. See `doc/harness/REQ__receipt-free-execution-and-completion.md`.
 
 ## 3. TASK.json (4 fields only)
 
@@ -69,14 +65,14 @@ storage/schema/gates.
   "run_id": "<canonical lowercase UUIDv7>",
   "execution_mode": "standard",
   "required_lenses": ["review-code", "qa-cli"],
-  "close_receipt_fingerprint": null
+  "closed": false
 }
 ```
 
 Task identity comes from the canonical directory. Routing and verdicts are
 derived on demand; `BLOCKED.md` represents a parked task. A successful close
-sets `close_receipt_fingerprint`. Removed task-control artifacts are not
-read or migrated.
+sets `closed: true`. Removed task-control artifacts are not
+read by ordinary lifecycle calls. Explicit migration handles supported prior controls.
 
 ## 4. Plan-first rule
 
@@ -98,7 +94,7 @@ Task in_progress (`.active` marker exists) 동안:
 - 자가 판단으로 task 를 끝내지 않는다 (아래 Task 종결 사유만).
 - Turn-end 는 Claude 에서 hook 으로 게이트되지 않는다 (Stop 훅 등록이
   2026-09-23 제거됨). Task 는 열린 채로 남고, close 는 여전히
-  `wbs(action="close")` 의 receipt-backed PASS 만 인정한다. Turn 간 지속(continuation)
+  `wbs(action="close")` 의 current WBS checks PASS 만 인정한다. Turn 간 지속(continuation)
   은 native `/goal` 이 담당한다 — close 조건(예: "WBS close PASS")을 goal
   condition 에 넣는다.
 - 대기는 종결이 아니다: 실행 중인 lens 서브에이전트를 기다릴 때는 turn 을
@@ -112,12 +108,14 @@ Task 종결 사유 (runtime_verdict 기반, turn 대기와 무관):
    `wbs(action="block")` 는 park 기록일 뿐 종결이 아니다 — PASS 를 주지 않고 C-04 close gate 를 우회하지 않으며, 태스크는 plain `wbs(action="open")` 로 재개한다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
-BLOCKED_ENV로 멈출 때는 `wbs(action="block")`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `wbs(action="verify")` 1회 후에도 남은 필수 attestation 누락이다. 렌즈가 실제로 돌아 결과를 냈는데 필수 증거가 없는 경우에는 고정 쌍만 쓴다. 단 기록 능력 상실이 **관측된** 경우(`doc/harness/.receipt-capability-broken` 존재)는 외부 환경 blocker 분기가 우선하며 고정 쌍을 쓰지 않는다 — 두 쌍 모두 "렌즈가 돌아 결과를 냈다"를 단언하는데 그 상태에서는 그게 미지이기 때문이다. 근거는 `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. 쌍은 **둘**이고 어느 쪽인지는 영수증 스트림이 정한다 — 이 run 에 아무 영수증도 기록되지 않았으면 empty-stream 쌍, 영수증은 있는데 필수 completion 이 없으면 missing-attestation 쌍. 두 `blocked_reason`/`unblock_condition` 문자열 모두 `plugin/scripts/_lib.py`가 소유하며, 방금 돌린 `wbs(action="verify")` 응답의 `next_action`에서 **그대로 복사**한다. 기억에 의존해 다시 타이핑하거나, 바꿔 쓰거나, 진단 문구를 끼워 넣지 않는다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 `wbs(action="verify")` + `wbs(action="close")`.
+BLOCKED_ENV로 멈출 때는 `wbs(action="block")`로 실제 외부 blocker와
+실행 가능한 unblock condition을 기록한다. 실제 FAIL은 수정하고 actual review
+PASS 뒤에 actual QA를 수행한다. 기록 누락은 blocker가 아니다. 난이도, 시간 압박,
+retry 소진도 blocker가 아니다. PASS 경로는 `wbs(action="verify")` +
+`wbs(action="close")`이며 machine verdict의 근거는 current measured WBS checks다.
 
-파킹 뒤에는 별도 resume 도구가 없다. plain `wbs(action="open")`가 같은 run과
-review/QA 영수증을 보존해 재개한다. 이미 끝난 증거를 의도적으로 버리고 새
-generation을 시작할 때만 `fresh_run: true`를 쓴다. closed task의 plain
-`wbs(action="open")`는 거부되며 같은 명시적 선택을 안내한다.
+파킹 뒤에는 plain `wbs(action="open")`으로 같은 run과 measured checks를 보존해
+재개한다. 새 generation을 의도적으로 시작할 때만 `fresh_run: true`를 쓴다.
 
 ## 5. Artifact ownership
 
@@ -126,8 +124,6 @@ generation을 시작할 때만 `fresh_run: true`를 쓴다. closed task의 plain
 | PLAN.md | plan-skill via `wbs(action="plan")` MCP |
 | TASK.json | WBS execution owner (`wbs(action="plan")` may update lens declarations) |
 | source + durable docs | developer |
-| RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |
-| REVIEWS.jsonl | shared formal-review detail writer used by lifecycle hooks or `review-log` |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
@@ -159,7 +155,7 @@ apply to read-only answers or ordinary non-harness work.
 
 ## 7. Verification
 
-`wbs(action="verify")` checks hook-recorded review and QA lifecycles.
+`wbs(action="verify")` measures current required WBS assertions, blocked state and target applicability.
 Do not claim success from static inspection when runtime verification is required.
 
 ## 8. Finish cleanly
@@ -195,9 +191,9 @@ an explicit file list when git history isn't the right source.
 
 ## 8b. Acceptance intent
 
-PLAN.md is the single acceptance document. Verification is represented by
-ordered review and QA entries in `RECEIPTS.jsonl`; there is no second mutable
-acceptance ledger to reconcile.
+PLAN.md is the single acceptance document. Existing WBS assertions own measured
+outcome checks. Independent review and QA remain workflow requirements; there
+is no second mutable acceptance ledger to reconcile.
 
 ## 8c. Verification delegation
 
@@ -214,8 +210,8 @@ the authoritative close signal.
 This is workflow guidance, not a PreToolUse gate. Short diagnostics and browser
 verification may run inline when delegation is unavailable or the inline path
 is materially simpler. Harness accepts the resulting context-growth risk; the
-caller still owns complete ordered review/QA receipts required by
-`wbs(action="verify")`.
+caller still owns substantive ordered review and QA, followed by current WBS
+checks through `wbs(action="verify")`.
 
 Allowed inline:
 - **Bash test runners** (`pytest`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `vitest`, `jest`, `mocha`, `cargo test`, `go test`, `mvn test`, `gradle test`, `rspec`, `phpunit`, `rake test`) — single PASS/FAIL lines do not bloat context; inline use is legitimate. For heavy full-suite runs, spawning `harness:qa-cli` (or `qa-api` / `qa-desktop` per project) keeps the main lane clean as a convention, not a gate.
@@ -233,9 +229,8 @@ delegation is now selected by the workflow instead.
 
 PLAN.md owns acceptance intent. Bug fixes record root-cause and regression
 evidence in the implementation review, while feature work includes concrete
-test evidence or a specific no-test rationale. Completion requires ordered,
-hook-owned review and QA PASS entries in `RECEIPTS.jsonl`; no agent may author
-or promote its own PASS.
+test evidence or a specific no-test rationale. Completion requires actual independent review PASS before actual QA PASS and
+current required WBS checks. No agent may author or promote its own independent PASS.
 
 ## 10. Quality scripts
 
@@ -248,7 +243,7 @@ All scripts under `plugin/scripts/`. Stdlib only.
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` | develop Phase 3.3 |
 | `promote_learnings.py` | Current-run-validated Tier 2 candidate reporting; no durable writes | stdout | run self-improvement |
 | `health.py --dry-run` | Weighted composite 0–10 score | stdout | run Phase 4.5 |
-| `retro.py` | Weekly retrospective (git + receipt-verified closes + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
+| `retro.py` | Weekly retrospective (git + verified closes + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
 
 Health is activated via the manifest optional key `health_components` and falls
 back to `test_command` when no components are declared.
@@ -264,8 +259,8 @@ doc/harness/learnings.jsonl  # Tier 3: append-only raw signals.
 ```
 
 **All skills write to Tier 3.** Automatic candidate reporting requires a valid signal
-from the just-closed receipt-verified task/run. A key may promote after valid
-occurrences from 2+ distinct receipt-verified closed task/runs; duplicate rows
+from the just-closed verified task/run. A key may promote after valid
+occurrences from 2+ distinct verified closed task/runs; duplicate rows
 from one run count once, and historical backlog alone cannot trigger reporting.
 The reporting pass never rewrites or prunes the raw ledger and never changes
 Tier 2 patterns. Apply a reported candidate only in a separately reviewed

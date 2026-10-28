@@ -228,7 +228,7 @@ def test_prompt_memory_emits_context_block() -> TestResult:
                 "run_id": "01890a5d-ac96-774b-bcce-b3020998df21",
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
-                "close_receipt_fingerprint": None,
+                "closed": False,
             }, f)
             f.write("\n")
         _os.makedirs(_os.path.join(base, "src"))

@@ -94,12 +94,8 @@ def _write_task_state(tasks_dir: str, task_name: str, status: str) -> str:
         "run_id": "0198c349-5800-7000-8000-000000000001",
         "execution_mode": "standard",
         "required_lenses": ["review-code", "qa-cli"],
-        "close_receipt_fingerprint": None,
+        "closed": status == "closed",
     }
-    if status == "closed":
-        control["close_receipt_fingerprint"] = "sha256:" + hashlib.sha256(
-            b"RECEIPTS.jsonl\0<missing>\0"
-        ).hexdigest()
     with open(state_path, "w") as f:
         json.dump(control, f)
         f.write("\n")

@@ -46,10 +46,10 @@ def _initialize_instructions(runtime: str) -> str:
         "Open a root for a plain repo-mutating request; hooks do not create tasks automatically. "
         "Start with coarse observable outcomes in PLAN's wbs fence, with optional check argv. "
         "Never prescribe edited files for progress or freeze implementation at intake. Refine as discovery requires. "
-        "check runs one declared outcome assertion; verify reads ordered independent review/QA evidence; close still requires both. "
+        "check runs one declared outcome assertion; verify and close measure current WBS checks and input applicability. Independent review and QA remain workflow-owned. "
         "dispatch owns prepare/bind/complete/resume/recover/status on the existing isolated-worktree pool; it creates worktrees and completes integration/disposal before parent completion. "
         "File ownership is supplied only at this actual concurrent execution handoff. "
-        "Internally task_start preserves the execution run and receipts; fresh_run=true deliberately discards evidence. "
+        "Task open preserves the execution run; fresh_run=true deliberately creates a new run. "
         "Use wbs(action=migrate) to preview retired records; apply=true explicitly converts them. Retired tool names are unavailable. "
     )
     if runtime == "codex":
@@ -78,48 +78,29 @@ from _lib import (  # type: ignore
     active_session_transaction, read_active_session_marker, resolve_session_task_binding,
     _has_binding_conflict_fence,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
-    receipt_runtime_verdict,
-    receipt_review_verdict, required_review_lenses, _required_qa_lenses,
-    receipt_snapshot, receipt_stream_fingerprint,
-    read_json_diagnostics, write_json_diagnostics,
-    reset_receipt_streams_for_new_run, restore_receipt_streams,
-    release_receipt_stream_reset,
-    receipt_stream_transaction,
+    required_review_lenses, _required_qa_lenses,
+    task_control_transaction,
     begin_task_run, restore_task_control,
     _bind_control_writer,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
     LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
-    # ATTESTATION_* are a deliberate test-facing re-export: since 2026-09-04
-    # this module reaches the pair through attestation_endgame() rather than
-    # interpolating it, so these two names have no runtime consumer here.
-    ATTESTATION_BLOCKED_REASON, ATTESTATION_UNBLOCK_CONDITION,
-    TRUST_BOUNDARY, attestation_endgame,
-    RECEIPT_RECORDING_UNAVAILABLE, is_spawn_instruction,
-    nonparsing_completion_lenses, nonparsing_completion_note,
+
 )
 
 try:
-    from hook_tree_health import receipt_capability_warning  # type: ignore
-except Exception:  # pragma: no cover - advisory check must never block startup
-    def receipt_capability_warning(config_dir=None):  # type: ignore[misc]
-        return ""
-
-try:
-    from codex_hook_registration import (  # type: ignore
-        REGISTERED as _REGISTRATION_REGISTERED,
-        REGISTRATION_BUDGET_SECONDS as _REGISTRATION_BUDGET_SECONDS,
-        restore_watcher_registration as _restore_watcher_registration,
+    from codex_hook_registration import (
+        workspace_roots as _codex_workspace_roots,
         _live_conflicts as _codex_live_conflicts,
         authenticate_native_session as _authenticate_native_session,
         register_native_task as _register_native_task,
     )
-except Exception:  # pragma: no cover - reported as a positive Codex failure
-    _REGISTRATION_REGISTERED = "registered"
-    _REGISTRATION_BUDGET_SECONDS = 0.0
-    _restore_watcher_registration = None
+except ImportError:
+    _codex_workspace_roots = None
     _codex_live_conflicts = None
     _authenticate_native_session = None
     _register_native_task = None
+
+_SERVER: "McpServer | None" = None
 
 
 def _control_root() -> str:
@@ -128,771 +109,15 @@ def _control_root() -> str:
     if error:
         raise RuntimeError(f"invalid Harness workspace at {root}: {error}")
     return root or candidate
-try:
-    from codex_lifecycle_watcher import (  # type: ignore
-        WatcherManager as _WatcherManager, workspace_roots as _codex_workspace_roots,
-        registrations as _watcher_registrations,
-        _registration_generation as _watcher_registration_generation,
-    )
-except Exception:
-    _WatcherManager = None
-    _codex_workspace_roots = None
-    _watcher_registrations = None
-    _watcher_registration_generation = None
-
-# ── Watcher diagnostics ──────────────────────────────────────────────────
-#
-# The hook process and this server are separate processes, so a registration
-# failure observed in a PreToolUse hook has to be left somewhere the control
-# plane can read it. This file is diagnostic only: nothing here can produce a
-# PASS, and no reader treats its contents as attestation.
-
-WATCHER_DIAGNOSTICS_RELPATH = "doc/harness/.watcher-diagnostics.json"
-
-# Set by McpServer.__init__ so the stateless handler functions can report live
-# watcher state. Stays None under direct handler unit tests.
-_SERVER: "McpServer | None" = None
-
-
-def _watcher_diagnostics_path(control_root: str = "") -> str:
-    try:
-        root = control_root or _control_root()
-    except Exception:
-        return ""
-    return os.path.join(root, WATCHER_DIAGNOSTICS_RELPATH)
-
-
-def _read_watcher_diagnostics(control_root: str = "") -> dict:
-    path = _watcher_diagnostics_path(control_root)
-    if not path:
-        return {}
-    return read_json_diagnostics(path)
-
-
-def _write_watcher_diagnostics(updates: dict, control_root: str = "") -> None:
-    path = _watcher_diagnostics_path(control_root)
-    if not path:
-        return
-    # Merge from the SCOPED read. Merging from the unscoped one and then
-    # stamping the result as current launders a record the scoped read had just
-    # rejected: a foreign or expired entry comes back as live state.
-    data = _diagnostics_for_this_session(control_root)
-    data.update(updates)
-    try:
-        root = control_root or _control_root()
-    except Exception:
-        return
-    # Stamp what we write, because that is what the scoped read requires. An
-    # unstamped record is dropped as unattributable, so omitting this silently
-    # discards the server's own watcher errors across a restart — exactly the
-    # swallowing that requirement 2 exists to end.
-    # Same identity source the scoped read uses, so the server does not write
-    # records its own read will then reject.
-    data["session_id"] = _current_session_identity(root)
-    data["updated"] = now_iso()
-    # Never raises: the helper reports failure by returning False, because
-    # diagnostics must never break the control plane.
-    write_json_diagnostics(path, data, confine_to=root)
-
-
-DIAGNOSTICS_MAX_AGE_SECONDS = 12 * 3600
+def _server_runtime() -> str:
+    runtime = getattr(_SERVER, "runtime", "") if _SERVER is not None else ""
+    return runtime or str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
 
 
 def _current_session_identity(control_root: str = "") -> str:
-    """Return only an identity directly owned by this process.
-
-    A repository-global session hint is last-writer-wins compatibility state,
-    not evidence that a Codex MCP host belongs to that root session. Claude's
-    lifecycle bridge still uses its established hint path.
-    """
     if _server_runtime() == "codex":
         return str(os.environ.get("CODEX_THREAD_ID") or "")
-    try:
-        return read_session_hint(control_root or _control_root()) or ""
-    except Exception:
-        return ""
-
-
-def _diagnostics_for_this_session(control_root: str = "") -> dict:
-    """Return the diagnostics record only when it describes the live session.
-
-    The record is written by the Codex pre-spawn hook and read here, in a
-    different process. Nothing stamps it as current except the hook itself, so
-    an unscoped read makes a record sticky: one pre-task spawn writes
-    `registration_present: false`, and every later session in the repo reads it
-    as live state with no expiry and no way to clear it. A record from another
-    session, or one too old to describe this one, is not evidence about now.
-    """
-    data = _read_watcher_diagnostics(control_root)
-    if not data:
-        return {}
-    expected = _current_session_identity(control_root)
-    recorded = str(data.get("session_id") or "")
-    if expected:
-        # Including the empty case: an unstamped id would otherwise match every
-        # session, so a planted record would need only `"session_id": ""` to opt
-        # out of scoping.
-        if recorded != expected:
-            return {}
-    elif recorded:
-        # We cannot determine which session we are, so a record claiming a
-        # specific one cannot be attributed to us. Unverifiable is not "mine".
-        return {}
-    # Remaining case — neither side has an identity — is age-scoped only. It is
-    # load-bearing rather than an oversight: on a runtime with no hint and no
-    # thread id, this is the only way the server reads back the
-    # `last_watcher_error` it recorded itself. A record planted here can set
-    # `receipts_recordable: False` and alter advisory watcher status, but it
-    # cannot suppress substantive review/QA or forge PASS; expiry bounds it.
-    # An absent stamp is rejected by the parse below, not by a separate guard:
-    # `fromisoformat("")` raises and lands in the same `return {}`. A dedicated
-    # branch here looked like it was doing the work and was never exercised.
-    stamped = str(data.get("updated") or "")
-    try:
-        age = (
-            datetime.now(timezone.utc)
-            - datetime.fromisoformat(stamped.replace("Z", "+00:00"))
-        ).total_seconds()
-    except Exception:
-        return {}
-    return data if 0 <= age <= DIAGNOSTICS_MAX_AGE_SECONDS else {}
-
-
-_REASON_MAX_CHARS = 200
-
-
-def _safe_reason(text: str) -> str:
-    """Flatten untrusted diagnostics text before it is handed to a caller.
-
-    The diagnostics file is not a protected artifact, so anything with local
-    write access can choose its contents. Everything derived from it is bounded
-    and flattened — both what reaches `next_action` and what is returned in
-    `watcher_status`, since the whole tool result is read by an orchestrator.
-    """
-    flattened = re.sub(r"[\x00-\x1f\x7f<>]+", " ", str(text or ""))
-    flattened = re.sub(r"\s+", " ", flattened).strip()
-    if len(flattened) > _REASON_MAX_CHARS:
-        flattened = flattened[:_REASON_MAX_CHARS].rstrip() + "…"
-    return flattened
-
-
-def _flatten_text(text: str) -> str:
-    """Flatten without truncating, for harness-authored strings.
-
-    `_safe_reason`'s 200-char cap exists for text from the unprotected
-    diagnostics file. Applying it to our own warning cut the `Fix: …` sentence
-    off the end — bounding the one string whose whole value is its remediation.
-    """
-    flattened = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text or ""))
-    return re.sub(r"\s+", " ", flattened).strip()
-
-
-def _safe_optional(value):
-    """Bound a diagnostics value that is allowed to be absent.
-
-    Preserves None so an undeterminable field keeps reporting null rather than
-    turning into an empty string, which reads as a determined answer.
-    """
-    return None if value is None else _safe_reason(str(value))
-
-
-def _clearing_a_recorded_error(message: str, control_root: str = "") -> bool:
-    """Is this an error-clear with no prior error on disk?
-
-    The success path calls `_record_watcher_error("")` on every watcher start.
-    Writing that would materialize a diagnostics file in any repo the server
-    runs in, purely to record the absence of a problem. There is nothing to
-    clear unless a previous run left an error behind.
-    """
-    if message:
-        return False
-    path = _watcher_diagnostics_path(control_root)
-    return not (path and os.path.exists(path))
-
-
-def _record_watcher_error(message: str, control_root: str = "") -> None:
-    if _clearing_a_recorded_error(message, control_root):
-        return
-    _write_watcher_diagnostics({"last_watcher_error": message or ""}, control_root)
-
-
-def _receipts_writable(task_dir: str) -> bool | None:
-    """True/False when it can be determined, None when it cannot.
-
-    A guessed True here would be the worst possible answer, so an
-    indeterminate result stays indeterminate.
-    """
-    if not task_dir:
-        return None
-    try:
-        return os.access(task_dir, os.W_OK)
-    except Exception:
-        return None
-
-
-def _server_runtime() -> str:
-    """The negotiated client runtime, or "" before initialize / under unit tests."""
-    runtime = getattr(_SERVER, "runtime", "") if _SERVER is not None else ""
-    if runtime:
-        return runtime
-    return str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
-
-
-# MCP can perform cross-workspace native ancestry and registration; unlike a
-# latency-sensitive hook it has an explicit longer, still finite transaction.
-# Real long-coordinator proof alone costs 1.2-1.8s before registry/locks.
-TASK_START_REGISTRATION_BUDGET_SECONDS = 8.0
-
-
-def _register_task_start_watcher(
-    repo_root: str, task_dir: str, control: dict, *, session_cwd: str = "",
-    diagnostics_root: str = "",
-):
-    """Register directly only when this MCP process owns an exact Codex id.
-
-    Ordinary Codex MCP hosts have no such id; their successful result is bound
-    by PostToolUse before the next tool call. No hint-derived identity is used.
-    """
-    if _server_runtime() != "codex":
-        return None
-    if _SERVER is not None:
-        _SERVER.watcher_thread_id = ""
-
-    session_id = _current_session_identity(repo_root)
-    if not session_id:
-        # Ordinary Codex MCP calls have no root-session identity. The exact
-        # binding is established by PostToolUse from the successful result.
-        return None
-    payload_data = {"cwd": session_cwd or repo_root, "session_id": session_id}
-    payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
-    outcome: dict = {}
-
-    def exact_bind(control_root: str, thread_id: str) -> bool:
-        return bool(
-            os.path.realpath(control_root) == os.path.realpath(repo_root)
-            and active_task_binding_matches(
-                repo_root,
-                task_dir,
-                control=control,
-                session_id=thread_id,
-            )
-        )
-
-    reason = ""
-    registered = False
-    if _restore_watcher_registration is None:
-        reason = "codex_hook_registration is unavailable in this plugin tree"
-    else:
-        try:
-            if session_cwd:
-                registered = bool(_register_native_task and _register_native_task(
-                    session_cwd, session_id, repo_root, task_dir,
-                    os.path.basename(task_dir), str(control.get("run_id") or ""),
-                    budget_seconds=TASK_START_REGISTRATION_BUDGET_SECONDS,
-                    status_out=outcome,
-                ))
-            else:
-                registered = bool(_restore_watcher_registration(
-                    payload,
-                    budget_seconds=TASK_START_REGISTRATION_BUDGET_SECONDS,
-                    bind_fn=exact_bind,
-                    status_out=outcome,
-                ))
-        except Exception as exc:
-            reason = f"{type(exc).__name__}: {exc}"
-
-    if registered and outcome.get("status") in (None, _REGISTRATION_REGISTERED):
-        registered_thread_id = str(outcome.get("thread_id") or session_id or "")
-        if _SERVER is not None:
-            # The diagnostics file is advisory. Retain the exact identity that
-            # successfully passed registration and active-task binding so live
-            # manager errors can be queried in MCP hosts without thread env.
-            _SERVER.watcher_thread_id = registered_thread_id
-        _write_watcher_diagnostics({
-            "registration_present": True,
-            "last_registration_error": "",
-            "last_registration_note": "",
-            "root_thread_id": registered_thread_id or None,
-        }, diagnostics_root or repo_root)
-        return {
-            "registered": True,
-            "reason": "",
-            "thread_id": registered_thread_id,
-        }
-
-    reason = reason or str(outcome.get("reason") or "")
-    if not reason:
-        reason = "watcher registration returned no successful Codex outcome"
-    elif outcome.get("status") != "failed":
-        # A valid Codex task_start must have an exact identity and binding.
-        # NOT_APPLICABLE is ordinary before a task exists, but is a positive
-        # failure here because the task and its marker were just published.
-        reason = f"watcher registration was not applicable after task_start: {reason}"
-    reason = _safe_reason(reason)
-    _write_watcher_diagnostics({
-        "registration_present": False,
-        "last_registration_error": reason,
-        "last_registration_note": "",
-        "root_thread_id": outcome.get("thread_id") or session_id or None,
-    }, diagnostics_root or repo_root)
-    return {"registered": False, "reason": reason}
-
-
-def _apply_task_start_registration_status(
-    status: dict, registration, task_dir: str, run_id: str, *, snapshot=None,
-) -> dict:
-    """Keep the current response fail-closed if diagnostics persistence fails."""
-    if (
-        registration is None
-        or registration["registered"]
-        or (
-            _run_has_receipts(task_dir, run_id) if snapshot is None
-            else _run_has_receipts(task_dir, run_id, snapshot)
-        )
-    ):
-        return status
-    status = dict(status)
-    reason = _safe_reason(registration.get("reason") or "")
-    status.update({
-        "registration_present": False,
-        "receipts_recordable": False,
-        "receipts_unrecordable_summary": (
-            "The receipt watcher is not registered for this session."
-        ),
-        "receipts_unrecordable_reason": reason,
-        "last_registration_error": reason,
-    })
-    return status
-
-
-_HOOK_CAPABILITY_MARKER = os.path.join("doc", "harness", ".receipt-capability-broken")
-
-
-def _hook_capability_marker_file(task_dir: str = "") -> str:
-    """Path of the marker a failing receipt hook leaves behind, or ''.
-
-    Written by `plugin/scripts/background_hook.py` when its import block fails,
-    and removed by the next hook invocation that imports cleanly.
-
-    `task_dir` anchors the lookup, matching how the rest of this module resolves
-    a control root. Resolving from the server's cwd instead made an unrelated
-    repo's marker visible to every call, which turned three pre-existing
-    `_watcher_status` tests red on any machine where a hook had ever failed.
-
-    Only the Claude hook tree writes and clears this marker, so it is consulted
-    only in that runtime. On Codex the recording path is the watcher, and a
-    marker left by an earlier Claude failure would otherwise pin
-    `receipts_recordable: false` with no Codex-side writer able to retire it.
-
-    `lstat`, not `isfile`: `isfile` follows symlinks, so a link planted at this
-    fixed name would let any existing file masquerade as a marker and pin the
-    capability signal false.
-    """
-    if _server_runtime() == "codex":
-        return ""
-    try:
-        anchor = task_dir or ""
-        root = find_harness_root(anchor) or find_repo_root(anchor)
-    except Exception:
-        return ""
-    if not root:
-        return ""
-    path = os.path.join(str(root), _HOOK_CAPABILITY_MARKER)
-    try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
-            return ""
-    except OSError:
-        return ""
-    return path
-
-
-def _hook_capability_marker(task_dir: str = "") -> bool:
-    return bool(_hook_capability_marker_file(task_dir))
-
-
-def _hook_capability_marker_reason(task_dir: str = "") -> str:
-    """The marker's recorded cause, bounded like every other reason string.
-
-    Falls back to a fixed sentence when the file is unreadable or malformed: the
-    marker's presence is the signal, and losing the detail must not downgrade a
-    positively observed failure into silence.
-    """
-    fallback = (
-        "The receipt hook could not import its dependencies, so no receipt can "
-        "be recorded. See doc/harness/learnings.jsonl for the recorded cause."
-    )
-    path = _hook_capability_marker_file(task_dir)
-    if not path:
-        return fallback
-    # The hardened reader, not a bare `open`. This file is untrusted local data
-    # in the same class as the watcher diagnostics, and `read_json_diagnostics`
-    # already carries the protections that class needs: O_NOFOLLOW, O_NONBLOCK
-    # (the MCP server has no timeout around this call, so a FIFO planted at the
-    # name would hang the control plane), an S_ISREG check, and a size cap.
-    try:
-        data = read_json_diagnostics(path)
-    except Exception:
-        return fallback
-    if not isinstance(data, Mapping):
-        return fallback
-    error = str(data.get("error") or "").strip()
-    remedy = str(data.get("remedy") or "").strip()
-    detail = "; ".join(part for part in (error, remedy) if part)
-    return f"{fallback} {detail}".strip() if detail else fallback
-
-
-def _run_has_receipts(task_dir: str, run_id: str, snapshot=None) -> bool:
-    """Has this exact run already recorded a receipt?
-
-    This is direct, positive disproof of any claim that receipts cannot be
-    recorded — the file the close gate reads already contains an entry from the
-    live run. It is only ever used to clear a suspicion, never to create one,
-    and it cannot manufacture a verdict: `task_verify` still reads the receipts
-    themselves, not this boolean.
-    """
-    if not task_dir or not run_id:
-        return False
-    # Read through the same integrity-validated reader the close gate uses, not
-    # by parsing lines. Parsing directly meant the disproof fired on exactly the
-    # streams that cannot close: a corrupt receipts file made this report
-    # "receipts are being recorded" while the real reader raised on the same
-    # bytes, so the agent was sent to spend review and QA that could never
-    # produce a PASS — the waste this REQ exists to prevent.
-    # A caller that already holds a snapshot must pass it: handlers under the
-    # single-read invariant may not take a second view of the stream, and the
-    # suite enforces that. Calls without an operation snapshot read here.
-    if snapshot is None:
-        try:
-            snapshot = receipt_snapshot(task_dir)
-        except Exception:
-            return False
-    # `.entries` is the whole validated stream. `.subagents` excludes review
-    # lenses, which would miss the commonest case: a review receipt is usually
-    # the first thing recorded for a run.
-    # Entries are read-only mappings, not dicts, so an `isinstance(item, dict)`
-    # guard here silently rejects every valid receipt.
-    for item in getattr(snapshot, "entries", None) or []:
-        if isinstance(item, Mapping) and item.get("task_run_id") == run_id:
-            return True
-    return False
-
-
-def _watcher_status(
-    task_dir: str = "", task_id: str = "", run_id: str = "", snapshot=None,
-) -> dict:
-    """Diagnostic snapshot of receipt-recording readiness.
-
-    Every field is advisory. Nothing here can authorize a PASS: the close gate
-    still reads only hook-owned entries in RECEIPTS.jsonl. Fields this runtime
-    cannot determine are reported as null rather than guessed.
-
-    `receipts_recordable` is deliberately tri-state. False means a failure was
-    positively observed. None means unknown — which is what a *suspicion* earns,
-    and the honest answer AC-002 asks for. Collapsing unknown into False is what
-    turned an advisory warning into a self-deadlock: `receipt_capability_warning`
-    inspects the registered Claude plugin paths — `installed_plugins.json` and
-    the marketplace `installLocation` — and neither records which tree was
-    actually loaded, so a stale registration entry makes it fire in a session
-    whose hooks are demonstrably writing receipts.
-    """
-    diagnostics = _diagnostics_for_this_session()
-    try:
-        capability_warning = receipt_capability_warning()
-    except Exception:
-        capability_warning = ""
-    if capability_warning and _run_has_receipts(task_dir, run_id, snapshot):
-        capability_warning = ""  # Disproves this heuristic only, not live errors.
-    manager_running = _SERVER.watcher_manager is not None if _SERVER is not None else None
-    if _SERVER is not None and _SERVER.watcher_manager is not None:
-        is_running = getattr(_SERVER.watcher_manager, "is_running", None)
-        if callable(is_running):
-            try:
-                manager_running = bool(is_running())
-            except Exception:
-                manager_running = False
-    if _WatcherManager is None or _server_runtime() != "codex":
-        # No Codex watcher is expected in this runtime, so a definite False
-        # would report a component as broken for not doing what it was never
-        # asked to do. The Claude hook tree is the recording path here.
-        manager_running = None
-
-    registration_present = diagnostics.get("registration_present")
-    last_registration_error = diagnostics.get("last_registration_error") or ""
-    last_watcher_error = (
-        (_SERVER.last_watcher_error if _SERVER is not None else "")
-        or diagnostics.get("last_watcher_error")
-        or ""
-    )
-    worker_state_unreadable = False
-    worker_snapshot = None
-    worker_ready = False
-    worker_stopped = False
-    if _server_runtime() == "codex" and _SERVER is not None and _SERVER.watcher_manager is not None:
-        manager = _SERVER.watcher_manager
-        # Only process-owned identity can select a worker; diagnostics are
-        # display-only and may name another thread.
-        current_thread_id = str(
-            getattr(_SERVER, "watcher_thread_id", "")
-            or os.environ.get("CODEX_THREAD_ID") or ""
-        )
-        status_reader = getattr(manager, "worker_status", None)
-        try:
-            if not current_thread_id:
-                worker_state_unreadable = True
-            elif callable(status_reader):
-                observed = status_reader(current_thread_id)
-                if observed is not None:
-                    # Reject malformed or partial snapshots instead of treating
-                    # an empty error as evidence that recording is possible.
-                    if not (
-                        isinstance(observed, dict)
-                        and {"task_id", "run_id", "generation", "alive", "cursor", "error", "result"}.issubset(observed)
-                        and isinstance(observed.get("task_id"), str)
-                        and isinstance(observed.get("run_id"), str)
-                        and isinstance(observed.get("generation"), tuple)
-                        and len(observed["generation"]) == 5
-                        and isinstance(observed.get("alive"), bool)
-                        and isinstance(observed.get("error"), str)
-                        and (observed.get("cursor") is None or (
-                            type(observed["cursor"]) is int and observed["cursor"] >= 0
-                        ))
-                        and (observed.get("result") is None or type(observed["result"]) is int)
-                    ):
-                        worker_state_unreadable = True
-                    else:
-                        generation_current = False
-                        if task_id and run_id and _watcher_registrations is not None:
-                            registrations = (
-                                registration
-                                for root in _codex_workspace_roots(manager.repo_root)
-                                for registration in _watcher_registrations(root)
-                            )
-                            for registration in registrations:
-                                if (
-                                    registration.get("thread_id") == current_thread_id
-                                    and registration.get("task_id") == task_id
-                                    and registration.get("run_id") == run_id
-                                ):
-                                    generation_current = (
-                                        _watcher_registration_generation(registration)
-                                        == observed["generation"]
-                                    )
-                                    break
-                        exact_worker = (
-                            observed["task_id"] == task_id
-                            and observed["run_id"] == run_id
-                            and generation_current
-                        )
-                        worker_snapshot = {
-                            "task_id": _safe_optional(observed["task_id"]),
-                            "run_id": _safe_optional(observed["run_id"]),
-                            "alive": observed["alive"],
-                            "cursor": observed.get("cursor"),
-                            "error": _safe_reason(observed["error"]),
-                            "result": observed.get("result"),
-                            "generation_current": generation_current,
-                        }
-                        if exact_worker:
-                            last_watcher_error = observed["error"] or last_watcher_error
-                            worker_stopped = (
-                                not observed["alive"] or observed["result"] not in (None, 0)
-                            )
-                            worker_ready = (
-                                observed["alive"] and not observed["error"] and not worker_stopped
-                            )
-            else:
-                worker_state_unreadable = True
-        except Exception:
-            worker_state_unreadable = True
-
-    # Readiness is per-runtime. `capability_warning` inspects the *Claude*
-    # plugin registration only, so on Codex it is silent even when the Codex
-    # watcher never registered — which is exactly how a session can spend three
-    # review agents and a full QA suite and end with no receipts. The Codex
-    # signals below are what catch that case.
-    # Two advisory strings, deliberately. `summary` is harness-authored and
-    # names which signal fired; `reason` carries the underlying detail, which
-    # originates in an unprotected file and is therefore untrusted text. Both
-    # stay in this diagnostic dict as data; neither enters authoritative
-    # `next_action` instructions.
-    unrecordable_summary = ""
-    unrecordable_reason = ""
-    recordable: bool | None = (
-        (True if worker_ready else None) if _server_runtime() == "codex" else True
-    )
-    if registration_present is False:
-        unrecordable_summary = (
-            "The receipt watcher is not registered for this session."
-        )
-        unrecordable_reason = (
-            "The receipt watcher is not registered for this session"
-            + (f": {last_registration_error}" if last_registration_error else ".")
-        )
-        recordable = False
-    elif last_registration_error:
-        unrecordable_summary = "Receipt watcher registration failed."
-        unrecordable_reason = (
-            f"Receipt watcher registration failed: {last_registration_error}"
-        )
-        recordable = False
-    elif last_watcher_error:
-        unrecordable_summary = "Receipt watcher failed to start."
-        unrecordable_reason = f"Receipt watcher failed to start: {last_watcher_error}"
-        recordable = False
-    elif worker_stopped:
-        unrecordable_summary = "Receipt watcher worker is not running."
-        unrecordable_reason = "The current task run's receipt watcher worker has stopped."
-        recordable = False
-    elif _server_runtime() == "codex" and manager_running is False:
-        unrecordable_summary = "Receipt watcher manager is not running."
-        unrecordable_reason = "Receipt watcher manager is not running."
-        recordable = False
-    elif _hook_capability_marker(task_dir):
-        # A positive observation, unlike `capability_warning` below: the hook
-        # process that failed to import wrote this marker itself, so there is no
-        # inference about which tree was loaded. It is cleared by the next
-        # successful hook import, so a present marker means the most recent hook
-        # to run could not record. Fail-closed, and deliberately above the
-        # `_run_has_receipts` override — earlier receipts in the same run do not
-        # disprove a break that happened after them, which is exactly the shape
-        # a mid-run bytecode-cache poisoning takes.
-        unrecordable_summary = "The receipt hook could not import its dependencies."
-        unrecordable_reason = _hook_capability_marker_reason(task_dir)
-        recordable = False
-    elif capability_warning:
-        # A suspicion, not an observation: this inspects plugin registration,
-        # not whether receipts are actually being written. Checked against the
-        # live run's own receipts above, so a session the
-        # file demonstrably contradicts does not carry the warning text at all
-        # — it was stating "no entry will be written" beside 41 written entries.
-        # Truncated on the way out like every other reason string. The
-        # untruncated text, remediation sentence included, is carried beside it
-        # in `receipt_capability_warning` and in the warnings array; leaving one
-        # uniform bound here beats special-casing trust per branch.
-        unrecordable_reason = capability_warning
-        recordable = None
-
-    if worker_state_unreadable and recordable is not False:
-        # An unreadable observation cannot establish current recording. Keep
-        # observed failures false, and never borrow identity from diagnostics.
-        unrecordable_summary = (
-            "Receipt watcher state could not be read for this session."
-        )
-        unrecordable_reason = (
-            "A receipt watcher manager is present and its worker state could "
-            "not be read — no session identity to query it with, or the query "
-            "raised — so whether receipts are recordable is unknown."
-        )
-        # Downgrades a `True` initializer, not only an existing `None`. A
-        # raising query on a host that *does* own an identity is just as
-        # unread as one with no identity to query with, and reporting that as
-        # recordable is the fail-open this file is named for. `is not False`
-        # keeps a positively observed failure above from being softened.
-        recordable = None
-    if recordable is None and not unrecordable_summary and not unrecordable_reason:
-        # Missing, external, and stale-generation workers are unknown. Preserve
-        # a more specific capability-warning reason when one exists.
-        unrecordable_summary = (
-            "Receipt watcher readiness is unknown for this session."
-        )
-        unrecordable_reason = (
-            "A live local receipt watcher matching this exact session, task, run, "
-            "and current registration generation could not be established here."
-        )
-
-    # Earlier receipts disprove only the capability heuristic above. They do
-    # not prove that a worker remains alive for the current generation.
-
-    return {
-        # Every value sourced from the diagnostics file is flattened and bounded
-        # on the way out, not only on the way into next_action. These land in
-        # the tool result the orchestrator reads, so unbounded attacker text
-        # here is both an injection surface and a context-cost amplifier — a
-        # planted file produced an 80KB watcher_status.
-        "receipt_capability_warning": capability_warning,
-        "receipts_recordable": recordable,
-        "receipts_unrecordable_reason": _safe_reason(unrecordable_reason),
-        "receipts_unrecordable_summary": unrecordable_summary,
-        "manager_running": manager_running,
-        "worker_status": worker_snapshot,
-        # Strict tri-state. This one comes from the diagnostics file too, and it
-        # only has to survive an `is False` comparison to do its gating job, so
-        # any JSON value would otherwise pass through verbatim — a planted
-        # record put 40KB of attacker text here while the fields on either side
-        # of it were bounded.
-        "registration_present": (
-            registration_present if isinstance(registration_present, bool) else None
-        ),
-        "root_thread_id": _safe_optional(diagnostics.get("root_thread_id")),
-        "rollout_offset": _safe_optional(diagnostics.get("rollout_offset")),
-        "active_task_id": task_id or None,
-        "active_run_id": run_id or None,
-        "receipts_writable": _receipts_writable(task_dir),
-        "last_registration_error": _safe_reason(last_registration_error),
-        "last_watcher_error": _safe_reason(last_watcher_error),
-    }
-
-
-# Both next-action strings are returned in full on every task_verify in their
-# branch, so they carry instructions only. The reasoning behind them belongs to
-# ADR__single-direct-codex-receipt-protocol and ADR__consolidated-task-artifacts.
-#
-# Each is a state-specific head plus the two shared blocks owned by `_lib`.
-# Until 2026-09-04 both heads carried their own wording of the C-14 trust
-# boundary, and both dropped elements of it: RECEIPT_UNAVAILABLE stated the
-# order as "only an actual review PASS advances to QA" but never that an actual
-# FAIL or BLOCKED_ENV overrides everything, and RECEIPT_PENDING_VERIFY folded
-# the whole boundary into one conditional so its clauses read as preconditions
-# for parking rather than as a definition of what counts. `handle_task_verify`
-# overwrites ctx["next_action"] with the second one, so the most authoritative
-# surface in the protocol was the one emitting the least complete boundary.
-# Compose; do not restate. See doc/harness/REQ__runtime-normative-text-has-one-source.md.
-RECEIPT_UNAVAILABLE_NEXT_ACTION = (
-    # Head sentence owned by _lib; the advice that follows is specific to this
-    # surface (continue and await). The turn-end gate that also used the head
-    # was deleted 2026-09-23. See _lib.
-    f"{RECEIPT_RECORDING_UNAVAILABLE} Continue and await the required review "
-    "and QA: their results are substantive but NON-ATTESTING and cannot "
-    "authorize task_close. Remediate an actual FAIL and publish an actual "
-    "BLOCKED_ENV through wbs(action='block'). Recording is unavailable in every state "
-    "here, so do not repair, restart, resume, recollect, or rerun a lens solely "
-    "to obtain a receipt at any point. "
-    f"{TRUST_BOUNDARY} {attestation_endgame()}"
-)
-
-RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
-    "Task verification is still pending. Run any required substantive lens that "
-    "has not actually completed, in actual-result order. "
-    f"{TRUST_BOUNDARY} {attestation_endgame()}"
-)
-
-
-# Re-exported under the private name this module has always used; the
-# predicate itself is owned by `_lib` (it once had a second caller, the turn-end
-# gate deleted 2026-09-23). See `_lib.is_spawn_instruction`.
-_is_spawn_instruction = is_spawn_instruction
-
-
-def _gate_next_action(ctx: dict, status: dict) -> dict:
-    """Route known receipt failure to useful non-attesting verification.
-
-    A positively observed recording failure changes the endgame, not whether
-    review or QA runs. Actual agent finals remain useful for defect discovery,
-    while only hook-owned receipts can authorize PASS and close.
-    """
-    if status.get("receipts_recordable") is not False:
-        return ctx
-    if not _is_spawn_instruction(str(ctx.get("next_action", ""))):
-        return ctx
-    ctx = dict(ctx)
-    # Never interpolate diagnostics into authoritative instructions. Even the
-    # harness-authored summary is unnecessary here: the proven fact relevant to
-    # task control is evidence unavailability, not its suspected root cause.
-    ctx["next_action"] = RECEIPT_UNAVAILABLE_NEXT_ACTION
-    return ctx
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────
+    return read_session_hint(control_root or _control_root()) or ""
 
 
 def _ok(d: dict) -> dict:
@@ -1114,7 +339,7 @@ def _task_roots(args: dict) -> tuple[str, str]:
             next_action="Pass workspace as an absolute worktree path, or omit it.",
         )
     # Codex PostToolUse binds the exact native coordinator to the echoed
-    # workspace. Merely routing this call grants no receipt identity.
+    # workspace. Merely routing this call grants no source ownership.
     return control_root, resolve_registered_worktree(control_root, workspace) or control_root
 
 
@@ -1135,7 +360,7 @@ def _invalid_task_control_error(operation: str, td: str) -> dict:
         f"{operation} failed: missing or invalid TASK.json",
         data={
             "task_dir": td,
-            "next_action": "Call wbs(action='open') to initialize a fresh exact TASK.json run.",
+            "next_action": "Use wbs(action='migrate') preview/apply for old task controls, or open a new task.",
         },
     )
 
@@ -1161,12 +386,12 @@ def _task_resume_next_action(status: str) -> str:
     if status == "blocked":
         return (
             "Call wbs(action='open') with this wbs_id to resume the same run and preserve "
-            "its review/QA receipts."
+            "its WBS checks and history."
         )
     if status == "closed":
         return (
             "Call wbs(action='open', fresh_run=true) only to deliberately create a new "
-            "evidence generation and discard the completed run's review/QA receipts."
+            "execution run."
         )
     return "Choose a new wbs_id and call wbs(action='open')."
 
@@ -1235,7 +460,7 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
                 )
         # Workspace execution defers binding; main execution keeps its existing
         # focus admission and marker behavior. Both authenticate/register only
-        # after these focus locks and the task receipt lock have been released.
+        # after these focus locks and the task control lock have been released.
         binding_handoff = {}
         if workspace:
             result = operation(args, defer_binding=True, binding_handoff=binding_handoff)
@@ -1248,49 +473,15 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
     data = result.get("structuredContent", {})
     task_dir = str(data.get("task_dir") or "")
     control = read_task_control(task_dir)
-    registration = None
-    if (
-        task_control_status(task_dir, control, snapshot=binding_handoff["snapshot"]) == "open"
-        and control.get("run_id") == data.get("run_id")
-    ):
-        registration = _register_task_start_watcher(
-            repo_root, task_dir, control, session_cwd=native_cwd,
-            diagnostics_root=control_root,
-        )
-    status = _watcher_status(
-        task_dir=task_dir, task_id=str(data.get("task_id") or ""),
-        run_id=str(data.get("run_id") or ""), snapshot=binding_handoff["snapshot"],
-    )
-    status = _apply_task_start_registration_status(
-        status, registration, task_dir, str(data.get("run_id") or ""),
-        snapshot=binding_handoff["snapshot"],
-    )
-    data["watcher_status"] = status
-    if status.get("receipts_recordable") is True and not status.get("receipt_capability_warning"):
-        data["warnings"] = [w for w in data.get("warnings", []) if w.get("code") != "RECEIPT_HOOKS_UNAVAILABLE"]
-        if "start_status" in data:
-            data["start_status"] = "ready_with_warnings" if data["warnings"] else "ready"
-    if isinstance(data.get("task_context"), dict):
-        # Re-gate the original routing against refreshed registration readiness,
-        # keeping the operation's one immutable receipt view and minimal fallback.
-        data["task_context"] = _gate_next_action(binding_handoff["context"], status)
-        if "next_action" in data:
-            data["next_action"] = data["task_context"].get("next_action", "")
-    if registration is not None and not registration["registered"]:
-        data.setdefault("warnings", []).append({
-            "code": "RECEIPT_WATCHER_REGISTRATION_FAILED",
-            "stage": "watcher_registration",
-            "message": "Codex receipt watcher registration failed for this exact task run.",
-            "detail": registration["reason"],
-        })
-        if "start_status" in data:
-            data["start_status"] = "ready_with_warnings"
-    return _ok(data)
+    if (workspace and native_cwd and _register_native_task is not None
+            and task_control_status(task_dir, control) == "open"):
+        _register_native_task(native_cwd, session_id, control_root, task_dir, os.path.basename(task_dir), control["run_id"])
+    return result
 
 
 def handle_task_start(args: dict) -> dict:
     # Reject an already invalid control before creating session lock storage.
-    # The implementation rechecks under its receipt lock before any mutation.
+    # The implementation rechecks under its task lock before any mutation.
     _, repo_root = _task_roots(args)
     task_dir = canonical_task_dir(
         task_id=_selector_opt(args, "task_id"), slug=_selector_opt(args, "slug"),
@@ -1302,7 +493,7 @@ def handle_task_start(args: dict) -> dict:
             data={
                 "task_dir": task_dir,
                 "next_action": (
-                    "Choose a new wbs_id and call wbs(action='open'). Harness does not "
+                    "Use wbs(action='migrate') preview/apply for an old task schema, or choose a new wbs_id. Harness does not "
                     "migrate or rewrite an unsupported existing task control."
                 ),
             },
@@ -1380,7 +571,7 @@ def _handle_task_start(
     if not resumed_existing:
         os.makedirs(task_dir, exist_ok=True)
     transaction_stack = ExitStack()
-    transaction_stack.enter_context(receipt_stream_transaction(task_dir))
+    transaction_stack.enter_context(task_control_transaction(task_dir))
     prior_marker_snapshot = active_marker_snapshot(repo_root, session_id=session_id)
     if resumed_existing:
         if not read_task_control(task_dir):
@@ -1389,7 +580,7 @@ def _handle_task_start(
                 data={
                     "task_dir": task_dir,
                     "next_action": (
-                        "Choose a new wbs_id and call wbs(action='open'). Harness does not "
+                        "Use wbs(action='migrate') preview/apply for an old task schema, or choose a new wbs_id. Harness does not "
                         "migrate or rewrite an unsupported existing task control."
                     ),
                 },
@@ -1419,20 +610,15 @@ def _handle_task_start(
             transaction_stack.close()
             raise
     original_resumed_control = read_task_control(task_dir) if resumed_existing else {}
-    terminal_receipt_snapshot = {}
     task_control_snapshot = {}
     blocked_artifact_snapshot = {}
     superseded_run_id = ""
-    preserved_snapshot = None
     run_action = "created"
-    validated_existing_receipts = None
 
     def rollback_new_start():
         if resumed_existing:
             if original_resumed_control:
                 write_task_control(task_dir, original_resumed_control)
-            if terminal_receipt_snapshot:
-                restore_receipt_streams(terminal_receipt_snapshot)
             restore_task_control(task_control_snapshot)
             _restore_text_snapshots(blocked_artifact_snapshot)
             restore_active_marker_snapshot(prior_marker_snapshot)
@@ -1442,32 +628,11 @@ def _handle_task_start(
             artifact: {"exists": False, "kind": "absent", "text": ""}
             for artifact in cleanup
         })
-        if terminal_receipt_snapshot:
-            restore_receipt_streams(terminal_receipt_snapshot)
         restore_active_marker_snapshot(prior_marker_snapshot)
 
     try:
         resumed = read_task_control(task_dir)
-        if resumed_existing:
-            try:
-                validated_existing_receipts = receipt_snapshot(task_dir)
-            except (OSError, RuntimeError, ValueError) as exc:
-                transaction_stack.close()
-                return _err(
-                    "task_start refused unsafe or unsupported receipt storage",
-                    data={
-                        "task_dir": task_dir,
-                        "status": "invalid",
-                        "detail": str(exc)[:300],
-                        "next_action": (
-                            "Inspect or update the receipt reader without deleting receipts, "
-                            "or choose a new task_id. fresh_run is not repair authority."
-                        ),
-                    },
-                )
-        terminal_resume_status = task_control_status(
-            task_dir, resumed, validated_existing_receipts,
-        )
+        terminal_resume_status = task_control_status(task_dir, resumed)
         if terminal_resume_status == "invalid":
             transaction_stack.close()
             return _err(
@@ -1477,7 +642,7 @@ def _handle_task_start(
                     "status": "invalid",
                     "next_action": (
                         "Inspect and repair the unsafe or inconsistent task artifacts without "
-                        "deleting receipts, or choose a new task_id. fresh_run is not repair authority."
+                        "changing task history, or choose a new task_id. fresh_run is not repair authority."
                     ),
                 },
             )
@@ -1492,7 +657,7 @@ def _handle_task_start(
                         "next_action": (
                             "Call wbs(action='open', fresh_run=true) only to deliberately "
                             "create a new evidence generation and discard the current "
-                            "review/QA receipts."
+                            "WBS checks and history."
                         ),
                     },
                 )
@@ -1535,7 +700,6 @@ def _handle_task_start(
                         ),
                     },
                 )
-            preserved_snapshot = validated_existing_receipts
             if terminal_resume_status == "blocked":
                 blocked_path = os.path.join(task_dir, "BLOCKED.md")
                 blocked_artifact_snapshot[blocked_path] = _strict_regular_text_snapshot(
@@ -1552,7 +716,7 @@ def _handle_task_start(
                     repo_root, task_dir, control=resumed, session_id=session_id,
                 ):
                     raise RuntimeError("task_start could not publish the preserved run binding")
-                preserved_context = emit_compact_context(task_dir, preserved_snapshot)
+                preserved_context = emit_compact_context(task_dir)
                 if "error" in preserved_context:
                     raise RuntimeError(str(preserved_context.get("error") or "compact context unavailable"))
             except BaseException:
@@ -1582,7 +746,6 @@ def _handle_task_start(
             # An explicitly fresh start is a new lifecycle generation and must
             # not inherit evidence collected for the previous run identity.
             # This destructive branch is reachable only through fresh_run=true.
-            terminal_receipt_snapshot = reset_receipt_streams_for_new_run(task_dir)
             run_action = "reset"
         if run_action != "preserved":
             if execution_mode and resumed.get("execution_mode") != execution_mode:
@@ -1610,14 +773,8 @@ def _handle_task_start(
             transaction_stack.close()
         raise
 
-    if preserved_snapshot is None:
-        try:
-            preserved_snapshot = receipt_snapshot(task_dir)
-        except BaseException:
-            transaction_stack.close()
-            raise
     try:
-        ctx = preserved_context if preserved_context is not None else emit_compact_context(task_dir, preserved_snapshot)
+        ctx = preserved_context if preserved_context is not None else emit_compact_context(task_dir)
         if "error" in ctx:
             raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
     except Exception as exc:
@@ -1652,82 +809,12 @@ def _handle_task_start(
             transaction_stack.close()
         raise
 
-    registration = None if (codex_workspace or defer_binding or binding_handoff is not None) else _register_task_start_watcher(repo_root, task_dir, resumed)
-    if registration is not None and not registration["registered"]:
-        warnings.append({
-            "code": "RECEIPT_WATCHER_REGISTRATION_FAILED",
-            "stage": "watcher_registration",
-            "message": (
-                "Codex receipt watcher registration failed for this exact task run."
-            ),
-            "detail": registration["reason"],
-            "retry_action": (
-                "Continue substantive review and QA. After actual QA PASS, call "
-                "wbs(action='verify') once and use wbs(action='block') if required evidence is missing."
-            ),
-        })
-
     transaction_stack.close()
-    if terminal_receipt_snapshot:
-        release_receipt_stream_reset(terminal_receipt_snapshot)
-
-    # Hooks and this server can resolve to different plugin trees. When the
-    # registered hook tree predates the receipt subsystem, subagents still run
-    # and return verdicts but nothing is ever written to RECEIPTS.jsonl, so the
-    # task cannot close and the only symptom is an absence. Warn here because a
-    # SessionStart hook would be loaded from the same stale tree it must indict.
-    # Advisory only: the task is created either way.
-    try:
-        receipt_warning = receipt_capability_warning()
-    except Exception:
-        receipt_warning = ""
-    if receipt_warning:
-        warnings.append({
-            "code": "RECEIPT_HOOKS_UNAVAILABLE",
-            "stage": "hook_registration",
-            "message": _flatten_text(receipt_warning),
-            "retry_action": (
-                "Continue substantive review and QA; then verify once and block "
-                "if required receipt evidence remains missing."
-            ),
-        })
-
     if superseded_run_id:
-        warnings.append({
-            "code": "EVIDENCE_RUN_SUPERSEDED",
-            "stage": "task_start",
-            "message": (
-                "새 evidence run이 생성되었습니다. 이전 review/QA 결과는 사용할 수 "
-                "없으며 모두 다시 실행해야 합니다. "
-                f"Superseded run_id: {superseded_run_id} -> {resumed['run_id']}."
-            ),
-            "retry_action": "Re-run every required review lens, then every required QA lens.",
-        })
-    elif resumed_existing:
-        warnings.append({
-            "code": "TASK_START_RUN_PRESERVED",
-            "stage": "task_start",
-            "message": (
-                "Existing task resumed without rotating run_id; current review/QA "
-                "receipts were preserved. Pass fresh_run=true only to deliberately "
-                "start a new evidence generation and discard them."
-            ),
-            "retry_action": ctx.get("next_action", ""),
-        })
-
-    status = {} if binding_handoff is not None else _watcher_status(
-        task_dir=task_dir, task_id=tid, run_id=str(resumed.get("run_id") or ""),
-        snapshot=preserved_snapshot,
-    )
-    status = _apply_task_start_registration_status(
-        status, registration, task_dir, str(resumed.get("run_id") or ""),
-        snapshot=preserved_snapshot,
-    )
-    if status.get("receipts_recordable") is True and not status.get("receipt_capability_warning"):
-        warnings = [w for w in warnings if w.get("code") != "RECEIPT_HOOKS_UNAVAILABLE"]
+        warnings.append({"code": "TASK_RUN_SUPERSEDED", "stage": "task_start",
+                         "message": "A new execution run requires current WBS checks."})
     if binding_handoff is not None:
-        binding_handoff.update({"context": ctx, "snapshot": preserved_snapshot})
-    ctx = _gate_next_action(ctx, status)
+        binding_handoff.update({"context": ctx})
 
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
@@ -1740,7 +827,6 @@ def _handle_task_start(
         "task_created": not resumed_existing,
         "resumed": resumed_existing,
         "warnings": warnings,
-        "watcher_status": status,
         "next_action": ctx.get("next_action", ""),
     })
 
@@ -1771,7 +857,7 @@ def _session_resumes(repo_root: str, task_dir: str, session_id: str) -> bool:
     Re-writing a marker that already names `task_dir` is deliberate focus
     re-assertion, and it is not a no-op: it refreshes a `run_id` that another
     session's `task_start` rotated away, which is the one marker field
-    `resolve_session_task_binding` will otherwise refuse a receipt for.
+    `resolve_session_task_binding` will otherwise refuse to bind source focus.
 
     Exact-runtime paths still publish the legacy `.active` compatibility file,
     but exact lifecycle readers always prefer the per-session marker.
@@ -1805,74 +891,16 @@ def _handle_task_context(
     if not defer_codex_binding and task_control_status(td, control) == "open" and _session_resumes(
         repo_root, td, session_id,
     ):
-        # A session that resumes an open task arrives here, and until it owns a
-        # marker every subagent stop it produces fails with
-        # `session-task-binding-unresolved` — no receipt, so no close path.
-        # task_start would also preserve and bind this open run. task_context
-        # remains the narrower read/rebind surface when no lifecycle transition
-        # or watcher registration is needed.
-        #
-        # The write is additive across sessions: write_active_marker creates
-        # only this session's own marker file, so markers other sessions hold
-        # keep resolving and their receipts stay valid. It does also rewrite
-        # the shared single-valued legacy `.active`, which is why
-        # `_session_resumes` gates the call — see its docstring.
-        #
-        # A refusal here is not swallowed. write_active_marker raises when the
-        # task-control runtime is not bound, and that is a real defect in the
-        # receipt subsystem, not a degraded-context nicety — handle_task_start
-        # lets the same call raise for the same reason.
+        # Rebind only this exact session after proving it steals no open focus.
         write_active_marker(repo_root, td, session_id=session_id)
-    snapshot = receipt_snapshot(td)
-    ctx = emit_compact_context(td, snapshot)
+    ctx = emit_compact_context(td)
     if "error" in ctx:
         return _err("task_context failed", data=ctx)
-    # The run id is readable here and must be passed: without it `active_run_id`
-    # is reported null on the most-called surface, and `_run_has_receipts` exits
-    # immediately, so the positive-disproof escape can never fire — the same
-    # on-disk state would answer differently from task_start and task_context.
-    try:
-        context_run_id = str(read_task_control(td).get("run_id") or "")
-    except Exception:
-        context_run_id = ""
-    status = {} if binding_handoff is not None else _watcher_status(
-        task_dir=td, task_id=ti, run_id=context_run_id, snapshot=snapshot,
-    )
     if binding_handoff is not None:
-        binding_handoff.update({"context": ctx, "snapshot": snapshot})
-    ctx = _gate_next_action(ctx, status)
-    return _ok({
-        "task_dir": td,
-        **({"workspace": repo_root} if args.get("workspace") is not None else {}),
-        "task_id": os.path.basename(os.path.normpath(td)),
-        "run_id": context_run_id,
-        "task_context": ctx,
-        "watcher_status": status,
-    })
-
-
-RECEIPT_SETTLEMENT_SECONDS = 2.0
-
-
-def _settled_receipt_snapshot(task_dir: str, control: dict):
-    """Let the existing async owner finish; never hold its lock while waiting."""
-    deadline = time.monotonic() + RECEIPT_SETTLEMENT_SECONDS
-    required = set(required_review_lenses(task_dir, control) + _required_qa_lenses(task_dir, control))
-    while True:
-        if read_task_control(task_dir) != control:
-            raise RuntimeError("task authority changed during receipt settlement")
-        snapshot = receipt_snapshot(task_dir)
-        if receipt_runtime_verdict(task_dir, control, snapshot) != "PENDING":
-            return snapshot
-        latest = {}
-        for entry in snapshot.entries:
-            if entry.get("task_run_id") == control["run_id"] and entry.get("lens") in required:
-                latest[entry["lens"]] = entry
-        pending = any(entry.get("event") == "started" for entry in latest.values())
-        remaining = deadline - time.monotonic()
-        if not pending or remaining <= 0:
-            return snapshot
-        time.sleep(min(0.05, remaining))
+        binding_handoff.update({"context": ctx})
+    return _ok({"task_dir": td, "task_id": ti, "run_id": control["run_id"],
+                **({"workspace": repo_root} if args.get("workspace") is not None else {}),
+                "task_context": ctx})
 
 
 def handle_task_verify(args: dict) -> dict:
@@ -1894,69 +922,13 @@ def handle_task_verify(args: dict) -> dict:
     progress = wbs.task_progress(td, _task_roots(args)[1], initial_control["run_id"], measure=True)
     from verification_target import measure_inputs
     target_inputs = measure_inputs(td, _task_roots(args)[1])
-    _settled_receipt_snapshot(td, initial_control)
-    # WBS work and settlement must not block the watcher receipt writer.
-    # Only final publication uses the common transaction, with fresh evidence.
-    with receipt_stream_transaction(td):
-        st = read_task_control(td)
-        if st != initial_control or wbs.read_state(td) != initial_wbs:
+    with task_control_transaction(td):
+        if read_task_control(td) != initial_control or wbs.read_state(td) != initial_wbs:
             return _err("task_verify refused: task authority or WBS changed during verification")
-        snapshot = receipt_snapshot(td)
-        ctx = emit_compact_context(td, snapshot, measured_progress=progress, measured_target_inputs=target_inputs)
-        rv = ctx["runtime_verdict"]
-        review_verdict = ctx["review_verdict"]
-        status = _watcher_status(
-            task_dir=td, task_id=ti, run_id=str(st.get("run_id") or ""), snapshot=snapshot,
-        )
-    ctx = _gate_next_action(ctx, status)
-    source_only_pending = (ctx.get("verification_targets", {}).get("missing_lenses")
-                           and receipt_runtime_verdict(td, st, snapshot) == "PASS")
-    if rv == "PENDING" and status.get("receipts_recordable") is not False and not source_only_pending:
-        ctx = dict(ctx)
-        # A lens that completed with a rejected verdict shape is neither an
-        # unrun lens nor a missing receipt, and the generic pending guidance
-        # sends the caller down both wrong paths. Name it first, then keep the
-        # unchanged attestation instruction — this only relabels a PENDING.
-        #
-        # The prerequisite comes first and is preserved verbatim. This branch
-        # discards whatever `emit_compact_context` computed, so before
-        # 2026-09-04 a task with no PLAN.md was told to chase review/QA
-        # attestation while the actual blocker — "Create PLAN.md via plan skill
-        # before source writes." — survived only inside `missing_for_close`.
-        # task_verify is the most authoritative surface in the protocol and it
-        # was naming the wrong obstacle.
-        #
-        # Keyed on the structured field, not on the sentence: `emit_compact_context`
-        # sets `why_source_write_blocked` exactly when a plan-first precondition
-        # is unmet, so a reworded instruction cannot silently detach this.
-        prerequisite = ""
-        if str(ctx.get("why_source_write_blocked") or "").strip():
-            prerequisite = str(ctx.get("next_action") or "").strip()
-            if prerequisite and not prerequisite.endswith((".", "!", "?")):
-                prerequisite += "."
-            if prerequisite:
-                prerequisite += " "
-        ctx["next_action"] = prerequisite + nonparsing_completion_note(
-            nonparsing_completion_lenses(td, st, snapshot)
-        ) + RECEIPT_PENDING_VERIFY_NEXT_ACTION
-    payload = {
-        "task_dir": td, "runtime_verdict": rv,
-        "receipt_recording": ctx["receipt_recording"],
-        "verification_targets": ctx.get("verification_targets", {"status": "unbound", "enforced": False}),
-        "next_action": ctx.get("next_action", ""),
-        "missing_for_close": ctx.get("missing_for_close", []),
-        "report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
-        "review_verdict": review_verdict,
-        "required_review_lenses": required_review_lenses(td, st),
-        "required_qa_lenses": ctx.get("required_qa_lenses", []),
-        # Reported for the same reason task_start and task_context report it,
-        # and with more force here: `_gate_next_action` above rewrites
-        # next_action from this status, so omitting it left the protocol's most
-        # authoritative surface stating a conclusion while withholding the
-        # observation it came from. A caller reading only task_verify could not
-        # distinguish an unreadable watcher from a healthy one.
-        "watcher_status": status,
-    }
+        ctx = emit_compact_context(td, measured_progress=progress, measured_target_inputs=target_inputs)
+    payload = {"task_dir": td, **{key: ctx[key] for key in (
+        "runtime_verdict", "verification_basis", "workflow_verification", "verification_targets",
+        "next_action", "missing_for_close", "required_review_lenses", "required_qa_lenses", "progress")}}
     if verify_run is not None:
         payload["verify_run"] = verify_run
     return _ok(payload)
@@ -1976,26 +948,18 @@ def handle_task_close(args: dict) -> dict:
                   "next_action": _task_resume_next_action(initial_status)},
         )
     control_root = find_harness_root(td) or find_repo_root(td)
-    with active_session_transaction(control_root), receipt_stream_transaction(td):
+    with active_session_transaction(control_root), task_control_transaction(td):
         wbs.require_integrated_for_task(control_root, os.path.basename(td))
-        snapshot = receipt_snapshot(td)
         def close_error(message, data):
             return _err(message, data=dict(data))
 
-        ctx = emit_compact_context(td, snapshot, measure_wbs=True)
+        ctx = emit_compact_context(td, measure_wbs=True)
         missing = ctx.get("missing_for_close") or []
         if missing:
             data = {
                 "task_dir": td, "missing_for_close": missing, "task_context": ctx,
             }
             return close_error("task_close blocked", data)
-
-        try:
-            receipt_fingerprint = receipt_stream_fingerprint(td, snapshot)
-        except RuntimeError:
-            return close_error("task_close blocked: receipt stream snapshot unavailable", {
-                "task_dir": td, "receipt_snapshot_unavailable": True,
-            })
 
         st = _validated_task_control(td)
         if not st:
@@ -2012,7 +976,7 @@ def handle_task_close(args: dict) -> dict:
         )
         preclose_marker_snapshot = active_marker_snapshot(control_root, session_id=session_id)
         try:
-            publish_task_close(td, st, receipt_fingerprint=receipt_fingerprint)
+            publish_task_close(td, st)
             clear_active_marker(control_root, td, session_id=session_id, strict=True)
             if os.path.realpath(resolve_active_task_dir(control_root, session_id=session_id) or "") == os.path.realpath(td):
                 raise RuntimeError("active task marker cleanup unavailable")
@@ -2051,7 +1015,7 @@ def handle_task_blocked(args: dict) -> dict:
     reason = _blocked_text(args, "blocked_reason")
     unblock = _blocked_text(args, "unblock_condition")
     task_root = find_harness_root(td) or find_repo_root(td)
-    with active_session_transaction(task_root), receipt_stream_transaction(td):
+    with active_session_transaction(task_root), task_control_transaction(td):
         return _handle_task_blocked_locked(td, reason=reason, unblock=unblock)
 
 
@@ -2068,8 +1032,8 @@ def _handle_task_blocked_locked(td: str, *, reason: str, unblock: str) -> dict:
         )
     resume_guidance = (
         "Call wbs(action='open') with this wbs_id to resume the same run and preserve "
-        "its review/QA receipts. Pass fresh_run=true only to deliberately start "
-        "a new evidence generation and discard those receipts."
+        "its WBS checks and history. Pass fresh_run=true only to deliberately start "
+        "a new execution run."
     )
     blocked_md = (
         "# BLOCKED\n\n"
@@ -2141,7 +1105,7 @@ def handle_task_wbs(args: dict) -> dict:
     if action == "context":
         return _ok({"progress": wbs.task_progress(td, repo, control["run_id"], measure=False)})
     if action in {"block_outcome", "open_outcome"}:
-        with receipt_stream_transaction(td):
+        with task_control_transaction(td):
             if _validated_task_control(td) != control or task_control_status(td, control) != "open":
                 raise ValueError("outcome operation requires the same open task run")
             body = wbs.block_outcome(td, _req(args, "leaf_id"), run_id=control["run_id"], clear=action == "open_outcome",
@@ -2149,7 +1113,7 @@ def handle_task_wbs(args: dict) -> dict:
             return _ok(dict(body, task_dir=td, task_id=os.path.basename(td), run_id=control["run_id"],
                             wbs_id="WBS__" + os.path.basename(td)[6:]))
     if action == "dispatch":
-        with receipt_stream_transaction(td):
+        with task_control_transaction(td):
             status = task_control_status(td, control)
             if (_validated_task_control(td) != control or status not in {"open", "blocked"}
                     or status == "blocked" and not (wbs.read_state(td) or {}).get("batch")):
@@ -2163,7 +1127,7 @@ def handle_task_wbs(args: dict) -> dict:
     timeout = args.get("timeout", 60)
     if type(timeout) is not int or not 1 <= timeout <= WBS_CHECK_TIMEOUT_MAX:
         raise ValueError(f"WBS verification timeout must be 1..{WBS_CHECK_TIMEOUT_MAX} seconds")
-    with receipt_stream_transaction(td):
+    with task_control_transaction(td):
         current = _validated_task_control(td)
         if current != control or task_control_status(td, current) != "open":
             raise ValueError("WBS verification requires the same open task run")
@@ -2292,23 +1256,11 @@ def handle_verification_target(args: dict) -> dict:
     _, repo = _task_roots(args)
     common = args
     td = canonical_task_dir(task_id=task_id, repo_root=repo)
-    # Prepare real recording capability before launching a new substantive
-    # role. Do not repair/replay completed roles or create receipt evidence.
     requested_spec = verification_target._spec(args.get("target"))
     initial_control = _validated_task_control(td)
     if not initial_control or task_control_status(td, initial_control) != "open":
         return _err("target issuance requires an open planned task")
-    control_root, _ = _task_roots(common)
-    native_cwd = (_authenticate_native_session(_current_session_identity(control_root), control_root)
-                  if requested_spec["purpose"] == "acceptance" and requested_spec["lenses"]
-                  and _server_runtime() == "codex" and _authenticate_native_session else "")
-    registration = (_register_task_start_watcher(repo, td, initial_control,
-                    session_cwd=native_cwd, diagnostics_root=control_root)
-                    if native_cwd else None)
-    readiness = _watcher_status(task_dir=td, task_id=task_id, run_id=initial_control["run_id"])
-    readiness = _apply_task_start_registration_status(readiness, registration, td, initial_control["run_id"])
-    # Same owner authorization and task transaction as existing mutations.
-    with active_session_transaction(find_harness_root(td) or repo), receipt_stream_transaction(td):
+    with active_session_transaction(find_harness_root(td) or repo), task_control_transaction(td):
         control = _validated_task_control(td)
         if control != initial_control or task_control_status(td, control) != "open":
             return _err("target not issued: task/run changed during readiness preflight")
@@ -2322,12 +1274,11 @@ def handle_verification_target(args: dict) -> dict:
                 was_issued = wbs.read_state(td).get(verification_target.FIELD) != prior_targets
             except (ValueError, OSError):
                 was_issued = None
-            return _err(str(error), data={"issued": was_issued, "watcher_status": readiness,
-                        "next_action": "Preserve task and receipts. Correct the named input or restore stable inputs, then issue the target again before new native roles."})
+            return _err(str(error), data={"issued": was_issued,
+                        "next_action": "Preserve the task and target inputs. Correct the named input or restore stable inputs, then issue the target again before new native roles."})
     public_target = {key: issued[key] for key in ("token", "run_id", "snapshot_root", "input_fingerprint", "spec", "context")}
     return _ok(dict(wbs_id="WBS__" + task_id[6:], issued=True,
-                    target=public_target, role_handoffs=verification_target.role_handoffs(issued),
-                    watcher_status=readiness))
+                    target=public_target))
 
 
 def handle_wbs(args: dict) -> dict:
@@ -2438,7 +1389,7 @@ def handle_write_plan(args: dict) -> dict:
     preflight = _prepare_write_plan(args, td, control)
     if isinstance(preflight, dict) and preflight.get("isError"):
         return preflight
-    with receipt_stream_transaction(td):
+    with task_control_transaction(td):
         return _handle_write_plan_locked(args, td, preflight=preflight)
 
 
@@ -2497,7 +1448,7 @@ def _prepare_write_plan(args: dict, td: str, control: dict):
 
 def _publish_write_plan(args, td, control, preflight):
     expected_control, candidate_control, checked_plan = preflight
-    # Recheck the exact authority while holding the receipt transaction.
+    # Recheck the exact authority while holding the task transaction.
     current = _validated_task_control(td)
     if current != expected_control or current != control or task_control_status(td, current) != "open":
         return _err(
@@ -2578,13 +1529,13 @@ del _bind_control_writer
 
 TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "wbs", "title": "Work through one WBS outcome tree",
-     "description": "One WBS outcome tree. open/context/next/plan do not hash source; current progress is unmeasured and historical credit is labelled. check and final verify/close measure current inputs. PLAN may include one wbs-inputs JSON fence with source roots, artifact files, exclude and deny lists, chosen at verification time rather than as an edit plan. block/open with node_id park/reopen one outcome while independent work continues. Dispatch owns isolated worktrees; ordered review/QA and current outcome proofs still gate completion.",
+     "description": "One WBS outcome tree. open/context/next/plan do not hash source; current progress is unmeasured and historical credit is labelled. check and final verify/close measure current inputs. PLAN may include one wbs-inputs JSON fence with source roots, artifact files, exclude and deny lists, chosen at verification time rather than as an edit plan. block/open with node_id park/reopen one outcome while independent work continues. Dispatch owns isolated worktrees; current WBS checks and safe integration proof gate completion; independent review and QA remain workflow-owned.",
      "inputSchema": {"type": "object", "properties": {
          "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate", "target"]},
          "wbs_id": {"type": "string", "description": "Stable root ID; WBS__<id>, legacy TASK__<id>, or a bare safe ID."},
          "objective": {"type": "string", "description": "For open without an ID, derive one stable root for this objective, including native Goals."},
          "node_id": {"type": "string", "description": "check target, or local outcome for block/open; omission keeps root lifecycle behavior."}, "plan": {"type": "string"},
-         "target": {"type": "object", "description": "target only: preissue a frozen source view before native review/QA. inputs (explicit WBS input policy), commands (argv arrays), lenses, purpose acceptance|diagnostic, optional environment key names, toolchain executables, and output_dirs outside selected inputs (not part of target identity). Use returned snapshot_root and exact role_handoffs task_name values."},
+         "target": {"type": "object", "description": "target only: preissue a frozen source view before native review/QA. inputs (explicit WBS input policy), commands (argv arrays), lenses, purpose acceptance|diagnostic, optional environment key names, toolchain executables, and output_dirs outside selected inputs (not part of target identity). Use returned snapshot_root as the source view for independent review and QA."},
          "required_lenses": {"type": "array", "items": {"type": "string"}},
          "ownership": {"type": "object", "description": "Execution-only ownership by pending outcome ID, supplied at actual worktree dispatch.", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
          "operation": {"type": "string", "enum": ["prepare", "status", "bind", "complete", "resume", "recover", "extend"], "description": "dispatch lifecycle operation. prepare creates owned worktrees; bind admits the actual worker; complete integrates/disposes stopped results; extend adds execution ownership for an exact stopped bound worker before integration; status is read-only."},
@@ -2692,39 +1643,9 @@ class McpServer:
         self.initialized = False
         self.protocol_version = SUPPORTED_PROTOCOLS[0]
         self.framed_stdio = False
-        self.watcher_manager = None
-        self.watcher_thread_id = ""
-        self.last_watcher_error = ""
         self.runtime = ""
         global _SERVER
         _SERVER = self
-
-    def _start_codex_watchers(self) -> None:
-        if self.watcher_manager is not None or _WatcherManager is None:
-            return
-        try:
-            self.watcher_manager = _WatcherManager(_control_root()).start()
-            self.last_watcher_error = ""
-            _record_watcher_error("")
-        except Exception as exc:
-            # Lifecycle attestation is fail-closed.  A watcher failure must not
-            # take down task_context or other MCP control-plane operations —
-            # but it must not be silent either.  Without the cause recorded the
-            # only symptom is an absent receipt, discovered after review and QA
-            # have already been paid for.
-            self.watcher_manager = None
-            self.last_watcher_error = f"{type(exc).__name__}: {exc}"
-            _record_watcher_error(self.last_watcher_error)
-
-    def close(self) -> None:
-        manager = self.watcher_manager
-        self.watcher_manager = None
-        self.watcher_thread_id = ""
-        if manager is not None:
-            try:
-                manager.stop()
-            except Exception:
-                pass
 
     def _read(self) -> dict | None:
         """Read either MCP stdio frames or newline-delimited JSON.
@@ -2783,8 +1704,6 @@ class McpServer:
             self.protocol_version = pv if isinstance(pv, str) and pv in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
             runtime = _runtime_from_initialize(params)
             self.runtime = runtime
-            if runtime == "codex":
-                self._start_codex_watchers()
             self._reply(msg_id, {
                 "protocolVersion": self.protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
@@ -2808,14 +1727,11 @@ class McpServer:
             self._error(msg_id, -32601, f"Method not found: {method}")
 
     def serve_forever(self) -> None:
-        try:
-            while True:
-                req = self._read()
-                if req is None:
-                    return
-                self.handle_request(req)
-        finally:
-            self.close()
+        while True:
+            req = self._read()
+            if req is None:
+                return
+            self.handle_request(req)
 
 
 def main() -> int:

@@ -1,74 +1,88 @@
 # Verification target applicability
 
 ## User requirements
-Users request reusable review and QA evidence bound to actual inputs, relevant-change invalidation, preserved authentic lifecycle history, diagnostic experiments without product acceptance inflation, and no repeated checks solely to repair recording. Restoring identical source at another path must preserve applicability. Unrelated documentation edits must not invalidate product QA.
+
+Users request reusable review and QA evidence bound to actual inputs,
+relevant-change invalidation, preserved authentic history, diagnostic experiments
+without product acceptance inflation, and no repeated checks solely to repair
+recording. Restoring identical source at another path preserves applicability.
+Unrelated documentation edits must not invalidate product QA.
 
 ## Derived mechanism
-Before new Codex review/QA, the owner calls `wbs(action="target", wbs_id=..., target=...)`. The specification declares explicit WBS `inputs`, `commands` as argv arrays, `lenses`, and `purpose` (`acceptance` or `diagnostic`), with optional environment key names and toolchain executable names. Actual platform, toolchain binary contents and hashes of selected environment values join the copied input manifest. Build flags and dependency/configuration files belong in these actual verification inputs, not an edited-file progress plan. Independent review checks scope adequacy.
 
-The response supplies a random token, persistent `snapshot_root`, and acceptance
-`role_handoffs` containing `{lens, task_name}`. Use the exact returned native task
-name for each role and direct it to read and execute against snapshot_root.
-Source files are copied without hardlinks and made read-only; source checkout changes cannot change that view. Runtime command output belongs outside selected inputs. Optional `output_dirs` prepare bounded writable runtime-only directories (for example `doc/harness/tasks` for the existing pytest session guard). Every selected input file remains read-only; output paths cannot overlap or be ancestors of selected inputs, and cannot be inside a selected source root unless explicitly excluded. These output paths are not target identity. Commands and explicit snapshot roots must be passed to execution tools; repository autodiscovery may walk outside a copied view and must not select mutable source. The snapshot is a declared controlled role view, not an OS sandbox or proof of every arbitrary tool read; same-UID hostile owners are outside this protection.
+Before review/QA against a copied source view, the owner uses
+`wbs(action="target", wbs_id=..., target=...)`. The target declares explicit WBS
+`inputs`, argv-array `commands`, `lenses`, and `purpose` (`acceptance` or
+`diagnostic`), plus optional environment key names and toolchain executable names.
+Actual platform, toolchain contents and selected environment hashes join the
+copied input manifest. Build flags, dependencies and configuration belong in
+those actual inputs. Independent review checks scope adequacy.
 
-Derived from readonly selected inputs and reusable input-bound evidence: before
-native roles start, recipes declare the actual command/framework runtime outputs
-through `output_dirs` and place caches and temporary fixture artifacts outside
-selected inputs (or disable optional caches). In this repository pytest needs
-`output_dirs:["doc/harness/tasks"]` for its existing session marker guard. Use
-the latest returned `snapshot_root` as the exact execution cwd, including after
-reissuing output preparation: a reconstructed view can keep the same token at
-a different path. Do not chmod frozen sources or omit required inputs to repair
-an output failure. Output preparation alone preserves applicable completed
-reviews when selected bytes, commands, selected environment, toolchains and
-review scope are unchanged; retain the failed attempt and rerun only affected
-blocked execution. A changed command or relevant context needs an appropriate
-new target and affected evidence; receipt absence alone never warrants reruns.
+The returned persistent `snapshot_root` contains copied, read-only inputs with
+no hardlinks to the source. Execute roles and declared commands against that
+exact root. Names are for operator readability; they do not bind verification
+authority. There is no spawn-name parser, watcher or lifecycle attestation.
 
-Derived from the existing requirement to bind future native roles before
-execution: target issuance accepts only canonical `SUPPORTED_LENSES`. Each
-handoff name round-trips through the existing receipt-lens classifier and
-`_vt_<token>` parser. A fresh invocation nonce is generated on every response,
-including reuse of identical target bytes/token; names are ephemeral guidance,
-not stored actor identities or a receipt ledger. Diagnostic responses provide
-no formal handoffs. The existing Codex pre-start name guard also refuses
-reserved target-tagged, attestation-looking names that cannot classify to a
-supported lens, including bare security/QA role names. Ordinary helper names,
-explicit diagnostic names and untargeted names retain their existing behavior.
-The classifier itself, old events and non-attesting finals are unchanged;
-validation cannot repair completed roles or create acceptance evidence.
+Declare actual runtime output directories through `output_dirs`. Place caches
+and fixture/temp artifacts outside selected inputs or disable optional caches.
+This repository uses `output_dirs:["doc/harness/tasks"]` for its existing pytest
+session guard. Every input remains read-only. Output paths cannot overlap or
+be ancestors of selected inputs, and must be explicitly excluded when inside a
+selected source root. Output preparation is not source identity.
+
+Use the latest returned snapshot root after output preparation. A reconstructed
+view can retain identical input identity at another path. Do not chmod frozen
+sources or omit required inputs to repair an output failure. Equivalent selected
+bytes, commands, environment, toolchain and review scope preserve applicability;
+rerun only actually blocked or changed substantive execution. No missing
+recording warrants a rerun.
 
 ## Observable behavior
-- An issued snapshot remains A while the checkout changes A → B → A. Gates compare current actual inputs with copied A, not a source hash observed during delayed receipt replay.
-- Existing native receipt source/task/run/agent/type/runtime identity authenticates the declared token. The matched first start/completion for an exact native agent is supported. Followups inherit names and remain source-unbound; issue a target and spawn a fresh agent for changed targets.
-- Receipt schemas and lifecycle parsing/order remain unchanged. Direct finals, copied text, diagnostics and historical unbound PASS never create target-certified acceptance.
-- `context`, open and plan do not hash inputs. Explicit verify, close and verified installation enforce active per-lens applicability separately from lifecycle verdicts. Relevant changes block target-aware completion and preserve old evidence. Completed results retain manifest-bound applicability if regenerable copied views disappear; a new job reconstructs only from identical current bytes.
-- A stale-target PENDING response names the required target correction even when source-write assignment is unavailable; it must not advertise close. An unfinished work pack retains its existing parking guidance.
-- Identical source content restored elsewhere is equivalent. Unselected documentation does not stale product results; selected source/dependencies/build context do. Changed command scope requires a new acceptance target, while identical issuance reuses its frozen view.
-- Diagnostic targets may declare an empty lenses list for direct runner experiments; they do not replace acceptance targets or satisfy product completion. They can supply bounded investigation evidence without declaring review/QA acceptance.
-- Existing lifecycle-only tasks are visibly `unbound`, retain their old lifecycle semantics and are never retroactively source-certified. Issuing an acceptance target enables future required-lens applicability for that task. Current native token association supports Codex; unbound runtime identities are reported rather than fabricated.
-- Full target manifests and historical copied inputs persist under task work storage. WBS keeps a small active lens index; old target history is not appended into PLAN or WBS. No lifetime 64-target cap, no new scheduler.
 
-Derived from preserving asynchronous receipt delivery: final explicit verify
-measures target input bytes and execution context outside the receipt-writer
-transaction. Final publication takes a fresh receipt snapshot under that
-transaction and associates its authentic tokens with the measured input proof.
-The task run, control, WBS and active target index must still match; stale or
-unavailable inputs and real negative verdicts still prevent acceptance. A source-phase
-completion must be able to append and be considered by that same verify call.
-The measurement is private in-memory state, not reusable external acceptance
-evidence; close and verified installation retain their fresh applicability gates.
+- Issued snapshot A stays A while the checkout changes A → B → A. Applicability
+  compares actual selected inputs and execution context with the copied view.
+- Actual independent code review and conditional security review PASS precede
+  actual QA. Direct independent finals supply workflow findings; copied text,
+  coordinator summaries and diagnostic runs cannot replace them.
+- Context/open/plan do not invent source certification. Explicit verify, close
+  and verified installation enforce current declared source applicability.
+  Machine verdicts measure current required WBS checks and do not attest review/QA.
+- Relevant changes require an appropriate new target and affected substantive
+  verification. Equivalent content restored elsewhere stays applicable;
+  unselected documentation edits do not stale product results.
+- Missing copied views can be reconstructed only from identical current bytes.
+  A stale or unavailable target names its actual correction and cannot authorize close.
+- Diagnostic targets may declare no lenses for direct runner experiments. They
+  cannot replace required acceptance checks or independent review/QA.
+- Target history remains in existing task work storage, with a bounded active
+  lens index in WBS. No second completion ledger or scheduler is introduced.
+- Final publication checks that task/run, control, WBS and target inputs still
+  match. Measurement is private in-memory state; close and verified installation
+  retain fresh applicability checks and stable source snapshot requirements.
+
+A copied view is not an OS sandbox. Tools must receive the explicit snapshot
+cwd; repository autodiscovery must not silently select mutable source. Same-UID
+hostile owners and arbitrary shell mutation remain outside this protection.
 
 ## Input limits and errors
-Canonical WBS policy and streaming measurement budgets apply; required files are not removed to obtain PASS. Unsupported symlink/nonregular inputs, missing dependencies, unsafe ownership/modes, nested checkout roots and recursive task/runtime input scopes fail explicitly. Select concrete nested-module source inputs instead of silently omitting them. Target metadata is bounded to 1 MiB per immutable record; refine actual validation scope if that bound is exceeded. Source and artifact selection must match declared policy. Private copied data can be read-only, but Harness does not intercept arbitrary shell mutations.
 
-Derived from preserving actual source inputs: owner-private readable source
-such as0600/0640 is valid without changing its original permissions. The existing
-descriptor reader retains ownership, single-link, no-follow and stability checks;
-source inputs reject group/other write, special permission bits, unreadable owner
-modes and executable bits without owner-execute. Copies remain private and
-read-only. This source-read policy does not relax canonical installer payload or
-frozen-copy permission checks.
+Canonical WBS policy and streaming measurement budgets apply. Required files
+are not removed to obtain PASS. Unsupported symlink/nonregular inputs, missing
+dependencies, unsafe ownership/modes, nested checkout roots and recursive
+task/runtime inputs fail explicitly. Select concrete nested-module inputs.
+Target metadata is bounded to 1 MiB per immutable record; refine actual scope
+when needed without hiding required evidence.
+
+Owner-private readable source such as 0600/0640 remains valid without changing
+original permissions. Descriptor reads enforce ownership, single link, no-follow
+and stability. Reject group/other write, special permission bits, unreadable owner
+modes and executable bits without owner execute. Copies remain private and
+read-only. Installer payload and frozen-copy permissions retain their own checks.
 
 ## Verification
-Actual source-copy execution under checkout ABA; content restoration and documentation-only reuse; native first-generation versus followup association; changed build options; diagnostic isolation; missing snapshot; public target action and stored-only context; authoritative verify/close/install applicability. All tests preserve independent lifecycle receipt authenticity and ordering.
+
+Exercise copied-input ABA behavior, equivalent restoration, unrelated doc edits,
+changed command/environment/toolchain context, output isolation, missing views,
+unsafe paths, and current applicability at verify/close/install. Preserve actual
+independent review-before-QA without lifecycle collection or name binding. See
+[receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md).

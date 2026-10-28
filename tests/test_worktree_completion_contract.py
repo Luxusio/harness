@@ -67,7 +67,7 @@ def test_batch_routes_managed_completion_and_recovery_does_not_forge_closed():
     assert "rebase, fast-forward, evidence harvest, worktree removal and `git branch -d`" in phase
     assert "Review the shared `skills/run/worktree-completion.md`" in phase
     assert "before completion" in phase
-    assert "never infers closure from narrative PASS, an archive, or an unreceipted review result" in phase
+    assert "never infers closure from narrative PASS, an archive, or a review result alone" in phase
     assert 'operation="recover"' in phase and 'operation="resume"' in phase
     assert "Blocked/failed leads remain retained with exact blockers" in phase
     # Non-managed already-copied recovery still has the same stricter per-change

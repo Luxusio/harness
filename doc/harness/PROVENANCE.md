@@ -11,7 +11,7 @@ part of the harness flow, which upstream source it came from, what was taken,
 what was stripped or refused, and the in-repo path that proves it.
 
 **These are behavioral references, not vendored dependencies.** No upstream
-code ships inside this repo. Harness owns the final prompts, routing, receipts,
+code ships inside this repo. Harness owns the final prompts, routing, task control,
 and close semantics, and every import was rewritten against harness's own
 contracts.
 
@@ -251,8 +251,9 @@ one selected focus, DEEP both.
   concrete failure scenario, claim verification before findings, and confidence
   calibration that suppresses unsupported blockers. Harness adaptation: missing
   review **fails closed** rather than degrading to gstack's informational
-  fallback, and evidence binds to the current task run and ordered lifecycle
-  receipts rather than to Git state — harness commonly reviews uncommitted work.
+  fallback. Actual independent review belongs to the current task and scope;
+  machine completion measures current required WBS checks. Harness commonly
+  reviews uncommitted work.
 
 **Refused:** generic SOLID enforcement, fixed function-length limits, and
 mandatory cyclomatic thresholds, because those rules manufacture abstractions
@@ -290,8 +291,9 @@ rejected design.
 
 Review **depth selection** (LIGHT / STANDARD / DEEP, the two-cycle discovery
 cap, and the rebase-LIGHT predicate set) has no recorded upstream source. Nor
-does the receipt-backed close gate — ordered hook-owned reviewer and QA
-completion receipts, `task_verify`, and the PASS-only `task_close`. Those are
+did the historical receipt-backed close gate. The current workflow requires
+actual independent review PASS before actual QA, while machine verify/close
+measure current required WBS checks. Those are
 harness's answer to the self-authored-verdict problem and were designed here.
 
 **Evidence:** `doc/harness/tasks/TASK__risk-proportional-review-depth/PLAN.md`,
@@ -308,8 +310,7 @@ or mobile-app interaction and screenshot evidence. `qa-api` and `qa-cli` use ord
 tooling.
 
 **Harness-specific:** QA agents never hold `Edit`/`Write` on source files, and
-each lens returns findings in its final response while lifecycle hooks own the
-receipt. Reviewer persona propagation follows the lesson recorded from Ponytail
+each lens returns actual findings in its final response. Reviewer persona propagation follows the lesson recorded from Ponytail
 `hooks/ponytail-subagent.js` — parent-session context does not reliably reach
 subagents, so roles are explicit named files rather than inherited context.
 
@@ -325,7 +326,7 @@ their value is a computation, not a conversation:
 | gstack skill | Harness form | What it does |
 |---|---|---|
 | `health` | `plugin/scripts/health.py` | Composite 0-10 project health score from manifest-declared components |
-| `retro` | `plugin/scripts/retro.py` | Weekly retrospective from git log, receipt-backed task closures, and learnings |
+| `retro` | `plugin/scripts/retro.py` | Weekly retrospective from git log, verified task closures, and learnings |
 | `checkpoint` | `plugin/scripts/write_checkpoint.py` | Mid-task resume snapshot under `doc/harness/checkpoints/` |
 | `learn` | `plugin/scripts/promote_learnings.py` | Aggregates `learnings.jsonl` and reports recurring keys as reviewed candidates |
 

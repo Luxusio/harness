@@ -165,7 +165,9 @@ def test_wbs_metadata_only_preserves_evidence_and_opaque_pool(tmp_path, owner):
                  batch_goal_id="GOAL__wbs-old", batch=value,
                  batch_history=[dict(batch_goal_id="GOAL__wbs-old", batch=value)])
     path = write(tmp_path, "doc/harness/tasks/TASK__integration/WBS.json", state)
-    control = write(tmp_path, "doc/harness/tasks/TASK__integration/TASK.json", b'old exact control bytes')
+    control = write(tmp_path, "doc/harness/tasks/TASK__integration/TASK.json", dict(
+        run_id=_lib.new_uuid7(), execution_mode="standard",
+        required_lenses=["review-code", "qa-cli"], closed=False))
     receipt = write(tmp_path, "doc/harness/tasks/TASK__integration/RECEIPTS.jsonl", b'old exact receipt bytes')
     originals = (path.read_bytes(), control.read_bytes(), receipt.read_bytes())
     migration.apply(tmp_path)
@@ -309,7 +311,7 @@ def test_unstarted_binding_preserves_existing_control_identity(tmp_path, monkeyp
     pool.init(value["requests"])
     row(pool.repo, tasks=[dict(task_id="TASK__integration", batch=value)])
     control = dict(run_id=_lib.new_uuid7(), execution_mode="standard", required_lenses=["review-code", "qa-cli"],
-                   close_receipt_fingerprint=None)
+                   closed=False)
     path = write(pool.repo, "doc/harness/tasks/TASK__integration/TASK.json", control)
     original = path.read_bytes()
     migration.apply(pool.repo)
@@ -486,7 +488,7 @@ def test_pool_destination_holds_shared_batch_writer_lock(tmp_path, monkeypatch, 
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(ValueError, match="batch writer active"):
-            migration.apply(tmp_path)
+            migration._apply_goals(tmp_path)
         assert not (tmp_path / migration.MANIFEST).exists()
         assert (tmp_path / pool_path).read_bytes() == b"original pool"
     finally:

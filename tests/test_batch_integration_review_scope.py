@@ -85,7 +85,7 @@ def _assert_carry(section: str) -> None:
         assert term in proof, f"proof condition missing {term!r}"
     assert "step d procedure" in step and "rebase never stopped" in step
     assert "not through the step e conflict path" in step
-    for term in ("harvested archive", "closed with pass", "non-null", "close_receipt_fingerprint", "no `blocked.md`"):
+    for term in ("harvested archive", "closed with pass", "closed: true", "no `blocked.md`"):
         assert term in archive, f"archive condition missing {term!r}"
     for condition in (proof, step):
         assert condition.endswith(";"), "non-final carry conditions must stay conjunctive"
@@ -133,7 +133,7 @@ def test_section_is_claude_only_and_scopes_the_integration_review_code_lens():
         "`review-code` lens",
         "`harness:batch` integration task",
         "`task__batch-integrate-<slug>`",
-        "a carry inherits the trust of that lead's close; receipts bind no tree",
+        "a carry inherits the trust of that lead's close.",
     ):
         assert term in normalized, term
 

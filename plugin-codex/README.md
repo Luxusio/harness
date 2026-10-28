@@ -3,7 +3,7 @@
 This is the Codex-runtime tree for the harness plugin. Claude's marketplace installs only `plugin/`, so a Claude marketplace update does not install this sibling tree. The source installer installs each runtime whose CLI is on PATH; use `python3 install.py --codex-only` or `--claude-only` to select one. The manifest's `features.codex_enabled` field is reserved metadata, not an installation switch.
 
 Architecture lives in [`doc/harness/spike-report.md`](../doc/harness/spike-report.md) §3.6 — **MCP-only sharing**:
-- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`TASK.json`, `PLAN.md`, unified `RECEIPTS.jsonl`, and the non-authoritative content-addressed `REVIEWS.jsonl` appendix).
+- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`TASK.json`, `PLAN.md`, and measured `WBS.json` outcomes).
 - Single installer: repo-root `install.py` emits the `~/.codex/config.toml` MCP+hook block that wires the shared substrate into a Codex install.
 - Independent per runtime: SKILL.md trees, agent definitions. Hand-authored on each side, both consuming the same shared substrate.
 
@@ -41,7 +41,11 @@ Further references:
 - `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair and `run` for repository mutation. `run` is implicitly invocable and loads the canonical internal workflow before edits.
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` for required independent review and QA. If that capability is absent, a strict review gate remains pending; inline work is limited to explicitly advisory roles.
-- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`; Codex flow is prompt-controlled by the skills and the Harness MCP server hosts the sole receipt watcher. The normative acquisition/identity/completion contract is in `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage/schema/gates are in `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
+- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`.
+  Hooks protect source/task ownership and route context. There is no receipt
+  watcher, name binding, collector or recording prerequisite. Actual independent
+  review PASS precedes actual QA; machine verify/close measure current WBS checks.
+  See [receipt-free completion](../doc/harness/REQ__receipt-free-execution-and-completion.md).
 
 ## Skills and Internal Prompts
 
@@ -78,24 +82,15 @@ Rebase-LIGHT requires exact endpoints, conflict-free one-to-one patch
 equivalence, affirmative semantic non-overlap, `HEAD` at the new tip, and a
 clean, accounted-for index/worktree. Discovery is capped at two cycles (four
 hunter calls maximum at DEEP); an exhausted or unknown recovery budget uses one
-fresh formal reviewer without another hunter. Formal review finals are stored separately
-from compact receipts. Retrieve one
-exact body without dumping history:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 python3 "$HARNESS_PLUGIN_ROOT/scripts/review-read" \
-  --task-dir doc/harness/tasks/TASK__slug <64-lowercase-hex>
-```
-
-Not found is expected for receipts produced before detail storage. It never
-changes receipt, verification, or close validity.
+fresh formal reviewer without another hunter. Await actual independent formal
+review finals and concrete QA evidence; recording never requires reruns or parking.
 
 ## What's deferred to v2
 
 - **Browser MCP verification** — qa-browser methodology is ported, but runtime calls to `mcp__chrome-devtools__*` have no Codex equivalent yet. Wire Codex Playwright MCP in v2.
 - **plan-* reviews without `spawn_agent`** — current Codex builds route the single independent reviewer through `spawn_agent`; builds without that surface run one inline critical-reviewer pass recorded as coordinator-only.
 - **AskUserQuestion** — every call site in the 9 ported skills converted to conversational prose with numbered/lettered options. Functional but UX-wise less discoverable than the structured tool. v2 may introduce a Codex helper that renders prose asks with a consistent shape.
-- **Inline advisory evidence** — verification receipts remain watcher-owned. Inline advisory roles return final-response findings and do not write critic artifacts or satisfy strict independent PASS gates.
+- **Inline advisory evidence** — actual independent review/QA results remain required. Inline advisory roles return final-response findings and do not write critic artifacts or satisfy strict independent PASS gates.
 - **Stop loop control** — disabled on Codex. Codex follows the prompt in `run` / `develop` to continue through verify and close inside the current turn when feasible. It does not rely on Stop-hook auto-resume.
 
 ## For Claude users

@@ -65,7 +65,7 @@ targets. Recheck only changed/affected inputs; documentation or missing cached
 artifacts alone do not invalidate unchanged product proofs. Existing verifier
 resource/output leases serialize the same VM, display, port or build output,
 while independent development continues. Resource wait is not a reason to stop
-unrelated source work. Never convert skip, missing attestation or failure to
+unrelated source work. Never convert skip, unmeasured work or failure to
 PASS. Source assignment is not review/QA evidence.
 
 ## Nested helpers and progress

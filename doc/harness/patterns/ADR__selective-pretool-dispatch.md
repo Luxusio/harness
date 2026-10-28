@@ -13,7 +13,7 @@ MCP tools paid the same fixed process-start cost as repository writes.
 The browser gate protected an optimization rather than repository integrity.
 Delegating browser work can keep large DOM snapshots, screenshots, and script
 results out of the orchestrator context, but an inline call does not bypass the
-plan, protected-artifact, review, QA-receipt, or close gates.
+plan, protected-artifact, review, QA, or close requirements.
 
 ## Decision
 
@@ -30,7 +30,7 @@ reduces context or process load, but may run browser tools inline when
 delegation is unavailable or inline work is materially simpler. Harness does
 not inspect every tool call to enforce that preference.
 
-Review and QA freshness, receipt ownership, and `task_verify`/`task_close`
+Review and QA freshness, source/task ownership, and `task_verify`/`task_close`
 requirements are unchanged. New direct-write tool names must be added to the
 selective matcher when a supported runtime introduces them. Bash/shell
 mutation is deliberately outside Harness PreToolUse enforcement.

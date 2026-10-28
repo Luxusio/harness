@@ -91,6 +91,10 @@ characters. Agents can parse the tail to route actions without scanning prose.
 
 ## Protected artifacts
 
+Historical RECEIPTS/REVIEWS retain denial labels solely to prevent direct
+mutation of preserved artifacts. No active collector, detail writer or
+recording-based close authority exists.
+
 The `PROTECTED_ARTIFACTS` dict maps basename → owner-role. Owners are space-free
 so the structured tail remains grep-stable; the deny sentence names the human
 tool to route through (for example `wbs(action="plan")` for `PLAN.md`).

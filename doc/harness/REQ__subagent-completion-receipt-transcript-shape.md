@@ -1,11 +1,14 @@
 ---
-freshness: current
+freshness: superseded
 invalidated_by_paths:
   - plugin/scripts/subagent_lifecycle.py
   - plugin/scripts/background_hook.py
   - plugin/hooks/hooks.json
 freshness_updated: 2026-09-25T14:50:00Z
 ---
+
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
 
 # REQ — subagent completion receipts survive runtime transcript shape
 

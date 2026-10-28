@@ -39,7 +39,8 @@ forbidden_paths:
 These are the seven canonical top-level keys. `phase`, `current_ac`, and
 `partial_ac` are strings or null; the other four values are lists of strings.
 Task identity comes from the parent directory, acceptance intent from PLAN.md,
-and review/QA evidence from RECEIPTS.jsonl. Detailed notes, decisions, attempts,
+and measured outcome checks from WBS.json. Actual independent review and QA
+remain workflow requirements. Detailed notes, decisions, attempts,
 and timestamps belong in checkpoints, durable docs, or the final report.
 
 ## Gate behavior

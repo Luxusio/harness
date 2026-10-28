@@ -1,7 +1,10 @@
 ---
 status: active
-freshness: current
+freshness: superseded
 ---
+
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
 
 # Codex watcher recovery after unavailable binding reads
 

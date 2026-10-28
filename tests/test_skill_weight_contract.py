@@ -84,6 +84,6 @@ def test_compressed_skills_preserve_unique_role_and_close_contracts():
         "Premise", "Scope", "Architecture", "Security", "Performance",
         "Information architecture", "accessibility", "Developer Journey",
         "TTHW", "task_verify", "install_verified.py", "task_close",
-        "RECEIPTS.jsonl", "BLOCKED_ENV",
+        "WBS", "BLOCKED_ENV",
     ):
         assert term in combined

@@ -18,7 +18,7 @@ S3. **Information disclosure** — does any new log, error message, prompt, or a
 
 ### Harness-native (this-product lens)
 
-H1. **Audit-trail preservation** — does any step risk breaking the PLAN.md → RECEIPTS.jsonl provenance chain? Receipt ordering and artifact-owner rules must remain intact.
+H1. **Audit-trail preservation** — does any step risk breaking the PLAN.md → measured WBS checks provenance chain? Independent review-before-QA and artifact-owner rules must remain intact.
 
 H2. **Protected-artifact provenance** — does develop/verify touch any file in `PROTECTED_ARTIFACTS` without routing through the owning skill/MCP/hook? Any Bash step that writes PLAN.md or RECEIPTS.jsonl via `sed -i`, `>`, `>>`, `tee`, or `python -c open(...,'w')`?
 

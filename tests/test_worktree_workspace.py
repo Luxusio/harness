@@ -3,7 +3,7 @@
 A ``harness:batch`` lead runs in ``<repo>/.claude/worktrees/<name>`` while the
 MCP server's cwd stays the main checkout. These tests pin that task paths and
 focus markers follow a validated ``workspace`` while session identity stays on
-the control root, and that hooks bind receipts to the worktree task.
+the control root, and that session source focus follows the worktree task.
 See doc/harness/REQ__parallel-tasks-via-worktree-leads.md.
 """
 from __future__ import annotations
@@ -40,6 +40,11 @@ import _lib as lib  # type: ignore  # noqa: E402
 SID = "b1c2d3e4-5f60-7182-93a4-b5c6d7e8f901"
 MANIFEST = "version: 5\nsource_git_roots: []\n"
 TASKS = "doc/harness/tasks"
+
+WORKTREE_PLAN = "# Plan\n\n```wbs\n" + json.dumps([{
+    "id": "A", "title": "Worktree contains its own manifest", "weight": 1,
+    "check": [sys.executable, "-c", "from pathlib import Path; assert Path('doc/harness/manifest.yaml').is_file()"],
+}]) + "\n```\n"
 
 
 def _git(cwd, *args):
@@ -118,7 +123,7 @@ def test_followup_tools_route_by_workspace_and_miss_without_it(tmp_path):
     _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)})
     plan = _call(main, "write_plan", {
         "task_id": "TASK__lead", "workspace": str(wt),
-        "plan": "# Plan\n\nSmall.\n", "required_lenses": ["review-code", "qa-cli"],
+        "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     })
     assert not plan.get("isError"), plan
     assert (wt / TASKS / "TASK__lead/PLAN.md").is_file()
@@ -235,34 +240,6 @@ def _hook(script: str, payload: dict, cwd: Path, *args: str) -> subprocess.Compl
     )
 
 
-def _receipts(task_dir: Path) -> list[dict]:
-    path = task_dir / lib.RECEIPTS_NAME
-    if not path.is_file():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
-def test_nested_reviewer_start_in_worktree_binds_to_worktree_task(tmp_path):
-    repo = _setup(tmp_path)
-    main, wt = repo
-    # The main checkout holds a live marker for the same session id.
-    assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
-    assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
-    main_task = main / TASKS / "TASK__main"
-    lead_task = wt / TASKS / "TASK__lead"
-    before_main = _receipts(main_task)
-    result = _hook("background_hook.py", {
-        "hook_event_name": "SubagentStart", "session_id": SID,
-        "agent_id": "a0123456789abcdef", "agent_type": "harness:code-reviewer",
-        "cwd": str(wt),
-    }, main, "--event", "start")
-    assert result.returncode == 0, result.stderr
-    started = [r for r in _receipts(lead_task) if r.get("event") == "started"]
-    assert [r.get("agent_id") for r in started] == ["a0123456789abcdef"]
-    assert started[0]["task_run_id"] == lib.read_task_control(str(lead_task))["run_id"]
-    assert _receipts(main_task) == before_main
-
-
 def _gate(wt: Path, file_path: Path) -> str | None:
     result = _hook("prewrite_gate.py", {
         "hook_event_name": "PreToolUse", "session_id": SID, "cwd": str(wt),
@@ -281,14 +258,13 @@ def test_worktree_plan_alone_does_not_admit_source_writes(tmp_path):
     assert _gate(wt, source) == "deny"
     assert not _call(main, "write_plan", {
         "task_id": "TASK__lead", "workspace": str(wt),
-        "plan": "# Plan\n\nSmall.\n", "required_lenses": ["review-code", "qa-cli"],
+        "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
     assert _gate(wt, source) == "deny"
 
 
 def test_full_lifecycle_closes_in_worktree_and_leaves_main_untouched(tmp_path):
     repo = _setup(tmp_path)
-    from test_harness_mcp_server import _record_receipt_fixture
 
     main, wt = repo
     assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
@@ -296,22 +272,10 @@ def test_full_lifecycle_closes_in_worktree_and_leaves_main_untouched(tmp_path):
     assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
     assert not _call(main, "write_plan", {
         "task_id": "TASK__lead", "workspace": str(wt),
-        "plan": "# Plan\n\nSmall.\n", "required_lenses": ["review-code", "qa-cli"],
+        "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
     lead_task = str(wt / TASKS / "TASK__lead")
-    for payload in (
-        {"agent_id": "review-1", "agent_type": "harness:code-reviewer", "event": "started"},
-        {"agent_id": "review-1", "agent_type": "harness:code-reviewer", "event": "completed",
-         "verdict": "PASS",
-         "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"},
-        {"agent_id": "qa-1", "agent_type": "harness:qa-cli", "event": "started"},
-        {"agent_id": "qa-1", "agent_type": "harness:qa-cli", "event": "completed",
-         "verdict": "PASS", "summary": "VERDICT: PASS"},
-    ):
-        _record_receipt_fixture(lead_task, {
-            **payload, "source": "claude_hook",
-            "runtime_id": f"claude:{SID}:{payload['agent_id']}",
-        })
+    assert not _call(main, "wbs", {"action": "check", "wbs_id": "TASK__lead", "workspace": str(wt), "node_id": "A"}).get("isError")
     verify = _payload(_call(main, "task_verify", {"task_id": "TASK__lead", "workspace": str(wt)}))
     assert verify["runtime_verdict"] == "PASS", verify
     closed = _call(main, "task_close", {"task_id": "TASK__lead", "workspace": str(wt)})
@@ -366,7 +330,6 @@ def test_non_string_workspace_is_refused_before_resolution(tmp_path):
 def test_lead_close_never_touches_the_coordinator_goal(tmp_path):
     repo = _setup(tmp_path)
     """A lead's worktree has no Goal store; closing it leaves the main Goal alone."""
-    from test_harness_mcp_server import _record_receipt_fixture
 
     main, wt = repo
     goal_dir = main / "doc/harness/goals"
@@ -377,54 +340,42 @@ def test_lead_close_never_touches_the_coordinator_goal(tmp_path):
     assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
     assert not _call(main, "write_plan", {
         "task_id": "TASK__lead", "workspace": str(wt),
-        "plan": "# Plan\n\nSmall.\n", "required_lenses": ["review-code", "qa-cli"],
+        "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
     lead_task = str(wt / TASKS / "TASK__lead")
-    for agent, kind, summary in (
-        ("review-1", "harness:code-reviewer",
-         "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"),
-        ("qa-1", "harness:qa-cli", "VERDICT: PASS"),
-    ):
-        for event in ("started", "completed"):
-            _record_receipt_fixture(lead_task, {
-                "agent_id": agent, "agent_type": kind, "event": event,
-                "verdict": "PASS" if event == "completed" else "",
-                "summary": summary if event == "completed" else "",
-                "source": "claude_hook", "runtime_id": f"claude:{SID}:{agent}",
-            })
+    assert not _call(main, "wbs", {"action": "check", "wbs_id": "TASK__lead", "workspace": str(wt), "node_id": "A"}).get("isError")
     assert not _call(main, "task_close", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
     goal_after = {p.name: p.read_bytes() for p in (main / "doc/harness/goals").glob("*.json")}
     assert goal_after == goal_before
 
 
-def test_nested_lens_start_and_stop_in_worktree_bind_to_worktree_task(tmp_path, monkeypatch):
-    """AC-003: the completion receipt (what grants PASS) binds to the worktree task."""
-    from test_subagent_lifecycle import _stop_payload, _transcript
 
+
+def test_codex_task_results_fence_conflicts_across_registered_workspaces(tmp_path, monkeypatch):
+    import codex_hook_registration as binding
     main, wt = _setup(tmp_path)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
     assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
-    main_task = main / TASKS / "TASK__main"
-    lead_task = wt / TASKS / "TASK__lead"
-    before_main = _receipts(main_task)
-    agent_id, agent_type = "a00112233445566ff", "harness:qa-cli"
-    final = "VERDICT: PASS\nchecks passed"
-    start = _hook("background_hook.py", {
-        "hook_event_name": "SubagentStart", "session_id": SID,
-        "agent_id": agent_id, "agent_type": agent_type, "cwd": str(wt),
-    }, main, "--event", "start")
-    assert start.returncode == 0, start.stderr
-    # _transcript sets CLAUDE_CONFIG_DIR in os.environ; _hook passes it through.
-    transcript = _transcript(
-        tmp_path, monkeypatch, str(lead_task), SID, agent_id, final, agent_type=agent_type,
-    )
-    stop = _hook("background_hook.py", {
-        **_stop_payload(SID, agent_id, agent_type, transcript, final), "cwd": str(wt),
-    }, main, "--event", "stop")
-    assert stop.returncode == 0, stop.stderr
-    rows = [(r["event"], r["verdict"], r["runtime_id"]) for r in _receipts(lead_task)]
-    assert rows == [
-        ("started", "", f"claude:{SID}:{agent_id}"),
-        ("completed", "PASS", f"claude:{SID}:{agent_id}"),
-    ]
-    assert _receipts(main_task) == before_main
+    sid = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    def result(root, name, workspace=None):
+        task = root / TASKS / name
+        control = lib.read_task_control(str(task))
+        args = {"action": "context", "wbs_id": name}
+        response = {"task_dir": str(task), "task_id": name, "run_id": control["run_id"]}
+        if workspace:
+            args["workspace"] = str(workspace)
+            response["workspace"] = str(workspace)
+        return json.dumps({"cwd": str(main), "session_id": sid, "tool_name": "wbs",
+                           "tool_input": args, "tool_response": {"structuredContent": response}}).encode()
+    assert binding.register_task_result(result(main, "TASK__main"))
+    assert not binding.register_task_result(result(wt, "TASK__lead", wt))
+    assert not lib.resolve_session_task_binding(str(main), sid)
+    assert not lib.resolve_session_task_binding(str(wt), sid)
+    for root in (main, wt):
+        assert len(lib.read_active_session_marker(str(root), sid)["conflicts"]) == 2
+    assert not _call(main, "task_blocked", {"task_id": "TASK__main",
+                    "blocked_reason": "separate work parked", "unblock_condition": "resume explicitly"}).get("isError")
+    assert binding.register_task_result(result(wt, "TASK__lead", wt))
+    assert lib.resolve_session_task_binding(str(wt), sid)["task_dir"] == str(wt / TASKS / "TASK__lead")
+    assert not lib.resolve_session_task_binding(str(main), sid)

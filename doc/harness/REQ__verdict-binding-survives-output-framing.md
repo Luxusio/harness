@@ -10,6 +10,9 @@ invalidated_by_paths:
 freshness_updated: 2026-09-18T08:10:49Z
 ---
 
+> **Historical — superseded 2026-10-28.** [Receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md) replaces this document’s receipt collection, attestation, naming, storage and completion instructions. The body below is retained history, not active workflow guidance. Actual independent review PASS before actual QA and current required WBS checks remain required.
+
+
 # REQ — verdict binding survives output framing
 
 Extends `REQ__lens-verdicts-bind-when-the-lens-complied.md`, which owns the

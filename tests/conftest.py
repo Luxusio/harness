@@ -34,7 +34,7 @@ SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
 # Two CPython builds that share a cache tag (here /usr/bin/python3 3.12.3 and
 # the mise/.venv 3.12.14; on 2026-09-09 two 3.12.13 builds) accept each
 # other's `.pyc` as header-valid but compile unequal code, and `_lib`'s
-# receipt-adapter guard refuses the mismatch with `StaleBytecodeCacheError`.
+# Source ownership guards refuse mismatched code objects.
 # The suite therefore writes no bytecode into the checkout, for itself or the
 # subprocesses it spawns, so a later run under another build cannot read one.
 # Set at import so xdist workers inherit the environment. The prune in
@@ -124,7 +124,7 @@ def is_nested_probe() -> bool:
 def _prune_checkout_bytecode(root: str) -> None:
     """Remove real `__pycache__` directories under `root`; never raise.
 
-    Bounded like `background_hook`'s self-prune: symlinked directories are not
+    Bounded to the checkout: symlinked directories are not
     followed and a symlinked `__pycache__` is left alone. A concurrent writer
     can make `rmtree` fail; the next session retries.
     """
@@ -212,7 +212,7 @@ def install_trees_lose_no_files():
     reach `~/.claude/harness-dev` through any path, not only the installer.
 
     On 2026-09-09 a whole-suite mutation run deleted the installed
-    `plugin/scripts` and `plugin/mcp` and killed receipt recording for the
+    `plugin/scripts` and `plugin/mcp` and broke runtime imports for the
     session that ran it. Six review rounds had invariant checks in place, but
     every one of them watched `doc/harness/tasks/.active_sessions/` — task
     artifacts — and none watched the tree the hooks actually execute from.
@@ -248,28 +248,8 @@ def install_trees_lose_no_files():
 # test can point it at a stand-in (tests/test_learnings_ledger_guard.py).
 _LEARNINGS_LEDGER = os.path.join(REPO_ROOT, "doc", "harness", "learnings.jsonl")
 
-# Writers the developer's live session runs in this checkout while the suite
-# runs, named by the part of a row's writer before the first ":". Each fires on
-# a session event, not on anything the suite does to the checkout:
-#   background_hook    SubagentStart/SubagentStop (`background_hook:binding-miss`,
-#                      `background_hook:import`; a `gate-crash` row names it
-#                      under `script`)
-#   subagent_lifecycle the receipt writer that SubagentStop drives
-#   receipts           `receipts:verdict-unbound`, written from the same stop
-#   prompt_memory      UserPromptSubmit
-#   tool_routing       PostToolUse on Bash, including the session's own calls
-# The first four were observed in a real ledger during suite runs; tool_routing
-# is the one remaining session hook with a ledger writer. The write gate
-# (`prewrite`, `prewrite_gate`), `qa_codifier`, `mcp_bash_guard` and every
-# learning an agent appends are deliberately absent: the suite drives those
-# writers directly, and they are what polluted the ledger.
-_LIVE_SESSION_LEDGER_WRITERS = frozenset({
-    "background_hook",
-    "subagent_lifecycle",
-    "receipts",
-    "prompt_memory",
-    "tool_routing",
-})
+# Live session hook writers may append concurrently with an isolated suite.
+_LIVE_SESSION_LEDGER_WRITERS = frozenset({"prompt_memory", "tool_routing"})
 
 
 def make_tmp_harness_root(path) -> str:
@@ -407,16 +387,8 @@ def learnings_ledger_gains_no_suite_rows():
 def restore_harness_server_global():
     """Undo `McpServer.__init__`'s assignment to the module global `_SERVER`.
 
-    Production runs one server per process, so owning that global is correct
-    there. `tests/test_harness_mcp_server.py` constructs a dozen servers and
-    nothing restored the previous value, so a server built by one test stayed
-    installed for every later test sharing its xdist worker. `_watcher_status`
-    reads `_SERVER.runtime` and `_SERVER.watcher_manager`; a leaked
-    codex-runtime server with no manager yields `manager_running is False`,
-    hence `receipts_recordable is False`, and `_gate_next_action` then replaces
-    `next_action` wholesale. Whether the leak reached a given test depended on
-    which siblings shared its worker, so it presented as a ~20% flake rather
-    than a deterministic failure.
+    Production runs one server per process. Tests construct several servers,
+    so restore the global to keep runtime state isolated across test cases.
 
     Lives here rather than in the test module because `test_*.py` files may not
     import pytest at the top level (`test_no_toplevel_third_party_imports`).

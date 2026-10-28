@@ -61,7 +61,7 @@ class TestAllowSilent(unittest.TestCase):
 
     def test_unrelated_review_detail_basename_is_not_harness_owned(self):
         with _isolated_task("pr1-unrelated-review-detail") as (root, task_dir):
-            target = os.path.join(root, "app/data/REVIEWS.jsonl")
+            target = os.path.join(root, "app/data/TASK.json")
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
@@ -70,7 +70,7 @@ class TestAllowSilent(unittest.TestCase):
         with _isolated_task("pr1-nested-review-detail") as (root, task_dir):
             target = os.path.join(
                 root,
-                "fixtures/doc/harness/tasks/TASK__sample/REVIEWS.jsonl",
+                "fixtures/doc/harness/tasks/TASK__sample/TASK.json",
             )
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         self.assertEqual(r.returncode, 0)
@@ -86,47 +86,8 @@ class TestDenyProtectedArtifact(unittest.TestCase):
         self.assertIn("owner=legacy-data-migration", reason)
         self.assertIn('wbs(action="migrate")', reason)
 
-    def test_write_claude_subagent_transcript_denies(self):
-        transcript = os.path.expanduser(
-            "~/.claude/projects/project/session/subagents/agent-review-code.jsonl"
-        )
-        r = invoke_hook(GATE, "Write", {"file_path": transcript})
-        decision, reason = parse_decision(r.stdout)
-        self.assertEqual(decision, "deny")
-        self.assertIn("runtime-owned receipt provenance", reason)
 
-    def test_write_symlink_to_codex_rollout_denies(self):
-        sessions = os.path.join(
-            os.path.expanduser(os.environ.get("CODEX_HOME") or "~/.codex"), "sessions",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            alias = os.path.join(tmp, "codex-sessions")
-            os.symlink(sessions, alias, target_is_directory=True)
-            rollout = os.path.join(
-                alias, "2026/08/13/rollout-runtime-thread.jsonl",
-            )
-            r = invoke_hook(GATE, "Write", {"file_path": rollout})
-        decision, reason = parse_decision(r.stdout)
-        self.assertEqual(decision, "deny")
-        self.assertIn("runtime-owned receipt provenance", reason)
 
-    def test_symlinked_runtime_roots_protect_physical_transcripts(self):
-        for env_name, subtree in (
-            ("CODEX_HOME", "sessions/2026/08/13/rollout-runtime-thread.jsonl"),
-            ("CLAUDE_CONFIG_DIR", "projects/project/session/subagents/agent-review.jsonl"),
-        ):
-            with self.subTest(env_name=env_name), tempfile.TemporaryDirectory() as tmp:
-                physical = os.path.join(tmp, "physical")
-                alias = os.path.join(tmp, "alias")
-                os.makedirs(physical)
-                os.symlink(physical, alias, target_is_directory=True)
-                target = os.path.join(physical, subtree)
-                r = invoke_hook(
-                    GATE, "Write", {"file_path": target}, env_extra={env_name: alias},
-                )
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("runtime-owned receipt provenance", reason)
 
     def test_write_plan_md_inside_task_denies(self):
         with _isolated_task("pr1-protected") as (root, task_dir):
@@ -140,27 +101,27 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertIn("C-05-protected-artifact", reason)
             self.assertIn("HARNESS_SKIP_PREWRITE", reason)
 
-    def test_write_review_detail_inside_task_denies_with_shared_writer_owner(self):
+    def test_write_task_control_denies_with_mcp_owner(self):
         with _isolated_task("pr1-review-detail") as (root, task_dir):
-            target = os.path.join(task_dir, "REVIEWS.jsonl")
+            target = os.path.join(task_dir, "TASK.json")
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("C-05-protected-artifact", reason)
-            self.assertIn("owner=review-detail-writer", reason)
-            self.assertIn("shared review-detail writer", reason)
+            self.assertIn("owner=task-control-mcp", reason)
+            self.assertIn("task control MCP tools", reason)
 
-    def test_symlink_alias_to_task_review_detail_is_still_protected(self):
+    def test_symlink_alias_to_task_control_is_still_protected(self):
         with _isolated_task("pr1-review-detail-alias") as (root, task_dir), \
              tempfile.TemporaryDirectory(dir=root) as alias_parent:
             alias = os.path.join(alias_parent, "task-alias")
             os.symlink(task_dir, alias, target_is_directory=True)
-            target = os.path.join(alias, "REVIEWS.jsonl")
+            target = os.path.join(alias, "TASK.json")
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         decision, reason = parse_decision(r.stdout)
         self.assertEqual(decision, "deny")
         self.assertIn("C-05-protected-artifact", reason)
-        self.assertIn("owner=review-detail-writer", reason)
+        self.assertIn("owner=task-control-mcp", reason)
 
 class TestMultiEdit(unittest.TestCase):
     def test_apply_patch_native_goal_control_denies(self):
@@ -301,7 +262,7 @@ class TestFailSafe(unittest.TestCase):
 class TestReasonFormat(unittest.TestCase):
     def test_every_deny_has_structured_tail(self):
         with _isolated_task("pr1-tail") as (root, task_dir):
-            for basename in ("PLAN.md", "RECEIPTS.jsonl", "REVIEWS.jsonl"):
+            for basename in ("PLAN.md", "TASK.json"):
                 target = os.path.join(task_dir, basename)
                 r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
                 decision, reason = parse_decision(r.stdout)

@@ -55,7 +55,6 @@ REVIEW_DEPTH_TERMS = {
         "resume",
         "recompute",
         "current evidence",
-        "receipts",
     ),
     "formal authority": (
         "fresh formal",
@@ -63,7 +62,6 @@ REVIEW_DEPTH_TERMS = {
         "only",
         "review-code",
         "hunters",
-        "receipts",
     ),
     "security and qa": (
         "security",
@@ -213,8 +211,6 @@ def test_claude_develop_forbids_collapsing_independent_acs_into_one_executor():
     # doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md.
     assert 'Lane <task_id>:AC-001' in body
     assert 'subagent_type="harness:ac-worker"' in body
-    assert "Never pass `name=` to a spawned agent" in body
-    assert 'Agent(name=' not in body
     assert "Use one Agent per independent AC" in body
     assert "Do not assign multiple independent ACs to one" in body
     assert "Do not edit PROGRESS.md" in body
@@ -284,7 +280,7 @@ def test_harness_ac_worker_is_scoped_to_one_ac_and_no_shared_artifacts():
     body = _text(AC_WORKER)
 
     assert "Implement only the assigned AC or lane" in body
-    assert "Do not write `PLAN.md`, `TASK.json`, `RECEIPTS.jsonl`" in body
+    assert "Do not write `PLAN.md`, `TASK.json`" in body
     assert "or `PROGRESS.md`" in body
     assert "Do not collapse multiple independent ACs into your lane" in body
 
@@ -340,7 +336,7 @@ def test_codex_review_gate_has_risk_proportional_fanout_before_formal_verifier()
     assert "escape literal `<`, `>`, `&`" in body
     assert "`\\u003c`, `\\u003e`, `\\u0026`" in body
     assert "only this full sweep formal reviewer" in _policy_text(body)
-    assert "hunters never emit verdicts or receipts" in _normalized(body)
+    assert "hunters never emit verdicts" in _normalized(body)
     assert "Every retry uses new task names" in body
     assert "security receives no hunter data" in body
 
@@ -613,8 +609,6 @@ def test_exhausted_discovery_uses_a_live_formal_only_exception_without_state():
         assert "no hunter" in policy and "forfeit" in policy
     assert "spawn no more hunters" in audit
     assert "spawn no hunter" in codex
-    assert "never reconstruct hunter counts from receipts" in audit
-    assert "no task receipt or review detail field" in codex
 
 
 def test_hunter_context_is_bounded_and_excludes_transcript_noise():

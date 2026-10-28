@@ -81,10 +81,10 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   native lead agents. Its task tools pass canonical workspace while native cwd
   may remain main; the shared binding owner binds the authenticated coordinator to the
   worktree. See `plugin-codex/internal-skills/batch/SKILL.md` and the
-  [Codex receipt protocol](patterns/ADR__single-direct-codex-receipt-protocol.md).
+  [receipt-free execution contract](REQ__receipt-free-execution-and-completion.md).
 - Each linked worktree is a separate checkout with its own write focus (C-09).
   Task state under `doc/harness/tasks/` is gitignored, so every worktree has
-  its own task namespace, focus markers, and `RECEIPTS.jsonl`.
+  its own task namespace, focus markers, and measured WBS checks.
 - A lead runs the normal lifecycle (`wbs(action="open")` → plan → develop → review/QA
   → `wbs(action="close")`) inside its worktree and commits on its branch, in one commit
   carrying a `Harness-Task: <task_id>` trailer (`git commit --trailer`), so
@@ -293,11 +293,11 @@ worktree. Invalid workspace proof publishes no new exact binding or registration
 Existing exact main-call behavior retains its shared session-lock protection.
 
 Task paths, focus markers, scaffolds, and `request_file` resolve under the
-workspace. Session identity (the Claude session hint), watcher diagnostics, and
+workspace. Session identity (the Claude session hint) and
 gate-warn learnings stay on the control root, because only the main checkout
 receives `UserPromptSubmit` and every Claude lead shares the main session id.
 Codex leads instead have distinct authenticated native coordinator threads;
-their exact markers and registrations live under their own task workspaces.
+their exact task binding markers live under their own task workspaces.
 For a process-owned exact Codex actor, close and block snapshot, remove and
 validate cleanup of that same actor’s marker, even when an inherited session
 ID names its parent. Failure restores that actor’s marker; it must not alter
@@ -305,7 +305,7 @@ the parent’s marker. Existing conflict fences remain intact.
 
 Claude hooks need no argument: they already resolve the repo from the payload `cwd`,
 and a nested reviewer/QA subagent spawned by a lead runs with the worktree as
-its cwd, so its receipts bind to the worktree task.
+its cwd, so its source ownership stays in the worktree task.
 Codex instead uses the exact echoed workspace/task/run and native hook identity;
 the authenticated lead's direct reviewer/QA children inherit that binding.
 Native cwd alone does not select a Codex worktree task.
@@ -618,7 +618,7 @@ remain outside S1 and use the ordinary sequential route.
   and the exact pool closes. Codex MCP returns canonical workspace and either
   defers to genuine PostToolUse or binds its process-owned actor after native
   metadata/cwd/full-ancestry authentication under the shared binding owner.
-  Missing or unverified identity never grants a receipt or successful close.
+  Missing or unverified identity never grants source authority or successful close.
 - Cross-checkout protection: when a lead's Edit/Write target lies outside its
   worktree, the prewrite gate resolves the target's own harness root and
   applies the C-05 protected-artifact rules there, so the main checkout's or a
@@ -672,7 +672,7 @@ Verified, fully accounted originals are then removed rather than kept forever.
 For WBS-owned packs this is enforced by managed dispatch and the owning WBS
 completion proof: archive/ancestry alone are insufficient while an owned
 worktree or disposable branch still exists. Lead source close remains the
-receipt-backed task gate; it does not remove its own checkout. Standalone
+current measured WBS task gate; it does not remove its own checkout. Standalone
 temporary-worktree recovery still follows the shared coordinator procedure.
 Actual completion reporting names the integrated destination and removed
 resources, or exact retained work and blocker.
@@ -689,12 +689,11 @@ resources, or exact retained work and blocker.
   binding; control root
   treated as omitted; marker file named after the control-root session hint;
   `task_blocked` and full-lifecycle `task_close` leave the main checkout
-  byte-identical; a lead close never touches coordinator state; hook
-  start and stop receipts from `cwd=<worktree>` land in the worktree task.
-- `tests/test_codex_worktree_receipts.py`: authenticated native workspace open/context,
-  missing/unverified identity deferral, invalid workspace proof without fresh
-  authority, main native cwd distinct from target worktree, cross-root
-  conflicts/fences and only future nested lifecycle evidence.
+  byte-identical; a lead close never touches coordinator state; source ownership from
+  `cwd=<worktree>` remains scoped to that worktree task.
+- Native binding tests cover authenticated workspace open/context, invalid
+  proof without fresh authority, main cwd distinct from target workspace and
+  cross-root conflicts/fences without lifecycle collection.
 - `tests/test_mcp_tool_name_contracts.py`: the sole WBS tool declares optional
   `workspace`; retired tool aliases are rejected.
 - `tests/test_batch_finish.py` (scratch repos, lead worktrees under
@@ -776,7 +775,7 @@ resources, or exact retained work and blocker.
   and evidence preservation requirements. Existing C-09 and ignore contracts
   continue to apply; native baseRef no longer selects managed creation.
 - Live probe: a real worktree subagent starts a task with `workspace` and its
-  nested reviewer's start/stop receipts appear in the worktree task.
+  nested reviewer works in the registered worktree and returns actual findings.
 
 ## Durable dirty-original isolation
 
@@ -840,7 +839,7 @@ host workflow must refresh after completion, release and capability changes.
 Existing target applicability and execution result reuse preserve unaffected
 proofs; existing resource/output leases serialize only conflicting VM/display/
 port/build outputs. They do not block independent development or create native
-review/QA receipts. Unmeasured outcomes request measurement, not invented new
+actual review/QA results. Unmeasured outcomes request measurement, not invented new
 implementation or a replacement pool after integration.
 
 Coverage: `test_public_dispatch_admission_and_completion_refill` exercises real

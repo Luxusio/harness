@@ -266,7 +266,7 @@ proof must refuse. Status and abandonment tests compare task/evidence bytes to
 prove they remain untouched. Retention tests cover the documented Git-visible
 host cleanup condition; durability tests assert synchronization order and
 retention on sync failures, without claiming to simulate power loss. Contract tests check workflow routing and both
-runtime payloads; full QA and native receipt gates remain required.
+runtime payloads; actual independent review-before-QA and current required WBS checks remain required.
 
 ## Known ceiling
 
@@ -363,12 +363,9 @@ Managed repositories and unintegrated commits stay under the repository; tempora
 
 Known owning-task checkpoint and watcher diagnostics may be preserved byte-for-byte in a separate ancillary archive before disposal. They never authorize closure or modify closed evidence. Producer diagnostics/checkpoints lack task/run attribution; sidecar task/run names identify disposal context only, never provenance or verification evidence. Only exact known-schema, ownership/type-checked preserved entries are accounted for; unknown ignored user data retains the worktree.
 
-Derived producer/consumer correction: the known diagnostics include the MCP's
-optional safe `root_thread_id` and string `last_watcher_error`. A first watcher
-error may precede `registration_present`; it still requires a safe session ID
-and timestamp. Unknown or duplicate fields, invalid types/identities and unsafe
-files continue to refuse disposal. Existing removal tests use real MCP-written
-payloads so producer changes cannot silently strand ordinary worktrees again.
+Historical watcher diagnostics may be preserved as ancillary bytes; no active
+watcher or diagnostic producer is required. Unknown ignored data still retains
+the worktree. Ancillary files never authorize closure or modify closed evidence.
 
 Outcome assertions freshly measure their declared source inputs, while checking
 stored archive identity, closed control, ancestry and actual disposal structurally.

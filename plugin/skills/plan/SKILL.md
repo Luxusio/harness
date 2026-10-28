@@ -29,7 +29,7 @@ Phase 5 (procedure-aware user gate) stays inline below.
 ## Invariants
 
 - **Full-plan single independent reviewer required.** Full-plan Phase 1 spawns exactly one independent reviewer subagent covering both the CEO and Engineering lenses; that phase falls back to coordinator-only on reviewer failure.
-- **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, receipts, close, or install verification.
+- **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
 - **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.

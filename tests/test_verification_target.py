@@ -16,26 +16,6 @@ def specification(**extra):
                 lenses=["review-code", "qa-cli"], **extra)
 
 
-def test_handoffs_round_trip_all_supported_lenses_without_persisting_names(tmp_path):
-    from _lib import SUPPORTED_LENSES, _infer_receipt_lens
-    repo, td, _, _ = public(tmp_path)
-    spec = dict(specification(), lenses=sorted(SUPPORTED_LENSES))
-    target = targets.issue_target(str(td), str(repo), spec)
-    before = (td / "WBS.json").read_bytes()
-    first = targets.role_handoffs(target)
-    repeated = targets.issue_target(str(td), str(repo), spec)
-    second = targets.role_handoffs(repeated)
-    assert target["token"] == repeated["token"]
-    assert (td / "WBS.json").read_bytes() == before
-    assert {row["lens"] for row in first} == SUPPORTED_LENSES
-    assert {row["task_name"] for row in first}.isdisjoint(row["task_name"] for row in second)
-    for row in first + second:
-        assert _infer_receipt_lens(row["task_name"]) == row["lens"]
-        assert targets.TOKEN.search(row["task_name"])[1] == target["token"]
-        assert row["task_name"].encode() not in (td / "WBS.json").read_bytes()
-    assert targets.role_handoffs(dict(target, spec=dict(spec, purpose="diagnostic", lenses=[]))) == []
-
-
 def test_unsupported_or_malformed_lens_refused_before_publication(tmp_path):
     repo, td, _, _ = public(tmp_path)
     before = (td / "WBS.json").read_bytes()
@@ -86,7 +66,7 @@ def test_private_source_view_survives_aba_and_content_restoration(tmp_path):
     assert targets.applicability(str(td), str(restored), measure=True)["targets"][0]["status"] == "applicable"
 
 
-def test_context_is_stored_only_and_missing_snapshot_stays_unavailable(tmp_path, monkeypatch):
+def test_context_is_stored_only_and_missing_copy_does_not_change_current_inputs(tmp_path, monkeypatch):
     repo, td, _, _ = public(tmp_path)
     target = targets.issue_target(str(td), str(repo), specification())
     with monkeypatch.context() as patch:
@@ -96,22 +76,12 @@ def test_context_is_stored_only_and_missing_snapshot_stays_unavailable(tmp_path,
     path.parent.chmod(0o700)
     path.unlink()
     status = targets.applicability(str(td), str(repo), measure=True)
-    assert status["missing_lenses"]
-    assert status["targets"][0]["status"] == "applicable"
-
-
-def test_delayed_binding_reuses_preissued_source_not_current_checkout(tmp_path):
-    repo, td, _, _ = public(tmp_path)
-    target = targets.issue_target(str(td), str(repo), specification())
-    (repo / "src.txt").write_text("changed after spawn")
-    name = "code_review_case_vt_" + target["token"]
-    start = dict(event="started", source="codex_session_watcher:collaboration", task_run_id=target["run_id"], agent_id="/root/" + name, agent_type=name, lens="review-code", runtime_id="native-1")
-    completion = dict(start, event="completed")
-    assert targets._receipt_target(completion, [start, completion]) == target["token"]
-    followup = dict(completion, runtime_id="native-2")
-    assert targets._receipt_target(followup, [start, completion, dict(followup, event="started"), followup]) is None
-    status = targets.applicability(str(td), str(repo), measure=True)
-    assert status["targets"][0]["status"] == "stale"
+    assert status["status"] == "applicable"
+    assert status["targets"][0]["snapshot_available"] is False
+    restored = targets.ensure_snapshot(str(td), target["token"], str(repo))
+    assert restored["snapshot_root"] != target["snapshot_root"]
+    assert (Path(restored["snapshot_root"]) / "src.txt").read_text() == "ok"
+    assert targets.applicability(str(td), str(repo), measure=True)["status"] == "applicable"
 
 
 def test_build_context_and_new_command_are_not_silently_reused(tmp_path, monkeypatch):
@@ -143,76 +113,6 @@ def test_symlink_and_task_runtime_inputs_fail_without_omission(tmp_path):
         targets.issue_target(str(td), str(repo), dict(specification(), inputs={"source": ["alias"]}))
     with unittest.TestCase().assertRaisesRegex(ValueError, "recursively captured"):
         targets.issue_target(str(td), str(repo), dict(specification(), inputs={"source": ["doc/harness/tasks/TASK__sample/PLAN.md"]}))
-
-
-def parent_proof_fixture(tmp_path, monkeypatch):
-    from test_codex_lifecycle_watcher import _load, _spawn_events
-    mod = _load()
-    child = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    name = "lead_source_target"
-    path = tmp_path / "parent.jsonl"
-    events = _spawn_events("parent", child, name, "/root/" + name)
-    path.write_text("".join(json.dumps(event) + "\n" for event in events))
-    monkeypatch.setattr(mod, "_find_rollout", lambda _: path)
-    monkeypatch.setattr(mod, "_sessions_root", lambda: tmp_path)
-    return mod, path, child, "/root/" + name
-
-
-def test_live_parent_append_does_not_starve_native_child_proof(tmp_path, monkeypatch):
-    mod, path, child, agent = parent_proof_fixture(tmp_path, monkeypatch)
-    original = mod._spawn_activity
-    appended = []
-    def while_parent_is_active(event, **kwargs):
-        if not appended:
-            with path.open("a") as stream:
-                stream.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count"}}) + "\n")
-            appended.append(True)
-        return original(event, **kwargs)
-    monkeypatch.setattr(mod, "_spawn_activity", while_parent_is_active)
-    assert mod._parent_spawn_proof("parent", child, agent)
-    assert appended
-    # A later exact duplicate remains invalid in the next coherent prefix.
-    with path.open("a") as stream:
-        from test_codex_lifecycle_watcher import _spawn_events
-        stream.write("".join(json.dumps(event) + "\n" for event in _spawn_events("parent", child, agent.rsplit("/", 1)[1], agent)))
-    assert not mod._parent_spawn_proof("parent", child, agent)
-
-
-def test_native_parent_prefix_rewrite_or_replacement_still_rejected(tmp_path, monkeypatch):
-    mod, path, child, agent = parent_proof_fixture(tmp_path, monkeypatch)
-    original, changed = mod._spawn_activity, []
-    def rewrite_during_proof(event, **kwargs):
-        if not changed:
-            path.write_bytes(path.read_bytes().replace(b"lead_source_target", b"lead_changed_value"))
-            changed.append(True)
-        return original(event, **kwargs)
-    monkeypatch.setattr(mod, "_spawn_activity", rewrite_during_proof)
-    with unittest.TestCase().assertRaises(mod._AncestryPending):
-        mod._parent_spawn_proof("parent", child, agent)
-
-
-def test_long_parent_has_separate_bounded_capacity(tmp_path, monkeypatch):
-    mod, path, child, agent = parent_proof_fixture(tmp_path, monkeypatch)
-    monkeypatch.setattr(mod, "MAX_CHILD_BYTES", 64)
-    assert path.stat().st_size > mod.MAX_CHILD_BYTES
-    assert mod._parent_spawn_proof("parent", child, agent)
-    monkeypatch.setattr(mod, "MAX_PARENT_BYTES", 64)
-    assert not mod._parent_spawn_proof("parent", child, agent)
-
-
-def test_native_parent_path_replacement_is_rejected(tmp_path, monkeypatch):
-    mod, path, child, agent = parent_proof_fixture(tmp_path, monkeypatch)
-    original, replaced = mod._spawn_activity, []
-    def replace_during_proof(event, **kwargs):
-        if not replaced:
-            replacement = path.with_suffix(".replacement")
-            replacement.write_bytes(path.read_bytes())
-            os.replace(replacement, path)
-            replaced.append(True)
-        return original(event, **kwargs)
-    monkeypatch.setattr(mod, "_spawn_activity", replace_during_proof)
-    with unittest.TestCase().assertRaises(mod._AncestryPending):
-        mod._parent_spawn_proof("parent", child, agent)
 
 
 def test_direct_diagnostic_has_no_native_lens_or_acceptance_side_effect(tmp_path):
@@ -263,3 +163,18 @@ def test_runtime_outputs_are_writable_without_mutating_frozen_inputs(tmp_path):
         targets.issue_target(str(td), str(repo), original, output_dirs=["src.txt"])
     with unittest.TestCase().assertRaisesRegex(ValueError, "canonical relative"):
         targets.issue_target(str(td), str(repo), original, output_dirs=["../outside"])
+
+
+def test_changed_existing_frozen_bytes_block_applicability_and_are_not_overwritten(tmp_path):
+    repo, td, _, _ = public(tmp_path)
+    target = targets.issue_target(str(td), str(repo), specification())
+    copied = Path(target["snapshot_root"]) / "src.txt"
+    copied.chmod(0o600)
+    copied.write_text("changed frozen source")
+    copied.chmod(0o444)
+    status = targets.applicability(str(td), str(repo), measure=True)
+    assert status["status"] == "stale"
+    assert status["targets"][0]["status"] == "unavailable"
+    with unittest.TestCase().assertRaisesRegex(ValueError, "frozen snapshot changed"):
+        targets.ensure_snapshot(str(td), target["token"], str(repo))
+    assert copied.read_text() == "changed frozen source"

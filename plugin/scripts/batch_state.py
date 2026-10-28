@@ -221,6 +221,8 @@ def validate(data, repo, batch_id):
     require((data['schema_version'] == 2) == selected_batch, 'selected modules require schema 2')
     require(len(json.dumps(data).encode()) <= LIMIT, 'state exceeds 1 MiB')
     for item in data['requests']:
+        require('close_fingerprint' not in item and (not isinstance(item.get('checkpoint'), dict) or 'close_fingerprint' not in item['checkpoint']), 'retired close fingerprint requires explicit wbs migrate')
+        require('closed' not in item or type(item['closed']) is bool, 'invalid closed state')
         if data['schema_version'] == 1 or not item.get('submodules'):
             require(not any(k in item for k in ('submodules', 'submodule_manifest', 'ownership_scopes')), 'S1 fields in an ordinary request')
         require(item.get('status') in STATES and item.get('task_id') == 'TASK__' + item['slug'], 'invalid request state')
@@ -249,7 +251,7 @@ def validate(data, repo, batch_id):
             require(isinstance(item.get('spawn_head'), str) and finish_helper.COMMIT_RE.fullmatch(item['spawn_head']), 'invalid reservation HEAD')
         if item['status'] in {'running', 'returned', 'integrating', 'integrated', 'kept'}:
             require(all(isinstance(item.get(k), str) and item[k] for k in ('worker_id', 'worktree', 'branch', 'spawn_head')), 'missing work binding')
-        for key in ('worker_id', 'worktree', 'branch', 'spawn_head', 'run_id', 'close_fingerprint'):
+        for key in ('worker_id', 'worktree', 'branch', 'spawn_head', 'run_id'):
             require(item.get(key) is None or isinstance(item[key], str), f'invalid {key}')
         if item.get('worktree'):
             require(os.path.isabs(item['worktree']) and item['worktree'] == os.path.realpath(item['worktree']), 'invalid worktree path')
@@ -273,12 +275,12 @@ def validate(data, repo, batch_id):
             require(item['retention'] == retention_contract(batch_id, item), 'invalid retention identity')
         if item['status'] in {'returned', 'integrating', 'integrated', 'kept', 'recovery-required'}:
             require(isinstance(item.get('result'), dict) and item['result'].get('verdict') == 'closed'
-                    and isinstance(item.get('run_id'), str) and isinstance(item.get('close_fingerprint'), str), 'missing closed result identity')
+                    and isinstance(item.get('run_id'), str) and item.get('closed') is True, 'missing closed result identity')
         if 'checkpoint' in item:
             checkpoint = item['checkpoint']
             require(isinstance(checkpoint, dict) and checkpoint.get('stage') in {'started', 'rebase', 'integrated', 'harvested'}, 'invalid checkpoint')
             require(checkpoint.get('destination_ref') == data['destination_ref'] and checkpoint.get('run_id') == item.get('run_id')
-                    and checkpoint.get('close_fingerprint') == item.get('close_fingerprint'), 'checkpoint identity mismatch')
+                    and checkpoint.get('closed') is True and item.get('closed') is True, 'checkpoint identity mismatch')
             require(isinstance(checkpoint.get('branch_tip'), str) and finish_helper.COMMIT_RE.fullmatch(checkpoint['branch_tip']), 'invalid checkpoint tip')
             if 'recovery_commit' in checkpoint:
                 require(checkpoint['recovery_commit'] == checkpoint['branch_tip'] and re.fullmatch(r'[0-9a-f]{40}', checkpoint['recovery_commit']), 'invalid recovery commit acknowledgement')
@@ -446,7 +448,6 @@ def control(item, base=None, closed=False):
     require(item.get('run_id') in (None, data['run_id']), 'task generation changed')
     if closed:
         require(task_control_status(directory, data) == 'closed', 'task is not validly closed')
-        require(item.get('close_fingerprint') in (None, data['close_receipt_fingerprint']), 'close fingerprint changed')
     return data
 
 
@@ -480,14 +481,19 @@ def no_main_task(repo):
                 require(task_control_status(entry.path) != 'open', 'main checkout has an open task')
 
 
-def fingerprint(path):
+def _fingerprint_entries(path):
+    """Validated archive entries shared by hashing and explicit migration."""
     parents(path)
     batch_harvest._refuse_non_regular_tree(path)
     for root, dirs, files in os.walk(path):
         safe(root, True)
         for name in files:
             safe(os.path.join(root, name))
-    return 'sha256:' + hashlib.sha256(json.dumps(batch_harvest._tree_entries(path), sort_keys=True).encode()).hexdigest()
+    return batch_harvest._tree_entries(path)
+
+
+def fingerprint(path):
+    return 'sha256:' + hashlib.sha256(json.dumps(_fingerprint_entries(path), sort_keys=True).encode()).hexdigest()
 
 
 def sync_harvest(repo, archive):
@@ -597,7 +603,7 @@ def extension_witness(repo, data, item, head, run_id):
     require(proof['run_id'] == run_id and task_control_status(
         os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id']), proof) in {'open', 'blocked'},
         'expected run must identify open or blocked task')
-    require(not proof.get('close_receipt_fingerprint'), 'task already has close evidence')
+    require(not proof['closed'], 'task already has close evidence')
     require(item.get('retention') == retention_contract(data['batch_id'], item), 'bootstrap retention identity missing')
     finish_helper.validate_retention(item['worktree'], item['retention'])
     no_git_operation(item['worktree'])
@@ -717,7 +723,7 @@ def extend_scopes(repo, data, item, records, args, save):
                         and historical_result.get('verdict') in {'blocked', 'failed'})
     require(item['status'] == 'running' and ('result' not in item or resumable_result)
             and not any(k in item for k in ('checkpoint', 'finish_result'))
-            and not item.get('close_fingerprint'), 'scope extension requires running pre-result work')
+            and not item.get('closed'), 'scope extension requires running pre-result work')
     require(args.worker_stopped is True and args.worker_id == item.get('worker_id') and args.worker_id,
             'scope extension requires exact stopped bound worker')
     scopes = args.scopes
@@ -990,7 +996,7 @@ def execute(args, directory, records):
                 control(item)
         if proof:
             require(result.get('run_id', proof['run_id']) == proof['run_id'], 'result run mismatch')
-            item.update(run_id=proof['run_id'], close_fingerprint=proof.get('close_receipt_fingerprint'))
+            item.update(run_id=proof['run_id'], closed=proof['closed'])
         else:
             require(result.get('run_id') is None, 'result claims missing task run')
             require(not os.path.lexists(os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id'])), 'task control missing or invalid')
@@ -1055,12 +1061,12 @@ def execute(args, directory, records):
         # Retrying an exact checkpoint must not erase its rebase/ack/archive
         # proof before the next Git effect has produced a fresh checkpoint.
         if not (args.resume and previous_checkpoint and previous_checkpoint.get('branch_tip') == branch_tip):
-            item['checkpoint'] = dict(stage='started', branch_tip=branch_tip, destination_ref=data['destination_ref'], run_id=item['run_id'], close_fingerprint=item['close_fingerprint'])
+            item['checkpoint'] = dict(stage='started', branch_tip=branch_tip, destination_ref=data['destination_ref'], run_id=item['run_id'], closed=True)
         save()
         def checkpoint(stage, result):
             require(result['destination_ref'] == data['destination_ref'], 'destination changed')
             control(item, closed=True)
-            result.update(stage=stage, run_id=item['run_id'], close_fingerprint=item['close_fingerprint'])
+            result.update(stage=stage, run_id=item['run_id'], closed=True)
             if stage == 'harvested':
                 archive = result['harvest']['archived']
                 control(item, base=archive, closed=True)
@@ -1112,7 +1118,7 @@ def execute(args, directory, records):
             main_boundary(repo, data['destination_ref'], admission)
             tip = checkpoint.get('branch_tip')
             require(tip and checkpoint.get('destination_ref') == data['destination_ref'], 'exact post-rebase tip missing')
-            require(checkpoint.get('run_id') == item.get('run_id') and checkpoint.get('close_fingerprint') == item.get('close_fingerprint'), 'checkpoint task identity mismatch')
+            require(checkpoint.get('run_id') == item.get('run_id') and checkpoint.get('closed') is True and item.get('closed') is True, 'checkpoint task identity mismatch')
             branch_tip = finish_helper._resolve_commit(repo, 'refs/heads/' + item['branch'])
             require(not branch_tip or branch_tip == tip, 'branch tip changed since checkpoint')
             ancestry = finish_helper._git(repo, 'merge-base', '--is-ancestor', tip, data['destination_ref']).returncode

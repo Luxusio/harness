@@ -3,7 +3,7 @@
 tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-updated: 2026-09-27
+updated: 2026-10-28
 task_ref: TASK__harness-architecture
 
 ---
@@ -12,8 +12,7 @@ task_ref: TASK__harness-architecture
 
 Harness uses one WBS for any repo-mutating request. A native Goal supplies
 only its objective and continuation. PLAN owns rolling outcomes, explicit
-checks report verified weight, and internal task/run identities own ordered
-review/QA receipts and completion. `wbs` is the sole callable MCP tool.
+checks report verified weight, and internal task/run identities own source ownership and completion. `wbs` is the sole callable MCP tool.
 
 ## WBS Flow
 
@@ -57,11 +56,11 @@ approval ledger.
 
 `task_start` is both the creation and resume entry point; there is no separate
 `task_resume` operation. For an existing valid open or blocked task, the default
-call preserves the same `run_id`, `TASK.json`, and `RECEIPTS.jsonl` and only
-rebinds the current session and lifecycle watcher. A blocked resume publishes
+call preserves the same `run_id`, `TASK.json`, and measured WBS checks and only
+rebinds the current session. A blocked resume publishes
 that unchanged-run binding before removing `BLOCKED.md`. Generation replacement
 is destructive and therefore explicit: only `fresh_run: true` rotates the run
-and resets review/QA receipts. A closed task refuses the default call and names
+for an intentionally new generation. A closed task refuses the default call and names
 that explicit fresh-run choice; invalid or unsafe control artifacts refuse in
 both modes.
 
@@ -71,13 +70,13 @@ then run self-improvement/learning promotion before separately authorized follow
 and automatic learning are independent of orchestration; runbooks, staged
 learnings, promotion, and search remain active after every child.
 
-Completion authority remains ordered review/QA receipts rather than a separate
-HEAD, dirty-tree or CHECKS receipt gate. WBS progress observes source fingerprints
-and explicit assertions; context may inspect Git while computing that
-measurement. A bound work pack additionally checks the destination branch,
-ancestry and archived integration proof before the parent resumes or closes.
-Workspace selection validates registered linked-worktree files. These checks
-serve progress, isolation and integration, separately from receipt authority.
+Machine completion authority is current required measured WBS checks, blocked
+state and declared source applicability. Await actual independent code review
+and conditional security review PASS before actual QA as workflow requirements.
+Machine verdicts do not attest review or QA. Work packs retain destination
+branch, ancestry and archived integration proof. Workspace selection validates
+registered linked-worktree files. These checks preserve progress, isolation and
+integration without a receipt system or replacement ledger.
 
 The plan declares the intended source scope in `PLAN.md`; `TASK.json` stores
 the applicable review/QA lenses. These declarations route work and verification; Harness does
@@ -97,8 +96,6 @@ environment facts are recomputed by the operation that needs them.
 |---|---|
 | `PLAN.md` | WBS plan action |
 | `TASK.json` | WBS open/plan/close lifecycle owners |
-| `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
-| `REVIEWS.jsonl` | shared review-detail writer reached only by formal review completion lifecycle hooks or `review-log` |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
 Manual evidence writers are intentionally absent. User corrections must be
@@ -115,8 +112,9 @@ Goal IDs and child records are interpreted only as explicit migration input.
 `write_plan` validates the complete supplied PLAN and required-lens bundle
 before its first write, so invalid input cannot leave a new PLAN or lens update
 behind. `task_blocked` requires an existing valid `TASK.json` before writing
-`BLOCKED.md`. Removed task-control artifacts have no compatibility readers or
-migration path; starting a fresh run is the recovery action.
+`BLOCKED.md`. Prior supported task controls require explicit migration preview/apply; ordinary
+calls do not provide compatibility readers. Unsupported historical controls are
+retained and reported; active or pool-referenced controls cannot be skipped.
 
 Per-session active markers are authoritative only while their canonical task
 state is live. Marker leaves must be regular files and are read without
@@ -128,7 +126,7 @@ so Stop and prewrite gates do not silently disengage; active-task iteration
 filters terminal per-session records as well.
 
 The confinement boundary validates lexical and physical paths and avoids
-following pre-existing control-plane leaf symlinks. Receipt, plan, block, and
+following pre-existing control-plane leaf symlinks. Plan, block, and
 task-authority publication holds an exclusive lock on the validated task
 directory descriptor and uses descriptor-relative atomic writes and rollback.
 Directory replacement or an unsafe leaf fails closed without publishing into
@@ -142,72 +140,28 @@ Verification has two responsibilities:
 - intent adequacy check: the result satisfies the user's request and durable
   requirements
 
-A source-changing task requires the plan-declared read-only reviewers, followed
-by every declared QA lens. Only ordered, lifecycle-owned, explicit PASS evidence
-for the current task run can close the task; a start or self-authored result
-cannot. Acceptance intent remains in `PLAN.md`, and later source drift is
-developer-owned.
+A source-changing task requires actual independent read-only code review,
+conditional security review, then every applicable QA lens. Await direct finals;
+a start, coordinator summary or copied text cannot replace an independent result.
+Fix actual FAILs and publish actual environmental blockers. Missing recording
+never warrants repair, reruns or parking. The active contract is
+[receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md).
 
-On Claude builds that deliver `SubagentStop` but no `SubagentStart`, the stop
-hook requires exact top-level official agent/session identity, the matching
-session marker and run, and a stable matching current-run Claude transcript
-whose recorded start attachment supplies the agent type before emitting the
-single-use inferred-start/completed pair in one task
-transaction. Missing, foreign, stale, replayed, aliased, untrusted, or unbound
-stops create no authority. The hook (and, until its removal on 2026-09-23, the
-Claude Stop gate) derives lifecycle state from
-the current task's unified receipts and never maintains a background registry
-or registry lock. The official adapter does not expose a generic receipt-append
-tool, but a hostile shell can invoke shipped lifecycle scripts directly; that
-accepted exposure is outside Harness's integrity boundary.
+PLAN.md owns acceptance intent; existing WBS assertions own measured outcome
+checks. `TASK.json` has `run_id`, `execution_mode`, `required_lenses`, and
+`closed: boolean`. Only the public owner publishes closure. Failed, unrun or
+stale required checks block close. No machine verdict claims review/QA attestation.
 
-Receipt storage, minimal schema, immutable snapshot, and gate semantics are
-normatively defined by
-[ADR__consolidated-task-artifacts.md](patterns/ADR__consolidated-task-artifacts.md).
-Codex acquisition, identity, and completion are normatively defined by
-[ADR__single-direct-codex-receipt-protocol.md](patterns/ADR__single-direct-codex-receipt-protocol.md).
+Browser and heavy full-suite verification use the applicable independent QA
+role when available. The roles report concrete evidence; static inspection
+cannot replace required runtime execution. Scope changes after review/QA require
+substantive freshness assessment by the developer.
 
-Verification delegation is a workflow optimization, not a generic pre-tool
-policy. Browser and heavy full-suite work should use an applicable `qa-*` lens
-when isolation materially reduces context or process load. Inline browser use
-remains valid when it is the lighter available path; its potentially large DOM,
-screenshot, or evaluation payload is an accepted caller-owned context cost and
-does not relax the receipt-backed close requirements above.
-
-`write_plan` accepts only the complete non-empty `PLAN.md` body and an optional
-`required_lenses` set. It canonicalizes supported lenses, requires
-`review-code` plus at least one `qa-*` lens, and atomically publishes only
-`PLAN.md` and `TASK.json`. Planning rationale remains in `PLAN.md`; there is no
-audit argument or audit artifact.
-
-`task_context`, `task_verify`, and `task_close` read task control artifacts and
-the receipt stream only. They never read non-authoritative `REVIEWS.jsonl`.
-They do not discover repositories, enumerate changed paths,
-validate Git metadata, or invalidate PASS because files changed. A developer
-who edits after QA must decide whether to rerun review or QA. Harness deliberately
-accepts that risk instead of imposing a repository-integrity monitor on local
-development. Missing or malformed task artifacts and receipt streams still fail
-closed. Public context and verification responses expose verdicts, required
-lenses, `missing_for_close`, `next_action`, and one report path; they do not
-embed raw receipts, completion summaries, transcript locations, or a duplicate
-authoritative review report path. Exact formal review detail is an optional
-content-addressed appendix selected explicitly by receipt digest; it is never a
-context, verdict, fingerprint, verification, installation, or close input.
-
-`TASK.json.run_id` is the non-Git generation identity and a canonical UUIDv7
-whose embedded millisecond timestamp supplies the run-start cutoff.
-`task_start` creates it for a new task. Default resume of an open or blocked task
-retains it and its receipt stream; only explicit `fresh_run: true` rotates it
-while clearing prior receipts. The session marker carries only that run ID to
-lifecycle watchers; start/completion receipts must match it. A replayed rollout
-event whose timestamp predates the UUIDv7 cutoff is ignored. This prevents
-prior-generation evidence from satisfying an explicitly fresh run without
-discarding same-generation evidence during ordinary resume.
-
-Codex SessionStart and spawn-selective PreToolUse establish the bounded root
-registration used by the MCP-hosted watcher. Registration and lifecycle
-authority follow the single-direct protocol ADR; late registration never
-recovers already-completed work.
+Context/verify/close read current task control and WBS state, not historical
+receipt files, transcripts or review appendices. Explicit migration preserves
+historical bytes and task/run/WBS identities. Default resume retains the same
+run and measured checks. No watcher startup, registration, spawn-name binding,
+recording capability check or missing-attestation parking remains.
 
 PreToolUse dispatch is selective: plan-first/artifact ownership runs only for
 direct write tools (`Write|Edit|MultiEdit|apply_patch`). Bash/shell mutation is
@@ -218,7 +172,7 @@ enforcement.
 Nested repositories and submodules need no source registration for lifecycle
 verification. Crossing a nested Git boundary requires the ancestor Harness
 root's session-specific active-task marker; the repository-wide legacy marker
-cannot authorize it. Hooks then bind receipts to that control root and active
+cannot authorize it. Hooks bind the session to that control root and active
 task. The plan may
 name nested source paths for human routing, but the lifecycle neither scans nor
 authorizes them through Git.
@@ -243,8 +197,8 @@ but is no longer loaded. Project-specific instructions belong in `AGENTS.md`,
 `CLAUDE.md`, or the matching durable `doc/` surface, while executable setup
 configuration remains in the manifest.
 
-No model-callable MCP tool can author review or QA evidence. Runtime and stream
-integrity rules fail closed as specified by the two receipt ADRs above.
+No model-callable MCP tool can author an independent review or QA PASS. Task
+ownership, source applicability and stable installation snapshots remain required.
 
 ## Durable Knowledge
 
@@ -266,4 +220,4 @@ candidates but does not satisfy the durable-memory requirement by itself.
 ## Runtime Boundaries
 
 Harness uses one rolling WBS for ordinary requests and native objectives. Hooks provide compact context
-and record subagent starts; MCP tools own explicit state transitions.
+and protect source/task ownership; MCP tools own explicit state transitions.

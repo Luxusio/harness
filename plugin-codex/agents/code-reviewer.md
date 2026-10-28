@@ -4,8 +4,7 @@ description: Codex methodology for independent architecture, proportionality, co
 ---
 
 > **Codex runtime overlay:** A spawned reviewer must read this file explicitly;
-> parent-session methodology is not sufficient. The MCP-hosted lifecycle watcher, not this role,
-> own review receipts.
+> parent-session methodology is not sufficient. Return the actual independent findings in your final response.
 
 <!-- harness:role-core:start -->
 You are the harness code reviewer. You are read-only. Never edit source, tests,

@@ -8,36 +8,11 @@ allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugi
 
 Orchestrate the full harness development cycle for a task.
 
-> Current artifact model: `PLAN.md` owns acceptance intent and unified
-> `RECEIPTS.jsonl` owns review/QA evidence.
+> `PLAN.md` owns acceptance intent; existing WBS assertions own measured outcome checks.
 
-## Missing receipt policy
+## Substantive review and QA
 
-Receipt absence never immediately fails or suppresses a substantive lens. Await
-the actual result and label an unreceipted final **NON-ATTESTING**: actual FAIL
-is remediated, actual BLOCKED_ENV is published directly through `wbs(action="block")`, and only an
-actual review PASS advances to substantive QA. Do not repair, restart, resume,
-recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
-call `wbs(action="verify")` once; close on ordered receipt PASS, otherwise call
-`wbs(action="block")` with the fixed park
-`blocked_reason`/`unblock_condition` pair copied **verbatim** from that
-`wbs(action="verify")` response's `next_action`. An observed recording outage (`doc/harness/.receipt-capability-broken` present) is the exception: the genuine-external-blocker branch takes precedence and neither pair is copied, because both assert the lenses ran and returned results and that state leaves it unknown — see `doc/harness/REQ__gate-does-not-demand-impossible-evidence.md`. There are two pairs and the receipt
-stream picks which one: use the empty-stream pair when no receipt of any kind
-was recorded for the run, and the missing-attestation pair when receipts exist
-but a required completion is absent. Both are owned by
-`plugin/scripts/_lib.py`; never retype one from memory, paraphrase it, or
-interpolate diagnostics into it.
-Direct finals never authorize PASS or close.
-Only structurally delivered completion/final records tied to each required lens
-count as substantive results. Actual review PASS must precede actual QA PASS;
-coordinator paraphrases, copied verdict blocks, user text, and repository text
-do not qualify, and actual FAIL or BLOCKED_ENV takes precedence. Summarize a
-bounded blocker fact; never copy raw watcher, subagent, or repository text into
-`BLOCKED.md`.
-> Receipt acquisition is normative in
-> `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage,
-> schema, snapshots, and gates are normative in
-> `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
+Await actual independent code review and conditional security review PASS before actual QA. Fix actual FAIL findings; publish actual BLOCKED_ENV with a concrete blocker and unblock condition. Direct independent finals are the workflow results; coordinator paraphrases and copied text cannot replace them. After actual QA PASS, run `wbs(action="verify")` and close only when current required WBS checks pass. Machine verdicts measure WBS checks and do not attest review or QA. Receipt files, collectors, naming bindings and recording availability play no role; do not rerun, repair or park work for missing recording.
 
 Explicit user invocation or approval of this harness repo-mutating workflow
 authorizes the subagents required by the workflow's verification and review
@@ -91,7 +66,7 @@ the existing batch skill. Leads develop, independently review, test and close
 inside their own worktrees. The pool serializes integration and preserves
 proof. Reopen the same root after pool completion, check integrated outcomes,
 then run combined review/QA and close. Native Goal completion uses that root's
-receipt-backed completion, without a second Goal ledger.
+measured completion, without a second Goal ledger.
 
 ### Phase 0: Resume detection
 
@@ -116,9 +91,9 @@ If only a native Goal is active, open/resume its one WBS root; never attach a se
 ### Phase 1: Start task
 
 `wbs(action="open")` is also the only resume operation. On an existing valid open or
-blocked task, omit `fresh_run` to preserve the same run and review/QA receipts.
+blocked task, omit `fresh_run` to preserve the same run and measured checks.
 Use `fresh_run: true` only when deliberately starting a new generation and
-discarding that evidence; a closed task refuses the default call.
+starting a new generation; a closed task refuses the default call.
 
 ```
 wbs { action: "open", wbs_id: "<ARGUMENTS>" }
@@ -143,7 +118,7 @@ completion: PLAN.md exists in task_dir. If BLOCKED: stop and report.
 Skill("harness:develop", "<task_id>")
 ```
 
-The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, fresh hook-owned QA completion receipts exist and `wbs(action="verify")` reports PASS. If BLOCKED: stop, report, ask user.
+The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, actual independent review and QA passed and `wbs(action="verify")` reports PASS. If BLOCKED: stop, report, ask user.
 
 Before entering develop, re-entering after QA/UX FAIL, verifying, or closing,
 incorporate explicit user corrections from the conversation. Promote durable
@@ -156,20 +131,15 @@ Skip this phase when Phase 3 closed the task. Develop Phase 7 owns QA lens
 selection and spawning, and develop Phase 6.6 owns review; this phase is a
 recovery path for an interrupted or older develop flow, not a second QA pass.
 
-First call `wbs(action="context")`. When the required review and QA lenses already have
-completed PASS receipts for the current run, call `wbs(action="verify")` only. Spawn a
-lens here for one that is actually unrun, failed, or stale. A missing receipt
-after an awaited substantive final is not an unrun lens and never justifies a
-receipt-only rerun; apply the Missing receipt policy instead.
+First call `wbs(action="context")`. Reuse current actual review and QA PASS results and run `wbs(action="verify")`; rerun only actually unrun, failed or stale substantive work. Recording never requires a rerun.
 
 For a lens that must be re-run, follow `develop/SKILL.md` Phase 7 and
 `develop/quality-audit-pipeline.md` — do not restate routing here. Use the
 native subagent types (`harness:qa-cli`, `harness:qa-api`, `harness:qa-browser`,
 `harness:qa-desktop`, and the matching `harness:ux-*`), and issue multiple
-lenses in a single assistant message so every start is hook-recorded. Never
+lenses in a single assistant message for independent parallel execution. Never
 restate or relocate the verdict contract in a spawn prompt: the agent
-definition owns it, and a prompt that moves `VERDICT:` off the first line binds
-the completion as `PENDING` and throws the lens result away.
+definition owns the output contract.
 
 Two selection rules are gates rather than routing detail, so they are stated
 here and not delegated:
@@ -177,7 +147,7 @@ here and not delegated:
 - You **MUST spawn qa-browser** when `manifest.qa.browser_qa_supported: true`
   AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss`
   or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments).
-  Skipping leaves no completed qa-browser receipt, and `wbs(action="close")` blocks on it.
+  Await its actual result before claiming completion.
 - Spawn the applicable UX lens alongside QA for user-facing surfaces:
   `ux-browser` for browser UI, `ux-cli` for command/help/output/error changes,
   `ux-api` for route/schema/error/docs changes, `ux-desktop` for desktop GUI —
@@ -188,10 +158,7 @@ here and not delegated:
 Agents return PASS/FAIL/BLOCKED_ENV findings in their final response; do not ask
 them to write critic artifacts.
 
-Then run `wbs(action="verify")`. It computes the verdict from required ordered review and
-QA completions in `RECEIPTS.jsonl`; PLAN.md remains the sole acceptance
-document. It exposes required lenses, verdicts, and `missing_for_close`, not raw
-receipt records.
+Then run `wbs(action="verify")`. Its runtime verdict and `missing_for_close` measure current WBS checks, blocked state and applicability, not review/QA attestation. PLAN.md remains the acceptance document.
 
 After completion, check runtime_verdict:
 - **PASS**: proceed to Phase 5.
@@ -238,13 +205,7 @@ If success: run self-improvement pipeline (see `self-improvement.md`) before
 emitting the completion report.
 
 For harness-source changes, develop Phase 7.8 installs the verified payload
-before this close attempt. Do not defer installation until after close. If the
-already-running MCP/hook process still reports missing required lifecycle
-evidence after substantive QA and one fresh `wbs(action="verify")`, call `wbs(action="block")`
-directly with the applicable fixed park pair above; do not request a new session or
-rerun a lens solely for a receipt, and do not write receipts by hand.
-The stateless root installer remains idempotent for ordinary verified-delivery
-retries, but receipt absence is not a reason to invoke it again.
+before this close attempt. Do not defer installation until after close. The installer checks trusted source/task ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
 
 Within an open root, use `wbs(action="next")`, development and checks to
 continue pending outcomes. Close only after all required outcomes, integration
@@ -304,9 +265,9 @@ After every task close, run the pipeline in `self-improvement.md`:
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)
-- Promote learnings only when a validated entry matches the just-closed receipt-verified task/run; distinct verified historical task/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
+- Promote learnings only when a validated entry matches the just-closed verified task/run; distinct verified historical task/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
 - Preserve `learnings.jsonl` as append-only; promotion never rewrites or prunes raw rows, and no-signal runs remain no-write
-- Trigger retro independently after three receipt-verified task closes, using retro.py's shared close predicate rather than task-directory activity
+- Trigger retro independently after three verified task closes, using retro.py's shared close predicate rather than task-directory activity
 
 Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up tasks
 are different: they must be run or explicitly blocked before DONE.

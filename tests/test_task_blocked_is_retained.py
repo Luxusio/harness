@@ -68,4 +68,5 @@ def test_docs_no_longer_describe_stop_gate_as_live():
             "`stop_gate.py` runs on the **main session** stop hook",
     }
     for rel, phrase in stale.items():
-        assert phrase not in _text(REPO / rel), rel
+        if (REPO / rel).exists():
+            assert phrase not in _text(REPO / rel), rel

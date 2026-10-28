@@ -590,10 +590,9 @@ def test_installer_clears_stale_bytecode_cache_even_when_synchronized(
     """A bad `.pyc` must not outlive an install run.
 
     `_VOLATILE_DIR_NAMES` excludes `__pycache__` from payload comparison, so a
-    tree whose bytecode cache breaks `subagent_lifecycle`'s import-time receipt
-    adapter binding still reports SYNCHRONIZED and the default run skips the sync
-    that would have replaced it. That is how one stale `.pyc` kept receipts dead
-    for a month. Pruning must therefore happen on the skip path too.
+    tree with stale cached executable code still reports SYNCHRONIZED and the
+    default run skips the sync that would have replaced it. Pruning must
+    therefore happen on the skip path too.
 
     The tree carries a cache under two sibling directories, as the real
     `~/.claude/harness-dev` does (`plugin/scripts` and `plugin/mcp`): the prune
@@ -613,7 +612,7 @@ def test_installer_clears_stale_bytecode_cache_even_when_synchronized(
     stale = []
     for cache in caches:
         cache.mkdir(parents=True, exist_ok=True)
-        pyc = cache / "subagent_lifecycle.cpython-312.pyc"
+        pyc = cache / "_lib.cpython-312.pyc"
         pyc.write_bytes(b"stale-bytecode")
         stale.append(pyc)
     # Precondition: comparison is blind to it, so the skip path is taken.
@@ -635,7 +634,7 @@ def test_installer_clears_stale_bytecode_cache_even_when_synchronized(
         assert not pyc.exists(), f"stale bytecode survived the install run: {pyc}"
         assert not pyc.parent.exists()
     # Only __pycache__ is removed; the payload it sat beside is untouched.
-    assert (plugin_root / "scripts" / "subagent_lifecycle.py").is_file()
+    assert (plugin_root / "scripts" / "_lib.py").is_file()
     assert module._claude_payload_state(install_root) == (
         module.PAYLOAD_SYNCHRONIZED, "",
     )
@@ -645,7 +644,7 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
     """The Codex half of the same guarantee, on the same skip path.
 
     Both runtimes execute the same `plugin/scripts` payload, so one stale
-    `.pyc` disables receipts identically. Codex owns two trees — the marketplace
+    `.pyc` can break imports identically. Codex owns two trees — the marketplace
     mirror and the resolved plugin cache — and the prune has to reach both
     before `_codex_payload_state` answers SYNCHRONIZED and returns early.
     """
@@ -663,9 +662,9 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
     stale = []
     for scripts in (mirror, cached):
         (scripts / "__pycache__").mkdir(parents=True)
-        pyc = scripts / "__pycache__" / "subagent_lifecycle.cpython-312.pyc"
+        pyc = scripts / "__pycache__" / "_lib.cpython-312.pyc"
         pyc.write_bytes(b"stale-bytecode")
-        (scripts / "subagent_lifecycle.py").write_text("ok\n")
+        (scripts / "_lib.py").write_text("ok\n")
         stale.append(pyc)
 
     with (
@@ -688,7 +687,7 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
     for pyc in stale:
         assert not pyc.exists(), f"stale bytecode survived the install run: {pyc}"
         assert not pyc.parent.exists()
-        assert (pyc.parent.parent / "subagent_lifecycle.py").is_file()
+        assert (pyc.parent.parent / "_lib.py").is_file()
 
 
 def test_prune_bytecode_caches_stays_inside_the_installer_owned_tree(tmp_path):
@@ -735,8 +734,8 @@ def test_suite_run_cannot_reach_the_real_install_roots(tmp_path):
     correct — but it also put an `rmtree` ahead of every other guard on roots
     that default to the real `~/.claude/harness-dev` and `~/.codex/harness`.
     A review round then trialled `rmtree(cache.parent)` and a full suite run
-    deleted the installed `plugin/scripts` and `plugin/mcp`, killing receipt
-    recording exactly as the stale `.pyc` had. Two layers close it: the
+    deleted the installed `plugin/scripts` and `plugin/mcp`, disabling runtime
+    imports exactly as the stale `.pyc` had. Two layers close it: the
     conftest default and the installer-side refusal.
 
     Each mutating entry point is probed in a form that touches nothing
@@ -930,8 +929,8 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     assert (codex_plugin / "agents" / "defect-hunter.md").is_file()
     assert (codex_plugin / "agents" / "code-reviewer.md").is_file()
     assert (codex_plugin / "agents" / "security-reviewer.md").is_file()
-    assert (codex_plugin / "scripts" / "review-log").is_file()
-    assert (codex_plugin / "scripts" / "review-read").is_file()
+    assert not (codex_plugin / "scripts" / "review-log").is_file()
+    assert not (codex_plugin / "scripts" / "review-read").is_file()
     assert not list((codex_plugin / "scripts").glob("hook_*.sh"))
 
 
@@ -973,8 +972,7 @@ def test_codex_hooks_config_uses_absolute_cache_python_and_reviews_all_events(tm
         # The PYTHONDONTWRITEBYTECODE prefix is part of the contract, not noise:
         # Codex hook commands are generated here rather than read from
         # plugin/hooks/hooks.json, so they were the uncovered half of the
-        # bytecode-cache fix. See
-        # doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md.
+        # bytecode-cache fix.
         assert hook["command"] == f"{module._python_hook_cmd()} {command}"
         assert hook["command"].startswith("PYTHONDONTWRITEBYTECODE=1 ")
         # The interpreter must still be an absolute path — this test's original
@@ -1050,11 +1048,7 @@ def test_codex_mcp_config_uses_absolute_python_and_installed_plugin_root(tmp_pat
     assert mcp["command"] == module._python_cmd()
     assert Path(mcp["command"]).is_absolute()
     assert mcp["args"] == [str(plugin_root.resolve() / "mcp" / "harness_server.py")]
-    # PYTHONDONTWRITEBYTECODE is required, not incidental: this server imports
-    # `_lib`, `hook_tree_health`, `codex_hook_registration`, and
-    # `codex_lifecycle_watcher` from the installed scripts tree, which is how
-    # those four caches were poisoned on 2026-09-16. See
-    # doc/harness/REQ__bytecode-cache-cannot-disable-receipts.md.
+    # Keep installed shared modules free from interpreter-specific caches.
     assert mcp["env"] == {
         "HARNESS_PLUGIN_ROOT": str(plugin_root.resolve()),
         "CLAUDE_PLUGIN_ROOT": str(plugin_root.resolve()),
@@ -1081,10 +1075,10 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
-    assert (cached / "scripts" / "review-log").is_file()
-    assert (cached / "scripts" / "review-read").is_file()
+    assert not (cached / "scripts" / "review-log").is_file()
+    assert not (cached / "scripts" / "review-read").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
-    assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
+    assert (cached / "scripts" / "_lib.py").is_file()
     assert (cached / "agents" / "defect-hunter.md").is_file()
     assert not (cached / "scripts" / "background_registry.py").exists()
     shared_rels = (
@@ -1284,8 +1278,8 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
     assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
-    assert (cached / "scripts" / "review-log").is_file()
-    assert (cached / "scripts" / "review-read").is_file()
+    assert not (cached / "scripts" / "review-log").is_file()
+    assert not (cached / "scripts" / "review-read").is_file()
     assert (cached / "agents" / "defect-hunter.md").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
     parsed = tomllib.loads(config_path.read_text())
@@ -1536,8 +1530,8 @@ def test_sync_claude_payload_copies_runtime_under_claude_root_without_git(tmp_pa
     assert (plugin_root / ".claude-plugin" / "plugin.json").is_file()
     assert (plugin_root / "mcp" / "harness_server.py").is_file()
     assert (plugin_root / "agents" / "defect-hunter.md").is_file()
-    assert (plugin_root / "scripts" / "review-log").is_file()
-    assert (plugin_root / "scripts" / "review-read").is_file()
+    assert not (plugin_root / "scripts" / "review-log").is_file()
+    assert not (plugin_root / "scripts" / "review-read").is_file()
     assert not stale_guard.exists()
     assert not (tmp_path / "claude" / "harness-dev" / ".git").exists()
     marketplace = tmp_path / "claude" / "harness-dev" / ".claude-plugin" / "marketplace.json"
@@ -1591,7 +1585,7 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
     assert (cached / "skills" / "run" / "SKILL.md").is_file()
     assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
     assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
-    assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
+    assert (cached / "scripts" / "_lib.py").is_file()
     assert not (cached / "scripts" / "background_registry.py").exists()
     assert not (cached / "stale.txt").exists()
     assert (stale / "stale.txt").read_text() == "old"
@@ -1916,6 +1910,6 @@ def test_claude_payload_over_old_tree_registers_no_stop_hook(tmp_path):
 
     hooks = json.loads((plugin_root / "hooks" / "hooks.json").read_text())["hooks"]
     assert "Stop" not in hooks
-    assert {"SubagentStart", "SubagentStop"} <= set(hooks)
+    assert not {"SubagentStart", "SubagentStop"} & set(hooks)
     assert not (plugin_root / "scripts" / "stop_gate.py").exists()
     assert not (plugin_root / "scripts" / "hook_stop.py").exists()

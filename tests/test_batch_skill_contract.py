@@ -337,7 +337,7 @@ def test_pool_capacity_refill_and_serial_integration_keep_lifecycle_gates():
         "dependencies release only after their predecessor integrates and cleanup completes",
         "unknown liveness forbids opening a main task",
         "`review-code`, conditional `review-security`, then `qa-cli`",
-        "receipt-backed review-before-QA order", 'before `wbs(action="close")`',
+        "actual review-before-QA order", 'before `wbs(action="close")`',
         "Operational closure never replaces review/QA or closes the WBS itself",
     ), BATCH_SKILL)
     _assert_all(_text(OWNER_REQ), (

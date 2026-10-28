@@ -75,8 +75,6 @@ except Exception:
 PROTECTED_ARTIFACTS = {
     "TASK.json": "task-control-mcp",
     "PLAN.md": "plan-skill",
-    "RECEIPTS.jsonl": "receipt-lifecycle-hook",
-    "REVIEWS.jsonl": "review-detail-writer",
     "WBS.json": "task-control-mcp",
 }
 
@@ -84,8 +82,6 @@ PROTECTED_ARTIFACTS = {
 PROTECTED_ARTIFACT_HUMAN = {
     "TASK.json": "task control MCP tools",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
-    "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
-    "REVIEWS.jsonl": "the shared review-detail writer",
     "WBS.json": "WBS plan/check/dispatch MCP actions",
 }
 RETIRED_GOALS = os.path.join("doc", "harness", "goals")
@@ -244,50 +240,6 @@ def _foreign_protected_target(candidates, log_root):
     except Exception as exc:
         _log_gate_error(exc, "prewrite_gate", repo_root=log_root)
     return None
-
-
-def _is_claude_subagent_transcript(path):
-    """Return True for the runtime-owned Claude subagent transcript surface."""
-    if not path:
-        return False
-    candidate = os.path.realpath(os.path.expanduser(str(path)))
-    config_root = os.path.realpath(os.path.expanduser(
-        os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
-    ))
-    projects_root = os.path.join(config_root, "projects")
-    try:
-        rel = os.path.relpath(candidate, projects_root).split(os.sep)
-    except ValueError:
-        return False
-    return (
-        len(rel) >= 4
-        and rel[-2] == "subagents"
-        and re.fullmatch(r"agent-[A-Za-z0-9_.:-]+\.jsonl", rel[-1]) is not None
-        and rel[0] != ".."
-    )
-
-
-def _is_codex_rollout(path):
-    """Return True for runtime-owned Codex session rollout provenance."""
-    if not path:
-        return False
-    candidate = os.path.realpath(os.path.expanduser(str(path)))
-    codex_root = os.path.realpath(os.path.expanduser(
-        os.environ.get("CODEX_HOME") or "~/.codex"
-    ))
-    sessions_root = os.path.join(codex_root, "sessions")
-    try:
-        rel = os.path.relpath(candidate, sessions_root).split(os.sep)
-    except ValueError:
-        return False
-    return (
-        len(rel) >= 4 and rel[0] != ".."
-        and re.fullmatch(r"rollout-[A-Za-z0-9_.:-]+\.jsonl", rel[-1]) is not None
-    )
-
-
-def _is_runtime_provenance(path):
-    return _is_claude_subagent_transcript(path) or _is_codex_rollout(path)
 
 
 def _is_workflow_control_surface(path, repo_root=None):
@@ -519,10 +471,6 @@ def _owner_to_next_action(owner: str) -> str:
         if runtime == "codex":
             return f"wbs {{ {args} }}"
         return f"mcp__plugin_harness_harness__wbs({args})"
-    if "receipt-lifecycle-hook" in o:
-        return "Spawn and await the required reviewer or QA agent; lifecycle hooks record RECEIPTS.jsonl"
-    if "review-detail-writer" in o:
-        return "Use plugin/scripts/review-log with the exact review final on standard input"
     return ""
 
 
@@ -698,18 +646,6 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
     elif not is_harness_enabled_repo(repo_root):
         return 0
     file_path = os.path.realpath(requested_path)
-    if any(
-        _is_runtime_provenance(path)
-        for path in (requested_path, file_path)
-    ):
-        _deny(
-            "C-05-protected-artifact",
-            requested_path,
-            "claude-runtime",
-            "Runtime transcripts are runtime-owned receipt provenance and cannot be edited.",
-            repo_root,
-        )
-        return 0
     try:
         requested_common = os.path.commonpath([repo_root, requested_path])
     except ValueError:

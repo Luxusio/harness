@@ -233,8 +233,8 @@ from `qa-cli`, `qa-api`, `qa-browser`, and `qa-desktop`.
 ## 6.6 Acceptance criteria
 
 Keep the stable acceptance criteria directly in PLAN.md. Do not assemble or
-write a second status ledger; review and QA completion is recorded in the
-unified `RECEIPTS.jsonl` lifecycle stream.
+write a second status ledger. Existing WBS assertions own measured checks;
+actual independent review and QA remain workflow requirements.
 
 Planning decisions from earlier phases are included directly in PLAN.md's
 Decision Audit Trail before the single MCP publication.

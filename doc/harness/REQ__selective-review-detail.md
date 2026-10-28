@@ -62,7 +62,7 @@ freshness_updated: 2026-09-18T08:10:49Z
    Batch integration carry (Claude-only): the `review-code` lens of the
    post-wave `harness:batch` integration task does not re-review a lead range
    that its own lead already reviewed and QA'd when the integration is proven
-   equivalent. A carry inherits the trust of that lead's close; receipts bind
+   equivalent. A carry requires that lead's closed WBS and integration proof; historical receipts do not bind
    no tree. Per integrated lead the endpoints are `old_base` = the coordinator
    HEAD from batch step b.5, `old_tip` = the lead's returned `commit` (leads
    commit after `task_close`, so it is the tree their review and QA passed),
@@ -137,39 +137,12 @@ freshness_updated: 2026-09-18T08:10:49Z
    otherwise verified findings produce `FAIL`, and their absence produces
    `PASS`.
 
-3. `RECEIPTS.jsonl` remains the compact and authoritative lifecycle stream.
-   The exact final text of each formal code or security review completion is
-   stored separately in the same task directory as one append-only
-   `REVIEWS.jsonl` row with exactly two string fields: `detail_sha256` and
-   `detail`. The hash is SHA-256 of the exact UTF-8 detail and matches the
-   receipt's `DETAIL_SHA256` value. No context, verification, fingerprint, or
-   close decision reads `REVIEWS.jsonl`.
-
-4. New detail is durably appended under the existing task receipt lock after
-   current-run and nonterminal checks and before the corresponding compact
-   receipt. A detail failure publishes no receipt. A failure after the detail
-   fsync restores any partial receipt append to its exact prior bytes and may
-   leave an orphan row; retrying the same hash and body reuses it without adding
-   a duplicate.
-
-5. Review detail is bounded to 2 MiB per UTF-8 body and 16 MiB per task store.
-   The store is an owner-only regular file, is never followed through a
-   symlink, and is rejected when ownership, link count, mode, row shape, hash,
-   or file identity is unsafe. Same-hash/different-body data is an integrity
-   error.
-
-6. `review-read [--task-dir TASK_DIR] <64-lowercase-hex>` returns only the
-   selected exact detail on stdout. It never lists or dumps unrelated rows.
-   `review-log [--task-dir TASK_DIR]` reads one detail from stdin, uses the same
-   shared writer, and prints only `DETAIL_SHA256:<hex>` on success. Omitting
-   `--task-dir` resolves the active task. Explicit `review-read` task selection
-   continues to work after close; `review-log` refuses a terminal task.
-
-7. Existing receipts and formal-review finals that predate this storage remain
-   valid. A missing file or digest is reported as not found and may mean the
-   receipt predates detail storage; it never invalidates review, QA, or task
-   close. Old runtimes may ignore the additive file. No migration, backfill,
-   fresh run, or cleanup state is required.
+3. Actual independent formal review finals remain the workflow results. Return
+   the required verdict, counts and structured review detail directly. The
+   coordinator awaits actual independent review PASS before actual QA. Missing
+   recording never warrants retries, repair or parking. No automatic detail
+   store, digest binding, read/write CLI or replacement ledger is required.
+   Historical review details remain non-authoritative preserved artifacts.
 
 ## Verification
 
@@ -188,9 +161,6 @@ freshness_updated: 2026-09-18T08:10:49Z
   listing, unchanged full suite and `qa-cli`, the Claude-only reviewer
   paragraph outside the shared role core, and avoidance of the anchors the
   existing review contract tests locate by first or last occurrence.
-- Store and CLI tests pin exact UTF-8 hashing, idempotency, limits, file safety,
-  digest-only stdout, explicit error classes, and detail-before-receipt order.
-- Lifecycle regressions prove `REVIEWS.jsonl` cannot affect receipt selection,
-  task context, fingerprints, verification, or close.
-- Installation tests prove both runtime bundles contain the hunter role and the
-  selective read/write scripts.
+- Installation checks prove both runtime bundles retain the hunter role and
+  actual independent formal reviewer output contract. Current machine
+  verify/close tests use measured WBS checks without receipt files.

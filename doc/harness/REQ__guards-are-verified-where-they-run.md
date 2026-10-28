@@ -105,9 +105,8 @@ the no-false-alarm property. Its first draft emitted `%p %s` including
 
 `plugin/scripts/install_smoke.py`, run by `install.py` after each runtime's
 payload is synced, imports every registered hook module from the installed tree
-and drives the installed `background_hook.py` against a throwaway repository
-until a `started` receipt row appears. A failure fails the install with the
-tree named.
+and drives the receipt-free public WBS lifecycle in a throwaway repository.
+A failure fails the install with the tree named.
 
 It also runs on the default run's PAYLOAD_SYNCHRONIZED early return, which is the
 path `install_verified.py` takes on every close and therefore the common one:
@@ -118,8 +117,7 @@ absent there is nothing to probe, and the install step says so rather than
 reporting a pass.
 
 The suite tests the source tree; hooks execute from the installed tree. When
-they diverge the suite is green and the runtime is dead — no receipt, no
-`task_close`, and no signal of any kind. This check inspects installed Python
+they diverge the suite can be green while the runtime is broken. This check inspects installed Python
 execution, not delivery of native events from an already-running Codex session.
 That additional boundary requires the refresh and native-delivery verification
 in [Native Codex hook binding](REQ__codex-native-hook-binding.md).

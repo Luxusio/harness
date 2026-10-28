@@ -60,7 +60,7 @@ Concretely:
 
 ```
 # Issue these N Agent calls in ONE assistant message.
-# Lane identity goes in the prompt, never in name= — see below.
+# Give each lane clear scope and ownership in its prompt.
 Agent(subagent_type="harness:ac-worker",
       prompt="Lane <task_id>:AC-001. Implement AC-001 per PLAN.md ...")
 Agent(subagent_type="harness:ac-worker",
@@ -74,45 +74,6 @@ Agent(subagent_type="harness:ac-worker",
 Agent(subagent_type="harness:test-author",
       prompt="Lane <task_id>:AC-001-tests. Write AC-001's tests per PLAN.md, only in its **Tests:** paths.")
 ```
-
-### Never pass `name=` to a spawned agent
-
-Not just to lens agents. `name=` is **forbidden** for any agent whose receipt a
-lens depends on — `harness:code-reviewer`, `harness:security-reviewer`, every
-`qa-*` — because it loses the receipt outright. But it is also wrong for
-lens-less lanes like `harness:ac-worker`, for a second reason: the lifecycle
-cannot distinguish "named lane that legitimately owes nothing" from "named lens
-agent whose type was destroyed", so a named AC worker writes a false
-`named-spawn-shadows-agent-type` breadcrumb on every spawn. A 4-worker batch
-writes four, which buries the signal the breadcrumb exists to carry.
-
-The CLI puts the display name in the `agentType` position and drops the resolved
-type from the payload entirely, so the lifecycle hook cannot infer the lens and
-writes no receipt. Measured 2026-09-10, same session and same agent type: three
-named spawns produced 0 receipt rows, one unnamed spawn produced its receipt
-immediately. The review runs correctly and `wbs(action="close")` still refuses, because
-there is no evidence it ran.
-
-Names that happen to encode the lens (`qa-cli-1` → `qa-cli`) survive, which is
-why this failed intermittently rather than obviously. Do not rely on it.
-
-```
-# WRONG — the receipt is lost, PASS becomes unreachable
-Agent(name="review-scoring", subagent_type="harness:code-reviewer", prompt=...)
-
-# RIGHT — distinguish lanes in the prompt, not the name
-Agent(subagent_type="harness:code-reviewer", prompt="Lane: scoring. ...")
-```
-
-An unnamed lens-less spawn is silent by design. A *named* lens-less spawn leaves
-a `background_hook:binding-miss` entry in `doc/harness/learnings.jsonl` with
-reason `named-spawn-shadows-agent-type` — up to one per lifecycle event, so
-start and stop can each contribute. Grep for it when a lens ran but its receipt
-never appeared; if the breadcrumb names a lane rather than a lens agent, the
-spawn site is passing `name=` and should stop. See
-`doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md`.
-
----
 
 ## Batch cap
 
@@ -175,40 +136,7 @@ The orchestrator MUST fanout when any row matches. PLAN.md AC dependency matrix 
 
 ### Extra review breadth under a single declared lens (advisory)
 
-Advisory, not a fanout trigger. The MUST rows above stay keyed to declared
-lenses, because a second agent of a review type is not free: it writes a receipt.
-
-When one review lens is declared but the diff has independent concern areas —
-probe logic versus filesystem isolation versus measured doc claims are three
-different jobs — extra breadth is worth buying, and running the areas as
-successive rounds costs wall-clock without adding coverage. Diversity is the
-real gain: in the round that produced this section, the agent that found a false
-prose claim was not the one assigned to look for one, and the one assigned to
-look for it reported it had searched and found nothing.
-
-**Buy that breadth with agent types that produce no lens.** Any agent type whose
-name tokenises to a {code, review} or {security, review} pair — `code-reviewer`
-in every namespace — is assigned `review-code` or `review-security` by
-`_infer_receipt_lens` and writes a receipt for it. Spawning several is not a
-coordinator preference the runtime honors; it is several verdicts on one lens,
-and the receipt layer keeps one:
-
-- `_completed_review_by_lens` keys by lens, and `_effective_completion` returns
-  the last readable completion. It was written for *reruns*, where newer
-  genuinely supersedes older, and has no concept of concurrent siblings — so a
-  sibling's `FAIL` is superseded by a later sibling's `PASS`, decided by
-  wall-clock order.
-- `_rerun_in_flight` tests only whether the *newest* event is a `started`, so a
-  lens can be judged on the first completion while its siblings still run.
-
-The lens vocabulary is closed (`review-code`, `review-security`) and
-`_task_control_lenses` rejects duplicates, so declaring one lens per concern
-area is not a workaround either. Exactly one receipt-producing review agent per
-declared lens; give the additional concern areas to types that yield no lens
-(`critic-document`, a general-purpose agent, `harness:documentation-review`),
-read their findings yourself, and treat any FAIL they report as blocking
-regardless of what the scoring lens said. A `PASS` that could be an artifact of
-completion order is not a PASS.
+Advisory, not a fanout trigger. Additional concern-area specialists return findings for the formal reviewer to verify. Await all actual findings and resolve substantive failures; completion order cannot supersede an unresolved failure. Keep exactly one full-sweep formal code reviewer per review attempt under the depth/hunter protocol.
 
 ### Re-review after remediation
 
@@ -307,11 +235,11 @@ installed plugin), run the ac-worker unpaired, owning `**Files:**` and
 
 ### ac-worker sub-split (Claude only)
 
-An ac-worker may split its own AC across at most 3 unnamed sub-workers
+An ac-worker may split its own AC across at most 3 sub-workers
 owning pairwise-disjoint subsets of its `**Files:**`, spawned in one message,
 one level deep. Every sub-worker call always passes
 `subagent_type="harness:ac-worker"` — never a lens agent (reviewers,
-hunters, qa-*, ux-*, dogfooder) and never `name=`. The parent ac-worker
+hunters, qa-*, ux-*, dogfooder) . The parent ac-worker
 stays the sole reporter: it waits for every sub-worker, runs its AC checks
 over the combined result, and the coordinator sees one `AC-NNN:` block. The
 full allowlist, depth bound, and fallback rules live in
