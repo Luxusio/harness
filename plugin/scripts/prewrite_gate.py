@@ -86,6 +86,7 @@ PROTECTED_ARTIFACT_HUMAN = {
 }
 RETIRED_GOALS = os.path.join("doc", "harness", "goals")
 MIGRATION_ARCHIVE = os.path.join("doc", "harness", "archive", "goal-migration")
+CONTROL_MIGRATION_ARCHIVE = os.path.join("doc", "harness", "archive", "task-control-migration")
 
 SOURCE_EXTENSIONS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
@@ -149,8 +150,9 @@ def _is_migration_artifact(path):
     normalized = os.path.normpath(str(path))
     if normalized == RETIRED_GOALS or normalized.endswith(os.sep + RETIRED_GOALS):
         return True
-    if normalized == MIGRATION_ARCHIVE or normalized.endswith(os.sep + MIGRATION_ARCHIVE) or normalized.startswith(MIGRATION_ARCHIVE + os.sep) or os.sep + MIGRATION_ARCHIVE + os.sep in normalized:
-        return True
+    for archive in (MIGRATION_ARCHIVE, CONTROL_MIGRATION_ARCHIVE):
+        if normalized == archive or normalized.endswith(os.sep + archive) or normalized.startswith(archive + os.sep) or os.sep + archive + os.sep in normalized:
+            return True
     marker = os.sep + RETIRED_GOALS + os.sep
     suffix = normalized.split(marker, 1)[1] if marker in normalized else ""
     if not suffix and normalized.startswith(RETIRED_GOALS + os.sep): suffix = normalized[len(RETIRED_GOALS) + 1:]

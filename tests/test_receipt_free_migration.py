@@ -72,11 +72,13 @@ def historical_control(td):
     return value
 
 
-def test_unreferenced_pre_uuid7_history_is_retained_and_reported(tmp_path):
+@pytest.mark.parametrize("archived", [False, True])
+def test_unreferenced_pre_uuid7_history_is_retained_and_reported(tmp_path, archived):
     from _lib import read_task_control
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = td.with_name("TASK__historical")
+    historical = (repo / "doc/harness/archive/batch/TASK__historical"
+                  if archived else td.with_name("TASK__historical"))
     historical_control(historical)
     path = historical / "TASK.json"
     before = path.read_bytes()
@@ -92,11 +94,13 @@ def test_unreferenced_pre_uuid7_history_is_retained_and_reported(tmp_path):
 
 
 @pytest.mark.parametrize("mutation", ["json", "unknown", "run", "started", "lenses", "fingerprint"])
-def test_malformed_pre_uuid7_history_refuses_before_writes(tmp_path, mutation):
+@pytest.mark.parametrize("archived", [False, True])
+def test_malformed_pre_uuid7_history_refuses_before_writes(tmp_path, mutation, archived):
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = td.with_name("TASK__historical")
+    historical = (repo / "doc/harness/archive/batch/TASK__historical"
+                  if archived else td.with_name("TASK__historical"))
     value = historical_control(historical)
     if mutation == "unknown":
         value["extra"] = True
@@ -119,11 +123,13 @@ def test_malformed_pre_uuid7_history_refuses_before_writes(tmp_path, mutation):
 
 
 @pytest.mark.parametrize("binding", ["legacy", "session", "conflict"])
-def test_active_pre_uuid7_history_refuses_before_writes(tmp_path, binding):
+@pytest.mark.parametrize("archived", [False, True])
+def test_active_pre_uuid7_history_refuses_before_writes(tmp_path, binding, archived):
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = td.with_name("TASK__historical")
+    historical = (repo / "doc/harness/archive/batch/TASK__historical"
+                  if archived else td.with_name("TASK__historical"))
     historical_control(historical)
     if binding == "legacy":
         (td.parent / ".active").write_text(str(historical))
@@ -143,12 +149,13 @@ def test_active_pre_uuid7_history_refuses_before_writes(tmp_path, binding):
         assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
 
 
-def test_pool_referenced_pre_uuid7_history_refuses_before_writes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("archived", [False, True])
+def test_pool_referenced_pre_uuid7_history_refuses_before_writes(tmp_path, monkeypatch, archived):
     import goal_migration
     from test_batch_state import Pool
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
-    td = pool.repo / "doc/harness/tasks/TASK__a"
+    td = pool.repo / ("doc/harness/archive/batch/TASK__a" if archived else "doc/harness/tasks/TASK__a")
     historical_control(td)
     state = pool.state.read_bytes()
     control = (td / "TASK.json").read_bytes()
@@ -161,11 +168,13 @@ def test_pool_referenced_pre_uuid7_history_refuses_before_writes(tmp_path, monke
         assert not (pool.repo / goal_migration.CONTROL_MANIFEST).exists()
 
 
-def test_prepared_migration_rechecks_historical_bindings_before_retry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("archived", [False, True])
+def test_prepared_migration_rechecks_historical_bindings_before_retry(tmp_path, monkeypatch, archived):
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = td.with_name("TASK__historical")
+    historical = (repo / "doc/harness/archive/batch/TASK__historical"
+                  if archived else td.with_name("TASK__historical"))
     historical_control(historical)
     before = (td / "TASK.json").read_bytes()
     def interrupt(*args):
@@ -182,6 +191,54 @@ def test_prepared_migration_rechecks_historical_bindings_before_retry(tmp_path, 
         assert str(historical / "TASK.json") in str(result)
         assert (td / "TASK.json").read_bytes() == before
         assert journal.read_bytes() == journal_before
+
+
+def test_prepared_migration_retains_archived_history_on_successful_retry(tmp_path, monkeypatch):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    legacy_control(td)
+    historical = repo / "doc/harness/archive/batch/TASK__historical"
+    historical_control(historical)
+    history = historical / "RECEIPTS.jsonl"
+    history.write_bytes(b"opaque archived history\x00\xff\n")
+    before = (historical / "TASK.json").read_bytes()
+    def interrupt(*args):
+        raise OSError("interrupted before any task conversion")
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_migration, "_control_write", interrupt)
+        assert migrate(repo, apply=True).get("isError")
+    journal = repo / goal_migration.CONTROL_MANIFEST
+    assert json.loads(journal.read_text())["status"] == "prepared"
+    for apply in (False, True, True):
+        result = migrate(repo, apply=apply)
+        assert not result.get("isError"), result
+        report = result["structuredContent"]["task_control_migration"]
+        assert report["retained_historical_controls"][0]["path"] == str(historical / "TASK.json")
+        assert (historical / "TASK.json").read_bytes() == before
+        assert history.read_bytes() == b"opaque archived history\x00\xff\n"
+    assert json.loads(journal.read_text())["status"] == "complete"
+
+
+@pytest.mark.parametrize("path_kind", ["unregistered-live", "unregistered-archive", "noncanonical"])
+def test_retained_report_rejects_unregistered_or_noncanonical_paths(tmp_path, path_kind):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    legacy_control(td)
+    assert not migrate(repo, apply=True).get("isError")
+    journal = repo / goal_migration.CONTROL_MANIFEST
+    value = json.loads(journal.read_text())
+    if path_kind == "noncanonical":
+        path = str(repo / "doc/harness/archive/other/TASK__historical/TASK.json")
+    else:
+        suffix = "tasks" if path_kind == "unregistered-live" else "archive/batch"
+        path = str(tmp_path / "unregistered" / "doc/harness" / suffix / "TASK__historical/TASK.json")
+    value["retained_historical_controls"] = [dict(path=path,
+        reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle")]
+    journal.write_text(json.dumps(value))
+    before = journal.read_bytes()
+    for apply in (False, True):
+        assert migrate(repo, apply=apply).get("isError")
+        assert journal.read_bytes() == before
 
 
 def test_public_migration_rejects_nonboolean_apply_without_changes(tmp_path):

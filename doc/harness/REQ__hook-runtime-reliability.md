@@ -32,7 +32,8 @@ malformed envelope or non-string action, or conflicting aliases, cannot fall thr
 permissive interpretation. Top-level arrays, null, numbers, strings and malformed JSON must not crash
 PostToolUse or UserPromptSubmit. Use each wrapper's shared dictionary decoder
 before accessing fields. Existing namespace, result, task/run, workspace,
-conflict-fence and immutable-offset checks remain authoritative.
+conflict-fence, native-session metadata authentication and source-focus
+checks remain authoritative.
 
 The registration budget covers the whole task-result callback, starting before
 input decoding and repository discovery, including session/task-control lock admission.

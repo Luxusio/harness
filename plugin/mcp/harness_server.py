@@ -475,7 +475,7 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
     control = read_task_control(task_dir)
     if (workspace and native_cwd and _register_native_task is not None
             and task_control_status(task_dir, control) == "open"):
-        _register_native_task(native_cwd, session_id, control_root, task_dir, os.path.basename(task_dir), control["run_id"])
+        _register_native_task(native_cwd, session_id, repo_root, task_dir, os.path.basename(task_dir), control["run_id"])
     return result
 
 

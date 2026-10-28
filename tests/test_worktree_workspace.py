@@ -304,6 +304,79 @@ def test_codex_runtime_routes_workspace_without_authenticated_native_binding(tmp
     assert not lib.resolve_session_task_binding(str(wt), SID)
 
 
+def _native_session(tmp_path, monkeypatch, cwd):
+    from datetime import datetime
+
+    sid = lib.new_uuid7()
+    home = tmp_path / "codex"
+    created = datetime.fromtimestamp(lib.uuid7_timestamp_ms(sid) / 1000).astimezone()
+    path = home / "sessions" / f"{created:%Y/%m/%d}" / f"rollout-test-{sid}.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "type": "session_meta", "payload": {"id": sid, "cwd": str(cwd)},
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("CODEX_THREAD_ID", sid)
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    return sid
+
+
+def _assert_native_workspace_binding(tmp_path, monkeypatch, action):
+    main, wt = _setup(tmp_path)
+    assert not _call(main, "wbs", {"action": "open", "wbs_id": "TASK__main"}).get("isError")
+    if action == "context":
+        assert not _call(main, "wbs", {
+            "action": "open", "wbs_id": "TASK__lead", "workspace": str(wt),
+        }).get("isError")
+    main_before = _snapshot(main)
+    sid = _native_session(tmp_path, monkeypatch, main)
+    result = _call(main, "wbs", {
+        "action": action, "wbs_id": "TASK__lead", "workspace": str(wt),
+    })
+    assert not result.get("isError"), result
+    data = _payload(result)
+    task = str(wt / TASKS / "TASK__lead")
+    run = lib.read_task_control(task)["run_id"]
+    assert data["task_dir"] == task
+    assert data["run_id"] == run
+    marker = lib.read_active_session_marker(str(wt), sid)
+    assert {key: marker[key] for key in ("session_id", "task_dir", "task_id", "run_id")} == {
+        "session_id": sid, "task_dir": task, "task_id": "TASK__lead", "run_id": run,
+    }
+    binding = lib.resolve_session_task_binding(str(wt), sid)
+    assert binding["task_dir"] == task and binding["run_id"] == run
+    assert not lib.resolve_session_task_binding(str(main), sid)
+    assert _snapshot(main) == main_before
+
+
+def test_authenticated_native_workspace_open_binds_exact_session_task_and_run(tmp_path, monkeypatch):
+    _assert_native_workspace_binding(tmp_path, monkeypatch, "open")
+
+
+def test_authenticated_native_workspace_context_binds_exact_session_task_and_run(tmp_path, monkeypatch):
+    _assert_native_workspace_binding(tmp_path, monkeypatch, "context")
+
+
+def test_authenticated_native_workspace_calls_preserve_conflicting_main_focus(tmp_path, monkeypatch):
+    main, wt = _setup(tmp_path)
+    assert not _call(main, "wbs", {
+        "action": "open", "wbs_id": "TASK__lead", "workspace": str(wt),
+    }).get("isError")
+    sid = _native_session(tmp_path, monkeypatch, main)
+    assert not _call(main, "wbs", {"action": "open", "wbs_id": "TASK__main"}).get("isError")
+    main_before, wt_before = _snapshot(main), _snapshot(wt)
+    for action, task_id in (("open", "TASK__new"), ("context", "TASK__lead")):
+        result = _call(main, "wbs", {
+            "action": action, "wbs_id": task_id, "workspace": str(wt),
+        })
+        assert result.get("isError"), result
+        assert "another worktree owns this Codex coordinator" in _payload(result)["error"]
+        assert lib.resolve_session_task_binding(str(main), sid)["task_dir"] == str(main / TASKS / "TASK__main")
+        assert not lib.resolve_session_task_binding(str(wt), sid)
+        assert _snapshot(main) == main_before
+        assert _snapshot(wt) == wt_before
+
+
 def test_codex_workspace_without_process_identity_does_not_promote_repo_hint(tmp_path, monkeypatch):
     main, wt = _setup(tmp_path)
     monkeypatch.setenv("HARNESS_RUNTIME", "codex")

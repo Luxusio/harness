@@ -987,6 +987,7 @@ def _control_changes(repo):
                 if "close_receipt_fingerprint" in original:
                     add(source, path, raw, _encode(value))
     # Archived controls are format consumers too; preserve every other archived byte.
+    references = pool_tasks | _control_bindings(repo)
     for name, info in _entries(repo, "doc/harness/archive/batch") or []:
         if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             continue
@@ -994,9 +995,13 @@ def _control_changes(repo):
         raw = _read(repo, path)
         if raw is None:
             continue
-        value = _migration_control(_control_json(raw, repo / path))
-        _require(value, "invalid archived task control: " + str(repo / path))
-        if "close_receipt_fingerprint" in _json(raw):
+        original = _control_json(raw, repo / path)
+        value = _migration_control(original)
+        if not value and _historical_control(original) and name not in references:
+            retained.append(dict(path=str(repo / path), reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle"))
+            continue
+        _require(value, "invalid or referenced historical archived task control: " + str(repo / path))
+        if "close_receipt_fingerprint" in original:
             after = _encode(value)
             add(repo, path, raw, after)
             archive = str(repo / ("doc/harness/archive/batch/" + name))
@@ -1021,6 +1026,20 @@ def _control_changes(repo):
     return result
 
 
+def _retained_control_root(repo, path):
+    """Allow only canonical live/archive paths in registered repositories."""
+    _require(isinstance(path, str) and os.path.isabs(path)
+             and str(Path(path)) == path and ".." not in Path(path).parts,
+             "invalid historical control path")
+    match = re.fullmatch(r"(.+)/doc/harness/(?:tasks|archive/batch)/TASK__[A-Za-z0-9_.-]{1,180}/TASK.json", path)
+    _require(match is not None, "invalid historical control path")
+    root = Path(match[1])
+    from _lib import resolve_registered_worktree
+    _require(root == repo or resolve_registered_worktree(str(repo), str(root)) == str(root),
+             "unregistered historical control repository")
+    return root
+
+
 def _control_journal(repo):
     raw = _read_publication(repo, CONTROL_MANIFEST, 16 * LIMIT)
     if raw is None:
@@ -1033,13 +1052,11 @@ def _control_journal(repo):
     retained = value.get("retained_historical_controls", [])
     _require(isinstance(retained, list) and len(retained) <= MAX_RECORDS * 4
              and all(isinstance(row, dict) and set(row) == {"path", "reason"}
-                     and isinstance(row["path"], str) and os.path.isabs(row["path"])
-                     and str(Path(row["path"])) == row["path"] and ".." not in Path(row["path"]).parts
-                     and re.fullmatch(r"TASK__[A-Za-z0-9_.-]{1,180}", Path(row["path"]).parent.name)
-                     and Path(row["path"]).name == "TASK.json"
-                     and Path(row["path"]).parent.parent.parts[-3:] == ("doc", "harness", "tasks")
+                     and isinstance(row["path"], str)
                      and row["reason"] == "pre-UUIDv7 historical control retained; unavailable to current lifecycle"
                      for row in retained), "invalid historical control report")
+    for row in retained:
+        _retained_control_root(repo, row["path"])
     keys = set()
     for entry in value["destinations"]:
         _require(isinstance(entry, dict) and set(entry) == {"root", "path", "before", "after"}, "invalid control migration entry")
@@ -1106,7 +1123,7 @@ def _check_retained_controls(repo, journal):
     bindings = {}
     for row in retained:
         path = Path(row["path"])
-        root = path.parents[4]
+        root = _retained_control_root(repo, row["path"])
         with _control_workspace(repo, root) as source:
             if root not in bindings:
                 bindings[root] = _control_bindings(source) | pool_tasks

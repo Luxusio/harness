@@ -101,16 +101,17 @@ diffs.
 **When:** Any direct `Write`/`Edit`/`MultiEdit`/`apply_patch` to PLAN.md,
 TASK.json, RECEIPTS.jsonl, task-local REVIEWS.jsonl, or
 retired `doc/harness/goals/*.json` and the entire
-`doc/harness/archive/goal-migration/` tree (explicit WBS migration only).
+`doc/harness/archive/goal-migration/` and
+`doc/harness/archive/task-control-migration/` trees (explicit WBS migration only).
 Batch control under `doc/harness/runtime/batches/` belongs to the batch runtime;
 use its lifecycle commands rather than direct edits.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
 Harness does not intercept Bash/shell file mutation.
-**On violation:** hard-block. Agent must route through the owning task MCP tool
-; optional review detail routes through the shared
-review-detail writer.
+**On violation:** hard-block. Agent must route through the owning task MCP tool.
+Actual review findings belong in independent agent final responses; preserved
+historical receipt/review bytes are not rewritten.
 **Why:** Wrong-writer mutation breaks task authority, lifecycle provenance, or
-append-only review evidence integrity.
+preserved historical artifact integrity.
 
 ### C-06
 
