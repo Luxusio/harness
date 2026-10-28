@@ -1026,3 +1026,42 @@ def test_public_wbs_migration_uses_its_isolated_root_without_hook_bypass(tmp_pat
     assert applied["structuredContent"]["status"] == "complete" and not source.exists()
     assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
     assert not list(tmp_path.rglob("TASK.json")) and not list(tmp_path.rglob(".migration-*"))
+
+
+def test_completed_migration_allows_live_pool_and_wbs_evolution(tmp_path, monkeypatch, owner):
+    from test_batch_state import Pool
+    pool = Pool(tmp_path, monkeypatch)
+    value = spec()
+    pool.batch = value['batch_id']
+    pool.init(value['requests'])
+    row(pool.repo, tasks=[dict(task_id='TASK__integration', batch=value)])
+    migration.apply(pool.repo)
+    archived = tree_snapshot(pool.repo / migration.ARCHIVE)
+    assert pool.claim()
+    state_path = pool.repo / 'doc/harness/tasks/TASK__integration/WBS.json'
+    state = json.loads(state_path.read_text())
+    state['last_progress_at'] = 123
+    state_path.write_text(json.dumps(state))
+    live = (pool.state.read_bytes(), state_path.read_bytes())
+    for operation in (migration.preview, migration.apply):
+        assert operation(pool.repo)['status'] == 'complete'
+        assert (pool.state.read_bytes(), state_path.read_bytes()) == live
+        assert tree_snapshot(pool.repo / migration.ARCHIVE) == archived
+
+
+@pytest.mark.parametrize('corruption', ['note', 'source_archive', 'destination_archive'])
+def test_completed_migration_retains_immutable_custody(tmp_path, owner, corruption):
+    state = dict(version=1, nodes=[dict(id='one', title='Observed result', weight=1, parent=None, depends_on=[])],
+                 checks={}, run_id='existing-run', started_at=19, last_progress_at=23, batch_goal_id='GOAL__old', batch=spec())
+    write(tmp_path, 'doc/harness/tasks/TASK__integration/WBS.json', state)
+    source = row(tmp_path)
+    result = migration.apply(tmp_path)
+    path = next(tmp_path / p for p in result['destinations'] if p.endswith('MIGRATION.md'))
+    if corruption == 'source_archive':
+        path = tmp_path / migration.ARCHIVE / 'original' / migration.GOALS / source.name
+    elif corruption == 'destination_archive':
+        path = tmp_path / migration.ARCHIVE / 'original/doc/harness/tasks/TASK__integration/WBS.json'
+    path.write_bytes(b'changed custody')
+    for operation in (migration.preview, migration.apply):
+        with pytest.raises(ValueError):
+            operation(tmp_path)

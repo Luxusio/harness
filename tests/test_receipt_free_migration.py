@@ -515,3 +515,182 @@ def test_focus_migration_rejects_symlink_before_control_changes(tmp_path):
     assert (td / 'TASK.json').read_bytes() == before
     assert outside.read_bytes() == b'preserve'
     assert not (repo / 'doc/harness/archive/task-control-migration/legacy-focus.json').exists()
+
+
+def test_completed_control_migration_rechecks_archived_history(tmp_path, monkeypatch):
+    pool, archive, _ = archived_legacy_pool(tmp_path, monkeypatch)
+    assert not migrate(pool.repo, apply=True).get('isError')
+    (archive / 'RECEIPTS.jsonl').write_bytes(b'corrupted completed archive history')
+    before = pool.state.read_bytes()
+    for apply in (False, True):
+        result = migrate(pool.repo, apply=apply)
+        assert result.get('isError'), result
+        assert 'archive' in str(result).lower()
+        assert pool.state.read_bytes() == before
+
+
+def default_marker(td):
+    control = json.loads((td / 'TASK.json').read_text())
+    path = td.parent / '.active_sessions/default.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = dict(session_id='default', task_dir=str(td), task_id=td.name,
+                 run_id=control['run_id'], updated='2026-10-29T14:42:17Z')
+    path.write_text(json.dumps(value, indent=3) + '\n')
+    return path
+
+
+def test_default_marker_migration_preserves_completed_focus_and_current_work(tmp_path):
+    import base64
+    import goal_migration
+    repo, td, call, _ = public(tmp_path)
+    (td.parent / '.active').write_bytes(b'legacy focus\x00\xff')
+    assert not migrate(repo, apply=True).get('isError')
+    old_archive = repo / goal_migration.LEGACY_FOCUS_ARCHIVE
+    old_bytes = old_archive.read_bytes()
+    marker = default_marker(td)
+    original = marker.read_bytes()
+    history = td / 'RECEIPTS.jsonl'
+    history.write_bytes(b'exact opaque history\x00\xff')
+    snapshots = {p: p.read_bytes() for p in (td / 'TASK.json', td / 'WBS.json', history)}
+    real_markers = {p: p.read_bytes() for p in marker.parent.glob('*.json') if p != marker}
+    preview = migrate(repo)
+    assert not preview.get('isError'), preview
+    assert preview['structuredContent']['legacy_default_marker_migration']['remaining'] == [str(marker)]
+    assert marker.read_bytes() == original
+    assert not migrate(repo, apply=True).get('isError')
+    assert not marker.exists()
+    archive = repo / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE
+    value = json.loads(archive.read_text())
+    assert value == dict(version=1, entries=[dict(root=str(repo), before=base64.b64encode(original).decode())])
+    assert old_archive.read_bytes() == old_bytes
+    assert all(p.read_bytes() == raw for p, raw in {**snapshots, **real_markers}.items())
+    preserved = archive.read_bytes()
+    assert not call('check', node_id='A').get('isError')
+    assert not call('close').get('isError')
+    assert not migrate(repo, apply=True).get('isError')
+    assert archive.read_bytes() == preserved
+
+
+@pytest.mark.parametrize('corruption', ['duplicate', 'unknown', 'fence', 'overflow', 'session', 'run', 'task_dir', 'task_id', 'timestamp', 'symlink', 'oversized'])
+def test_default_marker_refuses_unsafe_input_before_any_conversion(tmp_path, corruption):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    marker = default_marker(td)
+    value = json.loads(marker.read_text())
+    if corruption == 'duplicate':
+        marker.write_text(marker.read_text().replace('"session_id": "default"', '"session_id": "default", "session_id": "default"'))
+    elif corruption == 'oversized':
+        marker.write_bytes(b' ' * (256 * 1024 + 1))
+    elif corruption == 'symlink':
+        outside = tmp_path / 'outside-marker'
+        outside.write_bytes(marker.read_bytes())
+        marker.unlink()
+        marker.symlink_to(outside)
+    else:
+        key, replacement = {
+            'unknown': ('extra', 'unknown'), 'fence': ('binding_conflicts', []),
+            'overflow': ('binding_conflicts_overflow', True), 'session': ('session_id', 'real-session'),
+            'run': ('run_id', '0198c349-5800-7000-8000-000000000001'),
+            'timestamp': ('updated', '2026-02-30T14:42:17Z'),
+            'task_dir': ('task_dir', str(td / '..' / td.name)), 'task_id': ('task_id', 'TASK__other'),
+        }[corruption]
+        value[key] = replacement
+        marker.write_text(json.dumps(value))
+    legacy_control(td)
+    before = (td / 'TASK.json').read_bytes()
+    marker_before = marker.read_bytes()
+    for apply in (False, True):
+        result = migrate(repo, apply=apply)
+        assert result.get('isError'), result
+        assert (td / 'TASK.json').read_bytes() == before
+        assert marker.read_bytes() == marker_before
+        assert not (repo / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE).exists()
+        assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
+
+
+def test_default_marker_retry_archives_before_retiring_and_refuses_drift(tmp_path, monkeypatch):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    marker = default_marker(td)
+    original = marker.read_bytes()
+    retire = goal_migration._retire
+    def interrupt(root, relative, expected):
+        if relative == goal_migration.LEGACY_DEFAULT_MARKER_PATH:
+            raise OSError('interrupted after default marker archival')
+        return retire(root, relative, expected)
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_migration, '_retire', interrupt)
+        assert migrate(repo, apply=True).get('isError')
+    archive = repo / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE
+    captured = archive.read_bytes()
+    assert marker.read_bytes() == original
+    marker.write_bytes(original + b' ')
+    assert migrate(repo).get('isError')
+    assert migrate(repo, apply=True).get('isError')
+    assert archive.read_bytes() == captured
+    marker.write_bytes(original)
+    assert not migrate(repo, apply=True).get('isError')
+    assert not marker.exists() and archive.read_bytes() == captured
+
+
+def test_default_marker_migration_covers_main_linked_roots_and_disposed_history(tmp_path):
+    from test_worktree_workspace import _repo, _worktree, _git
+    from test_batch_state import task
+    import goal_migration
+    main = _repo(tmp_path / 'main')
+    worktree = _worktree(main, 'legacy-default')
+    for root in (main, worktree):
+        td = task(root, closed=True)
+        default_marker(td)
+    result = migrate(main, apply=True)
+    assert not result.get('isError'), result
+    archive = main / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE
+    preserved = archive.read_bytes()
+    assert {entry['root'] for entry in json.loads(preserved)['entries']} == {str(main), str(worktree)}
+    for root in (main, worktree):
+        assert not (root / goal_migration.LEGACY_DEFAULT_MARKER_PATH).exists()
+    _git(main, 'worktree', 'remove', '--force', str(worktree))
+    assert not migrate(main, apply=True).get('isError')
+    assert archive.read_bytes() == preserved
+
+
+def test_explicit_default_marker_migration_unblocks_exact_ordinary_removal_proof(tmp_path, monkeypatch):
+    from test_batch_state import Pool, complete
+    import batch_harvest
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    worktree, _, td = complete(pool)
+    marker = default_marker(td)
+    failed = pool.cli('finish', '--slug', 'a', ok=False)
+    assert failed['status'] == 'kept', failed
+    state = json.loads(pool.state.read_text())
+    checkpoint = state['requests'][0]['checkpoint']
+    with pytest.raises(Exception, match='session marker'):
+        batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), td.name, checkpoint=checkpoint)
+    assert marker.exists()
+    result = migrate(pool.repo, apply=True)
+    assert not result.get('isError'), result
+    assert not marker.exists()
+    batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), td.name, checkpoint=checkpoint)
+    pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    pool.cli('finish', '--slug', 'a', '--resume')
+    assert not worktree.exists()
+
+
+def test_completed_control_migration_preserves_unreferenced_archived_task(tmp_path):
+    repo, td, _, _ = public(tmp_path)
+    archived = repo / 'doc/harness/archive/batch/TASK__unreferenced'
+    archived.mkdir(parents=True)
+    (archived / 'TASK.json').write_bytes((td / 'TASK.json').read_bytes())
+    legacy_control(archived, closed=True)
+    assert not migrate(repo, apply=True).get('isError')
+    control = json.loads((archived / 'TASK.json').read_text())
+    control['closed'] = False
+    (archived / 'TASK.json').write_text(json.dumps(control))
+    changed = (archived / 'TASK.json').read_bytes()
+    for apply in (False, True):
+        result = migrate(repo, apply=apply)
+        assert result.get('isError'), result
+        assert 'archive' in str(result).lower()
+        assert (archived / 'TASK.json').read_bytes() == changed
