@@ -8,7 +8,7 @@ import pytest
 
 
 @pytest.mark.parametrize('develop, expected', [(None, 4), ('1', 1), ('6', 6), ('99', 8),
-    ('0', 4), ('-1', 4), ('true', 4), ("'6'", 4), ('2.5', 4), ('null', 4), ('[6]', 4)])
+    ('0', 4), ('-1', 4), ('true', 4), ("'6'", 4), ('2.5', 4), ('null', 4), ('[6]', 4), ('8#plain-string', 4)])
 def test_managed_cap_uses_effective_development_value(tmp_path, develop, expected):
     import batch_state
     manifest = tmp_path / 'doc/harness/manifest.yaml'
@@ -46,7 +46,13 @@ def test_managed_init_and_prepare_replay_pin_cap(tmp_path, monkeypatch, developm
 
 
 @pytest.mark.parametrize('text, expected', [
+    ('develop: {fanout_cap: 1} # actual comment\n', 1),
+    ('unrelated: |\n  open \" quote text\ndevelop: {fanout_cap: 1}\n', 1),
     ('develop: {fanout_cap: 1}\n', 1),
+    ('develop: {description: "# ordinary description", fanout_cap: 1}\n', 1),
+    ('develop: {other_settings: {foo: 2}, fanout_cap: 1}\n', 1),
+    ('develop:\n  "fanout_cap": 1\n', 1),
+    ("develop:\n  'fanout_cap': 1\n", 1),
     ('develop: {other: 2, fanout_cap: 6}\n', 6),
     ('develop: {description: \"x, fanout_cap: 8, y\", fanout_cap: 1}\n', 1),
     ('develop:\n  other_settings:\n    fanout_cap: 8\n  fanout_cap: 1\n', 1),
@@ -68,3 +74,13 @@ def test_managed_cli_explicit_limit_is_an_additional_bound(tmp_path, monkeypatch
     assert result['batch']['max_leads'] == 1
     assert result['batch']['cap_source'] == 'explicit'
     assert [item['slug'] for item in pool.claim()] == ['a']
+
+
+@pytest.mark.parametrize('text', ['develop: *settings\n', 'develop: {other: 2,\n  fanout_cap: 1}\n'])
+def test_unsupported_capacity_mapping_refuses_instead_of_raising_limit(tmp_path, text):
+    import batch_state
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(text)
+    with pytest.raises(batch_state.Refusal, match='direct develop.fanout_cap'):
+        batch_state.cap(str(tmp_path), None, managed=True)

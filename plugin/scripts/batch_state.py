@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -335,36 +336,70 @@ def cap(repo, explicit, managed=False):
             return effective(min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest')
         return effective(default, 'default-invalid-manifest')
 
+    def tokens(line):
+        # Retain scalar quotes/types while recognizing comments and mapping punctuation.
+        lexer = shlex.shlex(line, posix=False, punctuation_chars='{},:[]')
+        lexer.whitespace_split = True
+        lexer.commenters = ''
+        try:
+            result = []
+            for token in lexer:
+                if token.startswith('#'):
+                    break
+                result.extend(list(token) if all(c in '{},:[]' for c in token) else [token])
+            return result
+        except ValueError as exc:
+            raise Refusal('invalid capacity declaration; use a direct ' + section + '.' + key) from exc
+
+    def field(parts):
+        return len(parts) >= 2 and parts[0].strip('"\'') == key and parts[1] == ':'
+
     if os.path.isfile(path):
         inside, child_indent = False, None
         for line in open(path, encoding='utf-8'):
-            section_line = re.match(r'^' + section + r':\s*([^#]*?)(?:\s+#.*)?$', line)
-            if section_line:
-                value = section_line.group(1).strip()
-                # A scalar-only inline mapping is also an unambiguous cap declaration.
-                if re.fullmatch(r'\{[^{}]*\}', value):
-                    # Commas inside quoted scalars are not mapping separators.
-                    entry_pattern = r"(?:[^,\"']|\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*')+"
-                    entries = re.findall(entry_pattern, value[1:-1])
-                    for entry in entries:
-                        field = re.fullmatch(r"\s*(?:" + key + "|'" + key + "'|\"" + key + r"\")\s*:\s*(.*?)\s*", entry)
-                        if field:
-                            return scalar(field.group(1))
-                    return effective(default, 'default')
-                inside, child_indent = not value, None
-                continue
-            if not inside or not line.strip() or line.lstrip().startswith('#'):
+            if not line.strip() or line.lstrip().startswith('#'):
                 continue
             indent = len(line) - len(line.lstrip())
+            if not indent and not re.match(r"^(?:" + section + "|'" + section + "'|\"" + section + r"\")\s*:", line):
+                inside, child_indent = False, None
+                continue
+            if indent and not inside:
+                continue
+            parts = tokens(line)
+            if not parts:
+                continue
             if not indent:
-                inside = False
+                inside, child_indent = False, None
+                if len(parts) < 2 or parts[0].strip('"\'') != section or parts[1] != ':':
+                    continue
+                if len(parts) == 2:
+                    inside = True
+                    continue
+                if parts[2] != '{':
+                    # Scalar sections have no capacity field; aliases require explicit recovery.
+                    require(not managed or not parts[2].startswith(('*', '&')),
+                            'capacity aliases unsupported; use a direct develop.fanout_cap')
+                    continue
+                depth, entry = 0, []
+                for token in parts[2:]:
+                    if token in {'{', '['}:
+                        depth += 1
+                    elif token in {'}', ']'}:
+                        depth -= 1
+                    if (depth == 1 and token == ',') or depth == 0:
+                        if field(entry):
+                            return scalar(entry[2] if len(entry) == 3 else '')
+                        entry = []
+                    elif depth > 0 and not (depth == 1 and token == '{'):
+                        entry.append(token)
+                require(depth == 0, 'multiline capacity mapping unsupported; use a direct ' + section + '.' + key)
+                continue
+            if not inside:
                 continue
             if child_indent is None:
                 child_indent = indent
-            # A nested key belongs to its own mapping, never to develop/batch.
-            match = re.match(r'^\s+' + key + r':\s*([^#]*?)(?:\s+#.*)?$', line)
-            if indent == child_indent and match:
-                return scalar(match.group(1).strip())
+            if indent == child_indent and field(parts):
+                return scalar(parts[2] if len(parts) == 3 else '')
     return effective(default, 'default')
 
 
