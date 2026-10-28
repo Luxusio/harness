@@ -105,6 +105,7 @@ retired `doc/harness/goals/*.json` and the entire
 `doc/harness/archive/task-control-migration/` trees (explicit WBS migration only).
 Batch control under `doc/harness/runtime/batches/` belongs to the batch runtime;
 use its lifecycle commands rather than direct edits.
+Native Codex session metadata remains runtime-owned source-authentication data; ordinary writes and aliases cannot modify it. Historical receipt/review output is read-only, without a collector or a new writer.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
 Harness does not intercept Bash/shell file mutation.
 **On violation:** hard-block. Agent must route through the owning task MCP tool.

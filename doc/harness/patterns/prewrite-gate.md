@@ -60,7 +60,7 @@ call.
 | 1 | (escape) | `HARNESS_SKIP_PREWRITE=1` | silent allow, logs `gate-bypass` |
 | 2 | `invalid-harness-workspace` | The payload `cwd`'s Harness root cannot be resolved (manifest or a path component is a symlink, not a regular file, unreadable) | deny (`harness:setup`) |
 | 3 | — | No regular `doc/harness/manifest.yaml` at the root | silent allow |
-| 4 | `C-05-protected-artifact` | Target is a Claude subagent transcript (`<config>/projects/**/subagents/agent-*.jsonl`) or a Codex rollout (`<codex home>/sessions/**/rollout-*.jsonl`) | deny (`claude-runtime`) |
+| 4 | `C-05-protected-artifact` | Target is native Codex session metadata (`<codex home>/sessions/**/rollout-*.jsonl`) used for source authentication, including aliases and non-Harness cwd | deny (`native-session-runtime`) |
 | 5 | `symlink-outside-control` | The requested path is inside the root but its realpath is outside | deny (`developer`) |
 | 6 | `C-05-protected-artifact` | Target outside the root that is a protected artifact of *its own* valid Harness root (see [Cross-checkout protection](#cross-checkout-protection)); any other out-of-root target is a silent allow | deny (same owner as rule 7) |
 | 7 | `C-05-protected-artifact` | Target is a protected artifact (see [Protected artifacts](#protected-artifacts)) | deny (owning tool) |
@@ -103,13 +103,14 @@ tool to route through (for example `wbs(action="plan")` for `PLAN.md`).
 |--------|-------|----------|
 | `TASK.json` | basename, anywhere in the root | `task-control-mcp` |
 | `PLAN.md` | basename | `plan-skill` |
-| `RECEIPTS.jsonl` | basename | `receipt-lifecycle-hook` |
-| `REVIEWS.jsonl` | only `doc/harness/tasks/TASK__*/REVIEWS.jsonl` | `review-detail-writer` |
+| `RECEIPTS.jsonl` | preserved historical output, basename | `historical-task-artifacts` |
+| `REVIEWS.jsonl` | preserved historical output, only `doc/harness/tasks/TASK__*/REVIEWS.jsonl` | `historical-task-artifacts` |
 | `doc/harness/goals/*.json` | retired direct children | `legacy-data-migration` |
 | `doc/harness/runtime/batches/**` | pool metadata, immutable WBS owner and lock | `batch-pool-runtime` |
 | `doc/harness/archive/goal-migration/**` | entire archive, originals and manifest | `legacy-data-migration` |
+| `doc/harness/archive/task-control-migration/**` | entire migration authority tree | `legacy-data-migration` |
 | `doc/harness/tasks/.active`, `doc/harness/tasks/.active_sessions/*` | path | `task-control-runtime` |
-| runtime transcripts and rollouts | rule 4 | `claude-runtime` |
+| native Codex session metadata | rule 4, source authentication only | `native-session-runtime` |
 
 ## Cross-checkout protection
 

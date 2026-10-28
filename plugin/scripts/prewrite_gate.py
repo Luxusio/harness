@@ -23,7 +23,9 @@ Codex fallback: ``protected_artifact_decision`` runs only the C-05 rules. The
 Codex PreToolUse wrapper calls it in-process when this gate's child process
 times out or crashes (see hook_pre_tool_use.py).
 
-Dormant-repo behavior follows manifest strictness. Strict-compliance repos
+Native session authentication metadata remains runtime-owned even outside a
+Harness repository. Source-gate dormant behavior follows manifest strictness.
+Strict-compliance repos
   deny source writes until task_start establishes the canonical loop. Other
   repos remain fail-open when no task is active.
 """
@@ -76,6 +78,8 @@ PROTECTED_ARTIFACTS = {
     "TASK.json": "task-control-mcp",
     "PLAN.md": "plan-skill",
     "WBS.json": "task-control-mcp",
+    "RECEIPTS.jsonl": "historical-task-artifacts",
+    "REVIEWS.jsonl": "historical-task-artifacts",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
@@ -83,6 +87,8 @@ PROTECTED_ARTIFACT_HUMAN = {
     "TASK.json": "task control MCP tools",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "WBS.json": "WBS plan/check/dispatch MCP actions",
+    "RECEIPTS.jsonl": "preserved historical output (read-only)",
+    "REVIEWS.jsonl": "preserved historical output (read-only)",
 }
 RETIRED_GOALS = os.path.join("doc", "harness", "goals")
 MIGRATION_ARCHIVE = os.path.join("doc", "harness", "archive", "goal-migration")
@@ -184,6 +190,26 @@ def _is_task_local_review_detail(path, repo_root=None):
     )
 
 
+def _is_native_session_metadata(path):
+    """Codex session headers still authenticate source focus, not role results."""
+    if not path:
+        return False
+    candidate = os.path.abspath(os.path.expanduser(str(path)))
+    sessions = os.path.join(os.path.abspath(os.path.expanduser(
+        os.environ.get("CODEX_HOME") or "~/.codex"
+    )), "sessions")
+    for target in (candidate, os.path.realpath(candidate)):
+        for root in (sessions, os.path.realpath(sessions)):
+            try:
+                parts = os.path.relpath(target, root).split(os.sep)
+            except ValueError:
+                continue
+            if (len(parts) >= 4 and parts[0] != ".."
+                    and re.fullmatch(r"rollout-[A-Za-z0-9_.:-]+\.jsonl", parts[-1])):
+                return True
+    return False
+
+
 def _is_protected_artifact(path, repo_root=None):
     if not path: return False
     normalized = os.path.normpath(str(path))
@@ -198,6 +224,7 @@ def _is_protected_artifact(path, repo_root=None):
         )
         or os.sep + "work" + os.sep + "verification-targets" + os.sep in normalized
         or _is_migration_artifact(normalized)
+        or _is_native_session_metadata(normalized)
         or _is_pool_control_artifact(normalized)
         or normalized.endswith(os.path.join(TASK_DIR, ".active"))
         or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
@@ -209,6 +236,10 @@ def _protected_denial(path):
     basename = os.path.basename(path)
     goal_control = _is_migration_artifact(path)
     pool_control = _is_pool_control_artifact(path)
+    if _is_native_session_metadata(path):
+        return "native-session-runtime", "Native session metadata authenticates source ownership and is runtime-owned; ordinary writes cannot change it. No receipt collection is used."
+    if not goal_control and not pool_control and basename in {"RECEIPTS.jsonl", "REVIEWS.jsonl"}:
+        return "historical-task-artifacts", "Historical receipt/review output is preserved read-only. No collector or detail writer exists; keep current findings in actual agent responses."
     owner = "batch-pool-runtime" if pool_control else "legacy-data-migration" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
     owner_human = "batch_state.py lifecycle commands" if pool_control else 'wbs(action="migrate")' if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
     human = (
@@ -617,7 +648,7 @@ def _target_worktree_root(control_root: str, requested_path: str) -> str:
 def _check_path(data: dict, file_path: str, protected_only: bool = False) -> None:
     """Emit a deny for ``file_path`` on stdout, or nothing to allow it.
 
-    ``protected_only`` limits the check to the C-05 rules (runtime provenance,
+    ``protected_only`` limits the check to the C-05 rules (native metadata,
     another checkout's protected artifact, this root's protected artifacts).
     A root with an invalid manifest keeps C-05 because the full gate denies
     every write there; the other non-C-05 denies and all task-state rules are
@@ -635,6 +666,10 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         candidate_root = find_repo_root()
         harness_root, harness_error = harness_root_resolution(candidate_root)
         repo_root = harness_root or candidate_root
+    if _is_native_session_metadata(requested_path):
+        owner, human = _protected_denial(requested_path)
+        _deny("C-05-protected-artifact", requested_path, owner, human, repo_root)
+        return 0
     if harness_error:
         if not protected_only:
             _deny(
