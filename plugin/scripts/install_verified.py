@@ -25,7 +25,6 @@ from _lib import (  # type: ignore  # noqa: E402
     active_task_binding_matches,
     current_session_id,
     find_repo_root,
-    read_session_hint,
     read_task_control,
     emit_compact_context,
     task_control_transaction,
@@ -292,32 +291,13 @@ def _dirty_install_payload(repo_root: Path) -> set[str]:
 
 
 def _resolved_session_id(repo_root: Path) -> str:
-    """Resolve the runtime session id for a helper that runs outside a hook.
-
-    This script is invoked as a plain subprocess by the develop workflow's
-    mandatory pre-close install step, so it has neither hook input nor a session
-    environment variable. `current_session_id()` therefore degrades to
-    "default", and the session-marker lookup below misses the marker this
-    session actually wrote — the contract-mandated step then refuses with
-    "task is not the open active TASK.json generation" (observed 2026-08-25).
-
-    The session hint exists for exactly this gap: a hook that does receive the
-    real id records it. A real id still wins, so a caller with genuine hook
-    input or HARNESS_SESSION_ID is never overridden by a stale hint; the hint
-    only replaces the "default" fallback. That is deliberately narrower than
-    harness_server.py, whose host never has a real id and prefers the hint
-    unconditionally.
-
-    Never raises: an absent or unusable hint degrades to "default", which fails
-    the binding check closed rather than binding to the wrong task.
-    """
-    sid = current_session_id()
-    if sid != "default":
-        return sid
-    return read_session_hint(str(repo_root)) or sid
+    """Use only the real calling session; shared hints carry no install authority."""
+    return current_session_id()
 
 
 def _validate_task_dir(repo_root: Path, task_dir: Path, session_id: str) -> tuple[bool, str]:
+    if not session_id or session_id in {"default", "unknown"}:
+        return False, "calling session identity unavailable; run verified install from the owning session with its native session ID"
     expected_parent = (repo_root / "doc/harness/tasks").resolve()
     if task_dir.parent != expected_parent or not task_dir.name.startswith("TASK__"):
         return False, "task directory is not canonical"
@@ -350,8 +330,7 @@ def _global_lock_path() -> Path:
 def install_verified(task_dir: Path) -> int:
     task_dir = task_dir.resolve()
     repo_root = Path(find_repo_root(str(task_dir))).resolve()
-    # Resolved once so the pre- and post-install binding checks cannot disagree
-    # because the hint file changed mid-install.
+    # Resolve the native caller once for both binding checks; shared hints are advisory.
     session_id = _resolved_session_id(repo_root)
     lock_path = _global_lock_path()
     task_dir.mkdir(parents=True, exist_ok=True)

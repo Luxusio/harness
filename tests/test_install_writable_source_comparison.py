@@ -177,7 +177,7 @@ def test_install_clears_a_writable_installer_created_ancestor(tmp_path, monkeypa
     Drives the real Codex entry point so the fix is pinned at the call site.
     """
     install = _load_install_module()
-    codex_root = tmp_path / "codex-harness"
+    codex_root = tmp_path / "codex-home" / "harness"
     config_path = tmp_path / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
     codex_home = config_path.expanduser().resolve().parent
@@ -238,7 +238,7 @@ def test_the_installer_does_not_chmod_what_it_does_not_exclusively_own(
     gets a named diagnosis from `_tree_inventory`, never a mutation.
     """
     install = _load_install_module()
-    codex_root = tmp_path / "codex-harness"
+    codex_root = tmp_path / "codex-home" / "harness"
     config_path = tmp_path / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
     codex_home = config_path.expanduser().resolve().parent

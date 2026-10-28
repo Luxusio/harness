@@ -346,50 +346,18 @@ def test_task_dir_requires_open_exact_session_generation(tmp_path):
     )
 
 
-def test_resolved_session_id_prefers_a_real_id_over_the_hint(tmp_path):
-    repo, _ = _repo(tmp_path)
-    with (
-        mock.patch.object(mod, "current_session_id", return_value="real-sid"),
-        mock.patch.object(mod, "read_session_hint", return_value="stale-hint") as hint,
-    ):
-        assert mod._resolved_session_id(repo) == "real-sid"
-    # A caller with genuine hook input or HARNESS_SESSION_ID must never be
-    # redirected by a hint file another session left behind.
-    hint.assert_not_called()
-
-
-def test_resolved_session_id_falls_back_to_the_hint(tmp_path):
-    repo, _ = _repo(tmp_path)
-    with (
-        mock.patch.object(mod, "current_session_id", return_value="default"),
-        mock.patch.object(mod, "read_session_hint", return_value="hinted-sid"),
-    ):
-        assert mod._resolved_session_id(repo) == "hinted-sid"
-
-
-def test_resolved_session_id_stays_default_without_a_usable_hint(tmp_path):
-    repo, _ = _repo(tmp_path)
-    # read_session_hint already rejects empty, literal "default", and
-    # non-sanitizing values, returning "". Staying on "default" fails the
-    # binding check closed rather than binding to an arbitrary task.
-    with (
-        mock.patch.object(mod, "current_session_id", return_value="default"),
-        mock.patch.object(mod, "read_session_hint", return_value=""),
-    ):
-        assert mod._resolved_session_id(repo) == "default"
-
-
-def test_resolved_session_id_reads_a_real_hint_file(tmp_path):
-    """End-to-end over the real hint reader, not a mocked one."""
-    repo, _ = _repo(tmp_path)
+def test_resolved_session_id_uses_only_actual_caller(tmp_path):
+    repo, task = _repo(tmp_path)
     sessions = repo / "doc/harness/tasks/.active_sessions"
     sessions.mkdir(parents=True, exist_ok=True)
-    (sessions / ".session-hint").write_text("hinted-sid\n", encoding="utf-8")
-    with mock.patch.object(mod, "current_session_id", return_value="default"):
-        assert mod._resolved_session_id(repo) == "hinted-sid"
-    (sessions / ".session-hint").write_text("default\n", encoding="utf-8")
-    with mock.patch.object(mod, "current_session_id", return_value="default"):
-        assert mod._resolved_session_id(repo) == "default"
+    (sessions / ".session-hint").write_text("another-actor\n", encoding="utf-8")
+    for sid in ("real-sid", "default", "unknown"):
+        with mock.patch.object(mod, "current_session_id", return_value=sid):
+            assert mod._resolved_session_id(repo) == sid
+    with mock.patch.object(mod, "active_task_binding_matches", return_value=True) as binding:
+        valid, reason = mod._validate_task_dir(repo, task.resolve(), "default")
+    assert not valid and "session identity unavailable" in reason
+    binding.assert_not_called()
 
 
 def test_snapshot_paths_use_tracked_and_dirty_payload_files(tmp_path):

@@ -13,6 +13,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +41,16 @@ def _fake_run(install_root: Path, *, update=(0, REFRESHED, ""), marketplace_upda
         if calls is not None:
             calls.append(list(cmd))
         if cmd == UPDATE:
+            if not isinstance(update, BaseException) and update[0] == 0:
+                config = Path(os.environ["CLAUDE_CONFIG_DIR"])
+                version = _manifest_version(install_root / "plugin")
+                cache = config / "plugins" / "cache" / "harness" / "harness" / version
+                if not cache.exists():
+                    shutil.copytree(install_root / "plugin", cache)
+                registry = config / "plugins" / "installed_plugins.json"
+                registry.write_text(json.dumps({"version": 2, "plugins": {"harness@harness": [
+                    {"scope": "user", "installPath": str(cache), "version": version}
+                ]}}))
             if isinstance(update, BaseException):
                 raise update
             return update
@@ -78,6 +90,7 @@ def test_synchronized_default_run_refreshes_a_stale_plugin_cache(tmp_path, monke
     install = _load_install_module()
     install_root = tmp_path / "harness-dev"
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     install.sync_claude_payload(install_root)
     calls: list = []
     with (
@@ -90,6 +103,7 @@ def test_synchronized_default_run_refreshes_a_stale_plugin_cache(tmp_path, monke
     assert calls.index(MARKETPLACE_UPDATE) < calls.index(UPDATE)
     assert any(step.startswith("claude plugin cache refreshed") for step in result.steps)
     assert "plugin cache refreshed" in result.summary
+    assert result.restart_required
     # main() classifies "install skipped" as SKIPPED; a refresh changed things.
     assert "install skipped" not in result.summary
 
@@ -98,6 +112,7 @@ def test_synchronized_default_run_with_a_current_cache_stays_skipped(tmp_path, m
     install = _load_install_module()
     install_root = tmp_path / "harness-dev"
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     install.sync_claude_payload(install_root)
     with (
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
@@ -107,6 +122,7 @@ def test_synchronized_default_run_with_a_current_cache_stays_skipped(tmp_path, m
     assert result.ok, result.summary
     assert "claude plugin cache current" in result.steps
     assert "install skipped" in result.summary
+    assert not result.restart_required
 
 
 def test_synchronized_mirror_without_a_marketplace_falls_back_to_a_full_install(
@@ -115,6 +131,7 @@ def test_synchronized_mirror_without_a_marketplace_falls_back_to_a_full_install(
     install = _load_install_module()
     install_root = tmp_path / "harness-dev"
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     install.sync_claude_payload(install_root)
     calls: list = []
     with (
@@ -139,6 +156,7 @@ def test_registered_install_ends_with_a_plugin_update(tmp_path, monkeypatch):
     install = _load_install_module()
     install_root = tmp_path / "harness-dev"
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     calls: list = []
     with (
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
@@ -155,6 +173,7 @@ def test_plugin_update_failure_fails_the_install(tmp_path, monkeypatch):
     install = _load_install_module()
     install_root = tmp_path / "harness-dev"
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     for failure, expected in (
         ((1, "", "network down"), "claude plugin update harness@harness failed: network down"),
         (subprocess.TimeoutExpired(UPDATE, 120), "claude plugin update harness@harness timed out"),
@@ -186,3 +205,72 @@ def test_dry_run_lists_the_plugin_update_without_running_it(tmp_path, monkeypatc
     assert result.ok
     assert "would run: claude plugin update harness@harness" in result.steps
     assert UPDATE not in calls
+
+
+def test_healthy_mirror_does_not_certify_corrupt_selected_cache(tmp_path, monkeypatch):
+    install = _load_install_module()
+    root = tmp_path / "mirror"
+    monkeypatch.setenv("HARNESS_DEST", str(root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    install.sync_claude_payload(root)
+    run = _fake_run(root, update=(0, CURRENT, ""))
+    run(UPDATE, False)
+    version = _manifest_version(root / "plugin")
+    cache = tmp_path / "claude-config" / "plugins" / "cache" / "harness" / "harness" / version
+    (cache / "scripts" / "_lib.py").write_text("raise RuntimeError('corrupt cache')\n")
+    with mock.patch.object(install.shutil, "which", return_value="/bin/claude"), mock.patch.object(install, "_run", side_effect=run):
+        result = install.install_claude(dry_run=False, force=False)
+    assert not result.ok
+    assert "selected cache" in result.summary and str(cache) in result.summary
+    assert install._claude_payload_state()[0] == install.PAYLOAD_SYNCHRONIZED
+
+
+def test_selected_cache_rejects_missing_stale_ambiguous_and_unsafe_entries(tmp_path, monkeypatch):
+    install = _load_install_module()
+    root = tmp_path / "mirror"
+    mirror = install.sync_claude_payload(root)
+    config = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    ok, reason = install._verify_claude_selected_cache(mirror, [])
+    assert not ok and "installed_plugins.json" in reason
+    monkeypatch.setenv("HARNESS_DEST", str(root))
+    _fake_run(root)(UPDATE, False)
+    registry = config / "plugins" / "installed_plugins.json"
+    original = json.loads(registry.read_text())
+    for change, expected in (("version", "selected version"), ("path", "selected cache path"), ("duplicate", "exactly one"), ("mode", "unsafe regular file")):
+        data = json.loads(json.dumps(original))
+        entry = data["plugins"]["harness@harness"][0]
+        if change == "version":
+            entry["version"] = "old"
+        elif change == "path":
+            entry["installPath"] = str(mirror)
+        elif change == "duplicate":
+            data["plugins"]["harness@harness"].append(dict(entry))
+        else:
+            (Path(entry["installPath"]) / "scripts" / "_lib.py").chmod(0o666)
+        registry.write_text(json.dumps(data))
+        ok, reason = install._verify_claude_selected_cache(mirror, [])
+        assert not ok and expected in reason, reason
+
+
+def test_forced_current_cache_needs_no_restart_but_first_install_does(tmp_path, monkeypatch):
+    install = _load_install_module()
+    root = tmp_path / "mirror"
+    monkeypatch.setenv("HARNESS_DEST", str(root))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    run = _fake_run(root, update=(0, CURRENT, ""))
+    with mock.patch.object(install.shutil, "which", return_value="/bin/claude"), mock.patch.object(install, "_run", side_effect=run):
+        first = install.install_claude(dry_run=False, force=True)
+        current = install.install_claude(dry_run=False, force=True)
+    assert first.ok and first.restart_required, first.summary
+    assert current.ok and not current.restart_required, current.summary
+
+
+def test_unavailable_cli_cannot_claim_cache_verified(tmp_path, monkeypatch):
+    install = _load_install_module()
+    monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "mirror"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    with mock.patch.object(install.shutil, "which", return_value=None), mock.patch.object(install, "_verify_claude_selected_cache") as probe:
+        result = install.install_claude(dry_run=False, force=False)
+    assert not result.ok and result.summary == "claude CLI not found in PATH"
+    probe.assert_not_called()

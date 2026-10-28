@@ -54,6 +54,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -66,6 +67,8 @@ CODEX_PLUGIN_NAME = "harness"
 CODEX_VERSION_PIN_FILE = PLUGIN_CODEX_ROOT / ".codex-version"
 HARNESS_MCP_SERVER = PLUGIN_ROOT / "mcp" / "harness_server.py"
 DEFAULT_CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
+_CODEX_RUNTIME_HOME: ContextVar[Path | None] = ContextVar("codex_runtime_home", default=None)
+
 DEFAULT_CLAUDE_INSTALL_ROOT = Path.home() / ".claude" / "harness-dev"
 
 
@@ -103,6 +106,7 @@ class InstallResult:
     # before retrying (for example an unavailable runtime daemon).
     recovery: str | None = None
     restart_required: bool = False
+    activation_note: str | None = None
 
 
 PAYLOAD_SYNCHRONIZED = "SYNCHRONIZED"
@@ -562,7 +566,10 @@ def _version_tuple(v: str) -> tuple[int, ...]:
 def _run(cmd: list[str], dry: bool) -> tuple[int, str, str]:
     if dry:
         return 0, f"[dry-run] {' '.join(cmd)}", ""
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    env = None
+    if cmd and cmd[0] == "codex" and _CODEX_RUNTIME_HOME.get() is not None:
+        env = dict(os.environ, CODEX_HOME=str(_CODEX_RUNTIME_HOME.get()))
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -599,7 +606,7 @@ def _codex_marketplace_block() -> str:
         f"[marketplaces.{CODEX_PLUGIN_MARKETPLACE}]\n"
         f'last_updated = "{_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}"\n'
         'source_type = "local"\n'
-        f'source = "{CODEX_INSTALL_ROOT}"\n'
+        f'source = "{_codex_install_root()}"\n'
     )
 
 
@@ -751,7 +758,7 @@ def emit_and_install_codex_config(
     config_path: str | Path | None = None,
     force: bool = False,
 ) -> dict:
-    cfg = Path(config_path) if config_path else DEFAULT_CODEX_CONFIG_PATH
+    cfg = Path(config_path).expanduser() if config_path else _codex_home_for_config(None) / "config.toml"
     plugin_path = Path(plugin_root).resolve()
     if not plugin_path.is_dir():
         return {
@@ -1186,6 +1193,54 @@ def _refresh_claude_plugin(dry_run: bool) -> tuple[bool, bool, str]:
     return True, False, "claude plugin cache current"
 
 
+def _claude_selection_identity() -> tuple[str, str] | None:
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    try:
+        entries = json.loads((config / "plugins" / "installed_plugins.json").read_text())["plugins"]["harness@harness"]
+        selected = [entry for entry in entries if entry.get("scope") == "user"]
+        if len(selected) == 1:
+            return str(selected[0]["installPath"]), str(selected[0]["version"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _verify_claude_selected_cache(mirror: Path, steps: list[str]) -> tuple[bool, str]:
+    """Verify the user-scope cache selected by Claude, never the source mirror."""
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser().absolute()
+    registry = config / "plugins" / "installed_plugins.json"
+    try:
+        data = json.loads(registry.read_text())
+        entries = data["plugins"]["harness@harness"]
+        selected = [entry for entry in entries if entry.get("scope") == "user"]
+        if len(selected) != 1:
+            raise ValueError("expected exactly one user-scope harness@harness selection")
+        entry = selected[0]
+        version = json.loads((mirror / ".claude-plugin" / "plugin.json").read_text())["version"]
+        cache = Path(entry["installPath"])
+        expected = config / "plugins" / "cache" / "harness" / "harness" / version
+        if entry.get("version") != version:
+            raise ValueError(f"selected version {entry.get('version')!r} differs from expected {version}")
+        if not cache.is_absolute() or cache != expected or cache.resolve() != expected.absolute():
+            raise ValueError(f"selected cache path {cache} differs from expected {expected}")
+        # Existing guarded comparison refuses unsafe ancestors, modes and links.
+        # Build the expected projection independently: never normalize the selected cache.
+        with tempfile.TemporaryDirectory(prefix="harness-claude-selected-") as tmp:
+            projection = Path(tmp) / "expected"
+            _build_claude_payload(projection)
+            state, reason = _compare_payload_trees(projection / "plugin", cache)
+        if state != PAYLOAD_SYNCHRONIZED:
+            raise ValueError(f"selected cache {cache}: {state}: {reason}")
+        steps.append(f"Claude selected cache verified: {cache} (version {version})")
+        ok, smoke_steps = _smoke_installed_runtime(cache)
+        steps.extend(smoke_steps)
+        if not ok:
+            raise ValueError(f"selected cache {cache} failed its runtime smoke test")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return False, f"Claude selected cache verification failed ({registry}): {exc}"
+    return True, "Claude selected cache verified"
+
+
 def _codex_hooks_config(plugin_root: Path) -> dict:
     root = plugin_root.resolve()
     hooks = {
@@ -1556,10 +1611,11 @@ def _reload_codex_daemon_hooks(socket_path: str, *, timeout: float = 10.0) -> No
 
 
 def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str, bool]:
-    target = Path(config_path or DEFAULT_CODEX_CONFIG_PATH).resolve()
-    runtime_home = Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_CONFIG_PATH.parent)
+    target = Path(config_path or _codex_home_for_config(None) / "config.toml").resolve()
+    runtime_home = _codex_home_for_config(config_path)
     if target != (runtime_home / "config.toml").resolve():
-        return True, "custom Codex config installed; use a new session with that config", True
+        return True, (f"Custom Codex config artifact installed at {target}; running sessions are unchanged. "
+                      f"Merge it into {runtime_home / 'config.toml'} before starting a new session."), False
     try:
         rc, out, err = _run(["codex", "app-server", "daemon", "version"], False)
         if rc:
@@ -1639,7 +1695,7 @@ def sync_claude_payload(install_root: Path | None = None) -> Path:
 def sync_codex_payload(install_root: Path | None = None) -> Path:
     """Copy the Codex plugin source under ~/.codex and return its plugin root."""
     if install_root is None:
-        install_root = CODEX_INSTALL_ROOT
+        install_root = _codex_install_root()
     _reject_real_install_root_under_test(install_root)
     install_root.mkdir(parents=True, exist_ok=True)
     legacy_paths = (
@@ -1670,9 +1726,21 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
 
 
 def _codex_home_for_config(config_path: str | Path | None) -> Path:
+    bound = _CODEX_RUNTIME_HOME.get()
+    if bound is not None:
+        return bound
     if config_path:
         return Path(config_path).expanduser().resolve().parent
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
     return DEFAULT_CODEX_CONFIG_PATH.parent
+
+
+def _codex_install_root() -> Path:
+    if _CODEX_RUNTIME_HOME.get() is not None or os.environ.get("CODEX_HOME"):
+        return _codex_home_for_config(None) / "harness"
+    return CODEX_INSTALL_ROOT
 
 
 def _codex_cached_plugin_root(codex_home: Path, source_plugin_root: Path) -> Path:
@@ -1731,12 +1799,12 @@ def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
 
 
 def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, str]:
-    mirror = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
+    mirror = _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME
     legacy_paths = (
-        CODEX_INSTALL_ROOT / "plugin-codex",
-        CODEX_INSTALL_ROOT / "plugin",
-        CODEX_INSTALL_ROOT / ".codex-plugin",
-        CODEX_INSTALL_ROOT / "marketplace.json",
+        _codex_install_root() / "plugin-codex",
+        _codex_install_root() / "plugin",
+        _codex_install_root() / ".codex-plugin",
+        _codex_install_root() / "marketplace.json",
     )
     stale_reasons: list[str] = []
     for legacy in legacy_paths:
@@ -1764,7 +1832,7 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
     codex_home = _codex_home_for_config(config_path)
     version = _codex_plugin_version(PLUGIN_CODEX_ROOT)
     cache = codex_home / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME / version
-    marketplace = CODEX_INSTALL_ROOT / ".agents" / "plugins"
+    marketplace = _codex_install_root() / ".agents" / "plugins"
     try:
         with tempfile.TemporaryDirectory(prefix="harness-codex-compare-") as tmp:
             expected_root = Path(tmp)
@@ -1813,6 +1881,17 @@ def _claude_payload_state(install_root: Path | None = None) -> tuple[str, str]:
 
 def install_codex(*, dry_run: bool, force: bool,
                   config_path: str | None) -> InstallResult:
+    runtime_home = _codex_home_for_config(config_path)
+    effective_config = str(Path(config_path).expanduser().resolve()) if config_path else str(runtime_home / "config.toml")
+    token = _CODEX_RUNTIME_HOME.set(runtime_home)
+    try:
+        return _install_codex(dry_run=dry_run, force=force, config_path=effective_config)
+    finally:
+        _CODEX_RUNTIME_HOME.reset(token)
+
+
+def _install_codex(*, dry_run: bool, force: bool,
+                   config_path: str) -> InstallResult:
     steps: list[str] = []
     if not shutil.which("codex"):
         return InstallResult("codex", False, "codex CLI not found in PATH", steps)
@@ -1833,7 +1912,7 @@ def install_codex(*, dry_run: bool, force: bool,
     # Same reason as install_claude: prune before the staleness decision.
     if not dry_run:
         codex_payload_roots = (
-            CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME,
+            _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME,
             _codex_home_for_config(config_path)
             / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME,
         )
@@ -1848,7 +1927,7 @@ def install_codex(*, dry_run: bool, force: bool,
         # too, and normalizing only the payload left the default run failing
         # permanently on a state that the `--force` the tool prints does not
         # clear. Both roots here are created by this installer —
-        # `sync_codex_payload` mkdirs `CODEX_INSTALL_ROOT`, and
+        # `sync_codex_payload` mkdirs `_codex_install_root()`, and
         # `install_codex_plugin_cache` mkdirs the cache entry's parent. The
         # walk deliberately stops at the marketplace directory: `plugins/` and
         # `cache/` under the Codex home are Codex's namespace, shared with
@@ -1863,7 +1942,7 @@ def install_codex(*, dry_run: bool, force: bool,
         # reach it would chmod them too. The boundary is what the harness
         # exclusively owns, not what it happened to mkdir.
         for owned_root in (
-            CODEX_INSTALL_ROOT,
+            _codex_install_root(),
             _codex_home_for_config(config_path)
             / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE,
         ):
@@ -1885,7 +1964,7 @@ def install_codex(*, dry_run: bool, force: bool,
             try:
                 cached = _codex_cached_plugin_root(
                     _codex_home_for_config(config_path),
-                    CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME,
+                    _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME,
                 )
             except (OSError, ValueError) as exc:
                 cached = None
@@ -1915,14 +1994,14 @@ def install_codex(*, dry_run: bool, force: bool,
     # Step 2: copy runtime payload into Codex's home so config never points at
     # a transient project checkout.
     if dry_run:
-        source_plugin_root = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
-        steps.append(f"would sync plugin payload to {CODEX_INSTALL_ROOT}")
+        source_plugin_root = _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME
+        steps.append(f"would sync plugin payload to {_codex_install_root()}")
     else:
         source_plugin_root = _install_step("Codex payload sync", steps, sync_codex_payload)
-        steps.append(f"synced plugin payload to {CODEX_INSTALL_ROOT}")
+        steps.append(f"synced plugin payload to {_codex_install_root()}")
 
     codex_home = _codex_home_for_config(config_path)
-    codex_plugin_source_root = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
+    codex_plugin_source_root = _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME
     cached_plugin_root = _codex_cached_plugin_root(
         codex_home, source_plugin_root if not dry_run else PLUGIN_CODEX_ROOT,
     )
@@ -1940,7 +2019,7 @@ def install_codex(*, dry_run: bool, force: bool,
         # them. From the installer-created ancestors, for the reason given at
         # the pre-check call above: a writable ancestor is refused just as a
         # writable payload file is.
-        steps.extend(_normalize_payload_modes(CODEX_INSTALL_ROOT))
+        steps.extend(_normalize_payload_modes(_codex_install_root()))
         steps.extend(_normalize_payload_modes(
             codex_home / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE
         ))
@@ -1960,7 +2039,7 @@ def install_codex(*, dry_run: bool, force: bool,
     # it after the TOML merge so force-merge block replacement cannot trim the
     # [marketplaces.harness] entry Codex writes.
     if dry_run:
-        steps.append(f"would run: codex plugin marketplace add {CODEX_INSTALL_ROOT}")
+        steps.append(f"would run: codex plugin marketplace add {_codex_install_root()}")
         steps.append("would run: codex features enable plugin_hooks")
 
     # Remove any stale source before the TOML merge. The merge writes the
@@ -1969,7 +2048,7 @@ def install_codex(*, dry_run: bool, force: bool,
     _run(["codex", "plugin", "marketplace", "remove", "harness"], dry_run)
 
     # Step 5: TOML merge via library API
-    config_plugin_root = source_plugin_root if not dry_run else CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
+    config_plugin_root = source_plugin_root if not dry_run else _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME
     if dry_run:
         snippet_preview = emit_codex_config(str(config_plugin_root), config_path).splitlines()[:5]
         steps.append("would merge [plugins.\"harness@harness\"] + [mcp_servers.harness] "
@@ -2003,7 +2082,7 @@ def install_codex(*, dry_run: bool, force: bool,
     # Step 5: marketplace add. The config block already points at the installed
     # copy under ~/.codex/harness; this call lets Codex refresh any marketplace
     # metadata it maintains around that source.
-    rc, out, err = _run(["codex", "plugin", "marketplace", "add", str(CODEX_INSTALL_ROOT)], dry_run)
+    rc, out, err = _run(["codex", "plugin", "marketplace", "add", str(_codex_install_root())], dry_run)
     if rc != 0 and "already" not in (out + err).lower():
         return InstallResult("codex", False,
                              f"codex plugin marketplace add failed: {err.strip() or out.strip()}",
@@ -2023,11 +2102,13 @@ def install_codex(*, dry_run: bool, force: bool,
         )
     steps.append(reload_message)
     return InstallResult("codex", True, "Codex install complete", steps,
-                         backup_path=result["backup_path"], restart_required=restart_required)
+                         backup_path=result["backup_path"], restart_required=restart_required,
+                         activation_note=reload_message if Path(config_path).name != "config.toml" else None)
 
 
 def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     steps: list[str] = []
+    previous_selection = _claude_selection_identity() if not dry_run else None
     if not shutil.which("claude"):
         return InstallResult("claude", False, "claude CLI not found in PATH", steps)
     # Step 1: version
@@ -2076,19 +2157,10 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
             steps.append(refresh_step)
             if not refresh_ok:
                 return InstallResult("claude", False, refresh_step, steps)
-            # The smoke runs here too. `install_verified.py` delivers with the
-            # default run, so this early return is the harness's own common
-            # path; skipping the probe here would mean the one check that
-            # inspects what actually runs almost never runs.
-            smoke_ok, smoke_steps = _smoke_installed_runtime(installed_plugin_root)
-            steps.extend(smoke_steps)
-            if not smoke_ok:
-                return InstallResult(
-                    "claude", False,
-                    "installed Claude runtime failed its smoke test — hooks "
-                    "cannot perform task operations from this tree",
-                    steps,
-                )
+            if not dry_run:
+                cache_ok, cache_reason = _verify_claude_selected_cache(installed_plugin_root, steps)
+                if not cache_ok:
+                    return InstallResult("claude", False, cache_reason, steps)
             return InstallResult(
                 "claude", True,
                 (
@@ -2098,7 +2170,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
                     "Claude payload SYNCHRONIZED — install skipped "
                     "(config/registry health not checked)"
                 ),
-                steps,
+                steps, restart_required=refreshed,
             )
         steps.append(f"payload comparison: STALE ({payload_reason})")
 
@@ -2176,10 +2248,15 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     # Step 3b: refresh the plugin cache Claude runs hooks from. Covers the
     # update path, and the stale-source re-add whose `install` answered
     # "already" without touching the cache. A fresh install is a no-op here.
-    refresh_ok, _refreshed, refresh_step = _refresh_claude_plugin(dry_run)
+    refresh_ok, refreshed, refresh_step = _refresh_claude_plugin(dry_run)
     steps.append(refresh_step)
     if not refresh_ok:
         return InstallResult("claude", False, refresh_step, steps)
+
+    if not dry_run:
+        cache_ok, cache_reason = _verify_claude_selected_cache(installed_plugin_root, steps)
+        if not cache_ok:
+            return InstallResult("claude", False, cache_reason, steps)
 
     # Step 4: MCP server registration
     installed_mcp_server = installed_plugin_root / "mcp" / "harness_server.py"
@@ -2210,7 +2287,8 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
                              steps)
     steps.append(f"claude mcp add harness ok (server: {installed_mcp_server})")
     steps.append("verify: `claude --debug api` and look for harness MCP server connection")
-    return InstallResult("claude", True, "Claude install complete", steps)
+    return InstallResult("claude", True, "Claude install complete", steps,
+                         restart_required=refreshed or previous_selection != _claude_selection_identity())
 
 
 def main() -> int:
@@ -2282,8 +2360,11 @@ def main() -> int:
         else:
             outcome = "SUCCESS"
         print(f"{'Claude' if r.runtime == 'claude' else 'Codex'}: {outcome}")
-        if r.ok and r.restart_required and not args.dry_run:
-            print("  Start a new Codex session to load the installed hooks.")
+        if r.ok and r.activation_note and not args.dry_run:
+            print(f"  {r.activation_note}")
+        elif r.ok and r.restart_required and not args.dry_run:
+            print("  Restart Claude Code to load the installed plugin." if r.runtime == "claude"
+                  else "  Start a new Codex session to load the installed hooks.")
         if args.verbose:
             for step in r.steps:
                 print(f"    · {step}")

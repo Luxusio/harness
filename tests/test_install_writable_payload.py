@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import json
 import shutil
 import stat
 import subprocess
@@ -158,6 +159,14 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
     monkeypatch.setenv("HARNESS_DEST", str(install_root))
 
     plugin_root = install.sync_claude_payload(install_root)
+    config = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    version = json.loads((plugin_root / ".claude-plugin/plugin.json").read_text())["version"]
+    selected = config / "plugins/cache/harness/harness" / version
+    shutil.copytree(plugin_root, selected)
+    (config / "plugins/installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+        "harness@harness": [{"scope": "user", "version": version, "installPath": str(selected)}]
+    }}))
     victim = plugin_root / "scripts" / "_lib.py"
     os.chmod(victim, 0o777)
 
@@ -185,7 +194,7 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
 def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path):
     """The Codex half: the mirror and the resolved plugin cache both count."""
     install = _load_install_module()
-    codex_root = tmp_path / "codex-harness"
+    codex_root = tmp_path / "codex-home" / "harness"
     config_path = tmp_path / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
     codex_home = config_path.expanduser().resolve().parent

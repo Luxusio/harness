@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import importlib.util
+import json
 import marshal
 import os
 import shutil
@@ -193,7 +194,15 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     failure = (False, ["runtime smoke: FAIL WBS: task operation unavailable"])
 
     claude_root = tmp_path / "claude-dest"
-    (claude_root / "plugin").mkdir(parents=True)
+    mirror = install.sync_claude_payload(claude_root)
+    config = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    version = json.loads((mirror / ".claude-plugin/plugin.json").read_text())["version"]
+    selected = config / "plugins/cache/harness/harness" / version
+    shutil.copytree(mirror, selected)
+    (config / "plugins/installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+        "harness@harness": [{"scope": "user", "version": version, "installPath": str(selected)}]
+    }}))
     monkeypatch.setenv("HARNESS_DEST", str(claude_root))
     with (
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
@@ -209,12 +218,12 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     ):
         result = install.install_claude(dry_run=False, force=False)
     no_sync.assert_not_called()
-    claude_smoke.assert_called_once_with(claude_root / "plugin")
+    claude_smoke.assert_called_once_with(selected)
     assert not result.ok
     assert "smoke test" in result.summary
 
     # Codex loads the versioned cache entry, so that is the tree to probe.
-    codex_install_root = tmp_path / "codex-harness"
+    codex_install_root = tmp_path / "harness"
     source = codex_install_root / "plugins" / "harness"
     (source / ".codex-plugin").mkdir(parents=True)
     (source / ".codex-plugin" / "plugin.json").write_text(
@@ -248,7 +257,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
 def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path):
     """Nothing to probe is a stated step, never a silent pass."""
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
-    codex_install_root = tmp_path / "codex-harness"
+    codex_install_root = tmp_path / "harness"
     source = codex_install_root / "plugins" / "harness"
     (source / ".codex-plugin").mkdir(parents=True)
     (source / ".codex-plugin" / "plugin.json").write_text(

@@ -155,3 +155,22 @@ def test_no_runtimes_and_conflicting_flags_remain_usage_errors(installer, monkey
     assert "codex CLI not found" in captured.err and "claude CLI not found" in captured.err
     rc, captured, calls = run_main(installer, monkeypatch, capsys, {}, "--codex-only", "--claude-only")
     assert rc == 2 and not calls and "mutually exclusive" in captured.err
+
+
+@pytest.mark.parametrize("runtime", ["claude", "codex"])
+@pytest.mark.parametrize("restart", [False, True])
+def test_restart_guidance_names_changed_runtime(installer, monkeypatch, capsys, runtime, restart):
+    result = installer.InstallResult(runtime, True, "complete", restart_required=restart)
+    rc, captured, _ = run_main(installer, monkeypatch, capsys, {runtime: result}, f"--{runtime}-only")
+    assert rc == 0
+    expected = "Restart Claude Code" if runtime == "claude" else "Start a new Codex session"
+    assert (expected in captured.out) == restart
+    assert ("Codex session" if runtime == "claude" else "Claude Code") not in captured.out
+
+
+def test_custom_config_artifact_guidance_is_visible_without_verbose(installer, monkeypatch, capsys):
+    note = "Custom Codex config artifact installed at /tmp/custom.toml; running sessions are unchanged. Merge it into /tmp/config.toml before starting a new session."
+    result = installer.InstallResult("codex", True, "complete", activation_note=note)
+    rc, captured, _ = run_main(installer, monkeypatch, capsys, {"codex": result}, "--codex-only")
+    assert rc == 0 and note in captured.out
+    assert "Start a new Codex session" not in captured.out

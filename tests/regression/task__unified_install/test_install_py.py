@@ -75,6 +75,13 @@ def _run(args: list[str], extra_path: str | None = None) -> subprocess.Completed
 def _run_with_env(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
     merged.update(env)
+    if "--claude-only" in args and env.get("HARNESS_DEST") and env.get("PATH"):
+        fake_cli = Path(env["PATH"].split(os.pathsep)[0]) / "claude"
+        if fake_cli.is_file():
+            publish = "import os,json,shutil;from pathlib import Path;root=Path(os.environ['HARNESS_DEST'])/'plugin';version=json.loads((root/'.claude-plugin/plugin.json').read_text())['version'];config=Path(os.environ.get('CLAUDE_CONFIG_DIR',str(Path.home()/'.claude')));cache=config/'plugins/cache/harness/harness'/version;shutil.copytree(root,cache,dirs_exist_ok=True);(config/'plugins/installed_plugins.json').write_text(json.dumps({'version':2,'plugins':{'harness@harness':[{'scope':'user','version':version,'installPath':str(cache)}]}}))"
+            action = 'if [ "$1" = "plugin" ] && [ "$2" = "update" ]; then printf \'%s\\n\' "$*" >> "$CLAUDE_LOG"; ' + shlex.quote(sys.executable) + ' -c ' + shlex.quote(publish) + '; exit $?; fi\n'
+            content = fake_cli.read_text()
+            fake_cli.write_text(content.replace("#!/bin/sh\n", "#!/bin/sh\n" + action, 1))
     return subprocess.run(
         [sys.executable, str(INSTALL_PY)] + args,
         capture_output=True, text=True, timeout=180, env=merged,
@@ -353,6 +360,7 @@ def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
     config_path = codex_home / "config.toml"
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", install_root)
     monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setenv("CODEX_HOME", str(config_path.parent))
 
     mirror = module.sync_codex_payload(install_root)
     cache = module.install_codex_plugin_cache(mirror, codex_home)
@@ -385,6 +393,7 @@ def test_codex_payload_state_error_overrides_earlier_stale_surface(
     config_path = codex_home / "config.toml"
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", install_root)
     monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setenv("CODEX_HOME", str(config_path.parent))
 
     unsafe_target = tmp_path / "unsafe-marketplace"
     unsafe_target.mkdir()
@@ -511,6 +520,7 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
         mock.patch.object(
             module, "_smoke_installed_runtime", return_value=(True, ["runtime smoke: stubbed"]),
         ),
+        mock.patch.object(module, "_reload_codex_runtime", return_value=(True, "no daemon", True)),
     ):
         result = module.install_codex(
             dry_run=False, force=False, config_path=str(config_path),
@@ -555,7 +565,7 @@ def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path, mo
         module, "_claude_payload_state",
         return_value=(module.PAYLOAD_SYNCHRONIZED, ""),
     ), mock.patch.object(
-        module, "_smoke_installed_runtime", return_value=(True, ["runtime smoke: ok"]),
+        module, "_verify_claude_selected_cache", return_value=(True, "verified"),
     ), mock.patch.object(module, "sync_claude_payload") as sync:
         current = module.install_claude(dry_run=False, force=False)
     assert current.ok
@@ -630,6 +640,7 @@ def test_installer_clears_stale_bytecode_cache_even_when_synchronized(
         mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
         mock.patch.object(module, "sync_claude_payload") as sync,
+        mock.patch.object(module, "_verify_claude_selected_cache", return_value=(True, "verified")),
     ):
         result = module.install_claude(dry_run=False, force=False)
 
@@ -655,7 +666,7 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
     before `_codex_payload_state` answers SYNCHRONIZED and returns early.
     """
     module = _load_install_module()
-    codex_root = tmp_path / "codex-harness"
+    codex_root = tmp_path / "codex-home" / "harness"
     config_path = tmp_path / "codex-home" / "config.toml"
     config_path.parent.mkdir(parents=True)
     codex_home = config_path.expanduser().resolve().parent
@@ -1181,6 +1192,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
     fake_codex.write_text(
         "#!/bin/sh\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
@@ -1225,11 +1237,13 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
     config_home = tmp_path / (".codex" if reload_ok else "codex home 'quoted' $literal; extra")
+    codex_install_root = config_home / "harness"
     config_path = config_home / "config.toml"
     monkeypatch.setenv("CODEX_HOME", str(config_home))
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
@@ -1334,6 +1348,7 @@ def test_codex_install_fails_if_plugin_hooks_feature_cannot_be_enabled(tmp_path,
         "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
         "if [ \"$1 $2 $3\" = \"features enable plugin_hooks\" ]; then echo 'feature unavailable' >&2; exit 42; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
@@ -1362,6 +1377,7 @@ def test_codex_install_fails_if_marketplace_add_fails_after_plugin_hooks(tmp_pat
         "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
         "if [ \"$1 $2 $3\" = \"plugin marketplace add\" ]; then echo 'add failed' >&2; exit 43; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
@@ -1387,6 +1403,7 @@ def test_codex_install_treats_existing_marketplace_as_success(tmp_path, monkeypa
         "#!/bin/sh\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
         "if [ \"$1 $2 $3\" = \"plugin marketplace add\" ]; then echo 'already exists' >&2; exit 9; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
@@ -1415,6 +1432,7 @@ def test_default_codex_install_replaces_an_existing_harness_block_with_a_backup(
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
@@ -1626,7 +1644,7 @@ def test_dry_run_mentions_codex_install_root_when_codex_available(tmp_path):
     assert "would install Codex plugin-local hooks.json" in r.stdout
     assert "codex features enable plugin_hooks" in r.stdout
     assert "codex plugin marketplace add" in r.stdout
-    assert ".codex/harness" in r.stdout
+    assert str(cfg.parent / "harness") in r.stdout
     assert "[hooks.*]" not in r.stdout
 
 
@@ -1662,6 +1680,7 @@ def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
         "  echo '    Source: Directory (/stale/project/checkout)'\n"
         "  exit 0\n"
         "fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
@@ -1703,6 +1722,7 @@ def test_claude_install_updates_marketplace_when_registered_to_install_root(tmp_
         f"  echo 'harness Source: Directory ({harness_dest})'\n"
         "  exit 0\n"
         "fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
@@ -1739,6 +1759,7 @@ def test_claude_install_adds_marketplace_when_not_registered(tmp_path):
         "  echo 'Configured marketplaces:'\n"
         "  exit 0\n"
         "fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
@@ -1772,6 +1793,7 @@ def test_claude_install_accepts_existing_plugin_and_mcp_messages(tmp_path):
         "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then exit 0; fi\n"
         "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"install\" ]; then echo 'already installed' >&2; exit 17; fi\n"
         "if [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"add\" ]; then echo 'already exists' >&2; exit 18; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
@@ -1786,7 +1808,7 @@ def test_claude_install_accepts_existing_plugin_and_mcp_messages(tmp_path):
     )
 
     assert r.returncode == 0, r.stderr + r.stdout
-    assert r.stdout == "Claude: SUCCESS\n"
+    assert r.stdout == "Claude: SUCCESS\n  Restart Claude Code to load the installed plugin.\n"
 
 
 def test_claude_install_fails_when_marketplace_list_fails(tmp_path):
@@ -1797,6 +1819,7 @@ def test_claude_install_fails_when_marketplace_list_fails(tmp_path):
         "#!/bin/sh\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
         "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then echo 'boom' >&2; exit 22; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
@@ -1819,6 +1842,7 @@ def test_claude_install_fails_when_mcp_add_hard_fails(tmp_path):
         "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
         "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then exit 0; fi\n"
         "if [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"add\" ]; then echo 'permission denied' >&2; exit 23; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
@@ -1843,6 +1867,7 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_codex.chmod(0o755)
@@ -1852,6 +1877,7 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
         "printf '%s\\n' \"$*\" >> \"$CLAUDE_LOG\"\n"
         "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
         "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then echo 'list failed' >&2; exit 31; fi\n"
+        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
     fake_claude.chmod(0o755)
