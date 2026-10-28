@@ -42,3 +42,17 @@ def test_managed_init_and_prepare_replay_pin_cap(tmp_path, monkeypatch, developm
     assert replay['batch']['cap_source'] == 'develop.fanout_cap'
     assert replay['handoffs'] == first['handoffs'] == []
     assert [item['status'] for item in replay['batch']['requests']] == ['queued', 'queued']
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('develop: {fanout_cap: 1}\n', 1),
+    ('develop: {other: 2, fanout_cap: 6}\n', 6),
+    ('develop:\n  other_settings:\n    fanout_cap: 8\n  fanout_cap: 1\n', 1),
+    ('develop:\n  other_settings:\n    fanout_cap: 1\n', 4),
+])
+def test_managed_cap_is_direct_mapping_field(tmp_path, text, expected):
+    import batch_state
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(text)
+    assert batch_state.cap(str(tmp_path), None, managed=True)[0] == expected

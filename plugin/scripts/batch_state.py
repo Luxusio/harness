@@ -319,21 +319,40 @@ def cap(repo, explicit, managed=False):
         return min(8, int(explicit)), 'explicit'
     section, key, default = ('develop', 'fanout_cap', 4) if managed else ('batch', 'max_leads', 3)
     path = os.path.join(repo, 'doc/harness/manifest.yaml')
+
+    def scalar(value):
+        # Quotes and booleans deliberately do not become integers.
+        if re.fullmatch(r'[0-9]+', value) and int(value) > 0:
+            return min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest'
+        return default, 'default-invalid-manifest'
+
     if os.path.isfile(path):
-        # Preserve scalar type: quotes and booleans are deliberately not integers.
-        inside = False
+        inside, child_indent = False, None
         for line in open(path, encoding='utf-8'):
-            if re.match(r'^' + section + r':\s*(?:#.*)?$', line):
-                inside = True
+            section_line = re.match(r'^' + section + r':\s*([^#]*?)(?:\s+#.*)?$', line)
+            if section_line:
+                value = section_line.group(1).strip()
+                # A scalar-only inline mapping is also an unambiguous cap declaration.
+                if re.fullmatch(r'\{[^{}]*\}', value):
+                    for entry in value[1:-1].split(','):
+                        field = re.fullmatch(r"\s*(?:" + key + "|'" + key + "'|\"" + key + r"\")\s*:\s*(.*?)\s*", entry)
+                        if field:
+                            return scalar(field.group(1))
+                    return default, 'default'
+                inside, child_indent = not value, None
                 continue
-            if inside and line.strip() and not line[0].isspace() and not line.startswith('#'):
+            if not inside or not line.strip() or line.lstrip().startswith('#'):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if not indent:
                 inside = False
-            match = re.match(r'^\s+' + key + r':\s*([^#]*?)(?:\s+#.*)?$', line) if inside else None
-            if match:
-                value = match.group(1).strip()
-                if re.fullmatch(r'[0-9]+', value) and int(value) > 0:
-                    return min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest'
-                return default, 'default-invalid-manifest'
+                continue
+            if child_indent is None:
+                child_indent = indent
+            # A nested key belongs to its own mapping, never to develop/batch.
+            match = re.match(r'^\s+' + key + r':\s*([^#]*?)(?:\s+#.*)?$', line)
+            if indent == child_indent and match:
+                return scalar(match.group(1).strip())
     return default, 'default'
 
 
