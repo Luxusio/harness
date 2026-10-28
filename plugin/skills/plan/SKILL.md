@@ -81,7 +81,7 @@ Soft directive — degrade gracefully, never block.
 
 ## Completeness — Boil the Lake
 
-Every section fully completed before moving on. No "TBD", no placeholders. If a section produces fewer than 3 sentences, it is compression — expand. "No issues found" is valid only after stating what was examined and why nothing was flagged. Plan is not done until every AC has a verification path and every section is complete.
+Every section fully completed before moving on. No "TBD", no placeholders. "No issues found" is valid only after stating what was examined and why nothing was flagged. Plan is not done until every AC has a verification path and every section is complete.
 
 ## Plan Mode Safe Operations
 
@@ -304,6 +304,6 @@ Capstone — restating six load-bearing rules in one place. Most also appear in 
 - **Never abort.** The user invoked plan-skill. Record every taste decision in PLAN.md; never silently redirect to a shorter path. Reviewer failure surfaces as a finding and continues coordinator-only.
 - **User gates.** Both planning procedures ask once for unresolved material decisions. Explicit request and clarification are reusable authorization; review depth does not manufacture premise or final approval rounds.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail. No silent auto-decisions.
-- **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
+- **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Use the evidence and decisions required by the section; length alone never establishes completeness.
 - **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.
 - **Sequential order.** Compact: Phase 0 → bounded assessment → 5 (only if challenged) → 6. Full: Phase 0 → 1 → 5 → 6. Review phases never overlap.

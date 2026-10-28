@@ -41,7 +41,7 @@ Also seeds `doc/common/REQ__project__primary-goals.md` first paragraph.
 
 ### Q2 and Q4 — Fixed operating defaults (never ask)
 
-Record these values as if selected during every setup. (Q3 "status quo" was
+Record these values as configuration defaults during every setup, never as user-selected intent. (Q3 "status quo" was
 retired 2026-09-26: it only fed a manifest field that no code read.
 Execution mode, planning procedure, and review depth are chosen per task.)
 
@@ -116,7 +116,7 @@ may run immediately. Never create a partial manifest before bootstrap.
 In this order (each uses Edit/Write with the appropriate gate):
 
 1. `doc/common/CLAUDE.md` — insert `summary:` (Q1) if missing
-2. `doc/common/REQ__project__primary-goals.md` — seed with Q1 + Q2
+2. `doc/common/REQ__project__primary-goals.md` — seed only from actual Q1, the request or user-authored requirements with their provenance. Q2/Q4 `setup_default` values are configuration only: never seed goals or accepted user requirements from them. If actual intent is absent or skipped, do not invent a project goal.
 3. `doc/harness/manifest.yaml` — set `audience`,
    `maintenance_default`, `verify_commands`, `qa.browser_qa_supported` per
    Q2, Q4 and Q5

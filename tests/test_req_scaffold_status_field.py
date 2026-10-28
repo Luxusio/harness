@@ -273,3 +273,13 @@ def pytest_generate_tests(metafunc):
          ('origin', ['user_explicit', 'derived']), ('field', ['source', 'evidence'])]}
     for argument, values in cases.get(metafunc.function.__name__, []):
         metafunc.parametrize(argument, values)
+
+
+def test_setup_defaults_cannot_seed_accepted_user_goals():
+    body = (REPO / "plugin/skills/setup/project-interview.md").read_text()
+    assert '"source": "setup_default"' in body
+    assert "seed with Q1 + Q2" not in body
+    assert "never as user-selected intent" in body
+    assert "never seed goals or accepted user requirements from them" in body
+    assert "actual Q1, the request or user-authored requirements with their provenance" in body
+    assert "If actual intent is absent or skipped, do not invent a project goal" in body

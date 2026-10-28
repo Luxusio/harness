@@ -265,3 +265,19 @@ def test_develop_uses_independent_findings_and_explicit_transcript_only():
     ready = _text(REPO / "plugin/skills/develop/ready-lanes.md")
     assert "does not publish dispatch prepare or refill the parent pool" in ready
     assert "actual session, task, run, registered workspace and assigned ownership" in ready
+
+
+def test_failure_recovery_preserves_state_and_repairs_authorized_work():
+    for path in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):
+        body = (REPO / path).read_text()
+        recovery = body.split("## Recovery and Error Handling", 1)[1].split("## Self-Improvement", 1)[0]
+        assert 'wbs(action="context")' in recovery
+        assert "state before retrying" in recovery
+        assert "effects occurred" in recovery and "writer is still active" in recovery
+        assert "Retry only when state and effects are known" in recovery
+        assert "same task/run" in recovery and "failure history" in recovery
+        assert "Repair authorized failures autonomously" in recovery
+        assert "restore affected independent review" in recovery
+        assert "never skip failed" in recovery and "actual BLOCKED_ENV" in recovery
+        for stale in ("stop, report, ask how to proceed", "retry / skip / abort", "DONE_WITH_CONCERNS", "Phase 4 FAIL retry", "After max: stop"):
+            assert stale not in body

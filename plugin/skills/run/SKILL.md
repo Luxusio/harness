@@ -47,7 +47,7 @@ workspace on every worktree call. No separate Goal WBS or child task queue.
 
 ## Flow
 
-Execute phases in strict order. Each phase must complete before the next begins. On any phase failure: stop, report, ask how to proceed.
+Execute phases in strict order. Each phase must complete before the next begins. On failure, inspect actual state and follow Error Handling; repair authorized failures without repeating approval.
 
 Plain repo-mutating requests are valid task intake. Do not require the user to
 re-issue a clear feature, fix, refactor, behavior change, or durable process/doc
@@ -123,7 +123,7 @@ completion: PLAN.md exists in task_dir. If BLOCKED: stop and report.
 Skill("harness:develop", "<task_id>")
 ```
 
-The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, actual independent review and QA passed and `wbs(action="verify")` reports PASS. If BLOCKED: stop, report, ask user.
+The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, actual independent review and QA passed and `wbs(action="verify")` reports PASS. If BLOCKED: preserve the unfinished blocker and unblock condition; ask only for a missing user decision or authorization.
 
 Before entering develop, re-entering after QA/UX FAIL, verifying, or closing,
 incorporate explicit user corrections from the conversation. Promote durable
@@ -255,18 +255,25 @@ Files changed:    <count>
 Doc:              doc/changes/<date>-<slug>.md
 ```
 
-## Retry Tracking
+## Recovery and Error Handling
 
-Phase 3 (develop): max 3 retries after runtime FAIL. After max: stop, emit DONE_WITH_CONCERNS.
+On any phase error, agent crash or MCP timeout, report the concrete failure and
+inspect actual owner state via `wbs(action="context")` plus the affected operation's
+state before retrying. A timeout does not prove failure or completion. Determine
+whether effects occurred and whether any writer is still active; do not duplicate
+unknown or non-idempotent effects. Retry only when state and effects are known
+and the retry is safe. Preserve the same task/run, applicable proofs, actual
+failure history and filesystem guards; do not use fresh_run as recovery.
 
-## Error Handling
-
-On any agent timeout or crash:
-1. Report what happened
-2. Check state via `wbs(action="context")`
-3. Ask user: retry / skip / abort
-
-Stop on phase failures, report the failure, check task state, and ask how to proceed.
+Repair authorized failures autonomously and restore affected independent review
+PASS before actual QA. Reuse unaffected applicable evidence; never skip failed
+QA, invent completion, or offer override/skip/abort as routine recovery. When
+repeated attempts produce no new evidence, investigate the cause rather than
+blindly retrying. Unknown effects, unresolved environment or user-data blockers,
+and missing permission remain explicit and unfinished with an unblock condition.
+Ask only for a real unresolved material user decision or missing authorization
+for external/destructive effects. Required current checks and actual BLOCKED_ENV
+remain binding; a green machine check never clears substantive failure.
 
 ## Self-Improvement (post-close)
 

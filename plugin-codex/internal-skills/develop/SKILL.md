@@ -32,22 +32,26 @@ Await actual independent code review and conditional security review PASS before
 
 ## Confusion Protocol
 
-Ambiguity is blocking when PLAN.md and the code cannot settle it and a wrong
-guess changes the outcome, scope, safety, or external state (premise,
-architecture, scope, external-state, or three-attempt cases): stop, state the
-conflict in one sentence, and ask 2-3 numbered options with concrete tradeoffs.
-Decide defaultable ambiguity yourself, report it as `Assumption:`, and continue. Required verification is not scope expansion.
+Ambiguity is blocking only when code and current user intent cannot settle a
+material new outcome, user-facing constraint, risk acceptance, or authorization
+for external or destructive effects. Ask for the unresolved decision with concrete
+tradeoffs. Decide grounded implementation details yourself; label assumptions
+without promoting them to user requirements.
 
 ## Premise Gate / User Challenge
 
-At Phase 2, ask whether to re-plan, narrow, or proceed when search disproves the
-premise. At Phase 5, ask whether to revert, add to scope, or defer a necessary
-out-of-plan edit. Persist the choice in PLAN.md, a checkpoint note, or a durable artifact.
+Search discoveries, necessary helpers and implementation alternatives within the
+authorized outcome autonomously amend the current PLAN/WBS through its owner.
+Keep the same task/run and preserve checks' history; changed definitions need
+fresh checks. Record the grounding and continue without repeated approval.
+Ask only when discovery changes a material user decision or lacks authorization;
+then preserve the unfinished outcome until the decision is resolved.
 
 ## Error Philosophy
 
-Never halt with bare BLOCKED or silently cut an approved AC. Report the exact
-blocker and let the user choose a concrete recovery.
+Never halt with bare BLOCKED or silently cut an approved AC. Repair authorized failures after inspecting actual state. Report an unresolved
+environment, user-data or permission blocker with its concrete unblock condition;
+keep required work unfinished and ask only for the missing decision or authority.
 
 ## Model Routing
 
@@ -60,7 +64,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 **Runtime fallbacks:** keep routine work free of runtime routing notes. When an expected independent QA/review path was replaced by inline verification, a required browser/desktop tool was unavailable, or a high-risk policy/skill change had no independent review lens, state the reason and risk in task state or the final response. Do not write a fallback artifact just to record routing history.
 
-**Graceful degradation:** missing tool or phase prerequisite -> skip cleanly, log reason, do NOT install missing tools. Skipped-phase table:
+**Graceful degradation:** skip only optional phases explicitly listed below when their tool is missing; log the reason. Required planning, independent review and QA cannot be skipped. Do NOT install missing tools. Skipped-phase table:
 
 | Missing | Phases skipped |
 |---------|----------------|
@@ -71,7 +75,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.closed` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, conversationally ask about setup, a fresh task, or continuing anyway.
+Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.closed` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, inspect actual owner state and repair authorized prerequisites in the same task/run; unresolved authority or environment blockers remain unfinished.
 
 **Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
 and list the 3 newest task directories. If an in-progress task matches the
@@ -83,7 +87,7 @@ Micro/maintenance still baseline one concise WBS outcome. Coordinators publish d
 1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
-4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, ask the user (run plan skill / check task_id / abort) via prose.
+4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md is absent, inspect the current task identity and run the plan skill for that same task before source edits.
 
 **Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `${HARNESS_PLUGIN_ROOT}/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using a direct `doc/<area>/REQ__*.md` edit or `${HARNESS_PLUGIN_ROOT}/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
 
@@ -106,7 +110,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 3. Follow existing codebase conventions, not invented ones.
 4. Only build new when nothing fits — extend over duplicate.
 
-**Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag `EUREKA: AC-NNN — <discovery>` in the conversation and fire the Premise Gate conversational ask before overriding. Persist reusable discoveries as `type:"eureka"` in `learnings.jsonl`, then promote durable ones to a committed skill, pattern, test, or typed doc before close.
+**Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag `EUREKA: AC-NNN — <discovery>` in the conversation and apply the Premise Gate distinction: amend current PLAN/WBS autonomously for an authorized implementation alternative; ask only for a new material user decision. Persist reusable discoveries as `type:"eureka"` in `learnings.jsonl`, then promote durable ones to a committed skill, pattern, test, or typed doc before close.
 
 **Baseline screenshot (browser projects):** Browser tools are availability-gated on Codex. When available, run `${HARNESS_PLUGIN_ROOT}/agents/qa-browser.md` inline; when required but unavailable, record the browser-lens blocker and state the fallback in task state or final response.
 
@@ -227,7 +231,7 @@ enumerate them for you. Classify each known edit:
 - In scope -> proceed.
 - Related but unlisted -> acceptable, add the path to the appropriate PROGRESS list and explain it in the final response.
 - Unrelated -> revert. Belongs in a separate task.
-- Missing from plan but necessary -> note as "unplanned-but-necessary".
+- Missing from plan but necessary -> ground it in the authorized outcome and amend current PLAN/WBS autonomously; ask only for a new material user decision.
 
 **SCOPE CREEP signals:** unrelated changes, "while I was in there" edits, new features not in PLAN, reformatted distant modules.
 **MISSING REQUIREMENTS:** PLAN.md requirements not addressed by any change; partial implementations; test coverage gaps.

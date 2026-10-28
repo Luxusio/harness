@@ -206,6 +206,6 @@ create the sidecar; any deferred item is written directly into PLAN.md.
 
 ## Compression brake
 
-If any review section produces fewer than 3 sentences of analysis, it is compression — expand before moving on. "No issues found" valid only after stating what was examined and why nothing flagged (min 1-2 sentences). "Skipped" is never valid for a non-skip-listed section.
+"No issues found" valid only after stating what was examined and why nothing flagged. "Skipped" is never valid for a non-skip-listed section.
 
 **Skip list** (already handled by pipeline — do not re-run): Preamble/boilerplate, AskUserQuestion Format, Completeness Principle, Telemetry, Platform detection (Phase 0), Prerequisite Skill Offer (Phase 0.4.5).

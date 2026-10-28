@@ -80,7 +80,7 @@ Expanding or reducing the requested outcome is a material user decision.
 
 ## Completeness — Boil the Lake
 
-Complete every section before moving on. Use concrete content in each required section. If a section produces fewer than 3 sentences, expand. "No issues found" is valid only after stating what was examined.
+Complete every section before moving on. Use concrete content in each required section. "No issues found" is valid only after stating what was examined.
 
 ---
 
