@@ -16,7 +16,8 @@ def test_managed_cap_uses_effective_development_value(tmp_path, develop, expecte
     manifest.write_text('batch:\n  max_leads: 2\n' +
                         ('' if develop is None else 'develop:\n  fanout_cap: ' + develop + '\n'))
     assert batch_state.cap(str(tmp_path), None, managed=True)[0] == expected
-    assert batch_state.cap(str(tmp_path), '7', managed=True)[0] == expected
+    assert batch_state.cap(str(tmp_path), '7', managed=True)[0] == min(7, expected)
+    assert batch_state.cap(str(tmp_path), '1', managed=True)[0] == 1
     assert batch_state.cap(str(tmp_path), None)[0] == 2
     assert batch_state.cap(str(tmp_path), '7') == (7, 'explicit')
 
@@ -47,6 +48,7 @@ def test_managed_init_and_prepare_replay_pin_cap(tmp_path, monkeypatch, developm
 @pytest.mark.parametrize('text, expected', [
     ('develop: {fanout_cap: 1}\n', 1),
     ('develop: {other: 2, fanout_cap: 6}\n', 6),
+    ('develop: {description: \"x, fanout_cap: 8, y\", fanout_cap: 1}\n', 1),
     ('develop:\n  other_settings:\n    fanout_cap: 8\n  fanout_cap: 1\n', 1),
     ('develop:\n  other_settings:\n    fanout_cap: 1\n', 4),
 ])
@@ -56,3 +58,13 @@ def test_managed_cap_is_direct_mapping_field(tmp_path, text, expected):
     manifest.parent.mkdir(parents=True)
     manifest.write_text(text)
     assert batch_state.cap(str(tmp_path), None, managed=True)[0] == expected
+
+
+def test_managed_cli_explicit_limit_is_an_additional_bound(tmp_path, monkeypatch):
+    from test_batch_state import Pool, request
+    pool = Pool(tmp_path, monkeypatch)
+    (pool.repo / 'doc/harness/manifest.yaml').write_text('develop:\n  fanout_cap: 6\n')
+    result = pool.init([request('a'), request('b')], cap='1', owner='TASK__owner')
+    assert result['batch']['max_leads'] == 1
+    assert result['batch']['cap_source'] == 'explicit'
+    assert [item['slug'] for item in pool.claim()] == ['a']

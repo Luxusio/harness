@@ -312,19 +312,28 @@ def load_all(directory, repo):
 def cap(repo, explicit, managed=False):
     """Managed WBS pools use development capacity; standalone pools use batch capacity.
 
+    An explicit operational limit may further reduce managed capacity.
     The returned cap is pinned at initialization, including later prepare replays.
     """
-    if explicit is not None and not managed:
+    explicit_cap = None
+    if explicit is not None:
         require(re.fullmatch(r'[0-9]+', explicit) and int(explicit) > 0, 'max-leads must be a positive integer')
-        return min(8, int(explicit)), 'explicit'
+        explicit_cap = min(8, int(explicit))
+        if not managed:
+            return explicit_cap, 'explicit'
     section, key, default = ('develop', 'fanout_cap', 4) if managed else ('batch', 'max_leads', 3)
     path = os.path.join(repo, 'doc/harness/manifest.yaml')
+
+    def effective(value, source):
+        if explicit_cap is not None and explicit_cap < value:
+            return explicit_cap, 'explicit'
+        return value, source
 
     def scalar(value):
         # Quotes and booleans deliberately do not become integers.
         if re.fullmatch(r'[0-9]+', value) and int(value) > 0:
-            return min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest'
-        return default, 'default-invalid-manifest'
+            return effective(min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest')
+        return effective(default, 'default-invalid-manifest')
 
     if os.path.isfile(path):
         inside, child_indent = False, None
@@ -334,11 +343,14 @@ def cap(repo, explicit, managed=False):
                 value = section_line.group(1).strip()
                 # A scalar-only inline mapping is also an unambiguous cap declaration.
                 if re.fullmatch(r'\{[^{}]*\}', value):
-                    for entry in value[1:-1].split(','):
+                    # Commas inside quoted scalars are not mapping separators.
+                    entry_pattern = r"(?:[^,\"']|\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*')+"
+                    entries = re.findall(entry_pattern, value[1:-1])
+                    for entry in entries:
                         field = re.fullmatch(r"\s*(?:" + key + "|'" + key + "'|\"" + key + r"\")\s*:\s*(.*?)\s*", entry)
                         if field:
                             return scalar(field.group(1))
-                    return default, 'default'
+                    return effective(default, 'default')
                 inside, child_indent = not value, None
                 continue
             if not inside or not line.strip() or line.lstrip().startswith('#'):
@@ -353,7 +365,7 @@ def cap(repo, explicit, managed=False):
             match = re.match(r'^\s+' + key + r':\s*([^#]*?)(?:\s+#.*)?$', line)
             if indent == child_indent and match:
                 return scalar(match.group(1).strip())
-    return default, 'default'
+    return effective(default, 'default')
 
 
 def no_git_operation(repo):
