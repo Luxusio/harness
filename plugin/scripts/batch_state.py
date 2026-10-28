@@ -458,8 +458,11 @@ def cap(repo, explicit, managed=False):
                 continue
             if child_indent is None:
                 child_indent = indent
-            if indent == child_indent and field(parts):
-                return scalar(parts[2] if len(parts) == 3 else '')
+            if indent == child_indent:
+                require(len(parts) >= 2 and parts[1] == ':',
+                        'unsupported capacity section declaration; use a direct ' + section + '.' + key)
+                if field(parts):
+                    return scalar(parts[2] if len(parts) == 3 else '')
     return effective(default, 'default')
 
 
