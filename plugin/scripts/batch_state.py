@@ -309,27 +309,32 @@ def load_all(directory, repo):
     return records
 
 
-def cap(repo, explicit):
-    if explicit is not None:
+def cap(repo, explicit, managed=False):
+    """Managed WBS pools use development capacity; standalone pools use batch capacity.
+
+    The returned cap is pinned at initialization, including later prepare replays.
+    """
+    if explicit is not None and not managed:
         require(re.fullmatch(r'[0-9]+', explicit) and int(explicit) > 0, 'max-leads must be a positive integer')
         return min(8, int(explicit)), 'explicit'
+    section, key, default = ('develop', 'fanout_cap', 4) if managed else ('batch', 'max_leads', 3)
     path = os.path.join(repo, 'doc/harness/manifest.yaml')
     if os.path.isfile(path):
         # Preserve scalar type: quotes and booleans are deliberately not integers.
         inside = False
         for line in open(path, encoding='utf-8'):
-            if re.match(r'^batch:\s*(?:#.*)?$', line):
+            if re.match(r'^' + section + r':\s*(?:#.*)?$', line):
                 inside = True
                 continue
             if inside and line.strip() and not line[0].isspace() and not line.startswith('#'):
                 inside = False
-            match = re.match(r'^\s+max_leads:\s*([^#]*?)(?:\s+#.*)?$', line) if inside else None
+            match = re.match(r'^\s+' + key + r':\s*([^#]*?)(?:\s+#.*)?$', line) if inside else None
             if match:
                 value = match.group(1).strip()
                 if re.fullmatch(r'[0-9]+', value) and int(value) > 0:
-                    return min(8, int(value)), 'manifest'
-                return 3, 'default-invalid-manifest'
-    return 3, 'default'
+                    return min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest'
+                return default, 'default-invalid-manifest'
+    return default, 'default'
 
 
 def no_git_operation(repo):
@@ -793,7 +798,7 @@ def execute(args, directory, records):
         require(owner_task_id is None or batch_harvest.TASK_ID_RE.fullmatch(owner_task_id), 'invalid pool owner')
         requests = copy.deepcopy(args.requests) if hasattr(args, 'requests') else read_json(args.requests_file)
         requests_valid(requests)
-        maximum, source = cap(repo, args.max_leads)
+        maximum, source = cap(repo, args.max_leads, managed=owner_task_id is not None)
         normalized = normalize_requests(requests)
         if batch_id in records:
             old = records[batch_id]

@@ -9,6 +9,7 @@ import sys
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'plugin/scripts/parallel_dispatch.py'
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location('parallel_dispatch', SCRIPT)
 dispatcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dispatcher)
@@ -271,3 +272,32 @@ def test_wide_first_does_not_prevent_a_ready_disjoint_pair():
     ordered = dispatcher.independent_order(data, lambda x: x['paths'])
     assert [x['id'] for x in ordered] == ['a', 'b', 'wide']
     assert data == original
+
+
+def test_schedule_wide_first_fills_ready_disjoint_pair():
+    data = snapshot(capacity=5)
+    data['acs'][0]['files'] = ['src']
+    assert ids(dispatcher.schedule(data)) == ['AC-1', 'AC-2']
+
+
+def test_blocked_or_retained_candidates_cannot_choose_priority():
+    data = snapshot(capacity=9, count=5)
+    data['acs'][0]['files'] = ['src']
+    data['acs'][1]['depends_on'] = ['AC-4']
+    data['progress'] = {'AC-4': dict(status='blocked', workers_released=True)}
+    assert ids(dispatcher.schedule(data)) == ['AC-2', 'AC-3']
+    data['acs'][1]['depends_on'] = []
+    data['live_agents'].append(dict(id='held', role='implementation', paths=['src/AC-1.py']))
+    assert ids(dispatcher.schedule(data)) == ['AC-2', 'AC-3']
+
+
+def test_preferred_pair_must_fit_actual_atomic_slots():
+    data = snapshot(capacity=5, count=5)
+    data['live_agents'] += [dict(id='review', role='review-code'), dict(id='other', role='other')]
+    data['acs'][0]['files'] = ['src']
+    for lane in data['acs'][3:]:
+        lane['tests'] = []
+    result = dispatcher.schedule(data)
+    assert ids(result) == ['AC-3', 'AC-4']
+    assert result['remaining_slots'] == 0
+    assert all(group['slots'] == 1 for group in result['dispatch'])

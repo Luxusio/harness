@@ -105,11 +105,12 @@ def host_slots(host):
     return max(0, capacity - len(ids) - remaining_reserve)
 
 
-def independent_order(items, paths):
+def independent_order(items, paths, compatible=None):
     """Prioritize a bounded disjoint pair without rewriting immutable intake."""
     for index, first in enumerate(items):
         for second in items[index + 1:]:
-            if not _overlap(paths(first), paths(second)):
+            if (not _overlap(paths(first), paths(second))
+                    and (compatible is None or compatible(first, second))):
                 return [first, second] + [item for item in items if item is not first and item is not second]
     return list(items)
 
@@ -202,7 +203,24 @@ def schedule(snapshot):
     available = capacity - len(agents)
     remaining = available
     dispatch, deferred = [], []
-    for aid, ac in acs.items():
+
+    def worker_slots(aid):
+        ac = acs[aid]
+        return 2 if ac['files'] and ac['tests'] and capacity - coordinators >= 2 else 1
+
+    # Only lanes admissible against the original inventory may determine priority.
+    eligible = [aid for aid, ac in acs.items()
+                if states[aid]['status'] == 'pending' and aid not in live_acs
+                and all(dep in complete for dep in ac['depends_on'])
+                and not _overlap(ac['files'] + ac['tests'], claims)
+                and worker_slots(aid) <= available]
+    ordered = independent_order(
+        eligible, lambda aid: acs[aid]['files'] + acs[aid]['tests'],
+        lambda first, second: cap - len(active) >= 2
+        and worker_slots(first) + worker_slots(second) <= available)
+    ordered += [aid for aid in acs if aid not in eligible]
+    for aid in ordered:
+        ac = acs[aid]
         if aid in complete:
             continue
         state = states[aid]
@@ -220,7 +238,7 @@ def schedule(snapshot):
             reason = 'AC concurrency cap reached'
         # Pair whenever both roles have work and the host can ever fit the pair.
         paired = bool(ac['files'] and ac['tests']) and capacity - coordinators >= 2
-        needed = 2 if paired else 1
+        needed = worker_slots(aid)
         if reason is None and remaining < needed:
             reason = f'need {needed} available agent slots; {remaining} available'
         if reason:
