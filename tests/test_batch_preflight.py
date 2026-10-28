@@ -992,3 +992,92 @@ def test_s1_cli_repeat_submodule_selection_and_invalid_syntax(monkeypatch, tmp_p
     unknown = _cli("--repo", str(main), "--request", "a=libs", "--submodule", "unknown=libs/sub", cwd=tmp_path)
     assert unknown.returncode == 1
     assert json.loads(unknown.stdout)["verdict"] == "refuse"
+
+
+def test_managed_discovery_never_walks_unrelated_ignored_history(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    main = _repo(tmp_path / "main", {"owned/code.py": "pass\n", ".gitignore": "history/\n.claude/worktrees/\n"})
+    history = main / "history"
+    history.mkdir()
+    real_walk = mod.os.walk
+
+    def owned_walk(path, *args, **kwargs):
+        assert not Path(path).is_relative_to(history), "unrelated history was inspected"
+        return real_walk(path, *args, **kwargs)
+
+    monkeypatch.setattr(mod.os, "walk", owned_walk)
+    report = mod.preflight(str(main), {"a": ["owned"]}, dirty_scopes=[str(main / "owned")])
+    assert report["verdict"] == "ok", report
+    assert report["nested_repos"] == []
+
+
+def test_managed_discovery_keeps_owned_hidden_git_dirs_and_gitfiles(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    main = _repo(tmp_path / "main", {"owned/code.py": "pass\n", ".gitignore": "owned/.hidden/\n.claude/worktrees/\n"})
+    _repo(main / "owned/.hidden/nested", {"code.py": "pass\n"})
+    external = _repo(tmp_path / "external")
+    linked = main / "owned/.hidden/linked"
+    _git("worktree", "add", "-q", str(linked), cwd=external)
+    found = mod.list_nested_repos(str(main), set(), set(), inspection_scopes=[str(main / "owned")])
+    assert found == ["owned/.hidden/linked", "owned/.hidden/nested"]
+    report = mod.preflight(str(main), {"a": ["owned/.hidden/nested/code.py"]},
+                           dirty_scopes=[str(main / "owned/.hidden/nested/code.py")])
+    assert report["verdict"] == "adjust", report
+    assert report["scopes"][0]["class"] == "inside-ignored-nested-repo"
+
+
+def test_managed_discovery_refuses_unreadable_owned_history(monkeypatch, tmp_path):
+    _skip_as_root()
+    _isolate(monkeypatch, tmp_path)
+    main = _repo(tmp_path / "main", {"owned/code.py": "pass\n", ".gitignore": "owned/.hidden/\n"})
+    hidden = main / "owned/.hidden"
+    hidden.mkdir()
+    hidden.chmod(0)
+    try:
+        report = mod.preflight(str(main), {"a": ["owned"]}, dirty_scopes=[str(main / "owned")])
+    finally:
+        hidden.chmod(0o755)
+    assert report["verdict"] == "refuse", report
+    assert any("could not read part of" in item or "cannot scan" in item for item in report["refusals"])
+
+
+def test_managed_whole_checkout_ownership_keeps_global_discovery(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    main = _with_nested(tmp_path)
+    found = mod.list_nested_repos(str(main), set(), set(), inspection_scopes=[str(main)])
+    assert found == ["repos/svc"]
+
+
+def test_managed_discovery_does_not_expand_an_ignored_ancestor(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    main = _repo(tmp_path / "main", {"README.md": "root\n", ".gitignore": "ignored/\n.claude/worktrees/\n"})
+    owned = main / "ignored/owned"
+    owned.mkdir(parents=True)
+    (owned / "code.py").write_text("pass\n", encoding="utf-8")
+    unrelated = _repo(main / "ignored/unrelated/nested")
+    (unrelated / "README.md").write_text("user changes\n", encoding="utf-8")
+    real_walk = mod.os.walk
+
+    def bounded_walk(path, *args, **kwargs):
+        assert Path(path).is_relative_to(owned), "ignored ancestor escaped ownership"
+        return real_walk(path, *args, **kwargs)
+
+    monkeypatch.setattr(mod.os, "walk", bounded_walk)
+    report = mod.preflight(str(main), {"a": ["ignored/owned"]}, dirty_scopes=[str(owned)])
+    assert report["verdict"] == "ok", report
+    assert report["nested_repos"] == []
+    assert (unrelated / "README.md").read_text() == "user changes\n"
+
+
+def test_managed_ignored_file_scope_requires_no_git_directory_discovery(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    main = _repo(tmp_path / "main", {"README.md": "root\n", ".gitignore": "ignored/\n"})
+    owned = main / "ignored/owned/code.py"
+    owned.parent.mkdir(parents=True)
+    owned.write_text("pass\n", encoding="utf-8")
+
+    def no_global_listing(*args, **kwargs):
+        raise AssertionError("explicit ownership does not require global Git discovery")
+
+    monkeypatch.setattr(mod, "_git_text", no_global_listing)
+    assert mod.list_nested_repos(str(main), set(), set(), inspection_scopes=[str(owned)]) == []

@@ -237,25 +237,36 @@ def registered_worktrees(root: str) -> set:
     return paths
 
 
-def list_nested_repos(root: str, submodule_paths: set, worktrees: set) -> list:
+def list_nested_repos(root: str, submodule_paths: set, worktrees: set, *, inspection_scopes=None) -> list:
     """Directories under ``root`` that hold their own `.git` and git does not track.
 
     Candidates are the untracked and ignored directories git reports. Each is
     walked without following links, stopping at the first `.git` holder. A
     registered linked worktree of this repository is not a nested repository.
     A directory the walk cannot read could hide one, so it fails the scan.
+    Ordinary managed admission walks its literal ownership roots directly;
+    standalone and selected-module admission retain global Git discovery.
     """
     candidates = set()
-    for extra in ((), ("--ignored",)):
-        listing = _git_text(
-            root, "ls-files", "-z", "--others", *extra, "--exclude-standard", "--directory",
-            must_read_everything=True,
-        )
-        for entry in listing.split("\0"):
-            if entry.endswith("/"):
-                rel = _safe_relpath(entry.rstrip("/"))
-                if rel:
-                    candidates.add(rel)
+    if inspection_scopes is not None:
+        if not inspection_scopes:
+            raise PreflightError("managed discovery requires nonempty ownership scopes")
+        for scope in inspection_scopes:
+            absolute = os.path.realpath(os.path.join(root, scope))
+            if not _is_within(absolute, root):
+                raise PreflightError("managed discovery scope is outside the control root")
+            candidates.add(os.path.relpath(absolute, root).replace(os.sep, "/"))
+    else:
+        for extra in ((), ("--ignored",)):
+            listing = _git_text(
+                root, "ls-files", "-z", "--others", *extra, "--exclude-standard", "--directory",
+                must_read_everything=True,
+            )
+            for entry in listing.split("\0"):
+                if entry.endswith("/"):
+                    rel = _safe_relpath(entry.rstrip("/"))
+                    if rel:
+                        candidates.add(rel)
 
     def unreadable(exc: OSError) -> None:
         raise PreflightError(
@@ -266,9 +277,13 @@ def list_nested_repos(root: str, submodule_paths: set, worktrees: set) -> list:
     found = set()
     for rel in sorted(candidates):
         start = os.path.join(root, rel)
-        if os.path.islink(start) or not os.path.isdir(start):
+        info = _lstat_or_none(start)
+        if info is None or not stat.S_ISDIR(info.st_mode):
             continue
         for dirpath, dirnames, filenames in os.walk(start, onerror=unreadable):
+            if os.path.realpath(dirpath) == root:
+                dirnames[:] = [name for name in dirnames if name != ".git"]
+                continue
             if ".git" not in dirnames and ".git" not in filenames:
                 continue
             dirnames[:] = []
@@ -490,7 +505,9 @@ def _inspect(report: dict, root: str, common_dir: str, dirty_scopes=None) -> Non
     submodules = list_submodules(root)
     report["submodules"] = submodules
     sub_paths = {entry["path"] for entry in submodules}
-    report["nested_repos"] = list_nested_repos(root, sub_paths, registered_worktrees(root))
+    report["nested_repos"] = list_nested_repos(
+        root, sub_paths, registered_worktrees(root), inspection_scopes=dirty_scopes,
+    )
     report["off_limits"] = sorted(sub_paths | set(report["nested_repos"]))
     report["post_checkout_hooks"] = post_checkout_hooks(root, common_dir)
 
