@@ -43,7 +43,7 @@ CODEX_RUN_POLICY = "skills/run/agents/openai.yaml"
 ROUTING_BLOCK = """## Harness routing
 <!-- harness:routing-injected -->
 - On Codex, every repo-mutating request → invoke `$harness:run` before editing; it loads the canonical workflow and opens/resumes one WBS; a native Goal supplies only the objective
-- On Claude Code, run the same WBS cycle (open → plan → develop → QA → close); use `wbs(action="verify")` for ordered evidence and `wbs(action="close")` only after verified outcomes and review/QA PASS
+- On Claude Code, run the same WBS cycle (open → plan → develop → QA → close); use `wbs(action="verify")` for current WBS checks and `wbs(action="close")` only after verified outcomes and actual independent review/QA PASS
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
 - Plan-only requests → open/resume the WBS and stop after its plan phase if the user explicitly asks not to implement
 - Implement an approved PLAN.md / develop only → resume the same WBS through the internal develop path
