@@ -332,6 +332,10 @@ def cap(repo, explicit, managed=False):
 
     def scalar(value):
         # Quotes and booleans deliberately do not become integers.
+        require(not (re.fullmatch(r'[+]?0[xXbBoO][0-9A-Fa-f_]+', value)
+                     or re.fullmatch(r'[+]?[0-9][0-9_]*_[0-9_]*', value)
+                     or re.fullmatch(r'\+[0-9]+', value)),
+                'encoded capacity integers unsupported; use a direct ' + section + '.' + key)
         if re.fullmatch(r'[0-9]+', value) and int(value) > 0:
             return effective(min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest')
         return effective(default, 'default-invalid-manifest')
@@ -348,9 +352,17 @@ def cap(repo, explicit, managed=False):
             for token in lexer:
                 if token.startswith('#'):
                     break
-                require(not token.startswith(('*', '&')) and token.strip('\"\'') != '<<',
-                        'capacity aliases or merges unsupported; use a direct ' + section + '.' + key)
+                require(not token.startswith(('*', '&', '!')) and token.strip('\"\'') != '<<',
+                        'capacity aliases, tags or merges unsupported; use a direct ' + section + '.' + key)
                 result.extend(list(token) if all(c in '{},:[]' for c in token) else [token])
+            stack = []
+            for part in result:
+                if part in {'{', '['}:
+                    stack.append(part)
+                elif part in {'}', ']'}:
+                    require(bool(stack) and stack.pop() == {'}': '{', ']': '['}[part],
+                            'unbalanced capacity mapping; use a direct ' + section + '.' + key)
+            require(not stack, 'multiline capacity mapping unsupported; use a direct ' + section + '.' + key)
             return result
         except ValueError as exc:
             raise Refusal('invalid capacity declaration; use a direct ' + section + '.' + key) from exc
@@ -360,10 +372,19 @@ def cap(repo, explicit, managed=False):
 
     if os.path.isfile(path):
         inside, child_indent = False, None
+        root_mapping_seen = False
         for line in open(path, encoding='utf-8'):
             if not line.strip() or line.lstrip().startswith('#'):
                 continue
             indent = len(line) - len(line.lstrip())
+            require(not indent or root_mapping_seen,
+                    'indented capacity document unsupported; use a direct ' + section + '.' + key)
+            if not indent:
+                if not line.startswith(('%', '---', '...')) and ':' in line:
+                    root_mapping_seen = True
+                require(not re.match(r'^(?:---\s+)?[\{\[?!&*]', line)
+                        and not (line[0] in '\"\'' and '\\' in line.split(':', 1)[0]),
+                        'unsupported capacity document mapping; use a direct ' + section + '.' + key)
             if not indent and not re.match(r"^(?:" + section + "|'" + section + "'|\"" + section + r"\")\s*:", line):
                 inside, child_indent = False, None
                 continue

@@ -121,6 +121,19 @@ def test_unsupported_mapping_cannot_infer_a_higher_cap(tmp_path, text):
 
 
 @pytest.mark.parametrize('text', [
+    'develop:\n  description: [\n  fanout_cap: 8\n  ]\n  fanout_cap: 1\n',
+    'develop: !!map {fanout_cap: 1}\n',
+    'develop: !!map\n  fanout_cap: 1\n',
+    'develop:\n  fanout_cap: +1\n',
+    'develop:\n  fanout_cap: 0_1\n',
+    'develop:\n  fanout_cap: +0_1\n',
+    'develop:\n  fanout_cap: 0x1\n',
+    'develop:\n  fanout_cap: 0b1\n',
+    'develop:\n  fanout_cap: !!int 1\n',
+    '{develop: {fanout_cap: 1}}\n',
+    '  develop:\n    fanout_cap: 1\n',
+    '---\n  develop:\n    fanout_cap: 1\n',
+    r'"deve\u006cop": {fanout_cap: 1}' + '\n',
     'develop:\n  fanout_cap: 1\n',
     'develop:\n  "fanout_cap": 1 # direct key\n',
     'develop: {description: "# comment text", fanout_cap: 1}\n',
@@ -139,7 +152,8 @@ def test_semantic_cap_one_is_honored_or_actionably_refused(tmp_path, text):
     # PyYAML is the existing development-only dependency, never a runtime import.
     import yaml
     import batch_state
-    assert yaml.safe_load(text)['develop']['fanout_cap'] == 1
+    resolved_cap = yaml.safe_load(text)['develop']['fanout_cap']
+    assert type(resolved_cap) is int and resolved_cap == 1
     manifest = tmp_path / 'doc/harness/manifest.yaml'
     manifest.parent.mkdir(parents=True)
     manifest.write_text(text)
@@ -149,3 +163,13 @@ def test_semantic_cap_one_is_honored_or_actionably_refused(tmp_path, text):
         assert 'direct develop.fanout_cap' in str(error)
     else:
         assert actual == 1
+
+
+@pytest.mark.parametrize('development', [1, 6])
+def test_managed_init_claim_respects_development_limit(tmp_path, monkeypatch, development):
+    from test_batch_state import Pool, request
+    pool = Pool(tmp_path, monkeypatch)
+    (pool.repo / 'doc/harness/manifest.yaml').write_text(f'develop:\n  fanout_cap: {development}\n')
+    result = pool.init([request(f'lane-{n}') for n in range(7)], owner='TASK__owner')
+    assert result['batch']['max_leads'] == development
+    assert len(pool.claim()) == development
