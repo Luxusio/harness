@@ -1385,12 +1385,13 @@ def _legacy_focus_apply(repo, *, default=False):
         if not exists:
             # Exact bytes are durable before the first destructive operation.
             _write(repo, LEGACY_DEFAULT_MARKER_ARCHIVE if default else LEGACY_FOCUS_ARCHIVE, _encode(archive))
-        elif default:
+        else:
             # A retry may observe a link published before the directory sync.
             # Establish durable custody before retiring the only source copy.
-            raw = _read_publication(repo, LEGACY_DEFAULT_MARKER_ARCHIVE, 16 * LIMIT)
-            _require(raw is not None and _json(raw) == archive, "legacy default archive changed")
-            _normalize_publication(repo, LEGACY_DEFAULT_MARKER_ARCHIVE, raw)
+            archive_path = LEGACY_DEFAULT_MARKER_ARCHIVE if default else LEGACY_FOCUS_ARCHIVE
+            raw = _read_publication(repo, archive_path, 16 * LIMIT)
+            _require(raw is not None and _json(raw) == archive, "legacy focus archive changed")
+            _normalize_publication(repo, archive_path, raw)
         for row in archive["entries"]:
             if row["root"] not in roots:
                 continue  # Already retired before its registered checkout was disposed.

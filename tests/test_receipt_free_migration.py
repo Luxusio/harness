@@ -697,22 +697,27 @@ def test_completed_control_migration_preserves_unreferenced_archived_task(tmp_pa
 
 
 @pytest.mark.parametrize('sync_failure', [False, True])
-def test_default_marker_retry_normalizes_archive_durably_before_retiring(tmp_path, monkeypatch, sync_failure):
+@pytest.mark.parametrize('default', [False, True])
+def test_legacy_focus_retry_normalizes_archive_durably_before_retiring(tmp_path, monkeypatch, sync_failure, default):
     import errno
     import os
     import goal_migration
     repo, td, _, _ = public(tmp_path)
-    marker = default_marker(td)
-    original = marker.read_bytes()
+    source_path = goal_migration.LEGACY_DEFAULT_MARKER_PATH if default else goal_migration.LEGACY_FOCUS_PATH
+    archive_path = goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE if default else goal_migration.LEGACY_FOCUS_ARCHIVE
+    source = default_marker(td) if default else repo / source_path
+    if not default:
+        source.write_bytes(b'opaque retired focus\x00\xff\n')
+    original = source.read_bytes()
     retire = goal_migration._retire
     def interrupt(root, relative, expected):
-        if relative == goal_migration.LEGACY_DEFAULT_MARKER_PATH:
+        if relative == source_path:
             raise OSError('interrupted after archival before retirement')
         return retire(root, relative, expected)
     with monkeypatch.context() as patch:
         patch.setattr(goal_migration, '_retire', interrupt)
         assert migrate(repo, apply=True).get('isError')
-    archive = repo / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE
+    archive = repo / archive_path
     preserved = archive.read_bytes()
     stage = archive.with_name(goal_migration._publication_stage(archive.name))
     os.link(archive, stage)
@@ -726,11 +731,11 @@ def test_default_marker_retry_normalizes_archive_durably_before_retiring(tmp_pat
         if (info.st_dev, info.st_ino) == identity:
             synced.append(True)
             if sync_failure:
-                raise OSError(errno.EIO, 'recovered default archive directory sync failed')
+                raise OSError(errno.EIO, 'recovered legacy archive directory sync failed')
         return fsync(fd)
     def checked_retire(root, relative, expected):
-        if relative == goal_migration.LEGACY_DEFAULT_MARKER_PATH:
-            assert synced, 'default marker retirement preceded archive directory sync'
+        if relative == source_path:
+            assert synced, 'legacy source retirement preceded archive directory sync'
             assert not stage.exists() and archive.stat().st_nlink == 1
             retired.append(relative)
         return retire(root, relative, expected)
@@ -739,9 +744,9 @@ def test_default_marker_retry_normalizes_archive_durably_before_retiring(tmp_pat
     result = migrate(repo, apply=True)
     if sync_failure:
         assert result.get('isError'), result
-        assert synced and not retired and marker.read_bytes() == original
+        assert synced and not retired and source.read_bytes() == original
     else:
         assert not result.get('isError'), result
-        assert synced and retired and not marker.exists()
+        assert synced and retired and not source.exists()
     assert not stage.exists() and archive.stat().st_nlink == 1
     assert archive.read_bytes() == preserved
