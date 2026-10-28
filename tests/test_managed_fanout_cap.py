@@ -102,3 +102,19 @@ def test_escaped_description_cannot_inject_higher_capacity(tmp_path):
     manifest.write_text(r'develop: {description: "x\", fanout_cap: 8, y", fanout_cap: 1}' + '\n')
     with pytest.raises(batch_state.Refusal, match='direct develop.fanout_cap'):
         batch_state.cap(str(tmp_path), None, managed=True)
+
+
+@pytest.mark.parametrize('text', [
+    'develop:\n  description: "some text\n  fanout_cap: 8\n  more text"\n  fanout_cap: 1\n',
+    'small: &small 1\ndevelop:\n  fanout_cap: *small\n',
+    'develop:\n  fanout_cap: &small 1\n',
+    'develop: {fanout_cap: 1,\n  other: 2}\n',
+    'develop:\n  <<: {fanout_cap: 1}\n',
+])
+def test_unsupported_mapping_cannot_infer_a_higher_cap(tmp_path, text):
+    import batch_state
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(text)
+    with pytest.raises(batch_state.Refusal, match='direct develop.fanout_cap'):
+        batch_state.cap(str(tmp_path), None, managed=True)

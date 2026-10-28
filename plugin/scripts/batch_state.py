@@ -348,6 +348,8 @@ def cap(repo, explicit, managed=False):
             for token in lexer:
                 if token.startswith('#'):
                     break
+                require(not token.startswith(('*', '&')) and token.strip('\"\'') != '<<',
+                        'capacity aliases or merges unsupported; use a direct ' + section + '.' + key)
                 result.extend(list(token) if all(c in '{},:[]' for c in token) else [token])
             return result
         except ValueError as exc:
@@ -370,8 +372,7 @@ def cap(repo, explicit, managed=False):
             if indent:
                 if child_indent is None:
                     child_indent = indent
-                if indent != child_indent or not re.match(
-                        r"^\s*(?:" + key + "|'" + key + "'|\"" + key + r"\")\s*:", line):
+                if indent != child_indent:
                     continue
             parts = tokens(line)
             if not parts:
@@ -388,6 +389,8 @@ def cap(repo, explicit, managed=False):
                     require(not managed or not parts[2].startswith(('*', '&')),
                             'capacity aliases unsupported; use a direct develop.fanout_cap')
                     continue
+                require(parts[-1] == '}',
+                        'multiline capacity mapping unsupported; use a direct ' + section + '.' + key)
                 depth, entry = 0, []
                 for token in parts[2:]:
                     if token in {'{', '['}:
