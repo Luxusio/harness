@@ -23,6 +23,7 @@ FIXTURES = os.path.join(REPO_ROOT, "tests", "fixtures", "gstack_adoption")
 def _run_gate(file_path, tool_name="Write", env_extra=None):
     """Run prewrite_gate.py with a crafted stdin JSON payload."""
     payload = json.dumps({
+        "session_id": "pytest-hook",
         "tool_name": tool_name,
         "tool_input": {"file_path": file_path},
     })
@@ -49,10 +50,15 @@ def _make_scratch_task(tmp_dir, progress_content=None):
     # Write PLAN.md so plan-first check passes
     with open(os.path.join(task_dir, "PLAN.md"), "w") as f:
         f.write("# Test plan\n")
-    # Write .active
-    active_file = os.path.join(tasks_dir, ".active")
-    with open(active_file, "w") as f:
-        f.write(task_dir)
+    control = dict(run_id="0198c349-5800-7000-8000-000000000001", execution_mode="standard",
+                   required_lenses=["review-code", "qa-cli"], closed=False)
+    with open(os.path.join(task_dir, "TASK.json"), "w") as f:
+        json.dump(control, f)
+    sessions = os.path.join(tasks_dir, ".active_sessions")
+    os.makedirs(sessions, exist_ok=True)
+    with open(os.path.join(sessions, "pytest-hook.json"), "w") as f:
+        json.dump(dict(session_id="pytest-hook", task_dir=task_dir,
+                       task_id=os.path.basename(task_dir), run_id=control["run_id"]), f)
     # Write PROGRESS.md if provided
     if progress_content is not None:
         with open(os.path.join(task_dir, "PROGRESS.md"), "w") as f:

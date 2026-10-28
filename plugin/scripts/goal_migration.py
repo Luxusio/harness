@@ -856,7 +856,9 @@ def _control_bindings(repo):
     references = set()
     legacy = _read(repo, "doc/harness/tasks/.active", 4096)
     if legacy and legacy.strip():
-        first = legacy.decode("utf-8").strip().splitlines()[0]
+        # Explicit migration alone reads the retired focus. It cannot safely
+        # reinterpret a referenced historical control as a current generation.
+        first = legacy.decode("utf-8", errors="replace").strip().splitlines()[0]
         references.add(Path(first.rstrip("/")).name)
     for name, _ in _entries(repo, "doc/harness/tasks/.active_sessions") or []:
         if not name.endswith(".json"):
@@ -1254,21 +1256,116 @@ def _control_apply(repo):
         return _control_report(journal)
 
 
+LEGACY_FOCUS_ARCHIVE = CONTROL_ARCHIVE + "/legacy-focus.json"
+LEGACY_FOCUS_PATH = "doc/harness/tasks/.active"
+
+
+def _legacy_focus_plan(repo):
+    """Preserve shared focus as opaque history, never infer a session owner."""
+    from codex_hook_registration import workspace_roots
+    roots = workspace_roots(str(repo))
+    _require(roots and roots[0] == str(repo), "legacy focus migration requires the common repository root")
+    raw = _read_publication(repo, LEGACY_FOCUS_ARCHIVE, 16 * LIMIT)
+    if raw is None:
+        entries = []
+        for root in roots:
+            with _control_workspace(repo, root) as source:
+                before = _read(source, LEGACY_FOCUS_PATH, 4096)
+            if before is not None:
+                entries.append(dict(root=root, before=base64.b64encode(before).decode()))
+        return dict(version=1, entries=entries), False
+    archive = _json(raw)
+    _require(isinstance(archive, dict) and set(archive) == {"version", "entries"}
+             and archive["version"] == 1 and isinstance(archive["entries"], list)
+             and len(archive["entries"]) <= 257, "invalid legacy focus archive")
+    seen = set()
+    for entry in archive["entries"]:
+        _require(isinstance(entry, dict) and set(entry) == {"root", "before"}
+                 and isinstance(entry["root"], str) and os.path.isabs(entry["root"])
+                 and str(Path(entry["root"])) == entry["root"]
+                 and ".." not in Path(entry["root"]).parts
+                 and entry["root"] not in seen, "invalid legacy focus repository")
+        _require(entry["root"] in roots or not os.path.lexists(entry["root"]),
+                 "unregistered legacy focus repository")
+        seen.add(entry["root"])
+        try:
+            before = base64.b64decode(entry["before"], validate=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Goal migration: invalid legacy focus bytes") from exc
+        _require(len(before) <= 4096, "oversized legacy focus bytes")
+    # A completed archive is immutable. A new legacy publisher is a real
+    # compatibility regression, not permission to overwrite archived custody.
+    for root in roots:
+        with _control_workspace(repo, root) as source:
+            current = _read(source, LEGACY_FOCUS_PATH, 4096)
+        matching = next((row for row in archive["entries"] if row["root"] == root), None)
+        expected = base64.b64decode(matching["before"], validate=True) if matching else None
+        _require(current is None or current == expected and matching is not None,
+                 "legacy focus changed after preparation")
+    return archive, True
+
+
+def _legacy_focus_report(repo, archive):
+    remaining = []
+    for row in archive["entries"]:
+        if not os.path.lexists(row["root"]):
+            continue  # Successfully disposed worktrees retain immutable custody.
+        with _control_workspace(repo, row["root"]) as source:
+            if _read(source, LEGACY_FOCUS_PATH, 4096) is not None:
+                remaining.append(str(source / LEGACY_FOCUS_PATH))
+    return dict(status="preview" if remaining else "complete", remaining=remaining,
+                archived=len(archive["entries"]), archive=LEGACY_FOCUS_ARCHIVE)
+
+
+def _legacy_focus_apply(repo):
+    from _lib import active_session_transaction
+    from codex_hook_registration import workspace_roots
+    archive, exists = _legacy_focus_plan(repo)
+    if not archive["entries"]:
+        return _legacy_focus_report(repo, archive)
+    roots = workspace_roots(str(repo))
+    with ExitStack() as stack:
+        for root in roots:
+            stack.enter_context(active_session_transaction(root))
+        lock = _open_lock(repo, CONTROL_ARCHIVE + "/.lock")
+        stack.callback(os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current, now_exists = _legacy_focus_plan(repo)
+        _require(current == archive and exists == now_exists,
+                 "legacy focus changed before preparation")
+        if not exists:
+            # Exact bytes are durable before the first destructive operation.
+            _write(repo, LEGACY_FOCUS_ARCHIVE, _encode(archive))
+        for row in archive["entries"]:
+            if row["root"] not in roots:
+                continue  # Already retired before its registered checkout was disposed.
+            with _control_workspace(repo, row["root"]) as source:
+                _retire(source, LEGACY_FOCUS_PATH,
+                        _hash(base64.b64decode(row["before"], validate=True)))
+        return _legacy_focus_report(repo, archive)
+
+
 @_pinned
 def preview(repo_root):
     repo = Path(repo_root)
+    focus, _ = _legacy_focus_plan(repo)
+    focus_report = _legacy_focus_report(repo, focus)
     controls = _control_preview(repo)
     # Legacy Goal inspection may rely on the controls being converted; its own
     # importer accepts both exact forms only within this explicit migration.
     legacy = _preview_goals(repo)
     if legacy["status"] == "complete" and controls["status"] != "complete":
         legacy = dict(legacy, status=controls["status"], next_action="Apply this explicit task-control migration.")
-    return dict(legacy, task_control_migration=controls)
+    if legacy["status"] == "complete" and focus_report["status"] != "complete":
+        legacy = dict(legacy, status="preview", next_action="Apply this explicit legacy focus migration.")
+    return dict(legacy, task_control_migration=controls, legacy_focus_migration=focus_report)
 
 
 @_pinned
 def apply(repo_root):
     repo = Path(repo_root)
+    _legacy_focus_plan(repo)  # Refuse unsafe input before any control conversion.
     controls = _control_apply(repo)
     legacy = _apply_goals(repo)
-    return dict(legacy, task_control_migration=controls)
+    focus = _legacy_focus_apply(repo)
+    return dict(legacy, task_control_migration=controls, legacy_focus_migration=focus)

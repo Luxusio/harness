@@ -66,6 +66,17 @@
             "statusMessage": "Routing hint on bash failures"
           }
         ]
+      },
+      {
+        "matcher": "mcp__plugin_harness_harness__wbs|mcp__harness__wbs",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hook_post_tool_use.py || true",
+            "timeout": 10,
+            "statusMessage": "Binding exact task focus"
+          }
+        ]
       }
     ]
   }

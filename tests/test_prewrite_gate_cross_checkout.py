@@ -1,14 +1,4 @@
-"""C-05 cross-checkout protection for the prewrite gate.
-
-A ``harness:batch`` lead runs with its cwd in a linked worktree
-(``<main>/.claude/worktrees/<name>``). The gate's control root is then the
-worktree, so the main checkout and sibling worktrees are outside it. For such
-an out-of-root target the gate resolves the target's own Harness root and
-applies only the protected-artifact rules there: TASK.json, PLAN.md,
-TASK.json, PLAN.md, goal control JSON, and the focus
-markers are denied; plan-first and scope lock are not applied to another
-checkout. See doc/harness/patterns/prewrite-gate.md "Cross-checkout protection".
-"""
+"""Registered cross-checkout targets enforce their own exact-session gates."""
 from __future__ import annotations
 
 import importlib.util
@@ -214,17 +204,14 @@ class TestWorktreeCwdProtectsOtherCheckouts(CrossCheckoutFixture):
 
 
 class TestUnchangedBehavior(CrossCheckoutFixture):
-    def test_foreign_source_file_is_allowed_without_plan_first_or_scope_lock(self):
-        # Only C-05 crosses checkouts: plan-first, workflow-control-surface and
-        # scope-lock belong to the checkout that owns the active task, so the
-        # main checkout's ordinary source stays a silent allow from a worktree.
+    def test_registered_foreign_source_requires_target_local_focus(self):
         for target in (
             self.main / "src/app.py",
             self.main / "plugin/scripts/prewrite_gate.py",
             self.sibling / "src/app.py",
         ):
             with self.subTest(target=str(target)):
-                self.assertEqual(_gate(self.lead, target), (None, ""))
+                self.assertEqual(_gate(self.lead, target)[0], "deny")
 
     def test_non_harness_target_is_unaffected(self):
         plain = self.base / "plain"
@@ -257,9 +244,9 @@ class TestFailSafe(CrossCheckoutFixture):
 
         return cwd_only
 
-    def test_foreign_check_error_degrades_to_allow_and_logs_to_cwd_root(self):
+    def test_unregistered_foreign_discovery_error_logs_and_allows(self):
         gate = _load_gate_module()
-        target = str(self.main / f"{TASKS}/TASK__x/TASK.json")
+        target = str(self.base / "unregistered" / f"{TASKS}/TASK__x/TASK.json")
         out = io.StringIO()
         with mock.patch.object(
             gate, "harness_root_resolution", side_effect=self._resolution_failing_outside(gate),
@@ -276,14 +263,15 @@ class TestFailSafe(CrossCheckoutFixture):
         with mock.patch.object(gate, "_is_protected_artifact", side_effect=ValueError("bad")), \
                 mock.patch.object(gate, "_log_gate_error"), \
                 redirect_stdout(out):
-            gate._check_path({"cwd": str(self.lead)}, target)
+            with self.assertRaisesRegex(ValueError, "bad"):
+                gate._check_path({"cwd": str(self.lead)}, target)
         self.assertEqual(out.getvalue(), "")
 
     def test_foreign_error_does_not_drop_a_later_in_root_deny(self):
         # One apply_patch touching a foreign path first and the lead's own
         # TASK.json second: the first path's error must not end the loop.
         gate = _load_gate_module()
-        foreign = self.main / f"{TASKS}/TASK__x/TASK.json"
+        foreign = self.base / "unregistered" / f"{TASKS}/TASK__x/TASK.json"
         own = self.lead / f"{TASKS}/TASK__x/TASK.json"
         patch = (
             "*** Begin Patch\n"

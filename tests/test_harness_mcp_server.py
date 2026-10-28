@@ -40,14 +40,17 @@ import _lib as harness_lib  # type: ignore
 def call_execution(server, name, args):
     """Unit-test private execution owners without restoring public aliases."""
     handler = server._EXECUTION.get(name)
-    return server._invoke(name, handler, args) if handler else server.call_tool(name, args)
+    # These tests model a process with an exact Claude identity unless they
+    # explicitly clear it to exercise deferred hook binding.
+    with mock.patch.dict(os.environ, {"HARNESS_SESSION_ID": os.environ.get("HARNESS_SESSION_ID", "pytest-mcp")}):
+        return server._invoke(name, handler, args) if handler else server.call_tool(name, args)
 
 
 EXPECTED_TOOLS = {"wbs"}
 
 
 def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -> None:
-    sid = session_id or harness_lib.current_session_id()
+    sid = session_id or "pytest-mcp"
     sessions = Path(repo_root) / "doc/harness/tasks/.active_sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     control = harness_server.read_task_control(task_dir)
@@ -59,12 +62,14 @@ def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -
     (sessions / f"{sid}.json").write_text(
         json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8",
     )
-    (Path(repo_root) / "doc/harness/tasks/.active").write_text(
-        task_dir + "\n", encoding="utf-8",
-    )
 
 
 class HarnessMcpServerTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"HARNESS_SESSION_ID": "pytest-mcp", "CLAUDE_SESSION_ID": "", "HARNESS_RUNTIME": "claude"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _run_git(self, cwd: str, *args: str) -> None:
         subprocess.run(
             ["git", *args],
@@ -956,7 +961,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 task_dir = Path(self._make_task(tmp, f"TASK__limit-{field}"))
                 self._write_marker_fixture(tmp, str(task_dir))
                 task_before = (task_dir / "TASK.json").read_bytes()
-                marker = Path(tmp) / "doc/harness/tasks/.active"
+                marker = Path(tmp) / "doc/harness/tasks/.active_sessions/pytest-mcp.json"
                 marker_before = marker.read_bytes()
                 args = {
                     "task_id": task_dir.name,
@@ -987,7 +992,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 task_dir = Path(self._make_task(tmp, f"TASK__invalid-unicode-{mode}"))
                 self._write_marker_fixture(tmp, str(task_dir))
                 task_before = (task_dir / "TASK.json").read_bytes()
-                marker = Path(tmp) / "doc/harness/tasks/.active"
+                marker = Path(tmp) / "doc/harness/tasks/.active_sessions/pytest-mcp.json"
                 marker_before = marker.read_bytes()
                 args = {
                     "task_id": task_dir.name,
@@ -1379,10 +1384,9 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_task_start_absent_task_refuses_competing_open_focus_without_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
             focused = Path(self._make_task(tmp, "TASK__focused-open"))
-            self._write_marker_fixture(tmp, str(focused), session_id="default")
+            self._write_marker_fixture(tmp, str(focused), session_id="pytest-mcp")
             marker_paths = [
-                Path(tmp) / "doc/harness/tasks/.active",
-                Path(tmp) / "doc/harness/tasks/.active_sessions/default.json",
+                Path(tmp) / "doc/harness/tasks/.active_sessions/pytest-mcp.json",
             ]
             marker_before = {path: path.read_bytes() for path in marker_paths}
             candidate = Path(tmp) / "doc/harness/tasks/TASK__must-stay-absent"
@@ -1499,7 +1503,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             task_dir = Path(self._make_task(tmp, "TASK__preserve-unlink-failure"))
             blocked = task_dir / "BLOCKED.md"
             blocked.write_bytes(b"# BLOCKED\nexact blocker\n")
-            marker_before = harness_server.active_marker_snapshot(tmp, session_id="default")
+            marker_before = harness_server.active_marker_snapshot(tmp, session_id="pytest-mcp")
             real_unlink = harness_server.os.unlink
 
             def fail_blocker_unlink(path, *args, **kwargs):
@@ -1516,7 +1520,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("blocker unlink unavailable", result["structuredContent"]["error"])
             self.assertEqual(blocked.read_bytes(), b"# BLOCKED\nexact blocker\n")
             self.assertEqual(
-                harness_server.active_marker_snapshot(tmp, session_id="default"), marker_before,
+                harness_server.active_marker_snapshot(tmp, session_id="pytest-mcp"), marker_before,
             )
 
     def test_task_start_blocked_preserve_attempts_both_rollback_legs(self):
@@ -1890,8 +1894,8 @@ class HarnessMcpServerTests(unittest.TestCase):
             sessions.mkdir(parents=True)
             outside = Path(tmp) / "outside-marker"
             outside.write_text("preserve\n", encoding="utf-8")
-            marker = tasks / ".active"
-            marker.symlink_to(outside)
+            marker = sessions / "pytest-mcp.json"
+            marker.write_text("{}\n", encoding="utf-8")
             snapshot = harness_server.active_marker_snapshot(tmp)
             marker.unlink()
             marker.write_text("replacement\n", encoding="utf-8")

@@ -166,7 +166,7 @@ class TestCodexHookWrappers(unittest.TestCase):
 
     def test_thread_id_selects_active_marker_without_runtime_flag(self):
         lib = _load("_lib")
-        thread_id = "thread/id:current"
+        thread_id = "0198c349-5800-7000-8000-000000000001"
         with tempfile.TemporaryDirectory() as repo, \
              mock.patch.dict(
                  "os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True
@@ -189,12 +189,12 @@ class TestCodexHookWrappers(unittest.TestCase):
 
             marker = (
                 Path(repo)
-                / "doc/harness/tasks/.active_sessions/thread_id_current.json"
+                / "doc/harness/tasks/.active_sessions/0198c349-5800-7000-8000-000000000001.json"
             )
             self.assertTrue(marker.is_file())
             self.assertEqual(
                 json.loads(marker.read_text())["session_id"],
-                "thread_id_current",
+                thread_id,
             )
 
     def test_explicit_session_ids_take_precedence_over_thread_id(self):

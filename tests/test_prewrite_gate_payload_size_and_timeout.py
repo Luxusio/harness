@@ -345,11 +345,19 @@ class CodexWrapperFallback(_TmpRepoCase):
             MANIFEST + "strict_compliance_requires_delegation: true\n", encoding="utf-8",
         )
         planless = _make_repo(self.base, "planless")
-        (planless / TASKS / "TASK__y").mkdir()
-        (planless / TASKS / ".active").write_text("TASK__y\n", encoding="utf-8")
+        task = planless / TASKS / "TASK__y"
+        task.mkdir()
+        run = "0198c349-5800-7000-8000-000000000001"
+        (task / "TASK.json").write_text(json.dumps(dict(run_id=run, execution_mode="standard",
+            required_lenses=["review-code", "qa-cli"], closed=False)))
+        sessions = planless / TASKS / ".active_sessions"
+        sessions.mkdir(exist_ok=True)
+        (sessions / "planless.json").write_text(json.dumps(dict(session_id="planless",
+            task_dir=str(task), task_id=task.name, run_id=run)))
         for repo, rule in ((strict, "no-active-task"), (planless, "C-02-plan-first")):
             with self.subTest(rule=rule):
                 payload = _write(repo, "src/app.py", size=10)
+                payload["session_id"] = "planless"
                 (decision, reason), _size = _run_script(GATE, payload, repo)
                 self.assertEqual(decision, "deny")
                 self.assertIn(f"rule={rule}", reason)

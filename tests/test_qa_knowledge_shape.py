@@ -126,10 +126,8 @@ def red_claim_violation(node_id, cwd=ROOT, timeout=PROBE_TIMEOUT_SECONDS):
     # uncollectable node, blaming the note for the checker's own bad argv.
     #
     # HARNESS_NESTED_PROBE tells tests/conftest.py that this is a nested
-    # session: its `.active` snapshot/restore and its install-tree guard must
-    # not run. Without it the probe renames the developer's live task marker
-    # away for its duration and can unlink one a concurrent sibling test just
-    # created.
+    # session: the outer suite already owns shared environment guards, while
+    # exact marker fixtures remain isolated to their own test session.
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", node_id, "-q", "--no-header",
@@ -436,41 +434,13 @@ class KnownRedClaimsTests(unittest.TestCase):
         """
         import conftest
 
-        # Asserted on the lock, not on `_SESSION_ACTIVE_BACKUP`. The first
-        # version of this test checked that the backup global stayed None, and
-        # it could not fail: by the time it runs, the outer session has already
-        # renamed `.active` away, so the unguarded path also finds no marker
-        # and also sets None. Deleting the guard left the suite green —
-        # measured. Taking the lock is the first thing the unguarded path does
-        # and is observable whatever the marker's state.
-        #
-        # The outer session's own backup path lives in that global, so it is
-        # saved and restored: clobbering it would make the real
-        # `pytest_sessionfinish` skip restoring the developer's `.active`,
-        # causing the very loss this test exists to prevent.
-        saved = conftest._SESSION_ACTIVE_BACKUP
-        try:
-            with mock.patch.dict(os.environ, {"HARNESS_NESTED_PROBE": "1"}), \
-                    mock.patch.object(conftest, "active_marker_lock") as lock:
-                self.assertTrue(conftest.is_nested_probe())
-                conftest.pytest_sessionstart(None)
-                lock.assert_not_called()
-
-                # sessionfinish only reaches the lock when a backup path is
-                # set, so exercise it in that state: otherwise its guard is an
-                # unreachable branch that could be deleted unnoticed. A nested
-                # session inheriting a populated global must not restore over
-                # the parent's marker.
-                sidecar = Path(
-                    self.enterContext(__import__("tempfile").TemporaryDirectory()),
-                ) / "active.backup"
-                sidecar.write_text("parent", encoding="utf-8")
-                conftest._SESSION_ACTIVE_BACKUP = str(sidecar)
-                conftest.pytest_sessionfinish(None, 0)
-                lock.assert_not_called()
-                self.assertTrue(sidecar.is_file(), "the probe consumed the backup")
-        finally:
-            conftest._SESSION_ACTIVE_BACKUP = saved
+        # There is no shared-marker session lifecycle to disturb. Exact fixture
+        # setup/restore owns only its isolated test session.
+        self.assertFalse(hasattr(conftest, "_SESSION_ACTIVE_BACKUP"))
+        self.assertFalse(hasattr(conftest, "pytest_sessionstart"))
+        self.assertFalse(hasattr(conftest, "pytest_sessionfinish"))
+        with mock.patch.dict(os.environ, {"HARNESS_NESTED_PROBE": "1"}):
+            self.assertTrue(conftest.is_nested_probe())
 
         # Third guard site: the install-tree fixture. Driven through its
         # generator because the decorated object is a fixture, not a callable.
@@ -488,13 +458,7 @@ class KnownRedClaimsTests(unittest.TestCase):
             self.assertFalse(conftest.is_nested_probe())
 
     def test_the_probe_marks_itself_as_a_nested_session(self):
-        """Without the flag the probe mutates the live repo's task marker.
-
-        `tests/conftest.py`'s session hooks rename `doc/harness/tasks/.active`
-        away for the session's duration and unlink whatever `.active` they find
-        before restoring, so a nested run in the real tree can destroy a marker
-        an unlocked sibling test just created.
-        """
+        """The outer suite owns install-tree and learning-ledger guards."""
         with mock.patch.object(
             subprocess, "run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),

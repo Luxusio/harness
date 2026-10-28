@@ -30,7 +30,7 @@ def _invoke(repo_root: str, *, env_extra=None, payload: dict | None = None) -> s
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO_ROOT / "plugin")
     if env_extra:
         env.update(env_extra)
-    stdin = json.dumps(payload) if payload is not None else ""
+    stdin = json.dumps({"session_id": "pytest-prompt", **(payload or {})})
     return subprocess.run(
         [sys.executable, str(PROMPT)],
         input=stdin,
@@ -83,7 +83,11 @@ def _build_scratch_repo(base: Path, *,
             (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
         if checks_yaml is not None:
             (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
-        (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
+        sessions = tasks / ".active_sessions"
+        sessions.mkdir(exist_ok=True)
+        (sessions / "pytest-prompt.json").write_text(json.dumps(dict(
+            session_id="pytest-prompt", task_dir=str(task_dir), task_id=active_task_id,
+            run_id=RUN_ID, updated="2026-10-28T00:00:00Z")), encoding="utf-8")
     if suspect_notes:
         doc_dir = base / "doc" / "common"
         doc_dir.mkdir(parents=True, exist_ok=True)
@@ -573,7 +577,7 @@ raise SystemExit(result)
 """
             env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(REPO_ROOT / "plugin"))
             r = subprocess.run(
-                [sys.executable, "-c", probe, str(PROMPT)], input="",
+                [sys.executable, "-c", probe, str(PROMPT)], input=json.dumps({"session_id": "pytest-prompt"}),
                 capture_output=True, text=True, cwd=base, env=env, timeout=15,
             )
         self.assertEqual(r.returncode, 0)

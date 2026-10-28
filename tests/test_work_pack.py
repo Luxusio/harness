@@ -324,7 +324,9 @@ def test_prewrite_stored_custody_preserves_assignment(tmp_path, monkeypatch):
         observed.append(args[-1])
         return assignment(*args, **kwargs)
     monkeypatch.setattr(wbs, "require_source_assignment", require_assignment)
-    monkeypatch.setattr(prewrite_gate, "resolve_active_task_dir", lambda _: str(directory))
+    from test_harness_mcp_server import _write_marker_fixture
+    monkeypatch.setenv("HARNESS_SESSION_ID", "pack-prewrite")
+    _write_marker_fixture(str(pool.repo), str(directory), session_id="pack-prewrite")
     for active in (False, True):
         current = dict(state)
         if active:

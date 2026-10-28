@@ -148,15 +148,13 @@ unwanted changes.
 **When:** A second mutating request arrives while another open task holds this
 session's write focus.
 **Enforced by:** MCP `wbs(action="open")` and, on Codex, the PostToolUse task binding.
-While this session's marker (or, when it names no open task, the legacy
-`.active`) names another open task, `wbs(action="open")` refuses with "another open
-task owns the resolvable session focus", both for a new task and for resuming
-an existing task by id. Once the focused task is closed or parked with
-`wbs(action="block")`, resuming an existing task by id re-points focus to it. WBS dependencies determine ready outcomes; there is no Goal child queue. When the Codex MCP process has
-no `CODEX_THREAD_ID` (the usual case), `wbs(action="open")` skips this refusal;
-PostToolUse then binds the thread to the returned task only when the thread
-holds no other open task, and otherwise fences both tasks and clears the
-thread's binding, so neither holds source-write focus while both stay open.
+Only this exact session's marker, matching the current open TASK.json run and
+without a conflict fence, grants source-write focus. Legacy `.active` and shared
+session hints grant no authority. A process with no exact session identity defers
+publication to the trusted PostToolUse handler for a successful WBS open/context
+result. Competing open results fence the exact session, so neither task authorizes
+source writes. Close or park the focused task before binding another task. WBS
+dependencies determine ready outcomes; there is no Goal child queue.
 **On violation:** hard-block. `wbs(action="open")` returns the refusal, or on Codex the
 conflicting binding is fenced; the second request is never merged into the
 focused task. Close or park the focused task, then call `wbs(action="open")` again.
@@ -254,7 +252,7 @@ break it immediately.
 ### C-17
 
 **Title:** Turn-end/continuation guidance while a task is open.
-**When:** A task's `.active` marker exists and work is unfinished.
+**When:** This session holds an exact current open task binding and work is unfinished.
 **Enforced by:** `wbs(action="close")` requires current WBS checks; `wbs(action="block")` publishes a real unfinished environmental blocker. Persistent continuation across turns is native `/goal`.
 **On violation:** soft — open work stays open and resumes through `wbs(action="open")`/`wbs(action="context")`. Cancel only on explicit user instruction; never offer cancellation as a routine blocker workaround.
 **Why:** A turn ending is not task completion. Parking grants no PASS and does not bypass close. Resume preserves the same run and measured checks. Missing receipt recording is never a blocker; actual review PASS still precedes actual QA.

@@ -27,7 +27,13 @@ def active(root, plan=False):
 
     tasks = root / 'doc/harness/tasks'
     task = Path(_write_task_state(str(tasks), 'lead', 'open'))
-    (tasks / '.active').write_text(str(task) + '\n')
+    sessions = tasks / '.active_sessions'
+    sessions.mkdir(exist_ok=True)
+    control = json.loads((task / 'TASK.json').read_text())
+    (sessions / 'codex-prewrite-fixture.json').write_text(json.dumps(dict(
+        session_id='codex-prewrite-fixture', task_dir=str(task), task_id=task.name,
+        run_id=control['run_id'], updated='2026-10-28T00:00:00Z')))
+
     if plan:
         (task / 'PLAN.md').write_text('# Approved scope\n')
     return task
@@ -132,6 +138,7 @@ def test_symlink_outside_main_is_still_denied(tmp_path):
 def test_protected_only_fallback_resolves_worktree_without_enabling_source_gate(tmp_path):
     from test_prewrite_gate_payload_size_and_timeout import _load, _escapes_unset
     from unittest import mock
+    sys.path.insert(0, str(GATE.parent))
     import _lib as lib
 
     main, worktree = setup(tmp_path)

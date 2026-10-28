@@ -282,6 +282,25 @@ def _task_arguments(data: dict) -> dict | None:
     return values[0] if values else {}
 
 
+def _successful_task_response(response):
+    """Decode the bounded structured/text envelope used by both MCP runtimes."""
+    if not isinstance(response, dict) or response.get("isError") is True or response.get("success") is False:
+        return None
+    candidate = response.get("structuredContent", response)
+    if "structuredContent" not in response and isinstance(response.get("content"), list):
+        texts = [item.get("text") for item in response["content"]
+                 if isinstance(item, dict) and item.get("type") == "text"]
+        if len(texts) != 1 or not isinstance(texts[0], str) or len(texts[0]) > 1024 * 1024:
+            return None
+        try:
+            candidate = json.loads(texts[0])
+        except (ValueError, RecursionError):
+            return None
+    if not isinstance(candidate, dict) or candidate.get("error"):
+        return None
+    return candidate
+
+
 def _task_result(payload: bytes) -> tuple[str, str, str]:
     """Extract one successful task result from known Codex hook envelopes."""
     data = _payload_data(payload)
@@ -297,8 +316,8 @@ def _task_result(payload: bytes) -> tuple[str, str, str]:
         or str(response.get("status") or "").lower() in {"error", "failed"}
     ):
         return "", "", ""
-    candidate = response.get("structuredContent", response)
-    if not isinstance(candidate, dict) or candidate.get("error"):
+    candidate = _successful_task_response(response)
+    if candidate is None:
         return "", "", ""
     task_dir = candidate.get("task_dir")
     task_id = candidate.get("task_id")
@@ -361,8 +380,8 @@ def _task_result_binding(payload: bytes, status_out: dict | None):
     requested_workspace = tool_input.get("workspace")
     if requested_workspace is not None:
         response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
-        candidate = response.get("structuredContent", response)
-        if candidate.get("workspace") != requested_workspace:
+        candidate = _successful_task_response(response)
+        if candidate is None or candidate.get("workspace") != requested_workspace:
             return None
         try:
             control_root = resolve_registered_worktree(roots[0], requested_workspace) or roots[0]
@@ -499,7 +518,6 @@ def _bind_task_session(
                     control_root,
                     canonical_task,
                     session_id=thread_id,
-                    publish_legacy=False,
                 )
                 if status_out is not None:
                     status_out.update(status=REGISTERED, reason="")

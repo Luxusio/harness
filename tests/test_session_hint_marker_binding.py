@@ -67,70 +67,44 @@ class SessionHintTests(unittest.TestCase):
 
 
 class TaskStartMarkerBindingTests(unittest.TestCase):
-    def _call(self, repo_root: str, name: str, args: dict) -> dict:
-        with mock.patch.object(
-            harness_server, "find_repo_root", return_value=repo_root,
+    def _call(self, repo_root, name, args, session_id=""):
+        with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root), mock.patch.dict(
+            os.environ, {"HARNESS_SESSION_ID": session_id, "CLAUDE_SESSION_ID": "", "HARNESS_RUNTIME": "claude"},
         ):
             return call_execution(harness_server, name, args)
 
-    def _marker_names(self, repo_root: str) -> list[str]:
+    def _marker_names(self, repo_root):
         sessions = Path(repo_root) / "doc/harness/tasks/.active_sessions"
-        if not sessions.is_dir():
-            return []
-        return sorted(p.name for p in sessions.iterdir() if p.suffix == ".json")
+        return sorted(p.name for p in sessions.glob("*.json")) if sessions.is_dir() else []
 
-    def test_task_start_binds_marker_to_hinted_session(self):
-        """The outage regression: hook sid and marker filename must agree."""
+    def test_shared_hint_never_supplies_server_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             harness_lib.write_session_hint(tmp, REAL_SID)
             result = self._call(tmp, "task_start", {"task_id": "TASK__hinted"})
             self.assertNotIn("isError", result)
+            self.assertEqual(self._marker_names(tmp), [])
+            self.assertEqual(harness_lib.resolve_session_task_binding(tmp, REAL_SID), {})
+            self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
 
-            self.assertEqual(self._marker_names(tmp), [f"{REAL_SID}.json"])
-
-            task_dir = str(Path(tmp) / "doc/harness/tasks/TASK__hinted")
-            marker = json.loads(
-                (Path(tmp) / "doc/harness/tasks/.active_sessions"
-                 / f"{REAL_SID}.json").read_text(encoding="utf-8")
-            )
-            control = harness_lib.read_task_control(task_dir)
-            self.assertEqual(marker["session_id"], REAL_SID)
-            self.assertEqual(marker["run_id"], control["run_id"])
-
-            # The hook-side resolution that was returning {} must now resolve.
-            bound = harness_lib.resolve_session_task_binding(tmp, REAL_SID)
-            self.assertEqual(
-                os.path.realpath(bound.get("task_dir", "")),
-                os.path.realpath(task_dir),
-            )
-            self.assertEqual(bound.get("run_id"), control["run_id"])
-
-    def test_foreign_session_stays_unbound(self):
-        """Exact-session isolation must survive the fix."""
+    def test_process_identity_binds_only_its_current_run(self):
         with tempfile.TemporaryDirectory() as tmp:
-            harness_lib.write_session_hint(tmp, REAL_SID)
-            self._call(tmp, "task_start", {"task_id": "TASK__isolated"})
-            self.assertEqual(
-                harness_lib.resolve_session_task_binding(tmp, "some-other-session"),
-                {},
-            )
-
-    def test_without_hint_falls_back_to_default_marker(self):
-        """No hint (Codex, hookless installs) keeps the legacy behavior."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(
-                os.environ,
-                {"CODEX_SESSION_ID": "", "CODEX_THREAD_ID": ""},
-                clear=False,
-            ):
-                result = self._call(tmp, "task_start", {"task_id": "TASK__unhinted"})
+            harness_lib.write_session_hint(tmp, "foreign-session")
+            result = self._call(tmp, "task_start", {"task_id": "TASK__exact"}, REAL_SID)
             self.assertNotIn("isError", result)
-            self.assertEqual(self._marker_names(tmp), ["default.json"])
-            # And the pre-fix failure mode is still reproduced, by design:
-            # "default" is never a valid lifecycle binding.
-            self.assertEqual(
-                harness_lib.resolve_session_task_binding(tmp, "default"), {},
-            )
+            self.assertEqual(self._marker_names(tmp), [REAL_SID + ".json"])
+            task_dir = str(Path(tmp) / "doc/harness/tasks/TASK__exact")
+            bound = harness_lib.resolve_session_task_binding(tmp, REAL_SID)
+            self.assertEqual(bound["task_dir"], task_dir)
+            self.assertEqual(bound["run_id"], harness_lib.read_task_control(task_dir)["run_id"])
+            self.assertEqual(harness_lib.resolve_session_task_binding(tmp, "foreign-session"), {})
+            self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
+
+    def test_no_identity_defers_without_default_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._call(tmp, "task_start", {"task_id": "TASK__deferred"})
+            self.assertNotIn("isError", result)
+            self.assertEqual(self._marker_names(tmp), [])
+            self.assertEqual(harness_lib.resolve_session_task_binding(tmp, "default"), {})
 
 
 if __name__ == "__main__":

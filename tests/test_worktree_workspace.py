@@ -77,12 +77,11 @@ def _worktree(main: Path, name: str) -> Path:
 def _setup(tmp_path):
     main = _repo(tmp_path / "main")
     wt = _worktree(main, "lead")
-    lib.write_session_hint(str(main), SID)
     return main, wt
 
 
 def _call(main: Path, name: str, args: dict) -> dict:
-    with mock.patch.object(harness_server, "find_repo_root", return_value=str(main)):
+    with mock.patch.object(harness_server, "find_repo_root", return_value=str(main)), mock.patch.dict(os.environ, {"HARNESS_SESSION_ID": SID}):
         return call_execution(harness_server, name, args)
 
 
@@ -110,11 +109,12 @@ def test_task_start_with_workspace_creates_task_and_marker_in_worktree(tmp_path)
     assert not result.get("isError"), result
     data = _payload(result)
     assert data["task_dir"] == str(wt / TASKS / "TASK__lead")
-    # Session identity comes from the control root's hint, never "default".
+    # The process supplies its exact identity; a shared hint is not authority.
     assert _markers(wt) == [f"{SID}.json"]
     assert not (main / TASKS / "TASK__lead").exists()
     bound = lib.resolve_session_task_binding(str(wt), SID)
     assert bound["task_dir"] == data["task_dir"]
+    assert not (wt / TASKS / '.active').exists()
 
 
 def test_followup_tools_route_by_workspace_and_miss_without_it(tmp_path):
@@ -206,7 +206,7 @@ def test_task_blocked_on_worktree_task_leaves_main_markers_untouched(tmp_path):
     assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
     assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
     before = {p: (main / TASKS / ".active_sessions" / p).read_bytes() for p in _markers(main)}
-    legacy = (main / TASKS / ".active").read_bytes()
+    assert not (main / TASKS / ".active").exists()
     result = _call(main, "task_blocked", {
         "task_id": "TASK__lead", "workspace": str(wt),
         "blocked_reason": "probe", "unblock_condition": "probe",
@@ -214,7 +214,7 @@ def test_task_blocked_on_worktree_task_leaves_main_markers_untouched(tmp_path):
     assert not result.get("isError"), result
     assert (wt / TASKS / "TASK__lead/BLOCKED.md").is_file()
     assert {p: (main / TASKS / ".active_sessions" / p).read_bytes() for p in _markers(main)} == before
-    assert (main / TASKS / ".active").read_bytes() == legacy
+    assert not (main / TASKS / ".active").exists()
     assert lib.resolve_session_task_binding(str(wt), SID) == {}
 
 

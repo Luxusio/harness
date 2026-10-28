@@ -18,11 +18,13 @@ from __future__ import annotations
 import collections
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 import pytest
@@ -97,15 +99,9 @@ _INSTALL_TREE_ROOTS = _default_install_tree_roots()
 # `test_qa_knowledge_shape.red_claim_violation`, which probes whether a
 # known-red note's node still fails.
 #
-# Such a session runs with cwd=REPO_ROOT and so re-enters the session hooks
-# below, which is actively harmful rather than merely wasteful: the marker
-# snapshot renames the developer's live `.active` away for the probe's
-# duration, and `pytest_sessionfinish` unlinks whatever `.active` it finds
-# before restoring — so a marker created by an unlocked sibling test running
-# concurrently can be destroyed. Measured 2026-09-18 with a 10ms poller: 13
-# consecutive samples with `.active` absent and a session-backup sidecar
-# present. `doc/harness/REQ__test-suite-determinism-under-xdist.md` rule 2
-# forbids exactly this.
+# Nested probes share the outer process environment. Exact marker fixtures isolate
+# their own test session; no suite-wide live-session marker is renamed or removed.
+# The outer suite owns shared environment protection for the nested probe.
 #
 # The install-tree guard is skipped for the same reason in reverse: the nested
 # session inventories ~1500 installed files twice while the outer session is
@@ -434,12 +430,14 @@ def isolate_claude_install_root(tmp_path_factory):
 
 @contextlib.contextmanager
 def active_marker_lock(repo_root: str | None = None):
-    """Serialize real-repo `.active` mutations across pytest-xdist workers."""
+    """Serialize the isolated exact test-session marker across pytest workers."""
     root = repo_root or REPO_ROOT
     tasks_dir = os.path.join(root, "doc", "harness", "tasks")
     os.makedirs(tasks_dir, exist_ok=True)
-    lock_path = os.path.join(tasks_dir, ".active.fixture.lock")
-    with open(lock_path, "w", encoding="utf-8") as lock_file:
+    lock_key = hashlib.sha256(os.path.realpath(root).encode()).hexdigest()
+    lock_path = os.path.join(tempfile.gettempdir(), f"harness-fixture-{os.getuid()}-{lock_key}.lock")
+    fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -463,8 +461,7 @@ def invoke_hook(
     })
     env = os.environ.copy()
     env.setdefault("CLAUDE_PLUGIN_ROOT", os.path.join(REPO_ROOT, "plugin"))
-    # Keep hook subprocesses isolated from a real task_start-created
-    # default-session marker; fixtures intentionally own the legacy marker.
+    # Scratch fixtures own only this isolated exact session marker.
     env.setdefault("HARNESS_SESSION_ID", "pytest-hook")
     if env_extra:
         env.update(env_extra)
@@ -500,33 +497,30 @@ def scratch_task_in_real_repo(
     progress: str | None = None,
     repo_root: str | None = None,
 ):
-    """Create a scratch task dir under the real repo's doc/harness/tasks/.
+    """Bind a valid scratch run to the isolated pytest-hook exact session.
 
-    The task is removed in ``finally`` — no leaks even on test exception.
-    Also writes ``.active`` pointing at this task for the duration.
+    Atomic backup/restore touches only this session, preserving unrelated live
+    bindings even when the test body raises. No legacy focus is published.
     """
     root = repo_root or REPO_ROOT
     with active_marker_lock(root):
         tasks_dir = os.path.join(root, "doc", "harness", "tasks")
         task_id = f"TASK__{name}"
         task_dir = os.path.join(tasks_dir, task_id)
-        os.makedirs(task_dir, exist_ok=True)
-
-        # Save the real .active out of the way via atomic os.rename to a unique
-        # sidecar path. In-memory save (the previous approach) was lost whenever an
-        # exception fired between capture and restore — corrupting the harness's
-        # canonical focus marker. If the process is SIGKILLed mid-fixture, the
-        # sidecar `.active.fixture-backup.<pid>.<uuid>` survives and can be
-        # restored manually with `mv`.
-        active_marker = os.path.join(tasks_dir, ".active")
-        backup_marker = (
-            f"{active_marker}.fixture-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-        )
-        had_existing = os.path.isfile(active_marker)
+        os.mkdir(task_dir)
+        sessions = os.path.join(tasks_dir, ".active_sessions")
+        os.makedirs(sessions, exist_ok=True)
+        marker = os.path.join(sessions, "pytest-hook.json")
+        backup = f"{marker}.fixture-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        had_existing = os.path.lexists(marker)
         if had_existing:
-            os.rename(active_marker, backup_marker)
-
+            os.rename(marker, backup)
         try:
+            # UUIDv7 is the task-control schema, independent of wall-clock age.
+            run_id = "0198c349-5800-7000-8000-" + uuid.uuid4().hex[:12]
+            with open(os.path.join(task_dir, "TASK.json"), "w", encoding="utf-8") as f:
+                json.dump({"run_id": run_id, "execution_mode": "standard",
+                           "required_lenses": ["review-code", "qa-cli"], "closed": False}, f)
             if plan:
                 with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
                     f.write("# Test plan\n")
@@ -535,80 +529,18 @@ def scratch_task_in_real_repo(
             if progress is not None:
                 with open(os.path.join(task_dir, "PROGRESS.md"), "w", encoding="utf-8") as f:
                     f.write(progress)
-            with open(active_marker, "w", encoding="utf-8") as f:
-                f.write(task_dir)
+            with open(marker, "w", encoding="utf-8") as f:
+                json.dump({"session_id": "pytest-hook", "task_id": task_id,
+                           "task_dir": task_dir, "run_id": run_id, "updated": "fixture"}, f)
             yield task_dir
         finally:
             shutil.rmtree(task_dir, ignore_errors=True)
             try:
-                os.unlink(active_marker)
-            except OSError:
+                os.unlink(marker)
+            except FileNotFoundError:
                 pass
-            if had_existing and os.path.isfile(backup_marker):
-                os.rename(backup_marker, active_marker)
-
-
-_SESSION_ACTIVE_BACKUP: str | None = None
-
-
-def pytest_sessionstart(session):
-    """Snapshot the real repo's `.active` marker at session start via atomic
-    rename to a sidecar path. Restored in `pytest_sessionfinish`.
-
-    This is a safety net for test paths that mutate `.active` outside the
-    `scratch_task_in_real_repo` fixture — notably `test_harness_mcp_server.py`,
-    which calls `task_close` against the real `find_repo_root()` and removes
-    the marker as a side effect of the close protocol.
-
-    The fixture-level save/restore (`scratch_task_in_real_repo`) remains the
-    primary line of defense for normal cases; this hook catches everything
-    else with a single move.
-    """
-    global _SESSION_ACTIVE_BACKUP
-    if is_nested_probe():
-        _SESSION_ACTIVE_BACKUP = None
-        return
-    with active_marker_lock(REPO_ROOT):
-        active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
-        if not os.path.isfile(active_path):
-            _SESSION_ACTIVE_BACKUP = None
-            return
-        backup = (
-            f"{active_path}.session-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-        )
-        try:
-            os.rename(active_path, backup)
-            _SESSION_ACTIVE_BACKUP = backup
-        except OSError:
-            _SESSION_ACTIVE_BACKUP = None
-
-
-def pytest_sessionfinish(session, exitstatus):
-    """Restore the snapshotted `.active` from `pytest_sessionstart`.
-
-    Best-effort: if a test process was hard-killed mid-suite, the sidecar
-    file (`.active.session-backup.<pid>.<uuid>`) survives and the human can
-    `mv` it back manually.
-    """
-    global _SESSION_ACTIVE_BACKUP
-    if is_nested_probe():
-        _SESSION_ACTIVE_BACKUP = None
-        return
-    backup = _SESSION_ACTIVE_BACKUP
-    _SESSION_ACTIVE_BACKUP = None
-    if not backup or not os.path.isfile(backup):
-        return
-    with active_marker_lock(REPO_ROOT):
-        active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
-        # Clear any in-flight scratch marker first so rename can succeed.
-        try:
-            os.unlink(active_path)
-        except OSError:
-            pass
-        try:
-            os.rename(backup, active_path)
-        except OSError:
-            pass
+            if had_existing and os.path.lexists(backup):
+                os.rename(backup, marker)
 
 
 __all__ = [

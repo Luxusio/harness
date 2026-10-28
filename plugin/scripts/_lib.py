@@ -493,7 +493,7 @@ def _hook_payload_cwd():
     return None
 
 
-def current_session_id(default="default"):
+def current_session_id():
     raw = (
         _LAST_HOOK_INPUT.get("session_id")
         or _LAST_HOOK_INPUT.get("sessionId")
@@ -501,9 +501,9 @@ def current_session_id(default="default"):
         or os.environ.get("CODEX_SESSION_ID")
         or os.environ.get("CODEX_THREAD_ID")
         or os.environ.get("CLAUDE_SESSION_ID")
-        or default
+        or ""
     )
-    return sanitize_session_id(raw or default, default=default)
+    return raw if isinstance(raw, str) and _usable_session_hint(raw) == raw else ""
 
 
 def sanitize_session_id(value, default="default"):
@@ -1389,13 +1389,13 @@ def _registered_source_metadata_binding(control_root, source_root, relpath):
     return target
 
 
-def resolve_registered_worktree(control_root, workspace):
-    """Return ``workspace`` when it is a linked worktree of ``control_root``.
+def _registered_worktree_root(control_root, workspace):
+    """Resolve same-repository Git registration without admitting Harness use.
 
     Pure file checks, re-run on every call: canonical absolute path, a regular
     gitfile whose target sits directly under ``<control>/.git/worktrees``, a
-    matching back-pointer, and the worktree's own Harness manifest. A workspace
-    equal to the control root returns ``""`` (treated as omitted).
+    matching back-pointer. The caller separately validates Harness configuration.
+    A workspace equal to the control root returns "" (treated as omitted).
     """
     control = os.path.realpath(control_root)
     ws = str(workspace or "")
@@ -1436,9 +1436,22 @@ def resolve_registered_worktree(control_root, workspace):
         back = os.path.join(target, back)
     if os.path.realpath(back) != os.path.join(ws, ".git"):
         refuse("registered worktree back-pointer names another checkout", "gitdir_backpointer")
+    return ws
+
+
+def resolve_registered_worktree(control_root, workspace):
+    """Admit only a registered linked checkout with its own valid manifest."""
+    ws = _registered_worktree_root(control_root, workspace)
+    if not ws:
+        return ""
     root, error = harness_root_resolution(ws)
     if error or root != ws:
-        refuse("workspace does not carry its own Harness manifest", "harness_manifest")
+        raise GitBindingError(
+            "WORKSPACE_NOT_REGISTERED_WORKTREE",
+            "workspace does not carry its own Harness manifest",
+            path=ws, invariant="harness_manifest",
+            next_action="Restore the worktree's own valid Harness manifest, then retry.",
+        )
     return ws
 
 
@@ -1482,9 +1495,8 @@ def harness_root_resolution(start_dir=None):
             if nearest_git and nearest_git != current:
                 try:
                     sid = current_session_id()
-                    marker = _read_session_marker(_session_active_path(current, sid), sid)
-                    bound_task = _live_active_task_dir(current, marker.get("task_dir"))
-                    if not bound_task or marker.get("task_id") != os.path.basename(bound_task):
+                    binding = resolve_session_task_binding(current, sid)
+                    if not binding:
                         return "", ""
                 except (OSError, RuntimeError, ValueError):
                     return "", ""
@@ -1608,10 +1620,6 @@ def canonical_task_id(task_id=None, slug=None, task_dir=None,
 ACTIVE_SESSIONS_DIRNAME = ".active_sessions"
 
 
-def _legacy_active_path(repo_root):
-    return os.path.join(repo_root, TASK_DIR, ".active")
-
-
 def _active_sessions_dir(repo_root):
     return _validated_control_dir(
         repo_root,
@@ -1636,16 +1644,10 @@ def _usable_session_hint(value):
 
 
 def write_session_hint(repo_root, session_id):
-    """Record the runtime session id for MCP hosts that never receive it.
+    """Record an advisory hook hint; never use it as session authority.
 
-    Claude Code passes no session id into the MCP server environment, so
-    ``current_session_id()`` resolves to ``default`` there and the active marker
-    lands under a filename no lifecycle hook ever reads. Hooks *do* receive the
-    real id; recording it here lets ``task_start`` bind the marker correctly at
-    creation time instead of repairing it afterwards.
-
-    Best-effort by contract: this runs inside hooks, so any failure degrades to
-    "no hint" (and the conservative ``default`` marker) rather than raising.
+    Multiple sessions share this file, so it cannot authenticate an MCP caller.
+    Hooks publish exact task focus from their trusted successful tool results.
     """
     sid = _usable_session_hint(session_id)
     if not sid:
@@ -1669,14 +1671,16 @@ def read_session_hint(repo_root):
 
 
 def _session_active_path(repo_root, session_id=None):
-    sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+    sid = current_session_id() if session_id is None else session_id
+    if not isinstance(sid, str) or not sid or sid == "default" or sanitize_session_id(sid) != sid:
+        raise ValueError("invalid exact session id")
     return os.path.join(_active_sessions_dir(repo_root), sid + ".json")
 
 
 def read_active_session_marker(repo_root, session_id, *, strict=False):
     """Read one exact marker, including a non-authoritative recovery fence."""
-    sid = sanitize_session_id(session_id)
-    if sid != session_id or sid == "default":
+    sid = session_id
+    if not isinstance(sid, str) or not sid or sid == "default" or sanitize_session_id(sid) != sid:
         return {}
     return _read_session_marker(_session_active_path(repo_root, sid), sid, strict=strict)
 
@@ -1748,32 +1752,25 @@ def active_session_transaction(repo_root):
             os.close(component_fd)
 
 
-def write_active_marker(repo_root, task_dir, session_id=None, *, publish_legacy=True):
-    """Write the active task for the current session and optional legacy marker.
-
-    The session marker is authoritative for hooks that receive session_id. The
-    legacy ``.active`` file remains for older hooks/tests and single-session
-    installs; exact Codex PostToolUse binding deliberately omits it.
-    """
+def write_active_marker(repo_root, task_dir, session_id=None):
+    """Publish only one exact session's current task generation."""
     if not _trusted_control_writer(marker=True):
         raise _control_writer_error("active task binding requires the task-control runtime", marker=True)
-    tasks_dir = os.path.join(repo_root, TASK_DIR)
-    os.makedirs(tasks_dir, exist_ok=True)
+    sid = current_session_id() if session_id is None else session_id
+    _session_active_path(repo_root, sid)  # Validate before creating any storage.
+    task_run = read_task_control(task_dir)
+    if not task_run:
+        raise ValueError("invalid task control for exact session binding")
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
-    sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
     if _has_binding_conflict_fence(read_active_session_marker(repo_root, sid)):
         raise RuntimeError("exact task result recovery must acknowledge the conflict fence first")
-    task_run = read_task_control(task_dir)
-    payload = {
+    _publish_session_marker(repo_root, sid, {
         "session_id": sid,
         "task_dir": task_dir,
         "task_id": os.path.basename(os.path.normpath(task_dir)),
-        "run_id": task_run.get("run_id", ""),
+        "run_id": task_run["run_id"],
         "updated": now_iso(),
-    }
-    _publish_session_marker(repo_root, sid, payload)
-    if publish_legacy:
-        _atomic_text_write(_legacy_active_path(repo_root), task_dir)
+    })
 
 
 MAX_BINDING_CONFLICTS = 257
@@ -1857,32 +1854,24 @@ def clear_binding_conflict_fence(repo_root, session_id):
 
 
 def active_task_binding_matches(repo_root, task_dir, control=None, session_id=None):
-    """Require the current session marker to match the exact TASK.json generation."""
+    """Require an unfenced exact marker for the current open TASK generation."""
     control = control or read_task_control(task_dir)
-    if not control or task_control_status(task_dir, control) != "open":
-        return False
-    sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
-    marker = _read_session_marker(_session_active_path(repo_root, sid), sid)
-    return bool(
-        marker
-        and os.path.realpath(str(marker.get("task_dir") or "")) == os.path.realpath(task_dir)
-        and marker.get("task_id") == os.path.basename(os.path.normpath(task_dir))
-        and marker.get("run_id") == control.get("run_id")
-    )
+    sid = current_session_id() if session_id is None else session_id
+    binding = resolve_session_task_binding(repo_root, sid)
+    return bool(binding and control and task_control_status(task_dir, control) == "open"
+                and os.path.realpath(binding["task_dir"]) == os.path.realpath(task_dir)
+                and binding["run_id"] == control.get("run_id"))
 
 
 def active_marker_snapshot(repo_root, session_id=None):
-    """Capture exact current-session and legacy marker contents for rollback."""
-    paths = (
-        _session_active_path(repo_root, session_id),
-        _legacy_active_path(repo_root),
-    )
-    return {
-        path: _strict_regular_text_snapshot(
-            path, max_size=256 * 1024, allow_symlink=True,
-        )
-        for path in paths
-    }
+    """Capture the exact session marker for rollback, or nothing when deferred."""
+    sid = current_session_id() if session_id is None else session_id
+    if not sid:
+        return {}
+    path = _session_active_path(repo_root, sid)
+    return {path: _strict_regular_text_snapshot(
+        path, max_size=256 * 1024, allow_symlink=True,
+    )}
 
 
 def restore_active_marker_snapshot(snapshot):
@@ -1933,50 +1922,11 @@ def _read_session_marker(path, expected_session_id, *, strict=False):
     return data
 
 
-def _read_legacy_active(repo_root):
-    path = _legacy_active_path(repo_root)
-    first = (_read_regular_marker(path).strip().splitlines() or [""])[0]
-    if not first:
-        return ""
-    if os.path.isabs(first):
-        return first
-    return os.path.join(repo_root, TASK_DIR, first.rstrip("/"))
-
-
-def _live_active_task_dir(repo_root, value, *, require_live_state=True):
-    if not isinstance(value, str) or not value:
-        return ""
-    try:
-        td = canonical_task_dir(task_dir=value, repo_root=repo_root)
-    except ValueError:
-        return ""
-    if not require_live_state:
-        # The repository-wide marker is conservative for partially-created
-        # packs; exact TASK.json validation still gates lifecycle authority.
-        return td
-    control = read_task_control(td)
-    if not control or task_control_status(td, control) != "open":
-        return ""
-    return td
-
-
 def resolve_active_task_dir(repo_root=None, session_id=None):
-    """Resolve active task for this session, falling back to legacy ``.active``."""
+    """Resolve only this exact session's current, open, unfenced task."""
     repo_root = repo_root or find_repo_root()
-
-    try:
-        sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
-        path = _session_active_path(repo_root, sid)
-    except ValueError:
-        path = ""
-        sid = ""
-    data = _read_session_marker(path, sid) if path else {}
-    td = _live_active_task_dir(repo_root, data.get("task_dir"))
-    if td and data.get("task_id") == os.path.basename(td):
-        return td
-    return _live_active_task_dir(
-        repo_root, _read_legacy_active(repo_root), require_live_state=False
-    )
+    sid = current_session_id() if session_id is None else session_id
+    return resolve_session_task_binding(repo_root, sid).get("task_dir", "")
 
 
 def resolve_session_task_binding(repo_root, session_id, *, strict=False):
@@ -2027,73 +1977,46 @@ def resolve_session_task_binding(repo_root, session_id, *, strict=False):
 
 
 def iter_active_task_dirs(repo_root=None):
-    """Yield unique active task dirs from session markers and legacy fallback."""
+    """Yield unique current open task generations from exact session markers."""
     repo_root = repo_root or find_repo_root()
     seen = set()
     try:
         sessions = _active_sessions_dir(repo_root)
     except ValueError:
-        sessions = ""
+        return
     if os.path.isdir(sessions):
         for name in os.listdir(sessions):
             if not name.endswith(".json"):
                 continue
-            sid = name[:-5]
-            if sanitize_session_id(sid) != sid:
-                continue
-            data = _read_session_marker(os.path.join(sessions, name), sid)
-            td = _live_active_task_dir(repo_root, data.get("task_dir"))
-            if td and data.get("task_id") == os.path.basename(td) and td not in seen:
+            binding = resolve_session_task_binding(repo_root, name[:-5])
+            td = binding.get("task_dir")
+            if td and td not in seen:
                 seen.add(td)
                 yield td
-    legacy = _live_active_task_dir(
-        repo_root, _read_legacy_active(repo_root), require_live_state=False
-    )
-    if legacy and legacy not in seen:
-        yield legacy
 
 
 def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=False):
-    """Clear task focus under a caller-held session lock, preserving fences."""
+    """Clear only matching exact focus under the session lock, preserving fences."""
     if not _trusted_control_writer(marker=True):
         raise _control_writer_error("active task cleanup requires the task-control runtime", marker=True)
+    sid = current_session_id() if session_id is None else session_id
+    if not sid:
+        return
     try:
-        sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
         path = _session_active_path(repo_root, sid)
-        if not _has_binding_conflict_fence(_read_session_marker(path, sid)):
-            os.unlink(path)
+        marker = _read_session_marker(path, sid, strict=strict)
+        if _has_binding_conflict_fence(marker):
+            return
+        if task_dir is not None and os.path.normpath(str(marker.get("task_dir") or "")) != os.path.normpath(task_dir):
+            return
+        os.unlink(path)
+        if strict and os.path.lexists(path):
+            raise RuntimeError("active session marker cleanup unavailable")
     except FileNotFoundError:
         pass
     except (OSError, ValueError):
         if strict:
             raise
-    legacy = _legacy_active_path(repo_root)
-    try:
-        if os.path.isfile(legacy):
-            current = _read_legacy_active(repo_root)
-            if task_dir is None or os.path.normpath(current) == os.path.normpath(task_dir):
-                os.unlink(legacy)
-    except OSError:
-        if strict:
-            raise
-    if strict:
-        try:
-            sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
-            session_data = _read_session_marker(_session_active_path(repo_root, sid), sid)
-        except ValueError:
-            session_data = {}
-        if session_data and not _has_binding_conflict_fence(session_data) and (
-            task_dir is None
-            or os.path.normpath(str(session_data.get("task_dir") or ""))
-            == os.path.normpath(task_dir)
-        ):
-            raise RuntimeError("active session marker cleanup unavailable")
-        legacy_target = _read_legacy_active(repo_root)
-        if legacy_target and (
-            task_dir is None
-            or os.path.normpath(legacy_target) == os.path.normpath(task_dir)
-        ):
-            raise RuntimeError("legacy active marker cleanup unavailable")
 
 
 # ── Scaffold ─────────────────────────────────────────────────────────────

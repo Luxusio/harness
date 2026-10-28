@@ -153,23 +153,18 @@ def _parse_decision(stdout: str):
 
 def test_prewrite_json_deny_on_protected_artifact() -> TestResult:
     """prewrite_gate emits JSON deny (not exit 2) on protected artifact write."""
-    import shutil
     gate = os.path.join(SCRIPTS, "prewrite_gate.py")
-    tasks_root = os.path.join(_repo_root(), "doc", "harness", "tasks")
-    scratch = os.path.join(tasks_root, "TASK__golden-replay-prewrite")
-    active = os.path.join(tasks_root, ".active")
-    prev_active = None
-    if os.path.isfile(active):
-        with open(active) as f:
-            prev_active = f.read()
-    os.makedirs(scratch, exist_ok=True)
-    try:
+    with tempfile.TemporaryDirectory() as repo:
+        os.makedirs(os.path.join(repo, ".git"))
+        tasks_root = os.path.join(repo, "doc", "harness", "tasks")
+        scratch = os.path.join(tasks_root, "TASK__golden-replay-prewrite")
+        os.makedirs(scratch)
+        with open(os.path.join(repo, "doc", "harness", "manifest.yaml"), "w") as f:
+            f.write("type: library\n")
         with open(os.path.join(scratch, "PLAN.md"), "w") as f:
             f.write("# plan\n")
-        with open(active, "w") as f:
-            f.write(scratch)
         plan = os.path.join(scratch, "PLAN.md")
-        r = _invoke_hook(gate, {"tool_name": "Write", "tool_input": {"file_path": plan}})
+        r = _invoke_hook(gate, {"cwd": repo, "tool_name": "Write", "tool_input": {"file_path": plan}})
         if r.returncode != 0:
             return TestResult("prewrite_json_deny", False,
                               f"expected exit 0 (|| true compatibility), got {r.returncode}")
@@ -183,16 +178,6 @@ def test_prewrite_json_deny_on_protected_artifact() -> TestResult:
         if "HARNESS_SKIP_PREWRITE" not in reason:
             return TestResult("prewrite_json_deny", False,
                               "reason missing escape hint")
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
-        if prev_active is not None:
-            with open(active, "w") as f:
-                f.write(prev_active)
-        else:
-            try:
-                os.unlink(active)
-            except OSError:
-                pass
     return TestResult("prewrite_json_deny", True)
 
 
@@ -237,8 +222,12 @@ def test_prompt_memory_emits_context_block() -> TestResult:
             f.write("pass\n")
         now = _time.time()
         _os.utime(src, (now, now))
-        with open(_os.path.join(tasks, ".active"), "w") as f:
-            f.write(task_dir)
+        session_id = "golden-replay"
+        sessions = _os.path.join(tasks, ".active_sessions")
+        _os.makedirs(sessions)
+        with open(_os.path.join(sessions, session_id + ".json"), "w") as f:
+            json.dump({"session_id": session_id, "task_dir": task_dir,
+                       "task_id": "TASK__gr-pr3", "run_id": "01890a5d-ac96-774b-bcce-b3020998df21"}, f)
 
         env = _os.environ.copy()
         # Dual-name env (AC-006). Drop CLAUDE_PLUGIN_ROOT in v2.5 per CHANGELOG.
@@ -246,14 +235,14 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         env["CLAUDE_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
         r = subprocess.run(
             ["python3", prompt],
-            input='{"prompt":"status"}',
+            input=json.dumps({"prompt": "status", "session_id": session_id}),
             capture_output=True, text=True, cwd=base, env=env, timeout=5,
         )
     if r.returncode != 0:
         return TestResult("prompt_memory_context_block", False,
                           f"exit {r.returncode}: {r.stderr[:200]}")
     out = r.stdout
-    for needle in ("[harness-context]", "task=TASK__gr-pr3", "verdict=PENDING"):
+    for needle in ("[harness-context]", "task=TASK__gr-pr3", "status=open"):
         if needle not in out:
             return TestResult("prompt_memory_context_block", False,
                               f"missing {needle!r} in stdout: {out!r}")

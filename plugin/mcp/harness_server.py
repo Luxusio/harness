@@ -71,9 +71,8 @@ from _lib import (  # type: ignore
     ensure_task_scaffold, emit_compact_context,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
-    resolve_registered_worktree,
-    write_active_marker, clear_active_marker, read_session_hint,
-    current_session_id,
+    resolve_registered_worktree, sanitize_session_id,
+    write_active_marker, clear_active_marker,
     active_task_binding_matches,
     active_session_transaction, read_active_session_marker, resolve_session_task_binding,
     _has_binding_conflict_fence,
@@ -116,8 +115,10 @@ def _server_runtime() -> str:
 
 def _current_session_identity(control_root: str = "") -> str:
     if _server_runtime() == "codex":
-        return str(os.environ.get("CODEX_THREAD_ID") or "")
-    return read_session_hint(control_root or _control_root()) or ""
+        sid = str(os.environ.get("CODEX_THREAD_ID") or "")
+    else:
+        sid = str(os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("HARNESS_SESSION_ID") or "")
+    return sid if sid and sid != "default" and sanitize_session_id(sid) == sid else ""
 
 
 def _ok(d: dict) -> dict:
@@ -555,10 +556,8 @@ def _handle_task_start(
     codex_workspace = _server_runtime() == "codex" and args.get("workspace") is not None
     if codex_workspace or defer_binding:
         exact_session_id = ""
-    session_id = exact_session_id or current_session_id()
-    if codex_workspace or defer_binding:
-        session_id = "default"
-    defer_codex_binding = _server_runtime() == "codex" and not exact_session_id
+    session_id = exact_session_id
+    defer_codex_binding = not exact_session_id
     if not defer_codex_binding and not resumed_existing and not _session_resumes(repo_root, task_dir, session_id):
         return _err(
             "task_start refused: another open task owns the resolvable session focus",
@@ -709,10 +708,11 @@ def _handle_task_start(
                 # Publish the unchanged-run marker while BLOCKED.md still makes
                 # the task terminal. Removing BLOCKED.md is the commit point;
                 # a crash before it leaves the task safely parked.
-                write_active_marker(repo_root, task_dir, session_id=session_id)
+                if not defer_codex_binding:
+                    write_active_marker(repo_root, task_dir, session_id=session_id)
                 if terminal_resume_status == "blocked":
                     os.unlink(blocked_path)
-                if not active_task_binding_matches(
+                if not defer_codex_binding and not active_task_binding_matches(
                     repo_root, task_dir, control=resumed, session_id=session_id,
                 ):
                     raise RuntimeError("task_start could not publish the preserved run binding")
@@ -758,7 +758,8 @@ def _handle_task_start(
                 )
                 # As on the preserving path, publish the marker before the
                 # blocker removal that makes the task open.
-                write_active_marker(repo_root, task_dir, session_id=session_id)
+                if not defer_codex_binding:
+                    write_active_marker(repo_root, task_dir, session_id=session_id)
                 try:
                     os.unlink(blocked_path)
                 except FileNotFoundError:
@@ -790,11 +791,7 @@ def _handle_task_start(
                 "retry_action": ctx["next_action"],
             })
     try:
-        # This host receives no session id of its own, so current_session_id()
-        # would resolve to "default" and produce a marker no lifecycle hook
-        # reads. Prefer the id recorded by a hook that does receive it; fall
-        # back to the legacy default when no usable hint exists.
-        if not active_task_binding_matches(
+        if not defer_codex_binding and not active_task_binding_matches(
             repo_root, task_dir, control=resumed, session_id=session_id,
         ):
             write_active_marker(repo_root, task_dir, session_id=session_id)
@@ -832,36 +829,7 @@ def _handle_task_start(
 
 
 def _session_resumes(repo_root: str, task_dir: str, session_id: str) -> bool:
-    """True when writing this session's marker for `task_dir` steals nothing.
-
-    This guard is used only when the MCP process owns an exact session id.
-    Ordinary Codex MCP calls do not, so their successful result is bound later
-    by PostToolUse instead of consulting shared hint/default state here.
-
-    Many tasks are open at once — C-09 limits write focus per session and
-    closes nothing — so "the task being read is open" says nothing
-    about the caller's focus; that conjunct guards parked tasks, this one
-    guards other open ones.
-
-    `resolve_active_task_dir` reads exactly the two markers this write
-    overwrites, in the order readers consult them: this session's own marker
-    first, then the shared legacy `.active`. A marker naming a task that is no
-    longer open holds no focus to steal, so it must not block a real resume.
-    Parking and closing cannot strand such a pointer — `clear_active_marker`
-    unlinks the legacy file whenever it names the task leaving `open`, with no
-    session condition — so what actually reaches that branch is a pointer whose
-    task no longer *validates*: `task_control_status` answers `invalid` for a
-    removed task directory or an unreadable `TASK.json`, and no transition was
-    announced for anything to clean up after.
-
-    Re-writing a marker that already names `task_dir` is deliberate focus
-    re-assertion, and it is not a no-op: it refreshes a `run_id` that another
-    session's `task_start` rotated away, which is the one marker field
-    `resolve_session_task_binding` will otherwise refuse to bind source focus.
-
-    Exact-runtime paths still publish the legacy `.active` compatibility file,
-    but exact lifecycle readers always prefer the per-session marker.
-    """
+    """Exact current focus may be reasserted without borrowing shared hints."""
     held = resolve_active_task_dir(repo_root, session_id=session_id)
     if not held or task_control_status(held, read_task_control(held)) != "open":
         return True
@@ -886,8 +854,8 @@ def _handle_task_context(
     exact_session_id = _current_session_identity(control_root)
     if _server_runtime() == "codex" and (args.get("workspace") is not None or defer_binding):
         exact_session_id = ""
-    defer_codex_binding = _server_runtime() == "codex" and not exact_session_id
-    session_id = exact_session_id or current_session_id()
+    defer_codex_binding = not exact_session_id
+    session_id = exact_session_id
     if not defer_codex_binding and task_control_status(td, control) == "open" and _session_resumes(
         repo_root, td, session_id,
     ):
@@ -970,10 +938,7 @@ def handle_task_close(args: dict) -> dict:
                 "task_dir": td, "status": locked_status,
             })
         preclose_control = dict(st)
-        session_id = (
-            (_current_session_identity(control_root) or None)
-            if _server_runtime() == "codex" else None
-        )
+        session_id = _current_session_identity(control_root)
         preclose_marker_snapshot = active_marker_snapshot(control_root, session_id=session_id)
         try:
             publish_task_close(td, st)
@@ -1046,10 +1011,7 @@ def _handle_task_blocked_locked(td: str, *, reason: str, unblock: str) -> dict:
     # Markers live in the checkout that owns the task (a batch lead's worktree
     # or the main checkout), exactly as task_close resolves them.
     task_root = find_harness_root(td) or find_repo_root(td)
-    session_id = (
-        (_current_session_identity(task_root) or None)
-        if _server_runtime() == "codex" else None
-    )
+    session_id = _current_session_identity(task_root)
     marker_snapshot = active_marker_snapshot(task_root, session_id=session_id)
     blocked_snapshot = {
         blocked_path: _strict_regular_text_snapshot(blocked_path, max_size=256 * 1024)

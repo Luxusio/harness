@@ -52,12 +52,12 @@ try:
         find_repo_root,
         find_harness_root,
         harness_root_resolution,
-        resolve_registered_worktree,
+        _registered_worktree_root,
         yaml_array,
         yaml_field,
         now_iso,
         TASK_DIR,
-        resolve_active_task_dir,
+        resolve_session_task_binding,
         iter_active_task_dirs,
         read_task_control,
         task_control_status,
@@ -623,17 +623,23 @@ def _target_worktree_root(control_root: str, requested_path: str) -> str:
 
     Walk lexical parents so a symlink inside W cannot hide W's boundary by
     resolving into main first. The existing registration helper validates the
-    canonical gitfile, back-pointer and worktree's own Harness manifest.
+    canonical gitfile and back-pointer. Target Harness configuration is checked
+    separately so invalid registered checkouts cannot fall through as foreign.
     """
+    from codex_hook_registration import workspace_roots
+    roots = workspace_roots(control_root)
+    if not roots or control_root not in roots:
+        return ""
+    main_root = roots[0]
     current = os.path.dirname(requested_path)
     while True:
         if os.path.lexists(os.path.join(current, ".git")):
             canonical = os.path.realpath(current)
             try:
-                registered = resolve_registered_worktree(control_root, canonical)
+                registered = main_root if canonical == main_root else _registered_worktree_root(main_root, canonical)
             except (OSError, RuntimeError, ValueError):
                 registered = ""
-            if registered:
+            if registered and canonical == current:
                 return registered
             if canonical == current:
                 return ""
@@ -702,6 +708,15 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             if target_root != repo_root:
                 routed_checkout = target_root
             repo_root = target_root
+            target_harness_root, target_error = harness_root_resolution(target_root)
+            if (target_error or target_harness_root != target_root) and not protected_only:
+                _deny(
+                    "invalid-harness-workspace", requested_path, "harness:setup",
+                    "Harness target workspace configuration is invalid: "
+                    + (target_error or "the target must carry its own Harness manifest"),
+                    repo_root,
+                )
+                return 0
             requested_common = os.path.commonpath([repo_root, requested_path])
             physical_common = os.path.commonpath([repo_root, file_path])
     if physical_common != repo_root:
@@ -757,7 +772,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
     # Workflow control surface: only permitted from a MAINTENANCE task.
     if _is_workflow_control_surface(file_path, repo_root=repo_root):
         maint = False
-        active_dir = resolve_active_task_dir(repo_root)
+        active_dir = resolve_session_task_binding(repo_root, current_session_id()).get("task_dir", "")
         if active_dir and os.path.isdir(active_dir):
             maint = os.path.isfile(os.path.join(active_dir, "MAINTENANCE"))
         if not maint:
@@ -781,7 +796,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
     if not _is_source_file(file_path, repo_root=repo_root):
         return 0
 
-    active_dir = resolve_active_task_dir(repo_root)
+    active_dir = resolve_session_task_binding(repo_root, current_session_id()).get("task_dir", "")
     if not active_dir:
         # Strict-compliance repositories cannot bypass the task/QA close gate
         # merely because this is the first write of a new request.

@@ -202,7 +202,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             sessions = os.path.join(tasks_dir, ".active_sessions")
             os.makedirs(sessions, exist_ok=True)
             with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
-                json.dump({"session_id": "s1", "task_id": "TASK__session", "task_dir": task_dir}, f)
+                json.dump({"session_id": "s1", "task_id": "TASK__session", "task_dir": task_dir, "run_id": "0198c349-5800-7000-8000-000000000001"}, f)
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke_payload(tmpdir, {
                 "tool_name": "Write",
@@ -228,7 +228,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             sessions = os.path.join(tasks_dir, ".active_sessions")
             os.makedirs(sessions, exist_ok=True)
             with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
-                json.dump({"session_id": "s1", "task_id": "TASK__micro", "task_dir": task_dir}, f)
+                json.dump({"session_id": "s1", "task_id": "TASK__micro", "task_dir": task_dir, "run_id": "0198c349-5800-7000-8000-000000000001"}, f)
             nested = os.path.join(tmpdir, "packages", "child")
             os.makedirs(nested)
             os.mkdir(os.path.join(tmpdir, "packages", ".git"))

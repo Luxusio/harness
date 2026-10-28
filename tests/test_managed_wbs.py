@@ -25,6 +25,8 @@ def setup_parent(tmp_path, monkeypatch):
     assert not call("open").get("isError")
     nodes = [dict(id=k, title="Observable result " + k, weight=1) for k in ("A", "B")]
     assert not call("plan", plan=plan(nodes)).get("isError")
+    from test_harness_mcp_server import _write_marker_fixture
+    _write_marker_fixture(str(pool.repo), str(pool.repo / 'doc/harness/tasks/TASK__managed'), session_id='codex-prewrite-fixture')
     return pool, call
 
 
@@ -281,7 +283,8 @@ def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
     from test_codex_worktree_prewrite import check
     sibling = Path(second['worktree'])
     directory = task(sibling, second['slug'])
-    (sibling/'doc/harness/tasks/.active').write_text(str(directory)+'\n')
+    from test_harness_mcp_server import _write_marker_fixture
+    _write_marker_fixture(str(sibling), str(directory), session_id='codex-prewrite-fixture')
     assert check(pool.repo, sibling/'b.py') == {}
     assert check(pool.repo, sibling/'a.py').get('permissionDecision') == 'deny'
     worktree = Path(first['worktree'])
@@ -372,6 +375,8 @@ def _linked_direct(pool, worktree=None):
 
     assert not call('open').get('isError')
     assert not call('plan', plan=plan([dict(id='A', title='Assigned source', weight=1)])).get('isError')
+    from test_harness_mcp_server import _write_marker_fixture
+    _write_marker_fixture(str(tree), str(tree / 'doc/harness/tasks/TASK__ordinary'), session_id='codex-prewrite-fixture')
     return tree, tree / 'doc/harness/tasks/TASK__ordinary', call
 
 
@@ -625,7 +630,8 @@ def test_standalone_bound_and_resumed_lead_keeps_source_assignment(tmp_path, mon
     pool.claim()
     worktree, branch = pool.bind()
     directory = task(worktree)
-    (worktree / 'doc/harness/tasks/.active').write_text(str(directory) + '\n')
+    from test_harness_mcp_server import _write_marker_fixture
+    _write_marker_fixture(str(worktree), str(directory), session_id='codex-prewrite-fixture')
     assert check(pool.repo, worktree / 'a.py') == {}
     assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
     (worktree / 'a.py').write_text('preserved interrupted source\n')

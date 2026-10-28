@@ -427,15 +427,6 @@ def _ordinary_markers(worktree, task_id):
         return set()  # standalone legacy evidence can be archived, never infer marker ownership
     allowed = set()
     tasks = os.path.dirname(source)
-    for name in os.listdir(tasks):
-        full = os.path.join(tasks, name)
-        if re.fullmatch(r'\.active(?:\.[A-Za-z0-9_.-]+)?\.lock', name):
-            _s1_require(_ordinary_bytes(full, 0) == b'', 'nonempty Harness operational lock')
-            allowed.add('doc/harness/tasks/' + name)
-        elif name == '.active':
-            _s1_require(_ordinary_bytes(full, 4096).decode('utf-8').strip() == source,
-                        'legacy active marker belongs to another task')
-            allowed.add('doc/harness/tasks/' + name)
     sessions = os.path.join(tasks, '.active_sessions')
     owned_sessions = set()
     if os.path.lexists(sessions):
@@ -455,7 +446,7 @@ def _ordinary_markers(worktree, task_id):
             sid = name[:-5]
             _s1_require(isinstance(marker, dict) and set(marker) == {'session_id', 'task_dir', 'task_id', 'run_id', 'updated'}
                         and all(isinstance(v, str) and v for v in marker.values())
-                        and marker['session_id'] == sid and sanitize_session_id(sid) == sid
+                        and sid != 'default' and marker['session_id'] == sid and sanitize_session_id(sid) == sid
                         and marker['task_dir'] == source and marker['task_id'] == task_id
                         and marker['run_id'] == control['run_id'], 'session marker does not belong to exact closed task')
             owned_sessions.add(sid)

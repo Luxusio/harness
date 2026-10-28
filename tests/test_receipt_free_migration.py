@@ -423,3 +423,95 @@ def test_changed_migration_lock_scope_refuses_before_planning_or_publication(tmp
     assert "lock scope changed" in str(result)
     assert (td / "TASK.json").read_bytes() == before
     assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
+
+
+def test_explicit_focus_migration_archives_opaque_bytes_without_binding_or_task_changes(tmp_path):
+    import base64
+    repo, td, call, _ = public(tmp_path)
+    assert not call('plan', plan=policy_plan([node()], {'source': ['src.txt']})).get('isError')
+    assert not call('check', node_id='A').get('isError')
+    legacy = td.parent / '.active'
+    original = b'TASK__unknown\nambiguous retired focus\x00\xff'
+    legacy.write_bytes(original)
+    task_before = (td / 'TASK.json').read_bytes()
+    wbs_before = (td / 'WBS.json').read_bytes()
+    sessions = td.parent / '.active_sessions'
+    session_before = {p.name: p.read_bytes() for p in sessions.glob('*.json')}
+    preview = migrate(repo)
+    assert not preview.get('isError'), preview
+    assert legacy.read_bytes() == original
+    assert preview['structuredContent']['legacy_focus_migration']['status'] == 'preview'
+    result = migrate(repo, apply=True)
+    assert not result.get('isError'), result
+    assert not legacy.exists()
+    archive = repo / 'doc/harness/archive/task-control-migration/legacy-focus.json'
+    preserved = archive.read_bytes()
+    value = json.loads(preserved)
+    assert value == {'version': 1, 'entries': [{'root': str(repo), 'before': base64.b64encode(original).decode()}]}
+    assert (td / 'TASK.json').read_bytes() == task_before
+    assert (td / 'WBS.json').read_bytes() == wbs_before
+    assert {p.name: p.read_bytes() for p in sessions.glob('*.json')} == session_before
+    assert not migrate(repo, apply=True).get('isError')
+    assert archive.read_bytes() == preserved
+
+
+def test_focus_migration_retry_preserves_archive_and_rejects_changed_input(tmp_path, monkeypatch):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    legacy = td.parent / '.active'
+    legacy.write_bytes(b'TASK__unowned\n')
+    retire = goal_migration._retire
+    def interrupted(root, path, expected):
+        if path == goal_migration.LEGACY_FOCUS_PATH:
+            raise RuntimeError('interrupted before retirement')
+        return retire(root, path, expected)
+    monkeypatch.setattr(goal_migration, '_retire', interrupted)
+    failed = migrate(repo, apply=True)
+    assert failed.get('isError'), failed
+    archive = repo / goal_migration.LEGACY_FOCUS_ARCHIVE
+    captured = archive.read_bytes()
+    assert legacy.read_bytes() == b'TASK__unowned\n'
+    monkeypatch.setattr(goal_migration, '_retire', retire)
+    legacy.write_bytes(b'TASK__changed\n')
+    refused = migrate(repo, apply=True)
+    assert refused.get('isError'), refused
+    assert archive.read_bytes() == captured
+    assert legacy.read_bytes() == b'TASK__changed\n'
+    legacy.write_bytes(b'TASK__unowned\n')
+    assert not migrate(repo, apply=True).get('isError')
+    assert not legacy.exists()
+    assert archive.read_bytes() == captured
+
+
+def test_explicit_focus_migration_covers_registered_worktrees(tmp_path):
+    from test_worktree_workspace import _repo, _worktree
+    import base64
+    main = _repo(tmp_path / 'main')
+    worktree = _worktree(main, 'legacy-focus')
+    originals = {}
+    for root in (main, worktree):
+        tasks = root / 'doc/harness/tasks'
+        tasks.mkdir(parents=True, exist_ok=True)
+        originals[str(root)] = f'TASK__unknown-{root.name}\n'.encode()
+        (tasks / '.active').write_bytes(originals[str(root)])
+    result = migrate(main, apply=True)
+    assert not result.get('isError'), result
+    archive = json.loads((main / 'doc/harness/archive/task-control-migration/legacy-focus.json').read_text())
+    assert {row['root']: base64.b64decode(row['before']) for row in archive['entries']} == originals
+    for root in (main, worktree):
+        assert not (root / 'doc/harness/tasks/.active').exists()
+        assert not list((root / 'doc/harness/tasks/.active_sessions').glob('*.json'))
+
+
+def test_focus_migration_rejects_symlink_before_control_changes(tmp_path):
+    repo, td, _, _ = public(tmp_path)
+    legacy_control(td)
+    before = (td / 'TASK.json').read_bytes()
+    outside = tmp_path / 'outside-focus'
+    outside.write_bytes(b'preserve')
+    (td.parent / '.active').symlink_to(outside)
+    result = migrate(repo, apply=True)
+    assert result.get('isError'), result
+    assert (td / 'TASK.json').read_bytes() == before
+    assert outside.read_bytes() == b'preserve'
+    assert not (repo / 'doc/harness/archive/task-control-migration/legacy-focus.json').exists()

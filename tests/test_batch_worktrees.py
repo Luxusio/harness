@@ -509,11 +509,10 @@ def test_reproducible_cache_directories_and_exact_closed_metadata_allow_disposal
         _write(worktree / name / 'generated-cache.bin', 'reproducible content\n')
     sessions = worktree / 'doc/harness/tasks/.active_sessions'
     sessions.mkdir()
-    _write(worktree / 'doc/harness/tasks/.active.fixture.lock', '')
     if markers == 'exact-marker':
-        _write(sessions / 'default.json', json.dumps(dict(session_id='default', task_dir=str(worktree / 'doc/harness/tasks/TASK__a'),
+        _write(sessions / 'closed-session.json', json.dumps(dict(session_id='closed-session', task_dir=str(worktree / 'doc/harness/tasks/TASK__a'),
                     task_id='TASK__a', run_id=RUN, updated='2026-10-20T00:00:00+00:00')))
-        _write(sessions / '.session-hint', 'default\n')
+        _write(sessions / '.session-hint', 'closed-session\n')
     response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
     assert response['batch']['requests'][0]['status'] == 'integrated', response
     assert not worktree.exists()

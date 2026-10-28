@@ -177,7 +177,7 @@ def test_task_control_and_active_marker_mutators_require_runtime_owner(tmp_path)
         else:
             raise AssertionError("arbitrary control-authority mutation was accepted")
 
-def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path):
+def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path, monkeypatch):
     root = tmp_path / "workspace"
     manifest = root / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +186,8 @@ def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path):
     nested.mkdir(parents=True)
     (root / "cleo-v4-web/.git").mkdir()
     task = _task(root)
+    monkeypatch.setattr(lib, "_LAST_HOOK_INPUT", {})
+    monkeypatch.setenv("HARNESS_SESSION_ID", "nested-root-fixture")
     sid = lib.current_session_id()
     sessions = root / lib.TASK_DIR / lib.ACTIVE_SESSIONS_DIRNAME
     sessions.mkdir(parents=True, exist_ok=True)
@@ -197,6 +199,13 @@ def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path):
 
     assert lib.harness_root_resolution(nested) == (str(root.resolve()), "")
     assert lib.find_harness_root(nested) == str(root.resolve())
+
+    marker = Path(lib._session_active_path(str(root)))
+    original = json.loads(marker.read_text(encoding="utf-8"))
+    for mutation in ({"run_id": lib.new_uuid7()}, {"conflicts": []}):
+        marker.write_text(json.dumps(dict(original, **mutation)), encoding="utf-8")
+        assert lib.harness_root_resolution(nested) == ("", "")
+    marker.write_text(json.dumps(original), encoding="utf-8")
 
     # The repository-wide legacy marker alone must not authorize a nested Git
     # boundary; only the session-specific binding may do that.
@@ -289,3 +298,61 @@ def test_symlinked_manifest_remains_untrusted(tmp_path):
     assert resolved == str(root.resolve())
     assert "non-symlink" in error
     assert lib.find_harness_root(child) == ""
+
+
+def _exact_marker(repo, task, sid, **overrides):
+    sessions = repo / lib.TASK_DIR / lib.ACTIVE_SESSIONS_DIRNAME
+    sessions.mkdir(parents=True, exist_ok=True)
+    value = {"session_id": sid, "task_dir": str(task), "task_id": task.name,
+             "run_id": lib.read_task_control(task)["run_id"]}
+    value.update(overrides)
+    marker = sessions / (sid + ".json")
+    marker.write_text(json.dumps(value), encoding="utf-8")
+    return marker
+
+
+def test_exact_active_resolution_never_borrows_legacy_or_another_session(tmp_path):
+    task = _task(tmp_path)
+    _exact_marker(tmp_path, task, "owned")
+    legacy = tmp_path / lib.TASK_DIR / ".active"
+    legacy.write_text(str(task), encoding="utf-8")
+    assert lib.resolve_active_task_dir(str(tmp_path), session_id="owned") == str(task)
+    for sid in ("", "default", "foreign", "owned/alias"):
+        assert lib.resolve_active_task_dir(str(tmp_path), session_id=sid) == ""
+    assert legacy.read_text(encoding="utf-8") == str(task)
+
+
+def test_exact_active_resolution_and_iteration_reject_stale_runs_and_fences(tmp_path):
+    task = _task(tmp_path)
+    marker = _exact_marker(tmp_path, task, "owned")
+    assert lib.active_task_binding_matches(str(tmp_path), str(task), session_id="owned")
+    assert list(lib.iter_active_task_dirs(str(tmp_path))) == [str(task)]
+    for overrides in ({"run_id": lib.new_uuid7()}, {"conflicts": []}, {"conflicts_overflow": True}):
+        _exact_marker(tmp_path, task, "owned", **overrides)
+        assert lib.resolve_active_task_dir(str(tmp_path), session_id="owned") == ""
+        assert not lib.active_task_binding_matches(str(tmp_path), str(task), session_id="owned")
+        assert list(lib.iter_active_task_dirs(str(tmp_path))) == []
+    _exact_marker(tmp_path, task, "owned")
+    control = lib.read_task_control(task)
+    (task / "TASK.json").write_text(json.dumps(dict(control, closed=True)), encoding="utf-8")
+    assert lib.resolve_active_task_dir(str(tmp_path), session_id="owned") == ""
+    assert list(lib.iter_active_task_dirs(str(tmp_path))) == []
+
+
+def test_missing_session_has_no_default_identity_or_marker_snapshot(tmp_path, monkeypatch):
+    for name in ("HARNESS_SESSION_ID", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_SESSION_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(lib, "_LAST_HOOK_INPUT", {})
+    assert lib.current_session_id() == ""
+    assert lib.active_marker_snapshot(str(tmp_path)) == {}
+    assert not (tmp_path / lib.TASK_DIR).exists()
+    monkeypatch.setattr(lib, "_LAST_HOOK_INPUT", {"session_id": "bad/session"})
+    assert lib.current_session_id() == ""
+
+
+def test_active_snapshot_contains_only_the_exact_session(tmp_path):
+    task = _task(tmp_path)
+    marker = _exact_marker(tmp_path, task, "owned")
+    legacy = tmp_path / lib.TASK_DIR / ".active"
+    legacy.write_text(str(task), encoding="utf-8")
+    assert set(lib.active_marker_snapshot(str(tmp_path), session_id="owned")) == {str(marker)}
