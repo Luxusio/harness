@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -78,6 +79,55 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
                 task=task, task_run_id=run_id,
             )
         return result, output.getvalue(), errors.getvalue()
+
+    def test_no_current_signal_skips_all_close_validation_and_audits(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_entries(root, [
+                self._entry(task="TASK__old", type=[]),
+                self._entry(task="TASK__old", type={}),
+                self._entry(type=[]),
+                self._entry(insight=" "),
+            ])
+            with mock.patch.object(self.module, "_verified_closed_run", side_effect=AssertionError("unrelated close read")), mock.patch.object(self.module, "_audit_stale_files", side_effect=AssertionError("unrelated audit")), mock.patch.object(self.module, "_audit_contradictions", side_effect=AssertionError("unrelated audit")):
+                result, output, _ = self._run(root, task="TASK__current", run_id="run-current")
+            self.assertEqual(result, 0)
+            self.assertIn("no qualifying learning", output)
+
+    def test_automatic_validates_and_audits_only_current_keys(self):
+        with tempfile.TemporaryDirectory() as root:
+            entries = [self._entry(), self._entry(task="TASK__matching", run_id="matching"), self._entry(key="unrelated", task="TASK__unrelated")]
+            self._write_entries(root, entries)
+            def verified(storage, task, run):
+                self.assertNotEqual(task, "TASK__unrelated")
+                return True
+            with mock.patch.object(self.module, "_verified_closed_run", side_effect=verified), mock.patch.object(self.module, "_audit_stale_files", return_value=0) as stale, mock.patch.object(self.module, "_audit_contradictions", return_value=0) as contradictions:
+                result, output, _ = self._run(root, task="TASK__current", run_id="run-current")
+                self.assertEqual(stale.call_args.args[0], entries[:2])
+                self.assertEqual(contradictions.call_args.args[0], entries[:2])
+            self.assertEqual(result, 0)
+            self.assertIn("2 verified task runs", output)
+
+    def test_automatic_ignores_malformed_historical_keys(self):
+        with tempfile.TemporaryDirectory() as root:
+            run_id = self._task(root, "TASK__current")
+            self._write_entries(root, [
+                self._entry(run_id=run_id),
+                *[self._entry(key=key, task="TASK__old") for key in ([], {}, None, 42)],
+            ])
+            result, output, errors = self._run(root, threshold=1, task="TASK__current", run_id=run_id)
+            self.assertEqual(result, 0, errors)
+            self.assertIn("Tier 2 candidate: shared-rule (1 verified task runs)", output)
+
+    def test_manual_mode_retains_full_history_validation_and_audits(self):
+        with tempfile.TemporaryDirectory() as root:
+            entries = [self._entry(), self._entry(key="unrelated", task="TASK__unrelated")]
+            self._write_entries(root, entries)
+            with mock.patch.object(self.module, "_verified_closed_run", return_value=True) as verified, mock.patch.object(self.module, "_audit_stale_files", return_value=0) as stale, mock.patch.object(self.module, "_audit_contradictions", return_value=0) as contradictions:
+                result, _, _ = self._run(root)
+                self.assertEqual(verified.call_count, 2)
+                self.assertEqual(stale.call_args.args[0], entries)
+                self.assertEqual(contradictions.call_args.args[0], entries)
+            self.assertEqual(result, 0)
 
     def test_shared_validator_rejects_malformed_and_diagnostic_rows(self):
         self.assertTrue(self.module._valid_learning_candidate(self._entry()))

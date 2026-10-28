@@ -296,18 +296,54 @@ DOC_HISTORY_PREFIXES = ("doc/changes/",)
 SKIPPED_SOURCE_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
 
 
-def _python_sources(repo_root: str) -> list[str]:
-    paths = []
+OPERATIONAL_SOURCE_DIRS = {
+    "doc/harness/" + name for name in (
+        "tasks", "goals", "reviews", "checkpoints", "visual-baselines", "retros",
+        "runtime", "maintenance", "archive", "benchmark", "audits",
+    )
+}
+
+
+def _git_sources(repo_root: str) -> list[str] | None:
+    """An empty exact-root inventory is authoritative; ancestor Git is not."""
+    try:
+        root = subprocess.run(
+            ["git", "-C", repo_root, "rev-parse", "--show-toplevel"],
+            capture_output=True, timeout=10,
+        )
+        if root.returncode != 0 or os.path.realpath(os.fsdecode(root.stdout).strip()) != os.path.realpath(repo_root):
+            return None
+        listed = subprocess.run(
+            ["git", "-C", repo_root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, timeout=10,
+        )
+        if listed.returncode == 0:
+            return sorted(set(os.fsdecode(listed.stdout).split("\0")) - {""})
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _walk_sources(repo_root: str):
     for parent, dirnames, filenames in os.walk(repo_root, onerror=lambda _e: None):
         dirnames[:] = [
             name for name in dirnames
             if name not in SKIPPED_SOURCE_DIRS and not name.startswith(".")
+            and os.path.relpath(os.path.join(parent, name), repo_root).replace(os.sep, "/")
+            not in OPERATIONAL_SOURCE_DIRS
         ]
-        paths.extend(
-            os.path.join(parent, name)
-            for name in filenames if name.endswith(".py")
-        )
-    return paths
+        yield parent, filenames
+
+
+def _python_sources(repo_root: str) -> list[str]:
+    names = _git_sources(repo_root)
+    if names is not None:
+        return [os.path.join(repo_root, name) for name in names if name.endswith(".py")]
+    return [
+        os.path.join(parent, name)
+        for parent, filenames in _walk_sources(repo_root)
+        for name in filenames if name.endswith(".py")
+    ]
 
 
 def _test_identifiers(repo_root: str) -> tuple[set[str], set[str]]:
@@ -335,35 +371,16 @@ def _test_identifiers(repo_root: str) -> tuple[set[str], set[str]]:
 
 
 def _durable_docs(repo_root: str) -> list[str]:
-    """Repo-relative durable markdown under `doc/`.
-
-    Git-tracked files are the durable set: task directories, retros and other
-    generated trees under `doc/harness/` are gitignored working state whose
-    references are historical the moment the task closes. Falls back to a plain
-    walk where Git is unavailable, which over-reports rather than under-reports.
-    """
-    try:
-        listed = subprocess.run(
-            ["git", "-C", repo_root, "ls-files", "-z", "--", "doc"],
-            capture_output=True, timeout=10,
-        )
-        if listed.returncode == 0:
-            names = [
-                entry for entry in listed.stdout.decode("utf-8", "replace").split("\0")
-                if entry.endswith(".md")
-            ]
-            if names:
-                return names
-    except (OSError, subprocess.SubprocessError):
-        pass
-    names = []
-    for parent, dirnames, filenames in os.walk(os.path.join(repo_root, "doc")):
-        dirnames[:] = [name for name in dirnames if name not in SKIPPED_SOURCE_DIRS]
-        names.extend(
-            os.path.relpath(os.path.join(parent, name), repo_root)
-            for name in filenames if name.endswith(".md")
-        )
-    return sorted(names)
+    """Current repo-relative markdown; copied sources use the pruned fallback."""
+    names = _git_sources(repo_root)
+    if names is not None:
+        return [name for name in names if name.startswith("doc/") and name.endswith(".md")]
+    return sorted(
+        os.path.relpath(os.path.join(parent, name), repo_root)
+        for parent, filenames in _walk_sources(repo_root)
+        for name in filenames if name.endswith(".md")
+        and os.path.relpath(os.path.join(parent, name), repo_root).startswith("doc" + os.sep)
+    )
 
 
 def check_doc_test_references(repo_root: str = ".") -> list[str]:

@@ -386,7 +386,11 @@ def _valid_learning_candidate(
     task_run_id: str | None = None,
 ) -> bool:
     """Validate a promotable knowledge row, optionally against close context."""
-    if not isinstance(entry, dict) or entry.get("type") not in PROMOTABLE_TYPES:
+    if (
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("type"), str)
+        or entry["type"] not in PROMOTABLE_TYPES
+    ):
         return False
     if not _canonical_timestamp(entry.get("ts")):
         return False
@@ -637,9 +641,23 @@ def _run_with_storage(
     entries = _parse_entries(storage.read_learnings())
     automatic = task is not None or task_run_id is not None
 
-    if automatic and not _verified_closed_run(storage, task or "", task_run_id or ""):
-        print("automatic promotion requires the matching verified closed task run", file=sys.stderr)
-        return 2
+    current_keys: set[str] | None = None
+    if automatic:
+        current_keys = {
+            entry["key"] for entry in entries
+            if entry.get("task") == task and entry.get("task_run_id") == task_run_id
+            and _valid_learning_candidate(entry, task=task, task_run_id=task_run_id)
+        }
+        if not current_keys:
+            print("(no qualifying learning for current task run; promotion skipped)")
+            return 0
+        if not _verified_closed_run(storage, task or "", task_run_id or ""):
+            print("automatic promotion requires the matching verified closed task run", file=sys.stderr)
+            return 2
+        entries = [
+            entry for entry in entries
+            if isinstance(entry.get("key"), str) and entry["key"] in current_keys
+        ]
 
     if not entries:
         print("(no learnings to process)")
@@ -659,21 +677,6 @@ def _run_with_storage(
             unique_candidates[identity] = entry
 
     verified_entries = list(unique_candidates.values())
-    current_keys: set[str] | None = None
-    if automatic:
-        for entry in verified_entries:
-            if entry["task"] != task or entry["task_run_id"] != task_run_id:
-                continue
-            key = entry["key"]
-            current_keys = current_keys or set()
-            current_keys.add(key)
-        current_keys = current_keys or set()
-        if not current_keys:
-            print("(no qualifying learning for current task run; promotion skipped)")
-            _audit_stale_files(entries, repo_root)
-            _audit_contradictions(entries)
-            return 0
-
     counts: Counter[str] = Counter(entry["key"] for entry in verified_entries)
 
     promotable = {

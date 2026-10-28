@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -230,6 +231,76 @@ class DocTestReferenceTests(unittest.TestCase):
             "shipped `test_gate_blocks_on_remove`\n", encoding="utf-8",
         )
         self.assertEqual(self._issues(), [])
+
+
+class CurrentSourceInventoryTests(unittest.TestCase):
+    def _git(self, root, *args):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+    def test_exact_empty_git_inventory_does_not_fall_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._git(root, "init")
+            (root / ".gitignore").write_text("*.py\ndoc/\n")
+            (root / "ignored.py").write_text("def test_stale(): pass\n")
+            (root / "doc").mkdir()
+            (root / "doc" / "ignored.md").write_text("`test_stale`\n")
+            self.assertEqual(contract_lint._python_sources(str(root)), [])
+            self.assertEqual(contract_lint._durable_docs(str(root)), [])
+
+    def test_git_inventory_ignores_snapshot_definitions_but_includes_new_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._git(root, "init")
+            (root / ".gitignore").write_text("snapshots/\n")
+            (root / "snapshots").mkdir()
+            (root / "snapshots" / "old.py").write_text("def test_stale(): pass\n")
+            (root / "new.py").write_text("def test_current(): pass\n")
+            (root / "doc").mkdir()
+            (root / "doc" / "new.md").write_text("`test_stale` and `test_current`\n")
+            issues = contract_lint.check_doc_test_references(str(root))
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("test_stale", issues[0])
+
+    def test_ignored_frozen_copy_uses_fallback_and_prunes_history_before_descent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            self._git(parent, "init")
+            (parent / ".gitignore").write_text("copies/\n")
+            root = parent / "copies" / "frozen"
+            (root / "doc").mkdir(parents=True)
+            (root / "current.py").write_text("def test_current(): pass\n")
+            (root / "doc" / "current.md").write_text("`test_stale` and `test_current`\n")
+            for path in contract_lint.OPERATIONAL_SOURCE_DIRS:
+                history = root / path
+                history.mkdir(parents=True)
+                (history / "old.py").write_text("def test_stale(): pass\n")
+                (history / "old.md").write_text("`test_other_missing`\n")
+            visited = []
+            original = contract_lint.os.walk
+            def walk(*args, **kwargs):
+                for item in original(*args, **kwargs):
+                    visited.append(Path(item[0]).relative_to(root).as_posix())
+                    yield item
+            with mock.patch.object(contract_lint.os, "walk", side_effect=walk):
+                issues = contract_lint.check_doc_test_references(str(root))
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("test_stale", issues[0])
+            self.assertFalse(set(visited) & contract_lint.OPERATIONAL_SOURCE_DIRS)
+
+    def test_linked_git_file_root_uses_its_own_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            main = Path(directory) / "main"
+            main.mkdir()
+            self._git(main, "init")
+            self._git(main, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+            linked = Path(directory) / "linked"
+            self._git(main, "worktree", "add", "-b", "linked", str(linked))
+            self.assertTrue((linked / ".git").is_file())
+            (linked / ".gitignore").write_text("ignored.py\n")
+            (linked / "ignored.py").write_text("def test_stale(): pass\n")
+            (linked / "current.py").write_text("def test_current(): pass\n")
+            self.assertEqual(contract_lint._python_sources(str(linked)), [str(linked / "current.py")])
 
 
 class QuickModeScopeTests(unittest.TestCase):
