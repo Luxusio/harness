@@ -352,7 +352,7 @@ def cap(repo, explicit, managed=False):
             for token in lexer:
                 if token.startswith('#'):
                     break
-                require(not token.startswith(('*', '&', '!')) and token.strip('\"\'') != '<<',
+                require(not token.startswith(('*', '&', '!')) and token.strip('\"\'') != '<<' and token != '?',
                         'capacity aliases, tags or merges unsupported; use a direct ' + section + '.' + key)
                 result.extend(list(token) if all(c in '{},:[]' for c in token) else [token])
             stack = []
@@ -386,9 +386,6 @@ def cap(repo, explicit, managed=False):
                         and not re.match(r'^<<(?=\s|:|$)', line)
                         and not (line[0] in '\"\'' and '\\' in line.split(':', 1)[0]),
                         'unsupported capacity document mapping; use a direct ' + section + '.' + key)
-            if not indent and not re.match(r"^(?:" + section + "|'" + section + "'|\"" + section + r"\")\s*:", line):
-                inside, child_indent = False, None
-                continue
             if indent and not inside:
                 continue
             if indent:
@@ -398,6 +395,9 @@ def cap(repo, explicit, managed=False):
                     continue
             parts = tokens(line)
             if not parts:
+                continue
+            if not indent and not re.match(r"^(?:" + section + "|'" + section + "'|\"" + section + r"\")\s*:", line):
+                inside, child_indent = False, None
                 continue
             if not indent:
                 inside, child_indent = False, None
