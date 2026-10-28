@@ -87,9 +87,9 @@ class NoThirdPartyToplevelImportsTests(unittest.TestCase):
     def test_pytest_modules_skip_cleanly_without_site_packages(self):
         modules = [
             "test_batch_pending.py", "test_batch_worktrees.py",
-            "test_codex_registration_liveness.py", "test_device_lab_qa_contract.py",
+            "test_receipt_free_lifecycle.py", "test_device_lab_qa_contract.py",
             "test_install_permission_reporting.py", "test_installer_output.py",
-            "test_verify_receipt_settlement.py", "test_wbs_input_policy.py",
+            "test_receipt_free_migration.py", "test_wbs_input_policy.py",
             "test_wbs_measurement.py",
             "test_batch_scope_extension.py", "test_verify_runner_jobs.py",
         ]

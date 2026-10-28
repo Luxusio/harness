@@ -1,7 +1,13 @@
 """Completion is based on actual current WBS checks, without collection events."""
 import json
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
 
 from test_wbs import node, plan
 from test_wbs_input_policy import public

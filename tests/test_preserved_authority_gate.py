@@ -3,7 +3,13 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
 
 from conftest import SCRIPTS_DIR, invoke_hook, make_tmp_harness_root, parse_decision
 

@@ -334,6 +334,19 @@ def test_codex_smoke_drives_task_source_checks_without_payload_writes(tmp_path):
     assert not list(root.rglob("__pycache__"))
 
 
+def test_codex_smoke_requires_the_installed_hook_to_publish_binding(tmp_path):
+    root = _codex_tree(tmp_path)
+    hook = root / 'scripts/hook_post_tool_use.py'
+    text = hook.read_text()
+    binding_call = '        _register_task_result(payload, deadline=deadline)'
+    assert binding_call in text
+    hook.write_text(text.replace(binding_call, '        pass  # simulate lost native binding', 1))
+    smoke = _load('codex_binding_required_smoke', SMOKE)
+    ok, lines = smoke.smoke_installed_runtime(str(root), timeout=10)
+    assert not ok
+    assert any('lost exact session/task/run focus' in line for line in lines), lines
+
+
 def test_smoke_rejects_broken_installed_source_assignment(tmp_path):
     smoke = _load("broken_source_smoke", SMOKE)
     root = _codex_tree(tmp_path)

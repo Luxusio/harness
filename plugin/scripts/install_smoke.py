@@ -191,11 +191,14 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
         import _lib
         import harness_server
         import wbs
-        sid = "install-smoke-" + uuid.uuid4().hex
-        os.environ["HARNESS_SESSION_ID"] = sid
         os.environ["HARNESS_RUNTIME"] = (
             "codex" if Path(plugin_root, ".codex-plugin/plugin.json").is_file() else "claude"
         )
+        sid = _lib.new_uuid7() if os.environ["HARNESS_RUNTIME"] == "codex" else "install-smoke-" + uuid.uuid4().hex
+        if os.environ["HARNESS_RUNTIME"] == "codex":
+            os.environ.pop("HARNESS_SESSION_ID", None)
+        else:
+            os.environ["HARNESS_SESSION_ID"] = sid
         try:
             os.chdir(repo)
             def call(action, **args):
@@ -207,6 +210,8 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
             body = opened["structuredContent"]
             task_dir = body["task_dir"]
             if os.environ["HARNESS_RUNTIME"] == "codex":
+                if _lib.active_task_binding_matches(str(repo), task_dir, _lib.read_task_control(task_dir), session_id=sid):
+                    raise RuntimeError("Codex smoke session was bound before PostToolUse")
                 hook = str(Path(plugin_root) / "scripts/hook_post_tool_use.py")
                 payload = json.dumps({"cwd": str(repo), "session_id": sid, "tool_name": "wbs",
                                       "arguments": {"action": "open", "wbs_id": "install_smoke"},
@@ -215,6 +220,7 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
                               stdin=payload, timeout=timeout)
                 if result.returncode:
                     raise RuntimeError("installed PostToolUse binding failed: " + result.stderr[-500:])
+                os.environ["HARNESS_SESSION_ID"] = sid
             control = _lib.read_task_control(task_dir)
             if not _lib.active_task_binding_matches(str(repo), task_dir, control, session_id=sid):
                 raise RuntimeError("installed runtime lost exact session/task/run focus")

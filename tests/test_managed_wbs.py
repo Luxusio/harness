@@ -1,7 +1,13 @@
 """Public WBS worktree ownership, admission and completion with real Git."""
 from pathlib import Path
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
 
 from test_batch_state import Pool, RUN, task, _git, _head
 from test_wbs import plan

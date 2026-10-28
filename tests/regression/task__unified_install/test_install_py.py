@@ -23,7 +23,13 @@ import stat
 from pathlib import Path
 from unittest import mock
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
 
 try:
     import tomllib
