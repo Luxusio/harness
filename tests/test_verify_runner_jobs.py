@@ -473,7 +473,10 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path):
         for fd in held:
             os.close(fd)
         assert (tmp_path / "finished").exists()
-        assert not (tmp_path / "result.json").exists()
+        interrupted = json.loads((tmp_path / "result.json").read_text())
+        assert interrupted["status"] == "FAIL" and interrupted["successful"] == []
+        assert interrupted["commands"][0]["execution_pending"]
+        assert interrupted["commands"][0]["returncode"] is None
     finally:
         (tmp_path / "release").touch()
         if proc.poll() is None:
@@ -525,3 +528,221 @@ def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path)
         diagnostic = f"accepted={accepted}, arrivals={arrivals}, barrier_error={barrier_error}\nstdout={stdout}\nstderr={stderr}"
         assert proc.returncode == 0 and barrier_error is None, diagnostic
         assert len(json.loads(stdout)["commands"]) == 3, diagnostic
+
+
+def test_repeated_reuse_and_reuse_only_misses_preserve_origin_and_diagnostics(tmp_path):
+    original = "print('EARLY diagnostic')\nprint('x' * 9000)\n"
+    item = job(tmp_path, 'check', original)
+    first = execute(tmp_path, [item])['commands'][0]
+    reference = first['output_log']
+    log = Path(reference['path'])
+    assert log.read_text().startswith('EARLY diagnostic\n')
+    assert 'EARLY' not in first['output']
+    for generation in ('two', 'three'):
+        current = execute(tmp_path, [item], generation, reuse_only=True)['commands'][0]
+        assert current['reused'] and current['origin_generation'] == 'one'
+        assert current['output'] == first['output'] and current['output_log'] == reference
+    (tmp_path / 'check.py').write_text("raise AssertionError('must not execute B')\n")
+    missed = execute(tmp_path, [item], 'B', reuse_only=True)
+    assert missed['status'] == 'FAIL' and missed['commands'][0]['returncode'] is None
+    assert missed['successful'][0]['origin_generation'] == 'one'
+    assert log.read_text().startswith('EARLY diagnostic\n')
+    (tmp_path / 'check.py').write_text(original)
+    restored = execute(tmp_path, [item], 'A', reuse_only=True)['commands'][0]
+    assert restored['reused'] and restored['output_log'] == reference
+    log.unlink()
+    missing = execute(tmp_path, [item], 'missing-log', reuse_only=True)['commands'][0]
+    assert missing['reused'] and missing['output'] == first['output']
+    assert missing['output_log']['available'] is False
+
+
+def test_actual_failure_invalidates_matching_prior_success(tmp_path):
+    # Undeclared marker intentionally controls this trusted fixture's outcome;
+    # declaration argv/source remain identical across the actual attempts.
+    item = job(tmp_path, 'check', "from pathlib import Path\nPath('built').write_text('same artifact')\nprint('actual attempt')\nraise SystemExit(7 if Path('fail').exists() else 0)\n", kind="producer", outputs=["built"])
+    assert execute(tmp_path, [item])['status'] == 'PASS'
+    (tmp_path / 'fail').touch()
+    # Lost artifact forces actual execution with identical input/context; the
+    # failing attempt recreates the original output bytes before returning 7.
+    (tmp_path / "built").unlink()
+    failed = execute(tmp_path, [item], 'failed')
+    assert failed['commands'][0]['state'] == 'command_failure' and failed['successful'] == []
+    assert 'actual attempt' in Path(failed['commands'][0]['output_log']['path']).read_text()
+    missed = execute(tmp_path, [item], 'later', reuse_only=True)
+    assert missed['status'] == 'FAIL' and not missed['commands'][0]['reused']
+    evidence = missed['commands'][0]['last_execution']
+    assert evidence['returncode'] == 7 and evidence['execution_generation'] == 'failed'
+    assert Path(evidence['output_log']['path']).read_text().startswith('actual attempt')
+    again = execute(tmp_path, [item], 'later-again', reuse_only=True)
+    assert again['commands'][0]['last_execution'] == evidence
+
+
+@pytest.mark.parametrize('failure', ['exit', 'timeout', 'overflow'])
+def test_full_diagnostics_preserve_early_failure_output_and_bounds(tmp_path, failure):
+    code = "import sys,time\nprint('EARLY failure evidence', flush=True)\nprint('z' * 9000, flush=True)\n"
+    code += {'exit': 'raise SystemExit(9)\n', 'timeout': 'time.sleep(5)\n',
+             'overflow': "sys.stdout.write('z' * 1100000)\nsys.stdout.flush()\n"}[failure]
+    item = job(tmp_path, 'check', code)
+    record = execute(tmp_path, [item], timeout=0.3 if failure == 'timeout' else 5)['commands'][0]
+    assert record['status'] == 'FAIL'
+    reference = record['output_log']
+    data = Path(reference['path']).read_bytes()
+    assert data.startswith(b'EARLY failure evidence\n') and len(data) <= 1048576
+    assert reference['bytes'] == len(data) and reference['available']
+    assert reference['truncated'] == (failure == 'overflow')
+    if failure == 'overflow':
+        assert record['error'] == 'output limit exceeded'
+
+
+@pytest.mark.parametrize('unsafe', ['symlink', 'source', 'output'])
+def test_diagnostic_destinations_reject_before_launch(tmp_path, unsafe):
+    item = job(tmp_path, 'check', "from pathlib import Path\nPath('ran').touch()\n")
+    directory = tmp_path / 'results.json.logs'
+    if unsafe == 'symlink':
+        elsewhere = tmp_path / 'elsewhere'
+        elsewhere.mkdir()
+        directory.symlink_to(elsewhere, target_is_directory=True)
+    elif unsafe == 'source':
+        directory.mkdir()
+        (directory / 'input').write_text('selected')
+        item['inputs']['source'].append(directory.name)
+    else:
+        item['kind'] = 'producer'
+        item['outputs'] = [directory.name]
+    with pytest.raises(ValueError, match='diagnostic|symlink'):
+        execute(tmp_path, [item])
+    assert not (tmp_path / 'ran').exists()
+
+
+def test_prior_log_cannot_become_selected_source_or_artifact(tmp_path):
+    first = execute(tmp_path, [job(tmp_path, 'old', "print('old log')\n")])['commands'][0]
+    path = Path(first['output_log']['path'])
+    for category in ('source', 'artifacts'):
+        item = job(tmp_path, 'new', "from pathlib import Path\nPath('ran').touch()\n")
+        item['inputs'].setdefault(category, []).append(path.relative_to(tmp_path).as_posix())
+        with pytest.raises(ValueError, match='diagnostic path overlaps'):
+            execute(tmp_path, [item], 'selected-log')
+        assert path.read_text() == 'old log\n' and not (tmp_path / 'ran').exists()
+
+
+def test_failed_diagnostics_survive_blocking_and_refresh_missing_log(tmp_path):
+    consumer = job(tmp_path, 'consumer', "print('consumer failure')\nraise SystemExit(7)\n")
+    failed = execute(tmp_path, [consumer])['commands'][0]
+    path = Path(failed['output_log']['path'])
+    producer = job(tmp_path, 'producer', 'raise SystemExit(8)\n', kind='producer')
+    blocked = execute(tmp_path, [producer, consumer], 'blocked')['commands'][1]
+    assert blocked['state'] == 'blocked_dependency' and blocked['returncode'] is None
+    assert blocked['last_execution']['returncode'] == 7
+    assert path.read_text() == 'consumer failure\n'
+    path.unlink()
+    missed = execute(tmp_path, [consumer], 'miss', reuse_only=True)['commands'][0]
+    assert missed['last_execution']['output'] == 'consumer failure\n'
+    assert missed['last_execution']['output_log']['available'] is False
+    assert missed['status'] == 'FAIL' and missed['returncode'] is None
+
+
+def test_log_slots_remain_bounded_across_jobs_and_runs(tmp_path):
+    for index in range(4):
+        item = job(tmp_path, 'job' + str(index), "print('bounded')\n")
+        result = execute(tmp_path, [item], str(index), run_id='run' + str(index))
+        current = Path(result['commands'][0]['output_log']['path'])
+        assert current.read_text() == 'bounded\n'
+        assert list(current.parent.glob('*.log')) == [current]
+    # A leftover managed slot from an interrupted publication is reclaimed;
+    # unrelated files in that directory are outside the managed naming scheme.
+    leftover = current.parent / ('0' * 64 + '-attempt.log')
+    leftover.write_text('interrupted')
+    unrelated = current.parent / 'notes.txt'
+    unrelated.write_text('foreign')
+    execute(tmp_path, [item], 'last', run_id='run3')
+    assert not leftover.exists() and unrelated.read_text() == 'foreign'
+
+
+@pytest.mark.parametrize('corruption', ['returncode', 'commands', 'empty', 'utf8', 'oversized'])
+def test_invalid_current_results_cannot_be_repaired_by_success_copy(tmp_path, corruption):
+    item = job(tmp_path, 'check', "print('valid execution')\n")
+    assert execute(tmp_path, [item])['status'] == 'PASS'
+    path = tmp_path / 'results.json'
+    if corruption in ('returncode', 'commands', 'empty'):
+        payload = json.loads(path.read_text())
+        if corruption == 'returncode':
+            payload['commands'][0]['returncode'] = 7
+        else:
+            payload['commands'] = [] if corruption == 'empty' else None
+        path.write_text(json.dumps(payload))
+    elif corruption == 'utf8':
+        path.write_bytes(b'\xff')
+    else:
+        with path.open('wb') as stream:
+            stream.truncate(16 * 1024 * 1024 + 1)
+    result = execute(tmp_path, [item], 'unavailable', reuse_only=True)
+    assert result['status'] == 'FAIL' and not result['commands'][0]['reused']
+    assert execute(tmp_path, [item], 'regenerate')['status'] == 'PASS'
+
+
+def test_retained_success_diagnostic_corruption_or_loss_stays_unavailable(tmp_path):
+    original = "print('bounded summary')\n"
+    item = job(tmp_path, 'check', original)
+    record = execute(tmp_path, [item])['commands'][0]
+    Path(record['output_log']['path']).unlink()
+    (tmp_path / 'check.py').write_text("print('changed')\n")
+    missed = execute(tmp_path, [item], 'miss', reuse_only=True)
+    assert missed['status'] == 'FAIL' and not missed['successful'][0]['output_log']['available']
+    payload = json.loads((tmp_path / 'results.json').read_text())
+    payload['successful'][0]['output_log'] = []
+    (tmp_path / 'results.json').write_text(json.dumps(payload))
+    corrupted = execute(tmp_path, [item], 'malformed-log', reuse_only=True)
+    assert corrupted['status'] == 'FAIL' and corrupted['successful'][0]['output_log'] == {'available': False}
+    (tmp_path / 'check.py').write_text(original)
+    reused = execute(tmp_path, [item], 'restored', reuse_only=True)['commands'][0]
+    assert reused['reused'] and reused['output'] == 'bounded summary\n'
+    assert reused['output_log'] == {'available': False}
+
+
+def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path):
+    code = "from pathlib import Path\nimport time\nPath('built').write_text('same')\nif Path('rerun').exists():\n Path('ready').touch()\n while not Path('release').exists(): time.sleep(.01)\n print('failed rerun evidence', flush=True)\n raise SystemExit(7)\nprint('first success')\n"
+    item = job(tmp_path, 'owner', code, kind='producer', outputs=['built'])
+    first = execute(tmp_path, [item])['commands'][0]
+    assert first['status'] == 'PASS'
+    (tmp_path / 'built').unlink()
+    (tmp_path / 'rerun').touch()
+    declaration = tmp_path / 'jobs.json'
+    declaration.write_text(json.dumps([item]))
+    argv = [sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
+            '--jobs', str(declaration), '--results', str(tmp_path / 'results.json'),
+            '--task-id', 'task', '--run-id', 'run', '--generation', 'interrupted', '--timeout', '8']
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / 'ready').exists():
+            assert proc.poll() is None and time.monotonic() < deadline
+            time.sleep(.01)
+        pending = json.loads((tmp_path / 'results.json').read_text())
+        assert pending['status'] == 'FAIL' and pending['successful'] == []
+        assert pending['commands'][0]['execution_pending']
+        proc.kill()
+        proc.communicate(timeout=5)
+    finally:
+        (tmp_path / 'release').touch()
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate(timeout=5)
+    result = execute(tmp_path, [item], 'later', reuse_only=True)
+    record = result['commands'][0]
+    assert result['status'] == 'FAIL' and not record['reused'] and result['successful'] == []
+    evidence = record['last_execution']
+    assert evidence['returncode'] is None and evidence['execution_pending']
+    assert not evidence['output_log']['available']
+    assert Path(evidence['output_log']['path']).read_text() == 'failed rerun evidence\n'
+
+
+def test_malformed_unicode_log_reference_does_not_repeat_valid_command(tmp_path):
+    item = job(tmp_path, 'check', "print('valid summary')\n")
+    assert execute(tmp_path, [item])['status'] == 'PASS'
+    path = tmp_path / 'results.json'
+    payload = json.loads(path.read_text())
+    payload['successful'][0]['output_log']['path'] = '\ud800'
+    path.write_text(json.dumps(payload))
+    record = execute(tmp_path, [item], 'malformed-unicode', reuse_only=True)['commands'][0]
+    assert record['status'] == 'PASS' and record['reused']
+    assert record['output'] == 'valid summary\n' and record['output_log'] == {'available': False}

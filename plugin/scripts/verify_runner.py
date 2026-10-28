@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -127,7 +128,8 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
     """One producer and its read-only consumers; records are advisory, not QA."""
     import verification_target as vt
     import wbs
-    from _lib import _atomic_text_write
+    from threading import RLock
+    from _lib import _atomic_text_write, _strict_regular_text_snapshot
     from prewrite_gate import _is_protected_artifact
     root, results_path = Path(repo_root).resolve(), Path(results_path).absolute()
     _file_path(Path(results_path.anchor), results_path.relative_to(results_path.anchor).as_posix())
@@ -156,35 +158,125 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
             selected = root / name
             if results_path == selected or selected in results_path.parents or results_path in selected.parents:
                 raise ValueError("results path overlaps selected inputs/outputs")
+    log_directory = results_path.with_name(results_path.name + ".logs")
+    log_paths = {}
+    for job in jobs:
+        stem = _digest(job["job_id"])
+        paths = {slot: log_directory / (stem + "-" + slot + ".log") for slot in ("success", "attempt")}
+        for path in paths.values():
+            wbs._diagnostic_path(path, root)
+        log_paths[job["job_id"]] = paths
+    # The entire directory is reserved: cleanup can also touch older job slots.
+    for job in jobs:
+        policy = job["spec"]["inputs"]
+        for name in policy["source"] + policy["artifacts"] + outputs:
+            selected = root / name
+            if log_directory == selected or selected in log_directory.parents or log_directory in selected.parents:
+                raise ValueError("diagnostic path overlaps selected inputs/outputs")
     # Serialize only callers writing this same result file; jobs in different
     # invocations share the resource/artifact leases below.
     keys = {}
     _path_leases(keys, results_path, True)
+    _path_leases(keys, log_directory, True)
     deadline = time.monotonic() + timeout
     while (result_lease := _lease(keys)) is None:
         if time.monotonic() >= deadline:
             raise TimeoutError("result lease timeout")
         time.sleep(0.01)
+    publication_lock = RLock()
     records = {}
+    successful = {}
+    latest = {}
     try:
         try:
-            previous = json.loads(results_path.read_text())
+            previous = json.loads(_strict_regular_text_snapshot(str(results_path), max_size=16 * 1024 * 1024)["text"])
             if not isinstance(previous, dict) or any(previous.get(k) != v for k, v in dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id).items()):
                 previous = {}
             if not isinstance(previous.get("execution_generation"), str) or not previous.get("execution_generation"):
                 previous = {}
-            old = {r["job_id"]: r for r in previous.get("commands", []) if isinstance(r, dict) and isinstance(r.get("job_id"), str)}
-        except (OSError, ValueError, TypeError, KeyError):
-            old = {}
+            previous_commands = previous.get("commands", [])
+            if (not isinstance(previous_commands, list) or not 1 <= len(previous_commands) <= 32
+                    or any(not isinstance(r, dict) or not isinstance(r.get("job_id"), str)
+                           or not 0 < len(r["job_id"]) <= 128 for r in previous_commands)
+                    or len({r["job_id"] for r in previous_commands}) != len(previous_commands)):
+                raise ValueError("malformed current execution records")
+            latest = {r["job_id"]: r for r in previous_commands}
+            candidates = previous.get("successful", previous.get("commands", []))
+            if not isinstance(candidates, list) or len(candidates) > 32:
+                candidates = []
+            old = {r["job_id"]: r for r in candidates if isinstance(r, dict) and isinstance(r.get("job_id"), str)
+                   and r.get("status") == "PASS" and r.get("state") == "completed" and r.get("returncode") == 0}
+            # Retained copies never repair corrupt/newer actual outcome data.
+            validity = {"job_id", "outcome_id", "kind", "argv", "scope", "outputs", "state", "status", "returncode",
+                        "execution_generation", "origin_generation", "input_fingerprint", "context_fingerprint",
+                        "artifact_fingerprint", "artifact_manifest", "error"}
+            for current in previous_commands:
+                candidate = old.get(current["job_id"], {})
+                if (current.get("status") == "PASS"
+                        and (any(current.get(k) != candidate.get(k) for k in validity)
+                             or not isinstance(current.get("execution_generation"), str)
+                             or not current["execution_generation"] or current.get("returncode") != 0
+                             or current.get("state") != "completed" or current.get("error"))):
+                    old.pop(current["job_id"], None)
+                elif (current.get("status") != "FAIL" and current.get("status") != "PASS"
+                      or current.get("execution_pending")
+                      or current.get("status") == "FAIL" and current.get("returncode") is not None
+                      and current.get("context_fingerprint") == candidate.get("context_fingerprint")):
+                    old.pop(current["job_id"], None)
+            # No recursive candidate chains, and only this invocation's job set.
+            record_fields = {"job_id", "outcome_id", "kind", "argv", "scope", "outputs", "execution_generation",
+                             "origin_generation", "state", "status", "returncode", "reused", "input_fingerprint",
+                             "context_fingerprint", "artifact_fingerprint", "artifact_manifest", "output", "error", "output_log"}
+            successful = {j["job_id"]: {k: v for k, v in old[j["job_id"]].items() if k in record_fields}
+                          for j in jobs if j["job_id"] in old}
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+            old, successful, latest = {}, {}, {}
+
+        def diagnostic_reference(reference, job_id, slot):
+            if not wbs._valid_log_reference(reference):
+                return dict(available=False)
+            if reference["path"] != str(log_paths[job_id][slot]):
+                return dict(reference, available=False)
+            return wbs._log_available(reference, root)
+
+        for job_id, candidate in successful.items():
+            if "output_log" in candidate:
+                candidate["output_log"] = diagnostic_reference(candidate["output_log"], job_id, "success")
+        old = dict(successful)
+
+        def preserve_failure(record):
+            if record["status"] != "FAIL" or record.get("returncode") is not None:
+                return
+            previous_attempt = latest.get(record["job_id"], {})
+            diagnostic = previous_attempt.get("last_execution", previous_attempt)
+            if (isinstance(diagnostic, dict) and (diagnostic.get("returncode") is not None or diagnostic.get("execution_pending"))
+                    and diagnostic.get("state") in {"command_failure", "timeout", "executor_error"}):
+                fields = {"execution_generation", "state", "returncode", "error", "output", "output_log", "execution_pending"}
+                diagnostic = {k: v for k, v in diagnostic.items() if k in fields}
+                reference = diagnostic.get("output_log")
+                if "output_log" in diagnostic:
+                    if diagnostic.get("execution_pending"):
+                        # The supervisor may have produced bytes, but its final
+                        # result was not published. Never infer an exit code or
+                        # promote an unverified capture to complete evidence.
+                        diagnostic["output_log"] = dict(reference, available=False) if wbs._valid_log_reference(reference) else dict(available=False)
+                    else:
+                        diagnostic["output_log"] = diagnostic_reference(reference, record["job_id"], "attempt")
+                record["last_execution"] = diagnostic
 
         def publish():
-            ordered = [records[j["job_id"]] for j in jobs if j["job_id"] in records]
-            ok = len(ordered) == len(jobs) and all(r["status"] == "PASS" for r in ordered)
-            payload = dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id,
-                           execution_generation=execution_generation, status="PASS" if ok else "FAIL",
-                           returncode=0 if ok else 1, commands=ordered)
-            _atomic_text_write(str(results_path), json.dumps(payload, sort_keys=True))
-            return payload
+            with publication_lock:
+                ordered = [records[j["job_id"]] for j in jobs if j["job_id"] in records]
+                ok = len(ordered) == len(jobs) and all(r["status"] == "PASS" for r in ordered)
+                payload = dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id,
+                               execution_generation=execution_generation, status="PASS" if ok else "FAIL",
+                               returncode=0 if ok else 1, commands=ordered,
+                               successful=[successful[j["job_id"]] for j in jobs if j["job_id"] in successful])
+                encoded = json.dumps(payload, sort_keys=True)
+                if len(encoded.encode()) > 16 * 1024 * 1024:
+                    raise ValueError("execution results exceed storage budget")
+                _atomic_text_write(str(results_path), encoded)
+                return payload
 
         def execute(job, held):
             record = dict(job_id=job["job_id"], outcome_id=job["outcome_id"], kind=job["kind"],
@@ -242,7 +334,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     output_hash = None
                 if (prior.get("context_fingerprint") == fingerprint and prior.get("artifact_fingerprint") == output_hash
                         and output_hash is not None and prior.get("status") == "PASS" and prior.get("state") == "completed"
-                        and prior.get("returncode") == 0 and prior.get("outcome_id") == job["outcome_id"]
+                        and prior.get("returncode") == 0 and not prior.get("error") and prior.get("outcome_id") == job["outcome_id"]
                         and isinstance(prior.get("execution_generation"), str) and prior["execution_generation"]
                         and isinstance(prior.get("origin_generation"), str) and prior["origin_generation"]
                         and prior.get("input_fingerprint") == record["input_fingerprint"]
@@ -253,15 +345,32 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     output_manifest = artifacts()
                     if _digest(output_manifest) != output_hash:
                         raise ValueError("outputs changed during reuse validation")
+                    if "output" in prior:
+                        record["output"] = prior["output"]
+                    if "output_log" in prior:
+                        record["output_log"] = diagnostic_reference(prior["output_log"], job["job_id"], "success")
+                    record["error"] = prior.get("error")
                     record.update(state="completed", status="PASS", returncode=0, reused=True,
                                   artifact_fingerprint=output_hash, artifact_manifest=output_manifest, origin_generation=prior.get("origin_generation"))
                     return record
                 if reuse_only:
                     record.update(error="matching successful result unavailable (reuse-only)")
                     return record
+                # A newer actual attempt supersedes this job's successful candidate.
+                # In particular a same-input failure must never resurrect old PASS.
+                with publication_lock:
+                    successful.pop(job["job_id"], None)
+                    attempt_path = log_paths[job["job_id"]]["attempt"]
+                    wbs._diagnostic_path(attempt_path, root)
+                    attempt_path.unlink(missing_ok=True)
+                    pending_record = dict(record, execution_pending=True, error="execution result not published",
+                                          output_log=dict(path=str(attempt_path), bytes=0, sha256=hashlib.sha256(b"").hexdigest(),
+                                                          truncated=False, available=False))
+                    records[job["job_id"]] = pending_record
+                    publish()
                 try:
-                    code = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ))\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
-                    result = _scoped_call(code, dict(argv=argv, timeout=timeout), root, env, [*held, *result_lease])
+                    code = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
+                    result = _scoped_call(code, dict(argv=argv, timeout=timeout, log_path=str(log_paths[job["job_id"]]["attempt"])), root, env, [*held, *result_lease])
                 except OSError as exc:
                     record.update(state="start_failed", error=str(exc))
                     return record
@@ -271,6 +380,12 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     record.update(state="executor_error", error="inputs/context changed during execution")
                 if record["state"] == "completed":
                     output_manifest = artifacts()
+                    reference = record.get("output_log")
+                    if reference and reference.get("available"):
+                        destination = log_paths[job["job_id"]]["success"]
+                        wbs._diagnostic_path(destination, root)
+                        os.replace(log_paths[job["job_id"]]["attempt"], destination)
+                        record["output_log"] = dict(reference, path=str(destination))
                     record.update(artifact_fingerprint=_digest(output_manifest), artifact_manifest=output_manifest, status="PASS")
                 return record
             except Exception as exc:
@@ -283,6 +398,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
             if stage and stage[0]["kind"] == "consumer" and any(records[p["job_id"]]["status"] != "PASS" for p in producers):
                 for job in stage:
                     records[job["job_id"]] = dict(job_id=job["job_id"], outcome_id=job["outcome_id"], kind="consumer", argv=job["argv"], state="blocked_dependency", status="FAIL", returncode=None, reused=False, execution_generation=execution_generation)
+                    preserve_failure(records[job["job_id"]])
                 publish()
                 continue
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -304,8 +420,12 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                             held = running.pop(future)
                             try:
                                 record = future.result()
-                                records[record["job_id"]] = record
-                                publish()
+                                with publication_lock:
+                                    preserve_failure(record)
+                                    records[record["job_id"]] = record
+                                    if record["status"] == "PASS":
+                                        successful[record["job_id"]] = dict(record)
+                                    publish()
                                 lease_deadline = time.monotonic() + timeout
                             finally:
                                 for fd in held:
@@ -314,7 +434,21 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                         raise TimeoutError("job resource lease timeout")
                     if pending or running:
                         time.sleep(0.01)
-        return publish()
+        payload = publish()
+        # Reclaim only managed slot names in our exclusively leased directory,
+        # never paths supplied by advisory JSON. Includes interrupted/foreign-run
+        # leftovers; publication precedes reclamation.
+        retained = {r.get("output_log", {}).get("path") for r in [*records.values(), *successful.values()]}
+        retained.update(r.get("last_execution", {}).get("output_log", {}).get("path") for r in records.values())
+        if log_directory.is_dir():
+            for path in log_directory.iterdir():
+                if re.fullmatch(r"[0-9a-f]{64}-(success|attempt)\.log", path.name) and str(path) not in retained:
+                    try:
+                        wbs._diagnostic_path(path, root)
+                        path.unlink(missing_ok=True)
+                    except (OSError, ValueError):
+                        pass
+        return payload
     finally:
         for fd in result_lease:
             os.close(fd)

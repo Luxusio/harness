@@ -496,3 +496,62 @@ def test_public_migration_is_explicit_and_owner_authorized(tmp_path, monkeypatch
     assert not applied.get('isError'), applied
     assert applied['structuredContent']['status'] == 'complete' and not path.exists()
     assert not list(tmp_path.rglob('TASK.json'))
+
+
+def test_assertion_full_log_survives_compact_wbs_publication(tmp_path):
+    command = [sys.executable, '-c', "print('EARLY assertion diagnostic'); print('x' * 12000); raise SystemExit(4)"]
+    repo, td = baseline(tmp_path, [dict(id='A', title='Full diagnostic', weight=1, check=command)])
+    result = wbs.verify(str(td), str(repo), 'run', 'A')
+    assert not result['passed'] and result['returncode'] == 4
+    assert 'EARLY' not in result['output']
+    reference = result['output_log']
+    assert reference['available'] and not reference['truncated']
+    assert Path(reference['path']).is_relative_to(td / 'work')
+    assert Path(reference['path']).read_text().startswith('EARLY assertion diagnostic\n')
+    stored = wbs.read_state(str(td))['checks']['A']['result']
+    assert stored['output_log'] == reference and len(stored['output']) <= 4000
+    # Fixed leaf slots bound storage across later attempts.
+    assert not wbs.verify(str(td), str(repo), 'run', 'A')['passed']
+    assert len(list((td / 'work').glob('assertion-*.log'))) == 1
+
+
+def test_assertion_diagnostic_symlink_never_launches(tmp_path):
+    command = [sys.executable, '-c', "from pathlib import Path; Path('ran').touch()"]
+    repo, td = baseline(tmp_path, [dict(id='A', title='Safe diagnostic', weight=1, check=command)])
+    target = tmp_path / 'outside'
+    target.mkdir()
+    (td / 'work').symlink_to(target, target_is_directory=True)
+    import pytest
+    with pytest.raises(ValueError, match='symlink diagnostic'):
+        wbs.verify(str(td), str(repo), 'run', 'A')
+    assert not (repo / 'ran').exists() and not list(target.iterdir())
+
+
+def test_successful_recheck_refreshes_log_without_progress_clock_reset(tmp_path):
+    command = [sys.executable, '-c', "from pathlib import Path; p=Path('counter'); n=int(p.read_text())+1 if p.exists() else 1; p.write_text(str(n)); print(n)"]
+    repo, td = baseline(tmp_path, [dict(id='A', title='Current diagnostic', weight=1, check=command)])
+    text = (td / 'PLAN.md').read_text() + '```wbs-inputs\n' + json.dumps({'source': ['src.txt']}) + '\n```\n'
+    state = wbs.prepare(str(td), text, 'run', now=100)
+    (td / 'PLAN.md').write_text(text)
+    (td / 'WBS.json').write_text(json.dumps(state))
+    assert wbs.verify(str(td), str(repo), 'run', 'A', now=200)['passed']
+    assert wbs.verify(str(td), str(repo), 'run', 'A', now=300)['passed']
+    stored = wbs.read_state(str(td))
+    result = stored['checks']['A']['result']
+    assert result['output'] == '2\n'
+    assert wbs._log_available(result['output_log'], repo)['available']
+    assert Path(result['output_log']['path']).read_text() == '2\n'
+    assert stored['last_progress_at'] == 200
+
+
+def test_implicit_source_policies_still_execute_with_diagnostics(tmp_path):
+    for index, policy in enumerate(({'artifacts': ['src.txt']}, {'exclude': ['unrelated']})):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        repo, td = baseline(directory)
+        text = (td / 'PLAN.md').read_text() + '```wbs-inputs\n' + json.dumps(policy) + '\n```\n'
+        state = wbs.prepare(str(td), text, 'run')
+        (td / 'PLAN.md').write_text(text)
+        (td / 'WBS.json').write_text(json.dumps(state))
+        result = wbs.verify(str(td), str(repo), 'run', 'A')
+        assert result['passed'] and result['output_log']['available']

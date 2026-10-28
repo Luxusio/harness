@@ -110,6 +110,41 @@ Execution JSON is advisory data: it neither supplies independent QA results nor 
 WBS credit, runtime PASS or close authority. Independent roles still own review
 and QA and the existing WBS gates still decide admission.
 
+## Derived diagnostic retention contract
+
+The approved execution-reuse repair requires stdout summaries and original
+execution provenance to survive execute → reuse → reuse. A reuse-only miss
+remains current FAIL but preserves the last successful candidate, so restoring
+A after an A → B miss can reuse A. A newer actual execution failure invalidates
+its matching successful candidate; earlier PASS never overrides current failure.
+No-execution records retain the preceding actual failure diagnostics separately
+from their current failure or dependency status, with log availability refreshed.
+Before an actual argv starts, current pending FAIL and candidate invalidation
+are published atomically. If the runner owner is interrupted, later reuse stays
+unavailable, with an unverified attempt-log reference and no invented exit code.
+All existing source/context/output checks and leases still apply.
+
+Bounded full command diagnostics remain accessible outside measured inputs and
+protected lifecycle controls. Current command failure, timeout and output-budget
+failure retain their own diagnostics. Missing or changed logs are reported as
+unavailable, while the stored summary remains accessible; log loss alone does
+not repeat an otherwise valid product command.
+
+Implementation decisions: the existing per-group result contains at most one
+flat successful candidate per current job. Compact log references include path,
+byte count, content digest, availability and whether the output budget stopped
+capture. Per-job success and attempt log slots sit beside the result JSON;
+reused success references retain their original generation. Superseded owned
+slots are removed after final publication, including interrupted or prior-run
+leftovers in the dedicated directory. The entire directory is excluded from
+selected source/artifact/output ownership. WBS assertion logs use fixed slots
+under the task work directory, outside its measured inputs; proof JSON keeps
+only the existing tail and a compact log reference. A successful recheck updates
+that diagnostic result without restarting the progress clock. Each log captures at most
+the executor's 1 MiB output allowance; overflow is an execution failure, with
+honest truncation metadata. Unsafe components, protected destinations and
+source/artifact/output overlaps are refused before command launch.
+
 ## Derived cooperative ownership contract
 
 Stable flock files under `~/.cache/harness-verification-leases` coordinate local

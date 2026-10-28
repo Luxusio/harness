@@ -211,7 +211,7 @@ def validate_state(state):
             attempt = proof["last_attempt"]
             require(isinstance(attempt, dict) and set(attempt) == {"result", "checked_at", "measurement_error"}
                     and isinstance(attempt["result"], dict)
-                    and set(attempt["result"]) == {"returncode", "error", "output"}
+                    and {"returncode", "error", "output"} <= set(attempt["result"]) <= {"returncode", "error", "output", "output_log"}
                     and (attempt["result"]["returncode"] is None or type(attempt["result"]["returncode"]) is int)
                     and (attempt["result"]["error"] is None or isinstance(attempt["result"]["error"], str))
                     and isinstance(attempt["result"]["output"], str)
@@ -219,6 +219,9 @@ def validate_state(state):
                     and type(attempt["checked_at"]) in (int, float) and math.isfinite(attempt["checked_at"])
                     and isinstance(attempt["measurement_error"], str) and 0 < len(attempt["measurement_error"]) <= 4000,
                     "invalid inconclusive assertion evidence")
+        for result in (proof.get("result"), proof.get("last_attempt", {}).get("result")):
+            if isinstance(result, dict) and "output_log" in result:
+                require(_valid_log_reference(result["output_log"]), "invalid diagnostic reference")
         if proof["passed"]:
             require(all(isinstance(proof.get(k), str) and re.fullmatch(r"[0-9a-f]{64}", proof[k])
                         for k in ("definition", "source")), "invalid assertion binding")
@@ -659,8 +662,58 @@ def _error_text(reason):
     return (str(reason) or type(reason).__name__).encode(errors="replace")[:4000].decode(errors="replace")
 
 
-def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=4000, binary=False, pass_fds=()):
+def _diagnostic_path(path, repo, policy=None):
+    """Validate a diagnostic destination without granting lifecycle ownership."""
+    from prewrite_gate import _is_protected_artifact
+    path = Path(path).absolute()
+    input_policy({"source": [path.relative_to(path.anchor).as_posix()]})
+    require(len(str(path).encode()) <= 2048, "diagnostic path too long")
+    require(not _is_protected_artifact(str(path), repo_root=str(repo)), "protected diagnostic path")
+    for part in (path, *path.parents):
+        require(not part.is_symlink(), "symlink diagnostic path")
+    require(not path.exists() or path.is_file(), "diagnostic path must be a regular file")
+    if policy is not None and path.is_relative_to(Path(repo).resolve()):
+        name = path.relative_to(Path(repo).resolve()).as_posix()
+        excluded = any(covers(p, name) for p in policy.get("exclude", []) + policy.get("deny", []))
+        require(not any(covers(p, name) or covers(name, p) for p in policy["artifacts"])
+                and (excluded or not any(covers(p, name) or covers(name, p) for p in policy.get("source", []))),
+                "diagnostic path overlaps selected inputs")
+    return path
+
+
+def _valid_log_reference(value):
+    try:
+        return (isinstance(value, dict) and set(value) == {"path", "bytes", "sha256", "truncated", "available"}
+                and isinstance(value["path"], str) and 0 < len(value["path"].encode()) <= 2048
+                and type(value["bytes"]) is int and 0 <= value["bytes"] <= 1024 * 1024
+                and isinstance(value["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None
+                and type(value["truncated"]) is bool and type(value["available"]) is bool)
+    except UnicodeError:
+        return False
+
+def _log_available(reference, repo):
+    """Diagnostic loss affects availability, never product applicability."""
+    reference = dict(reference)
+    if not _valid_log_reference(reference):
+        return dict(reference, available=False)
+    try:
+        path = _diagnostic_path(reference["path"], repo)
+        import hashlib
+        with path.open("rb") as stream:
+            data = stream.read(1024 * 1024 + 1)
+        reference["available"] = (len(data) == reference["bytes"] <= 1024 * 1024
+                                  and hashlib.sha256(data).hexdigest() == reference["sha256"])
+    except (OSError, ValueError, KeyError, TypeError):
+        reference["available"] = False
+    return reference
+
+
+def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=4000, binary=False, pass_fds=(), log_path=None):
     """Bound time and captured output, terminating the entire assertion group."""
+    if log_path is not None:
+        log_path = _diagnostic_path(log_path, repo)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        _diagnostic_path(log_path, repo)
     proc = subprocess.Popen(argv, cwd=repo, env=env, pass_fds=pass_fds, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, start_new_session=True)
     output, failure = bytearray(), None
@@ -682,8 +735,9 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
                 if not chunk:
                     selector.unregister(key.fileobj)
                 else:
-                    output.extend(chunk)
-                    if len(output) > output_limit:
+                    overflow = len(output) + len(chunk) > output_limit
+                    output.extend(chunk[:max(0, output_limit - len(output))])
+                    if overflow:
                         failure = "output limit exceeded"
                         break
             if failure:
@@ -696,7 +750,27 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
             stop()
             code, failure = proc.wait(), "timeout"
         captured = bytes(output[-retain:])
-        return dict(returncode=code, error=failure, output=captured if binary else captured.decode(errors="replace"))
+        result = dict(returncode=code, error=failure, output=captured if binary else captured.decode(errors="replace"))
+        if log_path is not None:
+            import hashlib
+            reference = dict(path=str(log_path), bytes=len(output), sha256=hashlib.sha256(output).hexdigest(),
+                             truncated=failure == "output limit exceeded", available=False)
+            try:
+                _diagnostic_path(log_path, repo)
+                import tempfile
+                fd, temporary = tempfile.mkstemp(prefix=".diagnostic-", dir=log_path.parent)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(output)
+                    _diagnostic_path(log_path, repo)
+                    os.replace(temporary, log_path)
+                    reference["available"] = True
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
+            result["output_log"] = reference
+        return result
     finally:
         selector.close()
         proc.stdout.close()
@@ -736,12 +810,15 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
                     **(result or dict(returncode=None, error=None, output="")),
                     measurement_status="unavailable", measurement_phase=phase, measurement_error=_error_text(reason),
                     progress=_unavailable(reason))
+    log_path = _diagnostic_path(Path(task_dir) / "work" / ("assertion-" + hashlib.sha256(leaf_id.encode()).hexdigest() + ".log"),
+                                repo, verification_inputs(state, node))
     # Reserve the largest bounded publication before any assertion can run.
     # Preserve the previous proof even when the next result is inconclusive.
     reserve = dict(state, checks=dict(state["checks"]))
     reserved_proof = dict(state["checks"].get(leaf_id, dict(passed=False)))
     reserved_proof["last_attempt"] = dict(
-        result=dict(returncode=-999999999999999999999, error="\0" * 4000, output="\0" * 4000),
+        result=dict(returncode=-999999999999999999999, error="\0" * 4000, output="\0" * 4000,
+                    output_log=dict(path="\0" * 2048, bytes=1048576, sha256="0" * 64, truncated=False, available=False)),
         checked_at=1.7976931348623157e308, measurement_error="\0" * 4000)
     reserve["checks"][leaf_id] = reserved_proof
     try:
@@ -773,7 +850,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     before_aggregate = (aggregate(before_sources, state)
                         if any('inputs' in n for n in leaves(state['nodes'])) else before_progress)
     try:
-        result = _execute(node["check"], repo, timeout)
+        result = _execute(node["check"], repo, timeout, log_path=log_path)
     except OSError as exc:
         result = dict(returncode=None, error=_error_text(exc), output="")
     stamp = time.time() if now is None else now
@@ -799,7 +876,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     previous = state["checks"].pop(leaf_id, None)
     state["checks"][leaf_id] = dict(passed=False, result=result, checked_at=stamp)
     if success:
-        state["checks"][leaf_id] = dict(previous) if leaf_id in verified else dict(
+        state["checks"][leaf_id] = dict(previous, result=result) if leaf_id in verified else dict(
             passed=True, definition=digest(node), source=before, checked_at=stamp, result=result)
         policy = verification_inputs(state, node)
         if policy is not None:
