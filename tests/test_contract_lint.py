@@ -179,6 +179,17 @@ class DocTestReferenceTests(unittest.TestCase):
         self.assertIn("doc/note.md:5", issues[0])
         self.assertIn("test_gate_blocks_on_remove", issues[0])
 
+    def test_explicitly_superseded_history_is_not_a_current_coverage_claim(self):
+        self.doc.write_text(
+            "> **Historical — superseded 2026-10-28.** Retained history.\n"
+            "`test_retired_receipt_collector`\n", encoding="utf-8",
+        )
+        active = self.repo / "doc" / "active.md"
+        active.write_text("`test_missing_current_guard`\n", encoding="utf-8")
+        issues = self._issues()
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("test_missing_current_guard", issues[0])
+
     def test_prose_and_paths_that_merely_contain_test_do_not_fire(self):
         """Korean and English prose, config keys, and file paths are not claims."""
         (self.repo / "plugin").mkdir()

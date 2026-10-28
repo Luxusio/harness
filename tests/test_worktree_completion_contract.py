@@ -74,7 +74,7 @@ def test_batch_routes_managed_completion_and_recovery_does_not_forge_closed():
     # proof; the new managed entry point does not authorize invented closure.
     recovery = _shared("Interrupted or already-copied recovery")
     assert "do not fabricate a closed lead result" in recovery
-    assert "edit original task status/receipts" in recovery
+    assert "edit original task control" in recovery
     assert "Per-change disposition" in recovery
     assert "Fresh independent review and QA" in recovery
     assert "readable, byte-verified archive" in recovery
@@ -114,7 +114,7 @@ def test_copied_recovery_requires_destination_proof_not_just_an_archive():
     assert "not permission to silently bypass the original lifecycle by copying into main" in phase
     assert "use a separate recovery task" in phase
     assert "do not fabricate a closed lead result" in phase
-    assert "edit original task status/receipts, or carry original PASS evidence" in phase
+    assert "edit original task control, or carry original PASS evidence" in phase
     assert "No unintegrated unique source commits" in phase
     assert "Per-change disposition of tracked, staged, deleted and untracked paths" in phase
     assert "destination commit/path containing each intended change, or its explicit authorized omission" in phase

@@ -94,10 +94,11 @@ def test_cross_model_probe_is_gone_but_scratch_tolerance_survives():
 def test_claude_runtime_registers_no_stop_hook():
     hooks = json.loads(_text(REPO / "plugin/hooks/hooks.json"))["hooks"]
     assert "Stop" not in hooks
-    # The receipt lifecycle and the other gates are untouched.
-    for event in ("SessionStart", "SubagentStart", "SubagentStop", "PreToolUse",
+    # Source/session hooks remain; receipt-only lifecycle hooks are removed.
+    for event in ("SessionStart", "PreToolUse",
                   "UserPromptSubmit", "PostToolUse"):
         assert event in hooks, f"{event} hook disappeared"
+    assert "SubagentStart" not in hooks and "SubagentStop" not in hooks
     assert "stop_gate.py" not in _text(REPO / "plugin/hooks/hooks.json")
 
 

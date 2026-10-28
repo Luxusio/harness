@@ -18,6 +18,8 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import os
+import sys
 import unittest
 from pathlib import Path
 
@@ -75,8 +77,13 @@ class VerifyReportProbeTests(unittest.TestCase):
         if shutil.which(probe[0]) is None:
             self.skipTest(f"{probe[0]!r} is not on PATH; the declared runner cannot be probed here")
 
+        env = dict(os.environ)
+        if probe[0] == "uv" and (Path(sys.prefix) / "pyvenv.cfg").is_file():
+            # Reuse this suite's installed runner without writing into a frozen source view.
+            env.update(UV_PROJECT_ENVIRONMENT=sys.prefix, UV_NO_SYNC="1")
         proc = subprocess.run(
             probe, cwd=str(ROOT), capture_output=True, text=True, check=False,
+            env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
         self.assertIn("pytest", proc.stdout.lower())

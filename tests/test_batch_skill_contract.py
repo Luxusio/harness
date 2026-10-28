@@ -360,7 +360,7 @@ def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolatio
         "explicit mutation permission",
         "wbs(action=\"open\", workspace=W, wbs_id=existing_id)` without `fresh_run`",
         "Require the same run id",
-        "Preserve receipts and evidence",
+        "Preserve measured checks and evidence",
         "never restart solely to manufacture a PASS",
         "Never clean up your own worktree",
     ), path)

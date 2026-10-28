@@ -647,14 +647,11 @@ def test_local_writer_paths_match_canonical_operational_ignores():
 
     setup = load("setup_finalize_contract", SCRIPT)
     runbooks = load("runbook_memory_contract", REPO / "plugin/scripts/runbook_memory.py")
-    pretool = load(
-        "hook_pre_tool_use_contract", REPO / "plugin/scripts/hook_pre_tool_use.py"
-    )
 
     # Every path a runtime writer creates must be ignored in the projects setup
     # generates, not only in this repo's own .gitignore. Missing one leaves an
     # untracked file in every downstream project after the first spawn.
-    writer_paths = {runbooks.CANDIDATES_REL, pretool.WATCHER_DIAGNOSTICS_RELPATH}
+    writer_paths = {runbooks.CANDIDATES_REL}
     assert writer_paths <= set(setup.OPERATIONAL_IGNORES)
 
 

@@ -145,6 +145,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `mutation_probe.py` | Mutates the changed lines of a diff and reports the mutations no test noticed; every survivor is re-run against the full suite first | stdout |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
+| `codex_hook_registration.py` | Bind native sessions to the exact task/run and source workspace | Session focus |
 | `setup_finalize.py` | Canonical setup validation, manifest version migration, operational ignores, and legacy version-file cleanup | `.gitignore`, `doc/harness/manifest.yaml` |
 | `project_format_check.py` | Read-only SessionStart reminder for older Harness project file formats and missing operational ignores | stdout |
 | `verification_target.py` | Persistent copied verification inputs and separate source applicability for authentic review/QA results |

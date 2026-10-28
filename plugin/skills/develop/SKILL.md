@@ -189,8 +189,8 @@ history in PLAN.md, checkpoint notes, or the final report instead of
 adding PROGRESS keys. A completed AC needs its happy path, important
 negative/edge paths and regression evidence; partial work remains explicit.
 Each worker runs its own targeted tests. Full-suite verification
-belongs to the required qa-* agents; hooks record their lifecycle and
-`wbs(action="verify")` requires completed explicit PASS verdicts.
+belongs to the required qa-* agents. Await actual independent QA finals;
+`wbs(action="verify")` measures current required WBS checks.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -320,7 +320,7 @@ critic artifact is written.
 
 When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 
-**Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message so the hooks record each subagent start.
+**Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message so independent QA lanes run concurrently.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures are logged as `transient` in `learnings.jsonl` and not counted toward the 3-cycle limit.

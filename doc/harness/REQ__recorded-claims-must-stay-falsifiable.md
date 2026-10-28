@@ -148,9 +148,7 @@ known-red 건의 전말은
 - `tests/test_setup_verify_report_probe.py` — 스킬이 manifest 에서 프로브를
   유도하도록 지시하는지(문장 언급이 아니라 지시를 매칭한다), 그리고 선언된
   명령의 truncated 프로브가 실제로 실행 가능한지 확인한다.
-- `handle_task_verify` 응답의 `watcher_status`, 그리고
-  `tests/test_harness_mcp_server.py` 의 exact key-set 검사와
-  `test_task_verify_reports_the_watcher_status_it_gated_on`.
+- `handle_task_verify`는 현재 WBS checks를 반환한다. 과거 watcher 상태와 receipt gate 응답 검사는 2026-10-28 receipt 제거로 폐기되었다. 현재 lifecycle은 `tests/test_receipt_free_lifecycle.py`로 확인한다.
 
 ## 강제하지 않는 것, 그리고 이유
 

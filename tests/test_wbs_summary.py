@@ -18,6 +18,7 @@ def test_summary_keeps_tiers_and_stored_outcomes_distinct():
                                       software_verified="stored", actual_environment="unknown", complete="pending")
     assert result["outcomes"] == [dict(id="A", title="Real outcome", evidence="stored")]
     context.update(status="closed", verification_targets=dict(status="applicable"))
+    context["progress"]["status"] = "measured"
     context["progress"]["integration"]["proof_fresh"] = True
     result = wbs.summary(context)
     assert result["evidence"]["software_verified"] == "current"

@@ -138,7 +138,7 @@ def test_current_operational_docs_use_supported_recovery_actions():
     guide = (repo / "doc/harness/GUIDE__how-harness-works.md").read_text()
     assert "Goal executor" not in readme and "selecting the next child" not in readme
     assert "goal_storage_root" not in guide and "goal-control-mcp" not in guide
-    faq = guide.split("## 16. 문제 해결 FAQ", 1)[1].split("## 17.", 1)[0]
+    faq = guide.split("문제 해결 FAQ", 1)[1].split("\n## ", 1)[0]
     # Private error prefixes such as `task_start refused ...` remain accurate.
     # Bare retired operation names followed by Korean call/route particles
     # instead prescribe unavailable public operations in this recovery section.

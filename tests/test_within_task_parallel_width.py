@@ -256,7 +256,7 @@ def test_test_author_writes_only_tests_from_plan_intent():
                 "including an import of a new symbol PLAN.md names, fail until the AC lands",
                 "never make a red test green by loosening its assertion",
                 "once the whole batch returns",
-                "Do not write `PLAN.md`, `TASK.json`, or `PROGRESS.md`.",
+                "Do not write `PLAN.md`, `TASK.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.",
                 "Do not call harness MCP artifact writers.",
                 spawn_rule,
                 "Do not run full-suite QA.",
@@ -362,7 +362,7 @@ def test_codex_test_author_mirror_and_phase_30_line():
             "reserve its worker/test-author pair via `ready-lanes.md`",
             "explicit unpaired fallback only when host capacity requires it",
             '`spawn_agent(task_name="test_author_ac_<NNN>")`',
-            "so the watcher infers no lens",
+            "The author reads",
             "reads `${HARNESS_PLUGIN_ROOT}/agents/test-author.md`",
             "owns only `**Tests:**`",
             "the worker owns only `**Files:**` and leaves the AC's `Verify:` to the coordinator",
@@ -430,7 +430,7 @@ def test_ac_worker_sub_split_is_bounded_one_level_and_sole_reporter():
     )
     _assert_phrases(
         fanout,
-        ("at most 3 unnamed sub-workers", "one level deep", "sole reporter"),
+        ("at most 3 sub-workers", "one level deep", "sole reporter"),
         "parallel-fanout sub-split note",
     )
 
@@ -531,7 +531,7 @@ def test_adr_records_decisions_bounds_codex_scope_and_rejections():
             "only the prompt marker stops it from splitting again",
             "A sub-worker runs scoped tests for its own paths only",
             "by the parent, or by the coordinator when the AC is also paired with a test author",
-            "Both residual risks are accepted.",
+            "These residual risks are accepted.",
         ),
         "ADR",
     )

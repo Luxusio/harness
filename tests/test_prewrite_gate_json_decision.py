@@ -61,7 +61,7 @@ class TestAllowSilent(unittest.TestCase):
 
     def test_unrelated_review_detail_basename_is_not_harness_owned(self):
         with _isolated_task("pr1-unrelated-review-detail") as (root, task_dir):
-            target = os.path.join(root, "app/data/TASK.json")
+            target = os.path.join(root, "app/data/REVIEWS.jsonl")
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
@@ -70,7 +70,7 @@ class TestAllowSilent(unittest.TestCase):
         with _isolated_task("pr1-nested-review-detail") as (root, task_dir):
             target = os.path.join(
                 root,
-                "fixtures/doc/harness/tasks/TASK__sample/TASK.json",
+                "fixtures/doc/harness/tasks/TASK__sample/REVIEWS.jsonl",
             )
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         self.assertEqual(r.returncode, 0)

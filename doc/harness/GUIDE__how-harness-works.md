@@ -174,6 +174,8 @@ coordinator는 형식/크기를 검사하고 후보를 고치거나 만들어 �
 QA는 AC별 실행 증거와 검증 깊이를 보고하고 소스를 수정하지 않는다. dogfood는
 QA 뒤의 backlog/friction pass다.
 
+Native GUI QA는 Device Lab을 사용하며 X11, macOS, Windows, Android, iOS의 실제 대상과 실행 가능 여부를 확인한다. [qa-desktop](../../plugin/agents/qa-desktop.md)의 discovery와 readiness 절차를 따른다.
+
 ## 7. WBS와 native Goal
 
 Goal은 objective와 continuation을 제공하고 WBS는 같은 objective의 계획과 측정을
@@ -198,7 +200,7 @@ push, 자기 worktree 제거는 coordinator의 책임이다. coordinator는 stop
 clean branch tip, ancestry와 integration proof를 확인하고 serial rebase/fast-forward,
 archive harvest와 cleanup을 수행한다. 충돌과 남은 변경은 retained blocker로
 보고하고 강제로 버리지 않는다. selected S1 submodule은 기존 helper의 object pins,
-identity/content proof와 guarded disposal 규칙을 따른다.
+identity/content proof와 guarded disposal 규칙은 [S1 submodule 계약](REQ__batch-submodule-support.md)을 따른다.
 
 source task close와 소유한 임시 W/branch 제거는 별개다. 이미 closed여도 남은
 integration/disposal을 마쳐야 전체 완료다. cleanup만을 위해 리뷰나 close를 반복하지
@@ -236,6 +238,8 @@ post-close self-improvement는 실제 friction signal만 append-only learnings l
 현재 task control을 사용한다. 기존 health 측정이 없으면 점수나 PASS를 만들지 않는다.
 
 ## 11. 문제 해결 FAQ
+
+`wbs(action="open")`으로 같은 run을 재개하고 `wbs(action="context")`로 상태를 조회한다. 범위 변경은 `wbs(action="plan")`, 현재 assertion 측정은 `wbs(action="verify")`, 실제 blocker 기록은 `wbs(action="block")`을 사용한다. `fresh_run: true`는 의도적으로 새 generation을 시작할 때만 지정한다.
 
 **실제 리뷰/QA는 PASS인데 verify가 FAIL이다.** 현재 required WBS assertion,
 blocked state와 source applicability를 확인한다. machine verdict는 그 측정 결과다.

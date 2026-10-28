@@ -90,7 +90,8 @@ def test_claude_lens_agents_stay_in_the_foreground():
         text = (REPO / rel).read_text(encoding="utf-8")
         body = " ".join(text.split())
         assert "Run verification commands in the foreground" in body, rel
-        assert "Never end your turn while a command or subagent you started is still running" in body, rel
+        assert ("Return your final verdict only after commands and subagents needed for it have finished" in body
+                or "Never end your turn while a command or subagent you started is still running" in body), rel
         if "harness:role-core:end" in text:
             core = text.split("harness:role-core:end", 1)[0]
             assert "in the foreground" not in core, rel
@@ -179,7 +180,7 @@ def test_harness_source_completion_requires_commit_and_conditional_delivery():
         assert "commit the completed diff" in body
         assert "final response" in body
         assert "conditional verified-delivery result" in body
-        assert "stateless root installer" in body
+        assert "current WBS applicability and stable payload bytes" in body
 
 
 def test_develop_installs_harness_after_fresh_qa_before_close():
@@ -206,7 +207,7 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
         assert expected_installer in section
         assert "`python3 install.py` (the default conditional run)" in section
         assert "--if-stale" not in section
-        assert "terminal ordered" in section
+        assert "actual independent review and QA PASS MUST immediately run" in section
         assert "failed refreshes block completion" in " ".join(section.lower().split())
 
 

@@ -9,6 +9,7 @@ sys.path.insert(0, str(REPO / "plugin" / "scripts"))
 from req_detector import detect_req_need  # type: ignore
 from req_scaffold import create_req_doc  # type: ignore
 from conftest import SCRIPTS_DIR, invoke_hook, parse_decision, scratch_task_in_real_repo  # type: ignore
+from test_prewrite_gate_json_decision import _isolated_task
 
 
 def test_req_detector_flags_mobile_reader_back_stack_feedback():
@@ -54,14 +55,15 @@ def test_req_detector_does_not_flag_internal_refactor_path():
 
 
 def test_prewrite_denies_observable_source_edit_without_req_link():
-    with scratch_task_in_real_repo("req-prewrite-no-link") as task_dir:
+    with _isolated_task("req-prewrite-no-link") as (root, task_dir):
         plan = Path(task_dir) / "PLAN.md"
         plan.write_text("# PLAN\n\n## Durable Docs Decision\nREQ: n/a\n", encoding="utf-8")
-        target = REPO / "src/mobile/Reader.tsx"
+        target = Path(root) / "src/mobile/Reader.tsx"
         result = invoke_hook(
             str(Path(SCRIPTS_DIR) / "prewrite_gate.py"),
             "Write",
             {"file_path": str(target)},
+            cwd=root,
         )
 
     decision, reason = parse_decision(result.stdout)

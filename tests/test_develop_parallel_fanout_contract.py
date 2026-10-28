@@ -336,7 +336,7 @@ def test_codex_review_gate_has_risk_proportional_fanout_before_formal_verifier()
     assert "escape literal `<`, `>`, `&`" in body
     assert "`\\u003c`, `\\u003e`, `\\u0026`" in body
     assert "only this full sweep formal reviewer" in _policy_text(body)
-    assert "hunters never emit verdicts" in _normalized(body)
+    assert "hunters never emit formal verdicts" in _normalized(body)
     assert "Every retry uses new task names" in body
     assert "security receives no hunter data" in body
 

@@ -330,7 +330,7 @@ class RealFileTests(unittest.TestCase):
     def test_the_shipped_file_actually_declares_dependencies(self):
         # Without this, the path-existence test below passes vacuously the
         # moment someone deletes every declaration.
-        self.assertGreaterEqual(len(self.candidates), 15)
+        self.assertGreaterEqual(sum(not c["superseded"] for c in self.candidates), 15)
 
     def test_every_declared_path_exists(self):
         # This is the whole falsifiability contract: a declaration naming a
@@ -341,6 +341,7 @@ class RealFileTests(unittest.TestCase):
         missing = sorted(
             f"{c['key']} -> {p}"
             for c in self.candidates
+            if not c["superseded"]
             for p in c["paths"]
             if not (ROOT / p).exists()
         )

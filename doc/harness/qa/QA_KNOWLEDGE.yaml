@@ -153,12 +153,13 @@ qa_notes:
       session id from doc/harness/tasks/.active_sessions/.session-hint when
       current_session_id() returns "default". To exercise it against a temp
       fixture the task control file must contain exactly the four fields
-      run_id, execution_mode, required_lenses, close_receipt_fingerprint, be
+      run_id, execution_mode, required_lenses, closed, be
       mode 0600 with nlink 1, and run_id must be a valid uuid7; otherwise
       read_task_control() returns {} and validation reports the
       missing-or-invalid control error before any binding check runs.
     fixture_helper: tests/test_install_verified.py::_repo
   stale_hook_tree_detection:
+    superseded: 2026-10-28
     discovered: 2026-08-26
     invalidated_by_paths:
       - plugin/scripts/hook_tree_health.py
@@ -250,6 +251,7 @@ qa_notes:
       mutation testing was to perform file restores in Python
       (pathlib.write_text) rather than shell cp/mv.
   verdict_parser_probe_harness:
+    superseded: 2026-10-28
     discovered: 2026-09-02
     freshness: suspect
     freshness_updated: 2026-09-18T08:10:50Z
@@ -311,6 +313,7 @@ qa_notes:
       --check-weight as proof the budget was scanned; assert on the
       "[SOFT] C-13 weight" string instead.
   hook_tree_health_candidate_roots:
+    superseded: 2026-10-28
     discovered: 2026-09-02
     invalidated_by_paths:
       - plugin/scripts/hook_tree_health.py
@@ -455,6 +458,7 @@ qa_notes:
       - "`contract_lint.py --check-weight` baseline output on this tree is exactly `[INFO] 18 contracts, 18 matrix refs OK`, exit 0, with no weight warnings."
       - "Path-existence sweeps over provenance/attribution docs must exclude backticked UPSTREAM paths (e.g. gstack `ship/SKILL.md`, OMC `agents/code-reviewer.md`, Ponytail `skills/ponytail/SKILL.md`) and format tokens (`D<N>/ELI10/OK-NG`). They look like repo paths to a naive regex but are foreign-repo citations by design."
   lens_verdict_contract_survives_into_output_qa:
+    superseded: 2026-10-28
     discovered: 2026-09-17
     freshness: suspect
     freshness_updated: 2026-09-18T08:10:50Z

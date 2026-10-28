@@ -360,7 +360,7 @@ def _invalid_task_control_error(operation: str, td: str) -> dict:
         f"{operation} failed: missing or invalid TASK.json",
         data={
             "task_dir": td,
-            "next_action": "Use wbs(action='migrate') preview/apply for old task controls, or open a new task.",
+            "next_action": "Use wbs(action='migrate') preview/apply for old task controls, or wbs(action='open') to open a new task.",
         },
     )
 

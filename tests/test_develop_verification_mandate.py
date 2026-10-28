@@ -16,9 +16,9 @@ def _text(path: Path) -> str:
 def test_develop_forbids_verification_opt_in_prompt():
     body = _text(DEVELOP)
 
-    assert "Highest-tier verification mandate" in body
-    assert 'Do not ask "should I verify it?"' in body
-    assert "Running the highest available verification tier is not scope expansion" in body
+    assert "now-available live/API/browser/CLI verification route" in body
+    assert "Do not ask the user whether to perform the verification" in body
+    assert "run it through the appropriate qa-* lens" in body
     assert "No verification opt-in prompt" in body
 
 

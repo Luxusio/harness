@@ -390,6 +390,8 @@ def check_doc_test_references(repo_root: str = ".") -> list[str]:
                 lines = handle.readlines()
         except OSError:
             continue
+        if any(line.startswith("> **Historical — superseded ") for line in lines[:80]):
+            continue
         seen: set[str] = set()
         for number, line in enumerate(lines, 1):
             for span in INLINE_CODE.findall(line):

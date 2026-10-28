@@ -556,8 +556,7 @@ remain outside S1 and use the ordinary sequential route.
   under `task_run_id 01a0e225-300e-7298-940b-c47ffdf31b0d`, and
   `task_context` reported `review_verdict: PASS`. The probe worktree was
   removed afterwards without harvest, so the rows themselves are gone; the
-  repeatable regression is
-  `tests/test_worktree_workspace.py::test_nested_lens_start_and_stop_in_worktree_bind_to_worktree_task`.
+  historical receipt regression was tests/test_worktree_workspace.py::test_nested_lens_start_and_stop_in_worktree_bind_to_worktree_task (retired with receipt collection on 2026-10-28).
 
 - Historical native-isolation probe: Claude Code refused `Write` from an
   `isolation: worktree` lead to a

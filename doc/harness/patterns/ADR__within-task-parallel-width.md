@@ -97,7 +97,7 @@ AC routed to `harness:ac-worker` that declares both `**Files:**` and
   runs unpaired and owns both sets.
 
 The Route vocabulary is unchanged; the pair shares its AC's `Agent(...)` row.
-Names such as `test_author_ac_001` identify work for operators and grant no
+Names such as `author_ac_001` identify work for operators and grant no
 verification authority.
 
 ### 5. ac-worker sub-split (Claude only)

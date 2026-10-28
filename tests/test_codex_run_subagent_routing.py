@@ -27,8 +27,8 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "User request is not a condition for parallel routing" in body
     assert "the user does not need to request delegation" in body
     assert "spawn_agent {" in body
-    assert "RECEIPTS.jsonl" in body
-    assert "Do not call a harness receipt tool" in body
+    assert "Machine verdicts measure WBS checks and do not attest review or QA" in body
+    assert "names have no verification authority" in body
     assert "track every `agent_id` returned by `spawn_agent`" in body
     assert "`close_agent`" in body
     assert "Completed agents can\ncontinue to count toward the concurrency limit until closed" in body
@@ -77,11 +77,11 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "You are the qa-<lens> lens for <task_id>" in body
     assert "${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md" in body
     assert 'task_name: "qa_<lens>_<task_slug>_<run_id>"' in body
-    assert "prevents collaboration-tree name collisions" in body
+    assert "prevent collaboration-tree name collisions" in body
     assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
     assert "`missing_for_close`" in body
-    assert "raw receipt records" in body
+    assert "they do not attest review/QA" in body
     assert "state the fallback in task state or final response" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
 
@@ -94,7 +94,7 @@ def test_run_skills_document_parallel_ux_lens_routing():
         assert "ux-api" in body
         assert "ux-desktop" in body
         assert "final response" in body
-        assert "RECEIPTS.jsonl" in body
+        assert "Machine verdicts measure WBS checks and do not attest review or QA" in body
         assert "runtime_verdict" in body
 
 
@@ -107,7 +107,7 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "runtime_verdict is not PASS → Phase 3 Develop/Verify" in body
         assert "run `wbs(action=\"verify\")`" in body
         assert 'wbs(action="verify")' in body
-        assert "PLAN.md" in body and "RECEIPTS.jsonl" in body
+        assert "PLAN.md" in body and "Machine verdicts measure WBS checks" in body
 
 
 def test_run_skills_share_one_completion_report_checklist():
@@ -200,26 +200,23 @@ def test_runtime_fallback_notes_are_exception_only():
         assert phrase not in combined
 
 
-def test_run_and_develop_share_missing_receipt_policy():
+def test_run_and_develop_share_substantive_completion_policy():
     required = (
-        "Missing receipt policy",
-        "NON-ATTESTING",
-        "actual FAIL",
-        "actual BLOCKED_ENV",
-        "actual review PASS",
-        "wbs(action=\"verify\")` once",
-        'wbs(action="block")',
-        "Direct finals never authorize PASS or close",
+        "Substantive review and QA",
+        "Await actual independent code review and conditional security review PASS before actual QA",
+        "Fix actual FAIL findings", "actual BLOCKED_ENV",
+        "Direct independent finals are the workflow results",
+        "coordinator paraphrases and copied text cannot replace them",
+        'After actual QA PASS, run `wbs(action="verify")`',
+        "close only when current required WBS checks pass",
+        "Machine verdicts measure WBS checks and do not attest review or QA",
+        "do not rerun, repair or park work for missing recording",
     )
     for path in (CODEX_RUN, CLAUDE_RUN, CODEX_DEVELOP, CLAUDE_DEVELOP):
         body = _text(path)
-        normalized = " ".join(body.split())
         for phrase in required:
             assert phrase in body, f"{path}: missing {phrase!r}"
-        assert "rerun a lens solely to obtain a receipt" in normalized
-    for path in (CODEX_RUN, CLAUDE_RUN):
-        normalized = " ".join(_text(path).lower().split())
-        assert "missing receipt after an awaited substantive final" in normalized
+
 
 
 def test_feedback_pattern_records_writing_guidance_only():

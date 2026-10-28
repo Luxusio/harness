@@ -54,7 +54,7 @@ nothing. `_watcher_status` reads `_SERVER.runtime` and `_SERVER.watcher_manager`
 so a leaked codex-runtime server with no manager produced
 `manager_running is False` → `receipts_recordable is False`, and
 `_gate_next_action` then replaced `next_action` wholesale. The visible symptom
-was `test_micro_execution_mode_allows_no_plan_but_still_requires_verify`
+was the former test_micro_execution_mode_allows_no_plan_but_still_requires_verify (retired with receipt collection)
 asserting on a `next_action` that described receipt unavailability.
 
 Reproduction was 45% of runs for that file alone and 0/25 for the test in
