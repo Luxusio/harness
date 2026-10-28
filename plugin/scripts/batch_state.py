@@ -382,9 +382,9 @@ def cap(repo, explicit, managed=False):
         for line in open(path, encoding='utf-8'):
             require(not any(char in line for char in '\ufeff\x85\u2028\u2029'),
                     'capacity document encoding unsupported; use a direct ' + section + '.' + key)
-            if not line.strip() or line.lstrip().startswith('#'):
+            if not line.strip(' \t\r\n') or line.lstrip(' \t').startswith('#'):
                 continue
-            indent = len(line) - len(line.lstrip())
+            indent = len(line) - len(line.lstrip(' '))
             if literal_indent is not None:
                 if indent > literal_indent:
                     continue
