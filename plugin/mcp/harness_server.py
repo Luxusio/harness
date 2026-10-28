@@ -1101,9 +1101,9 @@ def _managed_dispatch(common: dict, args: dict) -> dict:
     import wbs
     import batch_worktrees
     control_root, repo = _task_roots(common)
-    if repo != control_root:
-        raise ValueError("worktree lifecycle must run from the surviving control checkout")
     operation = args.get("operation", "prepare")
+    if operation != "prepare" and (repo != control_root or Path(repo, ".git").is_file()):
+        raise ValueError("worktree lifecycle must run from the surviving control checkout")
     fields = {
         "prepare": {"ownership", "host"},
         "status": set(),

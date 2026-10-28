@@ -898,6 +898,8 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
     assignment = dict(run_id=run_id, host=host,
                       ownership=ownership, selected=[], available_slots=available)
     if state.get('batch'):
+        require(not bind or not Path(repo, '.git').is_file(),
+                'worktree lifecycle must run from the surviving control checkout')
         result = batch_route(task_dir, repo, state, measure=False)
         assignment.update(mode='verification' if result['route'] == 'integration' else 'managed',
                           ownership={r['slug']: r['scopes'] for r in state['batch']['requests']})
@@ -966,6 +968,10 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
                               selected=[] if managed else [outcome(n) for n in ordered[:1]],
                               serial_facts=facts)
             if managed:
+                # A linked checkout may publish local direct admission, but
+                # must never create a coordinator pool, even from its own cwd.
+                require(not bind or not Path(repo, '.git').is_file(),
+                        'worktree lifecycle must run from the surviving control checkout')
                 import work_pack as packs
                 if bind:
                     batch_state.main_boundary(repo, scopes=batch_state.ordinary_admission_scopes(repo, requests, managed=True))
