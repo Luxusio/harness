@@ -373,10 +373,15 @@ def cap(repo, explicit, managed=False):
     if os.path.isfile(path):
         inside, child_indent = False, None
         root_mapping_seen = False
+        literal_indent = None
         for line in open(path, encoding='utf-8'):
             if not line.strip() or line.lstrip().startswith('#'):
                 continue
             indent = len(line) - len(line.lstrip())
+            if literal_indent is not None:
+                if indent > literal_indent:
+                    continue
+                literal_indent = None
             require(not indent or root_mapping_seen,
                     'indented capacity document unsupported; use a direct ' + section + '.' + key)
             if not indent:
@@ -386,6 +391,12 @@ def cap(repo, explicit, managed=False):
                         and not re.match(r'^<<(?=\s|:|$)', line)
                         and not (line[0] in '\"\'' and '\\' in line.split(':', 1)[0]),
                         'unsupported capacity document mapping; use a direct ' + section + '.' + key)
+            parts = tokens(line)
+            if not parts:
+                continue
+            # Only literal/folded block bodies may bypass lexical validation.
+            if re.fullmatch(r'[|>](?:[+-]?[1-9]?|[1-9][+-]?)', parts[-1]):
+                literal_indent = indent
             if indent and not inside:
                 continue
             if indent:
@@ -393,9 +404,6 @@ def cap(repo, explicit, managed=False):
                     child_indent = indent
                 if indent != child_indent:
                     continue
-            parts = tokens(line)
-            if not parts:
-                continue
             if not indent and not re.match(r"^(?:" + section + "|'" + section + "'|\"" + section + r"\")\s*:", line):
                 inside, child_indent = False, None
                 continue
