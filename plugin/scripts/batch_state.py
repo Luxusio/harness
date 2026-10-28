@@ -337,6 +337,8 @@ def cap(repo, explicit, managed=False):
         return effective(default, 'default-invalid-manifest')
 
     def tokens(line):
+        require('\\' not in line,
+                'escaped capacity strings unsupported; use a direct ' + section + '.' + key)
         # Retain scalar quotes/types while recognizing comments and mapping punctuation.
         lexer = shlex.shlex(line, posix=False, punctuation_chars='{},:[]')
         lexer.whitespace_split = True
@@ -365,6 +367,12 @@ def cap(repo, explicit, managed=False):
                 continue
             if indent and not inside:
                 continue
+            if indent:
+                if child_indent is None:
+                    child_indent = indent
+                if indent != child_indent or not re.match(
+                        r"^\s*(?:" + key + "|'" + key + "'|\"" + key + r"\")\s*:", line):
+                    continue
             parts = tokens(line)
             if not parts:
                 continue

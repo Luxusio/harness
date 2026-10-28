@@ -84,3 +84,21 @@ def test_unsupported_capacity_mapping_refuses_instead_of_raising_limit(tmp_path,
     manifest.write_text(text)
     with pytest.raises(batch_state.Refusal, match='direct develop.fanout_cap'):
         batch_state.cap(str(tmp_path), None, managed=True)
+
+
+@pytest.mark.parametrize('managed, section, key', [(True, 'develop', 'fanout_cap'), (False, 'batch', 'max_leads')])
+def test_unrelated_block_scalar_does_not_affect_capacity(tmp_path, managed, section, key):
+    import batch_state
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(section + ':\n  description: |\n    open " quote text\n  ' + key + ': 1\n')
+    assert batch_state.cap(str(tmp_path), None, managed=managed)[0] == 1
+
+
+def test_escaped_description_cannot_inject_higher_capacity(tmp_path):
+    import batch_state
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(r'develop: {description: "x\", fanout_cap: 8, y", fanout_cap: 1}' + '\n')
+    with pytest.raises(batch_state.Refusal, match='direct develop.fanout_cap'):
+        batch_state.cap(str(tmp_path), None, managed=True)
