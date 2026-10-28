@@ -161,6 +161,23 @@ def test_unsupported_mapping_cannot_infer_a_higher_cap(tmp_path, text):
     'develop:\n  \u3000other: 3\n  fanout_cap: 1\n',
     'develop:\n  \xa0#key: [\n  fanout_cap: 8\n  ]\n  fanout_cap: 1\n',
     'develop:\n  \u3000#key: "text\n  fanout_cap: 8\n  end"\n  fanout_cap: 1\n',
+    'develop:\n  fanout_cap:other: 8\n  fanout_cap: 1\n',
+    'develop: {fanout_cap:other: 8, fanout_cap: 1}\n',
+    'develop:\n  fanout_cap:: 8\n  fanout_cap: 1\n',
+    'develop: {fanout_cap:: 8, fanout_cap: 1}\n',
+    'develop:\n  fanout_cap:1: 8\n  fanout_cap: 1\n',
+    'develop: {fanout_cap:1: 8, fanout_cap: 1}\n',
+    'browser:\n  entry_url: http://localhost:3000\ndevelop:\n  fanout_cap: 1\n',
+    'test_command: "python --url http://localhost:3000 --label a:b"\ndevelop:\n  fanout_cap: 1\n',
+    '"develop": {"fanout_cap":1}\n',
+    "develop: {'fanout_cap':1}\n",
+    'develop: {"fanout_cap:other":8,"fanout_cap":1}\n',
+    'develop:\n  fanout_cap:,other: 8\n  fanout_cap: 1\n',
+    'develop: {"fanout_cap:,other":8,"fanout_cap":1}\n',
+    'develop:\n  fanout_cap:[other]: 8\n  fanout_cap: 1\n',
+    'develop: {"fanout_cap:[other]":8,"fanout_cap":1}\n',
+    'develop:\n  fanout_cap:{other}: 8\n  fanout_cap: 1\n',
+    'develop: {"fanout_cap:{other}":8,"fanout_cap":1}\n',
     'develop:\n  other:\n    nested: "hello\n  fanout_cap: 8\n  end"\n  fanout_cap: 1\n',
     "develop:\n  other:\n    nested: 'hello\n  fanout_cap: 8\n  end'\n  fanout_cap: 1\n",
     'develop:\n  other:\n    nested: [\n  fanout_cap: 8\n    ]\n  fanout_cap: 1\n',
@@ -198,7 +215,14 @@ def test_semantic_cap_one_is_honored_or_actionably_refused(tmp_path, text):
     # PyYAML is the existing development-only dependency, never a runtime import.
     import yaml
     import batch_state
-    resolved_cap = yaml.safe_load(text)['develop']['fanout_cap']
+    class UniqueLoader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            self.flatten_mapping(node)
+            keys = [self.construct_object(key, deep=deep) for key, _ in node.value]
+            assert len(keys) == len(set(keys)), 'oracle requires unique semantic keys'
+            return super().construct_mapping(node, deep=deep)
+
+    resolved_cap = yaml.load(text, Loader=UniqueLoader)['develop']['fanout_cap']
     assert type(resolved_cap) is int and resolved_cap == 1
     manifest = tmp_path / 'doc/harness/manifest.yaml'
     manifest.parent.mkdir(parents=True)

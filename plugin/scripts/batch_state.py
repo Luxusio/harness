@@ -349,7 +349,7 @@ def cap(repo, explicit, managed=False):
         require('\\' not in line,
                 'escaped capacity strings unsupported; use a direct ' + section + '.' + key)
         # Retain scalar quotes/types while recognizing comments and mapping punctuation.
-        lexer = shlex.shlex(line, posix=False, punctuation_chars='{},:[]')
+        lexer = shlex.shlex(line, posix=False, punctuation_chars='{},[]')
         lexer.whitespace_split = True
         lexer.commenters = ''
         try:
@@ -357,9 +357,21 @@ def cap(repo, explicit, managed=False):
             for token in lexer:
                 if token.startswith('#'):
                     break
-                require(not token.startswith(('*', '&', '!')) and key_name(token) != '<<' and token != '?',
-                        'capacity aliases, tags or merges unsupported; use a direct ' + section + '.' + key)
-                result.extend(list(token) if all(c in '{},:[]' for c in token) else [token])
+                if all(c in '{},[]' for c in token):
+                    pieces = list(token)
+                elif token.startswith(':') and len(token) > 1 and result and result[-1][0] in '"\'':
+                    pieces = [':', token[1:]]  # Compact quoted-key JSON syntax.
+                elif token.endswith(':') and len(token) > 1:
+                    position = lexer.instream.tell()
+                    require(line[position - 1] in ' \t\r\n' or (position == len(line) and line[-1] == ':'),
+                            'ambiguous plain capacity key unsupported; use a direct ' + section + '.' + key)
+                    pieces = [token[:-1], ':']  # Interior plain-key colons stay semantic.
+                else:
+                    pieces = [token]
+                for piece in pieces:
+                    require(not piece.startswith(('*', '&', '!')) and key_name(piece) != '<<' and piece != '?',
+                            'capacity aliases, tags or merges unsupported; use a direct ' + section + '.' + key)
+                    result.append(piece)
             stack = []
             for part in result:
                 if part in {'{', '['}:
