@@ -217,8 +217,10 @@ def test_custom_config_never_refreshes_unrelated_native_daemon(tmp_path, monkeyp
     monkeypatch.setattr(module, "_reload_codex_daemon_hooks", forbidden)
     ok, detail, restart_required = module._reload_codex_runtime(str(tmp_path / "other.toml"))
     assert ok, detail
-    assert restart_required
-    assert detail
+    assert not restart_required
+    assert "running sessions are unchanged" in detail
+    assert "Merge it into" in detail
+    assert str(tmp_path / "config.toml") in detail
 
 
 def test_discovery_refreshes_only_reported_native_socket(tmp_path, monkeypatch):
@@ -572,15 +574,20 @@ def test_explicit_config_matching_codex_home_refreshes_that_daemon(tmp_path, mon
     assert calls == ["/test-only"]
 
 
-def test_default_config_mismatching_codex_home_skips_daemon(tmp_path, monkeypatch):
+def test_default_config_uses_effective_codex_home_daemon(tmp_path, monkeypatch):
     module = _installer()
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    def forbidden(*args, **kwargs):
-        raise AssertionError("different runtime home must not be probed")
-    monkeypatch.setattr(module, "_run", forbidden)
-    ok, detail, restart_required = module._reload_codex_runtime(None)
+    calls = []
+    with _daemon(tmp_path) as (path, requests):
+        def discover(command, dry):
+            calls.append((command, dry, module._codex_home_for_config(None)))
+            return 0, json.dumps({"status": "running", "socketPath": path}), ""
+        monkeypatch.setattr(module, "_run", discover)
+        ok, detail, restart_required = module._reload_codex_runtime(None)
     assert ok, detail
-    assert "new session" in detail
+    assert not restart_required
+    assert calls == [(["codex", "app-server", "daemon", "version"], False, tmp_path)]
+    assert requests[-1]["params"] == {"edits": [], "reloadUserConfig": True}
 
 
 def test_daemon_discovery_timeout_returns_failure(monkeypatch):

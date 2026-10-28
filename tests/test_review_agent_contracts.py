@@ -200,8 +200,8 @@ def test_developer_core_splits_blocking_from_defaultable_ambiguity():
         _assert_all(
             _text(path),
             (
-                "Ambiguity is blocking when PLAN.md and the code cannot settle it",
-                "Decide defaultable ambiguity yourself, report it as `Assumption:`",
+                "Ambiguity is blocking only when code and current user intent cannot settle a material new outcome",
+                "Decide grounded implementation details yourself; label assumptions without promoting them to user requirements",
             ),
             path,
         )
@@ -271,7 +271,7 @@ def test_fix_first_is_a_self_check_not_a_code_growth_table():
         fix_first,
         (
             "Pre-review self-check",
-            "3-Attempt Escalation Rule",
+            "Evidence-driven recovery",
             "Do not add an `attempts` key to canonical PROGRESS.md",
             "hypothesis-driven-debugging.md",
         ),

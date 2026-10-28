@@ -24,14 +24,9 @@ For every failing test, classify into one of four categories:
 
 **Never claim T3/T4 without proof.** Required evidence:
 
-```bash
-# Check if the test passes on the base branch
-git stash
-git checkout <base-branch>
-<run the failing test>
-git checkout <feature-branch>
-git stash pop
-```
+Run the failing test in an isolated base-revision source view using equivalent
+inputs, dependencies and execution context. Preserve user changes; do not stash,
+reset or checkout over the active worktree to obtain base evidence.
 
 If the test fails on base: confirmed T3/T4. Create a follow-up or mention it in final response.
 If the test passes on base: it is T1/T2, NOT pre-existing. Fix it.
@@ -41,24 +36,29 @@ If the test passes on base: it is T1/T2, NOT pre-existing. Fix it.
 **T1 (our code broke it):**
 1. Read the test output carefully. Understand what the test expects.
 2. Fix the code (not the test — the test is correct).
-3. Re-run the full verification suite.
-4. This counts against the 3-cycle limit in Phase 7.
+3. Rerun affected verification; retain unaffected applicable results. Run full
+   integration regression when required by current acceptance and dependencies.
+4. Preserve the failed attempt and use evidence-driven recovery without an attempt quota.
 
 **T2 (our test is wrong):**
 1. Re-read the AC the test was supposed to verify.
 2. Fix the test to match the AC's actual requirement.
 3. Re-run verification.
-4. This counts against the 3-cycle limit in Phase 7.
+4. Preserve the failed attempt and use evidence-driven recovery without an attempt quota.
 
 **T3 (pre-existing, unrelated):**
 1. Create a follow-up or mention it in final response as a pre-existing failure.
 2. Do NOT fix in this task — it is out of scope.
-3. Continue. T3 failures do not block this task.
+3. Report the scope accurately. A T3 label cannot override a current required
+   GATE check or actual QA FAIL/BLOCKED_ENV; unresolved required work remains unfinished.
 
 **T4 (pre-existing, exposed by our changes):**
-1. Assess: is the fix trivial (one line, obvious cause)? If yes, fix it.
-2. If the fix is non-trivial or risks scope creep: create a follow-up or mark the AC deferred with reason.
-3. Ask user via AskUserQuestion if unsure whether to fix.
+1. Repair a confirmed cause necessary for the authorized outcome, regardless of
+   line count. Amend current PLAN/WBS through its owner for supported discoveries.
+2. Keep genuinely unrelated work outside scope and name it accurately; required
+   GATE failures and actual QA FAIL/BLOCKED_ENV remain unfinished.
+3. Ask only for an unresolved material user decision or missing authorization;
+   uncertainty about an implementation detail calls for investigation.
 
 ### Step 5: Report triage results
 

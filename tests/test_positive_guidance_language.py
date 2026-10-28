@@ -50,7 +50,7 @@ def test_positive_guidance_replacements_are_present():
         "EUREKA — re-scope AC-004 to a smaller addition. Surface before writing PLAN.md.",
         "Log only concrete, reusable facts at discovery time",
         "When a user correction points at an agent mistake, extract only a reusable conditional behavior rule",
-        "Stop on phase failures, report the failure, check task state, and ask how to proceed",
+        "Repair authorized failures autonomously and restore affected independent review",
         "Auto-decide scope-partition choices",
         "Use wbs context/next for measured progress and dependency-ready outcomes",
         "Complete every loaded sub-skill methodology section",

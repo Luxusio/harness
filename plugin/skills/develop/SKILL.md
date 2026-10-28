@@ -197,7 +197,7 @@ Each worker runs its own targeted tests. Full-suite verification
 belongs to the required qa-* agents. Await actual independent QA finals;
 `wbs(action="verify")` measures current required WBS checks.
 
-Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
+Per-AC test failures → fix immediately. Use evidence-driven recovery without an attempt quota; preserve actual failures and recheck affected inputs.
 
 **Per-AC visual verification** (browser projects only): see `browser-verification.md` → "Per-AC Visual Verification" and "Per-AC Interaction Testing".
 Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`) to
@@ -226,7 +226,7 @@ Runs continuously during Phase 3.
 
   QA agents may include `codifiable:` YAML blocks in their final response for
   future regression-test extraction. Do not write critic artifacts for this.
-	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`: a pre-review self-check (delete / reuse / stdlib / native / yagni) over your own changed lines, plus the **3-attempt escalation rule** for every fix loop (per-AC, Phase 7, browser debug).
+	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`: a pre-review self-check (delete / reuse / stdlib / native / yagni) over your own changed lines, plus evidence-driven recovery for every authorized fix loop (per-AC, Phase 7, browser debug).
 	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use `direct REQ doc edit` / `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
 
 ### Phase 3.7–3.9: Post-implementation health
@@ -249,7 +249,7 @@ set without inspecting paths or diff content.
 
 **Phase 4.85 Coverage Synthesis** — use the coverage diagram from the audit agent final response to add tests only for uncovered non-trivial changed behavior. Do not create a separate test extra plan file.
 
-**Phase 4.9 Coverage Gate** — if manifest declares `coverage_minimum` / `coverage_target`, enforce. Below minimum = BLOCK (write tests); below target = WARN in final response. 3 fix cycles max; on exhaustion `AskUserQuestion` (continue / lower threshold / defer).
+**Phase 4.9 Coverage Gate** — if manifest declares `coverage_minimum` / `coverage_target`, enforce. Below minimum = BLOCK (write tests); below target = WARN in final response. Repair authorized coverage gaps autonomously; do not lower thresholds to clear a failure. A missing required measurement remains unfinished with its concrete blocker.
 
 ### Phase 5: Scope Drift Detection
 
@@ -309,7 +309,7 @@ reason once the budget is exhausted. Any affecting edit loops
 through focused tests/checkpoint and affected formal reviewers again. Start Phase 7 QA only after actual PASS finals from all required reviewers.
 
 ### Phase 7: Verification Gate
-Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with `hypothesis-driven-debugging.md` root-cause escalation on cycle 3.
+Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with evidence-driven recovery and `hypothesis-driven-debugging.md` without an attempt quota. Required failures remain unfinished.
 
 **Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Await actual applicable QA/UX PASS, then run `wbs(action="verify")`; the machine verdict measures current WBS checks; actual QA results come from the independent final.
 
@@ -328,11 +328,11 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
 **Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message so independent QA lanes run concurrently.
 
 **Also implements:**
-- **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures are logged as `transient` in `learnings.jsonl` and not counted toward the 3-cycle limit.
+- **Transient-failure diagnosis** — preserve the failed attempt; use a safe targeted rerun only when it can distinguish an intermittent cause. A retry PASS alone does not clear an unresolved required QA failure.
 - **Severity × confidence close gate** — from actual independent reviewer/QA findings, block close on:
   - `critical` AND confidence ≥ 7
   - `high` AND confidence ≥ 8
-  Lower severities may be deferred in final response or follow-up tasks — do not block close.
+  Lower-severity optional findings may be deferred in the final response; no severity label overrides required actual QA/UX PASS or current WBS checks.
 - **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, report concrete evidence and run the existing WBS assertions.
 
 ### Phase 7.7: Dogfood (post-QA, pre-close)

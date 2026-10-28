@@ -34,12 +34,11 @@ TAIL_RE = re.compile(
 
 @contextmanager
 def _isolated_task(name, *, plan=True, maintenance=False):
-    from test_prewrite_gate_dormant import _write_task_state
     with tempfile.TemporaryDirectory() as tmp:
         root = make_tmp_harness_root(tmp)
         with scratch_task_in_real_repo(name, repo_root=root, plan=plan,
                                        maintenance=maintenance) as task_dir:
-            _write_task_state(os.path.dirname(task_dir), name, "open")
+            # Preserve the run already published in the exact session binding.
             yield root, task_dir
 
 

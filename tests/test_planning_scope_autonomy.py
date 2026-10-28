@@ -1,5 +1,8 @@
 """Instruction regressions for grounded planning and recovery authority."""
+import importlib.util
 from pathlib import Path
+import re
+import sys
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -35,3 +38,46 @@ def test_rolling_wbs_keeps_dispatch_ownership_separate():
     assert "Add ownership only when assigning writers" in body
     assert "Supported implementation work may enter WBS" in body
     assert "cannot introduce a" in body
+
+
+def test_loaded_recovery_chain_preserves_authority_without_attempt_quotas(tmp_path):
+    """Inspect the subfiles actually delivered to Codex, not just SKILL.md."""
+    spec = importlib.util.spec_from_file_location("harness_install_recovery", REPO / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = install
+    spec.loader.exec_module(install)
+    payload = tmp_path / "harness"
+    install._build_codex_payload(payload, payload)
+
+    shared = ("fix-first-pattern.md", "verification-gate.md",
+              "hypothesis-driven-debugging.md", "test-failure-triage.md")
+    for name in shared:
+        source = REPO / "plugin/skills/develop" / name
+        delivered = payload / "internal-skills/develop" / name
+        expected = source.read_text().replace(
+            "${CLAUDE_PLUGIN_ROOT}/skills/", "${HARNESS_PLUGIN_ROOT}/internal-skills/"
+        ).replace("${CLAUDE_PLUGIN_ROOT}", "${HARNESS_PLUGIN_ROOT}")
+        assert delivered.read_text() == expected, name
+
+    public = (REPO / "plugin/skills/develop/SKILL.md").read_text()
+    codex = (payload / "internal-skills/develop/SKILL.md").read_text()
+    for name in shared[:2]:
+        assert name in public and name in codex
+    gate = (payload / "internal-skills/develop/verification-gate.md").read_text()
+    for name in shared[2:]:
+        assert name in gate
+
+    for name, body in [("public develop", public), ("Codex develop", codex), *(
+        (name, (payload / "internal-skills/develop" / name).read_text()) for name in shared
+    )]:
+        assert not re.search(r"3[- ](?:cycle|attempt|strike)|(?:maximum|only get) 3|>5 files|WTF score",
+                             body, re.IGNORECASE), name
+        assert "DONE_WITH_CONCERNS" not in body, name
+    assert "unknown effects" in (payload / "internal-skills/develop/fix-first-pattern.md").read_text()
+    assert "Required FAIL or BLOCKED_ENV" in gate
+    assert "affected independent review PASS before actual QA" in gate
+    assert "retry PASS alone does not clear" in gate
+    assert "missing authorization" in gate
+    for body in (public, codex):
+        assert "do not lower thresholds to clear a failure" in body
+        assert "Required failures remain unfinished" in body

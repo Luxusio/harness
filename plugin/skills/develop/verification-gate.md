@@ -134,27 +134,26 @@ If tests fail:
 
    | Tier | Criteria | Action |
    |------|----------|--------|
-   | **GATE** (blocks completion) | Regression tests, core functionality tests, tests covering changed codepaths | Must fix. Counts toward 3-cycle limit. |
-   | **PERIODIC** (log only) | Style/lint tests on unrelated code, slow E2E for unrelated features, known-flaky tests | Note in final response or follow-up task. Don't block. Don't count toward fix limit. |
+   | **GATE** (blocks completion) | Regression tests, core functionality tests, tests covering changed codepaths | Repair authorized failures; otherwise remain unfinished. |
+   | **PERIODIC** (log only) | Checks explicitly outside required acceptance | Report their actual results; they do not satisfy required checks. |
 
-   To determine tier: does the failing test cover code that this task changed?
-   - Yes → GATE. No → PERIODIC (unless it's a new test we wrote — then GATE).
-   - Check `learnings.jsonl` for known-flaky test entries — those are always PERIODIC.
+   Required acceptance checks remain GATE even if their failure appears unrelated
+   or historically flaky. Inspect actual dependency and acceptance scope before
+   classifying a check as PERIODIC; a flaky label never grants PASS.
 
    **Dimension B: OWN vs PRE-EXISTING**
 
    | Ownership | Criteria | Action |
    |-----------|----------|--------|
-   | **OWN** (our code broke it) | Failing test covers codepaths modified by this task's diff | Fix within 3-cycle limit. Use `hypothesis-driven-debugging.md` if needed. |
-   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this task, AND the same test fails on the base branch | Note in final response or follow-up task. Do NOT count toward fix limit. No root-cause escalation. |
+   | **OWN** (our code broke it) | Failing test covers codepaths modified by this task's diff | Repair the confirmed cause using `hypothesis-driven-debugging.md`. |
+   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this task, AND the same test fails on the base branch | Preserve base evidence; required GATE failures remain unfinished. |
 
    To determine ownership:
    - Get changed files: `git diff --name-only <base>...HEAD`
    - For each failing test, check: does the test file OR the code it tests appear in the diff?
-   - Yes → OWN. No → verify on base branch:
-     ```bash
-     git stash && <test_command> -- <failing-test-files> && git stash pop
-     ```
+   - Yes → investigate the changed behavior. No → run the failing test against an
+     isolated base-revision source view with equivalent dependencies and execution
+     context. Preserve user changes; do not stash, reset or checkout over them.
    - If it also fails on base → PRE-EXISTING. If it passes on base → OWN (our change triggered it indirectly).
    - **When ambiguous, default to OWN.** Only classify as PRE-EXISTING when you can prove it.
 
@@ -176,13 +175,14 @@ For each confirmed PRE-EXISTING failure:
 4. Recommend: "Consider a separate task to fix pre-existing failure in {module}. Run `Skill(harness:plan)` to create one."
 
 **Persist flaky/pre-existing test knowledge:** For each PERIODIC or PRE-EXISTING failure,
-log to `doc/harness/learnings.jsonl` so Phase 1 can skip them in future tasks:
+record concrete reusable facts in `doc/harness/learnings.jsonl`; future tasks
+must still determine current acceptance and applicability:
 
 ```bash
 echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"test-flaky","source":"develop-verify","key":"TEST_NAME","insight":"PRE-EXISTING/PERIODIC: <brief reason>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phase 1 loads them.
+Historical classifications inform diagnosis; they never waive current required checks.
 
 2. Read `${CLAUDE_PLUGIN_ROOT}/skills/develop/test-failure-triage.md` and classify each GATE+OWN failure (T1-T4).
 3. For T1/T2 GATE failures, read `${CLAUDE_PLUGIN_ROOT}/skills/develop/hypothesis-driven-debugging.md` and follow it. Form hypotheses, test them, then apply targeted fixes. Do NOT guess.
@@ -240,97 +240,36 @@ This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phas
    6. Apply fix, re-verify in browser before re-running test.
 
    This is the browser equivalent of hypothesis-driven-debugging.
-   Same 3-strike rule and blast radius gate apply.
+   The same evidence-driven recovery and ownership checks apply.
 
    **Red flags during debugging** — if you notice any of these, slow down:
    - "Quick fix for now" — there is no "for now." Fix it right or escalate.
    - Proposing a fix before tracing data flow — you're guessing, not debugging.
    - Each fix reveals a new problem elsewhere — wrong layer, not wrong code.
 
-   **3-strike hypothesis rule:** If 3 consecutive hypotheses fail to explain the failure,
-   use `AskUserQuestion` to present the situation:
-   ```
-   AskUserQuestion:
-     Question: "3 hypotheses failed for <test name>. Am I debugging the right thing?"
-     Options:
-       - A) Re-examine the failing test itself (maybe the test is wrong)
-       - B) Run structured root-cause analysis with `hypothesis-driven-debugging.md`
-      - C) Skip this test, create a follow-up or mark the AC deferred with reason
-     Context:
-       - Hypotheses tested: <list>
-       - Evidence: <summary>
-       - Test file: <path>
-   ```
-
-   **Blast radius gate:** Before applying any fix, check its scope:
-   ```bash
-   git diff --stat  # preview what the fix would touch
-   ```
-   If a fix touches >5 files: use `AskUserQuestion` to present the blast radius:
-   ```
-   AskUserQuestion:
-     Question: "Fix for <failure> touches <N> files — this is an architecture change, not a bug fix."
-     Options:
-       - A) Proceed anyway (user accepts wider scope)
-       - B) Narrow the fix to <=5 files and re-attempt
-      - C) Defer fix, create a follow-up or mark the AC deferred with reason
-     Context: files affected: <list>
-   ```
+   **Scope check:** Before a fix, inspect the actual diff and affected callers.
+   File count does not decide whether a change needs approval. Repair necessary
+   in-scope causes and amend current PLAN/WBS through its owner; ask only for an
+   unresolved material user decision or missing external/destructive authority.
+   Preserve assigned ownership and user changes.
 
 4. Document T3/T4 and PERIODIC failures with evidence. Never claim pre-existing without verifying on base branch.
 
-**WTF-Likelihood Self-Regulation:** After each fix cycle, assess honestly:
+## Step 2: Evidence-driven root-cause recovery
 
-```
-WTF Self-Check (cycle N/3):
-On a scale of 1-10, how surprised am I that this fix didn't work?
+When repairs fail to explain the observation or produce no new evidence, revisit
+`hypothesis-driven-debugging.md` from the actual failing entrypoint. Re-read the
+full error, check callers and state transitions, and distinguish product errors,
+fixture errors, verification-tool errors and environment blockers. Do not repeat
+an unchanged failing approach or add counters, scores or an approval budget.
 
-1-3: Expected — the fix was targeted, failure is informative. Adjust hypothesis.
-4-6: Mildly surprised — I may be debugging the wrong thing. Re-examine evidence.
-7-10: Very surprised — I'm likely chasing symptoms, not root cause. ESCALATE.
-```
-
-If WTF ≥ 7 on cycle 2: use `AskUserQuestion` before proceeding to cycle 3:
-```
-AskUserQuestion:
-  Question: "WTF score: <X>/10 — I'm likely chasing symptoms, not root cause. How should we proceed?"
-  Options:
-    - A) Re-examine from scratch with fresh eyes (re-read error, ignore prior assumptions)
-    - B) Run structured root-cause analysis with `hypothesis-driven-debugging.md`
-    - C) Skip this test, create a follow-up or mark the AC deferred with reason
-```
-Before asking, do this prep:
-1. Re-read the error output from scratch (ignore prior assumptions).
-2. Check: am I fixing the right file? The right function? The right module?
-3. Consider: is the test itself wrong? (Wrong assertion, wrong setup, wrong mock.)
-4. If after re-examination the fix is obvious: proceed to cycle 3.
-5. If not obvious: run the `hypothesis-driven-debugging.md` protocol for cycle 3 instead of guessing.
-
-Log WTF score:
-```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"wtf-check","source":"verify","cycle":"N","wtf_score":"X","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
-
-Maximum 3 fix cycles for T1/T2. After 2 cycles with persistent failures, escalate:
-
-## Step 2: Root-cause escalation (cycle 3)
-
-If 2 fix cycles fail to resolve T1/T2 failures, run the `hypothesis-driven-debugging.md` protocol from its
-first step, starting from the failing test names, the T1/T2 triage, and a
-summary of the prior fix attempts.
-
-Use its confirmed root cause for the final (3rd) fix attempt. If still failing: use `AskUserQuestion`:
-```
-AskUserQuestion:
-  Question: "All 3 fix cycles exhausted for <test name>. How should we proceed?"
-  Options:
-    - A) Close task with DONE_WITH_CONCERNS, mark the AC deferred or create a follow-up
-    - B) Create a follow-up task to investigate this specific failure
-    - C) Extend fix budget (allow 2 more cycles)
-  Context: <triage table summary>
-```
-
-Include the triage table in the final response or follow-up task. Note whether root-cause escalation ran.
+Inspect owner state and active writers after interruptions; retry only known safe
+effects. Preserve the same task/run, actual failed history, ownership and
+applicable unchanged proofs. Repair authorized failures autonomously and restore
+affected independent review PASS before actual QA. Required FAIL or BLOCKED_ENV
+remains unfinished with its concrete blocker and unblock condition; exhausted
+effort never authorizes skip, deferral or completion. Ask only for a genuine
+unresolved material decision or missing authorization, as in `fix-first-pattern.md`.
 
 ## Step 2.5: Plan Verification Auto-Run
 
@@ -353,8 +292,9 @@ browser-based checks, and `browser_qa_supported: true` in manifest, auto-run tho
    | Click "Add Item" | Form appears | Form visible | PASS |
    ```
 
-If browser QA is not available (non-browser project, no dev server, Chrome MCP missing):
-skip this step. Log: "Plan verification auto-run skipped: {reason}."
+If browser verification is not applicable, report that scope explicitly. If it
+is required but the browser tool or app is unavailable, report BLOCKED_ENV with
+the concrete unblock condition; do not skip required browser acceptance.
 
 ## Step 3: Build verification (if not already done)
 
@@ -369,28 +309,16 @@ python -c "import <module>" 2>&1
 
 This catches import errors before the QA phase.
 
-## Step 3.5: Transience filter
+## Step 3.5: Transient-failure diagnosis
 
-A test or check that fails on a single run is not yet a `failed` — it is a
-`transient`. Re-run the same command once. Only count the failure if it
-reproduces on the second run.
-
-```bash
-_FIRST=$(<test_command> 2>&1); _FIRST_CODE=$?
-if [ "$_FIRST_CODE" -ne 0 ]; then
-  _SECOND=$(<test_command> 2>&1); _SECOND_CODE=$?
-  if [ "$_SECOND_CODE" -eq 0 ]; then
-    # Single-run flake — log and continue
-    echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"transient","source":"verify","insight":"test passed on retry","task":"<task_id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-  fi
-fi
-```
-
-Only the persistent failure (both runs failing) counts toward the 3-cycle
-fix limit. Single-run failures don't trigger Phase 7 fix loops or consume
-the attempt budget — they are recorded as transient and the gate continues.
-
-Bounded: retry at most once per failure. No infinite retry loop.
+Preserve every actual failed attempt. A safe targeted rerun may help distinguish
+an intermittent environment, timing or fixture cause; inspect state and effects
+first so a retry cannot duplicate unknown or non-idempotent work. Do not rerun an
+entire successful suite to repair recording, and do not keep retrying unchanged
+failures. A retry PASS alone does not clear an unresolved required QA failure.
+Resolve the cause or publish its actual unfinished blocker, restore affected
+independent review when needed, then obtain applicable actual QA PASS. Retain
+unaffected source-bound results and all failed history.
 
 ## Step 3.6: Severity × confidence close gate
 
@@ -405,9 +333,11 @@ No quality synthesis agent or synthesized findings table is a prerequisite:
 | medium / low | any | final response or follow-up only; close allowed. |
 | any | < 5 | appendix only; do not surface at gate. |
 
-A blocking finding can be cleared by either (a) fixing it (re-run gate) or
-(b) explicit user deferral with justification captured in task state or final response. Silent
-deferral is not permitted.
+Repair blocking findings and restore affected independent review before actual
+QA. The user may explicitly change acceptance scope; publish that decision
+through the PLAN/WBS owner and preserve the unfinished/deferred history. Neither
+a severity score nor deferral prose overrides required actual QA/UX PASS and
+current WBS checks. Silent deferral is not permitted.
 
 ## Step 4: Record the verification result
 

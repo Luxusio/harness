@@ -4,7 +4,13 @@ import os
 import subprocess
 import sys
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 from test_codex_worktree_prewrite import check, setup
 from test_managed_wbs import host_snapshot

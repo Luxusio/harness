@@ -92,6 +92,7 @@ class NoThirdPartyToplevelImportsTests(unittest.TestCase):
             "test_receipt_free_migration.py", "test_wbs_input_policy.py",
             "test_wbs_measurement.py",
             "test_batch_scope_extension.py", "test_verify_runner_jobs.py",
+            "test_linked_direct_dispatch.py", "test_managed_fanout_cap.py",
         ]
         code = f"""
 import importlib.util

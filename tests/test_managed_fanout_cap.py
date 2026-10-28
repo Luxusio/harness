@@ -4,7 +4,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 
 @pytest.mark.parametrize('develop, expected', [(None, 4), ('1', 1), ('6', 6), ('99', 8),

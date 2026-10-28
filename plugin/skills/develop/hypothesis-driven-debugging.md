@@ -51,8 +51,9 @@ For each hypothesis (most likely first):
 2. **If confirmed** — you found the root cause. Go to Step 4.
 3. **If ruled out** — move to the next hypothesis. Do not attempt a fix yet.
 
-**Rule:** Never attempt a code fix until at least one hypothesis is confirmed. Guessing
-wastes fix cycles (you only get 3).
+**Rule:** Never attempt a code fix until at least one hypothesis is confirmed.
+Guessing produces no reliable causal evidence; revisit observations instead of
+repeating an unchanged failing approach.
 
 ### Step 4: Apply targeted fix
 
@@ -60,7 +61,8 @@ Once a hypothesis is confirmed:
 
 1. Fix ONLY the confirmed root cause. Do not "also fix" nearby code.
 2. Re-run ONLY the failing test first (fast feedback).
-3. If it passes, re-run the full verification suite.
+3. If it passes, rerun affected verification and required integration regression;
+   retain unaffected applicable results.
 4. If new failures appear, start a new hypothesis cycle for those.
 
 ### Step 5: Report reusable findings
