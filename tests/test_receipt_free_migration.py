@@ -694,3 +694,54 @@ def test_completed_control_migration_preserves_unreferenced_archived_task(tmp_pa
         assert result.get('isError'), result
         assert 'archive' in str(result).lower()
         assert (archived / 'TASK.json').read_bytes() == changed
+
+
+@pytest.mark.parametrize('sync_failure', [False, True])
+def test_default_marker_retry_normalizes_archive_durably_before_retiring(tmp_path, monkeypatch, sync_failure):
+    import errno
+    import os
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    marker = default_marker(td)
+    original = marker.read_bytes()
+    retire = goal_migration._retire
+    def interrupt(root, relative, expected):
+        if relative == goal_migration.LEGACY_DEFAULT_MARKER_PATH:
+            raise OSError('interrupted after archival before retirement')
+        return retire(root, relative, expected)
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_migration, '_retire', interrupt)
+        assert migrate(repo, apply=True).get('isError')
+    archive = repo / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE
+    preserved = archive.read_bytes()
+    stage = archive.with_name(goal_migration._publication_stage(archive.name))
+    os.link(archive, stage)
+    assert archive.stat().st_nlink == 2
+    directory = archive.parent.stat()
+    identity = (directory.st_dev, directory.st_ino)
+    fsync = os.fsync
+    synced, retired = [], []
+    def sync(fd):
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) == identity:
+            synced.append(True)
+            if sync_failure:
+                raise OSError(errno.EIO, 'recovered default archive directory sync failed')
+        return fsync(fd)
+    def checked_retire(root, relative, expected):
+        if relative == goal_migration.LEGACY_DEFAULT_MARKER_PATH:
+            assert synced, 'default marker retirement preceded archive directory sync'
+            assert not stage.exists() and archive.stat().st_nlink == 1
+            retired.append(relative)
+        return retire(root, relative, expected)
+    monkeypatch.setattr(os, 'fsync', sync)
+    monkeypatch.setattr(goal_migration, '_retire', checked_retire)
+    result = migrate(repo, apply=True)
+    if sync_failure:
+        assert result.get('isError'), result
+        assert synced and not retired and marker.read_bytes() == original
+    else:
+        assert not result.get('isError'), result
+        assert synced and retired and not marker.exists()
+    assert not stage.exists() and archive.stat().st_nlink == 1
+    assert archive.read_bytes() == preserved
