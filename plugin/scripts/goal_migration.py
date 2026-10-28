@@ -1125,15 +1125,51 @@ def _control_preview(repo):
     return dict(_control_report(value), status="preview" if value["destinations"] else "complete")
 
 
+def _control_scope(repo):
+    """Discover lock scope without walking or hashing archived file contents."""
+    import batch_state as batch
+    roots, pools, directories = {str(repo)}, [], []
+    for name, info in _entries(repo, "doc/harness/runtime/batches") or []:
+        if name == ".lock":
+            continue
+        _require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json", name)
+                 and stat.S_ISREG(info.st_mode), "unsafe pool migration input")
+        pools.append(name)
+        value = _without_close_fingerprint(_json(_read(repo, "doc/harness/runtime/batches/" + name)))
+        batch.validate(value, str(repo), name[:-5])
+        for item in value["requests"]:
+            worktree = item.get("worktree")
+            if worktree and os.path.isdir(worktree):
+                from _lib import resolve_registered_worktree
+                _require(resolve_registered_worktree(str(repo), worktree) == worktree,
+                         "unregistered pool worktree")
+                roots.add(worktree)
+    roots = (str(repo), *sorted(roots - {str(repo)}))
+    for root in roots:
+        with _control_workspace(repo, root) as source:
+            for parent in (["doc/harness/tasks", "doc/harness/archive/batch"]
+                           if root == str(repo) else ["doc/harness/tasks"]):
+                for name, info in _entries(source, parent) or []:
+                    if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                        continue
+                    _require(IDENT.fullmatch(name), "invalid task identity")
+                    directories.append((root, parent + "/" + name))
+    return roots, tuple(directories), tuple(pools)
+
+
 def _control_apply(repo):
     from _lib import active_session_transaction
     # Session focus locks precede task state locks, including migration.
     journal = _control_journal(repo)
-    if journal is None:
-        journal = _control_changes(repo)
-    if journal["status"] == "complete" or not journal["destinations"]:
+    if journal is not None and (journal["status"] == "complete" or not journal["destinations"]):
         return dict(_control_report(journal), status="complete")
-    roots = [str(repo)] + sorted({row["root"] for row in journal["destinations"]} - {str(repo)})
+    scope = _control_scope(repo)
+    roots, directories, _ = scope
+    if journal is not None:
+        roots = (str(repo), *sorted((set(roots) | {row["root"] for row in journal["destinations"]}) - {str(repo)}))
+        directories = tuple(sorted(set(directories) | {
+            (row["root"], str(Path(row["path"]).parent))
+            for row in journal["destinations"] if row["path"].endswith("/TASK.json")}))
     from _lib import resolve_registered_worktree
     for root in roots:
         _require(root == str(repo) or resolve_registered_worktree(str(repo), root) == root, "unregistered migration worktree")
@@ -1146,14 +1182,22 @@ def _control_apply(repo):
         batch_lock = _open_lock(repo, "doc/harness/runtime/batches/.lock")
         stack.callback(os.close, batch_lock)
         fcntl.flock(batch_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for entry in journal["destinations"]:
-            if entry["path"].endswith("/TASK.json"):
-                with _control_workspace(repo, entry["root"]) as root:
-                    fd, _ = stack.enter_context(_directory(root, _parts(entry["path"])[:-1]))
+        for root, directory in directories:
+            with _control_workspace(repo, root) as source:
+                fd, _ = stack.enter_context(_directory(source, _parts(directory)))
+                try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise ValueError("Goal migration: WBS writer active: " + str(source / directory)) from exc
+        _require(scope == _control_scope(repo), "migration lock scope changed before preparation")
         current = _control_journal(repo)
+        fresh = current is None
         if current is None:
-            _require(journal == _control_changes(repo), "migration inputs changed before preparation")
+            _require(journal is None, "migration journal disappeared")
+            journal = _control_changes(repo)
+            _require(scope == _control_scope(repo), "migration lock scope changed during preparation")
+            if not journal["destinations"]:
+                return dict(_control_report(journal), status="complete")
             _require(len(journal["destinations"]) <= MAX_RECORDS * 4 and len(_encode(journal)) <= 16 * LIMIT,
                      "task-control migration exceeds record/storage budget")
             _write(repo, CONTROL_MANIFEST, _encode(journal))
@@ -1175,10 +1219,11 @@ def _control_apply(repo):
         # Archive integrity on retry allows precisely the journal's own TASK
         # conversion, so interruption before pool fingerprint update is safe.
         import batch_state as batch
-        for archive in journal["archives"]:
-            _require(isinstance(archive, dict) and set(archive) == {"path", "before", "after"}, "invalid migration archive proof")
-            observed = batch.fingerprint(archive["path"])
-            _require(observed in {archive["before"], archive["after"]}, "archive drift during task-control migration")
+        if not fresh:
+            for archive in journal["archives"]:
+                _require(isinstance(archive, dict) and set(archive) == {"path", "before", "after"}, "invalid migration archive proof")
+                observed = batch.fingerprint(archive["path"])
+                _require(observed in {archive["before"], archive["after"]}, "archive drift during task-control migration")
         for entry in journal["destinations"]:
             before = base64.b64decode(entry["before"], validate=True)
             after = base64.b64decode(entry["after"], validate=True)

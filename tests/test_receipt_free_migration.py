@@ -309,3 +309,54 @@ def test_prepared_migration_rejects_unrelated_destination_changes(tmp_path, monk
     assert result.get("isError"), result
     assert "drift" in str(result).lower()
     assert (other / "TASK.json").read_bytes() == other_before
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_migration_hashes_each_archive_only_before_and_after_publication(tmp_path, monkeypatch, retry):
+    import batch_state
+    import goal_migration
+    pool, archive, history = archived_legacy_pool(tmp_path, monkeypatch)
+    if retry:
+        def interrupt(*args):
+            raise OSError("interrupted before task publication")
+        with monkeypatch.context() as patch:
+            patch.setattr(goal_migration, "_control_write", interrupt)
+            assert migrate(pool.repo, apply=True).get("isError")
+        journal = pool.repo / goal_migration.CONTROL_MANIFEST
+        assert json.loads(journal.read_text())["status"] == "prepared"
+    actual = batch_state._fingerprint_entries
+    walks = []
+    def counting(path):
+        walks.append(str(path))
+        return actual(path)
+    monkeypatch.setattr(batch_state, "_fingerprint_entries", counting)
+    result = migrate(pool.repo, apply=True)
+    assert not result.get("isError"), result
+    assert walks == [str(archive), str(archive)]
+    assert (archive / "RECEIPTS.jsonl").read_bytes() == history
+    assert json.loads((archive / "TASK.json").read_text())["closed"] is True
+
+
+def test_changed_migration_lock_scope_refuses_before_planning_or_publication(tmp_path, monkeypatch):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    legacy_control(td)
+    before = (td / "TASK.json").read_bytes()
+    actual = goal_migration._control_scope
+    scopes = []
+    def changing(root):
+        if scopes:
+            new = td.with_name("TASK__arrived")
+            new.mkdir()
+            (new / "TASK.json").write_bytes(before)
+        scopes.append(root)
+        return actual(root)
+    def forbidden(*args):
+        pytest.fail("archive planning started before lock scope was stable")
+    monkeypatch.setattr(goal_migration, "_control_scope", changing)
+    monkeypatch.setattr(goal_migration, "_control_changes", forbidden)
+    result = migrate(repo, apply=True)
+    assert result.get("isError"), result
+    assert "lock scope changed" in str(result)
+    assert (td / "TASK.json").read_bytes() == before
+    assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
