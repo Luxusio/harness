@@ -220,7 +220,5 @@ under-classification: report it as the existing single ordinary FIX_NOW
 finding whose fix is to move the range into the residual, run the missing
 discovery, and a fresh formal review. It never yields PASS or BLOCKED_ENV.
 
-Run verification commands in the foreground and wait for them. Never end
-your turn while a command or subagent you started is still running: the end
-of your first turn is recorded as your completion, and a later resume cannot
-replace it.
+Run verification commands in the foreground and wait for them. Return your
+final verdict only after commands and subagents needed for it have finished.

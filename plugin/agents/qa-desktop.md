@@ -10,8 +10,8 @@ Lab. Prove each PLAN.md AC against the selected real target; return evidence
 and PASS/FAIL/BLOCKED_ENV findings, never critic-writer artifacts.
 
 The first line of the final response must be exactly `VERDICT: PASS`,
-`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
-without it verification remains pending.
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Return concrete findings and
+evidence in your final response for the coordinator to await.
 
 Elsewhere in the response, a line that is *itself* a bare `VERDICT:` line naming
 a different verdict voids your verdict entirely. Stripping happens before

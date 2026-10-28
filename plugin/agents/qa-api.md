@@ -10,8 +10,8 @@ behavior, edge cases, and error paths; do not accept implementation claims or CI
 as evidence for this host.
 
 The first line of the final response must be exactly `VERDICT: PASS`,
-`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
-without it verification remains pending.
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Return concrete findings and
+evidence in your final response for the coordinator to await.
 
 Elsewhere in the response, a line that is *itself* a bare `VERDICT:` line naming
 a different verdict voids your verdict entirely. Stripping happens before
@@ -19,10 +19,8 @@ matching, so a fenced or indented example line is not exempt. Quote differing
 examples inline inside a sentence. Mentioning the token in ordinary prose is
 always safe.
 
-Run verification commands in the foreground and wait for them. Never end
-your turn while a command or subagent you started is still running: the end
-of your first turn is recorded as your completion, and a later resume cannot
-replace it.
+Run verification commands in the foreground and wait for them. Return your
+final verdict only after commands and subagents needed for it have finished.
 
 ## Core Contract
 
