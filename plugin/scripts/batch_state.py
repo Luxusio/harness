@@ -340,6 +340,11 @@ def cap(repo, explicit, managed=False):
             return effective(min(8, int(value)), 'develop.fanout_cap' if managed else 'manifest')
         return effective(default, 'default-invalid-manifest')
 
+    def key_name(token):
+        if len(token) >= 2 and token[0] in '\"\'' and token[-1] == token[0]:
+            return token[1:-1]
+        return token
+
     def tokens(line):
         require('\\' not in line,
                 'escaped capacity strings unsupported; use a direct ' + section + '.' + key)
@@ -352,7 +357,7 @@ def cap(repo, explicit, managed=False):
             for token in lexer:
                 if token.startswith('#'):
                     break
-                require(not token.startswith(('*', '&', '!')) and token.strip('\"\'') != '<<' and token != '?',
+                require(not token.startswith(('*', '&', '!')) and key_name(token) != '<<' and token != '?',
                         'capacity aliases, tags or merges unsupported; use a direct ' + section + '.' + key)
                 result.extend(list(token) if all(c in '{},:[]' for c in token) else [token])
             stack = []
@@ -368,13 +373,15 @@ def cap(repo, explicit, managed=False):
             raise Refusal('invalid capacity declaration; use a direct ' + section + '.' + key) from exc
 
     def field(parts):
-        return len(parts) >= 2 and parts[0].strip('"\'') == key and parts[1] == ':'
+        return len(parts) >= 2 and key_name(parts[0]) == key and parts[1] == ':'
 
     if os.path.isfile(path):
         inside, child_indent = False, None
         root_mapping_seen = False
         literal_indent = None
         for line in open(path, encoding='utf-8'):
+            require(not any(char in line for char in '\ufeff\x85\u2028\u2029'),
+                    'capacity document encoding unsupported; use a direct ' + section + '.' + key)
             if not line.strip() or line.lstrip().startswith('#'):
                 continue
             indent = len(line) - len(line.lstrip())
@@ -409,7 +416,7 @@ def cap(repo, explicit, managed=False):
                 continue
             if not indent:
                 inside, child_indent = False, None
-                if len(parts) < 2 or parts[0].strip('"\'') != section or parts[1] != ':':
+                if len(parts) < 2 or key_name(parts[0]) != section or parts[1] != ':':
                     continue
                 if len(parts) == 2:
                     inside = True
