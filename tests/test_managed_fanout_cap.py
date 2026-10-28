@@ -131,6 +131,8 @@ def test_unsupported_mapping_cannot_infer_a_higher_cap(tmp_path, text):
     'develop:\n  fanout_cap: 0b1\n',
     'develop:\n  fanout_cap: !!int 1\n',
     '{develop: {fanout_cap: 1}}\n',
+    '<<: {develop: {fanout_cap: 1}}\n',
+    'defaults: &defaults {develop: {fanout_cap: 1}}\n<<: *defaults\n',
     '  develop:\n    fanout_cap: 1\n',
     '---\n  develop:\n    fanout_cap: 1\n',
     r'"deve\u006cop": {fanout_cap: 1}' + '\n',
@@ -173,3 +175,14 @@ def test_managed_init_claim_respects_development_limit(tmp_path, monkeypatch, de
     result = pool.init([request(f'lane-{n}') for n in range(7)], owner='TASK__owner')
     assert result['batch']['max_leads'] == development
     assert len(pool.claim()) == development
+
+
+def test_unmerged_nested_development_settings_leave_default_unambiguous(tmp_path):
+    import yaml
+    import batch_state
+    text = 'defaults: {develop: {fanout_cap: 1}}\n'
+    assert 'develop' not in yaml.safe_load(text)
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(text)
+    assert batch_state.cap(str(tmp_path), None, managed=True) == (4, 'default')

@@ -383,6 +383,7 @@ def cap(repo, explicit, managed=False):
                 if not line.startswith(('%', '---', '...')) and ':' in line:
                     root_mapping_seen = True
                 require(not re.match(r'^(?:---\s+)?[\{\[?!&*]', line)
+                        and not re.match(r'^<<(?=\s|:|$)', line)
                         and not (line[0] in '\"\'' and '\\' in line.split(':', 1)[0]),
                         'unsupported capacity document mapping; use a direct ' + section + '.' + key)
             if not indent and not re.match(r"^(?:" + section + "|'" + section + "'|\"" + section + r"\")\s*:", line):
