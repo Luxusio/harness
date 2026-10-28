@@ -229,7 +229,8 @@ def test_parallel_fanout_small_task_skip_requires_evidence_and_coordinator_merge
     assert "coordinator" in body and "only writer to PROGRESS.md" in body
     assert "Merge cost controls batch size only" in body
     assert "does not justify collapsing two or more" in body
-    assert "For N>4, spawn batches of up to 4" in body
+    assert "Use the effective cap C for each batch; for N>C admit successive batches" in body
+    assert "For N>4, spawn batches of up to 4" not in body
     assert "actual predecessor IDs" in body
     assert '`reason:"small-task"` as an assignment bypass' in body
     assert "small edit estimate" in body

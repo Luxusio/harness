@@ -31,7 +31,8 @@ def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
     (repo / ".gitignore").write_text("doc/harness/tasks/\n")
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
-    monkeypatch.delenv("HARNESS_SESSION_ID", raising=False)
+    # An explicit isolated caller exercises a genuine exact-session conflict.
+    monkeypatch.setenv("HARNESS_SESSION_ID", "public-guidance-isolated-caller")
     monkeypatch.setattr(server, "find_repo_root", lambda *a: str(repo))
 
     def call(action, root="WBS__guidance", **args):

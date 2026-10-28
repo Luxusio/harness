@@ -79,7 +79,7 @@ current `task_id`, state "resuming from prior session" in the conversation.
 
 ### Phase 1: Load plan
 
-Micro/maintenance still baseline one concise WBS outcome and publish dispatch prepare before source edits. Read `doc/harness/tasks/<task_id>/`:
+Micro/maintenance still baseline one concise WBS outcome. Coordinators publish dispatch prepare before source edits; bound managed leads consume their parent assignment. Read `doc/harness/tasks/<task_id>/`:
 1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
@@ -112,13 +112,15 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Read `ready-lanes.md` and publish current WBS dispatch prepare admission before source edits. Choose execution ownership separately from progress WBS and use concrete dependencies before
-editing:
+Read `ready-lanes.md`: coordinators publish current WBS dispatch prepare; a
+bound managed lead consumes its exact parent assignment without preparing or
+refilling the parent pool. Choose execution ownership separately from progress
+WBS and use concrete dependencies before editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
 
-Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/ready-lanes.md` before public WBS dispatch prepare with actual host inventory; refresh and consume ready handoffs immediately after each completion. `develop.fanout_cap` applies as on Claude, with actual agent capacity taking precedence.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/ready-lanes.md` for coordinator dispatch prepare with actual host inventory; the coordinator refreshes and consumes ready handoffs after each completion. Bound managed leads consume their existing exact assignment and do not own parent prepare/refill. `develop.fanout_cap` applies as on Claude, with actual agent capacity taking precedence.
 
 `Route` is `spawn_agent(worker)` for every disjoint lane; spawn one worker per lane. Use one worker per independent AC. Do not assign multiple independent ACs to one worker. This is capability-gated, not user-request-gated: The user does not need to ask for delegation, `user did not ask for delegation` is an invalid reason, `delegation was not requested` is not a fallback, and Do not wait for the user to request delegation. User request is
 not a condition for parallel routing; this is mandatory capability/task-shape routing.
@@ -150,7 +152,7 @@ rewritten. Declare allowed / test / forbidden paths before each file edit:
 
 ### Phase 3: Implement
 
-1. For sequential batches, work **one AC at a time**, in order. For parallel work, consume completed AC results and refill dependency-ready lanes using `parallel_dispatch.py`; do not wait for unrelated sibling workers.
+1. For sequential batches, work **one AC at a time**, in order. For parallel work, coordinators consume completed AC results and refill dependency-ready lanes using `parallel_dispatch.py`; do not wait for unrelated sibling workers.
    Verify a paired AC after both its writers finish. Full-tree commands wait for all writers. Skip ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
    Apply `${HARNESS_PLUGIN_ROOT}/agents/developer.md` minimum-sufficient ladder in the
@@ -191,11 +193,10 @@ Runs continuously during Phase 3.
 
   *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in final verification evidence and, when resume needs it, a checkpoint note.
 
-  *QA codifier* (after Phase 7 PASS, before close):
-  ```bash
-  PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
-  ```
-  Parses `codifiable:` YAML blocks emitted by the QA pass and stages validated tests to `tests/regression/<sanitized-task-id>/`. Same script as Claude side; runtime-agnostic.
+  *QA codifier* is optional only when an actual QA transcript with `codifiable:`
+  blocks exists. Supply `--transcript <path>` explicitly to `qa_codifier.py`;
+  without that input, skip it. Missing recording never requires codification.
+
 	- **3.6 Fix-first pattern** — read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/fix-first-pattern.md`. It holds a pre-review self-check (delete / reuse / stdlib / native / yagni) over your own changed lines, plus the **3-attempt escalation rule** for every fix loop (per-AC, Phase 7, debug).
 	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
 
@@ -298,7 +299,8 @@ spawn_agent {
 }
 ```
 
-After awaiting QA/UX, run `wbs(action="verify")`.
+After awaiting actual QA/UX PASS, run `wbs(action="verify")`. Fix actual FAIL
+findings or publish a real BLOCKED_ENV before machine verification or close.
 `wait_agent` and `list_agents` are coordination-only; await actual lens finals. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
@@ -308,13 +310,14 @@ up to 60 seconds and one status update after timeout.
 
 Use clear, distinct QA/UX task names for operator visibility; names have no gate authority.
 
-Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
+Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close only with actual browser-lens PASS evidence;
+a browser-lens `BLOCKED_ENV` records unfinished work and never permits close.
 
 When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures logged as `transient` in `learnings.jsonl`, not counted toward the 3-cycle limit.
-- **Severity × confidence close gate** — after synthesis, block close on:
+- **Severity × confidence close gate** — from actual independent reviewer/QA findings, block close on:
   - `critical` AND confidence >= 7
   - `high` AND confidence >= 8
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
@@ -325,7 +328,7 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
 On Claude this is a `harness:dogfooder` agent spawn. On Codex, use `spawn_agent` when available; otherwise the dogfooder methodology runs inline in the orchestrator's context after Phase 7 PASS.
 
 **Skip conditions (Codex):**
-- `runtime_verdict` is not PASS (QA must pass first).
+- Current actual QA/UX results have not all PASSed (machine PASS is insufficient).
 - Task is maintenance-only (no user-facing change).
 - `PLAN.md` declares no dogfood/UX lens or user-facing surface.
 

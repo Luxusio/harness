@@ -81,7 +81,7 @@ current `task_id`, state "resuming from prior session" in the conversation.
 
 ### Phase 1: Load plan
 
-Micro/maintenance still baseline one concise WBS outcome and publish dispatch prepare before source edits. Read `doc/harness/tasks/<task_id>/`:
+Micro/maintenance still baseline one concise WBS outcome. Coordinators publish dispatch prepare before source edits; bound managed leads consume their parent assignment. Read `doc/harness/tasks/<task_id>/`:
 1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
@@ -123,8 +123,10 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Read `ready-lanes.md` and publish current WBS dispatch prepare admission before source edits. Choose execution ownership separately from progress WBS and use concrete dependencies before
-editing:
+Read `ready-lanes.md`: coordinators publish current WBS dispatch prepare; a
+bound managed lead consumes its exact parent assignment without preparing or
+refilling the parent pool. Choose execution ownership separately from progress
+WBS and use concrete dependencies before editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
@@ -170,7 +172,7 @@ rewritten. Declare allowed / test / forbidden paths before each file edit:
 ### Phase 3: Implement
 
 1. For sequential batches, work **one AC at a time**, in order. For parallel
-   work, consume completed AC results and refill dependency-ready lanes using
+   work, coordinators consume completed AC results and refill dependency-ready lanes using
    `parallel_dispatch.py`; do not wait for unrelated sibling executors.
    Verify a paired AC after both its writers finish. Full-tree commands wait for all writers. Skip ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
@@ -306,7 +308,7 @@ through focused tests/checkpoint and affected formal reviewers again. Start Phas
 ### Phase 7: Verification Gate
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with `hypothesis-driven-debugging.md` root-cause escalation on cycle 3.
 
-**Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `wbs(action="verify")`; the machine verdict measures current WBS checks; actual QA results come from the independent final.
+**Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Await actual applicable QA/UX PASS, then run `wbs(action="verify")`; the machine verdict measures current WBS checks; actual QA results come from the independent final.
 
 QA must be spawned after actual Phase 6.6 reviewer PASS finals. A QA run started
 before those finals is invalid substantive sequencing.
@@ -324,7 +326,7 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures are logged as `transient` in `learnings.jsonl` and not counted toward the 3-cycle limit.
-- **Severity × confidence close gate** — after synthesis, block close on:
+- **Severity × confidence close gate** — from actual independent reviewer/QA findings, block close on:
   - `critical` AND confidence ≥ 7
   - `high` AND confidence ≥ 8
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
@@ -352,7 +354,7 @@ The dogfooder does NOT gate task completion. Its output is:
   task when the finding blocks the agreed done criteria.
 
 Skip conditions:
-- `runtime_verdict` is not PASS (QA must pass first).
+- Current actual QA/UX results have not all PASSed (machine PASS is insufficient).
 - Task is maintenance-only (no user-facing change).
 - `PLAN.md` declares no user-facing surface and
   `dogfood_required` is not explicitly true.

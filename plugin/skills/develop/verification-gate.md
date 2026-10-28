@@ -394,8 +394,8 @@ Bounded: retry at most once per failure. No infinite retry loop.
 
 ## Step 3.6: Severity × confidence close gate
 
-After the quality synthesis agent produces its findings table, apply this
-close-gate rule before WBS close is allowed:
+Apply this rule to actual independent reviewer/QA findings before WBS close.
+No quality synthesis agent or synthesized findings table is a prerequisite:
 
 | Severity | Confidence | Action |
 |----------|-----------|--------|

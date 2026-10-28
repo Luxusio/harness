@@ -631,14 +631,23 @@ def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=N
 
 def thaw_verification_sources(repo, worktree, task_id, retention, checkpoint):
     """Only after full ordinary proof and durable archive, unseal typed copies."""
-    ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
     if checkpoint is None:
+        ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
         return
+    # Admit only the registered checkout and safe paths before collecting
+    # candidates. The complete byte inventory follows collection, before chmod.
+    _verify_registered_worktree(repo, worktree)
     from verification_target import _spec
-    task = os.path.join(worktree, 'doc/harness/tasks', task_id)
+    task = _s1_path(os.path.join(worktree, 'doc/harness/tasks', task_id), True)
     store = os.path.join(task, 'work/verification-targets')
     if not os.path.isdir(store):
+        ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
         return
+    _s1_path(store, True)
+    archive_task = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+    _s1_require(checkpoint.get('stage') == 'harvested'
+                and checkpoint.get('harvest', {}).get('archived') == archive_task,
+                'task archive differs from durable removal checkpoint')
     directories = []
     for token in os.listdir(store):
         if not re.fullmatch(r'[0-9a-f]{16}', token):
@@ -647,7 +656,6 @@ def thaw_verification_sources(repo, worktree, task_id, retention, checkpoint):
         # It does not certify these historical inputs for current acceptance.
         relative = os.path.join('work/verification-targets', token, 'target.json')
         metadata = _ordinary_bytes(os.path.join(task, relative), 1024 * 1024)
-        archive_task = checkpoint['harvest']['archived']
         _s1_require(metadata == _ordinary_bytes(os.path.join(archive_task, relative), 1024 * 1024),
                     'verification metadata differs from preserved archive')
         record = json.loads(metadata)

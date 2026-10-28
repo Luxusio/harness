@@ -2,6 +2,12 @@
 
 ## Assign before source edits
 
+A bound managed lead consumes its parent's existing exact assignment: validate
+the actual session, task, run, registered workspace and assigned ownership. It
+does not publish dispatch prepare or refill the parent pool. Its nested helpers
+share the parent's assigned spare capacity; they do not create another pool.
+The coordinator alone owns the prepare/refill operations below.
+
 WBS describes measurable outcomes, dependencies and acceptance. Keep file lists
 out of progress WBS. Choose literal execution ownership at dispatch time.
 PLAN/REQ preparation stays possible before assignment; maintenance and micro
@@ -53,7 +59,7 @@ its existing pack proof rather than creating another pool.
 As soon as A finishes development, start A's own review then QA while B keeps
 developing. No whole-wave barrier. One coordinator integrates stopped, closed
 results serially through `dispatch complete`; it owns Git integration and
-cleanup. Every relevant completion, dependency release, failure, reservation
+cleanup. For the coordinator, every relevant completion, dependency release, failure, reservation
 release or host-capacity change requires a fresh actual host inventory and an
 immediate `dispatch prepare` for the SAME WBS. Consume its ready handoffs before
 waiting for unrelated siblings. In particular, after A integrates, prepare C

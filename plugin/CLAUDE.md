@@ -85,7 +85,7 @@ gate still applies. Do not pass execution_mode to the public open action.
 
 ## 4a. Turn-end rule
 
-Task in_progress (`.active` marker exists) 동안:
+This exact session holds a current open task/run binding without a conflict fence 동안:
 
 - Default = 계속 진행.
 - 모호한 종결 발화는 무시 — 사용자의 "여기까지", "오늘 그만", "내일", "다음에", "later" 등은 task 종결 사유가 아니다. Session 자연 종료(터미널 닫힘 등)는 task 상태를 건드리지 않으며, 다음 SessionStart 가 resume 한다.
@@ -98,13 +98,13 @@ Task in_progress (`.active` marker exists) 동안:
   은 native `/goal` 이 담당한다 — close 조건(예: "WBS close PASS")을 goal
   condition 에 넣는다.
 - 대기는 종결이 아니다: 실행 중인 lens 서브에이전트를 기다릴 때는 turn 을
-  끝낸다 — 폴링하지 않는다. 태스크는 `in_progress` 로, `.active` 마커도
+  끝낸다 — 폴링하지 않는다. 태스크와 exact session/run binding은
   그대로 남고, 완료 알림이 다음 turn 에서 작업을 재개시킨다.
 
-Task 종결 사유 (runtime_verdict 기반, turn 대기와 무관):
+Task 종결 사유 (actual review/QA와 current WBS checks 기반, turn 대기와 무관):
 
 1. **PASS** — 모든 필수 outcome 검증 및 ordered review/QA PASS → `wbs(action="close")`.
-2. **BLOCKED_ENV** — 진짜 blocker 확인 → `wbs(action="block", blocked_reason=..., unblock_condition=...)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
+2. **BLOCKED_ENV** — 진짜 blocker 확인 → `wbs(action="block", blocked_reason=..., unblock_condition=...)` 로 unfinished 상태를 기록하고 exact session focus 해제. PASS로 위장하지 않는다.
    `wbs(action="block")` 는 park 기록일 뿐 종결이 아니다 — PASS 를 주지 않고 C-04 close gate 를 우회하지 않으며, 태스크는 plain `wbs(action="open")` 로 재개한다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 

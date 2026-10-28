@@ -17,7 +17,7 @@ Await actual independent code review and conditional security review PASS before
 > - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Await the actual independent final results; machine verification measures WBS checks. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
 > - The sole Codex MCP tool is bare `wbs`. Task-handler names below identify private owners; use the WBS action mapping.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
-> - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
+> - AskUserQuestion is conversational prose on Codex when a real user decision is needed; substantive FAIL findings follow the remediation path below.
 
 ## Codex Subagent Routing
 
@@ -136,9 +136,14 @@ resume instead of creating a duplicate.
 Resume routing:
 - Source task already closed with owned temporary worktrees remaining → Phase 5
   coordinator disposal only; do not repeat close or lenses solely for cleanup.
+- Current actual review/QA/UX FAIL → remediate the failed work in Phase 3;
+  actual BLOCKED_ENV → preserve the real blocker and unblock condition.
+  These results take precedence over a green machine runtime_verdict.
+- Required actual results unrun or stale → restore ordered review/QA in Phase 3 or 4.
 - PLAN.md missing → Phase 2 Plan.
 - PLAN.md exists and runtime_verdict is not PASS → Phase 3 Develop/Verify.
-- runtime_verdict is PASS and `missing_for_close` is empty → Phase 5 Close.
+- runtime_verdict is PASS and `missing_for_close` is empty, with current actual
+  independent review and applicable QA/UX PASS → Phase 5 Close.
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
 
@@ -183,7 +188,10 @@ does not maintain a separate feedback sidecar.
 
 Skip this phase when the source task is already closed. This is a recovery path for an
 interrupted or older develop flow, not a second QA pass. First call
-`wbs(action="context")`: when applicable actual QA already passed and WBS checks remain current, run `wbs(action="verify")` only. Rerun an actually unrun, failed or stale substantive lens; never rerun successful work for recording. The agent definition owns its final output contract.
+`wbs(action="context")`. Inspect current actual independent finals before
+machine checks. Reuse applicable actual review and QA/UX PASS results; rerun
+only actually unrun, failed or stale substantive work. Never rerun successful
+work for recording. The agent definition owns its final output contract.
 
 Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Await actual QA finals with concrete findings and evidence; a spawn alone is not completion.
 
@@ -218,22 +226,26 @@ spawn_agent {
 
 Use distinct task names to prevent collaboration-tree name collisions. Names do not bind verification authority. Run each applicable QA lens once per substantive verification cycle.
 
-After awaiting QA/UX, run `wbs(action="verify")`. Its runtime verdict and `missing_for_close` describe current WBS assertions, blocked state and applicability; they do not attest review/QA.
+Handle actual QA/UX results before `wbs(action="verify")`:
+- **FAIL**: return to Phase 3, fix substantive findings and restore affected
+  independent review PASS before rerunning actual QA/UX. A green machine
+  verdict cannot clear an unresolved actual failure.
+- **BLOCKED_ENV**: report the exact external blocker and executable unblock
+  condition; use `wbs(action="block")` for unfinished work. Do not close or
+  convert the blocker to PASS.
+- **PASS**: only after every applicable actual lens passes, run `wbs(action="verify")`.
+
+Its runtime verdict and `missing_for_close` describe current WBS assertions,
+blocked state and applicability; they do not attest review/QA.
 
 QA inline fallback on Codex reads the relevant qa-* prompt, follows the same
 methodology in-conversation. It does not write a critic artifact or handoff
 artifact. If the fallback means verification is incomplete, return
 `BLOCKED_ENV`; otherwise report the concrete commands/interactions used.
 
-After `wbs(action="verify")`, check the returned `runtime_verdict`:
-- **PASS**: proceed to Phase 5.
-- **FAIL**: report findings, then ask the user:
-  > QA returned FAIL. Findings: <summary>
-  > A) Send back to develop — fix the issues
-  > B) Override — accept current state (justify in the next reply)
-  > C) Abort task
-
-  A → return to Phase 3 with QA findings as additional context. Retry limit: 3 cycles. After 3 FAILs: stop and report.
+Machine PASS permits Phase 5 only after actual PASS; otherwise fix the named
+WBS check and reverify. Never label a machine check failure as a QA verdict or
+offer an override of substantive failure.
 
 **Persist QA failure patterns** after each retry cycle:
 ```bash

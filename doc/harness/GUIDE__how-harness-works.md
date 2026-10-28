@@ -77,6 +77,21 @@ payload 목록에 따라 Claude 트리에서 복사한다.
 항상 보존한다. control root의 session identity와 task workspace의 소스 소유권을
 구별하며 임의 cwd나 다른 작업의 마커로 권한을 얻지 않는다.
 
+Only this exact session's current open task/run binding without a conflict
+fence grants write focus. Legacy `.active`, shared/default hints, unknown caller
+identity and another workspace's marker grant no authority. Preserve the exact
+registered workspace on every call. A bound managed lead consumes the parent's
+assignment; the coordinator owns parent prepare/refill. Managed pools use
+`develop.fanout_cap` (default 4, maximum 8), lowered by an explicit operational
+limit; standalone pools use `batch.max_leads` (default 3) or an explicit limit.
+Existing pools pin their initialized cap, bounded by actual host slots.
+
+Recovery first handles current actual QA/UX FAIL or BLOCKED_ENV, even when
+machine WBS checks are green. Fix substantive failures or report a real blocker
+before verify/close; await actual independent code/security review PASS before
+actual QA. No quality synthesis prerequisite or transcriptless codifier run is
+required. Optional codification needs an explicit real transcript.
+
 현재 TASK.json은 네 필드다:
 
 ```json

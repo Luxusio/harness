@@ -878,7 +878,7 @@ def _historical_diagnostics(work, task, sid, *, error_only=False):
     (work / "doc/harness/.watcher-diagnostics.json").write_text(json.dumps(value) + "\n")
 
 
-def _ordinary_snapshot_fixture(tmp_path, *, error_only=False):
+def _ordinary_snapshot_fixture(tmp_path, *, error_only=False, verification=False):
     import test_batch_state as fixture
     repo = _main_repo(tmp_path)
     _ignore_task_evidence(repo)
@@ -903,6 +903,13 @@ def _ordinary_snapshot_fixture(tmp_path, *, error_only=False):
     checkpoint = work / 'doc/harness/checkpoints' / (task.name + '.md')
     checkpoint.parent.mkdir()
     checkpoint.write_text('# Checkpoint — ' + task.name + '\n\n- written: 2026-10-21T00:00:00Z\n\n## Task state\n\n- status: open\n\n## Progress\n\n- phase: implementation\n\n## Next action\n\nHistorical resume note\n')
+    if verification:
+        import verification_target
+        from test_wbs import wbs, plan, node
+        state = wbs.prepare(str(task), plan([node()]), fixture.RUN, now=100)
+        (task / 'WBS.json').write_text(wbs.encode_state(state))
+        verification_target.issue_target(str(task), str(work), dict(
+            inputs={'source': ['README.md']}, commands=[], lenses=[], purpose='diagnostic'))
     mod.harvest(str(repo), str(work), task.name)
     sidecar = repo / 'doc/harness/archive/worktree-recovery' / task.name / fixture.RUN
     return repo, work, task, diagnostics, checkpoint, sidecar
@@ -1067,3 +1074,91 @@ def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
     mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
     assert not work.exists()
     assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved
+
+
+def _ordinary_checkpoint(repo, task):
+    archive = repo / 'doc/harness/archive/batch' / task.name
+    entries = mod._tree_entries(str(archive))
+    return dict(stage='harvested', harvest={'archived': str(archive)},
+                archive_fingerprint='sha256:' + mod.hashlib.sha256(
+                    json.dumps(entries, sort_keys=True).encode()).hexdigest())
+
+
+def test_thaw_uses_one_complete_ordinary_proof_before_chmod(tmp_path, monkeypatch):
+    repo, work, task, *_ = _ordinary_snapshot_fixture(tmp_path, verification=True)
+    checkpoint = _ordinary_checkpoint(repo, task)
+    source = next((task / 'work/verification-targets').glob('*/source'))
+    archive = Path(checkpoint['harvest']['archived'])
+    before = mod._tree_entries(str(archive))
+    events = []
+    proof, chmod = mod.ordinary_removal_proof, mod.os.fchmod
+
+    def actual_proof(*args):
+        proof(*args)
+        events.append('proof')
+
+    def actual_chmod(*args):
+        assert events and events[0] == 'proof'
+        events.append('chmod')
+        return chmod(*args)
+
+    monkeypatch.setattr(mod, 'ordinary_removal_proof', actual_proof)
+    monkeypatch.setattr(mod.os, 'fchmod', actual_chmod)
+    assert not source.stat().st_mode & 0o200
+    mod.thaw_verification_sources(str(repo), str(work), task.name, None, checkpoint)
+    assert events.count('proof') == 1 and 'chmod' in events
+    assert source.stat().st_mode & 0o200
+    assert mod._tree_entries(str(archive)) == before
+    assert not (archive / source.relative_to(task)).stat().st_mode & 0o200
+
+
+def test_thaw_early_returns_still_run_actual_ordinary_proof(tmp_path, monkeypatch):
+    repo, work, task, *_ = _ordinary_snapshot_fixture(tmp_path)
+    checkpoint = _ordinary_checkpoint(repo, task)
+    calls = []
+    proof = mod.ordinary_removal_proof
+
+    def actual_proof(*args):
+        proof(*args)
+        calls.append(args[-1])
+
+    monkeypatch.setattr(mod, 'ordinary_removal_proof', actual_proof)
+    for value in (None, checkpoint):
+        mod.thaw_verification_sources(str(repo), str(work), task.name, None, value)
+    assert calls == [None, checkpoint]
+    (work / 'precious.bin').write_bytes(b'unaccounted user content')
+    for value in (None, checkpoint):
+        with _raises(mod.HarvestError, match='unknown ignored or untracked'):
+            mod.thaw_verification_sources(str(repo), str(work), task.name, None, value)
+
+
+def test_thaw_rejects_source_and_archive_drift_during_collection(tmp_path, monkeypatch):
+    for changed in ('source', 'archive'):
+        case = tmp_path / changed
+        case.mkdir()
+        repo, work, task, *_ = _ordinary_snapshot_fixture(case, verification=True)
+        checkpoint = _ordinary_checkpoint(repo, task)
+        source = next((task / 'work/verification-targets').glob('*/source'))
+        target = source / 'README.md' if changed == 'source' else (
+            Path(checkpoint['harvest']['archived']) / source.relative_to(task) / 'README.md')
+        path_check = mod._s1_path
+        seen = []
+        chmods = []
+
+        def drift_on_collection(path, directory=False):
+            result = path_check(path, directory)
+            if os.fspath(path) == str(source):
+                seen.append(path)
+                if len(seen) == 2:
+                    # Second validation is the os.walk collection, after root admission.
+                    target.chmod(0o600)
+                    target.write_bytes(b'drift after candidate admission')
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(mod, '_s1_path', drift_on_collection)
+            patch.setattr(mod.os, 'fchmod', lambda *args: chmods.append(args))
+            with _raises(mod.HarvestError, match='task evidence differs'):
+                mod.thaw_verification_sources(str(repo), str(work), task.name, None, checkpoint)
+        assert len(seen) >= 2 and not chmods
+        assert not source.stat().st_mode & 0o200

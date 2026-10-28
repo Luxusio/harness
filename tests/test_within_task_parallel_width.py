@@ -167,26 +167,29 @@ def test_fanout_cap_is_optional_bounded_and_defaults_to_four():
     _assert_phrases(
         _flat(cap),
         (
-            "Read `develop.fanout_cap` from `doc/harness/manifest.yaml` once at Phase 3.0",
+            "Managed WBS pools resolve `develop.fanout_cap` from `doc/harness/manifest.yaml` at initialization through `batch_state.cap`",
             "develop: fanout_cap: 6",
             "An integer from 1 to 8 is the cap.",
             "An integer above 8 caps at 8.",
-            "A missing key, a missing `develop` section, or any other value (zero, "
-            "negative, fractional, boolean, string, null, list) leaves the cap at 4.",
+            "A missing key or `develop` section defaults to 4; ordinary invalid values",
+            "Encoded integers (`+6`, `0x6`, digit separators), aliases, tags, merges, escaped strings and unsupported document forms are refused; they do not fall back.",
             "Setup preserves the key and never writes it.",
             "`effective fanout cap: <N> (<source>)` on a line above the lane table",
-            "`default`, `develop.fanout_cap`, `clamped from <M>`, `invalid value → default`",
+            "`default`, `develop.fanout_cap`, `explicit`, `default-invalid-manifest`, or standalone `manifest`",
             "The cap governs Phase 3.0 AC lanes only",
             "The cap counts AC lanes, not agents",
             "`harness:test-author` rides in its AC's lane",
-            "Cap parallel fanout at N=4 in a single batch by default. Past the effective cap,",
-            "With a configured cap C, for N>C spawn batches of up to C.",
+            "An explicit operational `--max-leads` may lower managed capacity, never raise it.",
+            "Standalone pools use `batch.max_leads`, default 3",
+            "Existing pools pin their initialized cap:",
+            "manifest changes and prepare replays do not resize them.",
+            "Use the effective cap C for each batch; for N>C admit successive batches of up to C",
+            "Actual host slots always bound spawns",
             "5 x cap: 20 agents at the default cap 4, 40 agents at the maximum cap 8",
         ),
         "Batch cap",
     )
-    # The default wording stays literal and on its original lines.
-    assert "For N>4, spawn batches of up to 4 in successive assistant turns; do not\n" in cap
+    assert "For N>4, spawn batches of up to 4" not in cap
     assert (
         "Merge cost controls batch size only. It does not justify collapsing two or more\n"
         in cap

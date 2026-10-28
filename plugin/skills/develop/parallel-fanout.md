@@ -77,39 +77,45 @@ Agent(subagent_type="harness:test-author",
 
 ## Batch cap
 
-Read `ready-lanes.md` and use the executable `parallel_dispatch.py` admission
-helper before spawning and after each completed lane. The configured cap is
+Read `ready-lanes.md`: the coordinator owns public dispatch prepare/refill;
+bound managed leads consume the exact parent assignment. Use the executable
+`parallel_dispatch.py` admission helper for bounded nested roles, sharing the
+parent inventory before spawning and after each completed lane. The configured cap is
 an upper bound on AC lanes; actual available host agent slots also bound every
 spawn, including paired test authors and nested workers. Refill ready lanes
 without an unrelated-sibling completion barrier.
 
-Read `develop.fanout_cap` from `doc/harness/manifest.yaml` once at Phase 3.0:
+Managed WBS pools resolve `develop.fanout_cap` from `doc/harness/manifest.yaml`
+at initialization through `batch_state.cap`:
 
 ```yaml
 develop:
   fanout_cap: 6
 ```
 
-An integer from 1 to 8 is the cap. An integer above 8 caps at 8. A missing
-key, a missing `develop` section, or any other value (zero, negative,
-fractional, boolean, string, null, list) leaves the cap at 4. Setup preserves
+An integer from 1 to 8 is the cap. An integer above 8 caps at 8. A missing key or `develop` section defaults to 4; ordinary invalid values
+(zero, negative, fractional, boolean, quoted string, null, list) fall back to 4.
+Encoded integers (`+6`, `0x6`, digit separators), aliases, tags, merges, escaped
+strings and unsupported document forms are refused; they do not fall back. Setup preserves
 the key and never writes it.
 
+An explicit operational `--max-leads` may lower managed capacity, never raise
+it. Standalone pools use `batch.max_leads`, default 3, or an explicit operational
+limit; values above 8 clamp to 8. Existing pools pin their initialized cap:
+manifest changes and prepare replays do not resize them. Actual host slots
+always bound spawns, including nested helpers and paired authors.
+
 The coordinator writes `effective fanout cap: <N> (<source>)` on a line above
-the lane table, source one of `default`, `develop.fanout_cap`,
-`clamped from <M>`, `invalid value → default`.
+the lane table, using the returned source: `default`, `develop.fanout_cap`, `explicit`,
+`default-invalid-manifest`, or standalone `manifest`.
 
 The cap governs Phase 3.0 AC lanes only; the other fanout phases stay bounded
 by their own lens lists. The cap counts AC lanes, not agents — an AC's
 `harness:test-author` rides in its AC's lane.
 
-Cap parallel fanout at N=4 in a single batch by default. Past the effective
-cap, orchestrator-side PROGRESS.md merge cost dominates the spawn-time savings.
-**The cap applies per batch, not per task** — broader trigger thresholds
-produce more batches, each still capped at the effective cap.
-For N>4, spawn batches of up to 4 in successive assistant turns; do not
-collapse remaining independent ACs into coordinator work. With a configured
-cap C, for N>C spawn batches of up to C.
+Use the effective cap C for each batch; for N>C admit successive batches of
+up to C without an unrelated-sibling completion barrier. Do not hardcode a
+second default-four batch limit when configured capacity is larger.
 Merge cost controls batch size only. It does not justify collapsing two or more
 independent ACs into one executor below the cap.
 

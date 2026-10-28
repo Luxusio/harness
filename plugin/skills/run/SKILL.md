@@ -77,9 +77,14 @@ and resume rather than creating a duplicate.
 Resume routing:
 - Already closed with outstanding coordinator disposal → Phase 5's shared
   completion procedure; do not repeat close or review solely for cleanup.
+- Current actual review/QA/UX FAIL → remediate the failed work in Phase 3;
+  actual BLOCKED_ENV → preserve the real blocker and unblock condition.
+  These results take precedence over a green machine runtime_verdict.
+- Required actual results unrun or stale → restore ordered review/QA in Phase 3 or 4.
 - PLAN.md missing → Phase 2 Plan.
 - PLAN.md exists and runtime_verdict is not PASS → Phase 3 Develop/Verify.
-- runtime_verdict is PASS and `missing_for_close` is empty → Phase 5 Close.
+- runtime_verdict is PASS and `missing_for_close` is empty, with current actual
+  independent review and applicable QA/UX PASS → Phase 5 Close.
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
 
@@ -131,7 +136,9 @@ Skip this phase when Phase 3 closed the task. Develop Phase 7 owns QA lens
 selection and spawning, and develop Phase 6.6 owns review; this phase is a
 recovery path for an interrupted or older develop flow, not a second QA pass.
 
-First call `wbs(action="context")`. Reuse current actual review and QA PASS results and run `wbs(action="verify")`; rerun only actually unrun, failed or stale substantive work. Recording never requires a rerun.
+First call `wbs(action="context")`. Inspect current actual independent finals before
+machine checks. Reuse applicable actual review and QA/UX PASS results; rerun
+only actually unrun, failed or stale substantive work. Recording never requires a rerun.
 
 For a lens that must be re-run, follow `develop/SKILL.md` Phase 7 and
 `develop/quality-audit-pipeline.md` — do not restate routing here. Use the
@@ -158,18 +165,20 @@ here and not delegated:
 Agents return PASS/FAIL/BLOCKED_ENV findings in their final response; do not ask
 them to write critic artifacts.
 
-Then run `wbs(action="verify")`. Its runtime verdict and `missing_for_close` measure current WBS checks, blocked state and applicability, not review/QA attestation. PLAN.md remains the acceptance document.
+Handle actual QA/UX results before `wbs(action="verify")`:
+- **FAIL**: return to Phase 3, fix substantive findings and restore affected
+  independent review PASS before rerunning actual QA/UX. A green machine
+  verdict cannot clear an unresolved actual failure.
+- **BLOCKED_ENV**: report the exact external blocker and executable unblock
+  condition; use `wbs(action="block")` for unfinished work. Do not close or
+  convert the blocker to PASS.
+- **PASS**: only after every applicable actual lens passes, run `wbs(action="verify")`.
 
-After completion, check runtime_verdict:
-- **PASS**: proceed to Phase 5.
-- **FAIL**: report findings, then ask:
-  ```
-  QA returned FAIL. Findings: <summary>
-  A) Send back to developer — fix the issues
-  B) Override — accept current state (requires justification)
-  C) Abort task
-  ```
-  A → return to Phase 3 with QA findings as additional context. Retry limit: 3 cycles. After 3 FAILs: stop and report.
+Its runtime verdict and `missing_for_close` measure current WBS checks,
+blocked state and applicability, not review/QA attestation. PLAN.md remains the
+acceptance document. Machine PASS permits Phase 5 only after actual PASS;
+otherwise fix the named WBS check and reverify. Never label a machine check
+failure as a QA verdict or offer an override of substantive failure.
 
 **Persist QA failure patterns** after each retry cycle:
 ```bash

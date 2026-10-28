@@ -36,6 +36,14 @@ These are technical decisions supporting the accepted outcomes, not additional u
 
 Keep preparation, publication and immutable-history integrity checks strict. Successful cache candidates and unsuccessful latest attempts must retain distinct applicability; a miss never becomes PASS. Logs may have bounded inline excerpts while their useful execution evidence remains accessible. Ordinary user changes, independent review before actual QA, platform skips and safe Git integration/disposal remain protected.
 
+## Agent-derived recovery findings
+
+These implementation observations support the approved repairs; they do not extend the user's nine requirements. Explicit focus migration must include the legacy `default.json` companion omitted by the initial marker inventory, preserve completed archive bytes, and allow an interrupted archive-fsync retry to complete under the existing owner guards. Completed legacy archives remain immutable.
+
+Actual disposal recovery read the same complete source/archive inventories twice before thawing frozen verification directories. Collect and validate candidate directories first, then perform one complete ordinary removal proof immediately before permission changes; retain that proof on no-checkpoint/no-store early exits. Source/archive drift or unknown content must still refuse disposal before chmod. No cached hashes replace current byte equality.
+
+The recovery also identified retired zero-byte `.active.fixture.lock` cache files. Their one-time retirement follows ownership and idle checks; current fixtures place locks under `/tmp`. This is cleanup of obsolete cache state, not permanent fixture compatibility or authority. Preserve user changes and actual failed evidence.
+
 ## Verification
 
 Use real hook and public MCP entrypoints for current/stale/fenced session authority, standalone linked-worktree preparation and worktree-to-main/sibling target routing, including a valid authorized control. Test effective CODEX_HOME config/cache/trust/reload, corrupt selected Claude cache despite a healthy mirror, and restart reporting. Exercise execute→reuse→reuse, A→reuse-only miss on B→restored A, completed migration→legitimate live mutation and completed migration→immutable archive corruption.

@@ -228,3 +228,40 @@ def test_feedback_pattern_records_writing_guidance_only():
     assert "Verify by using the form" in section
     assert "spawn_agent" not in section
     assert "subagent" not in section.lower()
+
+
+def test_recovery_respects_actual_results_before_machine_pass_in_both_runtimes():
+    for path in (CODEX_RUN, CLAUDE_RUN):
+        body = _text(path)
+        resume = body.split("Resume routing:", 1)[1].split("### Phase 1:", 1)[0]
+        assert resume.index("Current actual review/QA/UX FAIL") < resume.index("runtime_verdict is PASS")
+        assert "These results take precedence over a green machine runtime_verdict" in resume
+        assert "with current actual" in resume and "applicable QA/UX PASS" in resume
+        recovery = body.split("### Phase 4: Verify recovery", 1)[1].split("### Phase 4.5:", 1)[0]
+        assert "Handle actual QA/UX results before `wbs(action=\"verify\")`" in recovery
+        assert "green machine" in recovery and "unresolved actual failure" in recovery
+        assert 'use `wbs(action="block")` for unfinished work' in recovery
+        assert "only after every applicable actual lens passes" in recovery
+        assert "independent review PASS before rerunning actual QA/UX" in recovery
+        assert "Override — accept current state" not in recovery
+        assert "After completion, check runtime_verdict" not in recovery
+
+
+def test_develop_uses_independent_findings_and_explicit_transcript_only():
+    for path in (CODEX_DEVELOP, CLAUDE_DEVELOP):
+        body = _text(path)
+        assert "after synthesis, block close" not in body
+        assert "from actual independent reviewer/QA findings, block close" in body
+        assert "bound managed lead consumes its exact parent assignment" in body
+        assert "without preparing or" in body and "refilling the parent pool" in body
+    codex = _text(CODEX_DEVELOP)
+    assert "--transcript <path>" in codex
+    assert "without that input, skip it" in codex
+    assert "qa_codifier.py --task-dir" not in codex
+    assert "Current actual QA/UX results have not all PASSed" in codex
+    gate = _text(REPO / "plugin/skills/develop/verification-gate.md")
+    assert "After the quality synthesis agent" not in gate
+    assert "No quality synthesis agent or synthesized findings table is a prerequisite" in gate
+    ready = _text(REPO / "plugin/skills/develop/ready-lanes.md")
+    assert "does not publish dispatch prepare or refill the parent pool" in ready
+    assert "actual session, task, run, registered workspace and assigned ownership" in ready
