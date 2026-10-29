@@ -9,6 +9,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
+
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location(
@@ -22,6 +30,7 @@ SPEC.loader.exec_module(mod)
 
 def _repo(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path
+    repo.mkdir(parents=True, exist_ok=True)
     (repo / ".git").mkdir()
     for rel, payload in (
         ("plugin-codex/.codex-plugin/plugin.json", {
@@ -35,6 +44,13 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     (repo / "install.py").write_text("# fixture\n", encoding="utf-8")
     task = repo / "doc/harness/tasks/TASK__install"
     task.mkdir(parents=True)
+    import wbs
+    control = {"run_id": "0198c349-5800-7000-8000-000000000001", "closed": False,
+               "execution_mode": "standard", "required_lenses": ["review-code", "qa-cli"]}
+    (task / "TASK.json").write_text(json.dumps(control))
+    plan = '# Plan\n```wbs\n[{"id":"A","title":"Installed","weight":1}]\n```\n'
+    (task / "PLAN.md").write_text(plan)
+    (task / "WBS.json").write_text(json.dumps(wbs.prepare(str(task), plan, control["run_id"])))
     return repo, task
 
 
@@ -56,9 +72,12 @@ def test_install_requires_current_wbs_checks(tmp_path):
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
         mock.patch.object(mod, "_verification_state", return_value=(False, "current WBS checks required", "fp")),
+        mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
+        mock.patch.object(mod, "_payload_fingerprint", return_value="payload"),
+        mock.patch.object(mod, "_copy_payload_snapshot"),
         mock.patch.object(mod.subprocess, "run") as run,
     ):
-        assert mod.install_verified(task) == 3
+        assert mod.install_verified(task) == 5
     run.assert_not_called()
 
 
@@ -162,7 +181,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
         nonlocal verification_calls
         assert task_lock.locked()
         verification_calls += 1
-        if verification_calls == 3:
+        if verification_calls == 2:
             final_verification_finished.set()
         return True, "", "fp"
 
@@ -219,7 +238,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
     assert not install_thread.is_alive()
     assert not mutation_thread.is_alive()
     assert result == [0]
-    assert verification_calls == 3
+    assert verification_calls == 2
     assert mutation_finished.is_set()
     assert json.loads((task / "TASK.json").read_text(encoding="utf-8")) == {"mutated": True}
 
@@ -305,7 +324,7 @@ def test_payload_change_during_install_withholds_success_marker(tmp_path):
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(
             mod, "_payload_fingerprint",
-            side_effect=["payload-1", "payload-1", "payload-2"],
+            side_effect=["payload-1", "payload-1", "payload-1", "payload-2"],
         ),
         mock.patch.object(mod, "_copy_payload_snapshot"),
         mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
@@ -391,9 +410,221 @@ def test_global_lock_ignores_xdg_cache_and_follows_installer_home(tmp_path, monk
     assert mod._global_lock_path() == tmp_path / "home/.cache/harness/install.lock"
 
 
+def _measured_repo(tmp_path, monkeypatch):
+    """Real Git, WBS checks, source measurement, payload copy and installer CLI."""
+    import wbs
+    repo, task = _repo(tmp_path / "repo")
+    (repo / ".git").rmdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "remote.origin.url", mod.CANONICAL_REMOTE], cwd=repo, check=True)
+    (repo / ".gitignore").write_text("doc/harness/tasks/\n")
+    marker = tmp_path / "installed"
+    (repo / "install.py").write_text(
+        "from pathlib import Path\n"
+        "assert Path('plugin/source.bin').read_bytes().startswith(b'good')\n"
+        f"Path({str(marker)!r}).write_text('installed')\n"
+    )
+    (repo / "plugin/source.bin").write_bytes(b"good" + b"x" * (2 * 1024 * 1024 - 4))
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                    "commit", "-qm", "fixture"], cwd=repo, check=True)
+    control = mod.read_task_control(str(task))
+    nodes = [{"id": "A", "title": "Current payload", "weight": 1,
+              "check": [sys.executable, "-c", "from pathlib import Path; assert Path('plugin/source.bin').read_bytes().startswith(b'good')"]}]
+    plan = "# Plan\n```wbs\n" + json.dumps(nodes) + "\n```\n```wbs-inputs\n" + json.dumps(
+        {"source": ["install.py", "plugin", "plugin-codex"]}) + "\n```\n"
+    (task / "WBS.json").unlink()
+    state = wbs.prepare(str(task), plan, control["run_id"])
+    (task / "PLAN.md").write_text(plan)
+    (task / "WBS.json").write_text(json.dumps(state))
+    assert wbs.verify(str(task), str(repo), control["run_id"], "A")["passed"]
+    sessions = task.parent / ".active_sessions"
+    sessions.mkdir()
+    (sessions / "installer-test.json").write_text(json.dumps({
+        "session_id": "installer-test", "task_dir": str(task), "task_id": task.name,
+        "run_id": control["run_id"], "updated": "2026-10-29T00:00:00Z",
+    }))
+    monkeypatch.setattr(mod, "_resolved_session_id", lambda _: "installer-test")
+    monkeypatch.setattr(mod, "_global_lock_path", lambda: tmp_path / "install.lock")
+    assert mod._validate_task_dir(repo, task, "installer-test")[0]
+    assert mod._verification_state(task)[0]
+    return repo, task, marker
+
+
+def test_real_install_uses_two_full_measurements_and_repeats_fresh(tmp_path, monkeypatch):
+    import wbs
+    repo, task, marker = _measured_repo(tmp_path, monkeypatch)
+    original_fingerprint, original_fdopen = wbs.fingerprint, wbs.os.fdopen
+    active = False
+    totals = {"measurements": 0, "bytes": 0, "reads": 0, "opens": 0}
+
+    class Counted:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+        def fileno(self):
+            return self.stream.fileno()
+        def read(self, size):
+            data = self.stream.read(size)
+            totals["bytes"] += len(data)
+            totals["reads"] += 1
+            return data
+
+    def fdopen(fd, *args, **kwargs):
+        stream = original_fdopen(fd, *args, **kwargs)
+        if active and args and args[0] == "rb":
+            totals["opens"] += 1
+            return Counted(stream)
+        return stream
+
+    def fingerprint(*args, **kwargs):
+        nonlocal active
+        totals["measurements"] += 1
+        active = True
+        try:
+            return original_fingerprint(*args, **kwargs)
+        finally:
+            active = False
+
+    monkeypatch.setattr(wbs, "fingerprint", fingerprint)
+    monkeypatch.setattr(wbs.os, "fdopen", fdopen)
+    # Same real fixture, old measurement lane versus the actual new install path.
+    for _ in range(3):
+        assert mod._verification_state(task)[0]
+    three = dict(totals)
+    for attempt in range(2):
+        totals.update(dict.fromkeys(totals, 0))
+        marker.unlink(missing_ok=True)
+        assert mod.install_verified(task) == 0
+        assert marker.read_text() == "installed"
+        assert totals["measurements"] == 2
+        assert totals["bytes"] * 3 == three["bytes"] * 2
+        assert totals["reads"] * 3 == three["reads"] * 2
+        assert totals["opens"] * 3 == three["opens"] * 2
+        print(f"real WBS measurement lane attempt {attempt + 1}: three={three}, installed={totals}")
+    assert not (task / "INSTALL_RECEIPT.json").exists()
+
+
+@pytest.mark.parametrize("drift", ["copy", "source", "mode", "path", "definition", "control", "binding", "unverified-swap"])
+def test_real_preinstall_drift_never_executes_snapshot(tmp_path, monkeypatch, drift):
+    import wbs
+    repo, task, marker = _measured_repo(tmp_path, monkeypatch)
+    original_copy = mod._copy_payload_snapshot
+    source = repo / "plugin/source.bin"
+    good = source.read_bytes()
+    if drift == "unverified-swap":
+        source.write_bytes(b"bad!" + good[4:])
+        assert not mod._verification_state(task)[0]
+
+    def copy(*args):
+        original_copy(*args)
+        if drift == "copy":
+            (args[1] / "plugin/source.bin").write_bytes(b"tampered")
+        elif drift == "source":
+            source.write_bytes(b"changed")
+        elif drift == "mode":
+            source.chmod(0o755)
+        elif drift == "path":
+            (repo / "plugin/new.py").write_text("new")
+        elif drift == "definition":
+            state = wbs.read_state(str(task))
+            state["checks"]["A"]["checked_at"] += 1
+            (task / "WBS.json").write_text(json.dumps(state))
+        elif drift == "control":
+            control = mod.read_task_control(str(task))
+            control["required_lenses"].append("review-security")
+            (task / "TASK.json").write_text(json.dumps(control))
+        elif drift == "binding":
+            (task.parent / ".active_sessions/installer-test.json").unlink()
+        elif drift == "unverified-swap":
+            # Full current WBS verification now passes, but the copied old bytes
+            # were never verified and must not become executable authority.
+            source.write_bytes(good)
+            assert mod._verification_state(task)[0]
+
+    monkeypatch.setattr(mod, "_copy_payload_snapshot", copy)
+    assert mod.install_verified(task) == 5
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("drift", ["source", "mode", "path", "definition", "control", "binding"])
+def test_real_postinstall_drift_withholds_success(tmp_path, monkeypatch, capsys, drift):
+    repo, task, marker = _measured_repo(tmp_path, monkeypatch)
+    original_run = mod.subprocess.run
+
+    def run(command, *args, **kwargs):
+        result = original_run(command, *args, **kwargs)
+        if len(command) == 2 and str(command[1]).endswith("/install.py"):
+            if drift == "source":
+                (repo / "plugin/source.bin").write_bytes(b"changed")
+            elif drift == "mode":
+                (repo / "plugin/source.bin").chmod(0o755)
+            elif drift == "path":
+                (repo / "plugin/new.py").write_text("new")
+            elif drift == "definition":
+                state = json.loads((task / "WBS.json").read_text())
+                state["checks"]["A"]["checked_at"] += 1
+                (task / "WBS.json").write_text(json.dumps(state))
+            elif drift == "control":
+                control = mod.read_task_control(str(task))
+                control["required_lenses"].append("review-security")
+                (task / "TASK.json").write_text(json.dumps(control))
+            elif drift == "binding":
+                (task.parent / ".active_sessions/installer-test.json").unlink()
+        return result
+
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    assert mod.install_verified(task) == 5
+    assert marker.exists()
+    assert "verified delivery PASS" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["TASK.json", "WBS.json"])
+def test_definition_baseline_rejects_unsafe_metadata(tmp_path, name):
+    _, task = _repo(tmp_path)
+    path = task / name
+    path.chmod(0o666)
+    with pytest.raises(ValueError, match="unsafe or unreadable"):
+        mod._verification_definition(task)
+
+
+@pytest.mark.parametrize("denied,leaf_override", [
+    ("plugin", False), ("plugin/source.bin", False), ("plugin/source.bin", True),
+])
+def test_denied_payload_is_refused_before_any_payload_read(tmp_path, monkeypatch, denied, leaf_override):
+    import wbs
+    repo, task, marker = _measured_repo(tmp_path, monkeypatch)
+    state = wbs.read_state(str(task))
+    state["inputs"]["deny"] = [denied]
+    if leaf_override:
+        # A specialized leaf cannot erase the task-wide no-read boundary.
+        state["nodes"][0]["inputs"] = wbs.input_policy({"source": ["install.py"]})
+    (task / "WBS.json").write_text(json.dumps(state))
+    (task / "PLAN.md").write_text(
+        "# Plan\n```wbs\n" + json.dumps(state["nodes"]) + "\n```\n```wbs-inputs\n"
+        + json.dumps(state["inputs"]) + "\n```\n"
+    )
+    reads = []
+    original_read = mod._read_payload_file
+
+    def read(root, path, **kwargs):
+        if root == repo:
+            reads.append(path)
+        return original_read(root, path, **kwargs)
+
+    monkeypatch.setattr(mod, "_read_payload_file", read)
+    assert mod.install_verified(task) == 3
+    assert reads == []
+    assert not marker.exists()
+
+
 def test_active_task_switch_during_install_withholds_marker(tmp_path):
     repo, task = _repo(tmp_path)
-    validate = mock.Mock(side_effect=[(True, ""), (False, "task is not active")])
+    validate = mock.Mock(side_effect=[(True, ""), (True, ""), (False, "task is not active")])
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
@@ -414,5 +645,5 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
     # resolution inside _validate_task_dir would let a prompt hook rewriting
     # .session-hint mid-install make the post-check consult a different
     # session than the pre-check.
-    assert validate.call_count == 2
-    assert validate.call_args_list[0].args[2] == validate.call_args_list[1].args[2]
+    assert validate.call_count == 3
+    assert len({call.args[2] for call in validate.call_args_list}) == 1

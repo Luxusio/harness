@@ -79,6 +79,36 @@ def _verification_state(task_dir: Path) -> tuple[bool, str, str]:
     return True, "", fingerprint
 
 
+def _verification_policies(state: dict) -> list:
+    import wbs
+    return [wbs.verification_inputs(state, node) for node in wbs.leaves(state["nodes"])] or [state.get("inputs")]
+
+
+def _verification_definition(task_dir: Path) -> str:
+    """Freeze validated, owner-controlled authority without measuring source/custody."""
+    import wbs
+    records = {
+        name: _read_payload_file(task_dir, name, source_input=True)
+        for name in ("TASK.json", "WBS.json")
+    }
+    if any(record is None for record in records.values()):
+        raise ValueError("unsafe or unreadable task/WBS definition")
+    task = read_task_control(str(task_dir))
+    state = wbs.read_state(str(task_dir))
+    if not task or state is None or any(
+        json.loads(records[name][0]) != value
+        for name, value in (("TASK.json", task), ("WBS.json", state))
+    ):
+        raise ValueError("task/WBS definition changed while read")
+    for policy in _verification_policies(state):
+        if policy is not None:
+            wbs.required_inputs(policy)
+            wbs.require(not policy["deny"] or "source" in policy,
+                        "deny requires explicit source inputs; Git metadata reads cannot be confined")
+    # Serialize now: subsequent mutations must not modify the baseline object.
+    return json.dumps({"task": task, "wbs": state}, sort_keys=True, separators=(",", ":"))
+
+
 def _is_install_payload_path(path: str) -> bool:
     rel = _normalize_payload_path(path)
     if not rel:
@@ -347,10 +377,20 @@ def install_verified(task_dir: Path) -> int:
             if not valid_task:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
                 return 2
+            try:
+                definition = _verification_definition(task_dir)
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(f"ERROR: automatic install refused: {exc}", file=sys.stderr)
+                return 3
             snapshot_paths = _snapshot_paths(repo_root, task_dir)
-            verified, reason, fingerprint = _verification_state(task_dir)
-            if not verified:
-                print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
+            import wbs
+            if any(
+                wbs.covers(denied, path)
+                for policy in _verification_policies(json.loads(definition)["wbs"])
+                for denied in (policy or {}).get("deny", [])
+                for path in snapshot_paths
+            ):
+                print("ERROR: automatic install refused: install payload is denied by WBS input policy", file=sys.stderr)
                 return 3
             if not _payload_modes_match_index(repo_root, snapshot_paths):
                 print("ERROR: install payload mode or file type does not match Git", file=sys.stderr)
@@ -371,15 +411,22 @@ def install_verified(task_dir: Path) -> int:
                     return 5
                 verified_before, reason_before, fingerprint_before = _verification_state(task_dir)
                 payload_before = _payload_fingerprint(repo_root, snapshot_paths)
+                valid_before, task_reason_before = _validate_task_dir(repo_root, task_dir, session_id)
+                try:
+                    definition_before = _verification_definition(task_dir)
+                except (OSError, RuntimeError, ValueError):
+                    definition_before = ""
                 if (
                     not verified_before
-                    or fingerprint_before != fingerprint
+                    or not valid_before
+                    or definition_before != definition
+                    or _snapshot_paths(repo_root, task_dir) != snapshot_paths
                     or payload_before != payload_fingerprint
                     or not _payload_modes_match_index(repo_root, snapshot_paths)
                 ):
                     print(
                         "ERROR: source or verification changed before install"
-                        + (f": {reason_before}" if reason_before else ""),
+                        + (f": {reason_before or task_reason_before}" if reason_before or task_reason_before else ""),
                         file=sys.stderr,
                     )
                     return 5
@@ -390,12 +437,17 @@ def install_verified(task_dir: Path) -> int:
                 return result.returncode
             verified_after, reason_after, fingerprint_after = _verification_state(task_dir)
             valid_after, task_reason_after = _validate_task_dir(repo_root, task_dir, session_id)
+            try:
+                definition_after = _verification_definition(task_dir)
+            except (OSError, RuntimeError, ValueError):
+                definition_after = ""
             snapshot_paths_after = _snapshot_paths(repo_root, task_dir)
             payload_after = _payload_fingerprint(repo_root, snapshot_paths_after)
             if (
                 not verified_after
                 or not valid_after
-                or fingerprint_after != fingerprint
+                or definition_after != definition
+                or fingerprint_after != fingerprint_before
                 or snapshot_paths_after != snapshot_paths
                 or payload_after != payload_fingerprint
                 or not _payload_modes_match_index(repo_root, snapshot_paths_after)
@@ -406,7 +458,7 @@ def install_verified(task_dir: Path) -> int:
                     file=sys.stderr,
                 )
                 return 5
-    print(f"verified delivery PASS for {fingerprint}")
+    print(f"verified delivery PASS for {fingerprint_before}")
     return 0
 
 
