@@ -177,7 +177,7 @@ def test_task_control_and_active_marker_mutators_require_runtime_owner(tmp_path)
         else:
             raise AssertionError("arbitrary control-authority mutation was accepted")
 
-def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path, monkeypatch):
+def test_nested_git_never_inherits_ancestor_installation_from_task_binding(tmp_path, monkeypatch):
     root = tmp_path / "workspace"
     manifest = root / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -197,8 +197,8 @@ def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path, monkeypatch
     }) + "\n", encoding="utf-8")
     (root / lib.TASK_DIR / ".active").write_text(str(task) + "\n", encoding="utf-8")
 
-    assert lib.harness_root_resolution(nested) == (str(root.resolve()), "")
-    assert lib.find_harness_root(nested) == str(root.resolve())
+    assert lib.harness_root_resolution(nested) == ("", "")
+    assert lib.find_harness_root(nested) == ""
 
     marker = Path(lib._session_active_path(str(root)))
     original = json.loads(marker.read_text(encoding="utf-8"))
@@ -208,7 +208,7 @@ def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path, monkeypatch
     marker.write_text(json.dumps(original), encoding="utf-8")
 
     # The repository-wide legacy marker alone must not authorize a nested Git
-    # boundary; only the session-specific binding may do that.
+    # boundary. Neither an exact session binding nor a legacy marker is setup.
     Path(lib._session_active_path(str(root))).unlink()
     assert lib.harness_root_resolution(nested) == ("", "")
 

@@ -156,6 +156,8 @@ def main() -> int:
     deadline = time.monotonic() + max(0.0, TOTAL_BUDGET_SECONDS - _IMPORT_SECONDS)
     payload = sys.stdin.buffer.read()
     data = _json_payload(payload)
+    if "cwd" in data and _payload_cwd(payload) is None:
+        return 0
     tool_name = _tool_name(payload)
     if _is_task_binding_tool(tool_name, data.get("tool_input") or data.get("input") or data.get("arguments")):
         _register_task_result(payload, deadline=deadline)

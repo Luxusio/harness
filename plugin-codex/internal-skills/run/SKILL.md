@@ -8,6 +8,12 @@ Orchestrate the full harness development cycle for a task.
 
 > `PLAN.md` owns acceptance intent; existing WBS assertions own measured outcome checks.
 
+Before entering this workflow, resolve the current project with the existing
+Harness manifest guard. Run only in a project initialized by `harness:setup`
+(`doc/harness/manifest.yaml`); a nested Git checkout needs its own setup.
+Outside an initialized project, continue ordinary work without Harness tasks,
+planning, routing reminders or automatic setup. Explicit setup remains available.
+
 ## Substantive review and QA
 
 Await actual independent code review and conditional security review PASS before actual QA. Fix actual FAIL findings; publish actual BLOCKED_ENV with a concrete blocker and unblock condition. Direct independent finals are the workflow results; coordinator paraphrases and copied text cannot replace them. After actual QA PASS, run `wbs(action="verify")` and close only when current required WBS checks pass. Machine verdicts measure WBS checks and do not attest review or QA. Receipt files, collectors, naming bindings and recording availability play no role; do not rerun, repair or park work for missing recording.

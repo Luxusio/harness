@@ -79,6 +79,12 @@ def main() -> int:
     payload = sys.stdin.buffer.read()
     if _tool_name(payload) not in {"Write", "Edit", "MultiEdit", "apply_patch"}:
         return 0
+    data = json.loads(payload.decode("utf-8", errors="surrogateescape") or "{}")
+    if "cwd" in data and _payload_cwd(payload) is None:
+        out = _protected_artifact_fallback(payload)
+        if out:
+            sys.stdout.buffer.write(out)
+        return 0
     out, finished = _run("prewrite_gate.py", payload)
     if not out and not finished:
         out = _protected_artifact_fallback(payload)

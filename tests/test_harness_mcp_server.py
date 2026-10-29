@@ -64,6 +64,13 @@ def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -
     )
 
 
+def initialize_fixture_project(repo_root):
+    """Mark a test-owned disposable lifecycle project as explicitly initialized."""
+    manifest = Path(repo_root) / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+
+
 class HarnessMcpServerTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.dict(os.environ, {"HARNESS_SESSION_ID": "pytest-mcp", "CLAUDE_SESSION_ID": "", "HARNESS_RUNTIME": "claude"})
@@ -80,6 +87,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         )
 
     def _make_task(self, base_dir: str, task_id: str) -> str:
+        initialize_fixture_project(base_dir)
         task_dir = Path(base_dir) / "doc" / "harness" / "tasks" / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         task_dir.joinpath("TASK.json").write_text(
@@ -285,6 +293,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_rejects_traversal_and_outside_paths_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             git_dir = Path(tmp) / ".git"
             git_dir.mkdir()
             index_lock = git_dir / "index.lock"
@@ -307,6 +316,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_never_removes_repository_index_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -346,6 +356,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_rejects_old_six_field_control_with_new_task_guidance(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__old-control"
             task_dir.mkdir(parents=True)
             state = task_dir / "TASK.json"
@@ -372,6 +383,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_fresh_task_start_rejects_directory_replacement_before_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__fresh-race"
             real_atomic_write = harness_lib._atomic_text_write
             displaced = task_dir.with_name("TASK__fresh-race-displaced")
@@ -751,6 +763,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_micro_execution_mode_requires_plan_and_measured_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__micro"
             original_ctd = harness_server.canonical_task_dir
             original_root = harness_server.find_repo_root
@@ -1054,6 +1067,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertNotIn("isError", accepted)
 
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             result = self._call_in_repo(
                 tmp,
                 "task_blocked",
@@ -1087,6 +1101,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         )
         for args, field, reason, rejected in cases:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                initialize_fixture_project(tmp)
                 result = self._call_in_repo(tmp, "task_start", args)
                 payload = result["structuredContent"]
                 self.assertTrue(result.get("isError"))
@@ -1143,6 +1158,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_rejects_terminal_leaf_symlinks_without_touching_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__leaf-safe"
             task_dir.mkdir(parents=True)
             sentinel = Path(tmp) / "task-sentinel"
@@ -1187,6 +1203,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_blocked_missing_task_leaves_no_orphan_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__typo"
             result = self._call_in_repo(
                 tmp,
@@ -1580,6 +1597,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_returns_ready_with_warnings_after_committed_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -1621,6 +1639,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_fresh_run_on_absent_task_reports_creation_not_preservation(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             result = self._call_in_repo(
                 tmp,
                 "task_start",
@@ -1635,6 +1654,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_start_defers_error_shaped_compact_context_after_committed_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -1667,6 +1687,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_preserved_resume_context_failure_refuses_and_restores_focus(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -1701,6 +1722,7 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_failed_existing_resume_restores_state_and_receipts(self):
         for terminal_status in ("open", "closed", "blocked"):
             with self.subTest(status=terminal_status), tempfile.TemporaryDirectory() as tmp:
+                initialize_fixture_project(tmp)
                 task_dir = Path(tmp) / f"doc/harness/tasks/TASK__resume-{terminal_status}"
                 task_dir.mkdir(parents=True)
                 self._write_control_fixture(str(task_dir), {
@@ -1749,6 +1771,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_invalid_execution_mode_does_not_create_or_reopen_task(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             new_task = Path(tmp) / "doc/harness/tasks/TASK__invalid-mode-new"
             with (
                 mock.patch.object(
@@ -1789,6 +1812,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_old_only_pack_starts_fresh_without_migrating_legacy_leaves(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -1820,6 +1844,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_failed_resume_preserves_preexisting_active_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -1858,6 +1883,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_new_start_refuses_different_preexisting_open_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")
@@ -1908,6 +1934,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_new_task_rolls_back_when_active_marker_write_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
             self._run_git(tmp, "config", "user.name", "a")

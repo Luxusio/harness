@@ -214,7 +214,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             self.assertEqual(decision, "deny", reason)
             self.assertIn("wbs-execution-assignment", reason)
 
-    def test_micro_task_without_plan_is_recognized_from_nested_worktree(self):
+    def test_nested_uninitialized_git_does_not_inherit_outer_micro_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tasks_dir = _scaffold(tmpdir)
             task_dir = _write_task_state(tasks_dir, "micro", "created")
@@ -244,8 +244,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
 
             self.assertEqual(r.returncode, 0)
             decision, reason = _parse_decision(r.stdout)
-            self.assertEqual(decision, "deny", reason)
-            self.assertIn("wbs-execution-assignment", reason)
+            self.assertIsNone(decision, reason)
             self.assertFalse(os.path.exists(os.path.join(task_dir, "PLAN.md")))
 
 if __name__ == "__main__":

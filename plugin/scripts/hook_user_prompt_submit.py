@@ -67,6 +67,8 @@ def main() -> int:
     if _payload_data(payload) is None:
         return 0
     cwd = _payload_cwd(payload)
+    if "cwd" in _payload_data(payload) and cwd is None:
+        return 0
     harness_repo = _is_harness_repo(cwd)
     context = ""
     remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,27 +19,22 @@ def _load_session_start_entries() -> list[dict]:
     return sessions[0]["hooks"]
 
 
-def test_session_start_banner_includes_req_reminder():
-    entries = _load_session_start_entries()
-    banner_cmd = entries[0]["command"]
-    assert "REQ:" in banner_cmd, f"REQ: missing from banner. cmd={banner_cmd[:300]}"
-    assert "REQ__" in banner_cmd, "REQ__ slug placeholder missing"
-    assert "when behavior changes" in banner_cmd, "behavior-change cue missing"
-
-
 def test_session_start_banner_executes_cleanly():
     entries = _load_session_start_entries()
     banner_cmd = entries[0]["command"]
-    # banner uses `python3 -c "<script>"` form; execute the inner script directly.
     result = subprocess.run(
         ["bash", "-c", banner_cmd],
         capture_output=True,
         text=True,
         cwd=REPO,
+        input=json.dumps({"cwd": str(REPO)}),
+        env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(REPO / "plugin")},
         timeout=10,
     )
     assert result.returncode == 0, f"banner exited {result.returncode}: {result.stderr}"
     assert "REQ:" in result.stdout, f"banner stdout missing REQ line: {result.stdout!r}"
+    assert "REQ__" in result.stdout
+    assert "when behavior changes" in result.stdout
     assert "harness" in result.stdout
 
 

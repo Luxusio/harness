@@ -99,8 +99,9 @@ def publish(td, nodes, policy):
 
 
 def public(tmp_path, nodes=None):
-    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_harness_mcp_server import HarnessMcpServerTests, initialize_fixture_project
     repo, td = baseline(tmp_path)
+    initialize_fixture_project(repo)
     (td / "WBS.json").unlink()
     server = HarnessMcpServerTests()
     def call(action, **kwargs):

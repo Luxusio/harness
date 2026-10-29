@@ -78,7 +78,8 @@ def reminder(repo: Path) -> str:
 
 def main() -> int:
     try:
-        from _lib import find_repo_root, is_harness_enabled_repo  # type: ignore
+        from _lib import find_repo_root, is_harness_enabled_repo, read_hook_input  # type: ignore
+        read_hook_input()
         root = find_repo_root()
         if root and is_harness_enabled_repo(root):
             message = reminder(Path(root))

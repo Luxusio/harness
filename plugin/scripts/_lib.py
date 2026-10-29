@@ -96,28 +96,34 @@ import sys as _sys    # noqa: E402
 _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 
 _LAST_HOOK_INPUT: dict = {}
+# Rejected input is not an event with an omitted cwd; never inherit its host cwd.
+_HOOK_INPUT_REJECTED = False
 
 
 def read_hook_input(max_chars=_STDIN_CAP_BYTES):
     """Read and cache a bounded hook JSON object, returning {} on failure."""
-    global _LAST_HOOK_INPUT
+    global _LAST_HOOK_INPUT, _HOOK_INPUT_REJECTED
+    _HOOK_INPUT_REJECTED = False
     if not isinstance(max_chars, int) or max_chars <= 0:
         max_chars = _STDIN_CAP_BYTES
     try:
         raw = _sys.stdin.read(max_chars)
     except Exception:
         _LAST_HOOK_INPUT = {}
+        _HOOK_INPUT_REJECTED = True
         return {}
     if not raw:
         _LAST_HOOK_INPUT = {}
         return {}
     try:
         data = _json.loads(raw)
+        _HOOK_INPUT_REJECTED = not isinstance(data, dict)
         out = data if isinstance(data, dict) else {}
         _LAST_HOOK_INPUT = out
         return out
     except Exception:
         _LAST_HOOK_INPUT = {}
+        _HOOK_INPUT_REJECTED = True
         return {}
 
 
@@ -501,7 +507,7 @@ def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
 
 def _hook_payload_cwd():
     cwd = _LAST_HOOK_INPUT.get("cwd")
-    if isinstance(cwd, str) and cwd:
+    if isinstance(cwd, str) and cwd and os.path.isdir(cwd):
         return cwd
     return None
 
@@ -1258,17 +1264,28 @@ def restore_task_control(snapshot):
 
 
 def find_repo_root(start_dir=None):
-    """Find git repo root."""
+    """Find this initialized project, or its nearest Git root before setup."""
     # Codex plugin-local hooks may execute from the installed plugin directory
     # while the hook payload still carries the project cwd. Prefer that payload
     # cwd so gates read the user's repo, not ~/.codex/harness/plugins/harness.
-    d = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
+    hook_cwd = _hook_payload_cwd()
+    if start_dir is not None and (not start_dir or not os.path.isdir(start_dir)):
+        return ""
+    if start_dir is None and (
+        _HOOK_INPUT_REJECTED or ("cwd" in _LAST_HOOK_INPUT and hook_cwd is None)
+    ):
+        return ""
+    initial = os.path.realpath(start_dir or hook_cwd or os.getcwd())
+    project, _ = harness_root_resolution(initial)
+    if project:
+        return project
+    d = initial
     while d != "/":
         git_path = os.path.join(d, ".git")
         if os.path.isdir(git_path) or os.path.isfile(git_path):
             return d
         d = os.path.dirname(d)
-    return os.path.abspath(start_dir or os.getcwd())
+    return initial
 
 
 class GitBindingError(RuntimeError):
@@ -1476,14 +1493,18 @@ def resolve_registered_worktree(control_root, workspace):
 def harness_root_resolution(start_dir=None):
     """Return ``(root, error)`` for valid/none/invalid Harness ancestry.
 
-    A trusted ancestor manifest owns nested repositories only while that
-    control root has an explicit active task marker. This lets a delegated
-    agent finish from an ignored child repository without causing unrelated
-    nested repositories to inherit an outer Harness installation.
+    A nested Git checkout needs its own manifest. Task bindings never grant
+    installation authority across that boundary.
     """
-    start = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
+    hook_cwd = _hook_payload_cwd()
+    if start_dir is not None and (not start_dir or not os.path.isdir(start_dir)):
+        return "", ""
+    if start_dir is None and (
+        _HOOK_INPUT_REJECTED or ("cwd" in _LAST_HOOK_INPUT and hook_cwd is None)
+    ):
+        return "", ""
+    start = os.path.realpath(start_dir or hook_cwd or os.getcwd())
     current = start
-    nearest_git = ""
     while True:
         manifest_path = os.path.join(current, MANIFEST_PATH)
         if os.path.lexists(manifest_path):
@@ -1510,21 +1531,13 @@ def harness_root_resolution(start_dir=None):
                 or not stat.S_ISREG(manifest_info.st_mode)
             ):
                 return current, "Harness manifest must be a regular non-symlink file"
-            if nearest_git and nearest_git != current:
-                try:
-                    sid = current_session_id()
-                    binding = resolve_session_task_binding(current, sid)
-                    if not binding:
-                        return "", ""
-                except (OSError, RuntimeError, ValueError):
-                    return "", ""
             try:
                 if os.path.commonpath((current, start)) == current:
                     return current, ""
             except ValueError:
                 return "", ""
-        if not nearest_git and os.path.lexists(os.path.join(current, ".git")):
-            nearest_git = current
+        if os.path.lexists(os.path.join(current, ".git")):
+            return "", ""
         parent = os.path.dirname(current)
         if parent == current:
             return "", ""
@@ -1544,8 +1557,11 @@ def is_harness_enabled_repo(repo_root=None):
     directories. A git root alone is not enough permission to create
     ``doc/harness`` runtime files; setup creates ``doc/harness/manifest.yaml``.
     """
-    root = repo_root or find_harness_root() or find_repo_root()
-    return os.path.isfile(os.path.join(root, MANIFEST_PATH))
+    root = find_harness_root() if repo_root is None else repo_root
+    if not root or not os.path.isdir(root):
+        return False
+    resolved, error = harness_root_resolution(root)
+    return bool(not error and resolved == os.path.realpath(root))
 
 
 _TASK_ID_RE = re.compile(r"TASK__[A-Za-z0-9_.-]{1,180}\Z")

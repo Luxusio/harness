@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 -c \"import os; project=os.path.basename(os.getcwd()); print(f'harness \u2014 ready.\\nProject: {project}\\nLoop: task start \u2192 plan \u2192 develop \u2192 QA \u2192 close\\nReview and task_verify run as internal close gates.\\nAuto-routing on. Just describe what you want.\\nREQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes.')\" || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_session_start.py\" --claude-banner || true",
             "timeout": 5,
             "statusMessage": "harness ready"
           },

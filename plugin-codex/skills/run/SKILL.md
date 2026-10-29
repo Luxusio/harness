@@ -1,11 +1,17 @@
 ---
 name: run
-description: Run the complete Harness workflow for repository-mutating work in a Harness-enabled project. Use automatically when Codex is asked to implement, fix, refactor, build, migrate, or otherwise change source code, tests, configuration, or durable project documentation; when continuing an active Harness task or native Goal; or when a write gate says to enter Harness. Do not use for read-only questions, explanations, or status checks. This entry starts or resumes the task and enforces planning when needed, minimal implementation, independent code review, conditional security review, required QA, verification, installation when configured, and close.
+description: Run the complete Harness workflow for repository-mutating work in a Harness-enabled project. Within such an initialized project, use automatically when Codex is asked to implement, fix, refactor, build, migrate, or otherwise change source code, tests, configuration, or durable project documentation; when continuing an active Harness task or native Goal; or when a write gate says to enter Harness. Do not use for read-only questions, explanations, or status checks. This entry starts or resumes the task and enforces planning when needed, minimal implementation, independent code review, conditional security review, required QA, verification, installation when configured, and close.
 ---
 
 # Harness Run
 
 Use this skill as the single public Codex entry point for repository mutation.
+
+Before entering this workflow, resolve the current project with the existing
+Harness manifest guard. Run only in a project initialized by `harness:setup`
+(`doc/harness/manifest.yaml`); a nested Git checkout needs its own setup.
+Outside an initialized project, continue ordinary work without Harness tasks,
+planning, routing reminders or automatic setup. Explicit setup remains available.
 
 1. Read [the canonical run workflow](../../internal-skills/run/SKILL.md) completely before editing.
 2. Execute that workflow in the current conversation. Do not merely summarize it.

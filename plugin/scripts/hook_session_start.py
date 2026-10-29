@@ -15,17 +15,17 @@ sys.path.insert(0, SCRIPTS_DIR)
 _IMPORT_SECONDS = time.monotonic() - _IMPORT_STARTED_AT
 HOOK_TIMEOUT_SECONDS = 10.0
 
-def _payload_data(payload: bytes) -> dict:
+def _payload_data(payload: bytes) -> dict | None:
     try:
         data = json.loads(payload.decode("utf-8") or "{}")
     except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _payload_cwd(payload: bytes) -> str | None:
     data = _payload_data(payload)
-    cwd = data.get("cwd")
+    cwd = data.get("cwd") if data is not None else None
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
 
@@ -50,6 +50,27 @@ def _run(args: list[str], payload: bytes, *, deadline: float) -> bytes:
 def main() -> int:
     deadline = time.monotonic() + max(0.0, HOOK_TIMEOUT_SECONDS - _IMPORT_SECONDS)
     payload = sys.stdin.buffer.read()
+    data = _payload_data(payload)
+    if data is None:
+        return 0
+    cwd = _payload_cwd(payload)
+    if "cwd" in data and cwd is None:
+        return 0
+    if "--claude-banner" in sys.argv[1:]:
+        try:
+            from _lib import find_harness_root, is_harness_enabled_repo
+            root = find_harness_root(cwd or os.getcwd())
+            if root and is_harness_enabled_repo(root):
+                print(
+                    f"harness — ready.\nProject: {os.path.basename(root)}\n"
+                    "Loop: task start → plan → develop → QA → close\n"
+                    "Review and task_verify run as internal close gates.\n"
+                    "Auto-routing on. Just describe what you want.\n"
+                    "REQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes."
+                )
+        except Exception:
+            pass
+        return 0
     chunks: list[str] = []
     commands = [
         ["verification_gap_check.py"],

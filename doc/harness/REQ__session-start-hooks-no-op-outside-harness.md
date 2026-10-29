@@ -1,37 +1,32 @@
-# REQ - Session Start Hooks No Op Outside Harness
+# REQ — Harness activation belongs to initialized projects
 
-> **2026-09-23 note.** The Claude `Stop` hook registration for `stop_gate.py`
-> was removed from `plugin/hooks/hooks.json` earlier on 2026-09-23, and
-> `plugin/scripts/stop_gate.py` was deleted the same day (see CHANGELOG.md).
-> It is no longer part of the covered-hook-script lists below;
-> `tests/test_non_harness_hooks_noop.py` no longer exercises it.
+## User requirement
 
-## Intent
-Harness SessionStart/PreToolUse/PostToolUse/Stop/Subagent hooks must no-op silently when invoked from a repository that has not completed harness setup. "Not set up" means doc/harness/manifest.yaml is absent. Hooks are installed globally and fire from any project Claude Code or Codex opens, so this no-op contract is what keeps non-harness repos free of runtime files. This REQ captures the expected normal behavior surfaced by the 2026-05-31 stale-install pollution bug (root cause documented in OBS__design-planning-harness-friction.md Implementation-track section; resolving commit 0c5dd7b 2026-05-27).
+On 2026-10-29 the user explicitly required: “하네스 설치 안 된 폴더에서는 아얘 안 동작하게 되나? 그래야하는데. 설치된 폴더에서만 동작해야해”. Globally installed hooks and tools must not activate the project workflow merely because they are available to the editor.
 
-## Observable Behavior
-- In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
-- The covered hook scripts are: prewrite_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
-- Specifically, none of `doc/harness/learnings.jsonl`, `doc/harness/.hygiene-*`, `doc/harness/timeline.jsonl`, `doc/harness/checkpoints/`, or `doc/harness/tasks/` appear after firing any of those hooks against a non-harness-enabled repo. Lifecycle hooks never create a separate background registry or registry lock in any repository.
-- Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
+## Observable contract
 
-## Acceptance Signals
-- In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
-- The covered hook scripts are: prewrite_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
-- Specifically, none of `doc/harness/learnings.jsonl`, `doc/harness/.hygiene-*`, `doc/harness/timeline.jsonl`, `doc/harness/checkpoints/`, or `doc/harness/tasks/` appear after firing any of those hooks against a non-harness-enabled repo. Lifecycle hooks never create a separate background registry or registry lock in any repository.
-- Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
+- A project is initialized by explicit `harness:setup`, represented by its regular, non-symlink `doc/harness/manifest.yaml`. The control directories must also be real directories. Git alone, an active task binding, or a global plugin installation does not initialize a project.
+- Hooks resolve the project from the supplied valid `cwd`. An explicitly invalid or nonexistent `cwd`, or rejected/truncated hook input, must not fall back to the hook process directory. A valid payload without `cwd` uses the process directory.
+- Initialization covers ordinary subdirectories, including projects without Git. A nested Git checkout is an installation boundary and needs its own manifest, even when the outer project has an active task. A directory alias to an initialized project remains valid; symlinked manifest/control components do not grant authority.
+- In an uninitialized project, registered Claude and Codex hooks return silently without project workflow output, task focus binding, or project metadata creation. In particular there is no welcome banner, routing reminder, task context, task/runtime/archive directory, or learning/checkpoint output.
+- Public WBS requests, including open and migration, refuse before project metadata effects when initialization is absent. The response directs the caller to explicit setup; it never initializes a project automatically.
+- The run skill applies only inside this boundary. Ordinary development outside it continues without entering Harness.
 
-## Verification Cues
-- tests/test_non_harness_hooks_noop.py covers prewrite_gate, tool_routing, and note_freshness — all subprocess-invoke each hook with a tmp non-harness repo and assert stdout=='' and that no doc/harness/ tree is created. (Historical: it also covered stop_gate.py until that script was deleted 2026-09-23.)
-- A new test (this task) adds the same property to drift_warn.py via tests/test_drift_warn.py::test_drift_warn_noop_outside_harness_enabled_repo.
-- Manual: open a fresh terminal in a directory with .git but no doc/harness/manifest.yaml; start a Claude Code session; confirm ls -la doc/ shows no harness/ subdirectory after several tool calls and Stop events.
-- Drift surveillance: plugin/scripts/drift_warn.py compares source SHAs to installed SHAs for plugin/scripts/*.py in dev-of-harness repos; if the installed copy lags, it prints a one-line reminder so the no-op fix propagates promptly.
+## Existing protection retained
 
-## Non-Goals
-- This REQ does not commit to no-op behavior for non-harness invocations of MCP write tools (those live behind an MCP server and require an active session that registered the tool).
-- It does not prevent the user from explicitly setting up harness in any repository by creating doc/harness/manifest.yaml.
-- It does not promise zero environment writes outside the repository tree (for example, ~/.claude state); only that the repository under work is untouched.
+Native Codex session metadata remains runtime-owned under C-05 and the receipt-free execution contract, including when the current project is uninitialized. This host ownership guard is separate from project workflow activation. Invalid initialized control metadata also retains its existing fail-closed write protection. No receipt collector or new registry is introduced.
 
-## Source
-- created: 2026-05-31
-- source: C-100 (CONTRACTS.local.md): bug report -> REQ doc for expected normal behavior. Bug: 2026-05-31 stale-install pollution; resolving commit 0c5dd7b 2026-05-27. Captured ad-hoc via req_scaffold.py CLI (MCP runtime caches TOOLS from session start; loosened MCP path activates next session).
+## Provenance and interpretation
+
+| Rule | Source |
+| --- | --- |
+| Activate only in installed project folders | Explicit user request above |
+| Manifest authority, nested Git boundary, payload cwd, refusal before effects | Implementation interpretation making that request testable, rather than additional product requirements attributed to the user |
+| Native host metadata ownership and invalid-control protection | Existing C-05 and receipt-free execution contract |
+
+This extends the 2026-05-31 hook no-op requirement to the actual registered hooks, public WBS entry and skill routing. The old exception allowing MCP writes outside initialized projects is retired.
+
+## Verification
+
+`tests/test_non_harness_hooks_noop.py`, `tests/test_wbs_project_activation.py`, the Codex wrapper tests and task-control tests exercise real hook entry points and public stdio WBS calls. They check silent/no-write behavior, explicit cwd isolation, initialized positive cases, nested Git isolation, invalid control paths and retained native ownership protection. Session-start tests execute the registered banner command rather than assuming registration implies activation.

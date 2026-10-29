@@ -267,7 +267,13 @@ def _foreign_protected_target(candidates, log_root):
                 or _is_protected_artifact(candidate, repo_root=os.sep)
             ):
                 continue
-            root, error = harness_root_resolution(os.path.dirname(candidate))
+            parent = os.path.dirname(candidate)
+            # A protected file can be a future write target; its task directory
+            # need not exist. Resolve ownership from the existing ancestor,
+            # without admitting a nonexistent hook cwd as project context.
+            while not os.path.lexists(parent):
+                parent = os.path.dirname(parent)
+            root, error = harness_root_resolution(parent)
             if root and not error and _is_protected_artifact(candidate, repo_root=root):
                 return candidate, root
     except Exception as exc:

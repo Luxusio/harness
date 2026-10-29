@@ -8,7 +8,13 @@ import shlex
 import subprocess
 import sys
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 from test_wbs_input_policy import public
 import verification_target as targets

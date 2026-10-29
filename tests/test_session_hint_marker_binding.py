@@ -66,6 +66,9 @@ class SessionHintTests(unittest.TestCase):
             self.assertEqual(harness_lib.read_session_hint(tmp), "")
 
 
+from test_harness_mcp_server import initialize_fixture_project
+
+
 class TaskStartMarkerBindingTests(unittest.TestCase):
     def _call(self, repo_root, name, args, session_id=""):
         with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root), mock.patch.dict(
@@ -79,6 +82,7 @@ class TaskStartMarkerBindingTests(unittest.TestCase):
 
     def test_shared_hint_never_supplies_server_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             harness_lib.write_session_hint(tmp, REAL_SID)
             result = self._call(tmp, "task_start", {"task_id": "TASK__hinted"})
             self.assertNotIn("isError", result)
@@ -88,6 +92,7 @@ class TaskStartMarkerBindingTests(unittest.TestCase):
 
     def test_process_identity_binds_only_its_current_run(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             harness_lib.write_session_hint(tmp, "foreign-session")
             result = self._call(tmp, "task_start", {"task_id": "TASK__exact"}, REAL_SID)
             self.assertNotIn("isError", result)
@@ -101,6 +106,7 @@ class TaskStartMarkerBindingTests(unittest.TestCase):
 
     def test_no_identity_defers_without_default_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
+            initialize_fixture_project(tmp)
             result = self._call(tmp, "task_start", {"task_id": "TASK__deferred"})
             self.assertNotIn("isError", result)
             self.assertEqual(self._marker_names(tmp), [])

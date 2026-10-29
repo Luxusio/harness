@@ -70,7 +70,7 @@ from _lib import (  # type: ignore
     task_control_status, publish_task_close, _validate_task_control,
     ensure_task_scaffold, emit_compact_context,
     artifact_exists, canonical_task_dir, canonical_task_id,
-    find_harness_root, harness_root_resolution, find_repo_root,
+    find_harness_root, harness_root_resolution, find_repo_root, is_harness_enabled_repo,
     resolve_registered_worktree, sanitize_session_id,
     write_active_marker, clear_active_marker,
     active_task_binding_matches,
@@ -103,11 +103,12 @@ _SERVER: "McpServer | None" = None
 
 
 def _control_root() -> str:
-    candidate = find_repo_root()
-    root, error = harness_root_resolution(candidate)
+    root, error = harness_root_resolution(find_repo_root())
     if error:
         raise RuntimeError(f"invalid Harness workspace at {root}: {error}")
-    return root or candidate
+    if not root or not is_harness_enabled_repo(root):
+        raise ValueError("Harness is not initialized in this project; run harness:setup explicitly before using WBS.")
+    return root
 def _server_runtime() -> str:
     runtime = getattr(_SERVER, "runtime", "") if _SERVER is not None else ""
     return runtime or str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()

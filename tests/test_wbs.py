@@ -174,9 +174,10 @@ def test_invalid_measurement_never_releases_ready_outcomes(tmp_path):
 
 
 def test_oversized_state_refuses_before_publishing_or_losing_repairability(tmp_path):
-    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_harness_mcp_server import HarnessMcpServerTests, initialize_fixture_project
     server = HarnessMcpServerTests()
     repo, td = baseline(tmp_path)
+    initialize_fixture_project(repo)
     (td / "WBS.json").unlink()
     def call(action, **extra):
         return server._call_in_repo(str(repo), "wbs", dict(action=action, wbs_id="sample", **extra))
@@ -257,9 +258,10 @@ def test_rolling_plan_needs_no_file_layout_or_initial_assertion(tmp_path):
 
 
 def test_mcp_plan_bundle_and_explicit_check(tmp_path):
-    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_harness_mcp_server import HarnessMcpServerTests, initialize_fixture_project
     server = HarnessMcpServerTests()
     repo, td = baseline(tmp_path)
+    initialize_fixture_project(repo)
     # Start/plan through actual tool owner rather than forging control evidence.
     (td / "WBS.json").unlink()
     result = server._call_in_repo(str(repo), "task_start", {"task_id": "sample"})
@@ -273,9 +275,10 @@ def test_mcp_plan_bundle_and_explicit_check(tmp_path):
 
 
 def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
-    from test_harness_mcp_server import HarnessMcpServerTests, harness_server
+    from test_harness_mcp_server import HarnessMcpServerTests, harness_server, initialize_fixture_project
     server = HarnessMcpServerTests()
     repo, td = baseline(tmp_path)
+    initialize_fixture_project(repo)
     (td / "WBS.json").unlink()
     def call(action, **extra):
         return server._call_in_repo(str(repo), "wbs", dict(action=action, wbs_id="WBS__sample", **extra))
@@ -479,9 +482,10 @@ def test_retired_aliases_fail_over_actual_mcp_protocol(tmp_path, monkeypatch):
 
 
 def test_public_migration_is_explicit_and_owner_authorized(tmp_path, monkeypatch):
-    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_harness_mcp_server import HarnessMcpServerTests, initialize_fixture_project
     from test_goal_migration import row
     path = row(tmp_path)
+    initialize_fixture_project(tmp_path)
     owner = HarnessMcpServerTests()
     from test_codex_hook_wrappers import _load
     _load("_lib")  # Hook tests share the canonical writer authority, never reload it.

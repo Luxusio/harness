@@ -29,6 +29,7 @@ def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     (repo / ".gitignore").write_text("doc/harness/tasks/\n")
+    fixture.initialize_fixture_project(repo)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
     # An explicit isolated caller exercises a genuine exact-session conflict.

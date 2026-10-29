@@ -263,9 +263,10 @@ def test_arbitrary_directory_and_in_root_symlink_ancestor_are_unmeasurable(tmp_p
 
 
 def test_current_nodes_schema_public_context_check_preserves_identity(tmp_path, monkeypatch):
-    from test_harness_mcp_server import HarnessMcpServerTests
+    from test_harness_mcp_server import HarnessMcpServerTests, initialize_fixture_project
     server = HarnessMcpServerTests()
     repo, td = baseline(tmp_path)
+    initialize_fixture_project(repo)
     (td / "WBS.json").unlink()
     def call(action, **kwargs):
         return server._call_in_repo(str(repo), "wbs", dict(action=action, wbs_id="sample", **kwargs))

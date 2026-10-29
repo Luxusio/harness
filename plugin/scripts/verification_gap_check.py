@@ -12,7 +12,8 @@ def main() -> int:
     if os.environ.get("HARNESS_DISABLE_VERIFY_GAP") == "1":
         return 0
     try:
-        from _lib import find_repo_root, is_harness_enabled_repo
+        from _lib import find_repo_root, is_harness_enabled_repo, read_hook_input
+        read_hook_input()
         repo_root = find_repo_root()
         if not repo_root or not is_harness_enabled_repo(repo_root):
             return 0
