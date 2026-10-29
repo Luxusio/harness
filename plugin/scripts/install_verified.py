@@ -33,14 +33,20 @@ from _lib import (  # type: ignore  # noqa: E402
 CANONICAL_REMOTE = "https://github.com/Luxusio/harness"
 PAYLOAD_ROOTS = (".claude-plugin", "plugin", "plugin-codex")
 PAYLOAD_FILES = ("install.py", ".codex-version")
+PAYLOAD_MANIFESTS = ("plugin-codex/.codex-plugin/plugin.json", "plugin/.claude-plugin/plugin.json")
 def _normalized_remote(value: str) -> str:
     return value.strip().removesuffix(".git").rstrip("/")
 
 
 def _trusted_harness_repo(repo_root: Path) -> tuple[bool, str]:
     try:
-        codex = json.loads((repo_root / "plugin-codex/.codex-plugin/plugin.json").read_text())
-        claude = json.loads((repo_root / "plugin/.claude-plugin/plugin.json").read_text())
+        manifests = []
+        for path in PAYLOAD_MANIFESTS:
+            record = _read_payload_file(repo_root, path)
+            if record is None:
+                return False, f"manifest unreadable: {path}"
+            manifests.append(json.loads(record[0].decode("utf-8")))
+        codex, claude = manifests
     except Exception as exc:
         return False, f"manifest unreadable: {exc}"
     if codex.get("name") != "harness" or claude.get("name") != "harness":
@@ -88,8 +94,9 @@ def _verification_definition(task_dir: Path) -> str:
     """Freeze validated, owner-controlled authority without measuring source/custody."""
     import wbs
     records = {
-        name: _read_payload_file(task_dir, name, source_input=True)
-        for name in ("TASK.json", "WBS.json")
+        name: _read_payload_file(task_dir, name, source_input=True, max_bytes=limit)
+        # Match the canonical TASK and WBS readers before collecting raw bytes.
+        for name, limit in (("TASK.json", 16 * 1024), ("WBS.json", 1024 * 1024))
     }
     if any(record is None for record in records.values()):
         raise ValueError("unsafe or unreadable task/WBS definition")
@@ -135,7 +142,8 @@ def _normalize_payload_path(path: str) -> str:
     return raw
 
 
-def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=False, source_input=False) -> tuple[bytes, os.stat_result] | None:
+def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=False, source_input=False,
+                       max_bytes=None) -> tuple[bytes, os.stat_result] | None:
     """Read one stable regular file through descriptor-relative no-follow opens."""
     rel = _normalize_payload_path(path)
     if not rel:
@@ -161,7 +169,8 @@ def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=Fal
             if not _trusted_payload_directory(directory_fd):
                 return None
         file_fd = os.open(
-            parts[-1], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            parts[-1], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0),
             dir_fd=directory_fd,
         )
         before = os.fstat(file_fd)
@@ -178,13 +187,19 @@ def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=Fal
             or before.st_uid != os.getuid()
             or before.st_nlink != 1
             or not allowed_mode
+            or (max_bytes is not None and before.st_size > max_bytes)
         ):
             return None
         chunks = []
+        read_bytes = 0
         while True:
-            chunk = os.read(file_fd, 1024 * 1024)
+            size = 1024 * 1024 if max_bytes is None else min(1024 * 1024, max_bytes - read_bytes + 1)
+            chunk = os.read(file_fd, size)
             if not chunk:
                 break
+            read_bytes += len(chunk)
+            if max_bytes is not None and read_bytes > max_bytes:
+                return None
             if consume is None:
                 chunks.append(chunk)
             else:
@@ -368,10 +383,6 @@ def install_verified(task_dir: Path) -> int:
     with lock_path.open("a+", encoding="utf-8") as lock:
         if fcntl is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        trusted, reason = _trusted_harness_repo(repo_root)
-        if not trusted:
-            print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
-            return 2
         with task_control_transaction(str(task_dir)):
             valid_task, reason = _validate_task_dir(repo_root, task_dir, session_id)
             if not valid_task:
@@ -382,14 +393,23 @@ def install_verified(task_dir: Path) -> int:
             except (OSError, RuntimeError, ValueError) as exc:
                 print(f"ERROR: automatic install refused: {exc}", file=sys.stderr)
                 return 3
-            snapshot_paths = _snapshot_paths(repo_root, task_dir)
             import wbs
-            if any(
-                wbs.covers(denied, path)
-                for policy in _verification_policies(json.loads(definition)["wbs"])
-                for denied in (policy or {}).get("deny", [])
-                for path in snapshot_paths
-            ):
+            policies = _verification_policies(json.loads(definition)["wbs"])
+
+            def denied(paths):
+                return any(wbs.covers(boundary, path)
+                           for policy in policies for boundary in (policy or {}).get("deny", [])
+                           for path in paths)
+
+            if denied(PAYLOAD_MANIFESTS):
+                print("ERROR: automatic install refused: install manifests are denied by WBS input policy", file=sys.stderr)
+                return 3
+            trusted, reason = _trusted_harness_repo(repo_root)
+            if not trusted:
+                print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
+                return 2
+            snapshot_paths = _snapshot_paths(repo_root, task_dir)
+            if denied(snapshot_paths):
                 print("ERROR: automatic install refused: install payload is denied by WBS input policy", file=sys.stderr)
                 return 3
             if not _payload_modes_match_index(repo_root, snapshot_paths):

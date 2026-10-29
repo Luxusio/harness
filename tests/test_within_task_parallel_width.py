@@ -323,15 +323,20 @@ def test_fanout_pairs_test_author_and_reconciles_after_the_batch():
             "an import of a new symbol PLAN.md names is expected red",
             "never retry with the same ownership",
             "No fix crosses between `**Files:**` and `**Tests:**`.",
-            "The 3-Attempt Escalation Rule in `fix-first-pattern.md` bounds the loop.",
-            "Count attempts per failing test across both lanes: moving a red test to the "
-            "other lane does not reset its count.",
+            "Use the evidence-driven recovery in `fix-first-pattern.md`",
+            "continue authorized repairs without an attempt quota",
+            "Moving a failure between lanes never clears it or changes execution ownership.",
+            "obtain the coordinator's updated assignment before writing",
+            "Required failures remain unfinished",
+            "restore affected independent review PASS before actual QA",
             "when `harness:test-author` is unavailable",
             "run the ac-worker unpaired, owning `**Files:**` and `**Tests:**`, "
             "and write the reason in the lane table",
         ),
         "Test-author lane",
     )
+    assert "3-Attempt" not in lane
+    assert "Count attempts" not in lane
     routing = next(line for line in body.splitlines() if line.startswith("| 3 (per-AC tests) |"))
     assert "`harness:test-author`" in routing and "no lens" in routing
 

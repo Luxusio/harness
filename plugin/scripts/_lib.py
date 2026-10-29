@@ -204,11 +204,13 @@ def _strict_regular_text_snapshot(
         raise RuntimeError(f"snapshot requires a regular non-symlink file: {path}")
     if before.st_size > max_size:
         raise RuntimeError(f"snapshot exceeds size limit: {path}")
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     fd = os.open(leaf, flags, dir_fd=dir_fd) if dir_fd is not None else os.open(path, flags)
     try:
         opened = os.fstat(fd)
@@ -218,9 +220,18 @@ def _strict_regular_text_snapshot(
             or opened.st_size > max_size
         ):
             raise RuntimeError(f"snapshot identity changed before read: {path}")
-        with os.fdopen(fd, encoding="utf-8") as handle:
-            fd = -1
-            text = handle.read()
+        chunks = []
+        remaining = max_size + 1
+        while remaining:
+            chunk = os.read(fd, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if not remaining:
+            raise RuntimeError(f"snapshot exceeds size limit: {path}")
+        # Keep the original text reader's UTF-8 and universal-newline behavior.
+        text = b"".join(chunks).decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     except (OSError, UnicodeError) as exc:
         raise RuntimeError(f"snapshot read unavailable for {path}: {exc}") from exc
     finally:
@@ -236,6 +247,8 @@ def _strict_regular_text_snapshot(
         or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
     ):
         raise RuntimeError(f"snapshot identity changed after read: {path}")
+    if after.st_size > max_size:
+        raise RuntimeError(f"snapshot exceeds size limit: {path}")
     return {"exists": True, "kind": "regular", "text": text}
 
 
@@ -900,7 +913,8 @@ def _validate_task_control(data):
 
 
 def _read_task_control_text(path):
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
     try:
         before = os.lstat(path)
         if (
@@ -920,14 +934,18 @@ def _read_task_control_text(path):
             opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode,
             opened.st_uid, opened.st_nlink, opened.st_mtime_ns, opened.st_ctime_ns,
         )
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino) or opened.st_size > 16 * 1024:
             return ""
         chunks = []
-        while True:
-            chunk = os.read(fd, 4096)
+        remaining = 16 * 1024 + 1
+        while remaining:
+            chunk = os.read(fd, min(4096, remaining))
             if not chunk:
                 break
             chunks.append(chunk)
+            remaining -= len(chunk)
+        if not remaining:
+            return ""
         after = os.fstat(fd)
         if identity != (
             after.st_dev, after.st_ino, after.st_size, after.st_mode,

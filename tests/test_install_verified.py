@@ -592,10 +592,123 @@ def test_definition_baseline_rejects_unsafe_metadata(tmp_path, name):
         mod._verification_definition(task)
 
 
+@pytest.mark.parametrize("name,limit", [("TASK.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
+@pytest.mark.parametrize("grow_during_read", [False, True])
+def test_definition_baseline_preserves_metadata_read_limits(tmp_path, monkeypatch, name, limit, grow_during_read):
+    import os
+    _, task = _repo(tmp_path)
+    path = task / name
+    initial = path.read_bytes()
+    oversized = initial + b" " * (limit + 128)
+    if not grow_during_read:
+        path.write_bytes(oversized)
+    original_open, original_read = os.open, os.read
+    target_fds = set()
+    bytes_read = 0
+    grew = False
+
+    def opened(file, flags, *args, **kwargs):
+        fd = original_open(file, flags, *args, **kwargs)
+        if Path(file).name == name:
+            target_fds.add(fd)
+        else:
+            target_fds.discard(fd)
+        return fd
+
+    def read(fd, size):
+        nonlocal bytes_read, grew
+        if fd in target_fds and grow_during_read and not grew:
+            grew = True
+            path.write_bytes(oversized)
+        value = original_read(fd, size)
+        if fd in target_fds:
+            bytes_read += len(value)
+        return value
+
+    monkeypatch.setattr(os, "open", opened)
+    monkeypatch.setattr(os, "read", read)
+    with pytest.raises(ValueError, match="unsafe or unreadable"):
+        mod._verification_definition(task)
+    assert bytes_read <= limit + 1 if grow_during_read else bytes_read == 0
+    assert grew == grow_during_read
+
+
+@pytest.mark.parametrize("name,limit", [("TASK.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
+def test_canonical_definition_rereads_bound_growth_after_stat(tmp_path, monkeypatch, name, limit):
+    import os
+    import wbs
+    _, task = _repo(tmp_path)
+    path = task / name
+    initial = path.read_bytes()
+    original_open, original_read, original_fstat = os.open, os.read, os.fstat
+    target_fds = set()
+    grew = False
+    bytes_read = 0
+
+    def opened(file, flags, *args, **kwargs):
+        fd = original_open(file, flags, *args, **kwargs)
+        if Path(file).name == name:
+            target_fds.add(fd)
+        else:
+            target_fds.discard(fd)
+        return fd
+
+    def fstat(fd):
+        nonlocal grew
+        info = original_fstat(fd)
+        if fd in target_fds and not grew:
+            path.write_bytes(initial + b" " * (2 * limit))
+            grew = True
+        return info
+
+    def read(fd, size):
+        nonlocal bytes_read
+        value = original_read(fd, size)
+        if fd in target_fds:
+            bytes_read += len(value)
+        return value
+
+    monkeypatch.setattr(os, "open", opened)
+    monkeypatch.setattr(os, "fstat", fstat)
+    monkeypatch.setattr(os, "read", read)
+    if name == "TASK.json":
+        assert mod.read_task_control(str(task)) == {}
+    else:
+        with pytest.raises(RuntimeError, match="size limit"):
+            wbs.read_state(str(task))
+    assert grew and bytes_read <= limit + 1
+
+
+def test_bounded_snapshot_retains_utf8_and_universal_newlines(tmp_path):
+    from _lib import _strict_regular_text_snapshot
+    path = tmp_path / "note.txt"
+    path.write_bytes("a\r\n한글\r".encode("utf-8"))
+    assert _strict_regular_text_snapshot(str(path))["text"] == "a\n한글\n"
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "mkfifo"), reason="requires FIFO support")
+def test_definition_baseline_rejects_fifo_without_waiting_for_a_writer(tmp_path):
+    import os
+    _, task = _repo(tmp_path)
+    (task / "WBS.json").unlink()
+    os.mkfifo(task / "WBS.json")
+    code = ("from pathlib import Path; import install_verified as m; import sys; "
+            "\ntry: m._verification_definition(Path(sys.argv[1]))"
+            "\nexcept ValueError: print('rejected'); sys.exit(0)"
+            "\nsys.exit(1)")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(ROOT / "plugin/scripts"))
+    result = subprocess.run([sys.executable, "-B", "-c", code, str(task)],
+                            capture_output=True, text=True, timeout=3, env=env)
+    assert result.returncode == 0 and result.stdout.strip() == "rejected", result.stderr
+
+
 @pytest.mark.parametrize("denied,leaf_override", [
     ("plugin", False), ("plugin/source.bin", False), ("plugin/source.bin", True),
+    ("plugin/.claude-plugin/plugin.json", False),
+    ("plugin-codex/.codex-plugin/plugin.json", False),
+    ("plugin/.claude-plugin/plugin.json", True),
 ])
-def test_denied_payload_is_refused_before_any_payload_read(tmp_path, monkeypatch, denied, leaf_override):
+def test_denied_payload_is_never_read(tmp_path, monkeypatch, denied, leaf_override):
     import wbs
     repo, task, marker = _measured_repo(tmp_path, monkeypatch)
     state = wbs.read_state(str(task))
@@ -610,15 +723,27 @@ def test_denied_payload_is_refused_before_any_payload_read(tmp_path, monkeypatch
     )
     reads = []
     original_read = mod._read_payload_file
+    original_open = Path.open
 
     def read(root, path, **kwargs):
         if root == repo:
             reads.append(path)
         return original_read(root, path, **kwargs)
 
+    def opened(path, *args, **kwargs):
+        try:
+            relative = path.relative_to(repo).as_posix()
+        except ValueError:
+            relative = ""
+        if mod._is_install_payload_path(relative):
+            reads.append(relative)
+        return original_open(path, *args, **kwargs)
+
     monkeypatch.setattr(mod, "_read_payload_file", read)
+    monkeypatch.setattr(Path, "open", opened)
     assert mod.install_verified(task) == 3
-    assert reads == []
+    # Allowed trust manifests may be read before listing other payload paths.
+    assert not any(wbs.covers(denied, path) for path in reads)
     assert not marker.exists()
 
 

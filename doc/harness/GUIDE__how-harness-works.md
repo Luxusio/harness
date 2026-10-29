@@ -231,9 +231,10 @@ managed CONTRACTS, manifest와 critic playbook을 준비한다. manifest와 task
 Harness 소스 작업은 마지막 소스 변경과 실제 QA 뒤, close 전에 verified installer를
 실행한다. installer는 신뢰할 수 있는 source/task ownership, 현재 measured WBS
 applicability, stopped writers와 stable payload snapshot을 확인한다. 이미 같은
-runtime payload면 동기화가 불필요하다. 역사 기록의 상태는 설치 권한과 무관하다.
+runtime payload면 동기화가 불필요하다. 보존된 과거 영수증은 설치 권한을 부여하지 않는다.
 복사 전에 소유권과 형식을 검증한 TASK/WBS 정의를 메모리에 고정하고 원본과 snapshot의
-payload bytes/mode를 비교한다. 전체 WBS/source/custody 측정은 실행 직전과 직후 두 번만
+payload bytes/mode를 비교한다. 정의를 읽을 때도 기존 TASK 16KiB·WBS 1MiB 한도를 먼저
+적용하고, 읽는 중 커지는 파일도 제한한다. 전체 WBS/source/custody 측정은 실행 직전과 직후 두 번만
 수행하며, 같은 정의·호출 세션·payload·경로 집합을 확인한다. 실행 전 변화는 설치를
 거부하고 실행 도중 변화는 성공을 보고하지 않는다. 다음 호출도 새로 측정하며 cache나
 receipt를 저장하지 않는다.
