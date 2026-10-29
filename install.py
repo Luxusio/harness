@@ -1091,9 +1091,37 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
     ):
         if not (target / rel).is_file():
             raise RuntimeError(f"incomplete Codex payload: {rel}")
+    _stamp_codex_plugin_version(target)
 
 
-def _codex_marketplace_payload() -> dict:
+def _stamp_codex_plugin_version(plugin_root: Path) -> str:
+    # Hash the effective projection, including generated configuration semantics,
+    # before changing the copied manifest. Runtime paths are not artifact identity.
+    version = _codex_plugin_version(PLUGIN_CODEX_ROOT)
+    digest = hashlib.sha256()
+    for path in sorted(plugin_root.rglob("*")):
+        relative = path.relative_to(plugin_root).as_posix()
+        if path.is_dir():
+            digest.update(json.dumps(["dir", relative]).encode() + b"\0")
+            continue
+        data = path.read_bytes()
+        if relative == ".codex-plugin/plugin.json":
+            manifest = json.loads(data)
+            manifest["version"] = version
+            data = json.dumps(manifest, sort_keys=True).encode()
+        elif relative in {"hooks.json", ".mcp.json"}:
+            render = _codex_hooks_config if relative == "hooks.json" else _codex_mcp_config
+            data = json.dumps(render(Path("/HARNESS_PLUGIN_ROOT")), sort_keys=True).encode()
+        digest.update(json.dumps(["file", relative, stat.S_IMODE(path.stat().st_mode)]).encode() + b"\0")
+        digest.update(data + b"\0")
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["version"] = version + ".h" + digest.hexdigest()[:16]
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return _codex_plugin_version(plugin_root)
+
+
+def _codex_marketplace_payload(version: str) -> dict:
     return {
         "name": "harness",
         "display_name": "Harness",
@@ -1104,14 +1132,16 @@ def _codex_marketplace_payload() -> dict:
                 "name": "harness",
                 "source": "./plugins/harness",
                 "category": "productivity",
-                "version": "2.3.0",
+                "version": version,
                 "description": "MCP-backed task planning, development, QA, and docs sync workflow.",
             }
         ],
     }
 
 
-def _write_codex_marketplace(install_root: Path) -> None:
+def _write_codex_marketplace(install_root: Path, *, version: str | None = None) -> None:
+    if version is None:
+        version = _codex_plugin_version(install_root / "plugins" / CODEX_PLUGIN_NAME)
     marketplace_dir = install_root / ".agents" / "plugins"
     marketplace_dir.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(
@@ -1119,7 +1149,7 @@ def _write_codex_marketplace(install_root: Path) -> None:
     ))
     try:
         (staged / "marketplace.json").write_text(
-            json.dumps(_codex_marketplace_payload(), indent=2) + "\n"
+            json.dumps(_codex_marketplace_payload(version), indent=2) + "\n"
         )
         os.chmod(staged / "marketplace.json", 0o644)
         _activate_staged_tree(staged, marketplace_dir)
@@ -1785,11 +1815,26 @@ def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
     staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cache-staging-"))
     try:
         _build_codex_cache_payload(source_root, staged, target)
-        _activate_staged_tree(staged, target)
-    except BaseException:
+        # Only serialize publication into this marketplace's cache. Do not
+        # replace an existing identity, even for --force or concurrent installs.
+        import fcntl
+        fd = os.open(target.parent / ".publish.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+                raise PermissionError("unsafe Codex cache publication lock")
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if os.path.lexists(target):
+                state, reason = _compare_payload_trees(staged, target)
+                if state != PAYLOAD_SYNCHRONIZED:
+                    raise RuntimeError(f"Codex cache identity mismatch at {target}: {reason}; stop sessions using this cache and move this exact directory aside before retrying")
+            else:
+                os.rename(staged, target)
+        finally:
+            os.close(fd)
+    finally:
         if staged.exists():
             shutil.rmtree(staged)
-        raise
     # Keep prior version directories intact. Already-running Codex sessions
     # retain the absolute hook commands from the cache version they loaded;
     # deleting that directory mid-session breaks SessionStart and
@@ -1830,14 +1875,14 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
                 return PAYLOAD_ERROR, f"legacy path inspection failed: {exc}"
             stale_reasons.append(f"legacy payload path remains: {legacy}")
     codex_home = _codex_home_for_config(config_path)
-    version = _codex_plugin_version(PLUGIN_CODEX_ROOT)
-    cache = codex_home / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME / version
     marketplace = _codex_install_root() / ".agents" / "plugins"
     try:
         with tempfile.TemporaryDirectory(prefix="harness-codex-compare-") as tmp:
             expected_root = Path(tmp)
             expected_mirror = expected_root / "mirror"
             _build_codex_payload(expected_mirror, mirror)
+            version = _codex_plugin_version(expected_mirror)
+            cache = codex_home / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME / version
             state, reason = _compare_payload_trees(expected_mirror, mirror)
             if state == PAYLOAD_ERROR:
                 return state, f"Codex mirror: {reason}"
@@ -1846,7 +1891,7 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
 
             expected_market_root = expected_root / "market-root"
             expected_market_root.mkdir(mode=0o700)
-            _write_codex_marketplace(expected_market_root)
+            _write_codex_marketplace(expected_market_root, version=version)
             expected_marketplace = expected_market_root / ".agents" / "plugins"
             state, reason = _compare_payload_trees(expected_marketplace, marketplace)
             if state == PAYLOAD_ERROR:

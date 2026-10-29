@@ -101,7 +101,7 @@ def test_read_only_source_directory_projects_without_source_mode_change(tmp_path
                    for name in ("hooks.json", ".mcp.json"))
         marketplace = tmp_path / "marketplace"
         marketplace.mkdir(mode=0o700)
-        install._write_codex_marketplace(marketplace)
+        install._write_codex_marketplace(marketplace, version=install._codex_plugin_version(target))
         state, _, reason = install._tree_inventory(marketplace)
         assert state == install.PAYLOAD_SYNCHRONIZED, reason
         assert stat.S_IMODE(marketplace.stat().st_mode) == 0o700

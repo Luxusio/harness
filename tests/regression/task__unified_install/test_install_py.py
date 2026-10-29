@@ -964,7 +964,7 @@ def test_codex_marketplace_points_at_installed_plugin_tree(tmp_path):
             "name": "harness",
             "source": "./plugins/harness",
             "category": "productivity",
-            "version": "2.3.0",
+            "version": module._codex_plugin_version(install_root / "plugins" / "harness"),
             "description": "MCP-backed task planning, development, QA, and docs sync workflow.",
         }
     ]
@@ -1086,8 +1086,8 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
 
     cached = module.install_codex_plugin_cache(source_root, codex_home)
 
-    assert cached.name == CODEX_PLUGIN_VERSION
-    assert cached == codex_home / "plugins" / "cache" / "harness" / "harness" / CODEX_PLUGIN_VERSION
+    assert re.fullmatch(re.escape(CODEX_PLUGIN_VERSION) + r"\.h[0-9a-f]{16}", cached.name)
+    assert cached == codex_home / "plugins" / "cache" / "harness" / "harness" / module._codex_plugin_version(source_root)
     assert (stale_suffix / "stale.txt").read_text() == "old"
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
@@ -1289,7 +1289,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
         / "cache"
         / "harness"
         / "harness"
-        / CODEX_PLUGIN_VERSION
+        / module._codex_plugin_version(codex_install_root / "plugins" / "harness")
     )
     assert (cached / ".codex-plugin" / "plugin.json").is_file()
     assert (cached / "hooks.json").is_file()
@@ -1534,9 +1534,9 @@ def test_codex_plugin_cache_preserves_prior_versions_for_running_sessions(tmp_pa
 
     cached = module.install_codex_plugin_cache(install_root / "plugins" / "harness", codex_home)
 
-    assert cached == cache_parent / CODEX_PLUGIN_VERSION
-    assert sorted(path.name for path in cache_parent.iterdir()) == sorted(
-        ["2.2.0", "2.3.0-codex", "local", CODEX_PLUGIN_VERSION]
+    assert cached == cache_parent / module._codex_plugin_version(install_root / "plugins" / "harness")
+    assert sorted(path.name for path in cache_parent.iterdir() if path.is_dir()) == sorted(
+        ["2.2.0", "2.3.0-codex", "local", cached.name]
     )
     for version in ["2.2.0", "2.3.0-codex", "local"]:
         assert (cache_parent / version / "stale.txt").read_text() == "old"
@@ -1601,7 +1601,7 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
         / "cache"
         / "harness"
         / "harness"
-        / CODEX_PLUGIN_VERSION
+        / module._codex_plugin_version(source_root)
     )
     assert (cached / ".codex-plugin" / "plugin.json").is_file()
     assert (cached / ".mcp.json").is_file()

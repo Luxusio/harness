@@ -49,6 +49,33 @@ smoke, `chmod -R 777` on the same copy fails it identically to the field report,
 
 ## Requirement
 
+### Codex cache updates and provenance (2026-10-29)
+
+User-explicit: “그것도 버그 해결해” requests repair of the reported Codex
+installation failure while replacing the existing cache on a Windows-backed
+shared path. The following cache mechanics are derived implementation
+constraints, not additional user requests.
+
+- Give each effective Codex payload a deterministic content-derived version in
+  the copied manifest. Preserve the source release manifest. Include shared
+  runtime code, projected skills and generated hook/MCP semantics, normalizing
+  installation roots so staging paths do not change identity.
+- The mirror, marketplace declaration, selected cache and hook trust use that
+  same version. Changed content publishes a fresh cache directory and retains
+  earlier directories used by running sessions.
+- Reuse an independently compared identical cache, including forced installs.
+  The installer retains its existing repair of installer-owned writable modes
+  before comparison. A remaining path, ownership or content mismatch is an
+  error: preserve the cache and identify
+  the path; repair it only after stopping its users and moving that exact cache
+  out of the selected location. Never overwrite loaded files to obtain PASS.
+- Preserve staged publication, ownership checks, installed smoke and explicit
+  runtime reload/restart classification. A hash identifies content, not trust.
+
+Verification: `tests/test_install_codex_content_cache.py` covers cache identity,
+old-cache preservation, refusal, repeated publication and concurrency;
+`tests/test_install_runtime_locations.py` exercises forced reinstall and trust.
+
 1. **The installer owns the modes of every tree it writes.** After any payload
    is synced or a plugin cache entry is installed, group/other-write bits are
    cleared across that tree. A world-writable source checkout must not be able
