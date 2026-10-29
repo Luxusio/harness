@@ -206,6 +206,8 @@ def _flip_qa_entry(block: list, stamp: str) -> list:
 def scan_qa_notes(path: str, changed: set, stamp=None) -> list:
     """Flip matching `qa_notes` entries current -> suspect. No match means the
     file is not rewritten at all."""
+    if _is_evidence(path):
+        return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
@@ -301,15 +303,49 @@ def _gather_changed(from_git, explicit: list) -> set:
     return paths
 
 
+def _is_evidence(path, doc_root=None):
+    # Keep lexical ancestry as well as resolved identity: operational roots may
+    # themselves be symlinks, and scans may start above or inside the doc tree.
+    harness_roots = {os.path.join(find_repo_root(), "doc", "harness")}
+    for start in (path, doc_root):
+        if start is None:
+            continue
+        for initial in (os.path.abspath(start), os.path.realpath(start)):
+            ancestor = initial
+            while True:
+                if os.path.basename(ancestor) == "doc":
+                    harness_roots.add(os.path.join(ancestor, "harness"))
+                conventional = os.path.join(ancestor, "doc", "harness")
+                if os.path.isdir(conventional):
+                    harness_roots.add(conventional)
+                parent = os.path.dirname(ancestor)
+                if parent == ancestor:
+                    break
+                ancestor = parent
+    identities = (os.path.abspath(path), os.path.realpath(path))
+    for harness in harness_roots:
+        for name in ("archive", "tasks", "runtime", "checkpoints"):
+            operational = os.path.join(harness, name)
+            for boundary in (operational, os.path.realpath(operational)):
+                if any(actual == boundary or actual.startswith(boundary + os.sep) for actual in identities):
+                    return True
+    return False
+
+
 def scan(doc_root: str, changed: set) -> list:
     results: list = []
-    if not os.path.isdir(doc_root):
+    if not os.path.isdir(doc_root) or _is_evidence(doc_root, doc_root):
         return results
-    for dirpath, _, filenames in os.walk(doc_root):
+    for dirpath, dirnames, filenames in os.walk(doc_root):
+        # Prune before descent so retained notes are never opened or rewritten.
+        dirnames[:] = [name for name in dirnames
+                       if not _is_evidence(os.path.join(dirpath, name), doc_root)]
         for name in filenames:
             if not name.endswith(".md"):
                 continue
             path = os.path.join(dirpath, name)
+            if _is_evidence(path, doc_root):
+                continue
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     text = f.read()

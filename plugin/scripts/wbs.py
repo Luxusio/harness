@@ -550,7 +550,10 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
             validate_history(task_dir, repo, state, measure=measure and _measure_custody)
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None,
                         integration=batch_route(task_dir, repo, state, measure=measure and _measure_custody))
-        plan_text = Path(task_dir, "PLAN.md").read_text()
+        from _lib import _strict_regular_text_snapshot
+        plan = _strict_regular_text_snapshot(os.path.join(task_dir, "PLAN.md"), max_size=1024 * 1024)
+        require(plan["exists"], "PLAN.md is missing")
+        plan_text = plan["text"]
         plan_nodes = from_plan(plan_text)
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
         require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
@@ -781,12 +784,14 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
 
 
 def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
-    from _lib import _atomic_text_write
+    from _lib import _atomic_text_write, _strict_regular_text_snapshot
     state = read_state(task_dir)
     require(state is not None and state["run_id"] == run_id, "baseline current task run first through wbs(action='plan')")
     if state.get("batch"):
         require(batch_route(task_dir, repo, state, measure=False)["route"] == "integration", "work pack is unfinished; preserve parked parent")
-    plan_text = Path(task_dir, "PLAN.md").read_text()
+    plan = _strict_regular_text_snapshot(os.path.join(task_dir, "PLAN.md"), max_size=1024 * 1024)
+    require(plan["exists"], "PLAN.md is missing")
+    plan_text = plan["text"]
     require(from_plan(plan_text) == state["nodes"], "plan/evidence mismatch")
     require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
     node = next((n for n in leaves(state["nodes"]) if n["id"] == leaf_id), None)

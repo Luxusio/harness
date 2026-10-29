@@ -298,6 +298,170 @@ class QaNoteFlipTests(unittest.TestCase):
                 self.assertEqual(entry, expected)
 
 
+class MarkdownEvidencePreservationTests(unittest.TestCase):
+    NOTE = "---\nfreshness: current\ninvalidated_by_paths:\n  - src/example.py\n---\nEvidence.\n"
+    OPERATIONAL = ("archive", "tasks", "runtime", "checkpoints")
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def note(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.NOTE, encoding="utf-8")
+        return path
+
+    def scan_without_entering(self, doc_root, protected):
+        import builtins
+        from unittest import mock
+
+        actual_open, actual_scandir = builtins.open, os.scandir
+        opened, descended = [], []
+
+        def protected_path(path):
+            if isinstance(path, int):
+                return False
+            candidate = Path(path).resolve()
+            return any(candidate == root.resolve() or root.resolve() in candidate.parents
+                       for root in protected)
+
+        def open_note(path, *args, **kwargs):
+            self.assertFalse(protected_path(path), f"opened operational evidence: {path}")
+            opened.append(Path(path))
+            return actual_open(path, *args, **kwargs)
+
+        def descend(path):
+            self.assertFalse(protected_path(path), f"descended into operational evidence: {path}")
+            descended.append(Path(path))
+            return actual_scandir(path)
+
+        with mock.patch("builtins.open", side_effect=open_note), mock.patch.object(
+            nf.os, "scandir", side_effect=descend
+        ):
+            hits = nf.scan(str(doc_root), {"src/example.py"})
+        return hits, opened, descended
+
+    def test_operational_evidence_is_pruned_before_descent_and_open(self):
+        doc = self.tmp / "doc"
+        protected = [doc / "harness" / name for name in self.OPERATIONAL]
+        evidence = [self.note(root / "nested" / "note.md") for root in protected]
+        before = {path: path.read_bytes() for path in evidence}
+        current = self.note(doc / "design" / "note.md")
+        alias = doc / "evidence-alias.md"
+        alias.symlink_to(evidence[0])
+        hits, opened, descended = self.scan_without_entering(doc, protected)
+        self.assertEqual([Path(hit["path"]) for hit in hits], [current])
+        self.assertIn(current, opened)
+        self.assertIn(doc, descended)
+        self.assertIn("freshness: suspect", current.read_text())
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual({path: path.read_bytes() for path in evidence}, before)
+
+    def test_starting_inside_operational_evidence_never_enters_it(self):
+        for name in self.OPERATIONAL:
+            with self.subTest(name=name):
+                root = self.tmp / "doc" / "harness" / name
+                evidence = self.note(root / "nested" / "note.md")
+                before = evidence.read_bytes()
+                for start in (root, root / "nested"):
+                    hits, opened, descended = self.scan_without_entering(start, [root])
+                    self.assertEqual((hits, opened, descended), ([], [], []))
+                self.assertEqual(evidence.read_bytes(), before)
+
+    def test_explicit_doc_root_keeps_ordinary_same_basename_notes_live(self):
+        doc = self.tmp / "manuals"
+        durable = [self.note(doc / "guide" / name / "note.md") for name in self.OPERATIONAL]
+        durable += [self.note(doc / "harness" / name / "note.md") for name in self.OPERATIONAL]
+        durable.append(self.note(doc / "guide" / "harness" / "archive" / "note.md"))
+        hits, _, _ = self.scan_without_entering(doc, [])
+        self.assertEqual({Path(hit["path"]) for hit in hits}, set(durable))
+        for path in durable:
+            self.assertIn("freshness: suspect", path.read_text())
+
+    def test_scan_from_repo_root_prunes_nested_conventional_evidence(self):
+        root = self.tmp / "repo"
+        protected = [root / "doc" / "harness" / name for name in self.OPERATIONAL]
+        evidence = [self.note(path / "note.md") for path in protected]
+        before = {path: path.read_bytes() for path in evidence}
+        current = self.note(root / "doc" / "guide" / "note.md")
+        hits, _, _ = self.scan_without_entering(root, protected)
+        self.assertEqual([Path(hit["path"]) for hit in hits], [current])
+        self.assertEqual({path: path.read_bytes() for path in evidence}, before)
+
+    def test_scanning_ordinary_guide_does_not_redefine_operational_roots(self):
+        guide = self.tmp / "doc" / "guide"
+        current = self.note(guide / "harness" / "archive" / "note.md")
+        hits, _, _ = self.scan_without_entering(guide, [])
+        self.assertEqual([Path(hit["path"]) for hit in hits], [current])
+        self.assertIn("freshness: suspect", current.read_text())
+
+    def test_symlink_backed_operational_root_and_file_alias_are_never_opened(self):
+        doc = self.tmp / "doc"
+        storage = self.tmp / "stored-evidence"
+        evidence = self.note(storage / "nested" / "note.md")
+        before = evidence.read_bytes()
+        archive = doc / "harness" / "archive"
+        archive.parent.mkdir(parents=True)
+        archive.symlink_to(storage, target_is_directory=True)
+        alias = doc / "evidence-alias.md"
+        alias.symlink_to(evidence)
+        manuals = self.tmp / "manuals"
+        manuals.symlink_to(storage, target_is_directory=True)
+        for start in (archive, archive / "nested", doc, self.tmp, manuals):
+            hits, opened, _ = self.scan_without_entering(start, [storage])
+            self.assertEqual((hits, opened), ([], []))
+        self.assertEqual(evidence.read_bytes(), before)
+        self.assertTrue(alias.is_symlink())
+
+    def test_archived_snapshot_qa_knowledge_is_not_opened_or_rewritten_by_cli(self):
+        from unittest import mock
+
+        repo = self.tmp / "repo"
+        (repo / "doc" / "harness").mkdir(parents=True)
+        (repo / "doc" / "harness" / "manifest.yaml").write_text("project: fixture\n")
+        snapshot_doc = repo / "doc" / "harness" / "archive" / "snapshot" / "source" / "doc"
+        qa = snapshot_doc / "harness" / "qa"
+        qa.mkdir(parents=True)
+        knowledge = write_fixture(qa)
+        before = knowledge.read_bytes()
+        with mock.patch("builtins.open", side_effect=AssertionError("opened archived QA knowledge")):
+            self.assertEqual(nf.scan_qa_notes(str(knowledge), {"plugin/scripts/stop_gate.py"}), [])
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--doc-root", str(snapshot_doc),
+             "--paths", "plugin/scripts/stop_gate.py"],
+            cwd=repo, capture_output=True, text=True, timeout=10, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("0 notes invalidated", proc.stdout)
+        self.assertEqual(knowledge.read_bytes(), before)
+
+    def test_cli_repo_context_protects_external_archive_storage_and_alias(self):
+        import tempfile
+
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        storage = Path(external.name)
+        evidence = self.note(storage / "note.md")
+        before = evidence.read_bytes()
+        harness = self.tmp / "doc" / "harness"
+        harness.mkdir(parents=True)
+        (harness / "manifest.yaml").write_text("project: fixture\n")
+        (harness / "archive").symlink_to(storage, target_is_directory=True)
+        alias = self.tmp / "manuals"
+        alias.symlink_to(storage, target_is_directory=True)
+        for start in (alias, storage):
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--doc-root", str(start), "--paths", "src/example.py"],
+                cwd=self.tmp, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("0 notes invalidated", proc.stdout)
+            self.assertEqual(evidence.read_bytes(), before)
+
+
 class CliWiringTests(unittest.TestCase):
     """main() must reach the qa_notes scan, not merely export it."""
 

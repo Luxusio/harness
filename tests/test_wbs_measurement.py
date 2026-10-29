@@ -16,6 +16,100 @@ except ModuleNotFoundError as error:
 from test_wbs import baseline, check, node, plan, progress, publish, wbs
 
 
+@pytest.mark.parametrize("kind", ["missing", "fifo", "symlink", "oversize"])
+def test_unsafe_plan_refuses_progress_and_check_without_executing(tmp_path, kind):
+    marker = tmp_path / "assertion-ran"
+    assertion = dict(node(), check=[sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"])
+    repo, td = baseline(tmp_path, [assertion])
+    assert check(repo, td)["passed"]
+    marker.unlink()
+    before = (td / "WBS.json").read_bytes()
+    target = td / "PLAN.md"
+    text = target.read_text()
+    target.unlink()
+    if kind == "fifo":
+        os.mkfifo(target)
+    elif kind == "symlink":
+        other = tmp_path / "plan-target"
+        other.write_text(text)
+        target.symlink_to(other)
+    elif kind == "oversize":
+        target.write_text(text + " " * (1024 * 1024))
+    # Exercise both real callers in a bounded subprocess: the old FIFO read hangs.
+    script = """
+import json, sys
+from pathlib import Path
+from _lib import emit_compact_context
+import wbs
+td, repo = sys.argv[1:]
+Path(td, 'TASK.json').write_text(json.dumps(dict(run_id='01a1862c-95c1-7f98-b7a3-28d4d6260a72', execution_mode='standard', required_lenses=['review-code', 'qa-cli'], closed=False)))
+ctx = emit_compact_context(td)
+assert ctx['progress']['status'] == 'invalid', ctx
+assert ctx['progress']['percentage'] is None, ctx
+try:
+    wbs.verify(td, repo, 'run', 'A')
+except (OSError, ValueError, RuntimeError):
+    pass
+else:
+    raise AssertionError('unsafe PLAN accepted')
+"""
+    env = dict(os.environ, PYTHONPATH=str(Path(wbs.__file__).parent), PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([sys.executable, "-B", "-c", script, str(td), str(repo)],
+                            cwd=repo, env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists()
+    assert (td / "WBS.json").read_bytes() == before
+
+
+def test_plan_at_exact_snapshot_limit_keeps_progress_semantics(tmp_path):
+    repo, td = baseline(tmp_path)
+    target = td / "PLAN.md"
+    text = target.read_bytes()
+    target.write_bytes(text + b" " * (1024 * 1024 - len(text)))
+    assert check(repo, td)["passed"]
+    assert progress(repo, td)["percentage"] == 100
+
+
+@pytest.mark.parametrize("mutation", ["growth", "replacement"])
+@pytest.mark.parametrize("caller", ["progress", "verify"])
+def test_plan_snapshot_refuses_growth_and_replacement_at_real_read(tmp_path, monkeypatch, mutation, caller):
+    import _lib
+    repo, td = baseline(tmp_path)
+    assert check(repo, td)["passed"]
+    before = (td / "WBS.json").read_bytes()
+    target = td / "PLAN.md"
+    identity = target.stat().st_ino
+    original = _lib.os.read
+    touched = False
+    observed = 0
+
+    def read(fd, size):
+        nonlocal touched, observed
+        chunk = original(fd, size)
+        if os.fstat(fd).st_ino == identity:
+            observed += len(chunk)
+            if not touched:
+                touched = True
+                if mutation == "growth":
+                    with target.open("ab") as stream:
+                        stream.write(b" " * (1024 * 1024 + 1))
+                else:
+                    replacement = td / "replacement"
+                    replacement.write_bytes(target.read_bytes())
+                    replacement.replace(target)
+        return chunk
+
+    monkeypatch.setattr(_lib.os, "read", read)
+    if caller == "progress":
+        result = progress(repo, td)
+        assert result["status"] == "invalid" and result["percentage"] is None
+    else:
+        with pytest.raises(RuntimeError, match="snapshot.*(size limit|identity changed)"):
+            check(repo, td)
+    assert touched and observed <= 1024 * 1024 + 1
+    assert (td / "WBS.json").read_bytes() == before
+
+
 def git(repo, *args):
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
 
