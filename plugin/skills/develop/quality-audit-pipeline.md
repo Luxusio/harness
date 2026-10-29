@@ -1,6 +1,6 @@
 # Quality audit and independent review gate
 
-This file separates pre-review audit inputs from the final static review gate.
+This file separates pre-review audit inputs from the final independent review gate.
 The final review runs after the last implementation commit/checkpoint and before
 runtime QA. QA never substitutes for review.
 
@@ -228,6 +228,14 @@ receives no candidate data.
 Await its explicit final along with the later code-review final. All agents are
 read-only and read PLAN/REQUEST, linked durable docs, complete changed files,
 relevant callers/callees, and nearby project patterns.
+
+Preserve each role's proportionate experiments and evidence levels. Read-only
+allows safe disposable external probes, not edits to the reviewed tree or task
+state. Do not impose an invocation-wide test ban or a reproduction quota. Keep
+Reproduced, Source-proven and Unconfirmed qualifications in existing evidence
+text; candidates remain leads until independently verified. Missing material
+evidence keeps its existing blocker semantics. These bounded review experiments
+do not replace or start actual QA before independent review PASS.
 
 Claude routing:
 

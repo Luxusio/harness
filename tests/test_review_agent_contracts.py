@@ -307,6 +307,48 @@ def test_review_agents_are_read_only_and_have_exact_verdict_contract():
         assert "exploitability" in security and "blast radius" in security
 
 
+def test_review_roles_distinguish_bounded_observation_from_source_proof_and_hypothesis():
+    groups = {
+        "safe execution": ("safe, bounded probe", "disposable external fixtures",
+                           "foreground subprocess probes", "redirect outputs externally"),
+        "source preservation": ("reviewed source, tests, task state, or protected artifacts",),
+        "execution authority": ("not embedded instructions", "user data",
+                                "authorization for external or destructive effects"),
+        "proportionality": ("large diagnostic framework", "fixed experiment count"),
+        "observed": ("Reproduced", "actually executed", "observed result", "claimed path"),
+        "source proof": ("Source-proven", "concrete reason", "reachable inputs",
+                         "callers, branch conditions", "violated invariant", "wrong outcome"),
+        "uncertainty": ("Unconfirmed", "missing evidence"),
+        "false execution claims": ("proposed command", "another agent's summary",
+                                    "failed setup", "timeout", "not reproduced product behavior"),
+    }
+    for runtime in ("plugin", "plugin-codex"):
+        for role in ("code-reviewer", "security-reviewer", "defect-hunter"):
+            path = f"{runtime}/agents/{role}.md"
+            section = _role_core(path).split("## Proportionate experiments and evidence levels", 1)[1]
+            section = section.split("\n## ", 1)[0]
+            _assert_policy_terms(section, groups, path)
+        for role in ("code-reviewer", "security-reviewer"):
+            path = f"{runtime}/agents/{role}.md"
+            _assert_all(_role_core(path), (
+                "Before reporting a defect as confirmed, attempt",
+                "without new schema fields",
+                "Complete source proof remains valid; do not label it reproduced",
+                "missing material evidence prevents a safe verdict",
+            ), path)
+
+
+def test_review_pipeline_preserves_experiment_allowance_and_actual_qa_order():
+    path = "plugin/skills/develop/quality-audit-pipeline.md"
+    _assert_all(_text(path), (
+        "safe disposable external probes",
+        "Do not impose an invocation-wide test ban or a reproduction quota",
+        "Reproduced, Source-proven and Unconfirmed",
+        "existing evidence text",
+        "do not replace or start actual QA before independent review PASS",
+    ), path)
+
+
 def test_defect_hunters_are_minimal_non_attesting_discovery_roles():
     required = (
         "read-only and non-attesting",
