@@ -67,7 +67,19 @@ def test_loaded_recovery_chain_preserves_authority_without_attempt_quotas(tmp_pa
     for name in shared[2:]:
         assert name in gate
 
-    for name, body in [("public develop", public), ("Codex develop", codex), *(
+    # parallel-fanout is a Claude-loaded file; Codex delivers ready-lanes
+    # instead. Exercise its actual payload builder rather than inventing a
+    # Codex dependency just to make a source scan look transitive.
+    claude_payload = tmp_path / "claude"
+    install._build_claude_payload(claude_payload)
+    claude_develop = claude_payload / "plugin/skills/develop"
+    delivered_public = (claude_develop / "SKILL.md").read_text()
+    fanout = (claude_develop / "parallel-fanout.md").read_text()
+    assert "parallel-fanout.md" in delivered_public
+    assert fanout == (REPO / "plugin/skills/develop/parallel-fanout.md").read_text()
+
+    for name, body in [("public develop", public), ("Codex develop", codex),
+                       ("Claude parallel fanout", fanout), *(
         (name, (payload / "internal-skills/develop" / name).read_text()) for name in shared
     )]:
         assert not re.search(r"3[- ](?:cycle|attempt|strike)|(?:maximum|only get) 3|>5 files|WTF score",
@@ -81,3 +93,17 @@ def test_loaded_recovery_chain_preserves_authority_without_attempt_quotas(tmp_pa
     for body in (public, codex):
         assert "do not lower thresholds to clear a failure" in body
         assert "Required failures remain unfinished" in body
+
+    helper = next(line for line in fanout.splitlines() if "| Helper-extract-first |" in line)
+    assert "necessary helper discovered during implementation" in helper
+    assert "current PLAN/WBS autonomously" in helper
+    assert "actual execution ownership before assigning writers" in helper
+    assert "dependent consumers" in helper
+    assert "Do not invent helper progress nodes" in helper
+    assert "material unresolved decision or missing authorization" in helper
+    reconciliation = fanout.split("No fix crosses between", 1)[1].split("Fallback:", 1)[0]
+    assert "without an\nattempt quota" in reconciliation
+    assert "never clears it or changes\nexecution ownership" in reconciliation
+    assert "updated assignment before writing" in reconciliation
+    assert "Required failures remain unfinished" in reconciliation
+    assert "independent review PASS before actual QA" in reconciliation

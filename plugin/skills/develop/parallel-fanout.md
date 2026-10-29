@@ -135,7 +135,7 @@ The orchestrator MUST fanout when any row matches. PLAN.md AC dependency matrix 
 | Component-independent N≥2 | PLAN AC matrix has 2 or more ACs whose target file sets are pairwise disjoint | Parallel `Agent(...)` fanout, one per AC, in one assistant message |
 | Test-author pairing | An AC routed to `harness:ac-worker` declares both `**Files:**` and `**Tests:**` | Spawn one `harness:test-author` in the same assistant message as that ac-worker |
 | API↔frontend split | PLAN AC matrix declares both backend/API files (`*api*`, `*routes/*`, `*endpoint*`, `*graphql*`) AND frontend files (`*.tsx/.jsx/.vue/.svelte/.html/.css/.scss`) | Contract-first sequential prelude (API contract / shared types AC), then parallel-fanout the consumer ACs |
-| Helper-extract-first | PLAN explicitly contains a helper-extraction AC; consumer ACs depend on the extracted helper | Run the extract AC sequentially first, then parallel-fanout the consumers. Guard: extract must be a declared AC in PLAN.md; mid-task extraction is scope creep blocked by Phase 5 |
+| Helper-extract-first | Consumers depend on a shared helper extraction, including a necessary helper discovered during implementation | Amend the current PLAN/WBS autonomously for necessary work within the authorized outcome; declare the real prerequisite and actual execution ownership before assigning writers or starting dependent consumers. Run extraction sequentially before parallel consumers. Do not invent helper progress nodes solely to describe file ownership. Escalate only a material unresolved decision or missing authorization; never broaden a worker's ownership implicitly |
 | Multi-lens QA / dogfooder | Phase 7 has 2 or more applicable QA lenses (from manifest + diff scope) OR dogfooder is queued for the Phase 7 final-PASS cycle | All QA calls in one assistant message with `lens="<lens>"`; dogfooder batched alongside on the final-PASS pass. FAIL cycles skip dogfooder |
 | Quality audit fanout (Phase 4.5) | Quality audit pipeline runs: coverage trace + visual smoke (browser-only) | One assistant message; conditional specialists (security / perf / migration / LLM-trust) added when diff scope matches, per `quality-audit-pipeline.md` § Phase 4.5. Advisory inputs, not verdicts |
 | Independent review fanout (Phase 6.6) | Selected discovery or `wbs(action="context")` supplies 2 or more dependency-free calls | Initial batch: selected defect hunters plus routed `review-security`. Start dependent `review-code` only after attempted hunter finals; at LIGHT it may batch with security. Every required lens must PASS before Phase 7 QA starts. |
@@ -231,9 +231,14 @@ Refill independent ready lanes after each verified AC, and reconcile:
 | PLAN.md cannot settle it | `needs-coordinator-review` handling (amend PLAN or escalate; never retry with the same ownership) |
 
 No fix crosses between `**Files:**` and `**Tests:**`.
-The 3-Attempt Escalation Rule in `fix-first-pattern.md` bounds the loop.
-Count attempts per failing test across both lanes: moving a red test to the
-other lane does not reset its count.
+Use the evidence-driven recovery in `fix-first-pattern.md`: preserve the
+failure and inspect actual state, then continue authorized repairs without an
+attempt quota. Moving a failure between lanes never clears it or changes
+execution ownership. If ownership must change, obtain the coordinator's
+updated assignment before writing. Required failures remain unfinished;
+restore affected independent review PASS before actual QA. Stop for unknown
+effects, an external blocker, a material unresolved decision or missing
+authorization with the concrete unblock condition.
 
 Fallback: when `harness:test-author` is unavailable (for example an older
 installed plugin), run the ac-worker unpaired, owning `**Files:**` and

@@ -247,6 +247,21 @@ def test_claude_develop_parallelizes_full_suite_verification():
     assert "Spawn every applicable lens in one message" in fanout
 
 
+def test_parallel_recovery_preserves_lane_ownership_and_necessary_helper_authority():
+    body = _text(PARALLEL_FANOUT)
+    helper = next(line for line in body.splitlines() if "| Helper-extract-first |" in line)
+    assert "scope creep blocked by Phase 5" not in helper
+    assert "actual execution ownership before assigning writers" in helper
+    assert "Run extraction sequentially before parallel consumers" in helper
+    assert "never broaden a worker's ownership implicitly" in helper
+    recovery = body.split("No fix crosses between", 1)[1].split("Fallback:", 1)[0]
+    assert "3-Attempt Escalation Rule" not in recovery
+    assert "Count attempts" not in recovery
+    assert "evidence-driven recovery" in recovery
+    assert "updated assignment before writing" in recovery
+    assert "concrete unblock condition" in recovery
+
+
 def test_phase_66_batches_only_dependency_free_review_calls():
     body = _normalized(_text(PARALLEL_FANOUT))
     start = body.index("phase 6.6 independent review: batch only")
