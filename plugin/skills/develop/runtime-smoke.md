@@ -122,25 +122,56 @@ Steps:
 
 **CLI projects (`project_type: cli` or `project_type: library`):**
 
+Choose each command from its documented semantics before executing it. Use only
+documented non-mutating help, version or dry-run options; an unsupported option
+is a failed smoke check, never permission to retry the live command. Commands
+that mutate state require explicitly authorized disposable fixtures, with every
+resource/path directed there. Never run destructive smoke against live user
+resources. If no safe invocation is available, report the concrete blocker.
+
+To limit displayed output while preserving the original command exit status,
+capture the complete output before displaying it. Piping a running command to
+`head` can induce SIGPIPE even with `pipefail`; a plain pipeline can hide failure.
+Define this shell helper for the examples below:
+
+```bash
+smoke_capture() (
+  _SMOKE_LINES=$1
+  shift
+  _SMOKE_OUTPUT=$(mktemp) || exit $?
+  trap 'rm -f -- "$_SMOKE_OUTPUT"' EXIT
+  if "$@" >"$_SMOKE_OUTPUT" 2>&1; then
+    _SMOKE_STATUS=0
+  else
+    _SMOKE_STATUS=$?
+  fi
+  head -n "$_SMOKE_LINES" "$_SMOKE_OUTPUT"
+  exit "$_SMOKE_STATUS"
+)
+```
+
 Steps:
 1. **Build check** (if not already done in Phase 3.8):
    ```bash
-   <build_command> 2>&1 | tail -5
+   smoke_capture 5 <build_command>
    ```
    If build fails: fix immediately. This is Phase 3.8 repeated, skip if already passed.
 
 2. **Binary smoke test:** Run the built command with `--help` or `--version`:
    ```bash
-   <binary_path> --help 2>&1 | head -10
-   <binary_path> --version 2>&1
+   smoke_capture 10 <binary_path> --help || exit $?
+   smoke_capture 10 <binary_path> --version
    ```
    If exit code != 0: binary doesn't start. Fix immediately.
 
-3. **Basic command dry-run:** For each command added/modified by this task's ACs:
+3. **Basic safe command:** For each command added/modified by this task's ACs,
+   select the documented safe arguments (including `--dry-run` only when its
+   non-mutating semantics are documented), or use an authorized disposable fixture:
    ```bash
-   <binary_path> <command> --dry-run 2>&1 || <binary_path> <command> 2>&1 | head -20
+   smoke_capture 20 <binary_path> <documented_safe_args>
    ```
-   Verify: command runs without crash, output is sensible.
+   Verify: command runs without crash, output is sensible, and its original exit
+   status is zero. A nonzero result stops this check without a live fallback.
 
 4. **Report CLI smoke results:** summarize commands tested, passed count, and
    any failing command/exit code in the phase result.

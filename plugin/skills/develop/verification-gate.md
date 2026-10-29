@@ -5,21 +5,33 @@ test freshness.
 
 ---
 
-## Step 0: Clean State Check
+## Step 0: Verify the issued execution target
 
-Before running any tests, verify the working tree is clean:
+Before running tests against a frozen source view, confirm the current task/run's
+issued acceptance target and use its latest returned `snapshot_root` as the exact
+cwd. Validate the selected immutable input manifest and execution context
+(declared commands, relevant environment and toolchains) through the existing
+target owner: `verification_target.load_target` validates the issued record,
+`ensure_snapshot` validates or restores the copied inputs, and `applicability`
+with measurement compares the original repository's selected inputs/context.
+An unbound, missing, unavailable or stale target blocks execution until the owner
+prepares the appropriate target. Preserve failed history and rerun only affected
+review/QA when relevant selected inputs or context change. Unrelated unselected
+notes or other user changes in the mutable checkout do not invalidate this view.
 
-```bash
-git status --porcelain
-```
+A frozen snapshot has no `.git`; `git status --porcelain` run there can discover
+the mutable parent repository instead. Do not demand clean Git state, commit
+files or discover the source through Git inside frozen QA. Keep selected sources
+read-only; do not chmod or edit the snapshot to make a check pass. Missing copied
+inputs require owner preparation and the latest returned view before new QA;
+historical completed evidence still follows existing applicability rules.
 
-If the working tree has **uncommitted changes**:
-- Uncommitted changes mean tests run against code that differs from what was committed.
-- **Staged but uncommitted changes**: commit them first. Tests should verify committed state.
-- **Unstaged changes from Phase 4.5–4.9/6 fixes**: commit them, then re-run Phase 6.5 test freshness check.
-- **Only proceed when `git status --porcelain` is empty** (all changes committed).
-
-This ensures test results accurately reflect the code state that will be merged.
+For ordinary mutable-source verification, identify the actual planned source and
+include all relevant fixes in the inputs being verified. Git ownership and
+cleanliness checks still apply at the integration/commit boundary under the
+owning workflow; this target check does not authorize staging or committing
+unrelated user changes. Final WBS verify/close remeasure selected-input/context
+applicability before completion.
 
 ## Step 0.5: Install-tree removals (repos whose tests can reach a runtime)
 
@@ -302,12 +314,16 @@ If Phase 3.8 was skipped (interpreted language, no build step), run a quick sani
 
 ```bash
 # At minimum, verify imports resolve
-<test_command> --help 2>&1 | head -1
+<test_command> --help
 # Or import check
 python -c "import <module>" 2>&1
 ```
 
 This catches import errors before the QA phase.
+Use documented non-mutating help semantics and preserve the command's exit
+status; do not pipe a running check into an output limiter or retry a failed
+option as a live invocation. Use the safe capture/display pattern in
+`runtime-smoke.md` if output must be limited.
 
 ## Step 3.5: Transient-failure diagnosis
 
