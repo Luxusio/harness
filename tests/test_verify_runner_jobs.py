@@ -452,36 +452,82 @@ def test_producer_replacement_before_consumer_admission_is_not_accepted(tmp_path
     assert "prepared artifact changed" in result[0]["commands"][1]["error"]
 
 
-def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path):
+@pytest.mark.parametrize("termination", ["pid", "group", "outer-timeout", "interrupt"])
+@pytest.mark.parametrize("closed_stdout", [False, True])
+def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, termination, closed_stdout):
+    import signal
+
     name = "death-test:" + str(tmp_path)
-    item = job(tmp_path, "owner", "from pathlib import Path\nimport time\nPath('ready').touch()\nwhile not Path('release').exists(): time.sleep(.01)\nPath('finished').touch()\n", kind="producer", outputs=["finished"], resources=[name])
+    code = "from pathlib import Path\nimport os,time\nPath('worker.pid').write_text(str(os.getpid()))\n"
+    if closed_stdout:
+        code += "os.close(1)\nos.close(2)\n"
+    code += "Path('ready').touch()\nwhile not Path('release').exists(): time.sleep(.01)\nPath('finished').touch()\n"
+    item = job(tmp_path, "owner", code, kind="producer", outputs=["finished"], resources=[name])
     declaration = tmp_path / "jobs.json"
     declaration.write_text(json.dumps([item]))
-    proc = subprocess.Popen([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "result.json"), "--task-id", "t", "--run-id", "r", "--generation", "g", "--timeout", "8"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    argv = [sys.executable, "-B", str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path),
+            "--jobs", str(declaration), "--results", str(tmp_path / "result.json"),
+            "--task-id", "t", "--run-id", "r", "--generation", "g", "--timeout", "15"]
+    if termination == "outer-timeout":
+        prefix = "import sys,json;sys.path.insert(0," + repr(str(SCRIPTS)) + ");import wbs;"
+        argv = [sys.executable, "-B", "-c", prefix + "print(json.dumps(wbs._execute(" + repr(argv) + "," + repr(str(tmp_path)) + ",4)))"]
+    proc = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    worker = None
+    held = None
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 15
         while not (tmp_path / "ready").exists():
             assert proc.poll() is None and time.monotonic() < deadline
             time.sleep(.01)
-        proc.kill()
-        proc.wait(timeout=5)
+        worker = int((tmp_path / "worker.pid").read_text())
         assert runner._lease({"resource:" + name: True}) is None
-        (tmp_path / "release").touch()
+        if termination == "pid":
+            proc.kill()
+        elif termination == "group":
+            os.killpg(proc.pid, signal.SIGKILL)
+        elif termination == "interrupt":
+            proc.send_signal(signal.SIGINT)
+        stdout, stderr = proc.communicate(timeout=10)
+        if termination == "outer-timeout":
+            assert json.loads(stdout)["error"] == "timeout", stderr
         while (held := runner._lease({"resource:" + name: True})) is None:
             assert time.monotonic() < deadline
             time.sleep(.01)
-        for fd in held:
-            os.close(fd)
-        assert (tmp_path / "finished").exists()
+        # Once the next owner is admitted, the old command cannot still write.
+        state = Path('/proc') / str(worker) / 'stat'
+        if state.exists():
+            assert state.read_text().split()[2] == 'Z'
+        (tmp_path / "release").touch()
+        assert not (tmp_path / "finished").exists()
         interrupted = json.loads((tmp_path / "result.json").read_text())
         assert interrupted["status"] == "FAIL" and interrupted["successful"] == []
-        assert interrupted["commands"][0]["execution_pending"]
         assert interrupted["commands"][0]["returncode"] is None
     finally:
-        (tmp_path / "release").touch()
+        if held is not None:
+            for fd in held:
+                os.close(fd)
         if proc.poll() is None:
-            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)
+        if worker is not None:
+            try:
+                os.killpg(worker, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         proc.communicate(timeout=10)
+
+
+def test_closed_parent_lifeline_refuses_command_before_spawn(tmp_path, monkeypatch):
+    import wbs
+
+    reader, writer = os.pipe()
+    os.close(writer)
+    try:
+        monkeypatch.setattr(wbs, "_PARENT_LIFELINE", reader)
+        result = wbs._execute([sys.executable, '-c', "from pathlib import Path;Path('unexpected').touch()"], str(tmp_path), 1)
+        assert result['returncode'] is None and result['error'] == 'parent execution ended'
+        assert not (tmp_path / 'unexpected').exists()
+    finally:
+        os.close(reader)
 
 
 def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path):
@@ -675,6 +721,21 @@ def test_invalid_current_results_cannot_be_repaired_by_success_copy(tmp_path, co
     else:
         with path.open('wb') as stream:
             stream.truncate(16 * 1024 * 1024 + 1)
+    if corruption in ('utf8', 'oversized'):
+        original = path.read_bytes()
+        for reuse_only in (True, False):
+            with pytest.raises(RuntimeError):
+                execute(tmp_path, [item], 'unreadable', reuse_only=reuse_only)
+            assert path.read_bytes() == original
+        declaration = tmp_path / 'jobs.json'
+        declaration.write_text(json.dumps([item]))
+        cli = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
+                              '--jobs', str(declaration), '--results', str(path), '--task-id', 'task',
+                              '--run-id', 'run', '--generation', 'unreadable', '--reuse-only'],
+                             capture_output=True, text=True, timeout=15)
+        assert cli.returncode == 2 and 'Traceback' not in cli.stderr
+        assert path.read_bytes() == original
+        return
     result = execute(tmp_path, [item], 'unavailable', reuse_only=True)
     assert result['status'] == 'FAIL' and not result['commands'][0]['reused']
     assert execute(tmp_path, [item], 'regenerate')['status'] == 'PASS'
@@ -733,7 +794,7 @@ def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path
     evidence = record['last_execution']
     assert evidence['returncode'] is None and evidence['execution_pending']
     assert not evidence['output_log']['available']
-    assert Path(evidence['output_log']['path']).read_text() == 'failed rerun evidence\n'
+    assert Path(evidence['output_log']['path']).read_text() == ''
 
 
 def test_malformed_unicode_log_reference_does_not_repeat_valid_command(tmp_path):
@@ -746,3 +807,189 @@ def test_malformed_unicode_log_reference_does_not_repeat_valid_command(tmp_path)
     record = execute(tmp_path, [item], 'malformed-unicode', reuse_only=True)['commands'][0]
     assert record['status'] == 'PASS' and record['reused']
     assert record['output'] == 'valid summary\n' and record['output_log'] == {'available': False}
+
+
+def test_retained_failure_survives_success_reuse_and_restart(tmp_path, monkeypatch):
+    item = job(tmp_path, 'check', "import os,sys\nprint('early-'+os.environ['CHECK_EXIT'])\nprint('x'*9000)\nsys.exit(int(os.environ['CHECK_EXIT']))\n")
+    item['environment'] = ['CHECK_EXIT']
+    saved = []
+    for code in ('7', '8'):
+        monkeypatch.setenv('CHECK_EXIT', code)
+        result = execute(tmp_path, [item], 'same-generation')
+        assert result['status'] == 'FAIL'
+        row = result['commands'][0]
+        path = Path(row['output_log']['path'])
+        saved.append((path, path.read_bytes()))
+    assert len(result['failures']) == 2
+    assert len({r['attempt_id'] for r in result['failures']}) == 2
+    monkeypatch.setenv('CHECK_EXIT', '0')
+    passed = execute(tmp_path, [item], 'success')
+    assert passed['status'] == 'PASS' and len(passed['failures']) == 2
+    assert execute(tmp_path, [item], 'reuse', reuse_only=True)['commands'][0]['reused']
+    (tmp_path / 'jobs.json').write_text(json.dumps([item]))
+    proc = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
+                           '--jobs', str(tmp_path / 'jobs.json'), '--results', str(tmp_path / 'results.json'),
+                           '--task-id', 'task', '--run-id', 'run', '--generation', 'restart', '--reuse-only'],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, proc.stderr
+    restored = json.loads(proc.stdout)
+    assert restored['commands'][0]['reused'] and len(restored['failures']) == 2
+    assert [r['returncode'] for r in restored['failures']] == [7, 8]
+    for path, data in saved:
+        assert path.read_bytes() == data and data.startswith(b'early-')
+    assert all(r['output_log']['available'] for r in restored['failures'])
+
+
+@pytest.mark.parametrize('limit', ['count', 'bytes', 'metadata'])
+def test_retained_failure_budget_refuses_before_new_execution(tmp_path, monkeypatch, limit):
+    item = job(tmp_path, 'check', "import os,sys\nfrom pathlib import Path\nwith Path('executed').open('a') as f:f.write(os.environ['CHECK_EXIT'])\nprint('original failure')\nsys.exit(int(os.environ['CHECK_EXIT']))\n")
+    item['environment'] = ['CHECK_EXIT']
+    monkeypatch.setenv('CHECK_EXIT', '7')
+    first = execute(tmp_path, [item])
+    log = Path(first['failures'][0]['output_log']['path'])
+    data = log.read_bytes()
+    if limit == 'count':
+        monkeypatch.setattr(runner, 'MAX_FAILURES', 1)
+    elif limit == 'bytes':
+        monkeypatch.setattr(runner, 'MAX_FAILURE_LOG_BYTES', 1048576 + len(data) - 1)
+    else:
+        monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', (tmp_path / 'results.json').stat().st_size + 200)
+    monkeypatch.setenv('CHECK_EXIT', '8')
+    refused = execute(tmp_path, [item], 'refused')
+    assert refused['status'] == 'FAIL' and 'budget' in refused['commands'][0]['error']
+    assert refused['commands'][0]['returncode'] is None
+    assert (tmp_path / 'executed').read_text() == '7'
+    assert len(refused['failures']) == 1 and refused['failures'][0]['returncode'] == 7
+    assert log.read_bytes() == data
+
+
+def test_retained_failure_keeps_retired_jobs_and_previous_runs(tmp_path):
+    failed = job(tmp_path, 'old', "print('old failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [failed])
+    reference = first['failures'][0]['output_log']
+    current = job(tmp_path, 'new', "print('new success')\n")
+    changed = execute(tmp_path, [current], 'other-job', run_id='new-run')
+    assert changed['status'] == 'PASS' and not changed['commands'][0]['reused']
+    assert len(changed['failures']) == 1
+    assert changed['failures'][0]['job_id'] == 'old' and changed['failures'][0]['run_id'] == 'run'
+    assert Path(reference['path']).read_text() == 'old failure\n'
+
+
+def test_retained_failure_imports_existing_version_one_fixed_slot(tmp_path):
+    item = job(tmp_path, 'check', "print('original failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [item])
+    stored = json.loads((tmp_path / 'results.json').read_text())
+    row = stored['commands'][0]
+    fixed = tmp_path / 'results.json.logs' / (runner._digest('check') + '-attempt.log')
+    Path(row['output_log']['path']).rename(fixed)
+    row['output_log']['path'] = str(fixed)
+    row.pop('attempt_id')
+    stored.pop('failures')
+    (tmp_path / 'results.json').write_text(json.dumps(stored))
+    (tmp_path / 'check.py').write_text("print('new success')\n")
+    second = execute(tmp_path, [item], 'new')
+    assert second['status'] == 'PASS' and len(second['failures']) == 1
+    assert second['failures'][0]['returncode'] == 7
+    assert second['failures'][0]['output_log']['available']
+    assert fixed.read_text() == 'original failure\n'
+
+
+def test_retained_failure_oversized_store_is_not_overwritten(tmp_path, monkeypatch):
+    item = job(tmp_path, 'check', "print('authentic failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [item])
+    result_file = tmp_path / 'results.json'
+    original = result_file.read_bytes()
+    log = Path(first['failures'][0]['output_log']['path'])
+    monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', len(original) - 1)
+    with pytest.raises((RuntimeError, ValueError), match='(?:size|large|budget)'):
+        execute(tmp_path, [item], 'unreadable')
+    assert result_file.read_bytes() == original
+    assert log.read_text() == 'authentic failure\n'
+
+
+def test_retained_failure_reserves_task_and_run_provenance_before_execution(tmp_path):
+    item = job(tmp_path, 'check', "from pathlib import Path\nwith Path('executed').open('a') as f:f.write('x')\nprint('authentic failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [item])
+    path = Path(first['failures'][0]['output_log']['path'])
+    original = path.read_bytes()
+    refused = execute(tmp_path, [item], 'large-provenance', task_id='t' * (9 * 1024 * 1024))
+    assert refused['status'] == 'FAIL' and refused['commands'][0]['returncode'] is None
+    assert 'budget' in refused['commands'][0]['error']
+    assert (tmp_path / 'executed').read_text() == 'x'
+    assert len(refused['failures']) == 1 and refused['failures'][0]['returncode'] == 7
+    assert path.read_bytes() == original
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root bypasses file read permissions')
+def test_unreadable_result_preserves_failure_without_execution(tmp_path):
+    item = job(tmp_path, 'check', "print('authentic failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [item])
+    result_file = tmp_path / 'results.json'
+    original = result_file.read_bytes()
+    log = Path(first['failures'][0]['output_log']['path'])
+    (tmp_path / 'check.py').write_text("from pathlib import Path\nPath('executed').touch()\n")
+    result_file.chmod(0)
+    try:
+        with pytest.raises((PermissionError, RuntimeError)):
+            execute(tmp_path, [item], 'unreadable')
+    finally:
+        result_file.chmod(0o600)
+    assert result_file.read_bytes() == original
+    assert log.read_text() == 'authentic failure\n'
+    assert not (tmp_path / 'executed').exists()
+
+
+@pytest.mark.parametrize('pending,returncode,expected', [(False, 7, 1), (True, 7, 0), (False, None, 0)])
+def test_retained_failure_imports_legacy_last_execution(tmp_path, pending, returncode, expected):
+    item = job(tmp_path, 'check', "print('legacy failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [item])
+    result_file = tmp_path / 'results.json'
+    stored = json.loads(result_file.read_text())
+    record = stored['commands'][0]
+    fixed = tmp_path / 'results.json.logs' / (runner._digest('check') + '-attempt.log')
+    Path(record['output_log']['path']).rename(fixed)
+    record['output_log']['path'] = str(fixed)
+    diagnostic = {k: record[k] for k in ('execution_generation', 'state', 'returncode', 'error', 'output', 'output_log')}
+    diagnostic.update(returncode=returncode, execution_pending=pending)
+    record.update(returncode=None, state='executor_error', last_execution=diagnostic)
+    record.pop('attempt_id')
+    record.pop('output_log')
+    stored.pop('failures')
+    result_file.write_text(json.dumps(stored))
+    (tmp_path / 'check.py').write_text("print('new success')\n")
+    second = execute(tmp_path, [item], 'new')
+    assert second['status'] == 'PASS' and len(second['failures']) == expected
+    if expected:
+        row = second['failures'][0]
+        assert row['returncode'] == 7 and row['task_id'] == 'task' and row['run_id'] == 'run'
+        assert row['execution_generation'] == 'one'
+        assert row['output_log']['available'] and fixed.read_text() == 'legacy failure\n'
+
+
+def test_reuse_only_misses_do_not_duplicate_modern_failure_history(tmp_path):
+    item = job(tmp_path, 'check', "print('one authentic failure')\nraise SystemExit(7)\n")
+    first = execute(tmp_path, [item])
+    identity = first['failures'][0]['attempt_id']
+    reference = first['failures'][0]['output_log']
+    original = Path(reference['path']).read_bytes()
+    for index in range(4):
+        with (tmp_path / 'check.py').open('a') as stream:
+            stream.write(f'\n# changed input {index}\n')
+        result = execute(tmp_path, [item], f'reuse-{index}', reuse_only=True)
+        assert result['status'] == 'FAIL' and result['commands'][0]['returncode'] is None
+        assert len(result['failures']) == 1
+        assert result['failures'][0]['attempt_id'] == identity
+        assert Path(reference['path']).read_bytes() == original
+
+
+def test_producer_manifest_budget_refuses_before_execution(tmp_path, monkeypatch):
+    outputs = ['/'.join(['d' * 200] * 8 + [f'{index:02d}' + 'f' * 200]) for index in range(32)]
+    code = "from pathlib import Path\nPath('executed').touch()\nfor name in " + repr(outputs) + ":\n p=Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_text('built')\n"
+    item = job(tmp_path, 'prepare', code, kind='producer', outputs=outputs)
+    monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', 230000)
+    result = execute(tmp_path, [item])
+    assert result['status'] == 'FAIL' and result['commands'][0]['returncode'] is None
+    assert 'budget' in result['commands'][0]['error']
+    assert not (tmp_path / 'executed').exists()
+    assert all(not (tmp_path / name).exists() for name in outputs)
+    assert not result['commands'][0].get('execution_pending')

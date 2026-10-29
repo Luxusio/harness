@@ -156,3 +156,27 @@ def test_public_wbs_keeps_nearest_initialized_project_inside_ancestor_git(
     assert not result.get("isError"), result
     assert list((project / "doc/harness/tasks").glob("TASK__*/TASK.json"))
     assert not (outer / "doc/harness/tasks").exists()
+
+
+@pytest.mark.parametrize('kind', ['plain', 'git'])
+@pytest.mark.parametrize('action', ['open', 'migrate', 'verify'])
+def test_public_setup_recovery_identifies_project_initialization(tmp_path: Path, kind: str, action: str):
+    home = tmp_path / 'home'
+    home.mkdir()
+    repo = tmp_path / 'project'
+    repo.mkdir()
+    if kind == 'git':
+        subprocess.run(['git', 'init', '--quiet', str(repo)], check=True,
+                       capture_output=True, env=_env(home))
+    before = _tree(tmp_path)
+    arguments = dict(action=action)
+    if action != 'migrate':
+        arguments['wbs_id'] = 'audit'
+    response = _call(repo, home, arguments)
+    assert response.get('isError') is True
+    error = response['structuredContent']
+    assert error['error_code'] == 'HARNESS_NOT_INITIALIZED'
+    assert error['field'] == 'project_setup' and error['reason'] == 'setup_required'
+    assert 'manifest.yaml' in error['expected']
+    assert 'harness:setup' in error['next_action'] and 'selector' not in error['next_action']
+    assert _tree(tmp_path) == before

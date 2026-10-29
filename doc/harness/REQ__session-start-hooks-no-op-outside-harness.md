@@ -13,6 +13,10 @@ On 2026-10-29 the user explicitly required: “하네스 설치 안 된 폴더�
 - Public WBS requests, including open and migration, refuse before project metadata effects when initialization is absent. The response directs the caller to explicit setup; it never initializes a project automatically.
 - The run skill applies only inside this boundary. Ordinary development outside it continues without entering Harness.
 
+## Approved recovery correction (2026-10-29)
+
+user_confirmed: “ㄱㄱ 차례대로” approves the immediately preceding audit's incorrect setup-recovery finding. Derived observable behavior: missing initialization is classified as project setup in structured WBS errors and names explicit `harness:setup` as `next_action`. It must not label the refusal a malformed task selector or initialize automatically. Existing selector and unsafe-control errors retain their distinct remedies.
+
 ## Existing protection retained
 
 Native Codex session metadata remains runtime-owned under C-05 and the receipt-free execution contract, including when the current project is uninitialized. This host ownership guard is separate from project workflow activation. Invalid initialized control metadata also retains its existing fail-closed write protection. No receipt collector or new registry is introduced.

@@ -30,6 +30,8 @@ MAX_SOURCE_BYTE_LIMIT = 64 * 1024 * 1024
 MAX_LISTING_BYTES = 1024 * 1024
 MAX_MODULE_DEPTH = 8
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
+# Set only inside an isolated verification supervisor; commands never inherit it.
+_PARENT_LIFELINE = None
 
 
 def digest(value):
@@ -717,11 +719,21 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
         log_path = _diagnostic_path(log_path, repo)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         _diagnostic_path(log_path, repo)
-    proc = subprocess.Popen(argv, cwd=repo, env=env, pass_fds=pass_fds, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, start_new_session=True)
     output, failure = bytearray(), None
     selector = selectors.DefaultSelector()
-    selector.register(proc.stdout, selectors.EVENT_READ)
+    if _PARENT_LIFELINE is not None:
+        selector.register(_PARENT_LIFELINE, selectors.EVENT_READ, "parent")
+        if selector.select(0):
+            selector.close()
+            return dict(returncode=None, error="parent execution ended", output=b"" if binary else "", start_failed=True)
+    try:
+        proc = subprocess.Popen(argv, cwd=repo, env=env, pass_fds=pass_fds, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+    except BaseException:
+        selector.close()
+        raise
+    selector.register(proc.stdout, selectors.EVENT_READ, "stdout")
+    stdout_open = True
     deadline = time.monotonic() + timeout
     def stop():
         try:
@@ -729,14 +741,18 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
         except ProcessLookupError:
             pass
     try:
-        while selector.get_map():
+        while stdout_open or proc.poll() is None:
             if time.monotonic() >= deadline:
                 failure = "timeout"
                 break
             for key, _ in selector.select(min(0.1, max(0, deadline - time.monotonic()))):
+                if key.data == "parent":
+                    failure = "parent execution ended"
+                    break
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
                     selector.unregister(key.fileobj)
+                    stdout_open = False
                 else:
                     overflow = len(output) + len(chunk) > output_limit
                     output.extend(chunk[:max(0, output_limit - len(output))])

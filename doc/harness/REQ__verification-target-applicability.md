@@ -8,6 +8,10 @@ without product acceptance inflation, and no repeated checks solely to repair
 recording. Restoring identical source at another path preserves applicability.
 Unrelated documentation edits must not invalidate product QA.
 
+## Approved correction (2026-10-29)
+
+user_confirmed: “ㄱㄱ 차례대로” approves the immediately preceding audit's finding that a retired review lens still blocks close. Derived from that approval and the current-lens declarations: active applicability follows canonical current `TASK.json.required_lenses`, while immutable historical targets remain available. A retired lens cannot block current checks; reintroducing it again requires applicable target inputs. This does not waive independent reviews or actual QA.
+
 ## Derived mechanism
 
 Before review/QA against a copied source view, the owner uses

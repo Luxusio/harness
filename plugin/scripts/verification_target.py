@@ -339,11 +339,20 @@ def ensure_snapshot(task_dir, token, repo=None, *, output_dirs=()):
     return dict(record, snapshot_root=str(root))
 
 
+def _active_index(state, control):
+    index = state.get(FIELD) if state else None
+    if index is None:
+        return None
+    # Retired references remain in history, but are not current obligations.
+    return dict(index, required={lens: ref for lens, ref in index['required'].items()
+                                 if lens in control['required_lenses']})
+
+
 def measure_inputs(task_dir, repo):
     """Measure source outside task publication; retain exact owner authority."""
     from _lib import read_task_control
     state, control = wbs.read_state(task_dir), read_task_control(task_dir)
-    index = state.get(FIELD) if state else None
+    index = _active_index(state, control)
     rows = _input_rows(task_dir, repo, index, measure=True) if index and index.get("required") else []
     return dict(task_dir=os.path.realpath(task_dir), repo=os.path.realpath(repo),
                 state=state, control=control, rows=rows)
@@ -388,7 +397,7 @@ def applicability(task_dir, repo, *, measure=False, measured_inputs=None):
                  and measured_inputs["state"] == state and measured_inputs["control"] == control,
                  "authority or target index changed during measurement")
         measure = True
-    index = state.get(FIELD) if state else None
+    index = _active_index(state, control)
     if not index or not index.get("required"):
         return dict(status="unbound", enforced=False, source_binding="wbs_inputs", targets=[])
     rows = measured_inputs["rows"] if measured_inputs is not None else _input_rows(task_dir, repo, index, measure=False)

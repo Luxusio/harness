@@ -107,7 +107,13 @@ def _control_root() -> str:
     if error:
         raise RuntimeError(f"invalid Harness workspace at {root}: {error}")
     if not root or not is_harness_enabled_repo(root):
-        raise ValueError("Harness is not initialized in this project; run harness:setup explicitly before using WBS.")
+        raise _ToolArgumentError(
+            "Harness is not initialized in this project; run harness:setup explicitly before using WBS.",
+            error_code="HARNESS_NOT_INITIALIZED", field="project_setup", reason="setup_required",
+            rejected_value="<not initialized>",
+            expected="a project explicitly initialized with doc/harness/manifest.yaml",
+            next_action="Run harness:setup explicitly in this project, then retry the same WBS request.",
+        )
     return root
 def _server_runtime() -> str:
     runtime = getattr(_SERVER, "runtime", "") if _SERVER is not None else ""

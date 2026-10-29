@@ -1124,6 +1124,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         )
         for tool, args, field, expected_fragment in cases:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                initialize_fixture_project(tmp)
                 result = self._call_in_repo(tmp, tool, args)
                 payload = result["structuredContent"]
                 self.assertTrue(result.get("isError"))

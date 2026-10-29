@@ -13,6 +13,13 @@ The CLI, schema and lease design below are derived implementation mechanics.
 | Recheck changed and affected scopes | user_explicit; later message opening ““병렬로 해라”를 권장하는 대신, 작업 배정 단계에서 강제해야 해.”, item 4 | “변경되지 않은 코드의 검증은 재사용하고, 수정된 범위와 영향받는 부분만 다시 검증.” |
 | Lock conflicting resources while independent work proceeds | user_explicit; same later message, item 5 | “같은 VM·디스플레이·빌드 출력에는 자원 잠금을 적용. 독립 작업까지 함께 멈추지 않도록 함.” |
 
+## Approved lifecycle corrections (2026-10-29)
+
+user_confirmed: the reply “ㄱㄱ 차례대로” approves the immediately preceding audit's four findings, including nested timeout cleanup and lost failure history. These two outcomes extend the existing cooperative ownership and diagnostic-retention requirements. The implementation mechanics below are derived, not additional user-authored requirements.
+
+- Outer timeout or runner process-group termination must cancel nested command groups before resource and result ownership is released. The supervisor retains ownership until cleanup; an interrupted result never becomes completed evidence.
+- Authentic failed attempts and their diagnostic bytes survive later failures, success, reuse and restart without manual backups. Historical failures remain separate from current success and reusable candidates. Bounded storage exhaustion refuses before evidence deletion or an attempt whose result cannot be retained.
+
 ## Derived execution contract
 
 Derived from those intents and CONTRACTS C-04/C-14: `verify_runner.py --jobs`
@@ -58,8 +65,11 @@ be used as result stores. The schema is `harness.verification-execution`,
 `version: 1`, with `task_id`, `run_id`, `execution_generation`, aggregate
 `status`/`returncode` and declaration-ordered `commands`. Atomic intermediate
 publication has aggregate FAIL until all jobs successfully finish; readers need
-no lock. Corrupt, missing, foreign-task/run or unknown-version data is unavailable
-for reuse and is regenerated. A per-group store lease prevents concurrent
+no lock. Missing, foreign-task/run, unknown-version or parseable invalid current records
+are unavailable for reuse. Readable unsupported current records may be regenerated
+without promoting retained copies. Unreadable/oversized stores and invalid retained
+failure history refuse overwrite and preserve existing bytes; use a separate result
+store rather than deleting evidence to repair them. A per-group store lease prevents concurrent
 duplicate preparation; unrelated groups must use different result paths.
 
 Completed records contain `job_id`, `outcome_id`, `kind`, `argv`, `scope`,
@@ -133,10 +143,13 @@ not repeat an otherwise valid product command.
 Implementation decisions: the existing per-group result contains at most one
 flat successful candidate per current job. Compact log references include path,
 byte count, content digest, availability and whether the output budget stopped
-capture. Per-job success and attempt log slots sit beside the result JSON;
-reused success references retain their original generation. Superseded owned
-slots are removed after final publication, including interrupted or prior-run
-leftovers in the dedicated directory. The entire directory is excluded from
+capture. Per-job success and immutable attempt diagnostics sit beside the result JSON;
+reused success references retain their original generation. Authentic failure
+metadata stays in this same bounded per-group store (128 failures, 32 MiB of
+retained failure capture, and 16 MiB JSON). Admission reserves a full 1 MiB capture
+per active attempt and its complete serialized provenance before execution;
+cleanup retains every
+referenced historical failure log. Only unreferenced owned slots may be reclaimed. The entire directory is excluded from
 selected source/artifact/output ownership. WBS assertion logs use fixed slots
 under the task work directory, outside its measured inputs; proof JSON keeps
 only the existing tail and a compact log reference. A successful recheck updates
@@ -169,8 +182,10 @@ Ownership spans input hashing, command execution, descendant process-group
 teardown, output validation and atomic result publication. The existing bounded
 WBS executor kills descendants on success, error and timeout before releasing
 ownership. A small command supervisor inherits the lease descriptors and retains
-them through cleanup if the owning runner dies. Killing that supervisor or an
-entire host ends this cooperative lifetime guarantee. Missing or unsafe output
+them through cleanup if the owning runner dies. The supervisor is isolated from
+the runner process group and observes a parent-owned lifeline through the
+existing executor polling loop. Killing the supervisor directly or an entire
+host remains outside this cooperative guarantee. Missing or unsafe output
 after command success is executor failure.
 No Windows or real VM execution is claimed by the Linux CLI tests.
 

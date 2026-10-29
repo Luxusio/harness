@@ -12,16 +12,21 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 
 # Loaded lazily by the argv job path; the legacy manifest runner stays standalone.
 SCHEMA = "harness.verification-execution"
 VERSION = 1
+MAX_FAILURES = 128
+MAX_FAILURE_LOG_BYTES = 32 * 1024 * 1024
+MAX_RESULT_BYTES = 16 * 1024 * 1024
 
 
 def _digest(value):
@@ -83,16 +88,45 @@ def _path_leases(keys, path, exclusive):
     keys[key] = keys.get(key, False) or exclusive
 
 
-def _scoped_call(code, value, root, env, held=()):
+@contextmanager
+def _cancel_on_error(cancelled):
+    try:
+        yield
+    except BaseException:
+        cancelled.set()
+        raise
+
+
+def _scoped_call(code, value, root, env, held=(), *, cancelled=None):
     # Context probes see exactly the command environment. A command supervisor
     # inherits ownership and survives runner death until _execute reaps its group.
-    prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3])\n"
-    proc = subprocess.run([sys.executable, "-B", "-c", prefix + code,
-                           str(Path(__file__).resolve().parent), json.dumps(value), str(root)],
-                          cwd=str(root), env=env, pass_fds=tuple(held), capture_output=True, text=True)
-    if proc.returncode:
-        raise ValueError("scoped execution unavailable: " + proc.stderr[-4000:])
-    return json.loads(proc.stdout)
+    if cancelled is not None and cancelled.is_set():
+        raise ValueError("verification execution cancelled")
+    prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3]);import wbs;wbs._PARENT_LIFELINE=int(sys.argv[4])\n"
+    reader, writer = os.pipe()
+    try:
+        with subprocess.Popen([sys.executable, "-B", "-c", prefix + code,
+                               str(Path(__file__).resolve().parent), json.dumps(value), str(root), str(reader)],
+                              cwd=str(root), env=env, pass_fds=(*held, reader),
+                              start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            os.close(reader)
+            reader = None
+            while True:
+                if cancelled is not None and cancelled.is_set() and writer is not None:
+                    os.close(writer)
+                    writer = None
+                try:
+                    stdout, stderr = proc.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if proc.returncode:
+                raise ValueError("scoped execution unavailable: " + stderr[-4000:])
+            return json.loads(stdout)
+    finally:
+        for fd in (reader, writer):
+            if fd is not None:
+                os.close(fd)
 
 
 def _job_spec(value, root):
@@ -128,7 +162,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
     """One producer and its read-only consumers; records are advisory, not QA."""
     import verification_target as vt
     import wbs
-    from threading import RLock
+    from threading import RLock, Event
     from _lib import _atomic_text_write, _strict_regular_text_snapshot
     from prewrite_gate import _is_protected_artifact
     root, results_path = Path(repo_root).resolve(), Path(results_path).absolute()
@@ -162,7 +196,8 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
     log_paths = {}
     for job in jobs:
         stem = _digest(job["job_id"])
-        paths = {slot: log_directory / (stem + "-" + slot + ".log") for slot in ("success", "attempt")}
+        paths = {"success": log_directory / (stem + "-success.log"),
+                 "attempt": log_directory / (stem + "-" + secrets.token_hex(8) + "-attempt.log")}
         for path in paths.values():
             wbs._diagnostic_path(path, root)
         log_paths[job["job_id"]] = paths
@@ -187,9 +222,32 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
     records = {}
     successful = {}
     latest = {}
+    running = {}
+    cancelled = Event()
+
+    def scoped_call(code, value, root, env, held=()):
+        return _scoped_call(code, value, root, env, held, cancelled=cancelled)
+    record_fields = {"job_id", "outcome_id", "kind", "argv", "scope", "outputs", "execution_generation",
+                     "origin_generation", "state", "status", "returncode", "reused", "input_fingerprint",
+                     "context_fingerprint", "artifact_fingerprint", "artifact_manifest", "output", "error", "output_log", "attempt_id"}
     try:
         try:
-            previous = json.loads(_strict_regular_text_snapshot(str(results_path), max_size=16 * 1024 * 1024)["text"])
+            stored = json.loads(_strict_regular_text_snapshot(str(results_path), max_size=MAX_RESULT_BYTES)["text"])
+        except ValueError:
+            stored = {}
+        known_store = (isinstance(stored, dict) and stored.get('schema') == SCHEMA
+                       and stored.get('version') == VERSION
+                       and all(isinstance(stored.get(k), str) and stored[k] for k in ('task_id', 'run_id')))
+        failures = stored.get('failures', []) if known_store else []
+        if (not isinstance(failures, list) or len(failures) > MAX_FAILURES
+                or any(not isinstance(r, dict) or r.get('status') != 'FAIL'
+                       or type(r.get('returncode')) is not int
+                       or any(not isinstance(r.get(k), str) or not r[k] for k in ('job_id', 'task_id', 'run_id', 'attempt_id'))
+                       for r in failures)):
+            raise ValueError('invalid retained failure history; preserve the result store')
+        failures = [{k: v for k, v in r.items() if k in record_fields | {'task_id', 'run_id'}} for r in failures]
+        try:
+            previous = stored
             if not isinstance(previous, dict) or any(previous.get(k) != v for k, v in dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id).items()):
                 previous = {}
             if not isinstance(previous.get("execution_generation"), str) or not previous.get("execution_generation"):
@@ -224,9 +282,6 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                       and current.get("context_fingerprint") == candidate.get("context_fingerprint")):
                     old.pop(current["job_id"], None)
             # No recursive candidate chains, and only this invocation's job set.
-            record_fields = {"job_id", "outcome_id", "kind", "argv", "scope", "outputs", "execution_generation",
-                             "origin_generation", "state", "status", "returncode", "reused", "input_fingerprint",
-                             "context_fingerprint", "artifact_fingerprint", "artifact_manifest", "output", "error", "output_log"}
             successful = {j["job_id"]: {k: v for k, v in old[j["job_id"]].items() if k in record_fields}
                           for j in jobs if j["job_id"] in old}
         except (OSError, ValueError, TypeError, KeyError, RuntimeError):
@@ -235,7 +290,9 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
         def diagnostic_reference(reference, job_id, slot):
             if not wbs._valid_log_reference(reference):
                 return dict(available=False)
-            if reference["path"] != str(log_paths[job_id][slot]):
+            path = Path(reference["path"])
+            suffix = r'-success\.log' if slot == 'success' else r'-(?:[0-9a-f]{16}-)?attempt\.log'
+            if path.parent != log_directory or not re.fullmatch(_digest(job_id) + suffix, path.name):
                 return dict(reference, available=False)
             return wbs._log_available(reference, root)
 
@@ -264,16 +321,74 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                         diagnostic["output_log"] = diagnostic_reference(reference, record["job_id"], "attempt")
                 record["last_execution"] = diagnostic
 
+        def failure_row(record, origin):
+            row = {k: v for k, v in record.items() if k in record_fields}
+            row.update(task_id=origin['task_id'], run_id=origin['run_id'])
+            # Older version-1 stores had fixed slots but no attempt identity.
+            if not row.get('attempt_id'):
+                identity = dict(row)
+                identity.pop('output_log', None)
+                reference = row.get('output_log')
+                identity['log_identity'] = {k: v for k, v in reference.items() if k != 'available'} if isinstance(reference, dict) else None
+                row['attempt_id'] = _digest(identity)
+            return row
+
+        def remember_failure(record, origin):
+            if (record.get('status') != 'FAIL' or type(record.get('returncode')) is not int
+                    or not isinstance(record.get('job_id'), str) or not 0 < len(record['job_id']) <= 128):
+                return
+            row = failure_row(record, origin)
+            key = (row['task_id'], row['run_id'], row['job_id'], row['attempt_id'])
+            if not any((r['task_id'], r['run_id'], r['job_id'], r['attempt_id']) == key for r in failures):
+                failures.append(row)
+
+        if known_store:
+            for record in stored.get('commands', []) if isinstance(stored.get('commands'), list) else []:
+                if isinstance(record, dict):
+                    remember_failure(record, stored)
+                    diagnostic = record.get('last_execution')
+                    if ('failures' not in stored and isinstance(diagnostic, dict) and not diagnostic.get('execution_pending')
+                            and type(diagnostic.get('returncode')) is int
+                            and diagnostic.get('state') in {'command_failure', 'timeout', 'executor_error'}):
+                        remember_failure({**record, **diagnostic, 'status': 'FAIL'}, stored)
+        for failure in failures:
+            if 'output_log' in failure:
+                failure['output_log'] = diagnostic_reference(failure['output_log'], failure['job_id'], 'attempt')
+        if len(failures) > MAX_FAILURES:
+            raise ValueError('retained failure history budget exceeded; preserve the result store')
+
+        def result_payload():
+            ordered = [records[j['job_id']] for j in jobs if j['job_id'] in records]
+            ok = len(ordered) == len(jobs) and all(r['status'] == 'PASS' for r in ordered)
+            return dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id,
+                        execution_generation=execution_generation, status='PASS' if ok else 'FAIL',
+                        returncode=0 if ok else 1, commands=ordered, failures=failures,
+                        successful=[successful[j['job_id']] for j in jobs if j['job_id'] in successful])
+
+        def reserve_failure(pending):
+            active = [r for r in records.values() if r.get('execution_pending')]
+            active.append(pending)
+            retained_bytes = sum(r.get('output_log', {}).get('bytes', 0) for r in failures
+                                 if wbs._valid_log_reference(r.get('output_log')))
+            if len(failures) + len(active) > MAX_FAILURES or retained_bytes + len(active) * 1048576 > MAX_FAILURE_LOG_BYTES:
+                raise ValueError('retained failure history budget exhausted; preserve evidence and use a new result store')
+            worst = [dict(r, returncode=-999999999999999999999, error='\0' * 4096, output='\0' * 4000,
+                          artifact_fingerprint='0' * 64,
+                          artifact_manifest=[[name, False, wbs.MAX_ARTIFACT_BYTES, '0' * 64] for name in r['outputs']],
+                          output_log=dict(r['output_log'], bytes=1048576, sha256='0' * 64)) for r in active]
+            payload = result_payload()
+            payload['failures'] = failures + [failure_row(r, {'task_id': task_id, 'run_id': run_id}) for r in worst]
+            by_id = {r['job_id']: r for r in worst}
+            payload['commands'] = [by_id.get(r['job_id'], r) for r in payload['commands']
+                                   if r['job_id'] != pending['job_id']] + [worst[-1]]
+            if len(json.dumps(payload, sort_keys=True).encode()) > MAX_RESULT_BYTES:
+                raise ValueError('retained failure result budget exhausted; preserve the result store')
+
         def publish():
             with publication_lock:
-                ordered = [records[j["job_id"]] for j in jobs if j["job_id"] in records]
-                ok = len(ordered) == len(jobs) and all(r["status"] == "PASS" for r in ordered)
-                payload = dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id,
-                               execution_generation=execution_generation, status="PASS" if ok else "FAIL",
-                               returncode=0 if ok else 1, commands=ordered,
-                               successful=[successful[j["job_id"]] for j in jobs if j["job_id"] in successful])
+                payload = result_payload()
                 encoded = json.dumps(payload, sort_keys=True)
-                if len(encoded.encode()) > 16 * 1024 * 1024:
+                if len(encoded.encode()) > MAX_RESULT_BYTES:
                     raise ValueError("execution results exceed storage budget")
                 _atomic_text_write(str(results_path), encoded)
                 return payload
@@ -302,7 +417,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                 argv = [executable, *job["argv"][1:]]
                 env = {key: os.environ[key] for key in spec["environment"] if key in os.environ}
                 def observe_context():
-                    observed = _scoped_call("import verification_target as vt\nprint(json.dumps(vt._context(value, root)))", spec, root, env)
+                    observed = scoped_call("import verification_target as vt\nprint(json.dumps(vt._context(value, root)))", spec, root, env, [*held, *result_lease])
                     if not os.path.isabs(command) and Path(executable).is_relative_to(root) and executable not in job["spec"]["toolchains"]:
                         # Resolve absolute paths to execute, but identify a copied
                         # local command by its declared location and tool bytes.
@@ -359,18 +474,19 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                 # A newer actual attempt supersedes this job's successful candidate.
                 # In particular a same-input failure must never resurrect old PASS.
                 with publication_lock:
-                    successful.pop(job["job_id"], None)
                     attempt_path = log_paths[job["job_id"]]["attempt"]
                     wbs._diagnostic_path(attempt_path, root)
-                    attempt_path.unlink(missing_ok=True)
+                    record['attempt_id'] = attempt_path.name.split('-')[1]
                     pending_record = dict(record, execution_pending=True, error="execution result not published",
                                           output_log=dict(path=str(attempt_path), bytes=0, sha256=hashlib.sha256(b"").hexdigest(),
                                                           truncated=False, available=False))
+                    reserve_failure(pending_record)
+                    successful.pop(job['job_id'], None)
                     records[job["job_id"]] = pending_record
                     publish()
                 try:
                     code = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
-                    result = _scoped_call(code, dict(argv=argv, timeout=timeout, log_path=str(log_paths[job["job_id"]]["attempt"])), root, env, [*held, *result_lease])
+                    result = scoped_call(code, dict(argv=argv, timeout=timeout, log_path=str(log_paths[job["job_id"]]["attempt"])), root, env, [*held, *result_lease])
                 except OSError as exc:
                     record.update(state="start_failed", error=str(exc))
                     return record
@@ -401,7 +517,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     preserve_failure(records[job["job_id"]])
                 publish()
                 continue
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool, _cancel_on_error(cancelled):
                 while pending or running:
                     for job in list(pending):
                         if len(running) >= max_workers:
@@ -422,6 +538,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                                 record = future.result()
                                 with publication_lock:
                                     preserve_failure(record)
+                                    remember_failure(record, {'task_id': task_id, 'run_id': run_id})
                                     records[record["job_id"]] = record
                                     if record["status"] == "PASS":
                                         successful[record["job_id"]] = dict(record)
@@ -440,9 +557,10 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
         # leftovers; publication precedes reclamation.
         retained = {r.get("output_log", {}).get("path") for r in [*records.values(), *successful.values()]}
         retained.update(r.get("last_execution", {}).get("output_log", {}).get("path") for r in records.values())
+        retained.update(r.get('output_log', {}).get('path') for r in failures)
         if log_directory.is_dir():
             for path in log_directory.iterdir():
-                if re.fullmatch(r"[0-9a-f]{64}-(success|attempt)\.log", path.name) and str(path) not in retained:
+                if re.fullmatch(r"[0-9a-f]{64}-(?:[0-9a-f]{16}-)?(success|attempt)\.log", path.name) and str(path) not in retained:
                     try:
                         wbs._diagnostic_path(path, root)
                         path.unlink(missing_ok=True)
@@ -450,6 +568,10 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                         pass
         return payload
     finally:
+        cancelled.set()
+        for held in running.values():
+            for fd in held:
+                os.close(fd)
         for fd in result_lease:
             os.close(fd)
 
@@ -590,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
                                run_id=args.run_id, execution_generation=args.generation,
                                results_path=args.results, capabilities=args.capability,
                                max_workers=args.max_workers, timeout=args.timeout or 60, reuse_only=args.reuse_only)
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
             parser.error(str(exc))
         print(json.dumps(payload, indent=2, sort_keys=True))
         return payload["returncode"]
