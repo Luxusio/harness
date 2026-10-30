@@ -1,15 +1,15 @@
 ---
 name: plan
-description: Harness-native planning pipeline with a compact low-risk branch and a full single-reviewer branch; both write PLAN.md and task lens declarations via MCP.
-argument-hint: <task-slug>
+description: Harness-native planning pipeline with a compact low-risk branch and a full single-reviewer branch; both write PLAN.md and WBS lens declarations via MCP.
+argument-hint: <wbs-slug>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__wbs
 ---
 
-Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish the final task contract through the protected-artifact MCP.
+Harness-native planning pipeline. Conservatively eligible low-risk work uses the compact procedure; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish the final WBS contract through the protected-artifact MCP.
 
 > Current artifact model: acceptance criteria live in `PLAN.md`; `wbs(action="plan")`
-> publishes it with required lens declarations in `TASK.json`.
+> publishes it with required lens declarations in `WBS.control.json`.
 
 ## Sub-files
 
@@ -17,10 +17,10 @@ This skill is split across four sub-files. Load on demand:
 
 | File | Content |
 |------|---------|
-| `intake.md` | Phase 0 (spawned detection, session recovery, task pack read, git context, base branch, scope detection, planning-procedure branch) |
+| `intake.md` | Phase 0 (spawned detection, session recovery, WBS pack read, git context, base branch, scope detection, planning-procedure branch) |
 | `review-phases.md` | Phase 1 (merged CEO+Eng reviewer template, dimensions, UI checklist, coordinator-only fallback) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, AskUserQuestion format |
-| `write-artifacts.md` | Phase 6 (PLAN.md / TASK.json lens declarations + MCP writes, learnings, close) |
+| `write-artifacts.md` | Phase 6 (PLAN.md / WBS.control.json lens declarations + MCP writes, learnings, close) |
 
 Phase 5 (procedure-aware user gate) stays inline below.
 
@@ -32,7 +32,7 @@ Phase 5 (procedure-aware user gate) stays inline below.
 - **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
-- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
+- **Write via MCP only.** PLAN.md and WBS.control.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
 - **Zero browser-flag participation.** Does not invent or inspect undeclared browser verification flags.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
@@ -118,7 +118,7 @@ Iterate every non-skip-listed section at full depth. See `review-phases.md` for 
 Keep ordinary same-session planning state in working context. Do not create
 PLAN_SESSION.json by default. It may be created when planning is explicitly
 resumable, delegated across contexts, or otherwise needs recovery across a turn.
-It is scratch only and never controls task routing or artifact ownership.
+It is scratch only and never controls WBS routing or artifact ownership.
 
 | State | Phase | Condition |
 |-------|-------|-----------|
@@ -126,7 +126,7 @@ It is scratch only and never controls task routing or artifact ownership.
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
 | `closed` | post-6 | Transitional state immediately before scratch removal |
 
-When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after a successful `wbs(action="plan")`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
+When scratch is used, it has `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after a successful `wbs(action="plan")`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/WBS context; do not bulk-migrate historical WBS roots.
 
 
 ---
@@ -141,7 +141,7 @@ Full protocol, dimensions, checklists, and the coordinator-only fallback: `revie
 
 ## Phase orchestration (load sub-files for detail)
 
-1. **Phase 0** — `intake.md`. Always runs and selects `compact` or `full` planning procedure; TASK.json remains `standard` or `micro` only.
+1. **Phase 0** — `intake.md`. Always runs and selects `compact` or `full` planning procedure; WBS.control.json remains `standard` or `micro` only.
 2. **Compact branch** — for conservatively classified low-risk standard work, perform one bounded assessment and proceed to Phase 5. Ask only unresolved material decisions.
 3. **Full branch Phase 1 — Plan Review** — `review-phases.md` § Phase 1. Premise extraction and authorization classification are mandatory analysis. One reviewer merges CEO (premise/scope) and Engineering (architecture/tests/failure) methodology; adds a UI checklist when `ui_scope=true`.
 4. **Phase 5 — Consolidated Decision Gate** — inline below. Either procedure asks once only when unresolved material decisions remain.
@@ -213,7 +213,7 @@ Taste decisions are retained for PLAN.md's Decision Audit Trail. Do not surface 
 Cognitive load rules still apply for the PLAN decision rows:
 - **0 taste:** no rows written.
 - **1-7 taste:** one row per decision, flat.
-- **8+ taste:** one row per decision, with `phase_group` field set so the row is queryable post-task.
+- **8+ taste:** one row per decision, with `phase_group` field set so the row is queryable post-WBS.
 
 PLAN.md decision-row format:
 ```
@@ -289,7 +289,7 @@ Options (2 — keep this order so the Recommended label sticks to Approve):
 
 ## Planning procedure branches
 
-The exact TASK.json mode remains `standard|micro`. Standard work uses the
+The exact WBS.control.json mode remains `standard|micro`. Standard work uses the
 fail-closed compact/full selection in `intake.md` Phase 0.7. Compact planning
 collapses plan-time review into one bounded assessment but retains the same
 canonical PLAN.md output and every develop-time verification boundary. Full
@@ -305,5 +305,5 @@ Capstone — restating six load-bearing rules in one place. Most also appear in 
 - **User gates.** Both planning procedures ask once for unresolved material decisions. Explicit request and clarification are reusable authorization; review depth does not manufacture premise or final approval rounds.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail. No silent auto-decisions.
 - **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Use the evidence and decisions required by the section; length alone never establishes completeness.
-- **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.
+- **Artifacts are deliverables.** PLAN.md and valid required lenses in WBS.control.json must exist before Phase 6 closes the session.
 - **Sequential order.** Compact: Phase 0 → bounded assessment → 5 (only if challenged) → 6. Full: Phase 0 → 1 → 5 → 6. Review phases never overlap.

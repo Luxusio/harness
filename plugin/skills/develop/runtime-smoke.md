@@ -102,7 +102,7 @@ Steps:
    ```
    If HTTP 5xx or connection refused: fix immediately. T1 (our code).
 
-2. **Endpoint discovery:** For each endpoint added/modified by this task's ACs:
+2. **Endpoint discovery:** For each endpoint added/modified by this WBS's ACs:
    ```bash
    # Extract routes from diff
    git diff --name-only HEAD | grep -E "(route|controller|handler|api|endpoint)" || echo "NO_ROUTE_FILES"
@@ -164,7 +164,7 @@ Steps:
    ```
    If exit code != 0: binary doesn't start. Fix immediately.
 
-3. **Basic safe command:** For each command added/modified by this task's ACs,
+3. **Basic safe command:** For each command added/modified by this WBS's ACs,
    select the documented safe arguments (including `--dry-run` only when its
    non-mutating semantics are documented), or use an authorized disposable fixture:
    ```bash

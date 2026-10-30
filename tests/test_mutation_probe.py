@@ -843,7 +843,7 @@ GUARD = """\
         return False
 """
 
-# Every case gives an open task, exactly as every fixture did in the tree that
+# Every case gives an open WBS, exactly as every fixture did in the tree that
 # shipped the real defect. The conjunct is therefore never observed and no
 # assertion here changes when it is deleted.
 GUARD_TESTS = """\

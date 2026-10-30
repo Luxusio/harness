@@ -1,6 +1,6 @@
 # harness on Codex CLI — install + first run
 
-This guide gets a Codex CLI user from `git clone` to first PASS verdict on a harness task. Time to hello world target: ≤ 5 minutes on a clean Codex 1.1+ install.
+This guide gets a Codex CLI user from `git clone` to first PASS verdict on a Harness WBS. Time to hello world target: ≤ 5 minutes on a clean Codex 1.1+ install.
 
 If you're a Claude Code user, see the root [`README.md`](README.md) — your install path is `/plugin marketplace add`. The instructions below DO NOT apply to Claude Code.
 
@@ -27,14 +27,14 @@ codex exec "list harness mcp tools" < /dev/null
 
 If step 2 fails, re-run with `python3 install.py --codex-only --force`. The installer copies `plugin/` plus the Codex plugin manifest tree into `~/.codex/harness/`, writes `.agents/plugins/marketplace.json`, writes plugin-local `hooks.json`, then writes only plugin enablement and MCP registration into `~/.codex/config.toml`.
 
-## Capability caveats — read before opening a task
+## Capability routing — read before opening a WBS
 
-This is partial parity. **What's NOT in v1 on Codex:**
+QA and review routing uses tools available in the actual session. When browser
+QA is required, use the browser/device-lab tools exposed to that session; report
+BLOCKED_ENV if the required application or capability is unavailable. Use the
+available user-input mechanism when a real user decision is needed.
 
-- `qa-browser` (browser MCP integration deferred to v2)
-- `AskUserQuestion` — Codex has no native equivalent in v1
-
-See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the full row-by-row support table.
+See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for runtime details.
 
 **What DOES work on Codex:**
 - Public loop: `WBS open → plan → develop → QA → close` (independent review and `wbs(action="verify")` are internal close gates)
@@ -48,13 +48,13 @@ See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the ful
 ```bash
 cd <your project>
 
-# Plain request: the agent recognizes repo mutation and opens/resumes a task.
+# Plain request: the agent recognizes repo mutation and opens/resumes a WBS.
 codex exec 'fix the flaky test in tests/auth/' < /dev/null
 
 # Or start an explicit native Goal. Codex opens the same objective’s WBS.
 codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 
-# Watch it walk task start -> plan -> develop -> QA -> close.
+# Watch it walk WBS open -> plan -> develop -> QA -> close.
 # Verify with:
 codex exec 'show the current harness WBS progress and ready outcomes' < /dev/null
 ```
@@ -62,7 +62,7 @@ codex exec 'show the current harness WBS progress and ready outcomes' < /dev/nul
 Formal code review deterministically selects ephemeral LIGHT (no hunters),
 STANDARD (one selected correctness or contract/test hunter), or DEEP (both
 hunters), then always runs one fresh full-sweep authoritative verifier. Depth
-is not authoritative lifecycle state or a dedicated task, receipt, or
+is not authoritative lifecycle state or a dedicated WBS, receipt, or
 review-detail field, though selected depth and evidence may appear in stored
 non-authoritative formal-review narrative. Conditional security review remains
 separate.

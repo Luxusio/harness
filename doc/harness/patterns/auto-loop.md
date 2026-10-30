@@ -1,6 +1,6 @@
 ---
 tags: [harness, auto-loop, claude-goal]
-summary: native `/goal`은 Claude에서 유일한 auto-continue primitive다. Harness는 같은 objective의 WBS를 열고, close-gate(`task_close` PASS)를 `/goal` condition에 넣는 것으로 지속 루프를 만든다. 예전 stop-gate 스크립트는 2026-09-23 삭제됐고 자동 재개에 관여하지 않는다.
+summary: native `/goal`은 Claude에서 유일한 auto-continue primitive다. Harness는 같은 objective의 WBS를 열고, close-gate(`wbs(action="close")` PASS)를 `/goal` condition에 넣는 것으로 지속 루프를 만든다. 예전 stop-gate 스크립트는 2026-09-23 삭제됐고 자동 재개에 관여하지 않는다.
 freshness: current
 updated: 2026-09-23
 ---
@@ -10,8 +10,8 @@ updated: 2026-09-23
 ## 한 줄 요약
 **native `/goal`이 Claude에서 유일한 auto-continue primitive다.** Harness는
 같은 objective의 WBS를 사용하고, 내부 실행의
-task start → plan → develop → QA → close 공개 루프는 코디네이터가 직접
-진행한다. 독립 리뷰와 `task_verify`는 close 전 내부 게이트다. Turn-end는
+WBS open → plan → develop → QA → close 공개 루프는 코디네이터가 직접
+진행한다. 독립 리뷰와 `wbs(action="verify")`는 close 전 내부 게이트다. Turn-end는
 Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록은 2026-09-23
 제거됐다 (`plugin/hooks/hooks.json`에 `Stop` 엔트리 없음). 그 등록이 가리키던
 스크립트(옛 stop-gate turn-end 게이트)는 같은 날 트리에서 삭제됐으며,
@@ -35,17 +35,19 @@ Claude에서 hook으로 게이트되지 않는다 — Claude `Stop` 훅 등록�
 
 ### Harness WBS 연결
 1. Native `/goal <objective>`가 있으면 hook은 같은 WBS를 열도록 안내한다.
-   hook은 Goal 장부나 task를 생성하지 않는다. 에이전트가
+   hook은 별도 Goal 장부나 WBS root를 생성하지 않는다. 에이전트가
    `wbs(action="open", objective=...)`으로 일반 요청과 같은 실행을 연다.
-2. Turn-end 자체는 hook으로 강제되지 않는다. 태스크가 `in_progress`인 동안
+2. Turn-end 자체는 hook으로 강제되지 않는다. 현재 WBS가 열려 있는 동안
    완결로 인정되는 것은 current measured WBS checks의 `runtime_verdict: PASS` 를 거친
-   `task_close` 뿐이다 (C-04, C-17).
+   `wbs(action="close")` 뿐이다 (C-04, C-17).
 3. `/goal` 조건에 close 조건을 넣으면 native Stop hook이 그 조건이
-   충족될 때까지 자동 재개시킨다: `/goal harness task <task_id>이 닫힐
+   충족될 때까지 자동 재개시킨다: `/goal Harness WBS <wbs_id>가 닫힐
    때까지 진행. PLAN.md의 acceptance intent를 충족하고, 실제 independent review PASS 뒤 실제 QA PASS를 받고 current required WBS
    checks로 runtime_verdict=PASS를 만든 뒤 wbs(action="close") 성공.`
-4. Task가 `.active`로 열린 채 turn이 끝나면, 태스크는 다음 turn 또는 다음
-   session에서 `wbs(action="open")`/`wbs(action="context")`로 재개된다 — 이것이 native
+4. 현재 WBS가 열린 채 turn이 끝나면 다음 turn 또는 다음 session에서
+   `wbs(action="open")`/`wbs(action="context")`로 같은 root와 run을 재개한다.
+   쓰기 권한은 현재 exact session의 유효한 WBS/run binding과 assignment에서만
+   오며, legacy `.active`나 다른 세션의 hint는 권한을 주지 않는다. 이것이 native
    `/goal`을 쓰지 않는 경우의 지속 경로다. `/goal`을 쓰면 native Stop hook의
    재호출이 그 재개를 자동화한다.
 

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 import work_pack
 
 GOAL = "GOAL__parallel"
-CHILD = "TASK__integration"
+CHILD = "WBS__integration"
 
 
 def request(*args, **kwargs):
@@ -67,7 +67,7 @@ def test_missing_pack_routes_without_creating_state(tmp_path, monkeypatch):
     assert result["route"] == "batch" and result["batch_state"] == "missing"
     assert not pool.state.exists()
     assert work_pack.make_spec(str(pool.repo), CHILD, requests()) == spec
-    assert work_pack.make_spec(str(pool.repo), "TASK__other", requests())["batch_id"] != spec["batch_id"]
+    assert work_pack.make_spec(str(pool.repo), "WBS__other", requests())["batch_id"] != spec["batch_id"]
 
 
 def test_invalid_intake_refused(tmp_path, monkeypatch, requests):
@@ -85,12 +85,24 @@ def test_new_pack_rejects_used_lead_identity(tmp_path, monkeypatch, used_identit
     if used_identity == "pool":
         pool.init(requests(), owner=CHILD)
     else:
-        parent = "tasks" if used_identity == "task" else "archive/batch"
-        directory = pool.repo / "doc/harness" / parent / "TASK__a"
+        parent = "wbs" if used_identity == "task" else "archive/batch"
+        directory = pool.repo / "doc/harness" / parent / "WBS__a"
         directory.mkdir(parents=True)
-        (directory / "TASK.json").write_text('{"status":"closed"}\n')
+        (directory / "WBS.control.json").write_text('{"status":"closed"}\n')
     with pytest.raises(ValueError, match="identity already"):
         work_pack.make_spec(str(pool.repo), CHILD, requests())
+
+
+def test_retired_archive_identity_cannot_be_reused_as_a_new_lead(tmp_path, monkeypatch):
+    import pytest
+    from test_batch_state import Pool
+    pool = Pool(tmp_path, monkeypatch)
+    old = pool.repo / 'doc/harness/archive/batch/TASK__a'
+    old.mkdir(parents=True)
+    (old / 'report.json').write_text('historical bytes')
+    with pytest.raises(ValueError, match='identity already used'):
+        work_pack.make_spec(str(pool.repo), CHILD, requests())
+    assert (old / 'report.json').read_text() == 'historical bytes'
 
 
 def test_submodule_intent_preserved_without_derived_fields():
@@ -120,7 +132,7 @@ def test_integrated_pack_requires_archive_and_destination_proof(tmp_path, monkey
     integrated(pool)
     assert route(pool, spec)["route"] == "integration"
     work_pack.require_integrated(str(pool.repo), CHILD, spec)
-    archive = pool.repo / "doc/harness/archive/batch/TASK__a/PLAN.md"
+    archive = pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md"
     archive.write_text("changed archived evidence")
     with pytest.raises(ValueError, match="archive fingerprint"):
         route(pool, spec)
@@ -150,17 +162,17 @@ def test_stored_queries_skip_archive_hash_but_authority_still_refuses_tampering(
     assert stored["route"] == "integration" and stored["proof_fresh"] is False
     # Also cover an active pack, independent of the historical projection.
     active = dict(state, batch=spec, batch_history=[])
-    assert wbs.task_progress(str(td), str(pool.repo), state["run_id"], measure=False, _state=active)["integration"]["proof_fresh"] is False
+    assert wbs.wbs_progress(str(td), str(pool.repo), state["run_id"], measure=False, _state=active)["integration"]["proof_fresh"] is False
     (td / "WBS.json").write_text(wbs.encode_state(active))
     assert wbs.work_pack(str(td), str(pool.repo), state["run_id"], host=host_snapshot())["route"] == "integration"
-    (pool.repo / "doc/harness/archive/batch/TASK__a/PLAN.md").write_text("tampered archived content")
+    (pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md").write_text("tampered archived content")
     assert work_pack.route(str(pool.repo), CHILD, spec, measure=False)["route"] == "integration"
     monkeypatch.setattr(batch_state, "fingerprint", actual)
     with pytest.raises(ValueError, match="archive fingerprint"):
         work_pack.require_integrated(str(pool.repo), CHILD, spec)
     with pytest.raises(ValueError, match="archive fingerprint"):
-        wbs.require_integrated_for_task(str(pool.repo), CHILD)
-    archive = pool.repo / "doc/harness/archive/batch/TASK__a"
+        wbs.require_integrated_for_wbs(str(pool.repo), CHILD)
+    archive = pool.repo / "doc/harness/archive/batch/WBS__a"
     archive.rename(archive.with_name("moved"))
     with pytest.raises(ValueError, match="missing"):
         work_pack.route(str(pool.repo), CHILD, spec, measure=False)
@@ -211,7 +223,7 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
     elif change == "branch":
         _git("checkout", "-qb", "elsewhere", cwd=pool.repo)
     elif change == "archive_symlink":
-        archive = pool.repo / "doc/harness/archive/batch/TASK__a"
+        archive = pool.repo / "doc/harness/archive/batch/WBS__a"
         target = archive.with_name("moved")
         archive.rename(target)
         archive.symlink_to(target, target_is_directory=True)
@@ -254,23 +266,23 @@ def mcp_integration(tmp_path, monkeypatch):
     pool, call, _ = context
     declare(context)
     integrated(pool)
-    started = call("task_start", {"task_id": CHILD})
+    started = call("wbs_open", {"wbs_id": CHILD})
     assert not started.get("isError"), started
-    planned = call("write_plan", {"task_id": CHILD, "plan": '# Integration\n```wbs\n[{"id":"A","title":"Combined result","weight":1,"check":["true"]}]\n```\n',
+    planned = call("write_plan", {"wbs_id": CHILD, "plan": '# Integration\n```wbs\n[{"id":"A","title":"Combined result","weight":1,"check":["true"]}]\n```\n',
                                   "required_lenses": ["review-code", "qa-cli"]})
     assert not planned.get("isError"), planned
     import wbs
-    directory = pool.repo / "doc/harness/tasks" / CHILD
+    directory = pool.repo / "doc/harness/wbs" / CHILD
     state = wbs.read_state(str(directory))
     assert state["started_at"] > 0 and state["last_progress_at"] == state["started_at"]
     assert state["scope_revision"] == 1
-    before_due = wbs.task_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7199)
+    before_due = wbs.wbs_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7199)
     assert before_due["percentage"] == 0 and not before_due["refinement_due"]
-    assert wbs.task_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7200)["refinement_due"]
-    directory = pool.repo / "doc/harness/tasks" / CHILD
+    assert wbs.wbs_progress(str(directory), str(pool.repo), state["run_id"], now=state["started_at"] + 7200)["refinement_due"]
+    directory = pool.repo / "doc/harness/wbs" / CHILD
     checked = call("wbs", {"action":"check", "wbs_id":CHILD, "node_id":"A"})
     assert not checked.get("isError"), checked
-    verified = call("task_verify", {"task_id": CHILD})
+    verified = call("wbs_verify", {"wbs_id": CHILD})
     assert not verified.get("isError"), verified
     assert verified["structuredContent"]["runtime_verdict"] == "PASS"
     assert verified["structuredContent"]["verification_basis"] == "current_wbs_checks"
@@ -281,13 +293,13 @@ def damage_pack_proof(pool, proof):
     if proof == "missing":
         pool.state.unlink()
     else:
-        archive = pool.repo / "doc/harness/archive/batch/TASK__a/PLAN.md"
+        archive = pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md"
         archive.write_text("altered preserved evidence\n")
 
 
 def test_mcp_completed_pack_closes_integration_child_and_goal(tmp_path, monkeypatch):
     pool, call, directory = mcp_integration(tmp_path, monkeypatch)
-    closed = call("task_close", {"task_id": CHILD})
+    closed = call("wbs_close", {"wbs_id": CHILD})
     assert not closed.get("isError"), closed
 
 
@@ -338,7 +350,7 @@ def test_prewrite_stored_custody_preserves_assignment(tmp_path, monkeypatch):
         assert "wbs-execution-assignment" in denied["permissionDecisionReason"]
     assert observed == ["owned.py", "unowned.py"] * 2
     # Stored structure remains mandatory even without reading archive bytes.
-    archive = pool.repo / "doc/harness/archive/batch/TASK__a"
+    archive = pool.repo / "doc/harness/archive/batch/WBS__a"
     archive.rename(archive.with_name("moved"))
     denied = check(pool.repo, pool.repo / "owned.py")
     assert denied["permissionDecision"] == "deny"
@@ -348,7 +360,7 @@ def test_prewrite_stored_custody_preserves_assignment(tmp_path, monkeypatch):
     monkeypatch.setattr(work_pack.batch, "fingerprint", original)
     damage_pack_proof(pool, "tampered")
     with pytest.raises(ValueError, match="archive fingerprint"):
-        wbs.require_integrated_for_task(str(pool.repo), CHILD)
+        wbs.require_integrated_for_wbs(str(pool.repo), CHILD)
 
 
 def test_outcome_checks_preserve_source_proof_but_final_verify_remeasures_custody(tmp_path, monkeypatch):
@@ -365,7 +377,7 @@ def test_outcome_checks_preserve_source_proof_but_final_verify_remeasures_custod
     assert checked['structuredContent']['passed']
     assert checked['structuredContent']['progress']['custody_measurement'] == 'stored'
     assert observed == []
-    verified = call('task_verify', dict(task_id=CHILD))
+    verified = call('wbs_verify', dict(wbs_id=CHILD))
     assert observed
     # Authentic review/QA PASS is separate from fresh WBS custody acceptance.
     assert not verified.get('isError'), verified
@@ -375,12 +387,12 @@ def test_outcome_checks_preserve_source_proof_but_final_verify_remeasures_custod
 def test_mcp_close_refuses_damaged_pack_without_closing_child(tmp_path, monkeypatch, proof):
     pool, call, directory = mcp_integration(tmp_path, monkeypatch)
     goal_file = directory / "WBS.json"
-    before = (directory / "TASK.json").read_bytes(), goal_file.read_bytes()
+    before = (directory / "WBS.control.json").read_bytes(), goal_file.read_bytes()
     damage_pack_proof(pool, proof)
-    closed = call("task_close", {"task_id": CHILD})
+    closed = call("wbs_close", {"wbs_id": CHILD})
     assert closed.get("isError"), closed
     assert "work pack" in closed["structuredContent"]["error"] or "work-pack" in closed["structuredContent"]["error"]
-    assert ((directory / "TASK.json").read_bytes(), goal_file.read_bytes()) == before
+    assert ((directory / "WBS.control.json").read_bytes(), goal_file.read_bytes()) == before
 
 
 
@@ -389,9 +401,9 @@ def test_integrated_pool_cannot_be_replayed_under_another_owner(tmp_path, monkey
     import pytest
     pool, spec = pack(tmp_path, monkeypatch)
     integrated(pool)
-    copied = dict(spec, task_id='TASK__other')
+    copied = dict(spec, wbs_id='WBS__other')
     with pytest.raises(ValueError, match='pool owner mismatch'):
-        work_pack.route(str(pool.repo), 'TASK__other', copied)
+        work_pack.route(str(pool.repo), 'WBS__other', copied)
     assert route(pool, spec)['route'] == 'integration'
 
 

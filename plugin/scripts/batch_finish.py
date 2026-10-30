@@ -4,13 +4,13 @@
 Run from the main checkout once per lead that returned `verdict: "closed"`,
 in order. It rebases the lead branch onto the main checkout's HEAD inside the
 lead's worktree, fast-forwards the main checkout, harvests the lead's
-gitignored task evidence (`batch_harvest.py`), and removes the worktree and
+gitignored WBS evidence (`batch_harvest.py`), and removes the worktree and
 branch. See `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`.
 
 Usage:
   python3 plugin/scripts/batch_finish.py --repo <main checkout> \
       --worktree <abs lead worktree> --branch <lead branch> \
-      --task-id <TASK__x> --commit <sha the lead returned> [--resume]
+      --wbs-id <WBS__x> --commit <sha the lead returned> [--resume]
 
 Before it changes anything it checks, and on a failed check leaves every
 repository as it found it: the worktree is a registered linked worktree of
@@ -36,7 +36,7 @@ Prints one JSON object and exits with its status:
                  conflicted paths, or a harvest or removal refusal). Go on to
                  the next closed lead.
   conflict    4  the rebase stopped on `conflicted_paths` and was aborted.
-                 Stop integrating; resolve it in the integration task.
+                 Stop integrating; resolve it in the integration WBS.
   ff-refused  5  the main checkout is dirty, detached, changed branch identity,
                  or `git merge --ff-only` refused. Stop integrating.
   error       1  unexpected failure. Stop integrating and report it.
@@ -69,10 +69,10 @@ from _lib import (  # type: ignore  # noqa: E402
 import batch_harvest  # type: ignore  # noqa: E402
 import batch_submodules  # type: ignore  # noqa: E402
 
-TASK_ID_RE = batch_harvest.TASK_ID_RE
+WBS_ID_RE = batch_harvest.WBS_ID_RE
 COMMIT_RE = re.compile(r"[0-9a-fA-F]{7,64}")
 BRANCH_RE = re.compile(r"[^\s~^:?*\[\\]+")
-TRAILER_KEY = "Harness-Task"
+TRAILER_KEY = "Harness-WBS"
 GIT_TIMEOUT_SECONDS = 600
 # The rebase writes commits; an identity that comes only from the
 # environment must survive the trusted (GIT_*-free) environment.
@@ -250,8 +250,8 @@ def require_owned_delta(repo, base, tip, scopes):
                               + '; retain the lead and reconcile its declared work before integration')
 
 
-def _trailer_present(repo: str, base: str, tip: str, task_id: str):
-    """Whether every commit in ``base..tip`` carries ``Harness-Task: <task_id>``.
+def _trailer_present(repo: str, base: str, tip: str, wbs_id: str):
+    """Whether every commit in ``base..tip`` carries ``Harness-WBS: <wbs_id>``.
 
     None when the range holds no commit, so there is nothing to trace.
     """
@@ -263,7 +263,7 @@ def _trailer_present(repo: str, base: str, tip: str, task_id: str):
     if not records:
         return None
     return all(
-        task_id in [value.strip() for value in record.split("\x1f")] for record in records
+        wbs_id in [value.strip() for value in record.split("\x1f")] for record in records
     )
 
 
@@ -283,7 +283,7 @@ def _result(args, worktree: str) -> dict:
     return {
         "status": "error",
         "reason": "",
-        "task_id": args.task_id,
+        "wbs_id": args.wbs_id,
         "branch": args.branch,
         "worktree": worktree,
         "returned_commit": args.commit,
@@ -336,7 +336,7 @@ def _check(repo: str, worktree: str, args, result: dict, retention=None, scopes=
         raise Outcome("ff-refused", "the main checkout is on a detached HEAD; nothing was changed")
     main_ref = main_ref.stdout.strip()
     main_head = _git_out(repo, "rev-parse", "--verify", main_ref).strip()
-    result["trailer_present"] = _trailer_present(repo, main_head, ref, args.task_id)
+    result["trailer_present"] = _trailer_present(repo, main_head, ref, args.wbs_id)
     merges = _git_out(repo, "rev-list", "--merges", f"{main_head}..{ref}").split()
     if merges:
         raise Outcome(
@@ -425,7 +425,7 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
     cleanup = result["cleanup"]
     if submodules is None:
         try:
-            batch_harvest.thaw_verification_sources(repo, worktree, result['task_id'], retention, proof)
+            batch_harvest.thaw_verification_sources(repo, worktree, result['wbs_id'], retention, proof)
         except batch_harvest.HarvestError as exc:
             raise Outcome('kept', f'ordinary removal proof refused, worktree kept: {exc}') from exc
     lock = _worktree_lock(repo, worktree)
@@ -443,7 +443,7 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
                 removed = _git(repo, "worktree", "remove", worktree)
             else:
                 removed = batch_harvest.remove_s1_worktree(
-                    repo, worktree, result['task_id'], submodules, proof, git_runner=_git,
+                    repo, worktree, result['wbs_id'], submodules, proof, git_runner=_git,
                 )
         finally:
             # A removal refusal must keep the native retention predicate too.
@@ -494,6 +494,9 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
     result = _result(args, worktree)
     ref = f"refs/heads/{args.branch}"
     try:
+        from wbs_namespace_migration import require_complete
+        require_complete(repo)
+        require_complete(worktree)
         if retention is not None and checkpoint is None:
             raise FinishError('retention cleanup requires a durable checkpoint callback')
         if submodules is not None:
@@ -567,7 +570,7 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
         if checkpoint:
             checkpoint("integrated", copy.deepcopy(result))
         try:
-            result["harvest"] = batch_harvest.harvest(repo, worktree, args.task_id)
+            result["harvest"] = batch_harvest.harvest(repo, worktree, args.wbs_id)
         except Exception as exc:  # any harvest failure is local to this lead
             raise Outcome("kept", f"harvest refused, worktree kept: {type(exc).__name__}: {exc}")
         removal_checkpoint = None
@@ -613,7 +616,7 @@ def main(argv=None) -> int:
     parser.add_argument("--repo", default=None, help="main checkout (default: discover from cwd)")
     parser.add_argument("--worktree", required=True, help="absolute path of the lead worktree")
     parser.add_argument("--branch", required=True, type=_arg(BRANCH_RE, "branch name"))
-    parser.add_argument("--task-id", required=True, type=_arg(TASK_ID_RE, "task id"))
+    parser.add_argument("--wbs-id", required=True, type=_arg(WBS_ID_RE, "task id"))
     parser.add_argument("--commit", required=True, type=_arg(COMMIT_RE, "commit (hex sha)"))
     parser.add_argument(
         "--resume", action="store_true",

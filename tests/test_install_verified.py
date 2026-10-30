@@ -42,12 +42,12 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
     (repo / "install.py").write_text("# fixture\n", encoding="utf-8")
-    task = repo / "doc/harness/tasks/TASK__install"
+    task = repo / "doc/harness/wbs/WBS__install"
     task.mkdir(parents=True)
     import wbs
     control = {"run_id": "0198c349-5800-7000-8000-000000000001", "closed": False,
                "execution_mode": "standard", "required_lenses": ["review-code", "qa-cli"]}
-    (task / "TASK.json").write_text(json.dumps(control))
+    (task / "WBS.control.json").write_text(json.dumps(control))
     plan = '# Plan\n```wbs\n[{"id":"A","title":"Installed","weight":1}]\n```\n'
     (task / "PLAN.md").write_text(plan)
     (task / "WBS.json").write_text(json.dumps(wbs.prepare(str(task), plan, control["run_id"])))
@@ -67,7 +67,7 @@ def test_install_requires_current_wbs_checks(tmp_path):
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
+        mock.patch.object(mod, "_validate_wbs_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
@@ -81,7 +81,7 @@ def test_install_requires_current_wbs_checks(tmp_path):
     run.assert_not_called()
 
 
-def test_verification_state_tracks_actual_task_wbs_and_target_applicability(tmp_path):
+def test_verification_state_tracks_actual_wbs_action_and_target_applicability(tmp_path):
     import wbs
     _, task = _repo(tmp_path)
     control = {"run_id": "run", "closed": False}
@@ -89,7 +89,7 @@ def test_verification_state_tracks_actual_task_wbs_and_target_applicability(tmp_
     context = {"runtime_verdict": "PASS", "missing_for_close": [],
                "verification_targets": {"status": "applicable"}}
     with (
-        mock.patch.object(mod, "read_task_control", return_value=control),
+        mock.patch.object(mod, "read_wbs_control", return_value=control),
         mock.patch.object(mod, "emit_compact_context", return_value=context) as measured,
         mock.patch.object(wbs, "read_state", return_value=state),
     ):
@@ -117,7 +117,7 @@ def test_stateless_installer_rechecks_every_call_with_conditional_mode(tmp_path)
     common = (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
+        mock.patch.object(mod, "_validate_wbs_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value=set()),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
@@ -140,7 +140,7 @@ def test_stateless_installer_rechecks_every_call_with_conditional_mode(tmp_path)
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
+        mock.patch.object(mod, "_validate_wbs_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value=set()),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global-2.lock"),
@@ -171,13 +171,13 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
     result = []
 
     @contextmanager
-    def task_transaction(_task_dir):
+    def task_transaction(_wbs_dir):
         if threading.current_thread().name == "authority-mutator":
             mutation_attempted.set()
         with task_lock:
             yield
 
-    def verification_state(_task_dir):
+    def verification_state(_wbs_dir):
         nonlocal verification_calls
         assert task_lock.locked()
         verification_calls += 1
@@ -193,10 +193,10 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
         return subprocess.CompletedProcess([], 0)
 
     def mutate_authority():
-        with mod.task_control_transaction(str(task)):
+        with mod.wbs_control_transaction(str(task)):
             assert installer_finished.is_set()
             assert final_verification_finished.is_set()
-            (task / "TASK.json").write_text('{"mutated": true}\n', encoding="utf-8")
+            (task / "WBS.control.json").write_text('{"mutated": true}\n', encoding="utf-8")
         mutation_finished.set()
 
     install_thread = threading.Thread(
@@ -207,7 +207,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
     patches = (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
+        mock.patch.object(mod, "_validate_wbs_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
@@ -215,7 +215,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
         mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
-        mock.patch.object(mod, "task_control_transaction", side_effect=task_transaction),
+        mock.patch.object(mod, "wbs_control_transaction", side_effect=task_transaction),
         mock.patch.object(mod.subprocess, "run", side_effect=run_installer),
     )
     for patcher in patches:
@@ -240,7 +240,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
     assert result == [0]
     assert verification_calls == 2
     assert mutation_finished.is_set()
-    assert json.loads((task / "TASK.json").read_text(encoding="utf-8")) == {"mutated": True}
+    assert json.loads((task / "WBS.control.json").read_text(encoding="utf-8")) == {"mutated": True}
 
 
 def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path):
@@ -316,7 +316,7 @@ def test_payload_change_during_install_withholds_success_marker(tmp_path):
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
+        mock.patch.object(mod, "_validate_wbs_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
@@ -334,16 +334,16 @@ def test_payload_change_during_install_withholds_success_marker(tmp_path):
     assert not (task / "INSTALL_RECEIPT.json").exists()
 
 
-def test_task_dir_must_be_canonical_and_active(tmp_path):
+def test_wbs_dir_must_be_canonical_and_active(tmp_path):
     repo, _ = _repo(tmp_path)
-    rogue = repo / "rogue/TASK__fake"
+    rogue = repo / "rogue/WBS__fake"
     rogue.mkdir(parents=True)
-    valid, reason = mod._validate_task_dir(repo, rogue.resolve(), "sid-9")
+    valid, reason = mod._validate_wbs_dir(repo, rogue.resolve(), "sid-9")
     assert not valid
     assert "not canonical" in reason
 
 
-def test_task_dir_requires_open_exact_session_generation(tmp_path):
+def test_wbs_dir_requires_open_exact_session_generation(tmp_path):
     repo, task = _repo(tmp_path)
     control = {
         "run_id": "0198c349-5800-7000-8000-000000000001",
@@ -352,12 +352,12 @@ def test_task_dir_requires_open_exact_session_generation(tmp_path):
         "closed": False,
     }
     with (
-        mock.patch.object(mod, "read_task_control", return_value=control),
-        mock.patch.object(mod, "active_task_binding_matches", return_value=False) as binding,
+        mock.patch.object(mod, "read_wbs_control", return_value=control),
+        mock.patch.object(mod, "active_wbs_binding_matches", return_value=False) as binding,
     ):
-        valid, reason = mod._validate_task_dir(repo, task.resolve(), "sid-9")
+        valid, reason = mod._validate_wbs_dir(repo, task.resolve(), "sid-9")
     assert not valid
-    assert "open active TASK.json generation" in reason
+    assert "open active WBS.control.json generation" in reason
     # The resolved id must reach the binding check; without it the lookup falls
     # back to "default" and misses the marker this session wrote.
     binding.assert_called_once_with(
@@ -367,14 +367,14 @@ def test_task_dir_requires_open_exact_session_generation(tmp_path):
 
 def test_resolved_session_id_uses_only_actual_caller(tmp_path):
     repo, task = _repo(tmp_path)
-    sessions = repo / "doc/harness/tasks/.active_sessions"
+    sessions = repo / "doc/harness/wbs/.active_sessions"
     sessions.mkdir(parents=True, exist_ok=True)
     (sessions / ".session-hint").write_text("another-actor\n", encoding="utf-8")
     for sid in ("real-sid", "default", "unknown"):
         with mock.patch.object(mod, "current_session_id", return_value=sid):
             assert mod._resolved_session_id(repo) == sid
-    with mock.patch.object(mod, "active_task_binding_matches", return_value=True) as binding:
-        valid, reason = mod._validate_task_dir(repo, task.resolve(), "default")
+    with mock.patch.object(mod, "active_wbs_binding_matches", return_value=True) as binding:
+        valid, reason = mod._validate_wbs_dir(repo, task.resolve(), "default")
     assert not valid and "session identity unavailable" in reason
     binding.assert_not_called()
 
@@ -417,7 +417,7 @@ def _measured_repo(tmp_path, monkeypatch):
     (repo / ".git").rmdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "remote.origin.url", mod.CANONICAL_REMOTE], cwd=repo, check=True)
-    (repo / ".gitignore").write_text("doc/harness/tasks/\n")
+    (repo / ".gitignore").write_text("doc/harness/wbs/\n")
     marker = tmp_path / "installed"
     (repo / "install.py").write_text(
         "from pathlib import Path\n"
@@ -428,7 +428,7 @@ def _measured_repo(tmp_path, monkeypatch):
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
                     "commit", "-qm", "fixture"], cwd=repo, check=True)
-    control = mod.read_task_control(str(task))
+    control = mod.read_wbs_control(str(task))
     nodes = [{"id": "A", "title": "Current payload", "weight": 1,
               "check": [sys.executable, "-c", "from pathlib import Path; assert Path('plugin/source.bin').read_bytes().startswith(b'good')"]}]
     plan = "# Plan\n```wbs\n" + json.dumps(nodes) + "\n```\n```wbs-inputs\n" + json.dumps(
@@ -441,12 +441,12 @@ def _measured_repo(tmp_path, monkeypatch):
     sessions = task.parent / ".active_sessions"
     sessions.mkdir()
     (sessions / "installer-test.json").write_text(json.dumps({
-        "session_id": "installer-test", "task_dir": str(task), "task_id": task.name,
+        "session_id": "installer-test", "wbs_dir": str(task), "wbs_id": task.name,
         "run_id": control["run_id"], "updated": "2026-10-29T00:00:00Z",
     }))
     monkeypatch.setattr(mod, "_resolved_session_id", lambda _: "installer-test")
     monkeypatch.setattr(mod, "_global_lock_path", lambda: tmp_path / "install.lock")
-    assert mod._validate_task_dir(repo, task, "installer-test")[0]
+    assert mod._validate_wbs_dir(repo, task, "installer-test")[0]
     assert mod._verification_state(task)[0]
     return repo, task, marker
 
@@ -535,9 +535,9 @@ def test_real_preinstall_drift_never_executes_snapshot(tmp_path, monkeypatch, dr
             state["checks"]["A"]["checked_at"] += 1
             (task / "WBS.json").write_text(json.dumps(state))
         elif drift == "control":
-            control = mod.read_task_control(str(task))
+            control = mod.read_wbs_control(str(task))
             control["required_lenses"].append("review-security")
-            (task / "TASK.json").write_text(json.dumps(control))
+            (task / "WBS.control.json").write_text(json.dumps(control))
         elif drift == "binding":
             (task.parent / ".active_sessions/installer-test.json").unlink()
         elif drift == "unverified-swap":
@@ -570,9 +570,9 @@ def test_real_postinstall_drift_withholds_success(tmp_path, monkeypatch, capsys,
                 state["checks"]["A"]["checked_at"] += 1
                 (task / "WBS.json").write_text(json.dumps(state))
             elif drift == "control":
-                control = mod.read_task_control(str(task))
+                control = mod.read_wbs_control(str(task))
                 control["required_lenses"].append("review-security")
-                (task / "TASK.json").write_text(json.dumps(control))
+                (task / "WBS.control.json").write_text(json.dumps(control))
             elif drift == "binding":
                 (task.parent / ".active_sessions/installer-test.json").unlink()
         return result
@@ -583,7 +583,7 @@ def test_real_postinstall_drift_withholds_success(tmp_path, monkeypatch, capsys,
     assert "verified delivery PASS" not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("name", ["TASK.json", "WBS.json"])
+@pytest.mark.parametrize("name", ["WBS.control.json", "WBS.json"])
 def test_definition_baseline_rejects_unsafe_metadata(tmp_path, name):
     _, task = _repo(tmp_path)
     path = task / name
@@ -592,7 +592,7 @@ def test_definition_baseline_rejects_unsafe_metadata(tmp_path, name):
         mod._verification_definition(task)
 
 
-@pytest.mark.parametrize("name,limit", [("TASK.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
+@pytest.mark.parametrize("name,limit", [("WBS.control.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
 @pytest.mark.parametrize("grow_during_read", [False, True])
 def test_definition_baseline_preserves_metadata_read_limits(tmp_path, monkeypatch, name, limit, grow_during_read):
     import os
@@ -633,7 +633,7 @@ def test_definition_baseline_preserves_metadata_read_limits(tmp_path, monkeypatc
     assert grew == grow_during_read
 
 
-@pytest.mark.parametrize("name,limit", [("TASK.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
+@pytest.mark.parametrize("name,limit", [("WBS.control.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
 def test_canonical_definition_rereads_bound_growth_after_stat(tmp_path, monkeypatch, name, limit):
     import os
     import wbs
@@ -671,8 +671,8 @@ def test_canonical_definition_rereads_bound_growth_after_stat(tmp_path, monkeypa
     monkeypatch.setattr(os, "open", opened)
     monkeypatch.setattr(os, "fstat", fstat)
     monkeypatch.setattr(os, "read", read)
-    if name == "TASK.json":
-        assert mod.read_task_control(str(task)) == {}
+    if name == "WBS.control.json":
+        assert mod.read_wbs_control(str(task)) == {}
     else:
         with pytest.raises(RuntimeError, match="size limit"):
             wbs.read_state(str(task))
@@ -747,13 +747,13 @@ def test_denied_payload_is_never_read(tmp_path, monkeypatch, denied, leaf_overri
     assert not marker.exists()
 
 
-def test_active_task_switch_during_install_withholds_marker(tmp_path):
+def test_active_wbs_switch_during_install_withholds_marker(tmp_path):
     repo, task = _repo(tmp_path)
     validate = mock.Mock(side_effect=[(True, ""), (True, ""), (False, "task is not active")])
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", validate),
+        mock.patch.object(mod, "_validate_wbs_dir", validate),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
@@ -767,7 +767,7 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
         assert mod.install_verified(task) == 5
     assert not (task / "INSTALL_RECEIPT.json").exists()
     # Both binding checks must use one id resolved once. Re-inlining the
-    # resolution inside _validate_task_dir would let a prompt hook rewriting
+    # resolution inside _validate_wbs_dir would let a prompt hook rewriting
     # .session-hint mid-install make the post-check consult a different
     # session than the pre-check.
     assert validate.call_count == 3

@@ -19,7 +19,7 @@ review PASS must still precede actual acceptance QA.
 
 ## Step 0: Verify the issued execution target
 
-Before running tests against a frozen source view, confirm the current task/run's
+Before running tests against a frozen source view, confirm the current WBS/run's
 issued acceptance target and use its latest returned `snapshot_root` as the exact
 cwd. Validate the selected immutable input manifest and execution context
 (declared commands, relevant environment and toolchains) through the existing
@@ -53,7 +53,7 @@ trees — `~/.claude/harness-dev`, the Claude plugin cache
 from, `~/.codex/harness`, and the Codex plugin cache entry
 `~/.codex/plugins/cache/harness/harness` that Codex actually loads — and a
 test, script, or mutation experiment that reaches one can delete the runtime
-needed by subsequent work. Review and QA check all four roots, not only task artifacts.
+needed by subsequent work. Review and QA check all four roots, not only WBS artifacts.
 
 ```bash
 snapshot() { for r in "$HOME/.claude/harness-dev" \
@@ -101,7 +101,7 @@ See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 Before issuing a frozen target or starting native roles, identify writable
 operational outputs from the actual command and framework. Declare bounded
 runtime-only `output_dirs` outside selected inputs; in this repository pytest's
-session marker guard needs `output_dirs:["doc/harness/tasks"]`. An output cannot
+session marker guard needs `output_dirs:["doc/harness/wbs"]`. An output cannot
 overlap or contain selected inputs, and an output inside a selected source root
 must be explicitly excluded. Exclude only actual runtime outputs, keeping every
 required source, dependency and configuration input selected and read-only.
@@ -124,7 +124,7 @@ successful roles are reused when their applicable inputs remain unchanged.
 
 Run the highest available verification tier without asking the user to opt in.
 For shared preparation, use `verify_runner.py --jobs <group.json> --root <exact
-source-view> --results <task-work/group-results.json> --task-id <task> --run-id
+source-view> --results <wbs-work/group-results.json> --wbs-id <WBS> --run-id
 <run> --generation <generation>`. One group has at most one producer and its
 read-only consumers; independent groups use separate result files and can run
 concurrently. Declare source/artifact inputs, argv, environment, toolchains,
@@ -140,7 +140,7 @@ JSON is advisory and never replaces native
 actual independent review/QA or WBS gates. See
 `doc/harness/REQ__verification-execution.md` for declarations, capability preflight,
 failure states and ownership boundaries.
-If this task created or unblocked a live/API/browser/CLI verification path, use
+If this WBS created or unblocked a live/API/browser/CLI verification path, use
 that path now. Local rebuilds, dev server restarts, local DB seeds, and dev-only
 tokens are normal verification work. Stop to ask only for destructive state changes,
 production resources, paid/external credentials, or a real product choice between
@@ -169,8 +169,8 @@ If tests fail:
 
    | Ownership | Criteria | Action |
    |-----------|----------|--------|
-   | **OWN** (our code broke it) | Failing test covers codepaths modified by this task's diff | Repair the confirmed cause using `hypothesis-driven-debugging.md`. |
-   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this task, AND the same test fails on the base branch | Preserve base evidence; required GATE failures remain unfinished. |
+   | **OWN** (our code broke it) | Failing test covers codepaths modified by this WBS's diff | Repair the confirmed cause using `hypothesis-driven-debugging.md`. |
+   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this WBS, AND the same test fails on the base branch | Preserve base evidence; required GATE failures remain unfinished. |
 
    To determine ownership:
    - Get changed files: `git diff --name-only <base>...HEAD`
@@ -191,19 +191,19 @@ For each confirmed PRE-EXISTING failure:
    git log --format="%an (%ae)" -1 -- <source-file-under-test>
    ```
    If different people, prefer the production code author — they likely introduced the regression.
-   Note the author in the final response or follow-up task for awareness.
-2. Log to learnings: `{"type":"pre-existing-failure","key":"TEST_NAME","insight":"Fails on base branch: <reason>","task":"<task_id>"}`
-2. Note the test name, base branch result, and suspected cause in the final response or a follow-up task.
-3. If the pre-existing failure is in a module this task also touches: note the interaction risk.
+   Note the author in the final response or follow-up WBS for awareness.
+2. Log to learnings: `{"type":"pre-existing-failure","key":"TEST_NAME","insight":"Fails on base branch: <reason>","wbs":"<wbs_id>"}`
+2. Note the test name, base branch result, and suspected cause in the final response or a follow-up WBS.
+3. If the pre-existing failure is in a module this WBS also touches: note the interaction risk.
    "Pre-existing test X fails in billing module. Our change touches billing — verify our change doesn't worsen it."
-4. Recommend: "Consider a separate task to fix pre-existing failure in {module}. Run `Skill(harness:plan)` to create one."
+4. Recommend: "Consider a separate WBS to fix pre-existing failure in {module}. Run `Skill(harness:plan)` to create one."
 
 **Persist flaky/pre-existing test knowledge:** For each PERIODIC or PRE-EXISTING failure,
-record concrete reusable facts in `doc/harness/learnings.jsonl`; future tasks
+record concrete reusable facts in `doc/harness/learnings.jsonl`; future WBS roots
 must still determine current acceptance and applicability:
 
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"test-flaky","source":"develop-verify","key":"TEST_NAME","insight":"PRE-EXISTING/PERIODIC: <brief reason>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"test-flaky","source":"develop-verify","key":"TEST_NAME","insight":"PRE-EXISTING/PERIODIC: <brief reason>","wbs":"'"<wbs_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 Historical classifications inform diagnosis; they never waive current required checks.
@@ -227,7 +227,7 @@ Historical classifications inform diagnosis; they never waive current required c
    git log --oneline -10 -- <affected-files>
    ```
    If the same file has 3+ fix commits in recent history, this is an **architectural smell**,
-   not a simple bug. Flag in final response or a follow-up task: "Recurring failures in <file> — consider architectural review."
+   not a simple bug. Flag in final response or a follow-up WBS: "Recurring failures in <file> — consider architectural review."
    Recurring bugs in the same area indicate the root cause is likely a layer above the symptom.
 
    **External pattern search:** If the failure doesn't match any known pattern above,
@@ -241,7 +241,7 @@ Historical classifications inform diagnosis; they never waive current required c
    - Example: "TypeError: Cannot read properties of undefined (reading 'map') at /home/user/project/src/components/List.tsx:42"
      → Search: "React TypeError Cannot read properties of undefined reading map"
    - If search finds a documented solution, add it as an informed hypothesis (higher priority than blind guessing)
-   - Log the external finding: `{"type":"external-pattern","key":"ERROR_PATTERN","insight":"Found via WebSearch: <solution summary>","task":"<task_id>"}`
+   - Log the external finding: `{"type":"external-pattern","key":"ERROR_PATTERN","insight":"Found via WebSearch: <solution summary>","wbs":"<wbs_id>"}`
 
    **Browser debugging path (UI test failures):**
 
@@ -288,7 +288,7 @@ fixture errors, verification-tool errors and environment blockers. Do not repeat
 an unchanged failing approach or add counters, scores or an approval budget.
 
 Inspect owner state and active writers after interruptions; retry only known safe
-effects. Preserve the same task/run, actual failed history, ownership and
+effects. Preserve the same WBS/run, actual failed history, ownership and
 applicable unchanged proofs. Repair authorized failures autonomously and restore
 affected independent review PASS before actual QA. Required FAIL or BLOCKED_ENV
 remains unfinished with its concrete blocker and unblock condition; exhausted

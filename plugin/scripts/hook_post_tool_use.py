@@ -17,43 +17,43 @@ try:
     from _lib import (  # type: ignore
         find_harness_root,
         find_repo_root,
-        is_codex_task_binding_tool,
+        is_codex_wbs_binding_tool,
         is_harness_enabled_repo,
-        resolve_active_task_dir,
+        resolve_active_wbs_dir,
     )
 except Exception:  # pragma: no cover - hook must fail open
     find_harness_root = None
     find_repo_root = None
-    is_codex_task_binding_tool = None
+    is_codex_wbs_binding_tool = None
     is_harness_enabled_repo = None
-    resolve_active_task_dir = None
+    resolve_active_wbs_dir = None
 
 _IMPORT_SECONDS = time.monotonic() - _IMPORT_STARTED_AT
-register_task_result = None
+register_wbs_result = None
 
 
-def _register_task_result(payload: bytes, *, deadline: float) -> None:
+def _register_wbs_result(payload: bytes, *, deadline: float) -> None:
     """Lazy import avoids loading protected writer authority for unrelated hooks."""
-    global register_task_result
+    global register_wbs_result
     status = {}
     registered = False
     try:
         from codex_hook_registration import (
             REGISTRATION_BUDGET_SECONDS,
         )
-        if register_task_result is None:
-            from codex_hook_registration import register_task_result as callback  # type: ignore
-            register_task_result = callback
-        registered = register_task_result(
+        if register_wbs_result is None:
+            from codex_hook_registration import register_wbs_result as callback  # type: ignore
+            register_wbs_result = callback
+        registered = register_wbs_result(
             payload, budget_seconds=min(REGISTRATION_BUDGET_SECONDS,
                                         max(0.0, deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS)),
             status_out=status,
         )
     except Exception as exc:
         registered = False
-        status.update(status="failed", stage="task binding",
-                      reason=f"task binding unavailable ({type(exc).__name__})")
-    reason = " ".join(str(status.get("reason") or "task binding failed").split())[:200]
+        status.update(status="failed", stage="WBS binding",
+                      reason=f"WBS binding unavailable ({type(exc).__name__})")
+    reason = " ".join(str(status.get("reason") or "WBS binding failed").split())[:200]
     if not registered and status.get("status") == "failed":
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse",
@@ -65,13 +65,13 @@ HOOK_TIMEOUT_SECONDS = 10.0
 TOTAL_BUDGET_SECONDS = 9.4
 CHILD_TIMEOUT_SECONDS = 1.5
 DEADLINE_MARGIN_SECONDS = 0.4  # Leave time to publish binding guidance.
-def _task_control_root(cwd: str) -> str:
+def _wbs_control_root(cwd: str) -> str:
     root = find_harness_root(cwd) if find_harness_root is not None else ""
     if root:
         return root
-    if find_repo_root is not None and resolve_active_task_dir is not None:
+    if find_repo_root is not None and resolve_active_wbs_dir is not None:
         candidate = find_repo_root(cwd)
-        if resolve_active_task_dir(candidate):
+        if resolve_active_wbs_dir(candidate):
             return candidate
     return ""
 
@@ -100,10 +100,10 @@ def _is_create_goal_tool(tool_name: str) -> bool:
     return name == "create_goal" or name.endswith(".create_goal") or name.endswith("__create_goal")
 
 
-def _is_task_binding_tool(tool_name: str, arguments=None) -> bool:
+def _is_wbs_binding_tool(tool_name: str, arguments=None) -> bool:
     return bool(
-        is_codex_task_binding_tool is not None
-        and is_codex_task_binding_tool(tool_name, arguments)
+        is_codex_wbs_binding_tool is not None
+        and is_codex_wbs_binding_tool(tool_name, arguments)
     )
 
 
@@ -120,7 +120,7 @@ def _goal_routing_hint(payload: bytes) -> str:
     if not _is_create_goal_tool(str(data.get("tool_name") or data.get("tool") or "")):
         return ""
     try:
-        repo_root = _task_control_root(_payload_cwd(payload) or os.getcwd())
+        repo_root = _wbs_control_root(_payload_cwd(payload) or os.getcwd())
         if not repo_root:
             return ""
         if not is_harness_enabled_repo(repo_root):
@@ -147,7 +147,7 @@ def _goal_routing_hint(payload: bytes) -> str:
     return (
         "[harness-goal] Native Goal was created. Invoke $harness:run; before implementation call "
         "get_goal, then wbs(action=open, objective=...) to open or resume the same outcome tree. "
-        "Use wbs context/plan/check/dispatch/verify/close; do not create a separate Goal/task planning ledger. "
+        "Use wbs context/plan/check/dispatch/verify/close; keep this WBS as the sole planning and progress authority. "
         "Do not treat create_goal alone as harness activation."
     )
 
@@ -159,8 +159,8 @@ def main() -> int:
     if "cwd" in data and _payload_cwd(payload) is None:
         return 0
     tool_name = _tool_name(payload)
-    if _is_task_binding_tool(tool_name, data.get("tool_input") or data.get("input") or data.get("arguments")):
-        _register_task_result(payload, deadline=deadline)
+    if _is_wbs_binding_tool(tool_name, data.get("tool_input") or data.get("input") or data.get("arguments")):
+        _register_wbs_result(payload, deadline=deadline)
         return 0
     goal_hint = ""
     if _is_create_goal_tool(tool_name):

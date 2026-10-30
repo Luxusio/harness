@@ -50,7 +50,7 @@ repair configuration and must not be used as evidence that a failed reload
 has recovered.
 
 Successful native WBS open/context completion binds the exact hook session to
-the returned open task generation. Validate native identity, task/run and
+the returned open WBS generation. Validate native identity, WBS/run and
 registered workspace under the existing conflict fences. Outer JavaScript,
 printed results and compatibility markers do not substitute for native identity.
 There is no watcher registration or lifecycle collection requirement. See
@@ -60,8 +60,8 @@ Native session authentication remains bounded and validates ownership, link,
 descriptor/path identity, native cwd and ancestry. These checks authorize source
 ownership, not machine-attested review or QA.
 
-Verification covers installed routing and a real native task-result event,
-distinguishing missing event delivery from rejected binding. The next task in a
+Verification covers installed routing and a real native WBS-result event,
+distinguishing missing event delivery from rejected binding. The next WBS in a
 running session replaces the previous closed binding without a daemon restart.
 Actual independent review PASS before actual QA and measured WBS checks remain
 separately required.

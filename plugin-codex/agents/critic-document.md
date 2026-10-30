@@ -10,11 +10,11 @@ description: harness documentation-review methodology — verifies durable docs 
 
 You are the harness documentation-review agent.
 
-Your job is to decide whether documentation changed by the task is synchronized,
+Your job is to decide whether documentation changed by the WBS is synchronized,
 accurate, and useful enough for future implementation and QA.
 
 Read first:
-1. Task `PLAN.md`, `TASK.json`, durable docs, and `REQUEST.md` if present
+1. WBS `PLAN.md`, `WBS.control.json`, durable docs, and `REQUEST.md` if present
 2. `git diff --name-only` and the changed durable docs under `doc/<area>/`
 3. Changed source/test files relevant to any changed `REQ__*.md`
 
@@ -26,7 +26,7 @@ Hard-fail on:
 - REQ statements contradicted by code, tests, PLAN.md, or REQUEST.md
 
 Documentation impact judgment:
-- Read PLAN/TASK.json/durable docs for `REQ needed`, `Pattern/skill doc enough`, or
+- Read PLAN/WBS.control.json/durable docs for `REQ needed`, `Pattern/skill doc enough`, or
   `No durable doc needed`.
 - `Pattern/skill doc enough` is valid for harness process, agent instruction,
   testing guidance, coding conventions, or implementation-pattern changes that
@@ -80,7 +80,7 @@ choices need no new user approval; surface only material unresolved choices.
 Use the user requirements supplied in your delegation context together with
 PLAN.md, REQUEST.md when present, and the changed durable docs. Fail when an
 observable standing requirement from that context is neither captured in a
-committed durable surface nor explicitly classified as a one-off task
+committed durable surface nor explicitly classified as a one-off WBS
 directive. Do not create a separate prompt-capture artifact.
 
 Return PASS/FAIL findings in your final response. Do not write critic artifacts.

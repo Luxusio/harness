@@ -11,7 +11,7 @@ Invocation:
   python3 promote_learnings.py                       # manual full pipeline
   python3 promote_learnings.py --dry-run             # report what would happen
   python3 promote_learnings.py --threshold 3         # require 3+ occurrences
-  python3 promote_learnings.py --task TASK__x --task-run-id RUN_ID
+  python3 promote_learnings.py --wbs WBS__x --wbs-run-id RUN_ID
                                                    # current-run automatic mode
 
 Stdlib only.
@@ -29,11 +29,11 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
-    canonical_task_dir,
+    canonical_wbs_dir,
     find_repo_root,
-    read_task_control,
-    task_control_transaction_fd,
-    task_control_status,
+    read_wbs_control,
+    wbs_control_transaction_fd,
+    wbs_control_status,
 )
 
 LEARNINGS = "doc/harness/learnings.jsonl"
@@ -363,15 +363,15 @@ class _SafeRepoStorage:
         )
 
     @contextmanager
-    def task_binding(self, task: str):
+    def wbs_binding(self, wbs_id: str):
         initial_bindings = len(self._bindings)
         try:
-            task_dir = canonical_task_dir(task_id=task, repo_root=self.repo_root)
-            tasks_path = os.path.join(self.repo_root, "doc", "harness", "tasks")
-            tasks_fd = self._open_child_dir(self.harness_fd, "tasks", tasks_path)
-            self._open_child_dir(tasks_fd, task, task_dir)
+            wbs_dir = canonical_wbs_dir(wbs_id=wbs_id, repo_root=self.repo_root)
+            tasks_path = os.path.join(self.repo_root, "doc", "harness", "wbs")
+            tasks_fd = self._open_child_dir(self.harness_fd, "wbs", tasks_path)
+            self._open_child_dir(tasks_fd, wbs_id, wbs_dir)
             self._validate_bindings()
-            yield task_dir, self._bindings[-1][1]
+            yield wbs_dir, self._bindings[-1][1]
             self._validate_bindings()
         finally:
             for _, fd, _ in reversed(self._bindings[initial_bindings:]):
@@ -382,8 +382,8 @@ class _SafeRepoStorage:
 def _valid_learning_candidate(
     entry: object,
     *,
-    task: str | None = None,
-    task_run_id: str | None = None,
+    wbs_id: str | None = None,
+    wbs_run_id: str | None = None,
 ) -> bool:
     """Validate a promotable knowledge row, optionally against close context."""
     if (
@@ -398,9 +398,9 @@ def _valid_learning_candidate(
         return False
     if not _safe_pattern_text(entry.get("insight"), MAX_INSIGHT_LENGTH):
         return False
-    if not _bounded_text(entry.get("task"), MAX_CONTEXT_LENGTH, single_line=True):
+    if not _bounded_text(entry.get("wbs"), MAX_CONTEXT_LENGTH, single_line=True):
         return False
-    if not _bounded_text(entry.get("task_run_id"), MAX_CONTEXT_LENGTH, single_line=True):
+    if not _bounded_text(entry.get("wbs_run_id"), MAX_CONTEXT_LENGTH, single_line=True):
         return False
     if entry.get("type") in FEEDBACK_RULE_TYPES:
         for field in ("trigger", "action", "verification"):
@@ -409,9 +409,9 @@ def _valid_learning_candidate(
         reason = entry.get("reason")
         if reason is not None and not _safe_pattern_text(reason, MAX_INSIGHT_LENGTH):
             return False
-    if task is not None and entry.get("task") != task:
+    if wbs_id is not None and entry.get("wbs") != wbs_id:
         return False
-    if task_run_id is not None and entry.get("task_run_id") != task_run_id:
+    if wbs_run_id is not None and entry.get("wbs_run_id") != wbs_run_id:
         return False
     return True
 
@@ -596,21 +596,21 @@ def _audit_contradictions(entries: list[dict]) -> int:
     return warned
 
 
-def _verified_closed_run(storage: _SafeRepoStorage, task: str, task_run_id: str) -> bool:
+def _verified_closed_run(storage: _SafeRepoStorage, wbs_id: str, wbs_run_id: str) -> bool:
     try:
-        with storage.task_binding(task) as (task_dir, task_fd):
-            bound_task_dir = f"/proc/self/fd/{task_fd}"
-            before = storage._leaf_info(task_fd, "TASK.json")
+        with storage.wbs_binding(wbs_id) as (wbs_dir, task_fd):
+            bound_wbs_dir = f"/proc/self/fd/{task_fd}"
+            before = storage._leaf_info(task_fd, "WBS.control.json")
             if before is None:
                 return False
-            with task_control_transaction_fd(task_fd):
-                control = read_task_control(bound_task_dir)
+            with wbs_control_transaction_fd(task_fd):
+                control = read_wbs_control(bound_wbs_dir)
                 verified = bool(
                     control
-                    and control.get("run_id") == task_run_id
-                    and task_control_status(bound_task_dir, control) == "closed"
+                    and control.get("run_id") == wbs_run_id
+                    and wbs_control_status(bound_wbs_dir, control) == "closed"
                 )
-            after = storage._leaf_info(task_fd, "TASK.json")
+            after = storage._leaf_info(task_fd, "WBS.control.json")
             if after is None or (
                 after.st_dev,
                 after.st_ino,
@@ -634,25 +634,25 @@ def _run_with_storage(
     storage: _SafeRepoStorage,
     threshold: int,
     dry_run: bool,
-    task: str | None,
-    task_run_id: str | None,
+    wbs_id: str | None,
+    wbs_run_id: str | None,
 ) -> int:
     repo_root = storage.repo_root
     entries = _parse_entries(storage.read_learnings())
-    automatic = task is not None or task_run_id is not None
+    automatic = wbs_id is not None or wbs_run_id is not None
 
     current_keys: set[str] | None = None
     if automatic:
         current_keys = {
             entry["key"] for entry in entries
-            if entry.get("task") == task and entry.get("task_run_id") == task_run_id
-            and _valid_learning_candidate(entry, task=task, task_run_id=task_run_id)
+            if entry.get("wbs") == wbs_id and entry.get("wbs_run_id") == wbs_run_id
+            and _valid_learning_candidate(entry, wbs_id=wbs_id, wbs_run_id=wbs_run_id)
         }
         if not current_keys:
-            print("(no qualifying learning for current task run; promotion skipped)")
+            print("(no qualifying learning for current WBS run; promotion skipped)")
             return 0
-        if not _verified_closed_run(storage, task or "", task_run_id or ""):
-            print("automatic promotion requires the matching verified closed task run", file=sys.stderr)
+        if not _verified_closed_run(storage, wbs_id or "", wbs_run_id or ""):
+            print("automatic promotion requires the matching verified closed WBS run", file=sys.stderr)
             return 2
         entries = [
             entry for entry in entries
@@ -667,7 +667,7 @@ def _run_with_storage(
     verified_contexts: dict[tuple[str, str], bool] = {}
     unique_candidates: dict[tuple[str, str, str], dict] = {}
     for entry in candidates:
-        context = (entry["task"], entry["task_run_id"])
+        context = (entry["wbs"], entry["wbs_run_id"])
         if context not in verified_contexts:
             verified_contexts[context] = _verified_closed_run(storage, *context)
         if not verified_contexts[context]:
@@ -692,8 +692,8 @@ def _run_with_storage(
     for key in sorted(promotable):
         mode = "would report" if dry_run else "candidate"
         print(
-            f"  Tier 2 {mode}: {key} ({counts[key]} verified task runs); "
-            "open a reviewed Harness task before changing durable patterns"
+            f"  Tier 2 {mode}: {key} ({counts[key]} verified WBS runs); "
+            "open a reviewed Harness WBS before changing durable patterns"
         )
 
     stale_warns = _audit_stale_files(entries, repo_root)
@@ -711,21 +711,21 @@ def run(
     repo_root: str,
     threshold: int,
     dry_run: bool,
-    task: str | None = None,
-    task_run_id: str | None = None,
+    wbs_id: str | None = None,
+    wbs_run_id: str | None = None,
 ) -> int:
-    automatic = task is not None or task_run_id is not None
+    automatic = wbs_id is not None or wbs_run_id is not None
     if automatic and not (
-        _bounded_text(task, MAX_CONTEXT_LENGTH, single_line=True)
-        and _bounded_text(task_run_id, MAX_CONTEXT_LENGTH, single_line=True)
+        _bounded_text(wbs_id, MAX_CONTEXT_LENGTH, single_line=True)
+        and _bounded_text(wbs_run_id, MAX_CONTEXT_LENGTH, single_line=True)
     ):
-        print("automatic mode requires valid --task and --task-run-id values", file=sys.stderr)
+        print("automatic mode requires valid --wbs and --wbs-run-id values", file=sys.stderr)
         return 2
     try:
         with _SafeRepoStorage(repo_root) as storage:
             with storage.promotion_lock():
                 return _run_with_storage(
-                    storage, threshold, dry_run, task=task, task_run_id=task_run_id
+                    storage, threshold, dry_run, wbs_id=wbs_id, wbs_run_id=wbs_run_id
                 )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"promotion skipped: {exc}", file=sys.stderr)
@@ -737,12 +737,12 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD,
                    help=f"Min occurrences for promotion (default {DEFAULT_THRESHOLD})")
-    p.add_argument("--task", help="Current task id; with --task-run-id enables automatic mode")
-    p.add_argument("--task-run-id", help="Current task run id; with --task enables automatic mode")
+    p.add_argument("--wbs", help="Current WBS ID; with --wbs-run-id enables automatic mode")
+    p.add_argument("--wbs-run-id", help="Current WBS run id; with --wbs enables automatic mode")
     args = p.parse_args()
     return run(
         find_repo_root(), args.threshold, args.dry_run,
-        task=args.task, task_run_id=args.task_run_id,
+        wbs_id=args.wbs, wbs_run_id=args.wbs_run_id,
     )
 
 

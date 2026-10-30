@@ -25,13 +25,13 @@ def setup(tmp_path):
 def active(root, plan=False):
     from test_prewrite_gate_dormant import _write_task_state
 
-    tasks = root / 'doc/harness/tasks'
+    tasks = root / 'doc/harness/wbs'
     task = Path(_write_task_state(str(tasks), 'lead', 'open'))
     sessions = tasks / '.active_sessions'
     sessions.mkdir(exist_ok=True)
-    control = json.loads((task / 'TASK.json').read_text())
+    control = json.loads((task / 'WBS.control.json').read_text())
     (sessions / 'codex-prewrite-fixture.json').write_text(json.dumps(dict(
-        session_id='codex-prewrite-fixture', task_dir=str(task), task_id=task.name,
+        session_id='codex-prewrite-fixture', wbs_dir=str(task), wbs_id=task.name,
         run_id=control['run_id'], updated='2026-10-28T00:00:00Z')))
 
     if plan:
@@ -65,7 +65,7 @@ def test_worktree_source_requires_its_own_plan_from_main_cwd(tmp_path):
 
 def test_worktree_plan_alone_does_not_assign_source_when_main_has_no_task(tmp_path):
     main, worktree = setup(tmp_path)
-    assert 'no-active-task' in check(main, worktree / 'engine.py')['permissionDecisionReason']
+    assert 'no-active-wbs' in check(main, worktree / 'engine.py')['permissionDecisionReason']
     active(worktree, plan=True)
     assert check(main, worktree / 'engine.py').get('permissionDecision') == 'deny'
 
@@ -78,8 +78,8 @@ def test_worktree_and_sibling_protected_artifacts_stay_denied(tmp_path):
     active(worktree, plan=True)
     active(sibling, plan=True)
     for root in (worktree, sibling):
-        for name in ('TASK.json', 'PLAN.md', 'WBS.json'):
-            result = check(main, root / 'doc/harness/tasks/TASK__lead' / name)
+        for name in ('WBS.control.json', 'PLAN.md', 'WBS.json'):
+            result = check(main, root / 'doc/harness/wbs/WBS__lead' / name)
             assert result.get('permissionDecision') == 'deny'
             assert 'C-05-protected-artifact' in result['permissionDecisionReason']
 
@@ -115,7 +115,7 @@ def test_foreign_and_unregistered_targets_keep_existing_policy(tmp_path):
     # No new general authorizer: unrelated source writes keep existing C-12
     # behavior, while cross-checkout protected artifacts remain denied.
     assert check(main, foreign / 'engine.py', workspace=str(worktree)) == {}
-    protected = foreign / 'doc/harness/tasks/TASK__foreign/PLAN.md'
+    protected = foreign / 'doc/harness/wbs/WBS__foreign/PLAN.md'
     assert 'C-05-protected-artifact' in check(main, protected)['permissionDecisionReason']
     fake = main / '.claude/worktrees/unregistered'
     (fake / 'doc/harness').mkdir(parents=True)
@@ -149,7 +149,7 @@ def test_protected_only_fallback_resolves_worktree_without_enabling_source_gate(
     previous_input = lib.last_hook_input()
     with _escapes_unset(), mock.patch.object(lib, '_LAST_HOOK_INPUT', {}):
         assert gate.protected_artifact_decision(json.dumps(payload)) == ''
-        payload['tool_input']['file_path'] = str(worktree / 'doc/harness/tasks/TASK__lead/PLAN.md')
+        payload['tool_input']['file_path'] = str(worktree / 'doc/harness/wbs/WBS__lead/PLAN.md')
         result = json.loads(gate.protected_artifact_decision(json.dumps(payload)))
     assert lib.last_hook_input() is previous_input
     assert result['hookSpecificOutput']['permissionDecision'] == 'deny'

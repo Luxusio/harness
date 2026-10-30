@@ -1,4 +1,4 @@
-"""AC-003 (verification-only): prewrite_gate.py does not block doc/<area>/REQ__*.md outside an active task.
+"""AC-003 (verification-only): prewrite_gate.py does not block doc/<area>/REQ__*.md outside an active WBS.
 
 Phase 1 CEO consensus confirmed `SOURCE_EXTENSIONS` at prewrite_gate.py:82-87 contains only source code
 extensions (.py/.ts/...). `.md` is not gated. This test verifies the property — if it fails, AC-003
@@ -40,7 +40,7 @@ def _gate(repo: Path, payload: dict) -> subprocess.CompletedProcess:
     )
 
 
-def test_prewrite_gate_allows_req_doc_outside_active_task(tmp_path):
+def test_prewrite_gate_allows_req_doc_outside_active_wbs(tmp_path):
     repo = _harness_enabled_repo(tmp_path)
     payload = {
         "cwd": str(repo),
@@ -53,7 +53,7 @@ def test_prewrite_gate_allows_req_doc_outside_active_task(tmp_path):
     result = _gate(repo, payload)
     assert result.returncode == 0, f"gate failed: rc={result.returncode}, stderr={result.stderr!r}"
     assert result.stdout == "", (
-        "AC-003 verification FAILED: prewrite_gate now blocks doc/<area>/REQ__*.md outside an active task. "
+        "AC-003 verification FAILED: prewrite_gate now blocks doc/<area>/REQ__*.md outside an active WBS. "
         "The plan promise is broken; AC-003 must escalate from verification-only to a code change "
         f"in prewrite_gate.py. stdout={result.stdout!r}"
     )

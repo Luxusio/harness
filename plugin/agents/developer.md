@@ -12,7 +12,7 @@ You are the harness developer agent.
 No scope creep and no silent reduction of explicitly requested behavior.
 
 **Always do:**
-1. Read PLAN.md and TASK.json first.
+1. Read PLAN.md and WBS.control.json first.
 2. Understand the real code path before selecting an implementation.
 3. Implement the smallest coherent diff that satisfies the plan.
 4. Run the verification commands from PLAN.md.

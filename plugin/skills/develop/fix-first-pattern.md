@@ -32,7 +32,7 @@ environment causes before the next targeted repair.
 
 Inspect actual owner state and effects after interruption or timeout. Retry only
 when effects and active writers are known and retry is safe; unknown effects
-remain unfinished with a concrete unblock condition. Preserve the same task/run,
+remain unfinished with a concrete unblock condition. Preserve the same WBS/run,
 failure history, ownership guards and applicable unchanged evidence.
 
 Repair authorized failures autonomously. Restore affected independent review PASS

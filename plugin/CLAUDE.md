@@ -1,19 +1,19 @@
 # harness runtime rules
 
 Lightweight execution harness for Claude Code.
-Four-field TASK.json + on-the-fly routing + artifact provenance.
+Four-field WBS.control.json + on-the-fly routing + artifact provenance.
 Self-contained — no plugin-legacy dependency.
 
 Harness rules apply to any caller — the main Claude session, a sub-skill,
-or an MCP client — whenever a repo-mutating task runs through the
+or an MCP client — whenever a repo-mutating WBS runs through the
 canonical loop. There is no separate "harness agent" that owns the
 workflow; skills and MCP tools are the sole runtime surface.
 
 ## 1. Canonical Loop
 
-Every repo-mutating task exposes this public lifecycle:
+Every repo-mutating WBS exposes this public lifecycle:
 ```
-task start → plan → minimum-sufficient develop → runtime QA → close
+WBS open → plan → minimum-sufficient develop → runtime QA → close
 ```
 Independent review and `wbs(action="verify")` are mandatory internal close gates. No
 step is skipped. Smallest coherent diff per step.
@@ -40,7 +40,7 @@ progress for ordinary requests and native Goal continuation alike.
   converts them. Retired tool names are unavailable.
 
 Pass the known root as `wbs_id`. An optional `workspace` targets a validated,
-registered linked worktree; task paths and focus resolve there while session
+registered linked worktree; WBS paths and focus resolve there while session
 identity stays on the control checkout. See
 `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`.
 
@@ -58,7 +58,7 @@ and copied text cannot replace them. Machine verification measures WBS checks
 and does not attest review or QA. Missing recording never requires a rerun,
 repair or parking. See `doc/harness/REQ__receipt-free-execution-and-completion.md`.
 
-## 3. TASK.json (4 fields only)
+## 3. WBS.control.json (4 fields only)
 
 ```json
 {
@@ -69,9 +69,9 @@ repair or parking. See `doc/harness/REQ__receipt-free-execution-and-completion.m
 }
 ```
 
-Task identity comes from the canonical directory. Routing and verdicts are
-derived on demand; `BLOCKED.md` represents a parked task. A successful close
-sets `closed: true`. Removed task-control artifacts are not
+WBS identity comes from the canonical directory. Routing and verdicts are
+derived on demand; `BLOCKED.md` represents a parked WBS. A successful close
+sets `closed: true`. Removed WBS-control artifacts are not
 read by ordinary lifecycle calls. Explicit migration handles supported prior controls.
 
 ## 4. Plan-first rule
@@ -85,27 +85,27 @@ gate still applies. Do not pass execution_mode to the public open action.
 
 ## 4a. Turn-end rule
 
-This exact session holds a current open task/run binding without a conflict fence 동안:
+This exact session holds a current open WBS/run binding without a conflict fence 동안:
 
 - Default = 계속 진행.
-- 모호한 종결 발화는 무시 — 사용자의 "여기까지", "오늘 그만", "내일", "다음에", "later" 등은 task 종결 사유가 아니다. Session 자연 종료(터미널 닫힘 등)는 task 상태를 건드리지 않으며, 다음 SessionStart 가 resume 한다.
+- 모호한 종결 발화는 무시 — 사용자의 "여기까지", "오늘 그만", "내일", "다음에", "later" 등은 WBS 종결 사유가 아니다. Session 자연 종료(터미널 닫힘 등)는 WBS 상태를 건드리지 않으며, 다음 SessionStart 가 resume 한다.
 - AskUserQuestion 옵션 라벨에 "중단/취소/일시정지/나중에/cancel/stop/pause/defer/skip" 류 제시 금지.
 - Cancel 은 사용자가 명시 단어("취소", "cancel", "/cancel") 로 표명할 때만.
-- 자가 판단으로 task 를 끝내지 않는다 (아래 Task 종결 사유만).
+- 자가 판단으로 WBS를 끝내지 않는다 (아래 WBS 종결 사유만).
 - Turn-end 는 Claude 에서 hook 으로 게이트되지 않는다 (Stop 훅 등록이
-  2026-09-23 제거됨). Task 는 열린 채로 남고, close 는 여전히
+  2026-09-23 제거됨). WBS는 열린 채로 남고, close 는 여전히
   `wbs(action="close")` 의 current WBS checks PASS 만 인정한다. Turn 간 지속(continuation)
   은 native `/goal` 이 담당한다 — close 조건(예: "WBS close PASS")을 goal
   condition 에 넣는다.
 - 대기는 종결이 아니다: 실행 중인 lens 서브에이전트를 기다릴 때는 turn 을
-  끝낸다 — 폴링하지 않는다. 태스크와 exact session/run binding은
+  끝낸다 — 폴링하지 않는다. WBS와 exact session/run binding은
   그대로 남고, 완료 알림이 다음 turn 에서 작업을 재개시킨다.
 
-Task 종결 사유 (actual review/QA와 current WBS checks 기반, turn 대기와 무관):
+WBS 종결 사유 (actual review/QA와 current WBS checks 기반, turn 대기와 무관):
 
 1. **PASS** — 모든 필수 outcome 검증 및 ordered review/QA PASS → `wbs(action="close")`.
 2. **BLOCKED_ENV** — 진짜 blocker 확인 → `wbs(action="block", blocked_reason=..., unblock_condition=...)` 로 unfinished 상태를 기록하고 exact session focus 해제. PASS로 위장하지 않는다.
-   `wbs(action="block")` 는 park 기록일 뿐 종결이 아니다 — PASS 를 주지 않고 C-04 close gate 를 우회하지 않으며, 태스크는 plain `wbs(action="open")` 로 재개한다.
+   `wbs(action="block")` 는 park 기록일 뿐 종결이 아니다 — PASS 를 주지 않고 C-04 close gate 를 우회하지 않으며, WBS는 plain `wbs(action="open")` 로 재개한다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
 BLOCKED_ENV로 멈출 때는 `wbs(action="block")`로 실제 외부 blocker와
@@ -122,35 +122,35 @@ retry 소진도 blocker가 아니다. PASS 경로는 `wbs(action="verify")` +
 | Artifact | Owner |
 |----------|-------|
 | PLAN.md | plan-skill via `wbs(action="plan")` MCP |
-| TASK.json | WBS execution owner (`wbs(action="plan")` may update lens declarations) |
+| WBS.control.json | WBS execution owner (`wbs(action="plan")` may update lens declarations) |
 | source + durable docs | developer |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
 ## 6. Auto-routing
 
-**Default for repo-mutating intent: harness task routing.** Codex enters through
+**Default for repo-mutating intent: Harness WBS routing.** Codex enters through
 the public `$harness:run` skill, which loads the internal canonical workflow.
 Never ask the user to choose an orchestration mode or re-submit a clear request
 as `/goal`. Native `/goal` owns explicit goals and broad work; plain
-repo-mutating requests open or resume a harness task directly.
+repo-mutating requests open or resume a Harness WBS directly.
 
 Explicit user invocation or approval of a harness repo-mutating workflow
 authorizes the subagents required by that workflow's verification and review
-gates. This includes "use harness", "run/continue/close the harness task",
-native `/goal`, and clear approval to proceed with a harness task. It does not
+gates. This includes "use harness", "run/continue/close the Harness WBS",
+native `/goal`, and clear approval to proceed with a Harness WBS. It does not
 apply to read-only answers or ordinary non-harness work.
 
 | Intent | Route to |
 |--------|----------|
 | Set up harness | `Skill(setup)` |
-| Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
+| Pre-planning / scope-sharpening (product framing before a WBS) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
 | Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | On Codex invoke `$harness:run`; it opens/resumes one WBS with `wbs(action="open")` / `wbs(action="context")`; a native Goal supplies only the objective |
 | User explicitly says "plan only" / "just plan" | Open/resume the WBS, run the internal plan phase, then stop after plan |
 | User explicitly says "implement PLAN.md" / "develop only" | Resume the active WBS through the internal develop path |
-| Multi-component or API↔frontend change in one task | Same WBS with develop Phase 3.0 auto-fanout |
+| Multi-component or API↔frontend change in one WBS | Same WBS with develop Phase 3.0 auto-fanout |
 | CEO / Architecture / Design / DX review | Same WBS plan phase; review lenses are internal sub-skills |
-| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Schedule cleanup as a separate follow-up task |
+| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Schedule cleanup as a separate follow-up WBS |
 | Explanation | Direct answer |
 
 ## 7. Verification
@@ -240,7 +240,7 @@ All scripts under `plugin/scripts/`. Stdlib only.
 
 | Script | Purpose | Output | Caller |
 |--------|---------|--------|--------|
-| `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` | develop Phase 3.3 |
+| `write_checkpoint.py` | Mid-WBS resume snapshot | `doc/harness/checkpoints/<wbs-id>.md` | develop Phase 3.3 |
 | `promote_learnings.py` | Current-run-validated Tier 2 candidate reporting; no durable writes | stdout | run self-improvement |
 | `health.py --dry-run` | Weighted composite 0–10 score | stdout | run Phase 4.5 |
 | `retro.py` | Weekly retrospective (git + verified closes + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
@@ -259,12 +259,12 @@ doc/harness/learnings.jsonl  # Tier 3: append-only raw signals.
 ```
 
 **All skills write to Tier 3.** Automatic candidate reporting requires a valid signal
-from the just-closed verified task/run. A key may promote after valid
-occurrences from 2+ distinct verified closed task/runs; duplicate rows
+from the just-closed verified WBS/run. A key may promote after valid
+occurrences from 2+ distinct verified closed WBS/runs; duplicate rows
 from one run count once, and historical backlog alone cannot trigger reporting.
 The reporting pass never rewrites or prunes the raw ledger and never changes
 Tier 2 patterns. Apply a reported candidate only in a separately reviewed
-Harness task. When a Tier 2 doc is referenced in 2+ tasks, promote the key fact
+Harness WBS. When a Tier 2 doc is referenced in 2+ WBS roots, promote the key fact
 to Tier 1 (CLAUDE.md).
 
 **Tier 1 entries are one-liners.** Details stay in pattern docs.
@@ -272,7 +272,7 @@ to Tier 1 (CLAUDE.md).
 Example:
 ```
 # Tier 3 (learnings.jsonl)
-{"ts":"2026-09-01T00:00:00Z","type":"operational","key":"test-command","insight":"bun test, not npm test","task":"TASK__001","task_run_id":"01a05a20-fb11-7911-bffb-3de43a13c8fb"}
+{"ts":"2026-09-01T00:00:00Z","type":"operational","key":"test-command","insight":"bun test, not npm test","wbs":"WBS__001","wbs_run_id":"01a05a20-fb11-7911-bffb-3de43a13c8fb"}
 
 # Tier 2 (doc/harness/patterns/testing.md)
 ## Test command is bun test
@@ -285,7 +285,7 @@ Test command: `bun test` (Bun runtime)
 
 **When to log:** Any discovery that would save 5+ minutes in a future session.
 **What to log:** Build quirks, env var requirements, ordering constraints, port numbers, framework specifics, wrong manifest fields.
-**What NOT to log:** Code patterns (read from files), git history (read from git), task-specific details (in task dir).
+**What NOT to log:** Code patterns (read from files), git history (read from git), WBS-specific details (in WBS dir).
 
 ## 12. Environment variables
 

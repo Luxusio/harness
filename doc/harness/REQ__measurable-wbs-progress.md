@@ -2,7 +2,7 @@
 
 ## Provenance
 
-User-sourced outcomes in this document come from this task's conversation:
+User-sourced outcomes in this document come from this WBS's conversation:
 WBS measurement (“WBS기반으로 싹 바꿔줘”), two-hour refinement (“진행률이
 2시간동안 하나도 안 바뀌면 WBS를 세부적으로 더 쪼개서”), outcome-first
 scope (“주객이 전도되면 절대로 안돼”), isolated parallel development and
@@ -11,17 +11,55 @@ verification (“서로 다른 worktree를 파고, worktree에서 개발, 검증
 그런거까지 적으면 안된다”), and one WBS/interface (“그냥 다 wbs안에
 묶어버리면 되지 않나?”, “harness mcp더 단순화 가능하지 않음?”).
 
+On 2026-10-30 the user explicitly requested removal of remaining separate
+Goal/Task management: “다 추가 정리 해 줘”. WBS-only runtime names and
+explicit data migration below implement that request. Native host APIs and
+retained historical evidence keep their original identity.
+
 Specific API actions, weight/fingerprint/storage formats, clock boundaries,
 process limits and migration formats below are derived implementation
 choices. Their basis is the requested measurable progress plus the existing
-task/worktree safety contracts. They are not quoted user requirements.
+WBS/worktree safety contracts. They are not quoted user requirements.
 See [requirement provenance](REQ__requirement-provenance.md).
 
 One WBS tree contains any objective and its outcome breakdown. `wbs` is the
 only callable Harness MCP entry point: open, context, plan, check, next,
-dispatch, verify, close and block operate on that same root. Native Goals
+dispatch, target, verify, close and block operate on that same root; migrate
+is the explicit retired-data import. Native Goals
 provide the objective and continuation context, not a second planning ledger.
-Internal tasks retain execution identity and source ownership for existing runs.
+Internal WBS roots retain execution identity and source ownership for existing runs.
+Current execution uses `doc/harness/wbs/WBS__<id>/`, with one outcome tree in
+`WBS.json`, its run/lens/close control in `WBS.control.json`, and acceptance
+intent in `PLAN.md`. Public replies use `wbs_id`, `wbs_dir` and `context`.
+The control file is execution metadata for that root, not a separately planned
+Task. Normal WBS calls do not accept retired Task selectors or read their
+controls. Explicit migration preserves prior run IDs, checks, history and
+original record bytes; moving data never earns completion credit.
+Native host goal tools and subagent API names remain external adapters, not
+additional Harness planning or progress authorities.
+
+The namespace migration is explicit and includes initialized registered linked
+worktrees, including direct assignments outside managed pools. Running workers
+must stop before conversion. It preserves run IDs and original evidence;
+retained closed history cannot silently become a new run on ordinary open.
+An initialized linked checkout can migrate locally when its common main
+checkout is uninitialized; migration does not install Harness in that main
+checkout. Legacy authority created after a completed import requires another
+explicit preserving import. Earlier journals and original bytes remain
+available, and an existing current WBS identity is never overwritten.
+Historical work-directory links are recorded literally without following their
+targets and are not installed as executable WBS evidence. Disposal preserves
+declared historical bytes and link descriptors outside the worktree before
+removing it; unknown or changed content retains the worktree.
+
+WBS scaffold repair uses Git-local runtime exclusions when needed, preserving
+tracked project configuration and revision. It verifies effective exclusion in
+each affected checkout; overriding project rules must be repaired explicitly
+before admission or retirement of old authority. Normal calls do not interpret old
+controls as execution authority. Existing check commands and verification
+result formats remain historical records; owners update retired command/API
+references in the same WBS before their next execution. A format change alone
+never upgrades a past result to current PASS.
 Retired Goal/task tool names are rejected. The user explicitly requested removal
 of compatibility code with “호환성용 코드는 최대한 버리고싶은데... 기존꺼는
 마이그레이션 하는 방향만 남겨두고.” Existing Goal records and old work-pack
@@ -48,14 +86,14 @@ A fallback interrupted between link and staging removal is recoverable using
 only its exact deterministic same-parent staging name plus descriptor identity,
 safe ownership/mode, bounded stable bytes and exactly two links accounting for
 both aliases. The filename alone proves nothing. Existing source/archive and
-manifest hash checks still apply. Legacy sources, locks and task controls keep
+manifest hash checks still apply. Legacy sources, locks and WBS controls keep
 their strict single-link rule; arbitrary aliases, third links, symlinks and
 conflicting staging bytes are refused. A pre-publication orphan stage is reused
 or removed only after matching the exact intended bytes and trusted identity.
 
 Preview can inspect a valid interrupted publication without writing. Apply
 normalizes only verified publication aliases under the existing migration and
-required task/batch locks, before retiring sources or returning an already
+required WBS/batch locks, before retiring sources or returning an already
 complete manifest. Archive-first ordering, the version1 manifest, exact original
 bytes, conflict checks and idempotent retry remain authoritative. No additional
 migration ledger or runtime compatibility interface is introduced. Verification must include actual process death after link, not only exceptions
@@ -64,24 +102,24 @@ not a test fixture.
 
 
 All work reports verified outcome weight from the declared WBS,
-never an agent's percentage, elapsed time, task count or scheduling status.
-PLAN.md owns task intent in one `wbs` JSON fence. Each leaf names an observable
+never an agent's percentage, elapsed time, WBS count or scheduling status.
+PLAN.md owns WBS intent in one `wbs` JSON fence. Each leaf names an observable
 outcome and positive weight. Choose its assertion command as argv when ready
 to verify, not necessarily at intake. WBS must not prescribe edited files,
 directories or implementation structure for progress calculation. Existing
 acceptance criteria may be the WBS leaves: do not maintain two descriptions
-of the same work. One leaf is enough for a small task.
+of the same work. One leaf is enough for a small WBS.
 
 The control-plane check operation executes only the selected declared assertion
-in the selected checkout. Its result binds the leaf definition, current task
+in the selected checkout. Its result binds the leaf definition, current WBS
 run and an internally observed checkout fingerprint. A failed, stale, missing or timed-out assertion
 earns no credit. A passing assertion is evidence of that assertion, not proof
 that the chosen assertion covers the user's intent; independent review and QA
-remain responsible for adequacy. Verified weight and task/Goal completion are
+remain responsible for adequacy. Verified weight and root completion are
 separate fields. Measured WBS close and integrated batch proof remain the
 completion authority. Unknown historical baselines report a null percentage.
 
-There is no separate Goal baseline, task queue or manually duplicated outcome
+There is no separate Goal baseline, WBS queue or manually duplicated outcome
 mapping. Worktree execution envelopes attach to outcomes inside this tree.
 Adding an execution envelope or changing its caller status earns no progress.
 Baselines preserve existing identities and weight envelopes. Keep the early
@@ -129,7 +167,7 @@ or park it. Its coordinator
 performs no source writes while parked. Reopen the same WBS after the pool
 finishes and check integrated outcomes, then apply independent review/QA.
 A parent awaiting worktree results remains unfinished. No new worktree manager
-or verification ledger substitutes for existing batch/task authority.
+or verification ledger substitutes for existing batch/WBS authority.
 
 Verification: WBS regressions cover weighted credit, stale source/run evidence,
 invalid graphs, stable splits, two-hour boundaries, unknown baselines and unified
@@ -163,7 +201,7 @@ unavailable progress, preserving historical proof fields. Its selected check
 records a bounded `last_attempt` containing the actual result and measurement
 error; that marker withholds current credit until a conclusive rerun. Thus a
 prior PASS cannot revive merely because measurement becomes available again.
-No separate attempt ledger or task generation is created. A conclusive failed/start-
+No separate attempt ledger or WBS generation is created. A conclusive failed/start-
 failed assertion or changed source earns no credit. Historical evidence never
 substitutes for a current successful measurement; actual independent review and QA remain
 workflow requirements separate from WBS outcome proofs.
@@ -217,7 +255,7 @@ Because Git may read ignore/config includes outside its candidate list, `deny`
 requires explicit `source` (possibly empty for artifact-only checks); default
 Git enumeration with `deny` fails unavailable before invoking Git. A denied
 descendant inside a selected root also fails before opening that descendant.
-Policies are task-level, adaptable verification inputs, never edited-file
+Policies are WBS-level, adaptable verification inputs, never edited-file
 instructions. They must cover relevant common code, lockfiles, build scripts
 and resources; independent review checks adequacy. A selected required input
 which is denied, excluded or missing is unavailable, not unchanged. Apply
@@ -230,7 +268,7 @@ budget without returning source contents.
 Derived mechanics for the existing no-full-hash-on-query requirement: active
 and historical work-pack routing may validate stored integration metadata
 without freshly fingerprinting archived contents. This advisory mode retains
-pool/owner identity, disposal, checkpoint, archive presence and closed task
+pool/owner identity, disposal, checkpoint, archive presence and closed WBS
 control, preserved module pins and destination ancestry checks. Its result is
 labelled `proof_fresh: false`; explicit check and final verify/close retain the
 default fresh archive proof. Stored routing cannot authorize completion.
@@ -275,7 +313,7 @@ run, measured checks and ownership. `block` with `node_id` parks only that outco
 the same WBS; `open` with `node_id` clears that local blocker. Local blockers
 and their dependency/ancestor effects withhold credit and scheduling, while
 independent work remains available from next. These operations neither close
-the root nor create a second task queue. Blocking invalidates affected outcome
+the root nor create a second WBS queue. Blocking invalidates affected outcome
 and dependency proofs without deleting their historical fields; clearing the
 blocker does not revive their credit before conclusive revalidation.
 
@@ -297,7 +335,7 @@ that accepted outcome, not a quoted user design.
 
 A leaf may declare optional `inputs` using the same verification policy as the
 root `wbs-inputs` fence. Without a leaf policy, the root remains its default.
-Groups cannot declare leaf-only evidence inputs. Task-wide `deny` paths are
+Groups cannot declare leaf-only evidence inputs. WBS-wide `deny` paths are
 always inherited; a leaf override cannot remove a no-read boundary. Other root
 fields are defaults for leaves without a policy; a leaf deny adds restrictions
 for that scope only. The policy describes actual source/test/build dependencies
@@ -316,4 +354,4 @@ separate target-applicability and actual review-before-QA requirements.
 An explicit leaf check requires measurable target and prerequisite scopes. An
 unrelated missing input or artifact cannot prevent that check or erase its
 result. Aggregate progress can remain unavailable with a null percentage while
-the selected assertion has a measured result; this is not whole-task PASS.
+the selected assertion has a measured result; this is not whole-WBS PASS.

@@ -62,7 +62,7 @@ def test_first_final_review_covers_workpack_instead_of_commit_or_long_goal():
     _requires(_stages(),
               'At the approved PLAN/WBS workpack boundary, perform one complete '
               'independent final review',
-              'Do not wait for the entire long-running Goal, or arbitrarily shrink '
+              'Do not wait for the entire long-running objective, or arbitrarily shrink '
               'the workpack to changed files',
               'Actual required reviewer PASS finals remain mandatory before actual QA')
     for body in _reviewers():

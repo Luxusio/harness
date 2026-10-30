@@ -15,7 +15,7 @@ and does not replace its correctness verification.
 
 ## Inputs and method
 
-Read `doc/harness/manifest.yaml`, PLAN.md, TASK.json, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, WBS.control.json, REQUEST.md when present,
 and relevant REQ/README/durable docs. Derive the intended user path before
 judging. Preserve existing desktop lens/manifest names for native mobile too.
 
@@ -86,10 +86,10 @@ Use selected capabilities and current tool schemas, not a universal checklist.
 ## Ownership, lifecycle and screenshot privacy
 
 Use only owner-scoped devices and authorized resources. Discovery is read-only;
-create/attach/start only within actual task authority. Do not perform destructive
+create/attach/start only within actual WBS authority. Do not perform destructive
 resets, clears, deletion, or create new paid resources without actual authority.
-Track devices, attachments, apps/processes and recordings created for this task.
-Stop recordings and clean up only task-created resources; preserve pre-existing
+Track devices, attachments, apps/processes and recordings created for this WBS.
+Stop recordings and clean up only WBS-created resources; preserve pre-existing
 devices, attachments and user state. Do not stop or delete a shared existing
 device merely because QA ended.
 
@@ -124,7 +124,7 @@ Apps reviewed: <appId when applicable, or none>
 AC evidence: <AC ID; expected/observed state; deviceId/backend/platform; window or appId; real action; screenshot/redaction>
 Interactions performed: <actual supported action list, or none>
 Screenshots: <inspected image references/paths or redaction notes>
-Cleanup: <task-owned resources cleaned; existing resources preserved>
+Cleanup: <WBS-owned resources cleaned; existing resources preserved>
 Findings:
 - [PASS|FAIL|BACKLOG] <dimension> — <evidence>
 ```

@@ -110,7 +110,7 @@ def test_public_open_supports_initialized_non_git_project_and_directory_alias(
     home.mkdir()
     result = _call(subdirectory, home, {"action": "open", "objective": "Initialized positive"})
     assert not result.get("isError"), result
-    assert list((root / "doc/harness/tasks").glob("TASK__*/TASK.json"))
+    assert list((root / "doc/harness/wbs").glob("WBS__*/WBS.control.json"))
 
 
 @pytest.mark.parametrize("component", ["manifest", "control-directory"])
@@ -154,8 +154,8 @@ def test_public_wbs_keeps_nearest_initialized_project_inside_ancestor_git(
     subdirectory.mkdir()
     result = _call(subdirectory, home, {"action": "open", "objective": "Child owns this work"})
     assert not result.get("isError"), result
-    assert list((project / "doc/harness/tasks").glob("TASK__*/TASK.json"))
-    assert not (outer / "doc/harness/tasks").exists()
+    assert list((project / "doc/harness/wbs").glob("WBS__*/WBS.control.json"))
+    assert not (outer / "doc/harness/wbs").exists()
 
 
 @pytest.mark.parametrize('kind', ['plain', 'git'])

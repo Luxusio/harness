@@ -19,7 +19,7 @@ def migrate(repo, **args):
 
 
 def legacy_control(td, *, closed=False):
-    path = td / "TASK.json"
+    path = td / "WBS.control.json"
     control = json.loads(path.read_text())
     control.pop("closed")
     control["close_receipt_fingerprint"] = "sha256:" + "b" * 64 if closed else None
@@ -35,22 +35,22 @@ def test_public_preview_apply_preserves_run_checks_and_history(tmp_path, closed)
     history = td / "RECEIPTS.jsonl"
     history.write_bytes(b'corrupt historical receipt\x00\xff\n')
     legacy_control(td, closed=closed)
-    prior = (td / "TASK.json").read_bytes()
+    prior = (td / "WBS.control.json").read_bytes()
     checks = (td / "WBS.json").read_bytes()
     assert call("context").get("isError")
     preview = migrate(repo)
     assert not preview.get("isError"), preview
-    assert (td / "TASK.json").read_bytes() == prior
+    assert (td / "WBS.control.json").read_bytes() == prior
     applied = migrate(repo, apply=True)
     assert not applied.get("isError"), applied
-    control = json.loads((td / "TASK.json").read_text())
+    control = json.loads((td / "WBS.control.json").read_text())
     assert control == dict(run_id=opened["run_id"], execution_mode="standard",
                            required_lenses=["review-code", "qa-cli"], closed=closed)
     assert (td / "WBS.json").read_bytes() == checks
     assert history.read_bytes() == b'corrupt historical receipt\x00\xff\n'
-    snapshot = (td / "TASK.json").read_bytes()
+    snapshot = (td / "WBS.control.json").read_bytes()
     assert not migrate(repo, apply=True).get("isError")
-    assert (td / "TASK.json").read_bytes() == snapshot
+    assert (td / "WBS.control.json").read_bytes() == snapshot
     if not closed:
         assert call("verify")["structuredContent"]["runtime_verdict"] == "PASS"
         assert not call("close").get("isError")
@@ -59,13 +59,13 @@ def test_public_preview_apply_preserves_run_checks_and_history(tmp_path, closed)
 def test_invalid_legacy_control_refuses_without_converting_other_tasks(tmp_path):
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    before = (td / "TASK.json").read_bytes()
-    other = td.with_name("TASK__broken")
+    before = (td / "WBS.control.json").read_bytes()
+    other = td.with_name("WBS__broken")
     other.mkdir()
-    (other / "TASK.json").write_text('{"run_id":"bad","close_receipt_fingerprint":null}')
+    (other / "WBS.control.json").write_text('{"run_id":"bad","close_receipt_fingerprint":null}')
     result = migrate(repo, apply=True)
     assert result.get("isError"), result
-    assert (td / "TASK.json").read_bytes() == before
+    assert (td / "WBS.control.json").read_bytes() == before
 
 
 def historical_control(td):
@@ -74,29 +74,29 @@ def historical_control(td):
                  started_at="2026-08-12T03:11:29.968778Z", execution_mode="standard",
                  review_lenses=["review-code", "review-security"], qa_lenses=["qa-cli"],
                  close_receipt_fingerprint=None)
-    (td / "TASK.json").write_text(json.dumps(value, indent=3) + "\n")
+    (td / "WBS.control.json").write_text(json.dumps(value, indent=3) + "\n")
     return value
 
 
 @pytest.mark.parametrize("archived", [False, True])
 def test_unreferenced_pre_uuid7_history_is_retained_and_reported(tmp_path, archived):
-    from _lib import read_task_control
+    from _lib import read_wbs_control
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = (repo / "doc/harness/archive/batch/TASK__historical"
-                  if archived else td.with_name("TASK__historical"))
+    historical = (repo / "doc/harness/archive/batch/WBS__historical"
+                  if archived else td.with_name("WBS__historical"))
     historical_control(historical)
-    path = historical / "TASK.json"
+    path = historical / "WBS.control.json"
     before = path.read_bytes()
     for apply in (False, True, True):
         result = migrate(repo, apply=apply)
         assert not result.get("isError"), result
-        report = result["structuredContent"]["task_control_migration"]
+        report = result["structuredContent"]["wbs_control_migration"]
         assert report["retained_historical_controls"] == [dict(
             path=str(path), reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle")]
         assert str(path) not in report["destinations"]
         assert path.read_bytes() == before
-        assert read_task_control(str(historical)) == {}
+        assert read_wbs_control(str(historical)) == {}
 
 
 @pytest.mark.parametrize("mutation", ["json", "unknown", "run", "started", "lenses", "fingerprint"])
@@ -105,8 +105,8 @@ def test_malformed_pre_uuid7_history_refuses_before_writes(tmp_path, mutation, a
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = (repo / "doc/harness/archive/batch/TASK__historical"
-                  if archived else td.with_name("TASK__historical"))
+    historical = (repo / "doc/harness/archive/batch/WBS__historical"
+                  if archived else td.with_name("WBS__historical"))
     value = historical_control(historical)
     if mutation == "unknown":
         value["extra"] = True
@@ -118,13 +118,13 @@ def test_malformed_pre_uuid7_history_refuses_before_writes(tmp_path, mutation, a
         value["qa_lenses"] = ["qa-unknown"]
     else:
         value["close_receipt_fingerprint"] = True
-    (historical / "TASK.json").write_text("{" if mutation == "json" else json.dumps(value))
-    before = (td / "TASK.json").read_bytes()
+    (historical / "WBS.control.json").write_text("{" if mutation == "json" else json.dumps(value))
+    before = (td / "WBS.control.json").read_bytes()
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get("isError"), result
-        assert str(historical / "TASK.json") in str(result)
-        assert (td / "TASK.json").read_bytes() == before
+        assert str(historical / "WBS.control.json") in str(result)
+        assert (td / "WBS.control.json").read_bytes() == before
         assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
 
 
@@ -134,24 +134,24 @@ def test_active_pre_uuid7_history_refuses_before_writes(tmp_path, binding, archi
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = (repo / "doc/harness/archive/batch/TASK__historical"
-                  if archived else td.with_name("TASK__historical"))
+    historical = (repo / "doc/harness/archive/batch/WBS__historical"
+                  if archived else td.with_name("WBS__historical"))
     historical_control(historical)
     if binding == "legacy":
         (td.parent / ".active").write_text(str(historical))
     else:
         sessions = td.parent / ".active_sessions"
         sessions.mkdir(exist_ok=True)
-        value = dict(task_id=historical.name, task_dir=str(historical))
+        value = dict(wbs_id=historical.name, wbs_dir=str(historical))
         if binding == "conflict":
             value = dict(conflicts=[value])
         (sessions / "old.json").write_text(json.dumps(value))
-    before = (td / "TASK.json").read_bytes()
+    before = (td / "WBS.control.json").read_bytes()
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get("isError"), result
-        assert str(historical / "TASK.json") in str(result)
-        assert (td / "TASK.json").read_bytes() == before
+        assert str(historical / "WBS.control.json") in str(result)
+        assert (td / "WBS.control.json").read_bytes() == before
         assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
 
 
@@ -161,15 +161,15 @@ def test_pool_referenced_pre_uuid7_history_refuses_before_writes(tmp_path, monke
     from test_batch_state import Pool
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
-    td = pool.repo / ("doc/harness/archive/batch/TASK__a" if archived else "doc/harness/tasks/TASK__a")
+    td = pool.repo / ("doc/harness/archive/batch/WBS__a" if archived else "doc/harness/wbs/WBS__a")
     historical_control(td)
     state = pool.state.read_bytes()
-    control = (td / "TASK.json").read_bytes()
+    control = (td / "WBS.control.json").read_bytes()
     for apply in (False, True):
         result = migrate(pool.repo, apply=apply)
         assert result.get("isError"), result
-        assert str(td / "TASK.json") in str(result)
-        assert (td / "TASK.json").read_bytes() == control
+        assert str(td / "WBS.control.json") in str(result)
+        assert (td / "WBS.control.json").read_bytes() == control
         assert pool.state.read_bytes() == state
         assert not (pool.repo / goal_migration.CONTROL_MANIFEST).exists()
 
@@ -179,10 +179,10 @@ def test_prepared_migration_rechecks_historical_bindings_before_retry(tmp_path, 
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = (repo / "doc/harness/archive/batch/TASK__historical"
-                  if archived else td.with_name("TASK__historical"))
+    historical = (repo / "doc/harness/archive/batch/WBS__historical"
+                  if archived else td.with_name("WBS__historical"))
     historical_control(historical)
-    before = (td / "TASK.json").read_bytes()
+    before = (td / "WBS.control.json").read_bytes()
     def interrupt(*args):
         raise OSError("interrupted before any task conversion")
     with monkeypatch.context() as patch:
@@ -194,8 +194,8 @@ def test_prepared_migration_rechecks_historical_bindings_before_retry(tmp_path, 
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get("isError"), result
-        assert str(historical / "TASK.json") in str(result)
-        assert (td / "TASK.json").read_bytes() == before
+        assert str(historical / "WBS.control.json") in str(result)
+        assert (td / "WBS.control.json").read_bytes() == before
         assert journal.read_bytes() == journal_before
 
 
@@ -203,11 +203,11 @@ def test_prepared_migration_retains_archived_history_on_successful_retry(tmp_pat
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    historical = repo / "doc/harness/archive/batch/TASK__historical"
+    historical = repo / "doc/harness/archive/batch/WBS__historical"
     historical_control(historical)
     history = historical / "RECEIPTS.jsonl"
     history.write_bytes(b"opaque archived history\x00\xff\n")
-    before = (historical / "TASK.json").read_bytes()
+    before = (historical / "WBS.control.json").read_bytes()
     def interrupt(*args):
         raise OSError("interrupted before any task conversion")
     with monkeypatch.context() as patch:
@@ -218,9 +218,9 @@ def test_prepared_migration_retains_archived_history_on_successful_retry(tmp_pat
     for apply in (False, True, True):
         result = migrate(repo, apply=apply)
         assert not result.get("isError"), result
-        report = result["structuredContent"]["task_control_migration"]
-        assert report["retained_historical_controls"][0]["path"] == str(historical / "TASK.json")
-        assert (historical / "TASK.json").read_bytes() == before
+        report = result["structuredContent"]["wbs_control_migration"]
+        assert report["retained_historical_controls"][0]["path"] == str(historical / "WBS.control.json")
+        assert (historical / "WBS.control.json").read_bytes() == before
         assert history.read_bytes() == b"opaque archived history\x00\xff\n"
     assert json.loads(journal.read_text())["status"] == "complete"
 
@@ -234,10 +234,10 @@ def test_retained_report_rejects_unregistered_or_noncanonical_paths(tmp_path, pa
     journal = repo / goal_migration.CONTROL_MANIFEST
     value = json.loads(journal.read_text())
     if path_kind == "noncanonical":
-        path = str(repo / "doc/harness/archive/other/TASK__historical/TASK.json")
+        path = str(repo / "doc/harness/archive/other/WBS__historical/WBS.control.json")
     else:
-        suffix = "tasks" if path_kind == "unregistered-live" else "archive/batch"
-        path = str(tmp_path / "unregistered" / "doc/harness" / suffix / "TASK__historical/TASK.json")
+        suffix = "wbs" if path_kind == "unregistered-live" else "archive/batch"
+        path = str(tmp_path / "unregistered" / "doc/harness" / suffix / "WBS__historical/WBS.control.json")
     value["retained_historical_controls"] = [dict(path=path,
         reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle")]
     journal.write_text(json.dumps(value))
@@ -250,10 +250,10 @@ def test_retained_report_rejects_unregistered_or_noncanonical_paths(tmp_path, pa
 def test_public_migration_rejects_nonboolean_apply_without_changes(tmp_path):
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    before = (td / "TASK.json").read_bytes()
+    before = (td / "WBS.control.json").read_bytes()
     result = migrate(repo, apply="true")
     assert result.get("isError"), result
-    assert (td / "TASK.json").read_bytes() == before
+    assert (td / "WBS.control.json").read_bytes() == before
 
 
 def archived_legacy_pool(tmp_path, monkeypatch):
@@ -265,7 +265,7 @@ def archived_legacy_pool(tmp_path, monkeypatch):
     pool.claim()
     complete(pool)
     pool.cli("finish", "--slug", "a")
-    archive = pool.repo / "doc/harness/archive/batch/TASK__a"
+    archive = pool.repo / "doc/harness/archive/batch/WBS__a"
     history = archive / "RECEIPTS.jsonl"
     history.write_bytes(b'opaque historical archive bytes\x00\xff\n')
     legacy_control(archive, closed=True)
@@ -283,7 +283,7 @@ def archived_legacy_pool(tmp_path, monkeypatch):
     return pool, archive, history.read_bytes()
 
 
-def test_archive_task_conversion_updates_existing_pool_hash_without_rewriting_history(tmp_path, monkeypatch):
+def test_archive_wbs_conversion_updates_existing_pool_hash_without_rewriting_history(tmp_path, monkeypatch):
     import batch_state
     pool, archive, history = archived_legacy_pool(tmp_path, monkeypatch)
     before = json.loads(pool.state.read_text())
@@ -297,21 +297,21 @@ def test_archive_task_conversion_updates_existing_pool_hash_without_rewriting_hi
     assert row["checkpoint"]["closed"] is True
     assert row["checkpoint"]["archive_fingerprint"] != old_hash
     assert row["checkpoint"]["archive_fingerprint"] == batch_state.fingerprint(str(archive))
-    assert json.loads((archive / "TASK.json").read_text())["closed"] is True
+    assert json.loads((archive / "WBS.control.json").read_text())["closed"] is True
     assert (archive / "RECEIPTS.jsonl").read_bytes() == history
     pool.cli("status")
 
 
 def test_preexisting_archive_drift_is_rejected_before_any_conversion(tmp_path, monkeypatch):
     pool, archive, _ = archived_legacy_pool(tmp_path, monkeypatch)
-    control = (archive / "TASK.json").read_bytes()
+    control = (archive / "WBS.control.json").read_bytes()
     state = pool.state.read_bytes()
     (archive / "RECEIPTS.jsonl").write_bytes(b'changed after old archive custody hash')
     for apply in (False, True):
         result = migrate(pool.repo, apply=apply)
         assert result.get("isError"), result
         assert "archive" in str(result).lower() and "drift" in str(result).lower()
-        assert (archive / "TASK.json").read_bytes() == control
+        assert (archive / "WBS.control.json").read_bytes() == control
         assert pool.state.read_bytes() == state
 
 
@@ -332,7 +332,7 @@ def test_migration_retries_forward_after_archive_conversion_before_pool_publicat
         result = migrate(pool.repo, apply=True)
     assert result.get("isError"), result
     assert interrupted
-    assert json.loads((archive / "TASK.json").read_text())["closed"] is True
+    assert json.loads((archive / "WBS.control.json").read_text())["closed"] is True
     assert pool.state.read_bytes() == state_before
     journal = pool.repo / goal_migration.CONTROL_MANIFEST
     assert json.loads(journal.read_text())["status"] == "prepared"
@@ -350,10 +350,10 @@ def test_prepared_migration_rejects_unrelated_destination_changes(tmp_path, monk
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    other = td.with_name("TASK__second")
+    other = td.with_name("WBS__second")
     other.mkdir()
-    (other / "TASK.json").write_bytes((td / "TASK.json").read_bytes())
-    other_before = (other / "TASK.json").read_bytes()
+    (other / "WBS.control.json").write_bytes((td / "WBS.control.json").read_bytes())
+    other_before = (other / "WBS.control.json").read_bytes()
     actual = goal_migration._control_write
     writes = []
     def interrupt(repo, entry, data, expected):
@@ -365,13 +365,13 @@ def test_prepared_migration_rejects_unrelated_destination_changes(tmp_path, monk
         patch.setattr(goal_migration, "_control_write", interrupt)
         result = migrate(repo, apply=True)
     assert result.get("isError"), result
-    changed = json.loads((td / "TASK.json").read_text())
+    changed = json.loads((td / "WBS.control.json").read_text())
     changed["required_lenses"].append("qa-api")
-    (td / "TASK.json").write_text(json.dumps(changed))
+    (td / "WBS.control.json").write_text(json.dumps(changed))
     result = migrate(repo, apply=True)
     assert result.get("isError"), result
     assert "drift" in str(result).lower()
-    assert (other / "TASK.json").read_bytes() == other_before
+    assert (other / "WBS.control.json").read_bytes() == other_before
 
 
 @pytest.mark.parametrize("retry", [False, True])
@@ -397,21 +397,21 @@ def test_migration_hashes_each_archive_only_before_and_after_publication(tmp_pat
     assert not result.get("isError"), result
     assert walks == [str(archive), str(archive)]
     assert (archive / "RECEIPTS.jsonl").read_bytes() == history
-    assert json.loads((archive / "TASK.json").read_text())["closed"] is True
+    assert json.loads((archive / "WBS.control.json").read_text())["closed"] is True
 
 
 def test_changed_migration_lock_scope_refuses_before_planning_or_publication(tmp_path, monkeypatch):
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    before = (td / "TASK.json").read_bytes()
+    before = (td / "WBS.control.json").read_bytes()
     actual = goal_migration._control_scope
     scopes = []
     def changing(root):
         if scopes:
-            new = td.with_name("TASK__arrived")
+            new = td.with_name("WBS__arrived")
             new.mkdir()
-            (new / "TASK.json").write_bytes(before)
+            (new / "WBS.control.json").write_bytes(before)
         scopes.append(root)
         return actual(root)
     def forbidden(*args):
@@ -421,7 +421,7 @@ def test_changed_migration_lock_scope_refuses_before_planning_or_publication(tmp
     result = migrate(repo, apply=True)
     assert result.get("isError"), result
     assert "lock scope changed" in str(result)
-    assert (td / "TASK.json").read_bytes() == before
+    assert (td / "WBS.control.json").read_bytes() == before
     assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
 
 
@@ -431,9 +431,9 @@ def test_explicit_focus_migration_archives_opaque_bytes_without_binding_or_task_
     assert not call('plan', plan=policy_plan([node()], {'source': ['src.txt']})).get('isError')
     assert not call('check', node_id='A').get('isError')
     legacy = td.parent / '.active'
-    original = b'TASK__unknown\nambiguous retired focus\x00\xff'
+    original = b'WBS__unknown\nambiguous retired focus\x00\xff'
     legacy.write_bytes(original)
-    task_before = (td / 'TASK.json').read_bytes()
+    task_before = (td / 'WBS.control.json').read_bytes()
     wbs_before = (td / 'WBS.json').read_bytes()
     sessions = td.parent / '.active_sessions'
     session_before = {p.name: p.read_bytes() for p in sessions.glob('*.json')}
@@ -444,11 +444,11 @@ def test_explicit_focus_migration_archives_opaque_bytes_without_binding_or_task_
     result = migrate(repo, apply=True)
     assert not result.get('isError'), result
     assert not legacy.exists()
-    archive = repo / 'doc/harness/archive/task-control-migration/legacy-focus.json'
+    archive = repo / 'doc/harness/archive/wbs-control-migration/legacy-focus.json'
     preserved = archive.read_bytes()
     value = json.loads(preserved)
     assert value == {'version': 1, 'entries': [{'root': str(repo), 'before': base64.b64encode(original).decode()}]}
-    assert (td / 'TASK.json').read_bytes() == task_before
+    assert (td / 'WBS.control.json').read_bytes() == task_before
     assert (td / 'WBS.json').read_bytes() == wbs_before
     assert {p.name: p.read_bytes() for p in sessions.glob('*.json')} == session_before
     assert not migrate(repo, apply=True).get('isError')
@@ -459,7 +459,7 @@ def test_focus_migration_retry_preserves_archive_and_rejects_changed_input(tmp_p
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     legacy = td.parent / '.active'
-    legacy.write_bytes(b'TASK__unowned\n')
+    legacy.write_bytes(b'WBS__unowned\n')
     retire = goal_migration._retire
     def interrupted(root, path, expected):
         if path == goal_migration.LEGACY_FOCUS_PATH:
@@ -470,14 +470,14 @@ def test_focus_migration_retry_preserves_archive_and_rejects_changed_input(tmp_p
     assert failed.get('isError'), failed
     archive = repo / goal_migration.LEGACY_FOCUS_ARCHIVE
     captured = archive.read_bytes()
-    assert legacy.read_bytes() == b'TASK__unowned\n'
+    assert legacy.read_bytes() == b'WBS__unowned\n'
     monkeypatch.setattr(goal_migration, '_retire', retire)
-    legacy.write_bytes(b'TASK__changed\n')
+    legacy.write_bytes(b'WBS__changed\n')
     refused = migrate(repo, apply=True)
     assert refused.get('isError'), refused
     assert archive.read_bytes() == captured
-    assert legacy.read_bytes() == b'TASK__changed\n'
-    legacy.write_bytes(b'TASK__unowned\n')
+    assert legacy.read_bytes() == b'WBS__changed\n'
+    legacy.write_bytes(b'WBS__unowned\n')
     assert not migrate(repo, apply=True).get('isError')
     assert not legacy.exists()
     assert archive.read_bytes() == captured
@@ -490,31 +490,31 @@ def test_explicit_focus_migration_covers_registered_worktrees(tmp_path):
     worktree = _worktree(main, 'legacy-focus')
     originals = {}
     for root in (main, worktree):
-        tasks = root / 'doc/harness/tasks'
+        tasks = root / 'doc/harness/wbs'
         tasks.mkdir(parents=True, exist_ok=True)
-        originals[str(root)] = f'TASK__unknown-{root.name}\n'.encode()
+        originals[str(root)] = f'WBS__unknown-{root.name}\n'.encode()
         (tasks / '.active').write_bytes(originals[str(root)])
     result = migrate(main, apply=True)
     assert not result.get('isError'), result
-    archive = json.loads((main / 'doc/harness/archive/task-control-migration/legacy-focus.json').read_text())
+    archive = json.loads((main / 'doc/harness/archive/wbs-control-migration/legacy-focus.json').read_text())
     assert {row['root']: base64.b64decode(row['before']) for row in archive['entries']} == originals
     for root in (main, worktree):
-        assert not (root / 'doc/harness/tasks/.active').exists()
-        assert not list((root / 'doc/harness/tasks/.active_sessions').glob('*.json'))
+        assert not (root / 'doc/harness/wbs/.active').exists()
+        assert not list((root / 'doc/harness/wbs/.active_sessions').glob('*.json'))
 
 
 def test_focus_migration_rejects_symlink_before_control_changes(tmp_path):
     repo, td, _, _ = public(tmp_path)
     legacy_control(td)
-    before = (td / 'TASK.json').read_bytes()
+    before = (td / 'WBS.control.json').read_bytes()
     outside = tmp_path / 'outside-focus'
     outside.write_bytes(b'preserve')
     (td.parent / '.active').symlink_to(outside)
     result = migrate(repo, apply=True)
     assert result.get('isError'), result
-    assert (td / 'TASK.json').read_bytes() == before
+    assert (td / 'WBS.control.json').read_bytes() == before
     assert outside.read_bytes() == b'preserve'
-    assert not (repo / 'doc/harness/archive/task-control-migration/legacy-focus.json').exists()
+    assert not (repo / 'doc/harness/archive/wbs-control-migration/legacy-focus.json').exists()
 
 
 def test_completed_control_migration_rechecks_archived_history(tmp_path, monkeypatch):
@@ -530,10 +530,10 @@ def test_completed_control_migration_rechecks_archived_history(tmp_path, monkeyp
 
 
 def default_marker(td):
-    control = json.loads((td / 'TASK.json').read_text())
+    control = json.loads((td / 'WBS.control.json').read_text())
     path = td.parent / '.active_sessions/default.json'
     path.parent.mkdir(parents=True, exist_ok=True)
-    value = dict(session_id='default', task_dir=str(td), task_id=td.name,
+    value = dict(session_id='default', wbs_dir=str(td), wbs_id=td.name,
                  run_id=control['run_id'], updated='2026-10-29T14:42:17Z')
     path.write_text(json.dumps(value, indent=3) + '\n')
     return path
@@ -551,7 +551,7 @@ def test_default_marker_migration_preserves_completed_focus_and_current_work(tmp
     original = marker.read_bytes()
     history = td / 'RECEIPTS.jsonl'
     history.write_bytes(b'exact opaque history\x00\xff')
-    snapshots = {p: p.read_bytes() for p in (td / 'TASK.json', td / 'WBS.json', history)}
+    snapshots = {p: p.read_bytes() for p in (td / 'WBS.control.json', td / 'WBS.json', history)}
     real_markers = {p: p.read_bytes() for p in marker.parent.glob('*.json') if p != marker}
     preview = migrate(repo)
     assert not preview.get('isError'), preview
@@ -571,7 +571,7 @@ def test_default_marker_migration_preserves_completed_focus_and_current_work(tmp
     assert archive.read_bytes() == preserved
 
 
-@pytest.mark.parametrize('corruption', ['duplicate', 'unknown', 'fence', 'overflow', 'session', 'run', 'task_dir', 'task_id', 'timestamp', 'symlink', 'oversized'])
+@pytest.mark.parametrize('corruption', ['duplicate', 'unknown', 'fence', 'overflow', 'session', 'run', 'wbs_dir', 'wbs_id', 'timestamp', 'symlink', 'oversized'])
 def test_default_marker_refuses_unsafe_input_before_any_conversion(tmp_path, corruption):
     import goal_migration
     repo, td, _, _ = public(tmp_path)
@@ -592,17 +592,17 @@ def test_default_marker_refuses_unsafe_input_before_any_conversion(tmp_path, cor
             'overflow': ('binding_conflicts_overflow', True), 'session': ('session_id', 'real-session'),
             'run': ('run_id', '0198c349-5800-7000-8000-000000000001'),
             'timestamp': ('updated', '2026-02-30T14:42:17Z'),
-            'task_dir': ('task_dir', str(td / '..' / td.name)), 'task_id': ('task_id', 'TASK__other'),
+            'wbs_dir': ('wbs_dir', str(td / '..' / td.name)), 'wbs_id': ('wbs_id', 'WBS__other'),
         }[corruption]
         value[key] = replacement
         marker.write_text(json.dumps(value))
     legacy_control(td)
-    before = (td / 'TASK.json').read_bytes()
+    before = (td / 'WBS.control.json').read_bytes()
     marker_before = marker.read_bytes()
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get('isError'), result
-        assert (td / 'TASK.json').read_bytes() == before
+        assert (td / 'WBS.control.json').read_bytes() == before
         assert marker.read_bytes() == marker_before
         assert not (repo / goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE).exists()
         assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
@@ -680,20 +680,20 @@ def test_explicit_default_marker_migration_unblocks_exact_ordinary_removal_proof
 
 def test_completed_control_migration_preserves_unreferenced_archived_task(tmp_path):
     repo, td, _, _ = public(tmp_path)
-    archived = repo / 'doc/harness/archive/batch/TASK__unreferenced'
+    archived = repo / 'doc/harness/archive/batch/WBS__unreferenced'
     archived.mkdir(parents=True)
-    (archived / 'TASK.json').write_bytes((td / 'TASK.json').read_bytes())
+    (archived / 'WBS.control.json').write_bytes((td / 'WBS.control.json').read_bytes())
     legacy_control(archived, closed=True)
     assert not migrate(repo, apply=True).get('isError')
-    control = json.loads((archived / 'TASK.json').read_text())
+    control = json.loads((archived / 'WBS.control.json').read_text())
     control['closed'] = False
-    (archived / 'TASK.json').write_text(json.dumps(control))
-    changed = (archived / 'TASK.json').read_bytes()
+    (archived / 'WBS.control.json').write_text(json.dumps(control))
+    changed = (archived / 'WBS.control.json').read_bytes()
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get('isError'), result
         assert 'archive' in str(result).lower()
-        assert (archived / 'TASK.json').read_bytes() == changed
+        assert (archived / 'WBS.control.json').read_bytes() == changed
 
 
 @pytest.mark.parametrize('sync_failure', [False, True])

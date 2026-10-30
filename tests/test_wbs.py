@@ -21,9 +21,9 @@ def baseline(tmp_path, nodes=None, now=100):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / ".gitignore").write_text("doc/harness/tasks/\n")
+    (repo / ".gitignore").write_text("doc/harness/wbs/\n")
     (repo / "src.txt").write_text("ok")
-    td = repo / "doc/harness/tasks/TASK__sample"
+    td = repo / "doc/harness/wbs/WBS__sample"
     td.mkdir(parents=True)
     publish(td, nodes or [node()], now=now)
     return repo, td
@@ -38,7 +38,7 @@ def publish(td, nodes, now=100, run="run"):
 
 
 def progress(repo, td, now=100):
-    return wbs.task_progress(str(td), str(repo), "run", now=now)
+    return wbs.wbs_progress(str(td), str(repo), "run", now=now)
 
 
 def check(repo, td, key="A", now=101, **kw):
@@ -116,7 +116,7 @@ def test_invalid_definitions_refuse(case):
 def test_legacy_corrupt_and_foreign_run_do_not_claim_progress(tmp_path):
     repo, td = baseline(tmp_path)
     check(repo, td)
-    assert wbs.task_progress(str(td), str(repo), "other")["percentage"] == 0
+    assert wbs.wbs_progress(str(td), str(repo), "other")["percentage"] == 0
     (td / "WBS.json").write_text("broken")
     assert progress(repo, td)["percentage"] is None
     (td / "WBS.json").unlink()
@@ -183,7 +183,7 @@ def test_oversized_state_refuses_before_publishing_or_losing_repairability(tmp_p
         return server._call_in_repo(str(repo), "wbs", dict(action=action, wbs_id="sample", **extra))
     assert not call("open").get("isError")
     assert not call("plan", plan=plan([node()])).get("isError")
-    before = {name: (td / name).read_bytes() for name in ("WBS.json", "PLAN.md", "TASK.json")}
+    before = {name: (td / name).read_bytes() for name in ("WBS.json", "PLAN.md", "WBS.control.json")}
     large = node()
     large["check"] = [sys.executable, "-c", "#" + "x" * 1048300]
     assert len(plan([large]).encode()) < 1024 * 1024  # PLAN fits while combined WBS state does not.
@@ -264,14 +264,14 @@ def test_mcp_plan_bundle_and_explicit_check(tmp_path):
     initialize_fixture_project(repo)
     # Start/plan through actual tool owner rather than forging control evidence.
     (td / "WBS.json").unlink()
-    result = server._call_in_repo(str(repo), "task_start", {"task_id": "sample"})
+    result = server._call_in_repo(str(repo), "wbs_open", {"wbs_id": "sample"})
     assert not result.get("isError"), result
-    result = server._call_in_repo(str(repo), "write_plan", {"task_id": "sample", "plan": plan([node()])})
+    result = server._call_in_repo(str(repo), "write_plan", {"wbs_id": "sample", "plan": plan([node()])})
     assert not result.get("isError"), result
-    result = server._call_in_repo(str(repo), "task_wbs", {"task_id": "sample", "action": "verify", "leaf_id": "A"})
+    result = server._call_in_repo(str(repo), "wbs_action", {"wbs_id": "sample", "action": "verify", "leaf_id": "A"})
     assert not result.get("isError"), result
     assert result["structuredContent"]["progress"]["percentage"] == 100
-    assert set(json.loads((td / "TASK.json").read_text())) == {"run_id", "execution_mode", "required_lenses", "closed"}
+    assert set(json.loads((td / "WBS.control.json").read_text())) == {"run_id", "execution_mode", "required_lenses", "closed"}
 
 
 def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
@@ -298,22 +298,22 @@ def test_one_public_tree_preserves_existing_execution_run_and_gates(tmp_path):
     assert not call("verify").get("isError")
     assert call("context", plan="unexpected").get("isError")
     assert not call("block", blocked_reason="Waiting for external fixture service", unblock_condition="Restore fixture service").get("isError")
-    assert call("context")["structuredContent"]["task_context"]["status"] == "blocked"
+    assert call("context")["structuredContent"]["context"]["status"] == "blocked"
     assert call("open")["structuredContent"]["run_id"] == run
     assert not call("close").get("isError")  # Actual review/QA remain workflow-owned.
 
 
 def test_only_wbs_open_and_context_bind_hook_results(name, encoded):
-    from codex_hook_registration import _task_result
-    body = dict(task_dir="/tmp/fixture/TASK__x", task_id="TASK__x", run_id="run")
+    from codex_hook_registration import _wbs_result
+    body = dict(wbs_dir="/tmp/fixture/WBS__x", wbs_id="WBS__x", run_id="run")
     for action in ("open", "context", "plan", "check", "dispatch", "verify", "close", "block", "next"):
         args = dict(action=action, wbs_id="x")
         payload = dict(tool_name=name, tool_input=json.dumps(args) if encoded else args,
                        tool_response=dict(structuredContent=body))
-        observed = _task_result(json.dumps(payload).encode())
+        observed = _wbs_result(json.dumps(payload).encode())
         assert bool(observed[0]) == (action in {"open", "context"})
         payload["tool_response"]["isError"] = True
-        assert _task_result(json.dumps(payload).encode()) == ("", "", "")
+        assert _wbs_result(json.dumps(payload).encode()) == ("", "", "")
 
 
 def test_public_dispatch_performs_parent_handoff_without_another_lifecycle(tmp_path, monkeypatch):
@@ -333,7 +333,7 @@ def test_public_dispatch_performs_parent_handoff_without_another_lifecycle(tmp_p
     result = call("dispatch", wbs_id=root, ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
     assert not result.get("isError"), result
     assert result["structuredContent"]["execution"] == "awaiting_worktrees"
-    assert call("context", wbs_id=root)["structuredContent"]["task_context"]["status"] == "blocked"
+    assert call("context", wbs_id=root)["structuredContent"]["context"]["status"] == "blocked"
     assert call("open", wbs_id=root).get("isError")
     assert call("next", wbs_id=root)["structuredContent"]["ready"] == []
     assert not (pool.repo / "doc/harness/goals/current.json").exists()
@@ -345,22 +345,22 @@ def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, mo
     pool, server = Pool(tmp_path, monkeypatch), HarnessMcpServerTests()
     def call(name, **args):
         return server._call_in_repo(str(pool.repo), name, args)
-    assert not call("task_start", task_id="parent").get("isError")
+    assert not call("wbs_open", wbs_id="parent").get("isError")
     nodes = [dict(id=key, title="Outcome " + key, weight=1,
                   check=[sys.executable, "-c", "from pathlib import Path; assert Path('" + key.lower() + ".txt').read_text() == 'done'"])
              for key in ("A", "B")]
-    assert not call("write_plan", task_id="parent", plan=plan(nodes)).get("isError")
-    result = call("task_wbs", task_id="parent", action="dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
+    assert not call("write_plan", wbs_id="parent", plan=plan(nodes)).get("isError")
+    result = call("wbs_action", wbs_id="parent", action="dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]}, host=__import__("test_managed_wbs").host_snapshot())
     assert not result.get("isError"), result
     pack = result["structuredContent"]
     pool.batch = pack["batch_id"]
-    context = call("task_context", task_id="parent")["structuredContent"]["task_context"]
+    context = call("context", wbs_id="parent")["structuredContent"]["context"]
     assert not context["source_write_allowed"]
     assert "integrated WBS work pack" in context["missing_for_close"]
-    assert call("task_start", task_id="parent").get("isError")
-    assert not call("task_blocked", task_id="parent", blocked_reason="Waiting for isolated WBS leads to complete their worktree handoff.",
+    assert call("wbs_open", wbs_id="parent").get("isError")
+    assert not call("wbs_blocked", wbs_id="parent", blocked_reason="Waiting for isolated WBS leads to complete their worktree handoff.",
                     unblock_condition="Integrate and close the exact bound batch, then resume parent for combined verification.").get("isError")
-    pool.init(pack["requests"], owner="TASK__parent")
+    pool.init(pack["requests"], owner="WBS__parent")
     pool.claim()
     for index, request in enumerate(pack["requests"]):
         slug, worker = request["slug"], "worker-" + str(index)
@@ -368,24 +368,24 @@ def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, mo
         assert worktree != pool.repo
         (worktree / request["scopes"][0]).write_text("done")
         _git("add", "-A", cwd=worktree)
-        _git("commit", "-qm", slug, "--trailer", "Harness-Task: TASK__" + slug, cwd=worktree)
+        _git("commit", "-qm", slug, "--trailer", "Harness-WBS: WBS__" + slug, cwd=worktree)
         task(worktree, slug, closed=True)
         from test_batch_state import RUN
         pool.cli(*pool.result(slug, worktree, branch, "closed", worker, run_id=RUN))
     for request in pack["requests"]:
         pool.cli("finish", "--slug", request["slug"])
-        assert call("task_start", task_id="parent").get("isError")
+        assert call("wbs_open", wbs_id="parent").get("isError")
     pool.cli("close")
-    assert not call("task_start", task_id="parent").get("isError")
+    assert not call("wbs_open", wbs_id="parent").get("isError")
     for key in ("A", "B"):
-        result = call("task_wbs", task_id="parent", action="verify", leaf_id=key)
+        result = call("wbs_action", wbs_id="parent", action="verify", leaf_id=key)
         assert not result.get("isError"), result
         assert result["structuredContent"]["passed"]
     assert result["structuredContent"]["progress"]["percentage"] == 100
 
     # Integrated work must not freeze future rolling refinement or assertions.
     nodes[0]["title"] = "Refined outcome A after integrated feedback"
-    result = call("write_plan", task_id="parent", plan=plan(nodes))
+    result = call("write_plan", wbs_id="parent", plan=plan(nodes))
     assert not result.get("isError"), result
 
 
@@ -447,7 +447,7 @@ def test_tiny_pending_weight_never_rounds_to_completion_or_hides_stall(tmp_path)
 
 def test_ambient_git_index_cannot_hide_changes_to_ignored_tracked_source(tmp_path, monkeypatch):
     repo, td = baseline(tmp_path)
-    (repo / ".gitignore").write_text("doc/harness/tasks/\nsrc.txt\n")
+    (repo / ".gitignore").write_text("doc/harness/wbs/\nsrc.txt\n")
     subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
     subprocess.run(["git", "add", "-f", "src.txt"], cwd=repo, check=True)
     real_source = wbs.fingerprint(str(repo))
@@ -469,11 +469,11 @@ def test_retired_aliases_fail_over_actual_mcp_protocol(tmp_path, monkeypatch):
     server = harness_server.McpServer()
     monkeypatch.setattr(server, '_reply', lambda msg_id, result: replies.append((msg_id, result)))
     names = ['goal_start', 'goal_context', 'goal_add_task', 'goal_next_task', 'goal_finish',
-             'task_start', 'task_context', 'task_wbs', 'write_plan', 'task_verify', 'task_close', 'task_blocked']
+             'wbs_open', 'context', 'wbs_action', 'write_plan', 'wbs_verify', 'wbs_close', 'wbs_blocked']
     before = list(tmp_path.iterdir())
     for index, name in enumerate(names):
         server.handle_request(dict(jsonrpc='2.0', id=index, method='tools/call',
-                                   params=dict(name=name, arguments=dict(task_id='TASK__never'))))
+                                   params=dict(name=name, arguments=dict(wbs_id='WBS__never'))))
     assert len(replies) == len(names)
     assert all(result.get('isError') and 'Unknown tool' in result['structuredContent']['error']
                for _, result in replies)
@@ -499,7 +499,7 @@ def test_public_migration_is_explicit_and_owner_authorized(tmp_path, monkeypatch
     applied = owner._call_in_repo(str(tmp_path), 'wbs', dict(action='migrate', apply=True))
     assert not applied.get('isError'), applied
     assert applied['structuredContent']['status'] == 'complete' and not path.exists()
-    assert not list(tmp_path.rglob('TASK.json'))
+    assert not list(tmp_path.rglob('WBS.control.json'))
 
 
 def test_assertion_full_log_survives_compact_wbs_publication(tmp_path):

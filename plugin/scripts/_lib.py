@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harness minimal library — stdlib only, exact four-field TASK.json."""
+"""Harness minimal library — stdlib only, exact four-field WBS.control.json."""
 
 import os
 import re
@@ -19,18 +19,18 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import CodeType
 
-TASK_DIR = "doc/harness/tasks"
+WBS_DIR = "doc/harness/wbs"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
-TASK_CONTROL_NAME = "TASK.json"
+WBS_CONTROL_NAME = "WBS.control.json"
 
-CODEX_TASK_BINDING_TOOLS = frozenset({
+CODEX_WBS_BINDING_TOOLS = frozenset({
     "wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs",
 })
 
 
-def is_codex_task_binding_tool(tool_name, arguments=None):
+def is_codex_wbs_binding_tool(tool_name, arguments=None):
     """Bind only successful public WBS open/context operations."""
-    if not isinstance(tool_name, str) or tool_name.lower() not in CODEX_TASK_BINDING_TOOLS:
+    if not isinstance(tool_name, str) or tool_name.lower() not in CODEX_WBS_BINDING_TOOLS:
         return False
     try:
         arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
@@ -49,11 +49,11 @@ def native_wbs_id(objective):
 def native_wbs_is_synced(repo_root, objective):
     if not str(objective or "").strip():
         return False
-    task_id = "TASK__" + native_wbs_id(objective)[5:]
-    td = canonical_task_dir(task_id=task_id, repo_root=repo_root)
-    return bool(read_task_control(td))
+    wbs_id = "WBS__" + native_wbs_id(objective)[5:]
+    td = canonical_wbs_dir(wbs_id=wbs_id, repo_root=repo_root)
+    return bool(read_wbs_control(td))
 
-TASK_CONTROL_FIELDS = frozenset({
+WBS_CONTROL_FIELDS = frozenset({
     "run_id", "execution_mode", "required_lenses", "closed",
 })
 LENS_ORDER = (
@@ -181,11 +181,11 @@ def _strict_regular_text_snapshot(
 ):
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
-    binding_fn = globals().get("_task_control_lock_binding")
+    binding_fn = globals().get("_wbs_control_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
     dir_fd = binding[1] if binding is not None else None
     if binding is not None:
-        _validate_task_control_dir_binding(binding)
+        _validate_wbs_control_dir_binding(binding)
 
     def leaf_stat():
         if dir_fd is None:
@@ -265,10 +265,10 @@ def _restore_text_snapshots(snapshots):
             if not snapshot["exists"]:
                 parent = os.path.abspath(os.path.dirname(path) or ".")
                 leaf = os.path.basename(path)
-                binding = _task_control_lock_binding(parent) if "_task_control_lock_binding" in globals() else None
+                binding = _wbs_control_lock_binding(parent) if "_wbs_control_lock_binding" in globals() else None
                 try:
                     if binding is not None:
-                        _validate_task_control_dir_binding(binding)
+                        _validate_wbs_control_dir_binding(binding)
                         os.unlink(leaf, dir_fd=binding[1])
                     else:
                         os.unlink(path)
@@ -344,10 +344,10 @@ def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
 def _atomic_text_write(path: str, text: str) -> None:
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
-    binding_fn = globals().get("_task_control_lock_binding")
+    binding_fn = globals().get("_wbs_control_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
     if binding is not None:
-        if binding is not None: _validate_task_control_dir_binding(binding)
+        if binding is not None: _validate_wbs_control_dir_binding(binding)
         dir_fd = binding[1]
         tmp = f".text.{secrets.token_hex(8)}.tmp"
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -359,12 +359,12 @@ def _atomic_text_write(path: str, text: str) -> None:
             while view:
                 written = os.write(fd, view)
                 if written <= 0:
-                    raise OSError("atomic task artifact write made no progress")
+                    raise OSError("atomic WBS artifact write made no progress")
                 view = view[written:]
             os.fsync(fd)
             os.replace(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
             os.fsync(dir_fd)
-            if binding is not None: _validate_task_control_dir_binding(binding)
+            if binding is not None: _validate_wbs_control_dir_binding(binding)
         finally:
             os.close(fd)
             try:
@@ -434,7 +434,7 @@ def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
 
     A fixed ``<path>.tmp`` opened with plain ``open(..., "w")`` follows a
     symlink planted at that name, so an actor who may not touch RECEIPTS.jsonl
-    or TASK.json could still redirect this write anywhere on the filesystem and
+    or WBS.control.json could still redirect this write anywhere on the filesystem and
     clobber the target with attacker-chosen JSON keys. ``O_EXCL|O_NOFOLLOW`` on
     a random temp name closes the temp side; refusing a non-regular destination
     closes the replace side. Returns False rather than raising — diagnostics
@@ -581,7 +581,7 @@ def _log_gate_error(exc, source, repo_root=None):
     `repo_root` is for a caller that already knows which repo the record
     belongs to. Resolving from the process cwd is right for a gate, which runs
     in the project, and wrong for a caller reached from a hook whose cwd may be
-    elsewhere while it holds the task directory.
+    elsewhere while it holds the WBS directory.
     """
     try:
         repo_root = repo_root or find_repo_root()
@@ -602,7 +602,7 @@ def _log_gate_error(exc, source, repo_root=None):
 
 
 def log_gate_crash(exc, script, hook_input=None):
-    """Structured gate-crash log (AC-007 of TASK__dual-runtime-plugin-claude-codex).
+    """Structured gate-crash log (AC-007 of WBS__dual-runtime-plugin-claude-codex).
 
     Payload-aware upgrade over :func:`_log_gate_error`. Records the script
     name, tool name, payload keys, and exception. Used by gate scripts'
@@ -614,7 +614,7 @@ def log_gate_crash(exc, script, hook_input=None):
     Schema (one JSON line in `doc/harness/learnings.jsonl`):
       ts            ISO timestamp
       type          "gate-crash" (versus _log_gate_error's "gate-error" for legacy callers)
-      script        the gate name (e.g. "prewrite_gate", "task_close")
+      script        the gate name (e.g. "prewrite_gate", "wbs_close")
       tool_name     hook_input["tool_name"] if present, truncated to 120 chars
       payload_keys  sorted top-level keys of hook_input (for drift detection)
       error         "<ExceptionName>: <message>" capped at 400 chars
@@ -660,7 +660,7 @@ _UNBOUND_COMPLETION_CAUSES = {
     "verdict": (
         "its verdict did not bind",
         # Kept short: `_log_gate_error` caps the ledger line at 400 characters,
-        # and a longer action lost its remedy clause for real task-dir names.
+        # and a longer action lost its remedy clause for real WBS-directory names.
         "Re-deliver that lens final with exactly one verdict block on line 1; "
         "if it was an interim message from a lens waiting on its own work, "
         "spawn it fresh in the foreground.",
@@ -831,14 +831,14 @@ def set_scalar_field(frontmatter: str, field: str, value: str) -> str:
     return new_fm + f"{field}: {value}\n"
 
 
-# ── Task control read/write ──────────────────────────────────────────────
+# ── WBS execution control read/write ──────────────────────────────────────────────
 
 
-def task_control_file(task_dir):
-    return os.path.join(task_dir, TASK_CONTROL_NAME)
+def wbs_control_file(wbs_dir):
+    return os.path.join(wbs_dir, WBS_CONTROL_NAME)
 
 
-def _task_control_lenses(value):
+def _wbs_control_lenses(value):
     if (
         not isinstance(value, list)
         or not value
@@ -885,16 +885,16 @@ def uuid7_timestamp_ms(value):
     return parsed.int >> 80
 
 
-def task_run_started_at(control):
-    """Return the TASK run cutoff as canonical UTC milliseconds."""
+def wbs_run_started_at(control):
+    """Return the WBS run cutoff as canonical UTC milliseconds."""
     milliseconds = uuid7_timestamp_ms((control or {}).get("run_id"))
     return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).isoformat(
         timespec="milliseconds"
     ).replace("+00:00", "Z")
 
 
-def _validate_task_control(data):
-    if not isinstance(data, dict) or set(data) != TASK_CONTROL_FIELDS:
+def _validate_wbs_control(data):
+    if not isinstance(data, dict) or set(data) != WBS_CONTROL_FIELDS:
         return {}
     run_id = data.get("run_id")
     mode = data.get("execution_mode")
@@ -903,7 +903,7 @@ def _validate_task_control(data):
         uuid7_timestamp_ms(run_id)
     except ValueError:
         return {}
-    lenses = _task_control_lenses(data.get("required_lenses"))
+    lenses = _wbs_control_lenses(data.get("required_lenses"))
     if (
         mode not in {"standard", "micro"}
         or lenses is None
@@ -918,7 +918,7 @@ def _validate_task_control(data):
     }
 
 
-def _read_task_control_text(path):
+def _read_wbs_control_text(path):
     flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
              | getattr(os, "O_NONBLOCK", 0))
     try:
@@ -965,32 +965,32 @@ def _read_task_control_text(path):
         os.close(fd)
 
 
-def read_task_control(task_dir):
-    """Read the one exact, owner-controlled task authority or fail closed."""
-    text = _read_task_control_text(task_control_file(task_dir))
+def read_wbs_control(wbs_dir):
+    """Read the one exact, owner-controlled WBS authority or fail closed."""
+    text = _read_wbs_control_text(wbs_control_file(wbs_dir))
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError(f"duplicate TASK.json key: {key}")
+                raise ValueError(f"duplicate WBS.control.json key: {key}")
             result[key] = value
         return result
     try:
         data = json.loads(text, object_pairs_hook=unique_object) if text else {}
     except (TypeError, ValueError):
         return {}
-    return _validate_task_control(data)
+    return _validate_wbs_control(data)
 
 
 def _make_control_writer_authority():
     allowed = {
         "harness_server": {
-            "handle_task_start", "handle_task_context", "handle_task_close",
-            "handle_task_blocked", "handle_write_plan", "handle_wbs_migrate",
-            "handle_task_wbs", "handle_verification_target",
+            "handle_wbs_open", "handle_wbs_context", "handle_wbs_close",
+            "handle_wbs_blocked", "handle_write_plan", "handle_wbs_migrate",
+            "handle_wbs_action", "handle_verification_target",
         },
         "codex_hook_registration": {
-            "register_native_task", "register_task_result",
+            "register_native_wbs", "register_wbs_result",
         },
     }
     canonical_paths = {
@@ -1023,9 +1023,9 @@ def _make_control_writer_authority():
         return found
 
     protected_dependencies = {
-        "write_task_control", "begin_task_run", "restore_task_control",
+        "write_wbs_control", "begin_wbs_run", "restore_wbs_control",
         "write_active_marker", "clear_active_marker",
-        "restore_active_marker_snapshot", "publish_task_close",
+        "restore_active_marker_snapshot", "publish_wbs_close",
     }
     def bind(function):
         module_name = function.__module__
@@ -1033,7 +1033,7 @@ def _make_control_writer_authority():
         roles = [role for role, path in canonical_paths.items() if path == function_path]
         role = roles[0] if len(roles) == 1 else ""
         if function.__qualname__ not in allowed.get(role, set()):
-            raise PermissionError("unsupported task-control writer")
+            raise PermissionError("unsupported WBS-control writer")
         module = sys.modules.get(module_name)
         expected_path = canonical_paths[role]
         caller = inspect.currentframe().f_back
@@ -1072,7 +1072,7 @@ def _make_control_writer_authority():
                 os.close(fd)
             final_path = os.lstat(expected_path)
         except OSError as exc:
-            raise PermissionError("task-control writer source is unsafe") from exc
+            raise PermissionError("WBS-control writer source is unsafe") from exc
         source_identity = lambda value: (
             value.st_dev, value.st_ino, value.st_size, value.st_mode,
             value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
@@ -1105,7 +1105,7 @@ def _make_control_writer_authority():
             or source_identity(opened) != source_identity(after)
             or (final_path.st_dev, final_path.st_ino) != (before.st_dev, before.st_ino)
         ):
-            raise PermissionError("task-control writer requires its canonical module import")
+            raise PermissionError("WBS-control writer requires its canonical module import")
         dependencies = tuple(
             (name, function.__globals__[name]) for name in function.__code__.co_names
             if name in protected_dependencies and name in function.__globals__
@@ -1121,7 +1121,7 @@ def _make_control_writer_authority():
         )
         existing = bindings.get(identity)
         if existing is not None and existing != binding:
-            raise PermissionError("task-control writer is already bound")
+            raise PermissionError("WBS-control writer is already bound")
         bindings[identity] = binding
 
     def authorized(marker=False):
@@ -1179,15 +1179,15 @@ def _make_control_writer_authority():
         # `marker` selects the same binding subset `authorized()` consults, so
         # the category answers the question the caller actually asked. Without
         # it, a process that bound only the Codex hook registration reported
-        # "not the bound writer" for a task-control write when in truth no
-        # task-control writer was bound at all — the exact confusion AC-3 names.
+        # "not the bound writer" for a WBS-control write when in truth no
+        # WBS-control writer was bound at all — the exact confusion AC-3 names.
         if not any(marker or role == "harness_server" for role, _ in bindings):
             return (
-                "no task-control writer is bound in this process — "
+                "no WBS-control writer is bound in this process — "
                 "import the canonical MCP module, and note that reloading _lib "
                 "empties the binding"
             )
-        return "the calling frame is not the bound task-control writer"
+        return "the calling frame is not the bound WBS-control writer"
 
     return authorized, bind, refusal_category
 
@@ -1205,29 +1205,31 @@ def _control_writer_error(action: str, *, marker: bool = False) -> PermissionErr
     return PermissionError(f"{action}: {_control_writer_refusal(marker=marker)}")
 
 
-def write_task_control(task_dir, control):
-    """Atomically publish one exact TASK.json value."""
-    validated = _validate_task_control(control)
+def write_wbs_control(wbs_dir, control):
+    """Atomically publish one exact WBS.control.json value."""
+    validated = _validate_wbs_control(control)
     if not validated:
-        raise ValueError("invalid exact TASK.json control value")
-    path = task_control_file(task_dir)
+        raise ValueError("invalid exact WBS.control.json control value")
+    path = wbs_control_file(wbs_dir)
     if not _trusted_control_writer():
-        raise _control_writer_error("TASK.json mutation requires the task-control MCP")
-    os.makedirs(task_dir, exist_ok=True)
-    _revalidate_task_control_transaction(task_dir)
-    if os.path.lexists(path) and not read_task_control(task_dir):
-        raise RuntimeError("existing TASK.json is unsafe or invalid")
+        raise _control_writer_error("WBS.control.json mutation requires the WBS-control MCP")
+    from wbs_namespace_migration import require_complete
+    require_complete(find_repo_root(wbs_dir))
+    os.makedirs(wbs_dir, exist_ok=True)
+    _revalidate_wbs_control_transaction(wbs_dir)
+    if os.path.lexists(path) and not read_wbs_control(wbs_dir):
+        raise RuntimeError("existing WBS.control.json is unsafe or invalid")
     snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
     try:
         _atomic_text_write(path, json.dumps(validated, indent=2, sort_keys=True) + "\n")
-        _revalidate_task_control_transaction(task_dir)
+        _revalidate_wbs_control_transaction(wbs_dir)
     except BaseException:
         _restore_text_snapshots(snapshot)
         raise
     return True
 
 
-def _new_task_control(*, execution_mode="standard"):
+def _new_wbs_control(*, execution_mode="standard"):
     return {
         "run_id": new_uuid7(),
         "execution_mode": execution_mode,
@@ -1236,27 +1238,27 @@ def _new_task_control(*, execution_mode="standard"):
     }
 
 
-def begin_task_run(task_dir):
-    """Rotate TASK.json run identity and clear terminal authority."""
+def begin_wbs_run(wbs_dir):
+    """Rotate WBS.control.json run identity and clear terminal authority."""
     if not _trusted_control_writer():
-        raise _control_writer_error("task run rotation requires the task-control MCP")
-    path = task_control_file(task_dir)
+        raise _control_writer_error("WBS run rotation requires the WBS-control MCP")
+    path = wbs_control_file(wbs_dir)
     snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
-    current = read_task_control(task_dir)
+    current = read_wbs_control(wbs_dir)
     if not current:
-        raise RuntimeError("valid TASK.json required to rotate task run")
+        raise RuntimeError("valid WBS.control.json required to rotate WBS run")
     payload = dict(current)
     payload.update({
         "run_id": new_uuid7(),
         "closed": False,
     })
-    write_task_control(task_dir, payload)
+    write_wbs_control(wbs_dir, payload)
     return payload, snapshot
 
 
-def restore_task_control(snapshot):
+def restore_wbs_control(snapshot):
     if not _trusted_control_writer():
-        raise _control_writer_error("TASK.json restoration requires the task-control MCP")
+        raise _control_writer_error("WBS.control.json restoration requires the WBS-control MCP")
     _restore_text_snapshots(snapshot)
 
 
@@ -1493,7 +1495,7 @@ def resolve_registered_worktree(control_root, workspace):
 def harness_root_resolution(start_dir=None):
     """Return ``(root, error)`` for valid/none/invalid Harness ancestry.
 
-    A nested Git checkout needs its own manifest. Task bindings never grant
+    A nested Git checkout needs its own manifest. WBS bindings never grant
     installation authority across that boundary.
     """
     hook_cwd = _hook_payload_cwd()
@@ -1564,91 +1566,93 @@ def is_harness_enabled_repo(repo_root=None):
     return bool(not error and resolved == os.path.realpath(root))
 
 
-_TASK_ID_RE = re.compile(r"TASK__[A-Za-z0-9_.-]{1,180}\Z")
+_WBS_ID_RE = re.compile(r"WBS__[A-Za-z0-9_.-]{1,180}\Z")
 
 
-def _normalize_task_id(task_id=None, slug=None, task_dir=None):
-    """Derive canonical TASK__<id> from arguments."""
-    if task_id:
-        value = str(task_id)
-        tid = value if value.startswith("TASK__") else f"TASK__{value}"
-        field = "task_id"
+def _normalize_wbs_id(wbs_id=None, slug=None, wbs_dir=None):
+    """Derive canonical WBS__<id> from arguments."""
+    if any(str(value).startswith(("TASK__", "GOAL__")) for value in (wbs_id, slug) if value):
+        raise ValueError('retired Goal/Task ID; use wbs(action="migrate") preview and apply=true')
+    if wbs_id:
+        value = str(wbs_id)
+        tid = value if value.startswith("WBS__") else f"WBS__{value}"
+        field = "wbs_id"
     if slug:
         value = str(slug)
-        tid = value if value.startswith("TASK__") else f"TASK__{value}"
+        tid = value if value.startswith("WBS__") else f"WBS__{value}"
         field = "slug"
-    if task_dir and not task_id and not slug:
-        name = os.path.basename(os.path.normpath(task_dir))
-        tid = name if name.startswith("TASK__") else f"TASK__{name}"
-        field = "task_dir"
-    if not (task_id or slug or task_dir):
+    if wbs_dir and not wbs_id and not slug:
+        name = os.path.basename(os.path.normpath(wbs_dir))
+        tid = name if name.startswith("WBS__") else f"WBS__{name}"
+        field = "wbs_dir"
+    if not (wbs_id or slug or wbs_dir):
         return None
-    if not _TASK_ID_RE.fullmatch(tid):
+    if not _WBS_ID_RE.fullmatch(tid):
         raise ValueError(
-            f"invalid {field}; expected canonical TASK__<safe-id> using only "
+            f"invalid {field}; expected canonical WBS__<safe-id> using only "
             "letters, digits, dot, underscore, or hyphen"
         )
     return tid
 
 
-def canonical_task_dir(task_id=None, slug=None, task_dir=None,
-                       tasks_dir=TASK_DIR, repo_root=None):
-    """Resolve a task selector to an immediate child of the repo task root."""
+def canonical_wbs_dir(wbs_id=None, slug=None, wbs_dir=None,
+                       wbs_root=WBS_DIR, repo_root=None):
+    """Resolve a WBS selector to an immediate child of the repo WBS root."""
     repo_root = repo_root or find_repo_root()
     selectors = [
-        _normalize_task_id(task_id=task_id) if task_id else None,
-        _normalize_task_id(slug=slug) if slug else None,
-        _normalize_task_id(task_dir=task_dir) if task_dir else None,
+        _normalize_wbs_id(wbs_id=wbs_id) if wbs_id else None,
+        _normalize_wbs_id(slug=slug) if slug else None,
+        _normalize_wbs_id(wbs_dir=wbs_dir) if wbs_dir else None,
     ]
     selected = {item for item in selectors if item}
     if len(selected) > 1:
         raise ValueError(
-            "task selectors disagree; task_id, slug, and task_dir must name the same canonical TASK__<safe-id>"
+            "WBS selectors disagree; wbs_id, slug, and wbs_dir must name the same canonical WBS__<safe-id>"
         )
     tid = next(iter(selected), None)
     if not tid:
         return ""
-    tasks_root = _validated_control_dir(repo_root, tasks_dir, "canonical task root")
+    tasks_root = _validated_control_dir(repo_root, wbs_root, "canonical WBS root")
     canonical = os.path.join(tasks_root, tid)
-    if task_dir:
-        raw = str(task_dir)
+    if wbs_dir:
+        raw = str(wbs_dir)
         if any(ord(ch) < 32 for ch in raw):
-            raise ValueError("invalid task_dir; control characters are not allowed")
+            raise ValueError("invalid wbs_dir; control characters are not allowed")
         candidate = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(repo_root, raw))
         expected_form = canonical if os.path.isabs(raw) else os.path.relpath(canonical, repo_root)
         if raw != expected_form:
             raise ValueError(
-                f"invalid task_dir; expected exact canonical path {os.path.relpath(canonical, repo_root)} "
+                f"invalid wbs_dir; expected exact canonical path {os.path.relpath(canonical, repo_root)} "
                 "or its absolute path without traversal or aliases"
             )
         if candidate != canonical or os.path.dirname(candidate) != tasks_root:
             raise ValueError(
-                f"invalid task_dir; expected canonical {os.path.relpath(canonical, repo_root)} "
+                f"invalid wbs_dir; expected canonical {os.path.relpath(canonical, repo_root)} "
                 "or its absolute path inside this repository"
             )
     expected_real = os.path.join(os.path.realpath(tasks_root), tid)
     if os.path.lexists(canonical):
         if os.path.islink(canonical) or not os.path.isdir(canonical):
-            raise ValueError("invalid task selector; canonical task directory must be a real directory")
+            raise ValueError("invalid WBS selector; canonical WBS directory must be a real directory")
         if os.path.realpath(canonical) != expected_real:
-            raise ValueError("invalid task selector; canonical task directory resolves outside this repository")
+            raise ValueError("invalid WBS selector; canonical WBS directory resolves outside this repository")
     return canonical
 
 
-def canonical_task_id(task_id=None, slug=None, task_dir=None,
-                      tasks_dir=TASK_DIR, repo_root=None):
-    """Derive canonical task id string."""
-    resolved = canonical_task_dir(
-        task_id=task_id,
+def canonical_wbs_id(wbs_id=None, slug=None, wbs_dir=None,
+                      wbs_root=WBS_DIR, repo_root=None):
+    """Derive canonical WBS ID string."""
+    resolved = canonical_wbs_dir(
+        wbs_id=wbs_id,
         slug=slug,
-        task_dir=task_dir,
-        tasks_dir=tasks_dir,
+        wbs_dir=wbs_dir,
+        wbs_root=wbs_root,
         repo_root=repo_root,
     )
     return os.path.basename(resolved) if resolved else ""
 
 
-# ── Active task markers ─────────────────────────────────────────────────
+# ── Active WBS markers ─────────────────────────────────────────────────
 
 
 ACTIVE_SESSIONS_DIRNAME = ".active_sessions"
@@ -1657,7 +1661,7 @@ ACTIVE_SESSIONS_DIRNAME = ".active_sessions"
 def _active_sessions_dir(repo_root):
     return _validated_control_dir(
         repo_root,
-        f"{TASK_DIR}/{ACTIVE_SESSIONS_DIRNAME}",
+        f"{WBS_DIR}/{ACTIVE_SESSIONS_DIRNAME}",
         "active session marker root",
     )
 
@@ -1681,7 +1685,7 @@ def write_session_hint(repo_root, session_id):
     """Record an advisory hook hint; never use it as session authority.
 
     Multiple sessions share this file, so it cannot authenticate an MCP caller.
-    Hooks publish exact task focus from their trusted successful tool results.
+    Hooks publish exact WBS focus from their trusted successful tool results.
     """
     sid = _usable_session_hint(session_id)
     if not sid:
@@ -1740,7 +1744,7 @@ def active_session_transaction(repo_root):
 
     PostToolUse callbacks can arrive out of order. Locking the marker directory
     lets a caller compare the current exact binding and publish its replacement
-    as one decision, so a delayed result cannot race a newer task binding.
+    as one decision, so a delayed result cannot race a newer WBS binding.
     """
     root = os.path.abspath(repo_root)
     sessions = _active_sessions_dir(root)
@@ -1786,23 +1790,25 @@ def active_session_transaction(repo_root):
             os.close(component_fd)
 
 
-def write_active_marker(repo_root, task_dir, session_id=None):
-    """Publish only one exact session's current task generation."""
+def write_active_marker(repo_root, wbs_dir, session_id=None):
+    """Publish only one exact session's current WBS generation."""
     if not _trusted_control_writer(marker=True):
-        raise _control_writer_error("active task binding requires the task-control runtime", marker=True)
+        raise _control_writer_error("active WBS binding requires the WBS-control runtime", marker=True)
+    from wbs_namespace_migration import require_complete
+    require_complete(repo_root)
     sid = current_session_id() if session_id is None else session_id
     _session_active_path(repo_root, sid)  # Validate before creating any storage.
-    task_run = read_task_control(task_dir)
-    if not task_run:
-        raise ValueError("invalid task control for exact session binding")
+    wbs_run = read_wbs_control(wbs_dir)
+    if not wbs_run:
+        raise ValueError("invalid WBS execution control for exact session binding")
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
     if _has_binding_conflict_fence(read_active_session_marker(repo_root, sid)):
-        raise RuntimeError("exact task result recovery must acknowledge the conflict fence first")
+        raise RuntimeError("exact WBS result recovery must acknowledge the conflict fence first")
     _publish_session_marker(repo_root, sid, {
         "session_id": sid,
-        "task_dir": task_dir,
-        "task_id": os.path.basename(os.path.normpath(task_dir)),
-        "run_id": task_run["run_id"],
+        "wbs_dir": wbs_dir,
+        "wbs_id": os.path.basename(os.path.normpath(wbs_dir)),
+        "run_id": wbs_run["run_id"],
         "updated": now_iso(),
     })
 
@@ -1836,29 +1842,29 @@ def _live_binding_conflicts(marker, workspace_roots):
     raw = marker.get("conflicts")
     if not isinstance(raw, list) or len(raw) < 2:
         return []
-    tasks_roots = {os.path.realpath(os.path.join(root, "doc", "harness", "tasks"))
+    tasks_roots = {os.path.realpath(os.path.join(root, "doc", "harness", "wbs"))
                    for root in workspace_roots}
     found = []
     for item in raw:
         if not isinstance(item, dict):
             continue
-        task_dir = os.path.realpath(str(item.get("task_dir") or ""))
-        task_id = str(item.get("task_id") or "")
+        wbs_dir = os.path.realpath(str(item.get("wbs_dir") or ""))
+        wbs_id = str(item.get("wbs_id") or "")
         run_id = str(item.get("run_id") or "")
-        if (not re.fullmatch(r"TASK__[A-Za-z0-9_.-]{1,180}", task_id)
-            or os.path.dirname(task_dir) not in tasks_roots
-            or os.path.basename(task_dir) != task_id):
+        if (not re.fullmatch(r"WBS__[A-Za-z0-9_.-]{1,180}", wbs_id)
+            or os.path.dirname(wbs_dir) not in tasks_roots
+            or os.path.basename(wbs_dir) != wbs_id):
             continue
-        control = read_task_control(task_dir)
-        if task_control_status(task_dir, control) == "open" and control.get("run_id") == run_id:
-            found.append({"task_dir": task_dir, "task_id": task_id, "run_id": run_id})
+        control = read_wbs_control(wbs_dir)
+        if wbs_control_status(wbs_dir, control) == "open" and control.get("run_id") == run_id:
+            found.append({"wbs_dir": wbs_dir, "wbs_id": wbs_id, "run_id": run_id})
     return found
 
 
 def write_binding_conflict_fence(repo_root, session_id, conflicts, *, overflow=False):
-    """Replace task authority with the exact conflicting task generations."""
+    """Replace WBS authority with the exact conflicting WBS generations."""
     if not _trusted_control_writer(marker=True):
-        raise _control_writer_error("binding recovery requires the task-control runtime", marker=True)
+        raise _control_writer_error("binding recovery requires the WBS-control runtime", marker=True)
     sid = sanitize_session_id(session_id)
     if sid != session_id or sid == "default":
         raise ValueError("invalid exact session id")
@@ -1876,7 +1882,7 @@ def write_binding_conflict_fence(repo_root, session_id, conflicts, *, overflow=F
 def clear_binding_conflict_fence(repo_root, session_id):
     """Acknowledge a fence only after the caller revokes all registrations."""
     if not _trusted_control_writer(marker=True):
-        raise _control_writer_error("binding recovery requires the task-control runtime", marker=True)
+        raise _control_writer_error("binding recovery requires the WBS-control runtime", marker=True)
     sid = sanitize_session_id(session_id)
     if sid != session_id or sid == "default":
         raise ValueError("invalid exact session id")
@@ -1887,13 +1893,13 @@ def clear_binding_conflict_fence(repo_root, session_id):
         _publish_session_marker(repo_root, sid, {"session_id": sid, "updated": now_iso()})
 
 
-def active_task_binding_matches(repo_root, task_dir, control=None, session_id=None):
-    """Require an unfenced exact marker for the current open TASK generation."""
-    control = control or read_task_control(task_dir)
+def active_wbs_binding_matches(repo_root, wbs_dir, control=None, session_id=None):
+    """Require an unfenced exact marker for the current open WBS generation."""
+    control = control or read_wbs_control(wbs_dir)
     sid = current_session_id() if session_id is None else session_id
-    binding = resolve_session_task_binding(repo_root, sid)
-    return bool(binding and control and task_control_status(task_dir, control) == "open"
-                and os.path.realpath(binding["task_dir"]) == os.path.realpath(task_dir)
+    binding = resolve_session_wbs_binding(repo_root, sid)
+    return bool(binding and control and wbs_control_status(wbs_dir, control) == "open"
+                and os.path.realpath(binding["wbs_dir"]) == os.path.realpath(wbs_dir)
                 and binding["run_id"] == control.get("run_id"))
 
 
@@ -1911,9 +1917,9 @@ def active_marker_snapshot(repo_root, session_id=None):
 def restore_active_marker_snapshot(snapshot):
     """Restore an exact marker snapshot captured by active_marker_snapshot."""
     if not _trusted_control_writer(marker=True):
-        raise _control_writer_error("active task restoration requires the task-control runtime", marker=True)
+        raise _control_writer_error("active WBS restoration requires the WBS-control runtime", marker=True)
     # Ordinary rollback cannot acknowledge a fence published after its snapshot.
-    # Callers hold the session transaction before their task transaction.
+    # Callers hold the session transaction before their WBS transaction.
     restorable = {}
     for path, value in snapshot.items():
         if os.path.basename(os.path.dirname(path)) == ACTIVE_SESSIONS_DIRNAME:
@@ -1956,14 +1962,14 @@ def _read_session_marker(path, expected_session_id, *, strict=False):
     return data
 
 
-def resolve_active_task_dir(repo_root=None, session_id=None):
-    """Resolve only this exact session's current, open, unfenced task."""
+def resolve_active_wbs_dir(repo_root=None, session_id=None):
+    """Resolve only this exact session's current, open, unfenced WBS."""
     repo_root = repo_root or find_repo_root()
     sid = current_session_id() if session_id is None else session_id
-    return resolve_session_task_binding(repo_root, sid).get("task_dir", "")
+    return resolve_session_wbs_binding(repo_root, sid).get("wbs_dir", "")
 
 
-def resolve_session_task_binding(repo_root, session_id, *, strict=False):
+def resolve_session_wbs_binding(repo_root, session_id, *, strict=False):
     """Resolve only an exact session marker and its current open run."""
     if not isinstance(session_id, str) or not session_id or session_id == "default":
         return {}
@@ -1979,39 +1985,39 @@ def resolve_session_task_binding(repo_root, session_id, *, strict=False):
         return {}
     if _has_binding_conflict_fence(marker):
         return {}
-    binding_fields = ("task_dir", "task_id", "run_id")
+    binding_fields = ("wbs_dir", "wbs_id", "run_id")
     if strict and any(key in marker for key in binding_fields) and any(
         not isinstance(marker.get(key), str) or not marker[key]
         for key in binding_fields
     ):
         raise RuntimeError("active session binding malformed")
-    value = marker.get("task_dir")
+    value = marker.get("wbs_dir")
     if not isinstance(value, str) or not value:
         return {}
     try:
-        task_dir = canonical_task_dir(task_dir=value, repo_root=repo_root)
+        wbs_dir = canonical_wbs_dir(wbs_dir=value, repo_root=repo_root)
     except ValueError:
         if strict:
-            raise RuntimeError("active task directory unavailable") from None
+            raise RuntimeError("active WBS directory unavailable") from None
         return {}
-    if not task_dir or marker.get("task_id") != os.path.basename(task_dir):
+    if not wbs_dir or marker.get("wbs_id") != os.path.basename(wbs_dir):
         if strict:
             raise RuntimeError("active session binding malformed")
         return {}
-    control = read_task_control(task_dir)
+    control = read_wbs_control(wbs_dir)
     if strict and not control:
-        raise RuntimeError("active task authority unavailable")
+        raise RuntimeError("active WBS authority unavailable")
     if (
         not control
-        or task_control_status(task_dir, control) != "open"
+        or wbs_control_status(wbs_dir, control) != "open"
         or marker.get("run_id") != control.get("run_id")
     ):
         return {}
-    return {"task_dir": task_dir, "run_id": control["run_id"]}
+    return {"wbs_dir": wbs_dir, "run_id": control["run_id"]}
 
 
-def iter_active_task_dirs(repo_root=None):
-    """Yield unique current open task generations from exact session markers."""
+def iter_active_wbs_dirs(repo_root=None):
+    """Yield unique current open WBS generations from exact session markers."""
     repo_root = repo_root or find_repo_root()
     seen = set()
     try:
@@ -2022,17 +2028,17 @@ def iter_active_task_dirs(repo_root=None):
         for name in os.listdir(sessions):
             if not name.endswith(".json"):
                 continue
-            binding = resolve_session_task_binding(repo_root, name[:-5])
-            td = binding.get("task_dir")
+            binding = resolve_session_wbs_binding(repo_root, name[:-5])
+            td = binding.get("wbs_dir")
             if td and td not in seen:
                 seen.add(td)
                 yield td
 
 
-def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=False):
+def clear_active_marker(repo_root, wbs_dir=None, session_id=None, *, strict=False):
     """Clear only matching exact focus under the session lock, preserving fences."""
     if not _trusted_control_writer(marker=True):
-        raise _control_writer_error("active task cleanup requires the task-control runtime", marker=True)
+        raise _control_writer_error("active WBS cleanup requires the WBS-control runtime", marker=True)
     sid = current_session_id() if session_id is None else session_id
     if not sid:
         return
@@ -2041,7 +2047,7 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=Fal
         marker = _read_session_marker(path, sid, strict=strict)
         if _has_binding_conflict_fence(marker):
             return
-        if task_dir is not None and os.path.normpath(str(marker.get("task_dir") or "")) != os.path.normpath(task_dir):
+        if wbs_dir is not None and os.path.normpath(str(marker.get("wbs_dir") or "")) != os.path.normpath(wbs_dir):
             return
         os.unlink(path)
         if strict and os.path.lexists(path):
@@ -2056,24 +2062,36 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=Fal
 # ── Scaffold ─────────────────────────────────────────────────────────────
 
 
-def ensure_task_scaffold(
-    task_dir, task_id, request_text="", repo_root=None, execution_mode="standard",
+def ensure_wbs_scaffold(
+    wbs_dir, wbs_id, request_text="", repo_root=None, execution_mode="standard",
 ):
-    """Create a new exact TASK.json; existing valid controls are resumed."""
-    os.makedirs(task_dir, exist_ok=True)
-    expected_tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
-    path = task_control_file(task_dir)
+    """Create a new exact WBS.control.json; existing valid controls are resumed."""
+    from wbs_namespace_migration import ensure_runtime_ignored
+    root = repo_root or find_repo_root(os.path.dirname(wbs_dir))
+    relative = os.path.relpath(os.path.abspath(wbs_dir), os.path.abspath(root)).replace(os.sep, "/")
+    planned = [relative + "/" + name for name in (
+        "WBS.control.json", "WBS.json", "PLAN.md", "REQUEST.md",
+        "PROGRESS.md", "BLOCKED.md", "MAINTENANCE",
+    )]
+    planned.append(WBS_DIR + "/.active_sessions/" + SESSION_HINT_NAME)
+    sid = current_session_id()
+    if sid:
+        planned.append(WBS_DIR + "/.active_sessions/" + sid + ".json")
+    ensure_runtime_ignored(root, paths=planned)
+    os.makedirs(wbs_dir, exist_ok=True)
+    expected_tid = _normalize_wbs_id(wbs_id, wbs_dir=wbs_dir) or wbs_id
+    path = wbs_control_file(wbs_dir)
     if os.path.lexists(path):
-        if not read_task_control(task_dir):
-            raise ValueError("existing TASK.json must be an exact safe task control")
+        if not read_wbs_control(wbs_dir):
+            raise ValueError("existing WBS.control.json must be an exact safe WBS execution control")
         created = [path]
-        return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
+        return {"created": created, "wbs_dir": wbs_dir, "wbs_id": expected_tid}
     created = []
     try:
-        write_task_control(task_dir, _new_task_control(execution_mode=execution_mode))
+        write_wbs_control(wbs_dir, _new_wbs_control(execution_mode=execution_mode))
         created.append(path)
         if request_text:
-            req_path = os.path.join(task_dir, "REQUEST.md")
+            req_path = os.path.join(wbs_dir, "REQUEST.md")
             if not os.path.isfile(req_path) or os.path.islink(req_path):
                 _atomic_text_write(req_path, request_text)
                 created.append(req_path)
@@ -2084,7 +2102,7 @@ def ensure_task_scaffold(
             except FileNotFoundError:
                 pass
         raise
-    return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
+    return {"created": created, "wbs_dir": wbs_dir, "wbs_id": expected_tid}
 
 
 # ── Manifest ─────────────────────────────────────────────────────────────
@@ -2095,8 +2113,8 @@ def read_manifest_field(field, repo_root=None):
     return yaml_field(field, os.path.join(repo_root, MANIFEST_PATH))
 
 
-def is_maintenance_task(task_dir, repo_root=None):
-    if os.path.isfile(os.path.join(task_dir, "MAINTENANCE")):
+def is_maintenance_wbs(wbs_dir, repo_root=None):
+    if os.path.isfile(os.path.join(wbs_dir, "MAINTENANCE")):
         return True
     return str(read_manifest_field("maintenance_default", repo_root) or "").lower() == "true"
 
@@ -2104,16 +2122,16 @@ def is_maintenance_task(task_dir, repo_root=None):
 # ── Routing (on-the-fly, never stored) ───────────────────────────────────
 
 
-def compile_routing(task_dir, repo_root=None):
-    # A task in a linked worktree routes by that worktree's manifest, not the
+def compile_routing(wbs_dir, repo_root=None):
+    # A WBS in a linked worktree routes by that worktree's manifest, not the
     # process cwd (the MCP server's cwd is always the main checkout).
-    repo_root = repo_root or find_harness_root(task_dir) or find_repo_root()
-    maintenance = is_maintenance_task(task_dir, repo_root)
-    control = read_task_control(task_dir)
+    repo_root = repo_root or find_harness_root(wbs_dir) or find_repo_root()
+    maintenance = is_maintenance_wbs(wbs_dir, repo_root)
+    control = read_wbs_control(wbs_dir)
     micro_loop = _is_micro_loop_state(control)
     from wbs import read_state, admission_definition
     try:
-        state = read_state(task_dir)
+        state = read_state(wbs_dir)
         assignment = (state or {}).get('execution_admission', {})
         mode = (assignment.get('mode') if state and assignment.get('run_id') == control.get('run_id')
                 and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected'))
@@ -2121,7 +2139,7 @@ def compile_routing(task_dir, repo_root=None):
     except (OSError, ValueError, RuntimeError):
         mode = 'unassigned'
     return {
-        "maintenance_task": maintenance,
+        "maintenance": maintenance,
         "workflow_locked": not maintenance,
         "risk_level": "high" if maintenance else "medium",
         "execution_mode": "micro" if micro_loop else "standard",
@@ -2150,42 +2168,42 @@ def _atomic_json_write(path, data):
         raise
 
 
-_TASK_CONTROL_LOCK_HELD = ContextVar("harness_task_control_lock_held", default=())
+_WBS_CONTROL_LOCK_HELD = ContextVar("harness_wbs_control_lock_held", default=())
 
 
-def _validated_task_control_dir(task_dir):
-    task_dir = os.path.abspath(os.fspath(task_dir))
-    current = task_dir
+def _validated_wbs_control_dir(wbs_dir):
+    wbs_dir = os.path.abspath(os.fspath(wbs_dir))
+    current = wbs_dir
     for _ in range(4):
         try:
             info = os.lstat(current)
         except OSError as exc:
-            raise RuntimeError("task storage integrity unavailable") from exc
+            raise RuntimeError("WBS storage integrity unavailable") from exc
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise RuntimeError("task storage integrity unavailable")
+            raise RuntimeError("WBS storage integrity unavailable")
         current = os.path.dirname(current)
-    task_info = os.lstat(task_dir)
+    task_info = os.lstat(wbs_dir)
     if task_info.st_uid != os.getuid() or stat.S_IMODE(task_info.st_mode) & 0o022:
-        raise RuntimeError("task storage integrity unavailable")
-    return task_dir
+        raise RuntimeError("WBS storage integrity unavailable")
+    return wbs_dir
 
 
-def _task_control_lock_binding(task_dir):
-    task_dir = os.path.abspath(os.fspath(task_dir))
-    for binding in reversed(_TASK_CONTROL_LOCK_HELD.get()):
-        if binding[0] == task_dir:
+def _wbs_control_lock_binding(wbs_dir):
+    wbs_dir = os.path.abspath(os.fspath(wbs_dir))
+    for binding in reversed(_WBS_CONTROL_LOCK_HELD.get()):
+        if binding[0] == wbs_dir:
             return binding
     return None
 
 
-def _validate_task_control_dir_binding(binding):
-    task_dir, fd, identity, components = binding
+def _validate_wbs_control_dir_binding(binding):
+    wbs_dir, fd, identity, components = binding
     for path, component_fd, component_identity in components:
         try:
             opened = os.fstat(component_fd)
             current = os.lstat(path)
         except OSError as exc:
-            raise RuntimeError("task storage integrity unavailable") from exc
+            raise RuntimeError("WBS storage integrity unavailable") from exc
         if (
             not stat.S_ISDIR(opened.st_mode)
             or (opened.st_dev, opened.st_ino) != component_identity
@@ -2193,43 +2211,43 @@ def _validate_task_control_dir_binding(binding):
             or not stat.S_ISDIR(current.st_mode)
             or (current.st_dev, current.st_ino) != component_identity
         ):
-            raise RuntimeError("task storage integrity unavailable")
+            raise RuntimeError("WBS storage integrity unavailable")
     task_opened = os.fstat(fd)
     if (
         (task_opened.st_dev, task_opened.st_ino) != identity
         or task_opened.st_uid != os.getuid()
         or stat.S_IMODE(task_opened.st_mode) & 0o022
     ):
-        raise RuntimeError("task storage integrity unavailable")
+        raise RuntimeError("WBS storage integrity unavailable")
 
 
-def _revalidate_task_control_transaction(task_dir):
-    """Fail if a task directory changes during an enclosing task transaction."""
-    binding = _task_control_lock_binding(task_dir)
+def _revalidate_wbs_control_transaction(wbs_dir):
+    """Fail if a WBS directory changes during an enclosing WBS transaction."""
+    binding = _wbs_control_lock_binding(wbs_dir)
     if binding is not None:
-        _validate_task_control_dir_binding(binding)
+        _validate_wbs_control_dir_binding(binding)
 
 
-def _task_control_dir_fd(task_dir):
-    binding = _task_control_lock_binding(task_dir)
+def _wbs_control_dir_fd(wbs_dir):
+    binding = _wbs_control_lock_binding(wbs_dir)
     if binding is None:
-        raise RuntimeError("task transaction required")
-    _validate_task_control_dir_binding(binding)
+        raise RuntimeError("WBS transaction required")
+    _validate_wbs_control_dir_binding(binding)
     return binding[1]
 
 
 @contextmanager
-def _task_control_lock(task_dir):
-    task_dir = os.path.abspath(os.fspath(task_dir))
-    nested = _task_control_lock_binding(task_dir)
+def _wbs_control_lock(wbs_dir):
+    wbs_dir = os.path.abspath(os.fspath(wbs_dir))
+    nested = _wbs_control_lock_binding(wbs_dir)
     if nested is not None:
-        _validate_task_control_dir_binding(nested)
+        _validate_wbs_control_dir_binding(nested)
         yield
-        _validate_task_control_dir_binding(nested)
+        _validate_wbs_control_dir_binding(nested)
         return
-    task_dir = _validated_task_control_dir(task_dir)
+    wbs_dir = _validated_wbs_control_dir(wbs_dir)
     component_paths = []
-    current = task_dir
+    current = wbs_dir
     for _ in range(4):
         component_paths.append(current)
         current = os.path.dirname(current)
@@ -2251,7 +2269,7 @@ def _task_control_lock(task_dir):
                 or (component_info.st_dev, component_info.st_ino)
                 != (current_info.st_dev, current_info.st_ino)
             ):
-                raise RuntimeError("task storage integrity unavailable")
+                raise RuntimeError("WBS storage integrity unavailable")
             components[-1] = (
                 path, component_fd, (component_info.st_dev, component_info.st_ino),
             )
@@ -2259,7 +2277,7 @@ def _task_control_lock(task_dir):
         for _, component_fd, _ in components:
             os.close(component_fd)
         if isinstance(exc, OSError):
-            raise RuntimeError("task storage integrity unavailable") from exc
+            raise RuntimeError("WBS storage integrity unavailable") from exc
         raise
     fd = components[-1][1]
     try:
@@ -2269,39 +2287,39 @@ def _task_control_lock(task_dir):
             or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) & 0o022
         ):
-            raise RuntimeError("task storage integrity unavailable")
+            raise RuntimeError("WBS storage integrity unavailable")
         try:
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
-            raise RuntimeError("task storage integrity unavailable") from exc
+            raise RuntimeError("WBS storage integrity unavailable") from exc
         binding = (
-            task_dir, fd, (info.st_dev, info.st_ino), tuple(components),
+            wbs_dir, fd, (info.st_dev, info.st_ino), tuple(components),
         )
-        _validate_task_control_dir_binding(binding)
-        token = _TASK_CONTROL_LOCK_HELD.set(_TASK_CONTROL_LOCK_HELD.get() + (binding,))
+        _validate_wbs_control_dir_binding(binding)
+        token = _WBS_CONTROL_LOCK_HELD.set(_WBS_CONTROL_LOCK_HELD.get() + (binding,))
         try:
             yield
-            _validate_task_control_dir_binding(binding)
+            _validate_wbs_control_dir_binding(binding)
         finally:
-            _TASK_CONTROL_LOCK_HELD.reset(token)
+            _WBS_CONTROL_LOCK_HELD.reset(token)
     finally:
         for _, component_fd, _ in reversed(components):
             os.close(component_fd)
 
 
 @contextmanager
-def task_control_transaction(task_dir):
-    """Hold the task directory stable across state publication."""
-    with _task_control_lock(task_dir):
+def wbs_control_transaction(wbs_dir):
+    """Hold the WBS directory stable across state publication."""
+    with _wbs_control_lock(wbs_dir):
         yield
 
 
 @contextmanager
-def task_control_transaction_fd(task_fd):
-    """Hold a task transaction on an already-bound task directory fd."""
+def wbs_control_transaction_fd(task_fd):
+    """Hold a WBS transaction on an already-bound WBS directory fd."""
     locked_fd = os.dup(task_fd)
-    task_dir = os.path.abspath(f"/proc/self/fd/{task_fd}")
+    wbs_dir = os.path.abspath(f"/proc/self/fd/{task_fd}")
     try:
         info = os.fstat(locked_fd)
         if (
@@ -2309,40 +2327,40 @@ def task_control_transaction_fd(task_fd):
             or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) & 0o022
         ):
-            raise RuntimeError("task storage integrity unavailable")
+            raise RuntimeError("WBS storage integrity unavailable")
         try:
             import fcntl
             fcntl.flock(locked_fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
-            raise RuntimeError("task storage integrity unavailable") from exc
+            raise RuntimeError("WBS storage integrity unavailable") from exc
         binding = (
-            task_dir, locked_fd, (info.st_dev, info.st_ino), (),
+            wbs_dir, locked_fd, (info.st_dev, info.st_ino), (),
         )
-        _validate_task_control_dir_binding(binding)
-        token = _TASK_CONTROL_LOCK_HELD.set(_TASK_CONTROL_LOCK_HELD.get() + (binding,))
+        _validate_wbs_control_dir_binding(binding)
+        token = _WBS_CONTROL_LOCK_HELD.set(_WBS_CONTROL_LOCK_HELD.get() + (binding,))
         try:
             yield
-            _validate_task_control_dir_binding(binding)
+            _validate_wbs_control_dir_binding(binding)
         finally:
-            _TASK_CONTROL_LOCK_HELD.reset(token)
+            _WBS_CONTROL_LOCK_HELD.reset(token)
     finally:
         os.close(locked_fd)
 
 
-def _declared_lenses(task_dir, prefix, *, control=None):
-    value = (control or read_task_control(task_dir)).get("required_lenses")
+def _declared_lenses(wbs_dir, prefix, *, control=None):
+    value = (control or read_wbs_control(wbs_dir)).get("required_lenses")
     if not isinstance(value, list):
         return []
     return [lens for lens in value if lens.startswith(prefix)]
 
 
-def required_review_lenses(task_dir, state=None):
-    """Return task-declared review lenses without inspecting source state."""
-    return _declared_lenses(task_dir, "review-", control=state)
+def required_review_lenses(wbs_dir, state=None):
+    """Return WBS-declared review lenses without inspecting source state."""
+    return _declared_lenses(wbs_dir, "review-", control=state)
 
 
-def _blocked_artifact_valid(task_dir):
-    path = os.path.join(task_dir, "BLOCKED.md")
+def _blocked_artifact_valid(wbs_dir):
+    path = os.path.join(wbs_dir, "BLOCKED.md")
     try:
         info = os.lstat(path)
     except OSError:
@@ -2355,48 +2373,48 @@ def _blocked_artifact_valid(task_dir):
     )
 
 
-def task_control_status(task_dir, control=None):
-    """Derive state from exact task control and its safe parking artifact."""
-    control = control or read_task_control(task_dir)
+def wbs_control_status(wbs_dir, control=None):
+    """Derive state from exact WBS execution control and its safe parking artifact."""
+    control = control or read_wbs_control(wbs_dir)
     if not control:
         return "invalid"
-    if os.path.lexists(os.path.join(task_dir, "BLOCKED.md")):
-        if not _blocked_artifact_valid(task_dir) or control["closed"]:
+    if os.path.lexists(os.path.join(wbs_dir, "BLOCKED.md")):
+        if not _blocked_artifact_valid(wbs_dir) or control["closed"]:
             return "invalid"
         return "blocked"
     return "closed" if control["closed"] else "open"
 
 
-def publish_task_close(task_dir, control):
-    """Publish closure through the task-control owner."""
+def publish_wbs_close(wbs_dir, control):
+    """Publish closure through the WBS-control owner."""
     if not _trusted_control_writer():
-        raise _control_writer_error("task close publication requires the task-control MCP")
+        raise _control_writer_error("WBS close publication requires the WBS-control MCP")
     updated = dict(control, closed=True)
-    write_task_control(task_dir, updated)
+    write_wbs_control(wbs_dir, updated)
     return updated
 
 
-def _required_qa_lenses(task_dir, state=None):
+def _required_qa_lenses(wbs_dir, state=None):
     """Return workflow declarations, not machine-tracked role results."""
-    return _declared_lenses(task_dir, "qa-", control=state)
+    return _declared_lenses(wbs_dir, "qa-", control=state)
 
 
-def emit_compact_context(task_dir, *, measure_wbs=False, measured_progress=None, measure_targets=False, measured_target_inputs=None):
+def emit_compact_context(wbs_dir, *, measure_wbs=False, measured_progress=None, measure_targets=False, measured_target_inputs=None):
     """Report WBS check readiness; independent role results remain workflow-owned."""
-    st = read_task_control(task_dir)
+    st = read_wbs_control(wbs_dir)
     if not st:
-        return {"error": "missing or invalid exact four-field TASK.json", "task_dir": task_dir,
-                "next_action": "Use wbs(action='migrate') preview/apply for old controls, or open a new task."}
-    from wbs import task_progress, summary
+        return {"error": "missing or invalid exact four-field WBS.control.json", "wbs_dir": wbs_dir,
+                "next_action": "Use wbs(action='migrate') preview/apply for old controls, or open a new WBS."}
+    from wbs import wbs_progress, summary
     from verification_target import applicability
-    repo = find_repo_root(task_dir)
-    progress = measured_progress if measured_progress is not None else task_progress(
-        task_dir, repo, st["run_id"], measure=measure_wbs)
-    targets = applicability(task_dir, repo, measure=measure_wbs or measure_targets,
+    repo = find_repo_root(wbs_dir)
+    progress = measured_progress if measured_progress is not None else wbs_progress(
+        wbs_dir, repo, st["run_id"], measure=measure_wbs)
+    targets = applicability(wbs_dir, repo, measure=measure_wbs or measure_targets,
                             measured_inputs=measured_target_inputs)
-    status = task_control_status(task_dir, st)
-    routing = compile_routing(task_dir)
-    has_plan = artifact_exists(task_dir, "PLAN.md")
+    status = wbs_control_status(wbs_dir, st)
+    routing = compile_routing(wbs_dir)
+    has_plan = artifact_exists(wbs_dir, "PLAN.md")
     source_allowed = status == "open" and has_plan and routing["orchestration_mode"] == "direct"
     why = "" if source_allowed else "Create PLAN.md before source writes." if not has_plan else "Fresh execution assignment required: dispatch prepare with current host inventory and ownership"
     if status == "open" and has_plan and routing["orchestration_mode"] == "unassigned" and os.path.isfile(os.path.join(repo, ".git")):
@@ -2416,24 +2434,24 @@ def emit_compact_context(task_dir, *, measure_wbs=False, measured_progress=None,
     if targets.get("enforced") and targets.get("status") != "applicable":
         missing.append("applicable verification target inputs")
     if status == "blocked":
-        missing.append("task is blocked")
+        missing.append("WBS is blocked")
     if status == "invalid":
-        missing.append("valid task state")
+        missing.append("valid WBS state")
     verdict = "BLOCKED_ENV" if status == "blocked" else "PASS" if not missing else "PENDING"
     next_action = "Run wbs(action='close') after awaited independent review and actual QA succeed." if not missing else "Run the declared WBS checks against current inputs; resolve the listed blockers."
     if not has_plan:
         next_action = "Create PLAN.md via wbs(action='plan') before source writes."
     elif status == "blocked":
-        next_action = "Resolve the blocker, then resume this same task with wbs(action='open')."
+        next_action = "Resolve the blocker, then resume this same WBS with wbs(action='open')."
     elif integration and integration["route"] != "integration":
         next_action = "Finish integration and disposal of this exact WBS work pack before resuming."
-    context = dict(task_id=os.path.basename(task_dir), task_dir=task_dir, status=status,
+    context = dict(wbs_id=os.path.basename(wbs_dir), wbs_dir=wbs_dir, status=status,
                    routing=routing, runtime_verdict=verdict, verification_basis="current_wbs_checks",
                    workflow_verification="Independent review and QA results are awaited by the workflow and are not machine-tracked.",
                    progress=progress, verification_targets=targets,
                    source_write_allowed=source_allowed, why_source_write_blocked=why,
-                   required_review_lenses=required_review_lenses(task_dir, st),
-                   required_qa_lenses=_required_qa_lenses(task_dir, st),
+                   required_review_lenses=required_review_lenses(wbs_dir, st),
+                   required_qa_lenses=_required_qa_lenses(wbs_dir, st),
                    missing_for_close=missing, next_action=next_action,
                    effective_close_gate="micro" if _is_micro_loop_state(st) else "standard")
     context["summary"] = summary(context)
@@ -2477,8 +2495,8 @@ def _git_changed_paths(repo_root):
 # ── Artifact helpers ─────────────────────────────────────────────────────
 
 
-def artifact_exists(task_dir, filename):
-    return os.path.isfile(os.path.join(task_dir, filename))
+def artifact_exists(wbs_dir, filename):
+    return os.path.isfile(os.path.join(wbs_dir, filename))
 
 
 # ── Atomic JSON state helpers ─────────────────────────────────────────────

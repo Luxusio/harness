@@ -22,13 +22,99 @@ def assert_guidance(value):
             assert_guidance(item)
 
 
+def test_public_lifecycle_uses_one_wbs_identity_and_control(tmp_path):
+    from test_wbs_input_policy import public, policy_plan
+    from test_wbs import node
+    from test_managed_wbs import host_snapshot
+    repo, td, call, opened = public(tmp_path)
+    assert td == repo / "doc/harness/wbs/WBS__sample"
+    assert opened["wbs_id"] == "WBS__sample"
+    assert set(json.loads((td / "WBS.control.json").read_text())) == {
+        "run_id", "execution_mode", "required_lenses", "closed"}
+    assert not (td / "TASK.json").exists()
+    assert not call("plan", plan=policy_plan([node()], {"source": ["src.txt"]})).get("isError")
+    assigned = call("dispatch", operation="prepare", ownership={"A": ["src.txt"]}, host=host_snapshot())
+    assert assigned["structuredContent"]["route"] == "direct", assigned
+    for action, extra in (("context", {}), ("next", {}), ("check", {"node_id": "A"}),
+                          ("verify", {}), ("close", {})):
+        result = call(action, **extra)
+        assert not result.get("isError"), result
+        body = result["structuredContent"]
+        assert not ({"task_id", "task_dir", "task_context"} & set(body))
+        if "context" in body:
+            assert body["context"]["wbs_id"] == opened["wbs_id"]
+        if "run_id" in body:
+            assert body["run_id"] == opened["run_id"]
+    assert json.loads((td / "WBS.control.json").read_text())["closed"] is True
+
+
+def test_retired_identifiers_require_explicit_migration(tmp_path):
+    from test_wbs_input_policy import public
+    repo, td, call, opened = public(tmp_path)
+    from test_harness_mcp_server import HarnessMcpServerTests
+    for selector in ("TASK__sample", "GOAL__sample", "WBS__TASK__sample"):
+        result = HarnessMcpServerTests()._call_in_repo(str(repo), "wbs", {
+            "action": "context", "wbs_id": selector})
+        assert result.get("isError"), result
+        assert 'migrate' in result["structuredContent"]["error"]
+    assert not (repo / "doc/harness/tasks").exists()
+
+
+def test_raw_retired_goal_intent_is_imported_without_creating_authority(tmp_path):
+    from test_wbs_input_policy import public
+    repo, td, call, opened = public(tmp_path)
+    legacy = repo / "doc/harness/goals"
+    legacy.mkdir()
+    raw = json.dumps({"goal_id": "GOAL__old", "objective": "Old intent", "tasks": [
+        {"task_id": "TASK__old", "title": "Historical claim", "status": "closed"}]}).encode()
+    (legacy / "GOAL__old.json").write_bytes(raw)
+    assert call("context").get("isError")
+    from test_harness_mcp_server import HarnessMcpServerTests
+    result = HarnessMcpServerTests()._call_in_repo(str(repo), "wbs", {"action": "migrate", "apply": True})
+    assert not result.get("isError"), result
+    import goal_migration
+    assert (repo / goal_migration.ARCHIVE / "original/doc/harness/goals/GOAL__old.json").read_bytes() == raw
+    assert not (repo / "doc/harness/wbs/WBS__old/WBS.control.json").exists()
+    assert not call("context").get("isError")
+
+
+def test_retained_closed_identity_requires_deliberate_new_generation(tmp_path):
+    from test_harness_mcp_server import HarnessMcpServerTests, initialize_fixture_project
+    from _lib import new_uuid7
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    initialize_fixture_project(repo)
+    old = repo / "doc/harness/tasks/TASK__past"
+    old.mkdir(parents=True)
+    control = dict(run_id=new_uuid7(), execution_mode="standard",
+                   required_lenses=["review-code", "qa-cli"], closed=True)
+    raw = json.dumps(control).encode()
+    (old / "TASK.json").write_bytes(raw)
+    server = HarnessMcpServerTests()
+    result = server._call_in_repo(str(repo), "wbs", dict(action="open", wbs_id="WBS__past"))
+    assert result.get("isError"), result
+    assert result["structuredContent"]["error_code"] == "wbs_migration_required"
+    assert not (repo / "doc/harness/wbs/WBS__past").exists()
+    result = server._call_in_repo(str(repo), "wbs", dict(action="migrate", apply=True))
+    assert not result.get("isError"), result
+    result = server._call_in_repo(str(repo), "wbs", dict(action="open", wbs_id="WBS__past"))
+    assert result.get("isError"), result
+    assert result["structuredContent"]["error_code"] == "historical_wbs_identity"
+    result = server._call_in_repo(str(repo), "wbs", dict(action="open", wbs_id="WBS__past", fresh_run=True))
+    assert not result.get("isError"), result
+    assert result["structuredContent"]["run_id"] != control["run_id"]
+    assert not (old / "TASK.json").exists()
+    assert (repo / "doc/harness/archive/wbs-namespace-migration/original/doc/harness/tasks/TASK__past/TASK.json").read_bytes() == raw
+
+
 def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
     fixture = importlib.import_module("test_harness_mcp_server")
     server = fixture.harness_server
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / ".gitignore").write_text("doc/harness/tasks/\n")
+    (repo / ".gitignore").write_text("doc/harness/wbs/\n")
     fixture.initialize_fixture_project(repo)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
@@ -43,8 +129,8 @@ def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
 
     opened = call("open")
     assert not opened.get("isError"), opened
-    td = Path(opened["structuredContent"]["task_dir"])
-    run = server.read_task_control(str(td))["run_id"]
+    td = Path(opened["structuredContent"]["wbs_dir"])
+    run = server.read_wbs_control(str(td))["run_id"]
     plan = '# Plan\n```wbs\n' + json.dumps([dict(id="A", title="Observable outcome", weight=1, check=["true"])]) + '\n```\n'
     assert not call("plan", plan=plan).get("isError")
     for action in ("context", "next", "verify"):
@@ -55,16 +141,16 @@ def test_public_recovery_and_resume_guidance(tmp_path, monkeypatch):
     blocked = call("block", blocked_reason="External service unavailable", unblock_condition="Service returns")
     assert not blocked.get("isError")
     assert "wbs(action='open')" in blocked["structuredContent"]["next_action"]
-    assert "Call task_start" not in (td / "BLOCKED.md").read_text()
+    assert "Call wbs_open" not in (td / "BLOCKED.md").read_text()
     assert not call("open").get("isError")
-    assert server.read_task_control(str(td))["run_id"] == run
+    assert server.read_wbs_control(str(td))["run_id"] == run
     # Preserved-run resume fails atomically when response preparation fails;
     # it does not publish a partially resumed generation or invent another run.
     with mock.patch.object(server, "emit_compact_context", side_effect=RuntimeError("projection unavailable")):
         fallback = call("open")
     assert fallback.get("isError")
     assert "projection unavailable" in fallback["structuredContent"]["error"]
-    assert server.read_task_control(str(td))["run_id"] == run
+    assert server.read_wbs_control(str(td))["run_id"] == run
     assert not call("open").get("isError")
     invalid = call("context", root="WBS__missing")
     assert invalid.get("isError")
@@ -95,14 +181,14 @@ def test_recovery_outputs_from_gate_registration_and_checkpoint(tmp_path, monkey
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    td = helper._make_task(str(repo), "TASK__checkpoint")
+    td = helper._make_task(str(repo), "WBS__checkpoint")
     checkpoint = importlib.import_module("write_checkpoint")
     path = checkpoint.write_checkpoint(td)
     saved = Path(path).read_text()
     assert "receipt" not in saved.lower()
     assert "complete independent review and QA" in saved
     assert "run WBS checks and close" in saved
-    assert "run task_close" not in saved
+    assert "run wbs_close" not in saved
 
 
 def test_shipped_runtime_rules_expose_only_current_wbs_actions():
@@ -131,7 +217,7 @@ def test_generated_routing_uses_same_wbs_and_preserves_user_content():
     assert "resume the same WBS" in rendered
     assert 'wbs(action="verify")' in rendered and 'wbs(action="close")' in rendered
     assert "Goal child" not in rendered and "sync/create Goal" not in rendered
-    assert "task_verify" not in rendered
+    assert "wbs_verify" not in rendered
 
 
 def test_current_operational_docs_use_supported_recovery_actions():
@@ -141,7 +227,7 @@ def test_current_operational_docs_use_supported_recovery_actions():
     assert "Goal executor" not in readme and "selecting the next child" not in readme
     assert "goal_storage_root" not in guide and "goal-control-mcp" not in guide
     faq = guide.split("문제 해결 FAQ", 1)[1].split("\n## ", 1)[0]
-    # Private error prefixes such as `task_start refused ...` remain accurate.
+    # Private error prefixes such as `wbs_open refused ...` remain accurate.
     # Bare retired operation names followed by Korean call/route particles
     # instead prescribe unavailable public operations in this recovery section.
     assert not re.search(r"`(?:task_(?:start|context|verify|close|blocked)|write_plan)(?:\([^`]*\))?`(?:를|을|로|나)", faq)

@@ -34,12 +34,12 @@ def test_verification_gate_runs_highest_available_tier_without_asking():
 def test_contract_records_highest_available_verification_rule():
     body = _text(CONTRACTS)
 
-    assert "Highest available verification is part of the task" in body
+    assert "Highest available verification is part of the WBS" in body
     assert "asking the user whether to verify" in body
     assert "external/destructive blocker" in body
 
 
-def test_develop_workflow_uses_unified_task_control_not_git_freshness():
+def test_develop_workflow_uses_unified_wbs_control_not_git_freshness():
     body = "\n".join(_text(path) for path in (DEVELOP, QUALITY, PARALLEL))
 
     assert "WBS" in body

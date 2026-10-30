@@ -150,13 +150,13 @@ def _add_worktree(repo: Path, worktree: Path, branch: str) -> None:
     _git("worktree", "add", "-b", branch, str(worktree), cwd=repo)
 
 
-def _write_task(root: Path, task_id: str, content: str = "plan\n") -> Path:
-    """Write task evidence directly in the worktree's filesystem, the way a
-    lead's gitignored doc/harness/tasks/ actually behaves: never git-added."""
-    task_dir = root / "doc/harness/tasks" / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    (task_dir / "PLAN.md").write_text(content, encoding="utf-8")
-    return task_dir
+def _write_task(root: Path, wbs_id: str, content: str = "plan\n") -> Path:
+    """Write WBS evidence directly in the worktree's filesystem, the way a
+    lead's gitignored doc/harness/wbs/ actually behaves: never git-added."""
+    wbs_dir = root / "doc/harness/wbs" / wbs_id
+    wbs_dir.mkdir(parents=True, exist_ok=True)
+    (wbs_dir / "PLAN.md").write_text(content, encoding="utf-8")
+    return wbs_dir
 
 
 def _write_learnings(root: Path, rows: list) -> None:
@@ -176,7 +176,7 @@ def _rebase_and_fast_forward(repo: Path, worktree: Path, branch: str) -> None:
 def _commit_and_merge(repo: Path, worktree: Path, branch: str) -> None:
     """Commit a real, git-tracked source change on `branch` in the worktree
     and integrate it into the main checkout's HEAD. Mirrors how a lead's actual
-    code change is what gets integrated, while its gitignored task evidence and
+    code change is what gets integrated, while its gitignored WBS evidence and
     learnings stay worktree-local (never git-added, never touched by git)."""
     (worktree / "src.txt").write_text(f"change from {branch}\n", encoding="utf-8")
     _git("add", "src.txt", cwd=worktree)
@@ -201,17 +201,17 @@ def test_happy_path_copy_and_append(tmp_path: Path):
     worktree = tmp_path / "wt"
     _add_worktree(repo, worktree, "lead-1")
 
-    task_id = "TASK__demo"
-    _write_task(worktree, task_id, "plan body\n")
+    wbs_id = "WBS__demo"
+    _write_task(worktree, wbs_id, "plan body\n")
     _write_learnings(worktree, [
         {"key": "a", "insight": "one"},
         {"key": "b", "insight": "two"},
     ])
     _commit_and_merge(repo, worktree, "lead-1")
 
-    summary = mod.harvest(str(repo), str(worktree), task_id)
+    summary = mod.harvest(str(repo), str(worktree), wbs_id)
 
-    dest = repo / "doc/harness/archive/batch" / task_id
+    dest = repo / "doc/harness/archive/batch" / wbs_id
     assert dest.is_dir()
     assert (dest / "PLAN.md").read_text(encoding="utf-8") == "plan body\n"
     assert summary["archived"] == str(dest)
@@ -226,15 +226,15 @@ def test_idempotent_second_run_appends_zero(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = tmp_path / "wt"
     _add_worktree(repo, worktree, "lead-1")
-    task_id = "TASK__demo"
-    _write_task(worktree, task_id)
+    wbs_id = "WBS__demo"
+    _write_task(worktree, wbs_id)
     _write_learnings(worktree, [{"key": "a"}])
     _commit_and_merge(repo, worktree, "lead-1")
 
-    first = mod.harvest(str(repo), str(worktree), task_id)
+    first = mod.harvest(str(repo), str(worktree), wbs_id)
     assert first["learnings_appended"] == 1
 
-    second = mod.harvest(str(repo), str(worktree), task_id)
+    second = mod.harvest(str(repo), str(worktree), wbs_id)
     assert second["learnings_appended"] == 0
     assert second["archived"] == first["archived"]
 
@@ -246,10 +246,10 @@ def test_refuses_plain_directory(tmp_path: Path):
     repo = _main_repo(tmp_path)
     plain = tmp_path / "not_a_worktree"
     plain.mkdir()
-    _write_task(plain, "TASK__demo")
+    _write_task(plain, "WBS__demo")
 
     with _raises(mod.HarvestError):
-        mod.harvest(str(repo), str(plain), "TASK__demo")
+        mod.harvest(str(repo), str(plain), "WBS__demo")
 
     assert not (repo / "doc/harness/archive/batch").exists()
 
@@ -260,10 +260,10 @@ def test_refuses_worktree_of_different_repo(tmp_path: Path):
     _init_repo(other_repo)
     other_worktree = tmp_path / "other_wt"
     _add_worktree(other_repo, other_worktree, "lead-x")
-    _write_task(other_worktree, "TASK__demo")
+    _write_task(other_worktree, "WBS__demo")
 
     with _raises(mod.HarvestError):
-        mod.harvest(str(repo), str(other_worktree), "TASK__demo")
+        mod.harvest(str(repo), str(other_worktree), "WBS__demo")
 
     assert not (repo / "doc/harness/archive/batch").exists()
 
@@ -272,7 +272,7 @@ def test_refuses_forged_back_pointer(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = tmp_path / "wt"
     _add_worktree(repo, worktree, "lead-1")
-    _write_task(worktree, "TASK__demo")
+    _write_task(worktree, "WBS__demo")
     _commit_and_merge(repo, worktree, "lead-1")
 
     # Forge the back-pointer inside .git/worktrees/<name>/gitdir so it no
@@ -284,7 +284,7 @@ def test_refuses_forged_back_pointer(tmp_path: Path):
     back_pointer.write_text(str(tmp_path / "somewhere-else" / ".git") + "\n", encoding="utf-8")
 
     with _raises(mod.HarvestError, match="back-pointer"):
-        mod.harvest(str(repo), str(worktree), "TASK__demo")
+        mod.harvest(str(repo), str(worktree), "WBS__demo")
 
     assert not (repo / "doc/harness/archive/batch").exists()
 
@@ -293,7 +293,7 @@ def test_refuses_unmerged_branch(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = tmp_path / "wt"
     _add_worktree(repo, worktree, "lead-1")
-    _write_task(worktree, "TASK__demo")
+    _write_task(worktree, "WBS__demo")
     (worktree / "src.txt").write_text("unmerged change\n", encoding="utf-8")
     subprocess.run(["git", "add", "src.txt"], cwd=worktree, check=True)
     subprocess.run(
@@ -302,20 +302,20 @@ def test_refuses_unmerged_branch(tmp_path: Path):
     # Deliberately do not merge lead-1 into the main checkout's HEAD.
 
     with _raises(mod.HarvestError, match="not merged"):
-        mod.harvest(str(repo), str(worktree), "TASK__demo")
+        mod.harvest(str(repo), str(worktree), "WBS__demo")
 
     assert not (repo / "doc/harness/archive/batch").exists()
 
 
 def _ignore_task_evidence(repo: Path) -> None:
-    """Commit the ignores a real project has, so task evidence stays out of git
+    """Commit the ignores a real project has, so WBS evidence stays out of git
     and `git worktree remove` sees a clean lead worktree."""
     (repo / ".gitignore").write_text(
-        "doc/harness/tasks/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n",
+        "doc/harness/wbs/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n",
         encoding="utf-8",
     )
     _git("add", ".gitignore", cwd=repo)
-    _git("commit", "-q", "-m", "ignore task evidence", cwd=repo)
+    _git("commit", "-q", "-m", "ignore WBS evidence", cwd=repo)
 
 
 def _lead_commit(worktree: Path, name: str, body: str, message: str) -> None:
@@ -334,23 +334,23 @@ def test_two_leads_rebased_and_fast_forwarded_are_harvested_and_removed(tmp_path
         branch = f"lead-{n}"
         _add_worktree(repo, worktree, branch)
         _git("worktree", "lock", str(worktree), cwd=repo)  # Claude's agent lock
-        task_id = f"TASK__lead{n}"
-        _write_task(worktree, task_id, f"plan {n}\n")
+        wbs_id = f"WBS__lead{n}"
+        _write_task(worktree, wbs_id, f"plan {n}\n")
         _write_learnings(worktree, [{"key": f"k{n}", "insight": f"lead {n}"}])
         _lead_commit(worktree, f"file{n}.txt", f"lead {n}\n", f"lead {n} work")
-        leads.append((worktree, branch, task_id))
+        leads.append((worktree, branch, wbs_id))
 
     tip_before = _git("rev-parse", "HEAD", cwd=leads[1][0])
-    for index, (worktree, branch, task_id) in enumerate(leads):
+    for index, (worktree, branch, wbs_id) in enumerate(leads):
         if index == 1:
             # Rebased but not yet fast-forwarded: harvest must refuse.
             base_now = _git("rev-parse", "HEAD", cwd=repo)
             _git("rebase", "-q", "--no-autostash", base_now, cwd=worktree)
             with _raises(mod.HarvestError, match="not merged"):
-                mod.harvest(str(repo), str(worktree), task_id)
+                mod.harvest(str(repo), str(worktree), wbs_id)
         _rebase_and_fast_forward(repo, worktree, branch)
         assert _git("rev-parse", "HEAD", cwd=worktree) == _git("rev-parse", "HEAD", cwd=repo)
-        summary = mod.harvest(str(repo), str(worktree), task_id)
+        summary = mod.harvest(str(repo), str(worktree), wbs_id)
         assert summary["learnings_appended"] == 1
         _git("worktree", "unlock", str(worktree), cwd=repo)
         _git("worktree", "remove", str(worktree), cwd=repo)
@@ -362,8 +362,8 @@ def test_two_leads_rebased_and_fast_forwarded_are_harvested_and_removed(tmp_path
     assert _git("log", "--format=%s", f"{base}..HEAD", cwd=repo).splitlines() == [
         "lead 2 work", "lead 1 work",
     ]
-    for _, _, task_id in leads:
-        assert (repo / "doc/harness/archive/batch" / task_id / "PLAN.md").is_file()
+    for _, _, wbs_id in leads:
+        assert (repo / "doc/harness/archive/batch" / wbs_id / "PLAN.md").is_file()
     assert _git("worktree", "list", "--porcelain", cwd=repo).count("worktree ") == 1
 
 
@@ -390,19 +390,19 @@ def test_rebase_conflict_abort_restores_the_lead_and_leaves_main(tmp_path: Path)
     assert _git("status", "--porcelain", cwd=second) == ""
     assert _git("rev-parse", "HEAD", cwd=repo) == main_head
     with _raises(mod.HarvestError, match="not merged"):
-        mod.harvest(str(repo), str(second), "TASK__lead2")
+        mod.harvest(str(repo), str(second), "WBS__lead2")
 
 
 def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(tmp_path: Path):
     """A stopped rebase detaches the worktree HEAD at the main HEAD, which
-    passes the ancestor check; harvest must refuse it. The integration task
+    passes the ancestor check; harvest must refuse it. The integration WBS
     then resolves, continues, fast-forwards, harvests, and removes."""
     repo = _main_repo(tmp_path)
     _ignore_task_evidence(repo)
     first, second = tmp_path / "wt1", tmp_path / "wt2"
     _add_worktree(repo, first, "lead-1")
     _add_worktree(repo, second, "lead-2")
-    _write_task(second, "TASK__lead2")
+    _write_task(second, "WBS__lead2")
     _lead_commit(first, "shared.txt", "from lead 1\n", "lead 1 work")
     _lead_commit(second, "shared.txt", "from lead 2\n", "lead 2 work")
     _rebase_and_fast_forward(repo, first, "lead-1")
@@ -416,8 +416,8 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
     assert _git("diff", "--name-only", "--diff-filter=U", cwd=second) == "shared.txt"
     assert _git("rev-parse", "HEAD", cwd=second) == main_head  # detached at main
     with _raises(mod.HarvestError, match="detached"):
-        mod.harvest(str(repo), str(second), "TASK__lead2")
-    assert not (repo / "doc/harness/archive/batch/TASK__lead2").exists()
+        mod.harvest(str(repo), str(second), "WBS__lead2")
+    assert not (repo / "doc/harness/archive/batch/WBS__lead2").exists()
 
     (second / "shared.txt").write_text("from lead 1\nfrom lead 2\n", encoding="utf-8")
     _git("add", "shared.txt", cwd=second)
@@ -425,22 +425,22 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
     subprocess.run(["git", "rebase", "--continue"], cwd=second, env=env,
                    capture_output=True, check=True)
     _git("merge", "-q", "--ff-only", "lead-2", cwd=repo)
-    mod.harvest(str(repo), str(second), "TASK__lead2")
+    mod.harvest(str(repo), str(second), "WBS__lead2")
     _git("worktree", "remove", str(second), cwd=repo)
     _git("branch", "-d", "lead-2", cwd=repo)
 
     assert (repo / "shared.txt").read_text(encoding="utf-8") == "from lead 1\nfrom lead 2\n"
     assert _git("rev-list", "--merges", "HEAD", cwd=repo) == ""
-    assert (repo / "doc/harness/archive/batch/TASK__lead2/PLAN.md").is_file()
+    assert (repo / "doc/harness/archive/batch/WBS__lead2/PLAN.md").is_file()
 
 
-def test_refuses_invalid_task_id(tmp_path: Path):
+def test_refuses_invalid_wbs_id(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = tmp_path / "wt"
     _add_worktree(repo, worktree, "lead-1")
     _commit_and_merge(repo, worktree, "lead-1")
 
-    with _raises(mod.HarvestError, match="invalid task_id"):
+    with _raises(mod.HarvestError, match="invalid wbs_id"):
         mod.harvest(str(repo), str(worktree), "../escape")
 
     assert not (repo / "doc/harness/archive/batch").exists()
@@ -456,63 +456,63 @@ def _merged_lead(repo: Path, tmp_path: Path, branch: str = "lead-x") -> Path:
 def test_refuses_symlink_inside_task_evidence(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = _merged_lead(repo, tmp_path)
-    task_dir = _write_task(worktree, "TASK__demo")
+    wbs_dir = _write_task(worktree, "WBS__demo")
     secret = tmp_path / "secret.txt"
     secret.write_text("secret\n", encoding="utf-8")
-    (task_dir / "leak").symlink_to(secret)
+    (wbs_dir / "leak").symlink_to(secret)
     with _raises(mod.HarvestError, match="non-regular entry"):
-        mod.harvest(str(repo), str(worktree), "TASK__demo")
-    assert not (repo / "doc/harness/archive/batch/TASK__demo").exists()
+        mod.harvest(str(repo), str(worktree), "WBS__demo")
+    assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
 
 
 def test_refuses_symlinked_evidence_parent_and_fifo(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = _merged_lead(repo, tmp_path)
     outside = tmp_path / "outside-tasks"
-    _write_task(outside, "TASK__demo")
-    (worktree / "doc/harness/tasks").symlink_to(outside / "doc/harness/tasks")
+    _write_task(outside, "WBS__demo")
+    (worktree / "doc/harness/wbs").symlink_to(outside / "doc/harness/wbs")
     with _raises(mod.HarvestError, match="symlink"):
-        mod.harvest(str(repo), str(worktree), "TASK__demo")
+        mod.harvest(str(repo), str(worktree), "WBS__demo")
 
     worktree2 = _merged_lead(repo, tmp_path, "lead-y")
-    task_dir = _write_task(worktree2, "TASK__demo")
-    os.mkfifo(task_dir / "pipe")
+    wbs_dir = _write_task(worktree2, "WBS__demo")
+    os.mkfifo(wbs_dir / "pipe")
     with _raises(mod.HarvestError, match="non-regular entry"):
-        mod.harvest(str(repo), str(worktree2), "TASK__demo")
+        mod.harvest(str(repo), str(worktree2), "WBS__demo")
 
 
 def test_learnings_links_refused_and_non_json_rows_skipped(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = _merged_lead(repo, tmp_path)
-    _write_task(worktree, "TASK__demo")
+    _write_task(worktree, "WBS__demo")
     real = tmp_path / "rows.jsonl"
     real.write_text('{"k": 1}\n', encoding="utf-8")
     (worktree / "doc/harness/learnings.jsonl").symlink_to(real)
     with _raises(mod.HarvestError, match="symlink"):
-        mod.harvest(str(repo), str(worktree), "TASK__demo")
-    assert not (repo / "doc/harness/archive/batch/TASK__demo").exists()
+        mod.harvest(str(repo), str(worktree), "WBS__demo")
+    assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
 
     (worktree / "doc/harness/learnings.jsonl").unlink()
     (worktree / "doc/harness/learnings.jsonl").write_text(
         '{"k": 1}\nnot json\n["array"]\n{"k": 2}\n', encoding="utf-8",
     )
-    summary = mod.harvest(str(repo), str(worktree), "TASK__demo")
+    summary = mod.harvest(str(repo), str(worktree), "WBS__demo")
     assert summary["learnings_appended"] == 2
     assert (repo / "doc/harness/learnings.jsonl").read_text(encoding="utf-8") == '{"k": 1}\n{"k": 2}\n'
 
 
-def test_refuses_to_replace_a_different_archive_for_the_same_task_id(tmp_path: Path):
+def test_refuses_to_replace_a_different_archive_for_the_same_wbs_id(tmp_path: Path):
     repo = _main_repo(tmp_path)
     first = _merged_lead(repo, tmp_path, "lead-a")
-    _write_task(first, "TASK__fix", "evidence from batch 1\n")
-    mod.harvest(str(repo), str(first), "TASK__fix")
-    archived = repo / "doc/harness/archive/batch/TASK__fix/PLAN.md"
+    _write_task(first, "WBS__fix", "evidence from batch 1\n")
+    mod.harvest(str(repo), str(first), "WBS__fix")
+    archived = repo / "doc/harness/archive/batch/WBS__fix/PLAN.md"
     assert archived.read_text(encoding="utf-8") == "evidence from batch 1\n"
 
     second = _merged_lead(repo, tmp_path, "lead-b")
-    _write_task(second, "TASK__fix", "evidence from batch 2\n")
+    _write_task(second, "WBS__fix", "evidence from batch 2\n")
     with _raises(mod.HarvestError, match="refusing to overwrite"):
-        mod.harvest(str(repo), str(second), "TASK__fix")
+        mod.harvest(str(repo), str(second), "WBS__fix")
     assert archived.read_text(encoding="utf-8") == "evidence from batch 1\n"
 
 
@@ -525,23 +525,23 @@ def test_ambient_git_env_cannot_redirect_the_merged_check(tmp_path: Path, monkey
     (worktree / "src.txt").write_text("unmerged\n", encoding="utf-8")
     _git("add", "src.txt", cwd=worktree)
     _git("commit", "-q", "-m", "unmerged", cwd=worktree)
-    _write_task(worktree, "TASK__demo")
+    _write_task(worktree, "WBS__demo")
     # Pointing git at a decoy repository must not make an unmerged lead look merged.
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
     with _raises(mod.HarvestError):
-        mod.harvest(str(repo), str(worktree), "TASK__demo")
-    assert not (repo / "doc/harness/archive/batch/TASK__demo").exists()
+        mod.harvest(str(repo), str(worktree), "WBS__demo")
+    assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
 
 
 def test_non_canonical_worktree_path_is_canonicalized_before_use(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = _merged_lead(repo, tmp_path, "lead-c")
-    _write_task(worktree, "TASK__demo")
+    _write_task(worktree, "WBS__demo")
     alias = str(tmp_path / "lead-c" / ".." / "lead-c")
-    summary = mod.harvest(str(repo), alias, "TASK__demo")
-    assert summary["archived"] == str(repo.resolve() / "doc/harness/archive/batch/TASK__demo")
+    summary = mod.harvest(str(repo), alias, "WBS__demo")
+    assert summary["archived"] == str(repo.resolve() / "doc/harness/archive/batch/WBS__demo")
     with _raises(mod.HarvestError, match="absolute"):
-        mod.harvest(str(repo), "lead-c", "TASK__demo")
+        mod.harvest(str(repo), "lead-c", "WBS__demo")
 
 
 def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, preexisting_tag=False):
@@ -561,7 +561,7 @@ def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, pree
         (target / "precious").write_text("external data")
         (main / "external-link").symlink_to(target, target_is_directory=True)
     with (main / ".gitignore").open("a") as handle:
-        handle.write("doc/harness/tasks/\ndoc/harness/archive/\ndoc/harness/runtime/\ndoc/harness/learnings.jsonl\n")
+        handle.write("doc/harness/wbs/\ndoc/harness/archive/\ndoc/harness/runtime/\ndoc/harness/learnings.jsonl\n")
     fixture._commit(main, "ignore operational evidence")
     fixture._git(work, "rebase", "main")
     helper = fixture._helper()
@@ -575,9 +575,9 @@ def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, pree
     manifest["witness"] = witness
     fixture._git(main, "merge", "--ff-only", "lead")
     helper.reconcile_checkout(main, manifest, witness)
-    task_dir = state_fixture.task(work, slug="lead", closed=True)
-    control = json.loads((task_dir / "TASK.json").read_text())
-    harvested = mod.harvest(str(main), str(work), "TASK__lead")
+    wbs_dir = state_fixture.task(work, slug="lead", closed=True)
+    control = json.loads((wbs_dir / "WBS.control.json").read_text())
+    harvested = mod.harvest(str(main), str(work), "WBS__lead")
     batch_state.sync_harvest(str(main), harvested["archived"])
     checkpoint = dict(stage="harvested", destination_ref="refs/heads/main", branch_tip=tip,
                       integrated_tip=tip, run_id=control["run_id"], closed=True,
@@ -586,11 +586,11 @@ def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, pree
     request = dict(slug="lead", request="module edit", scopes=[paths[0]], depends_on=[],
                    resolved_scopes=[str(main / paths[0])], ownership_scopes=[str(main / paths[0])],
                    submodules=[paths[0]], submodule_manifest=copy.deepcopy(manifest),
-                   status="integrating", task_id="TASK__lead", worker_id="worker-lead",
+                   status="integrating", wbs_id="WBS__lead", worker_id="worker-lead",
                    worktree=str(work), branch="lead", spawn_head=manifest["spawn_head"],
                    run_id=control["run_id"], closed=True,
                    checkpoint=copy.deepcopy(checkpoint),
-                   result=dict(verdict="closed", task_id="TASK__lead", worktree=str(work), branch="lead", commit=tip))
+                   result=dict(verdict="closed", wbs_id="WBS__lead", worktree=str(work), branch="lead", commit=tip))
     state = dict(schema_version=2, batch_id=manifest["batch_id"], repo=str(main),
                  destination_ref="refs/heads/main", initial_head=manifest["spawn_head"],
                  max_leads=3, cap_source="default", status="open", halted=False,
@@ -607,14 +607,14 @@ def test_s1_guarded_removal_uses_single_force_and_preserves_objects(tmp_path, mo
     def runner(repo, *args):
         calls.append(args)
         return subprocess.run(["git", *map(str, args)], cwd=repo, capture_output=True, text=True)
-    result = mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint, git_runner=runner)
+    result = mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint, git_runner=runner)
     assert result.returncode == 0, result.stderr
     assert calls == [("worktree", "remove", "--force", str(work))]
     assert not work.exists()
     assert not Path(manifest["admin_dir"]).exists()
     _git("gc", "--prune=now", cwd=main / path)
     assert _git("cat-file", "-t", tip, cwd=main / path) == "commit"
-    assert (main / "doc/harness/archive/batch/TASK__lead/PLAN.md").exists()
+    assert (main / "doc/harness/archive/batch/WBS__lead/PLAN.md").exists()
     # The helper removes only the tree: the finish owner still owns safe -d.
     assert _git("rev-parse", "refs/heads/lead", cwd=main) == checkpoint["integrated_tip"]
 
@@ -629,7 +629,7 @@ def test_s1_guarded_removal_requires_exact_persisted_state(tmp_path, monkeypatch
         changed = copy.deepcopy(state)
         changed[key] = value
         variants.append(changed)
-    for key, value in (("status", "returned"), ("task_id", "TASK__foreign"), ("spawn_head", "0" * 40),
+    for key, value in (("status", "returned"), ("wbs_id", "WBS__foreign"), ("spawn_head", "0" * 40),
                        ("worktree", str(tmp_path / "foreign")), ("branch", "foreign"),
                        ("run_id", "foreign"), ("closed", False)):
         changed = copy.deepcopy(state)
@@ -644,30 +644,30 @@ def test_s1_guarded_removal_requires_exact_persisted_state(tmp_path, monkeypatch
     for changed in variants:
         batch_state.write_json(str(state_path), changed)
         with _raises(mod.HarvestError):
-            mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+            mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
         assert work.exists()
     state_path.unlink()
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert work.exists()
 
 
 def test_s1_guarded_removal_rejects_changed_evidence_and_archive(tmp_path, monkeypatch):
     main, work, _, manifest, checkpoint, _, _, _ = _s1_removal_fixture(tmp_path, monkeypatch)
     archive = Path(checkpoint["harvest"]["archived"])
-    for path in (archive / "PLAN.md", work / "doc/harness/tasks/TASK__lead/PLAN.md",
-                 archive / "TASK.json", work / "doc/harness/tasks/TASK__lead/TASK.json"):
+    for path in (archive / "PLAN.md", work / "doc/harness/wbs/WBS__lead/PLAN.md",
+                 archive / "WBS.control.json", work / "doc/harness/wbs/WBS__lead/WBS.control.json"):
         original = path.read_bytes()
         path.write_bytes(original + b"changed")
         with _raises(mod.HarvestError):
-            mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+            mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
         assert work.exists()
         path.write_bytes(original)
 
 
 def test_s1_guarded_removal_rejects_unknown_ignored_and_untracked_content(tmp_path, monkeypatch):
     main, work, module, manifest, checkpoint, _, _, _ = _s1_removal_fixture(tmp_path, monkeypatch)
-    for path in (work / "unknown.txt", work / "doc/harness/tasks/unknown.bin",
+    for path in (work / "unknown.txt", work / "doc/harness/wbs/unknown.bin",
                  work / "doc/harness/runtime/precious.bin", work / module / "unknown.txt"):
         missing_parents = []
         parent = path.parent
@@ -677,7 +677,7 @@ def test_s1_guarded_removal_rejects_unknown_ignored_and_untracked_content(tmp_pa
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("irreplaceable")
         with _raises(mod.HarvestError):
-            mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+            mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
         assert path.read_text() == "irreplaceable"
         path.unlink()
         for parent in missing_parents:
@@ -688,7 +688,7 @@ def test_s1_guarded_removal_rejects_unknown_ignored_and_untracked_content(tmp_pa
     hidden = work / module / "private-data"
     hidden.write_text("irreplaceable")
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert hidden.read_text() == "irreplaceable"
 
 
@@ -698,7 +698,7 @@ def test_s1_guarded_removal_rejects_dirty_superproject_and_module(tmp_path, monk
         before = path.read_bytes()
         path.write_text("keep edits")
         with _raises(mod.HarvestError):
-            mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+            mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
         assert path.read_text() == "keep edits"
         path.write_bytes(before)
 
@@ -707,12 +707,12 @@ def test_s1_guarded_removal_rejects_new_refs_and_missing_pins(tmp_path, monkeypa
     main, work, module, manifest, checkpoint, _, _, _ = _s1_removal_fixture(tmp_path, monkeypatch)
     _git("branch", "new-work", cwd=work / module)
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     _git("branch", "-d", "new-work", cwd=work / module)
     pin = next(iter(manifest["modules"][0]["pins"].values()))
     _git("update-ref", "-d", pin, cwd=main / module)
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert work.exists()
 
 
@@ -721,7 +721,7 @@ def test_s1_guarded_removal_rejects_ignored_nested_repository(tmp_path, monkeypa
     hidden = work / "doc/harness/runtime/nested"
     _init_repo(hidden)
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert (hidden / ".git").exists()
 
 
@@ -731,7 +731,7 @@ def test_s1_guarded_removal_rejects_symlinked_state(tmp_path, monkeypatch):
     state_path.rename(saved)
     state_path.symlink_to(saved)
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert work.exists()
 
 
@@ -741,13 +741,13 @@ def test_s1_guarded_removal_rejects_extra_initialized_unselected_module(tmp_path
     extra = work / "libs/module1"
     fixture._git(main, "clone", "--no-hardlinks", str(main / "libs/module1"), str(extra))
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert (extra / ".git").exists()
 
 
 def test_s1_guarded_removal_accepts_tracked_directory_symlink_without_following(tmp_path, monkeypatch):
     main, work, _, manifest, checkpoint, _, _, _ = _s1_removal_fixture(tmp_path, monkeypatch, tracked_link=True)
-    result = mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+    result = mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert result.returncode == 0, result.stderr
     assert not work.exists()
     assert (tmp_path / "external/precious").read_text() == "external data"
@@ -767,7 +767,7 @@ def test_s1_guarded_removal_rejects_staged_change_hidden_by_restored_worktree(tm
     index = Path(_git("rev-parse", "--absolute-git-dir", cwd=work)) / "index"
     index_bytes = index.read_bytes()
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert work.is_dir()
     assert index.read_bytes() == index_bytes
     assert _git("rev-parse", ":file.txt", cwd=work) == staged_oid
@@ -777,7 +777,7 @@ def test_s1_guarded_removal_rejects_staged_change_hidden_by_restored_worktree(tm
 def _s1_reharvest_learnings(main, work, checkpoint, state_path, state):
     import copy
     import batch_state
-    harvested = mod.harvest(str(main), str(work), "TASK__lead")
+    harvested = mod.harvest(str(main), str(work), "WBS__lead")
     batch_state.sync_harvest(str(main), harvested["archived"])
     checkpoint["harvest"] = harvested
     state["requests"][0]["checkpoint"] = copy.deepcopy(checkpoint)
@@ -797,7 +797,7 @@ def test_s1_guarded_removal_accepts_exact_harvested_learning_lines(tmp_path, mon
     assert harvested["learnings_appended"] == 1
     assert destination.read_bytes() == source.read_bytes()
     preserved = destination.read_bytes()
-    result = mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+    result = mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert result.returncode == 0 and not work.exists()
     assert destination.read_bytes() == preserved
 
@@ -813,7 +813,7 @@ def test_s1_guarded_removal_retains_learning_bytes_omitted_by_harvest(tmp_path, 
         _s1_reharvest_learnings(main, work, checkpoint, state_path, state)
         assert destination.read_bytes() == valid
         with _raises(mod.HarvestError, match="learning content not preserved"):
-            mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+            mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
         assert work.is_dir() and source.read_bytes() == original
         assert destination.read_bytes() == valid
 
@@ -844,7 +844,7 @@ def test_s1_guarded_removal_retains_edits_hidden_by_index_flags(tmp_path, monkey
         raise AssertionError("guard reached destructive removal with hidden source edits")
 
     with _raises(mod.HarvestError):
-        mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint,
+        mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint,
                               git_runner=refuse_unexpected_removal)
     assert remove_calls == []
     assert work.is_dir() and path.read_bytes() == precious
@@ -858,14 +858,14 @@ def test_s1_full_removal_supports_preexisting_annotated_module_tag(tmp_path, mon
     tag = _git("rev-parse", "refs/tags/preexisting-annotated", cwd=destination)
     assert _git("cat-file", "-t", tag, cwd=destination) == "tag"
     annotation = _git("cat-file", "-p", tag, cwd=destination)
-    result = mod.remove_s1_worktree(str(main), str(work), "TASK__lead", manifest, checkpoint)
+    result = mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert result.returncode == 0 and not work.exists()
     assert not Path(manifest["admin_dir"]).exists()
     _git("reflog", "expire", "--expire=now", "--all", cwd=destination)
     _git("gc", "--prune=now", cwd=destination)
     assert _git("cat-file", "-p", tag, cwd=destination) == annotation
     assert _git("cat-file", "-t", tip, cwd=destination) == "commit"
-    assert (main / "doc/harness/archive/batch/TASK__lead/TASK.json").is_file()
+    assert (main / "doc/harness/archive/batch/WBS__lead/WBS.control.json").is_file()
 
 
 def _historical_diagnostics(work, task, sid, *, error_only=False):
@@ -893,7 +893,7 @@ def _ordinary_snapshot_fixture(tmp_path, *, error_only=False, verification=False
     sessions = task.parent / '.active_sessions'
     sessions.mkdir()
     (sessions / (sid + '.json')).write_text(json.dumps(dict(
-        session_id=sid, task_dir=str(task), task_id=task.name,
+        session_id=sid, wbs_dir=str(task), wbs_id=task.name,
         run_id=fixture.RUN, updated='2026-10-21T00:00:00Z')))
     diagnostics = work / 'doc/harness/.watcher-diagnostics.json'
     _historical_diagnostics(work, task, sid, error_only=error_only)
@@ -902,7 +902,7 @@ def _ordinary_snapshot_fixture(tmp_path, *, error_only=False, verification=False
     assert ('registration_present' in value) is not error_only
     checkpoint = work / 'doc/harness/checkpoints' / (task.name + '.md')
     checkpoint.parent.mkdir()
-    checkpoint.write_text('# Checkpoint — ' + task.name + '\n\n- written: 2026-10-21T00:00:00Z\n\n## Task state\n\n- status: open\n\n## Progress\n\n- phase: implementation\n\n## Next action\n\nHistorical resume note\n')
+    checkpoint.write_text('# Checkpoint — ' + task.name + '\n\n- written: 2026-10-21T00:00:00Z\n\n## WBS state\n\n- status: open\n\n## Progress\n\n- phase: implementation\n\n## Next action\n\nHistorical resume note\n')
     if verification:
         import verification_target
         from test_wbs import wbs, plan, node
@@ -972,7 +972,7 @@ def test_ordinary_snapshots_refuse_foreign_malformed_and_unsafe_inputs(tmp_path)
         assert not sidecar.exists()
     diagnostics.write_bytes(raw)
     ckraw = checkpoint.read_bytes()
-    checkpoint.write_bytes(ckraw.replace(task.name.encode(), b'TASK__foreign'))
+    checkpoint.write_bytes(ckraw.replace(task.name.encode(), b'WBS__foreign'))
     with _raises(mod.HarvestError, match='foreign task checkpoint'):
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
     checkpoint.write_bytes(ckraw)
@@ -1017,8 +1017,8 @@ def test_ordinary_snapshot_collisions_and_sidecar_links_never_overwrite(tmp_path
 
 def test_ordinary_diagnostics_after_close_need_no_removed_session_marker(tmp_path):
     repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
-    # task_close removes the owning session marker; diagnostics carry no task/run
-    # and remain a nonattesting checkout advisory, never closed task evidence.
+    # wbs_close removes the owning session marker; diagnostics carry no task/run
+    # and remain a nonattesting checkout advisory, never closed WBS evidence.
     sessions = task.parent / '.active_sessions'
     (sessions / 'session-snapshots.json').unlink()
     sessions.rmdir()
@@ -1032,16 +1032,16 @@ def test_ordinary_diagnostics_after_close_need_no_removed_session_marker(tmp_pat
 def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
     repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
     original = {str(p.relative_to(work)): p.read_bytes() for p in (diagnostics, checkpoint)}
-    task_id = task.name
-    mod.ordinary_removal_proof(str(repo), str(work), task_id)
-    archive = repo / 'doc/harness/archive/batch' / task_id
+    wbs_id = task.name
+    mod.ordinary_removal_proof(str(repo), str(work), wbs_id)
+    archive = repo / 'doc/harness/archive/batch' / wbs_id
     entries = mod._tree_entries(str(archive))
     tip = _git('rev-parse', 'HEAD', cwd=repo)
     proof = dict(stage='harvested', integrated_tip=tip, harvest={'archived': str(archive)},
                  archive_fingerprint='sha256:' + mod.hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest())
     _git('worktree', 'remove', str(work), cwd=repo)
     # Model a native interrupted removal with only typed ancillary remainder;
-    # source task control can already be gone, so immutable archive is authority.
+    # source WBS execution control can already be gone, so immutable archive is authority.
     for rel, raw in original.items():
         path = work / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1050,20 +1050,20 @@ def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
     saved = (sidecar / 'watcher-diagnostics.json').read_bytes()
     (sidecar / 'watcher-diagnostics.json').unlink()
     with _raises(mod.HarvestError, match='not preserved'):
-        mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+        mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     assert not (sidecar / 'watcher-diagnostics.json').exists()
     (sidecar / 'watcher-diagnostics.json').write_bytes(saved)
     diagnostics.write_bytes(original[str(diagnostics.relative_to(work))] + b' ')
     with _raises(mod.HarvestError, match='collision'):
-        mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+        mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     diagnostics.write_bytes(original[str(diagnostics.relative_to(work))])
     precious = checkpoint.parent / 'precious.bin'
     precious.write_bytes(b'unique ignored user bytes')
     with _raises(mod.HarvestError, match='unpreserved'):
-        mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+        mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     assert precious.read_bytes() == b'unique ignored user bytes'
     precious.unlink()
-    mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     assert not work.exists()
     assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved
     assert (sidecar / 'checkpoint.md').read_bytes() == original[str(checkpoint.relative_to(work))]
@@ -1071,7 +1071,7 @@ def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
     # Files may disappear before an interrupted removal leaves their known
     # empty checkpoint parent. Already-preserved typed copies still account for it.
     checkpoint.parent.mkdir(parents=True)
-    mod.remove_ordinary_residue(str(repo), str(work), task_id, tip, proof)
+    mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     assert not work.exists()
     assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved
 
@@ -1158,7 +1158,7 @@ def test_thaw_rejects_source_and_archive_drift_during_collection(tmp_path, monke
         with monkeypatch.context() as patch:
             patch.setattr(mod, '_s1_path', drift_on_collection)
             patch.setattr(mod.os, 'fchmod', lambda *args: chmods.append(args))
-            with _raises(mod.HarvestError, match='task evidence differs'):
+            with _raises(mod.HarvestError, match='WBS evidence differs'):
                 mod.thaw_verification_sources(str(repo), str(work), task.name, None, checkpoint)
         assert len(seen) >= 2 and not chmods
         assert not source.stat().st_mode & 0o200

@@ -23,7 +23,7 @@ from test_batch_state import Pool, request, task, _git, _write, _head, RUN
 
 def setup(tmp_path, monkeypatch, requests=None):
     pool = Pool(tmp_path, monkeypatch)
-    spec = work_pack._spec('TASK__owner', requests or [request('a'), request('b')], batch_id='pool')
+    spec = work_pack._spec('WBS__owner', requests or [request('a'), request('b')], batch_id='pool')
     return pool, spec
 
 
@@ -112,9 +112,9 @@ def finish_result(pool, spec, slug='a'):
     worktree = Path(handoff['worktree'])
     _write(worktree / (slug + '.txt'), slug + '\n')
     _git('add', slug + '.txt', cwd=worktree)
-    _git('commit', '-qm', slug, '--trailer', 'Harness-Task: TASK__' + slug, cwd=worktree)
+    _git('commit', '-qm', slug, '--trailer', 'Harness-WBS: WBS__' + slug, cwd=worktree)
     task(worktree, slug, closed=True)
-    return dict(verdict='closed', task_id='TASK__' + slug, worktree=str(worktree), branch=handoff['branch'],
+    return dict(verdict='closed', wbs_id='WBS__' + slug, worktree=str(worktree), branch=handoff['branch'],
                 commit=_head(worktree), run_id=RUN)
 
 
@@ -194,7 +194,7 @@ def test_blocked_completion_exposes_retained_disposition(tmp_path, monkeypatch):
     pool, spec = setup(tmp_path, monkeypatch)
     handoff, = call(pool, spec, available_slots=1)['handoffs']
     call(pool, spec, operation='bind', slug='a', worker_id='actual-a')
-    result = dict(verdict='blocked', task_id='TASK__a', worktree=handoff['worktree'], branch=handoff['branch'], commit=None)
+    result = dict(verdict='blocked', wbs_id='WBS__a', worktree=handoff['worktree'], branch=handoff['branch'], commit=None)
     response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
     assert response['status'] == 'blocked'
     assert Path(handoff['worktree']).exists()
@@ -271,7 +271,7 @@ def test_creation_intent_corruption_and_cross_pool_collision_fail_closed(tmp_pat
     duplicate['batch_id'] = 'other'
     duplicate['requests'] = [duplicate['requests'][0]]
     duplicate['requests'][0]['slug'] = 'different'
-    duplicate['requests'][0]['task_id'] = 'TASK__different'
+    duplicate['requests'][0]['wbs_id'] = 'WBS__different'
     batch.write_json(str(pool.state.parent / 'other.json'), duplicate)
     with pytest.raises(batch.Refusal, match='duplicate worktree ownership'):
         call(pool, spec, operation='status')
@@ -292,7 +292,7 @@ def test_returned_retry_never_integrates_unreported_commit(tmp_path, monkeypatch
     worktree = Path(result['worktree'])
     _write(worktree / 'a.txt', 'unreported change\n')
     _git('add', 'a.txt', cwd=worktree)
-    _git('commit', '-qm', 'unreported', '--trailer', 'Harness-Task: TASK__a', cwd=worktree)
+    _git('commit', '-qm', 'unreported', '--trailer', 'Harness-WBS: WBS__a', cwd=worktree)
     before = _head(pool.repo)
     for _ in range(2):
         with pytest.raises(batch.Refusal, match='reported result'):
@@ -342,7 +342,7 @@ def test_manually_resolved_rebase_requires_exact_explicit_recovery_commit(tmp_pa
 
 def test_prepare_preserves_existing_explicit_pool_capacity(tmp_path, monkeypatch):
     pool, spec = setup(tmp_path, monkeypatch)
-    pool.init(spec['requests'], cap='2', owner=spec['task_id'])
+    pool.init(spec['requests'], cap='2', owner=spec['wbs_id'])
     first = json.loads(pool.state.read_text())
     response = call(pool, spec, available_slots=0)
     assert response['batch']['max_leads'] == 2
@@ -446,8 +446,8 @@ def test_ordinary_complete_retains_unknown_ignored_bytes_and_original_lock(tmp_p
     ignore_disposal_fixture(pool)
     result = finish_result(pool, spec)
     worktree = Path(result['worktree'])
-    rel = {'precious':'precious.local', 'other-task':'doc/harness/tasks/TASK__other/notes.md',
-           'bad-learning':'doc/harness/learnings.jsonl', 'invalid-marker':'doc/harness/tasks/.active_sessions/default.json',
+    rel = {'precious':'precious.local', 'other-task':'doc/harness/wbs/WBS__other/notes.md',
+           'bad-learning':'doc/harness/learnings.jsonl', 'invalid-marker':'doc/harness/wbs/.active_sessions/default.json',
            'cache-file':'.pytest_cache', 'unknown-cache':'.cache/precious.txt',
            'nested-cache-repo':'.venv/nested/.git/config'}[kind]
     precious = worktree / rel
@@ -487,8 +487,8 @@ def test_evidence_changed_after_harvest_prevents_ordinary_removal(tmp_path, monk
     result = finish_result(pool, spec)
     original = batch.finish_helper._cleanup
     def late_change(repo, worktree, branch, outcome, *args, **kwargs):
-        directory = (Path(worktree) / 'doc/harness/tasks/TASK__a' if mutate == 'task'
-                     else Path(repo) / 'doc/harness/archive/batch/TASK__a')
+        directory = (Path(worktree) / 'doc/harness/wbs/WBS__a' if mutate == 'task'
+                     else Path(repo) / 'doc/harness/archive/batch/WBS__a')
         _write(directory / 'late-evidence.txt', 'late unique bytes\n')
         return original(repo, worktree, branch, outcome, *args, **kwargs)
     monkeypatch.setattr(batch.finish_helper, '_cleanup', late_change)
@@ -507,11 +507,11 @@ def test_reproducible_cache_directories_and_exact_closed_metadata_allow_disposal
     worktree = Path(result['worktree'])
     for name in ('.venv', 'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'):
         _write(worktree / name / 'generated-cache.bin', 'reproducible content\n')
-    sessions = worktree / 'doc/harness/tasks/.active_sessions'
+    sessions = worktree / 'doc/harness/wbs/.active_sessions'
     sessions.mkdir()
     if markers == 'exact-marker':
-        _write(sessions / 'closed-session.json', json.dumps(dict(session_id='closed-session', task_dir=str(worktree / 'doc/harness/tasks/TASK__a'),
-                    task_id='TASK__a', run_id=RUN, updated='2026-10-20T00:00:00+00:00')))
+        _write(sessions / 'closed-session.json', json.dumps(dict(session_id='closed-session', wbs_dir=str(worktree / 'doc/harness/wbs/WBS__a'),
+                    wbs_id='WBS__a', run_id=RUN, updated='2026-10-20T00:00:00+00:00')))
         _write(sessions / '.session-hint', 'closed-session\n')
     response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
     assert response['batch']['requests'][0]['status'] == 'integrated', response
@@ -613,7 +613,7 @@ def test_resume_missing_worktree_reports_retained_branch_without_new_task(tmp_pa
         call(pool, spec, operation='resume', slug='a', worker_stopped=True)
     assert pool.state.read_bytes() == before
     assert _git('rev-parse', 'refs/heads/' + handoff['branch'], cwd=pool.repo) == handoff['spawn_head']
-    assert (moved / 'doc/harness/tasks/TASK__a/TASK.json').is_file()
+    assert (moved / 'doc/harness/wbs/WBS__a/WBS.control.json').is_file()
 
 
 def test_managed_parallel_divergent_siblings_integrate_owned_subsets(tmp_path, monkeypatch):
@@ -626,9 +626,9 @@ def test_managed_parallel_divergent_siblings_integrate_owned_subsets(tmp_path, m
         w = Path(handoff['worktree'])
         _write(w / (slug + '.txt'), slug + '\n')
         _git('add', slug + '.txt', cwd=w)
-        _git('commit', '-qm', slug, '--trailer', 'Harness-Task: TASK__' + slug, cwd=w)
+        _git('commit', '-qm', slug, '--trailer', 'Harness-WBS: WBS__' + slug, cwd=w)
         task(w, slug, closed=True)
-        results.append(dict(verdict='closed', task_id='TASK__' + slug, worktree=str(w), branch=handoff['branch'], commit=_head(w), run_id=RUN))
+        results.append(dict(verdict='closed', wbs_id='WBS__' + slug, worktree=str(w), branch=handoff['branch'], commit=_head(w), run_id=RUN))
     for handoff, result in zip(handoffs, results):
         response = call(pool, spec, operation='complete', slug=handoff['slug'], worker_id='actual-' + handoff['slug'], result=result, worker_stopped=True)
         assert response['batch']['requests'][handoffs.index(handoff)]['status'] == 'integrated', response

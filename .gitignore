@@ -19,6 +19,7 @@ doc/harness/.hygiene-session-count
 
 # harness - operational artifacts (ephemeral, not durable knowledge)
 doc/harness/tasks/
+doc/harness/wbs/
 doc/harness/goals/
 doc/harness/reviews/
 doc/harness/learnings.jsonl

@@ -1,8 +1,8 @@
 """Measured WBS projections; PLAN owns intent, explicit checks own evidence.
 
 No read executes commands and no caller supplies percentage or completion.
-The MCP owns WBS.json under the existing task transaction. This is not a
-replacement for independent review, QA, task close or batch integration proof.
+The MCP owns WBS.json under the existing WBS transaction. This is not a
+replacement for independent review, QA, WBS close or batch integration proof.
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def validate(nodes):
     for key, item in index.items():
         if children[key]:
             require(weight_sum(index[c] for c in children[key]) == Decimal(str(item["weight"])), "split must conserve parent weight")
-            require(not any(field in item for field in ("check", "task_id", "leaf_id", "inputs")), "group cannot claim leaf verification")
+            require(not any(field in item for field in ("check", "wbs_id", "leaf_id", "inputs")), "group cannot claim leaf verification")
         else:
             check = item.get("check")
             require(check is None or isinstance(check, list) and 0 < len(check) <= 128
@@ -178,9 +178,9 @@ def transition(old, new):
                 "new work must be a new outcome or refine unfinished work")
 
 
-def read_state(task_dir):
+def read_state(wbs_dir):
     from _lib import _strict_regular_text_snapshot
-    snapshot = _strict_regular_text_snapshot(os.path.join(task_dir, STATE), max_size=1024 * 1024)
+    snapshot = _strict_regular_text_snapshot(os.path.join(wbs_dir, STATE), max_size=1024 * 1024)
     if not snapshot["exists"]:
         return None
     state = json.loads(snapshot["text"])
@@ -242,8 +242,8 @@ def encode_state(state):
     return encoded
 
 
-def prepare(task_dir, plan, run_id, *, now=None):
-    nodes, old = from_plan(plan), read_state(task_dir)
+def prepare(wbs_dir, plan, run_id, *, now=None):
+    nodes, old = from_plan(plan), read_state(wbs_dir)
     if nodes is None:
         require(old is None, "cannot remove an existing WBS")
         return None
@@ -252,7 +252,7 @@ def prepare(task_dir, plan, run_id, *, now=None):
         from _lib import find_repo_root
         first_baseline = old.get("pack_only") is True
         if old.get("batch") and nodes != old["nodes"]:
-            require(batch_route(task_dir, find_repo_root(task_dir), old, measure=False)["route"] == "integration",
+            require(batch_route(wbs_dir, find_repo_root(wbs_dir), old, measure=False)["route"] == "integration",
                     "finish the active work pack before refinement")
             old = dict(old, batch_history=old.get("batch_history", []) + [
                 dict(batch=old["batch"])])
@@ -498,7 +498,7 @@ def fingerprint(repo, policy=None, *, _deadline=None):
 
 def verification_inputs(state, node):
     policy = node.get("inputs", state.get("inputs"))
-    # A leaf can specialize its dependency scope, never remove a task-wide
+    # A leaf can specialize its dependency scope, never remove a WBS-wide
     # no-read boundary. Root excludes remain defaults, not security denials.
     denied = (state.get("inputs") or {}).get("deny", [])
     if "inputs" in node and denied:
@@ -541,19 +541,19 @@ def scoped_source(sources, policy):
     return sources.get(digest(policy)) if isinstance(sources, dict) else sources
 
 
-def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=True, _state=None,
+def wbs_progress(wbs_dir, repo, run_id, *, now=None, _source=None, measure=True, _state=None,
                   _measure_custody=True):
     stamp = time.time() if now is None else now
     try:
-        state = read_state(task_dir) if _state is None else _state
+        state = read_state(wbs_dir) if _state is None else _state
         if state is None:
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None)
         if state.get("pack_only"):
-            validate_history(task_dir, repo, state, measure=measure and _measure_custody)
+            validate_history(wbs_dir, repo, state, measure=measure and _measure_custody)
             return dict(status="unbaselined", percentage=None, verified_weight=0, total_weight=None,
-                        integration=batch_route(task_dir, repo, state, measure=measure and _measure_custody))
+                        integration=batch_route(wbs_dir, repo, state, measure=measure and _measure_custody))
         from _lib import _strict_regular_text_snapshot
-        plan = _strict_regular_text_snapshot(os.path.join(task_dir, "PLAN.md"), max_size=1024 * 1024)
+        plan = _strict_regular_text_snapshot(os.path.join(wbs_dir, "PLAN.md"), max_size=1024 * 1024)
         require(plan["exists"], "PLAN.md is missing")
         plan_text = plan["text"]
         plan_nodes = from_plan(plan_text)
@@ -604,8 +604,8 @@ def task_progress(task_dir, repo, run_id, *, now=None, _source=None, measure=Tru
         total = float(weight_sum(rows))
         earned = float(weight_sum(n for n in rows if n["verified"]))
         complete = all(n["verified"] for n in rows)
-        validate_history(task_dir, repo, state, measure=measure and _measure_custody)
-        integration = batch_route(task_dir, repo, state, measure=measure and _measure_custody) if state.get("batch") else None
+        validate_history(wbs_dir, repo, state, measure=measure and _measure_custody)
+        integration = batch_route(wbs_dir, repo, state, measure=measure and _measure_custody) if state.get("batch") else None
         if not measure:
             for row in rows:
                 row["historical_verified"], row["verified"] = row["verified"], False
@@ -650,7 +650,7 @@ def summary(context):
         software = "current" if progress.get("status") == "measured" else "stored"
     else:
         software = "pending"
-    return dict(advisory=True, task_id=context.get("task_id"), task_status=context.get("status"),
+    return dict(advisory=True, wbs_id=context.get("wbs_id"), wbs_status=context.get("status"),
                 evidence=dict(implemented="unknown",
                               integrated=("current" if integration.get("proof_fresh") else "stored")
                               if integration.get("route") == "integration" else "unknown",
@@ -799,13 +799,13 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
         proc.wait()
 
 
-def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
+def verify(wbs_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     from _lib import _atomic_text_write, _strict_regular_text_snapshot
-    state = read_state(task_dir)
-    require(state is not None and state["run_id"] == run_id, "baseline current task run first through wbs(action='plan')")
+    state = read_state(wbs_dir)
+    require(state is not None and state["run_id"] == run_id, "baseline current WBS run first through wbs(action='plan')")
     if state.get("batch"):
-        require(batch_route(task_dir, repo, state, measure=False)["route"] == "integration", "work pack is unfinished; preserve parked parent")
-    plan = _strict_regular_text_snapshot(os.path.join(task_dir, "PLAN.md"), max_size=1024 * 1024)
+        require(batch_route(wbs_dir, repo, state, measure=False)["route"] == "integration", "work pack is unfinished; preserve parked parent")
+    plan = _strict_regular_text_snapshot(os.path.join(wbs_dir, "PLAN.md"), max_size=1024 * 1024)
     require(plan["exists"], "PLAN.md is missing")
     plan_text = plan["text"]
     require(from_plan(plan_text) == state["nodes"], "plan/evidence mismatch")
@@ -820,7 +820,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     def aggregate(sources, current_state):
         try:
             complete_sources = measurement_sources(repo, current_state, observed=sources)
-            return task_progress(task_dir, repo, run_id, now=now, _source=complete_sources,
+            return wbs_progress(wbs_dir, repo, run_id, now=now, _source=complete_sources,
                                  _state=current_state, _measure_custody=False)
         except observation_errors as exc:
             return _unavailable(exc)
@@ -831,7 +831,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
                     **(result or dict(returncode=None, error=None, output="")),
                     measurement_status="unavailable", measurement_phase=phase, measurement_error=_error_text(reason),
                     progress=_unavailable(reason))
-    log_path = _diagnostic_path(Path(task_dir) / "work" / ("assertion-" + hashlib.sha256(leaf_id.encode()).hexdigest() + ".log"),
+    log_path = _diagnostic_path(Path(wbs_dir) / "work" / ("assertion-" + hashlib.sha256(leaf_id.encode()).hexdigest() + ".log"),
                                 repo, verification_inputs(state, node))
     # Reserve the largest bounded publication before any assertion can run.
     # Preserve the previous proof even when the next result is inconclusive.
@@ -851,7 +851,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         before = scoped_source(before_sources, verification_inputs(state, node))
     except observation_errors as exc:
         return unavailable(exc, "before")
-    before_progress = task_progress(task_dir, repo, run_id, now=now, _source=before_sources,
+    before_progress = wbs_progress(wbs_dir, repo, run_id, now=now, _source=before_sources,
                                     _measure_custody=False)
     if before_progress["status"] != "measured":
         return unavailable(before_progress.get("reason", "current measurement unavailable"), "before")
@@ -878,7 +878,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     try:
         after_sources = measurement_sources(repo, state, only=needed)
         after_source = scoped_source(after_sources, verification_inputs(state, node))
-        after_progress = task_progress(task_dir, repo, run_id, now=now, _source=after_sources,
+        after_progress = wbs_progress(wbs_dir, repo, run_id, now=now, _source=after_sources,
                                        _measure_custody=False)
         require(after_progress["status"] == "measured", after_progress.get("reason", "current measurement unavailable"))
     except observation_errors as exc:
@@ -887,7 +887,7 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         proof = dict(state["checks"].get(leaf_id, dict(passed=False)))
         proof["last_attempt"] = dict(result=result, checked_at=stamp, measurement_error=_error_text(exc))
         state["checks"][leaf_id] = proof
-        _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+        _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
         return unavailable(exc, "after", result)
     success = result["returncode"] == 0 and not result["error"]
     if success:
@@ -908,26 +908,26 @@ def verify(task_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
             > weight_sum(n for n in before_aggregate["outcomes"] if n["verified"])):
         state["last_progress_at"] = stamp
         final_progress["last_progress_at"] = stamp
-    _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+    _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
     return dict(leaf_id=leaf_id, passed=success, **result,
                 execution="start_failed" if result["returncode"] is None else "completed",
                 measurement_status="measured", measurement_error=None,
                 progress=final_progress)
 
 
-def batch_route(task_dir, repo, state, *, measure=True):
+def batch_route(wbs_dir, repo, state, *, measure=True):
     import work_pack
-    return work_pack.route(repo, Path(task_dir).name, state["batch"], measure=measure)
+    return work_pack.route(repo, Path(wbs_dir).name, state["batch"], measure=measure)
 
 
-def validate_history(task_dir, repo, state, *, measure=True):
+def validate_history(wbs_dir, repo, state, *, measure=True):
     for prior in state.get("batch_history", []):
-        require(batch_route(task_dir, repo, prior, measure=measure)["route"] == "integration", "previous work pack proof is no longer integrated")
+        require(batch_route(wbs_dir, repo, prior, measure=measure)["route"] == "integration", "previous work pack proof is no longer integrated")
 
 
-def require_integrated_for_task(repo, task_id, *, measure=True):
-    from _lib import canonical_task_dir
-    td = canonical_task_dir(task_id=task_id, repo_root=repo)
+def require_integrated_for_wbs(repo, wbs_id, *, measure=True):
+    from _lib import canonical_wbs_dir
+    td = canonical_wbs_dir(wbs_id=wbs_id, repo_root=repo)
     state = read_state(td) if Path(td).is_dir() else None
     if state:
         validate_history(td, repo, state, measure=measure)
@@ -940,13 +940,13 @@ def admission_definition(state, ownership, selected):
     return digest([state['run_id'], state['nodes'], state['checks'], state.get('blocks', {}), ownership, selected])
 
 
-def require_source_assignment(repo, task_id, path=None):
+def require_source_assignment(repo, wbs_id, path=None):
     """Use a bound pool lead or a current owner-published direct assignment."""
-    from _lib import canonical_task_dir, read_task_control, task_control_status, resolve_registered_worktree
+    from _lib import canonical_wbs_dir, read_wbs_control, wbs_control_status, resolve_registered_worktree
     import batch_state
-    td = canonical_task_dir(task_id=task_id, repo_root=repo)
-    control = read_task_control(td)
-    require(control and task_control_status(td, control) == 'open', 'source assignment requires the same open task')
+    td = canonical_wbs_dir(wbs_id=wbs_id, repo_root=repo)
+    control = read_wbs_control(td)
+    require(control and wbs_control_status(td, control) == 'open', 'source assignment requires the same open WBS')
     # Existing managed ownership is the authority for a lead; never create a
     # nested pool merely because its own WBS has not measured its next check.
     if Path(repo, '.git').is_file():
@@ -965,7 +965,7 @@ def require_source_assignment(repo, task_id, path=None):
                     for item in data['requests']:
                         owned = item.get('worktree') or item.get('creation_intent', {}).get('worktree')
                         if owned == repo:
-                            require(item['task_id'] == task_id, 'source belongs to another managed task')
+                            require(item['wbs_id'] == wbs_id, 'source belongs to another managed WBS')
                             require(not data['halted'] and item['status'] == 'running' and item.get('worker_id'),
                                     'managed lead is not currently bound for development')
                             batch_state.bound(root, item)
@@ -985,12 +985,12 @@ def require_source_assignment(repo, task_id, path=None):
     return assignment
 
 
-def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
+def work_pack(wbs_dir, repo, run_id, *, bind=False, ownership=None, host=None):
     """Derive direct/managed admission within the existing owner's transaction."""
     from parallel_dispatch import host_slots, independent_order, _paths
     import batch_state
     from _lib import _atomic_text_write
-    state = read_state(task_dir)
+    state = read_state(wbs_dir)
     require(state is not None and state['run_id'] == run_id, 'baseline WBS before dispatch')
     available = host_slots(host)
     assignment = dict(run_id=run_id, host=host,
@@ -998,14 +998,14 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
     if state.get('batch'):
         require(not bind or not Path(repo, '.git').is_file(),
                 'worktree lifecycle must run from the surviving control checkout')
-        result = batch_route(task_dir, repo, state, measure=False)
+        result = batch_route(wbs_dir, repo, state, measure=False)
         assignment.update(mode='verification' if result['route'] == 'integration' else 'managed',
                           ownership={r['slug']: r['scopes'] for r in state['batch']['requests']})
         if not host['spawn_available'] or not host['continuation_available']:
             assignment['serial_facts'] = [dict(kind='capability',
                 spawn_available=host['spawn_available'], continuation_available=host['continuation_available'])]
     else:
-        progress = task_progress(task_dir, repo, run_id, measure=False)
+        progress = wbs_progress(wbs_dir, repo, run_id, measure=False)
         require(progress['status'] == 'unmeasured', 'valid stored WBS required')
         done = {row['id'] for row in progress['outcomes'] if row.get('historical_verified')}
         blocked = blocked_outcomes(state)
@@ -1019,7 +1019,7 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
             ownership = {key: _paths(paths, key, Path(repo).resolve()) for key, paths in ownership.items()}
             require(all(ownership.values()), 'each pending outcome requires execution ownership')
             assignment['ownership'] = ownership
-            prefix = 'wbs-' + digest([Path(task_dir).name, state['nodes']])[:12]
+            prefix = 'wbs-' + digest([Path(wbs_dir).name, state['nodes']])[:12]
             slug = {n['id']: prefix + '-' + n['id'] for n in pending}
             index = {n['id']: n for n in state['nodes']}
             def descendants(key):
@@ -1073,8 +1073,8 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
                 import work_pack as packs
                 if bind:
                     batch_state.main_boundary(repo, scopes=batch_state.ordinary_admission_scopes(repo, requests, managed=True))
-                spec = (packs.make_spec(repo, Path(task_dir).name, requests) if bind
-                        else packs._spec(Path(task_dir).name, requests))
+                spec = (packs.make_spec(repo, Path(wbs_dir).name, requests) if bind
+                        else packs._spec(Path(wbs_dir).name, requests))
                 state['batch'] = spec
                 result = dict(route='batch', **spec)
             else:
@@ -1082,14 +1082,14 @@ def work_pack(task_dir, repo, run_id, *, bind=False, ownership=None, host=None):
     assignment['definition'] = admission_definition(state, assignment['ownership'], assignment['selected'])
     state['execution_admission'] = assignment
     if bind:
-        _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+        _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
     return dict(result, execution_admission=assignment, available_slots=available)
 
 
-def publish_handoffs(task_dir, run_id, expected, slugs):
+def publish_handoffs(wbs_dir, run_id, expected, slugs):
     """Owner-transaction publication after the pool returns real reservations."""
     from _lib import _atomic_text_write
-    state = read_state(task_dir)
+    state = read_state(wbs_dir)
     require(state and state['run_id'] == run_id and state.get('execution_admission') == expected,
             'assignment changed during preparation; preserve pool and inspect status')
     assignment = dict(expected)
@@ -1099,7 +1099,7 @@ def publish_handoffs(task_dir, run_id, expected, slugs):
     assignment.update(ownership=ownership, selected=slugs)
     assignment['definition'] = admission_definition(state, ownership, slugs)
     state['execution_admission'] = assignment
-    _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+    _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
     return assignment
 
 
@@ -1123,7 +1123,7 @@ def blocked_outcomes(state):
 
 
 def ready_outcomes(state, progress):
-    """Ready IDs from the same outcome graph, never a second task queue."""
+    """Ready IDs from the same outcome graph, never a second outcome queue."""
     if progress.get("status") not in {"measured", "unmeasured"}:
         return []
     if progress.get("integration") and progress["integration"]["route"] != "integration":
@@ -1154,12 +1154,12 @@ def ready_outcomes(state, progress):
     return ready
 
 
-def block_outcome(task_dir, node_id, *, run_id, reason=None, unblock_condition=None, clear=False):
-    """Local WBS parking; the task owner holds the existing task transaction."""
+def block_outcome(wbs_dir, node_id, *, run_id, reason=None, unblock_condition=None, clear=False):
+    """Local WBS parking; the WBS owner holds the existing WBS transaction."""
     from _lib import _atomic_text_write
-    state = read_state(task_dir)
+    state = read_state(wbs_dir)
     require(state is not None and node_id in {n["id"] for n in state["nodes"]}, "unknown outcome")
-    require(state["run_id"] == run_id, "baseline the current task run before changing outcome blockers")
+    require(state["run_id"] == run_id, "baseline the current WBS run before changing outcome blockers")
     state = dict(state, blocks=dict(state.get("blocks", {})), checks=dict(state["checks"]))
     if clear:
         state["blocks"].pop(node_id, None)
@@ -1170,7 +1170,7 @@ def block_outcome(task_dir, node_id, *, run_id, reason=None, unblock_condition=N
         affected = blocked_outcomes(state)
         for key in affected & state["checks"].keys():
             state["checks"][key] = dict(state["checks"][key], invalidated=True)
-    _atomic_text_write(os.path.join(task_dir, STATE), encode_state(state))
+    _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
     return dict(node_id=node_id, blocked=not clear, blocks=state["blocks"])
 
 

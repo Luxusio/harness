@@ -107,7 +107,7 @@ Use exactly one of:
 
 ## Repo Ownership — See Something, Say Something
 
-`REPO_MODE` (from task context; default `unknown` → treat as `collaborative`):
+`REPO_MODE` (from WBS context; default `unknown` → treat as `collaborative`):
 
 - **solo** — You own everything. Investigate proactively; offer to fix. One-sentence note: what you noticed and impact.
 - **collaborative** — Others may own adjacent code. Add a material ownership or
@@ -134,7 +134,7 @@ When first-principles reaches a conclusion contradicting conventional wisdom:
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"ONE_LINE_SUMMARY","source":"first-principles","task":"TASK__<id>","task_run_id":"<TASK.json run_id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"ONE_LINE_SUMMARY","source":"first-principles","wbs":"WBS__<id>","wbs_run_id":"<WBS.control.json run_id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 Only genuine first-principles discoveries. Non-blocking.
 
@@ -147,7 +147,7 @@ Every AskUserQuestion from this skill MUST begin with a one-line orientation hea
 **One-line header (mandatory first line of every question body):**
 
 ```
-Task: TASK__<id> | Phase: <current> | Step: <name>
+WBS: WBS__<id> | Phase: <current> | Step: <name>
 ```
 
 Applies to: prerequisite offer (0.4.5) and the consolidated decision interaction (5.3).
@@ -158,7 +158,7 @@ review state.
 
 **4-rule question structure:** every AskUserQuestion body MUST follow this four-part shape:
 
-1. **Re-ground** — restate the project, active task, and current phase in one or two sentences. The user may not have looked at the window in 20 minutes; assume zero context carryover.
+1. **Re-ground** — restate the project, active WBS, and current phase in one or two sentences. The user may not have looked at the window in 20 minutes; assume zero context carryover.
 2. **Simplify** — explain the decision in plain language a new contributor could follow. No internal jargon, no implementation-detail names. Say what it DOES, not what it's CALLED.
 3. **Recommend** — one line: `RECOMMENDATION: <option> because <one-line reason>`. Always prefer the completeness-dominant option (see Principle P1). Include `Completeness: X/10` per option (scoring below). Flag explicitly if any option is ≤5.
 4. **Options** — lettered 2-4 options (AskUserQuestion's schema caps at 4). For effort-heavy options, show both scales: `(human: ~X / plan-skill: ~Y)`.
@@ -166,7 +166,7 @@ review state.
 **Concrete example** (from the consolidated decision interaction):
 
 ```
-Task: TASK__<id> | Phase: 5 | Step: Unresolved decisions
+WBS: WBS__<id> | Phase: 5 | Step: Unresolved decisions
 
 [Re-ground] We reviewed the plan for <feature> in <repo>. Everything already authorized by the request or clarification is settled.
 
@@ -197,7 +197,7 @@ If both options 8+: recommend the higher. If one ≤5: flag explicitly. For effo
 
 **Effort reference:**
 
-| Task type | Human | Plan-skill | Compression |
+| WBS type | Human | Plan-skill | Compression |
 |-----------|-------|-----------|-------------|
 | Boilerplate | 2 days | 15 min | ~100× |
 | Tests | 1 day | 15 min | ~50× |

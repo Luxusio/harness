@@ -4,7 +4,7 @@ REQ: doc/harness/REQ__protected-artifact-denial-survives-payload-size-and-hook-t
 
 - The prewrite gate parses the whole hook payload. ``_lib.read_hook_input``
   caps stdin at 64 KiB by default; a larger Write/Edit/apply_patch payload used
-  to be cut mid-JSON, parse to ``{}``, and be allowed, TASK.json and PLAN.md
+  to be cut mid-JSON, parse to ``{}``, and be allowed, WBS.control.json and PLAN.md
   included.
 - The Codex PreToolUse wrapper runs the gate as a child process. When that
   child times out, exits nonzero with no output, or cannot start, the wrapper
@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 GATE = SCRIPTS / "prewrite_gate.py"
 WRAPPER = SCRIPTS / "hook_pre_tool_use.py"
-TASKS = "doc/harness/tasks"
+TASKS = "doc/harness/wbs"
 MANIFEST = "version: 5\nsource_git_roots: []\n"
 ESCAPE_VARS = ("HARNESS_SKIP_PREWRITE", "HARNESS_DISABLE_SCOPE_LOCK")
 BIG = 70_000
@@ -45,13 +45,13 @@ DEFAULT_CAP = 1 << 16
 EVERY_WRITE = "applies to every write while set in the runtime's environment"
 
 PROTECTED = (
-    f"{TASKS}/TASK__x/TASK.json",
-    f"{TASKS}/TASK__x/PLAN.md",
+    f"{TASKS}/WBS__x/WBS.control.json",
+    f"{TASKS}/WBS__x/PLAN.md",
     f"{TASKS}/.active",
     "doc/harness/goals/current.json",
 )
 # README.md is an ordinary file, src/app.py a gated source file the full gate
-# would deny here (an invalid open task exists), plugin/CLAUDE.md a
+# would deny here (an invalid open WBS exists), plugin/CLAUDE.md a
 # workflow-control file the full gate would deny without MAINTENANCE. The
 # protected-only fallback allows all three.
 UNPROTECTED = ("README.md", "src/app.py", "plugin/CLAUDE.md")
@@ -180,7 +180,7 @@ class GateReadsWholePayload(_TmpRepoCase):
     """AC-001: >64 KiB payloads reach the classifiers."""
 
     def test_big_write_to_task_json_and_plan_is_denied_directly(self):
-        for rel in (f"{TASKS}/TASK__x/TASK.json", f"{TASKS}/TASK__x/PLAN.md"):
+        for rel in (f"{TASKS}/WBS__x/WBS.control.json", f"{TASKS}/WBS__x/PLAN.md"):
             with self.subTest(rel=rel):
                 (decision, reason), size = _run_script(GATE, _write(self.repo, rel), self.repo)
                 self.assertGreater(size, DEFAULT_CAP)
@@ -190,7 +190,7 @@ class GateReadsWholePayload(_TmpRepoCase):
                 self.assertIn("escape: HARNESS_SKIP_PREWRITE=1 <retry>", reason)
 
     def test_big_edit_and_multiedit_are_denied_directly(self):
-        rel = f"{TASKS}/TASK__x/PLAN.md"
+        rel = f"{TASKS}/WBS__x/PLAN.md"
         path = str(self.repo / rel)
         for tool, tool_input in (
             ("Edit", {"file_path": path, "old_string": "{}", "new_string": "b" * BIG}),
@@ -206,7 +206,7 @@ class GateReadsWholePayload(_TmpRepoCase):
                 self.assertIn("rule=C-05-protected-artifact", reason)
 
     def test_multi_mebibyte_payload_is_denied(self):
-        payload = _write(self.repo, f"{TASKS}/TASK__x/TASK.json", size=4 << 20)
+        payload = _write(self.repo, f"{TASKS}/WBS__x/WBS.control.json", size=4 << 20)
         (decision, reason), size = _run_script(GATE, payload, self.repo)
         self.assertGreater(size, 4 << 20)
         self.assertEqual(decision, "deny")
@@ -214,7 +214,7 @@ class GateReadsWholePayload(_TmpRepoCase):
 
     def test_non_ascii_payload_over_the_default_char_cap_is_denied(self):
         # Raw UTF-8 JSON: more than 64 Ki characters and far more bytes.
-        payload = _write(self.repo, f"{TASKS}/TASK__x/PLAN.md", size=BIG, char="é")
+        payload = _write(self.repo, f"{TASKS}/WBS__x/PLAN.md", size=BIG, char="é")
         (decision, reason), size = _run_script(
             GATE, payload, self.repo, ascii_json=False, env=_clean_env(PYTHONUTF8="1"),
         )
@@ -230,7 +230,7 @@ class GateReadsWholePayload(_TmpRepoCase):
         # The "strict" subtests fail on the old gate and every wrapper subtest
         # fails on the old wrapper; "utf8-mode" on the gate is a control that
         # already passed, because UTF-8 mode gives stdin surrogateescape.
-        rel = f"{TASKS}/TASK__x/TASK.json"
+        rel = f"{TASKS}/WBS__x/WBS.control.json"
         raw = json.dumps(_write(self.repo, rel, size=10, char="z")).encode("utf-8")
         raw = raw.replace(b"zzzzzzzzzz", b"zz\xffzz", 1)
         envs = {
@@ -273,7 +273,7 @@ class CodexWrapperPassesWholePayload(_TmpRepoCase):
     """AC-001 through hook_pre_tool_use.py, Write and apply_patch."""
 
     def test_big_write_through_wrapper_is_denied(self):
-        for rel in (f"{TASKS}/TASK__x/TASK.json", f"{TASKS}/TASK__x/PLAN.md"):
+        for rel in (f"{TASKS}/WBS__x/WBS.control.json", f"{TASKS}/WBS__x/PLAN.md"):
             with self.subTest(rel=rel):
                 (decision, reason), size = _run_script(WRAPPER, _write(self.repo, rel), self.repo)
                 self.assertGreater(size, DEFAULT_CAP)
@@ -281,7 +281,7 @@ class CodexWrapperPassesWholePayload(_TmpRepoCase):
                 self.assertIn("rule=C-05-protected-artifact", reason)
 
     def test_big_apply_patch_through_wrapper_is_denied(self):
-        for rel in (f"{TASKS}/TASK__x/TASK.json", f"{TASKS}/TASK__x/PLAN.md"):
+        for rel in (f"{TASKS}/WBS__x/WBS.control.json", f"{TASKS}/WBS__x/PLAN.md"):
             with self.subTest(rel=rel):
                 payload = _patch(self.repo, ["README.md", rel])
                 (decision, reason), size = _run_script(WRAPPER, payload, self.repo)
@@ -329,7 +329,7 @@ class CodexWrapperFallback(_TmpRepoCase):
     def test_full_gate_would_deny_the_unprotected_non_c05_targets(self):
         # Guards the matrix above: these targets are denied by the full gate for
         # non-C-05 reasons, so an empty fallback answer proves protected-only.
-        for rel, rule in (("src/app.py", "no-active-task"),
+        for rel, rule in (("src/app.py", "no-active-wbs"),
                           ("plugin/CLAUDE.md", "workflow-control-surface")):
             with self.subTest(rel=rel):
                 (decision, reason), _size = _run_script(
@@ -345,16 +345,16 @@ class CodexWrapperFallback(_TmpRepoCase):
             MANIFEST + "strict_compliance_requires_delegation: true\n", encoding="utf-8",
         )
         planless = _make_repo(self.base, "planless")
-        task = planless / TASKS / "TASK__y"
+        task = planless / TASKS / "WBS__y"
         task.mkdir()
         run = "0198c349-5800-7000-8000-000000000001"
-        (task / "TASK.json").write_text(json.dumps(dict(run_id=run, execution_mode="standard",
+        (task / "WBS.control.json").write_text(json.dumps(dict(run_id=run, execution_mode="standard",
             required_lenses=["review-code", "qa-cli"], closed=False)))
         sessions = planless / TASKS / ".active_sessions"
         sessions.mkdir(exist_ok=True)
         (sessions / "planless.json").write_text(json.dumps(dict(session_id="planless",
-            task_dir=str(task), task_id=task.name, run_id=run)))
-        for repo, rule in ((strict, "no-active-task"), (planless, "C-02-plan-first")):
+            wbs_dir=str(task), wbs_id=task.name, run_id=run)))
+        for repo, rule in ((strict, "no-active-wbs"), (planless, "C-02-plan-first")):
             with self.subTest(rule=rule):
                 payload = _write(repo, "src/app.py", size=10)
                 payload["session_id"] = "planless"
@@ -365,13 +365,13 @@ class CodexWrapperFallback(_TmpRepoCase):
                 self.assertEqual(out, b"")
 
     def test_timeout_denies_big_apply_patch_with_a_protected_target(self):
-        rel = f"{TASKS}/TASK__x/PLAN.md"
+        rel = f"{TASKS}/WBS__x/PLAN.md"
         rc, out = _call_wrapper(self.mod, _patch(self.repo, ["README.md", rel]), run=_timeout)
         self.assertEqual(rc, 0)
         self._assert_c05(out, rel)
 
     def test_nonzero_exit_without_output_denies_protected(self):
-        rel = f"{TASKS}/TASK__x/TASK.json"
+        rel = f"{TASKS}/WBS__x/WBS.control.json"
         for code in (1, -9):
             with self.subTest(code=code):
                 def crashed(args, **kwargs):
@@ -384,7 +384,7 @@ class CodexWrapperFallback(_TmpRepoCase):
     def test_spawn_failure_denies_protected(self):
         def unspawnable(args, **kwargs):
             raise OSError("exec failed")
-        rel = f"{TASKS}/TASK__x/TASK.json"
+        rel = f"{TASKS}/WBS__x/WBS.control.json"
         _rc, out = _call_wrapper(self.mod, _write(self.repo, rel, size=10), run=unspawnable)
         self._assert_c05(out, rel)
 
@@ -411,21 +411,21 @@ class CodexWrapperFallback(_TmpRepoCase):
             side_effect=AssertionError("fallback ran after a clean allow"),
         ):
             _rc, out = _call_wrapper(
-                self.mod, _write(self.repo, f"{TASKS}/TASK__x/TASK.json", size=10), run=allowed,
+                self.mod, _write(self.repo, f"{TASKS}/WBS__x/WBS.control.json", size=10), run=allowed,
             )
         self.assertEqual(out, b"")
 
     def test_skip_prewrite_is_honored_by_the_fallback(self):
         with mock.patch.dict(os.environ, {"HARNESS_SKIP_PREWRITE": "1"}):
             _rc, out = _call_wrapper(
-                self.mod, _write(self.repo, f"{TASKS}/TASK__x/TASK.json", size=10), run=_timeout,
+                self.mod, _write(self.repo, f"{TASKS}/WBS__x/WBS.control.json", size=10), run=_timeout,
             )
         self.assertEqual(out, b"")
 
     def test_non_harness_directory_stays_allowed(self):
         plain = self.base / "plain"
-        (plain / f"{TASKS}/TASK__x").mkdir(parents=True)
-        payload = _write(plain, f"{TASKS}/TASK__x/TASK.json", size=10)
+        (plain / f"{TASKS}/WBS__x").mkdir(parents=True)
+        payload = _write(plain, f"{TASKS}/WBS__x/WBS.control.json", size=10)
         _rc, out = _call_wrapper(self.mod, payload, run=_timeout)
         self.assertEqual(out, b"")
 
@@ -437,7 +437,7 @@ class CodexWrapperFallback(_TmpRepoCase):
                 broken.protected_artifact_decision.side_effect = side_effect
                 with mock.patch.dict(sys.modules, {"prewrite_gate": broken}):
                     rc, out = _call_wrapper(
-                        self.mod, _write(self.repo, f"{TASKS}/TASK__x/TASK.json", size=10),
+                        self.mod, _write(self.repo, f"{TASKS}/WBS__x/WBS.control.json", size=10),
                         run=_timeout,
                     )
                 self.assertEqual(rc, 0)
@@ -446,9 +446,9 @@ class CodexWrapperFallback(_TmpRepoCase):
     def test_real_child_timeout_triggers_the_fallback(self):
         with mock.patch.object(self.mod, "CHILD_TIMEOUT_SECONDS", 0.001):
             _rc, out = _call_wrapper(
-                self.mod, _write(self.repo, f"{TASKS}/TASK__x/PLAN.md", size=10),
+                self.mod, _write(self.repo, f"{TASKS}/WBS__x/PLAN.md", size=10),
             )
-            self._assert_c05(out, f"{TASKS}/TASK__x/PLAN.md")
+            self._assert_c05(out, f"{TASKS}/WBS__x/PLAN.md")
             _rc, out = _call_wrapper(self.mod, _write(self.repo, "README.md", size=10))
             self.assertEqual(out, b"")
 
@@ -458,9 +458,9 @@ class CodexWrapperFallback(_TmpRepoCase):
         (crashing / "prewrite_gate.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
         with mock.patch.object(self.mod, "SCRIPTS_DIR", str(crashing)):
             _rc, out = _call_wrapper(
-                self.mod, _write(self.repo, f"{TASKS}/TASK__x/TASK.json", size=10),
+                self.mod, _write(self.repo, f"{TASKS}/WBS__x/WBS.control.json", size=10),
             )
-        self._assert_c05(out, f"{TASKS}/TASK__x/TASK.json")
+        self._assert_c05(out, f"{TASKS}/WBS__x/WBS.control.json")
 
     def test_wrapper_holds_no_copy_of_the_protected_table(self):
         # Prose may name an artifact inside a longer message; a classifier
@@ -489,7 +489,7 @@ class ProtectedOnlyDecision(_TmpRepoCase):
     def test_foreign_checkout_protected_target_is_denied(self):
         other = _make_repo(self.base, "other")
         payload = _write(self.repo, "README.md", size=10)
-        payload["tool_input"]["file_path"] = str(other / f"{TASKS}/TASK__x/TASK.json")
+        payload["tool_input"]["file_path"] = str(other / f"{TASKS}/WBS__x/WBS.control.json")
         decision, reason = self._decide(payload)
         self.assertEqual(decision, "deny")
         self.assertIn("another Harness checkout", reason)
@@ -520,7 +520,7 @@ class ProtectedOnlyDecision(_TmpRepoCase):
         (decision, reason), _size = _run_script(GATE, ordinary, broken)
         self.assertEqual(decision, "deny")
         self.assertIn("rule=invalid-harness-workspace", reason)
-        protected = _write(broken, f"{TASKS}/TASK__x/TASK.json", size=10)
+        protected = _write(broken, f"{TASKS}/WBS__x/WBS.control.json", size=10)
         decision, reason = self._decide(protected)
         self.assertEqual(decision, "deny")
         self.assertIn("rule=C-05-protected-artifact", reason)
@@ -534,7 +534,7 @@ class ProtectedOnlyDecision(_TmpRepoCase):
         self.assertIs(sys.stdin, before)
 
     def test_full_decision_is_unchanged_for_protected_targets(self):
-        payload = _write(self.repo, f"{TASKS}/TASK__x/TASK.json", size=10)
+        payload = _write(self.repo, f"{TASKS}/WBS__x/WBS.control.json", size=10)
         full = self.gate._decision(payload)
         protected = self.gate.protected_artifact_decision(json.dumps(payload))
         self.assertEqual(full, protected)
@@ -572,14 +572,14 @@ class EnvEscapeWording(unittest.TestCase):
         gate = _load("prewrite_gate")
         with tempfile.TemporaryDirectory() as tmp, _escapes_unset():
             repo = Path(os.path.realpath(tmp))
-            task = repo / TASKS / "TASK__scope"
+            task = repo / TASKS / "WBS__scope"
             task.mkdir(parents=True)
             (task / "PROGRESS.md").write_text(
                 "allowed_paths:\n  - src/ok.py\nforbidden_paths:\n  - src/billing.py\n",
                 encoding="utf-8",
             )
             block, text = gate._handle_scope_lock(
-                str(repo / "src/billing.py"), str(task), str(repo), "TASK__scope",
+                str(repo / "src/billing.py"), str(task), str(repo), "WBS__scope",
             )
         self.assertTrue(block)
         self.assertIn(f"HARNESS_DISABLE_SCOPE_LOCK=1 ({EVERY_WRITE})", text)

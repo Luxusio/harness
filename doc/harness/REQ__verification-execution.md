@@ -62,12 +62,13 @@ starting. Failed preparation blocks its consumers.
 `--results` names one **per-group** durable JSON file outside selected inputs and
 outputs, independently of source checkout. Protected lifecycle artifacts cannot
 be used as result stores. The schema is `harness.verification-execution`,
-`version: 1`, with `task_id`, `run_id`, `execution_generation`, aggregate
+`version: 2`, with `wbs_id`, `run_id`, `execution_generation`, aggregate
 `status`/`returncode` and declaration-ordered `commands`. Atomic intermediate
 publication has aggregate FAIL until all jobs successfully finish; readers need
-no lock. Missing, foreign-task/run, unknown-version or parseable invalid current records
-are unavailable for reuse. Readable unsupported current records may be regenerated
-without promoting retained copies. Unreadable/oversized stores and invalid retained
+no lock. Missing, foreign-WBS/run, or parseable invalid current records
+are unavailable for reuse. A retired version or Task-identity result store is
+refused without overwrite; preserve it as history and use a new WBS result path.
+Current-format foreign or invalid records cannot promote retained copies. Unreadable/oversized stores and invalid retained
 failure history refuse overwrite and preserve existing bytes; use a separate result
 store rather than deleting evidence to repair them. A per-group store lease prevents concurrent
 duplicate preparation; unrelated groups must use different result paths.
@@ -81,7 +82,7 @@ measurement never completed. `state` distinguishes `completed`,
 `capability_unavailable`, and `blocked_dependency`. Nonzero exit is only a
 command failure; it does not establish product versus fixture ownership.
 
-Reuse requires a completed successful record from the same task/run/job/outcome,
+Reuse requires a completed successful record from the same WBS/run/job/outcome,
 matching scoped input bytes, declaration, argv, environment, platform, toolchain
 and current output bytes. A generation labels an invocation; advancing it does
 not invalidate identical inputs. Inputs/context are checked before and after
@@ -102,8 +103,8 @@ the reusable contract. These are cooperative trusted commands, not a sandbox.
 
 ```sh
 python3 plugin/scripts/verify_runner.py --root /exact/source-view \
-  --jobs /task/work/group.json --results /task/work/group-results.json \
-  --task-id TASK__example --run-id current-run --generation generation-2 \
+  --jobs /WBS/work/group.json --results /WBS/work/group-results.json \
+  --wbs-id WBS__example --run-id current-run --generation generation-2 \
   --max-workers 4 --timeout 60
 ```
 
@@ -151,7 +152,7 @@ per active attempt and its complete serialized provenance before execution;
 cleanup retains every
 referenced historical failure log. Only unreferenced owned slots may be reclaimed. The entire directory is excluded from
 selected source/artifact/output ownership. WBS assertion logs use fixed slots
-under the task work directory, outside its measured inputs; proof JSON keeps
+under the WBS work directory, outside its measured inputs; proof JSON keeps
 only the existing tail and a compact log reference. A successful recheck updates
 that diagnostic result without restarting the progress clock. Each log captures at most
 the executor's 1 MiB output allowance; overflow is an execution failure, with
@@ -210,13 +211,13 @@ outputs retain an empty manifest. Measurement failure releases job ownership.
 consumers, scoped reuse, restored views, lost/changed artifacts, invalid inputs,
 cross-process named contention with independent progress, output-leaf locks,
 capability/launch/command/timeout failures and descendant teardown. Normal
-conftest runtime-removal guards remain enabled; use a task-local pytest basetemp.
+conftest runtime-removal guards remain enabled; use a WBS-local pytest basetemp.
 
 ## Derived health execution contract
 
-The user-approved QA flow repair (2026-10-25, parent task
-`TASK__fix-qa-flow-20261025`, HEALTH outcome) derives this behavior from the
-reuse intents above; it adds no new user requirement identity. Automatic task
+The user-approved QA flow repair (2026-10-25, parent WBS
+`WBS__fix-qa-flow-20261025`, HEALTH outcome) derives this behavior from the
+reuse intents above; it adds no new user requirement identity. Automatic WBS
 completion must not invoke `health.py` or `test_command` to obtain a score.
 It may reuse an already reported measurement applicable to the current scope;
 otherwise the completion report omits the score. An unmeasured result is never

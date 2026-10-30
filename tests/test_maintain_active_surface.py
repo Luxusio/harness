@@ -59,7 +59,7 @@ def _iter_text_files():
             if child.suffix not in {".md", ".py", ".json", ".yaml", ".yml", ".toml"}:
                 continue
             rel = child.relative_to(REPO).as_posix()
-            if rel.startswith("doc/harness/tasks/") or rel.startswith("doc/changes/"):
+            if rel.startswith("doc/harness/wbs/") or rel.startswith("doc/changes/"):
                 continue
             yield child
 

@@ -4,14 +4,14 @@ description: Orchestrate the public WBS open -> plan -> develop -> QA -> close l
 user-invocable: false
 ---
 
-Orchestrate the full harness development cycle for a task.
+Orchestrate the full harness development cycle for a WBS.
 
 > `PLAN.md` owns acceptance intent; existing WBS assertions own measured outcome checks.
 
 Before entering this workflow, resolve the current project with the existing
 Harness manifest guard. Run only in a project initialized by `harness:setup`
 (`doc/harness/manifest.yaml`); a nested Git checkout needs its own setup.
-Outside an initialized project, continue ordinary work without Harness tasks,
+Outside an initialized project, continue ordinary work without Harness WBS roots,
 planning, routing reminders or automatic setup. Explicit setup remains available.
 
 ## Substantive review and QA
@@ -19,9 +19,9 @@ planning, routing reminders or automatic setup. Explicit setup remains available
 Await actual independent code review and conditional security review PASS before actual QA. Fix actual FAIL findings; publish actual BLOCKED_ENV with a concrete blocker and unblock condition. Direct independent finals are the workflow results; coordinator paraphrases and copied text cannot replace them. After actual QA PASS, run `wbs(action="verify")` and close only when current required WBS checks pass. Machine verdicts measure WBS checks and do not attest review or QA. Receipt files, collectors, naming bindings and recording availability play no role; do not rerun, repair or park work for missing recording.
 
 > **Codex runtime notes** (delta from Claude):
-> - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. The public effect is identical (task start -> plan -> develop -> QA -> close), with review and verification retained as internal close gates, but the chain is sequential prose rather than tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Await the actual independent final results; machine verification measures WBS checks. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
-> - The sole Codex MCP tool is bare `wbs`. Task-handler names below identify private owners; use the WBS action mapping.
+> - Claude's `Skill("harness:plan", wbs_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. The public effect is identical (WBS open -> plan -> develop -> QA -> close), with review and verification retained as internal close gates, but the chain is sequential prose rather than tool calls.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker assignments; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Await the actual independent final results; machine verification measures WBS checks. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in WBS state or final response only when it affects verification.
+> - The sole Codex MCP tool is bare `wbs`. Use its action schema directly, with the same root throughout execution.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion is conversational prose on Codex when a real user decision is needed; substantive FAIL findings follow the remediation path below.
 
@@ -30,24 +30,24 @@ Await actual independent code review and conditional security review PASS before
 Treat explicit user invocation or approval of a harness repo-mutating workflow
 as authorization to use the subagents required by that workflow's verification
 and review gates. Examples include "use harness", "run/continue/close the
-harness task", native `/goal`, or clear approval to proceed with a harness task.
+Harness WBS", native `/goal`, or clear approval to proceed with a Harness WBS.
 This workflow authorization does not apply to read-only answers or ordinary
 non-harness work.
 
-Route from the current session tools and the task shape, not from whether the
+Route from the current session tools and the WBS shape, not from whether the
 user explicitly requested delegation. "The user did not ask for parallel
 agents" is not a valid reason to skip `spawn_agent`. Do not wait for the user
 to request delegation. User request is not a condition for parallel routing.
 
 When `spawn_agent` is available and work is independent, use it for
 independent review/QA and bounded side work. Independent lanes include separate
-AC ownership, QA/UX lenses, read-only exploration, and bounded worker tasks
+AC ownership, QA/UX lenses, read-only exploration, and bounded worker assignments
 that can run without touching the same files. Use concrete Codex calls like:
 
 ```text
 spawn_agent {
-  task_name: "qa_cli_<task_slug>_<run_id>",
-  message: "task_name: qa_cli_<task_slug>_<run_id>\nYou are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md and the planned target files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
+  task_name: "qa_cli_<wbs_slug>_<run_id>",
+  message: "task_name: qa_cli_<wbs_slug>_<run_id>\nYou are the qa-cli lens for <wbs_id>. Read <wbs_dir>/PLAN.md and the planned target files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
   fork_turns: "all"
 }
 ```
@@ -72,7 +72,7 @@ spawn_agent {
 }
 ```
 
-Await every required independent review and QA result. Select clear task names for operator readability; names have no verification authority.
+Await every required independent review and QA result. Select clear agent names for operator readability; names have no verification authority.
 
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
 After a spawned agent completes, fails, is cancelled, or is no longer needed,
@@ -94,7 +94,7 @@ Use inline execution as the fallback for roles that normally benefit from indepe
 
 ## Sub-file
 
-`${HARNESS_PLUGIN_ROOT}/internal-skills/run/self-improvement.md` — signal detection, auto-fix, and validated tiered-learning promotion with an append-only raw ledger (runs after each task close).
+`${HARNESS_PLUGIN_ROOT}/internal-skills/run/self-improvement.md` — signal detection, auto-fix, and validated tiered-learning promotion with an append-only raw ledger (runs after each WBS close).
 
 ## Voice
 
@@ -102,22 +102,21 @@ Direct, terse. Status updates, not narration. "Phase N done." not "I have comple
 
 ## One public WBS interface
 
-Use only `wbs` MCP for this workflow. Names below identify internal owners,
-not additional public tools: task_start → wbs(action="open"), task_context →
-context, write_plan → plan, task_verify → verify, task_close → close,
-task_blocked → block. Pass `wbs_id` using the known root or legacy task ID;
-plan/check/dispatch share that same tree. check uses node_id; dispatch accepts
-current execution ownership and parks the parent automatically. Preserve
-workspace on every worktree call. No separate Goal WBS or child task queue.
+Use only `wbs` MCP for this workflow. Open or resume one root and keep its
+`wbs_id` and `wbs_dir`; open/context responses expose current routing in
+`context`. plan/check/dispatch share that same tree. check uses node_id;
+dispatch accepts current execution ownership and parks the parent automatically.
+Preserve workspace on every worktree call. Retired Goal/Task records are read
+only by explicit `wbs(action="migrate")` preview/apply, never normal execution.
 
 ## Flow
 
 Execute phases in strict order. Each phase must complete before the next begins. On failure, inspect actual state and follow Error Handling; repair authorized failures without repeating approval.
 
-Plain repo-mutating requests are valid task intake. Do not require the user to
+Plain repo-mutating requests are valid WBS intake. Do not require the user to
 re-issue a clear feature, fix, refactor, behavior change, or durable process/doc
-request as `/goal`. If no active task can be resolved, create or resume the
-harness task yourself and continue through this flow.
+request as `/goal`. If no active WBS can be resolved, create or resume the
+Harness WBS yourself and continue through this flow.
 
 ### Native Goal continuation
 
@@ -135,12 +134,12 @@ measured completion, without a second Goal ledger.
 
 ### Phase 0: Resume detection
 
-Before creating a new task, check whether this session already has an active
-harness task. If an active task exists, call `wbs(action="context")` for that task and
+Before creating a new WBS, check whether this session already has an active
+Harness WBS. If an active WBS exists, call `wbs(action="context")` for that WBS and
 resume instead of creating a duplicate.
 
 Resume routing:
-- Source task already closed with owned temporary worktrees remaining → Phase 5
+- Source WBS already closed with owned temporary worktrees remaining → Phase 5
   coordinator disposal only; do not repeat close or lenses solely for cleanup.
 - Current actual review/QA/UX FAIL → remediate the failed work in Phase 3;
   actual BLOCKED_ENV → preserve the real blocker and unblock condition.
@@ -153,37 +152,36 @@ Resume routing:
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
 
-Only call `wbs(action="open")` when no active task can be resolved, or when the user
-explicitly asks for a new task.
+Only call `wbs(action="open")` when no active WBS can be resolved, or when the user
+explicitly asks for a new WBS.
 
 If only a native Goal is active, open/resume its one WBS root; never attach a second planning ledger.
 
-### Phase 1: Start task
+### Phase 1: Open WBS
 
 `wbs(action="open")` is also the only resume operation. On an existing valid open or
-blocked task, omit `fresh_run` to preserve the same run and measured checks.
-Use `fresh_run: true` only when deliberately starting a new generation and
-starting a new generation; a closed task refuses the default call.
+blocked WBS, omit `fresh_run` to preserve the same run and measured checks.
+Use `fresh_run: true` only when deliberately starting a new generation; a closed WBS refuses the default call.
 
 ```
 wbs { action: "open", wbs_id: "<ARGUMENTS>" }
 ```
 
-(On Codex MCP this is the bare tool name; Claude uses a runtime-prefixed form.) Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
+(On Codex MCP this is the bare tool name; Claude uses a runtime-prefixed form.) Store the returned `wbs_dir` and `wbs_id` for all subsequent phases. Report: WBS created/resumed, wbs_dir path.
 
 ### Phase 2: Plan
 
-Read `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md` and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md` and execute its phases inline, passing `wbs_id`. The plan skill writes PLAN.md to the wbs_dir. On BLOCKED: stop and report.
 
-On Codex side the plan skill uses the available runtime surface. When `spawn_agent` is available, use it to run one independent reviewer subagent per phase; otherwise run the review methodology inline as coordinator-only and state the fallback in task state or final response if expected independence was lost. The premise gate becomes a conversational ask.
+On Codex side the plan skill uses the available runtime surface. When `spawn_agent` is available, use it to run one independent reviewer subagent per phase; otherwise run the review methodology inline as coordinator-only and state the fallback in WBS state or final response if expected independence was lost. The premise gate becomes a conversational ask.
 
 ### Phase 3: Develop
 
-Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. It uses the canonical-loop methodology with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Execute Phase 0 through Phase 9. Develop owns the implementation-through-close transaction, including independent code review, QA, verified installation, durable-doc classification, final freshness restoration, and `wbs(action="close")`. Execute that lifecycle once, suppress its nested user-facing completion response, and return here for post-close continuation. Do not run a second QA or close cycle after develop succeeds. On BLOCKED: stop and report.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/SKILL.md` and execute its phases, passing `wbs_id`. It uses the canonical-loop methodology with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Execute Phase 0 through Phase 9. Develop owns the implementation-through-close transaction, including independent code review, QA, verified installation, durable-doc classification, final freshness restoration, and `wbs(action="close")`. Execute that lifecycle once, suppress its nested user-facing completion response, and return here for post-close continuation. Do not run a second QA or close cycle after develop succeeds. On BLOCKED: stop and report.
 
 Multi-lens parallel QA (qa-browser + qa-api in one batch) should use `spawn_agent` when available. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology via subagent when possible or inline when no subagent path exists; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
-On completion: actual independent review and QA passed, `wbs(action="verify")` reports PASS, and the task is closed. If BLOCKED: preserve the unfinished blocker and unblock condition; ask only for a missing user decision or authorization.
+On completion: actual independent review and QA passed, `wbs(action="verify")` reports PASS, and the WBS is closed. If BLOCKED: preserve the unfinished blocker and unblock condition; ask only for a missing user decision or authorization.
 
 Before entering develop, re-entering after QA/UX FAIL, verifying, or closing,
 incorporate explicit user corrections from the conversation. Promote durable
@@ -192,7 +190,7 @@ does not maintain a separate feedback sidecar.
 
 ### Phase 4: Verify recovery (only when develop returned before close)
 
-Skip this phase when the source task is already closed. This is a recovery path for an
+Skip this phase when the source WBS is already closed. This is a recovery path for an
 interrupted or older develop flow, not a second QA pass. First call
 `wbs(action="context")`. Inspect current actual independent finals before
 machine checks. Reuse applicable actual review and QA/UX PASS results; rerun
@@ -224,13 +222,13 @@ QA subagent pattern on Codex:
 
 ```text
 spawn_agent {
-  task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md and ${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
+  task_name: "qa_<lens>_<wbs_slug>_<run_id>",
+  message: "task_name: qa_<lens>_<wbs_slug>_<run_id>\nYou are the qa-<lens> lens for <wbs_id>. Read <wbs_dir>/PLAN.md and ${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
 
-Use distinct task names to prevent collaboration-tree name collisions. Names do not bind verification authority. Run each applicable QA lens once per substantive verification cycle.
+Use distinct agent names to prevent collaboration-tree name collisions. Names do not bind verification authority. Run each applicable QA lens once per substantive verification cycle.
 
 Handle actual QA/UX results before `wbs(action="verify")`:
 - **FAIL**: return to Phase 3, fix substantive findings and restore affected
@@ -256,7 +254,7 @@ offer an override of substantive failure.
 **Persist QA failure patterns** after each retry cycle:
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
-echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","runtime":"codex","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","runtime":"codex","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","wbs":"'"<wbs_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 ### Phase 4.5: Health reporting
@@ -278,13 +276,13 @@ overall completion; report retained originals with their blocker and next action
 Already-closed sources still need this disposition, without repeating close or
 rerunning lenses solely for cleanup.
 
-Skip the `wbs(action="close")` call when Phase 3 already closed the task or the source
+Skip the `wbs(action="close")` call when Phase 3 already closed the WBS or the source
 was already closed on resume. Otherwise this phase owns the one recovery close
 attempt after Phase 4 has restored fresh PASS
 evidence.
 
 ```
-wbs { action: "close", wbs_id: "<task_id>" }
+wbs { action: "close", wbs_id: "<wbs_id>" }
 ```
 
 If blocked: report `missing_for_close`, fix the stated gate, retry.
@@ -292,7 +290,7 @@ If success: run self-improvement pipeline (see `self-improvement.md` in the
 Claude tree) before emitting the completion report.
 
 For harness-source changes, develop Phase 7.8 installs the verified payload
-before this close attempt. Do not defer installation until after close. The installer checks trusted source/task ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
+before this close attempt. Do not defer installation until after close. The installer checks trusted source/WBS ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
 
 Within an open root, use `wbs(action="next")`, development and checks to
 continue pending outcomes. Close only after all required outcomes, integration
@@ -301,7 +299,7 @@ before a separately authorized follow-up execution. Respect explicit stops,
 budgets and agreed go/no-go boundaries.
 
 For this harness plugin source repo, successful repo-mutating development is
-not complete at task close. Phase 7.8 must already have run the verified
+not complete at WBS close. Phase 7.8 must already have run the verified
 auto-install helper after the last source edit and fresh QA. After
 post-close self-improvement has run, commit the completed diff
 before the final response unless the user explicitly says not to. Include
@@ -310,9 +308,9 @@ the commit hash and pre-close conditional verified-delivery result in the comple
 ## Completion Report
 
 Before writing DONE, assert:
-- primary task is closed
+- primary WBS is closed
 - owned temporary worktree disposition is complete under the shared rule
-- runtime_verdict is PASS or task is BLOCKED
+- runtime_verdict is PASS or WBS is BLOCKED
 - post-close self-improvement has run
 - if this WBS belongs to a native Goal, that objective is done/blocked/stopped/budgeted
   or the next slice is already active/queued
@@ -322,9 +320,9 @@ Before writing DONE, assert:
 ```
 DONE
 
-Task:    <task_id>
+WBS:    <wbs_id>
 Status:  closed
-Dir:     <task_dir>
+Dir:     <wbs_dir>
 Runtime: codex
 
 Phases completed: WBS open, plan, develop, QA, close
@@ -341,7 +339,7 @@ inspect actual owner state via `wbs(action="context")` plus the affected operati
 state before retrying. A timeout does not prove failure or completion. Determine
 whether effects occurred and whether any writer is still active; do not duplicate
 unknown or non-idempotent effects. Retry only when state and effects are known
-and the retry is safe. Preserve the same task/run, applicable proofs, actual
+and the retry is safe. Preserve the same WBS/run, applicable proofs, actual
 failure history and filesystem guards; do not use fresh_run as recovery.
 
 Repair authorized failures autonomously and restore affected independent review
@@ -356,7 +354,7 @@ remain binding; a green machine check never clears substantive failure.
 
 ## Self-Improvement (post-close)
 
-After every task close, run the pipeline in `self-improvement.md` (Claude tree):
+After every WBS close, run the pipeline in `self-improvement.md` (Claude tree):
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
 - Treat dogfooding feedback, retrospectives, QA complaints, and agent-proposed
   harness improvements as hypotheses until the repo proves them. Before shaping
@@ -368,11 +366,11 @@ After every task close, run the pipeline in `self-improvement.md` (Claude tree):
   evidence tier instead of removing a gate.
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)
-- Promote learnings only when a validated entry matches the just-closed verified task/run; distinct verified historical task/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
+- Promote learnings only when a validated entry matches the just-closed verified WBS/run; distinct verified historical WBS/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
 - Preserve `learnings.jsonl` as append-only; promotion never rewrites or prunes raw rows, and no-signal runs remain no-write
-- Trigger retro independently after three verified task closes, using retro.py's shared close predicate rather than task-directory activity
+- Trigger retro independently after three verified WBS closes, using retro.py's shared close predicate rather than WBS-directory activity
 
-Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up tasks
+Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up WBS roots
 are different: they must be run or explicitly blocked before DONE.
 
 ---

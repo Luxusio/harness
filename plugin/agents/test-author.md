@@ -29,7 +29,7 @@ The coordinator runs your tests against both lanes' work once the whole batch re
 
 ## Never Do
 
-- Do not write `PLAN.md`, `TASK.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.
+- Do not write `PLAN.md`, `WBS.control.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.
 - Do not call harness MCP artifact writers.
 - Do not spawn agents.
 - Do not run full-suite QA.

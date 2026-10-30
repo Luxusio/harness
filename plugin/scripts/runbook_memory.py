@@ -156,6 +156,9 @@ def _dump_root_map(root_key: str, items: dict[str, dict[str, Any]]) -> str:
             "failed_command",
             "failure_class",
             "source_phase",
+            "source_wbs",
+            # Captured provenance is historical data, never execution authority.
+            # Preserve older attribution when rewriting an unrelated runbook.
             "source_task",
             "learned_at",
             "verified_at",
@@ -193,11 +196,11 @@ def save_candidates(repo_root: str, candidates: dict[str, dict[str, Any]]) -> No
 
 
 def add_candidate(repo_root: str, item_id: str, description: str, command: str,
-                  gotchas: list[str] | None = None, source_task: str = "") -> dict[str, Any]:
+                  gotchas: list[str] | None = None, source_wbs: str = "") -> dict[str, Any]:
     item = {
         "description": sanitize_text(description, max_len=500),
         "command": sanitize_text(command, max_len=500),
-        "source_task": sanitize_text(source_task, max_len=160),
+        "source_wbs": sanitize_text(source_wbs, max_len=160),
         "learned_at": now_iso(),
         "gotchas": [sanitize_text(g, max_len=500) for g in (gotchas or []) if sanitize_text(g)],
     }
@@ -215,9 +218,9 @@ def add_candidate(repo_root: str, item_id: str, description: str, command: str,
 def capture_candidate(repo_root: str, item_id: str, description: str, command: str,
                       failed_command: str = "", failure_class: str = "",
                       source_phase: str = "", gotchas: list[str] | None = None,
-                      source_task: str = "") -> dict[str, Any]:
+                      source_wbs: str = "") -> dict[str, Any]:
     """Capture a discovered setup/test/dev command as an unapproved runbook candidate."""
-    item = add_candidate(repo_root, item_id, description, command, gotchas=gotchas, source_task=source_task)
+    item = add_candidate(repo_root, item_id, description, command, gotchas=gotchas, source_wbs=source_wbs)
     extras = {
         "failed_command": sanitize_text(failed_command, max_len=500),
         "failure_class": sanitize_text(failure_class, max_len=160),
@@ -276,7 +279,7 @@ def render_prompt_block(repo_root: str | None = None) -> str:
     if candidates:
         sample = ", ".join(sanitize_text(k, max_len=40) for k in sorted(candidates)[:ITEM_CAP])
         suffix = f" (+{len(candidates) - ITEM_CAP} more)" if len(candidates) > ITEM_CAP else ""
-        lines.append(f"pending candidates: {sample}{suffix}. Fold into the active/next harness task; approve/defer/skip through close-time Self-Healing Candidates.")
+        lines.append(f"pending candidates: {sample}{suffix}. Fold into the active/next Harness WBS; approve/defer/skip through close-time Self-Healing Candidates.")
     lines.append("</system-reminder>")
     block = "\n".join(lines)
     if len(block) > PROMPT_CAP:
@@ -305,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     p_add.add_argument("--description", required=True)
     p_add.add_argument("--command", required=True)
     p_add.add_argument("--gotcha", action="append", default=[])
-    p_add.add_argument("--source-task", default="")
+    p_add.add_argument("--source-wbs", default="")
 
     p_capture = sub.add_parser(
         "capture",
@@ -318,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     p_capture.add_argument("--failure-class", default="", help="Short class such as missing-env, wrong-host, crlf-env")
     p_capture.add_argument("--source-phase", default="", help="develop, qa-browser, qa-api, qa-cli, setup, etc.")
     p_capture.add_argument("--gotcha", action="append", default=[])
-    p_capture.add_argument("--source-task", default="")
+    p_capture.add_argument("--source-wbs", default="")
 
     p_approve = sub.add_parser("approve")
     p_approve.add_argument("id")
@@ -334,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "add-candidate":
             add_candidate(repo_root, args.id, args.description, args.command,
-                          gotchas=args.gotcha, source_task=args.source_task)
+                          gotchas=args.gotcha, source_wbs=args.source_wbs)
             print(f"candidate added: {args.id}")
         elif args.cmd == "capture":
             capture_candidate(
@@ -346,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
                 failure_class=args.failure_class,
                 source_phase=args.source_phase,
                 gotchas=args.gotcha,
-                source_task=args.source_task,
+                source_wbs=args.source_wbs,
             )
             print(f"candidate captured: {args.id}")
         elif args.cmd == "approve":

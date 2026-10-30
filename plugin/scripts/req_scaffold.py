@@ -165,7 +165,7 @@ def create_req_doc(repo_root: str, area: str, slug: str, intent: str,
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create or update a durable REQ scaffold.")
     parser.add_argument("--repo-root", default=os.getcwd())
-    parser.add_argument("--task-id", default="")
+    parser.add_argument("--wbs-id", default="")
     parser.add_argument("--area", default="")
     parser.add_argument("--slug", default="")
     parser.add_argument("--intent", required=True)
@@ -189,7 +189,7 @@ def main() -> int:
     detected = detect_req_need(texts=[args.intent, args.observable_behavior, args.verification_cues], paths=args.path)
     area = args.area or detected.get("suggested_area") or "ui"
     slug = args.slug or detected.get("suggested_slug") or "observable-behavior"
-    source = args.source or (f"task: {args.task_id}" if args.task_id else "harness auto REQ scaffold")
+    source = args.source or (f"wbs: {args.wbs_id}" if args.wbs_id else "harness auto REQ scaffold")
     try:
         rel = create_req_doc(
             args.repo_root, area, slug, args.intent, args.observable_behavior,

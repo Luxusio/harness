@@ -96,8 +96,8 @@ def test_claude_routing_does_not_expose_internal_skills_directly():
     claude = routing_docs[0].read_text(encoding="utf-8")
     bootstrap = routing_docs[1].read_text(encoding="utf-8")
     assert "native `/goal`" in claude
-    assert "repo-mutating requests open or resume a harness task directly" in claude.replace("\n", " ")
-    assert "open or resume a harness task directly" in claude
+    assert "repo-mutating requests open or resume a Harness WBS directly" in claude.replace("\n", " ")
+    assert "open or resume a Harness WBS directly" in claude
     assert "authorizes the subagents required by that workflow" in claude
     assert "review lenses are internal sub-skills" in claude
     assert "$harness:run" in claude

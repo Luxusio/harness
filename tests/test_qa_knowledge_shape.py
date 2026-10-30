@@ -53,7 +53,7 @@ KNOWLEDGE = ROOT / "doc" / "harness" / "qa" / "QA_KNOWLEDGE.yaml"
 # Matching a bare marker word was still too wide: "baseline" and "pre-existing"
 # carry their ordinary meanings all over this file — a baseline recipe, a
 # baseline lint output, suite baseline totals, a pre-existing behaviour of
-# handle_task_verify. Six live notes matched that way. Requiring each of them
+# handle_wbs_verify. Six live notes matched that way. Requiring each of them
 # to name a pytest node id would have been six false alarms; exempting them for
 # having no node id would have made the node-id requirement unenforced while
 # this comment claimed otherwise. So the marker must sit next to the failure
@@ -325,9 +325,9 @@ class KnownRedClaimsTests(unittest.TestCase):
         # this kind are live in the real file; none is a known-red claim.
         ordinary_senses = [
             "`contract_lint.py --check-weight` baseline output is exit 0.",
-            "Suite baseline after TASK__x: 1418 passed, exit 0.",
+            "Suite baseline after WBS__x: 1418 passed, exit 0.",
             "Template-vs-root managed-block divergence baseline recipe: ...",
-            "handle_task_verify overwrites next_action. Pre-existing at 90a7afe.",
+            "handle_wbs_verify overwrites next_action. Pre-existing at 90a7afe.",
         ]
 
         self.assertEqual(
@@ -351,7 +351,7 @@ class KnownRedClaimsTests(unittest.TestCase):
         for benign in (
             "This is a known test failure that QA should watch for, not skip.",
             "The suite has a known failure mode when run twice in one sandbox.",
-            "Pre-existing behaviour of handle_task_verify, not a regression.",
+            "Pre-existing behaviour of handle_wbs_verify, not a regression.",
         ):
             with self.subTest(benign=benign):
                 self.assertEqual(known_red_claims([benign]), [])

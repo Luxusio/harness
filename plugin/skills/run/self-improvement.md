@@ -1,6 +1,6 @@
 # Self-Improvement & Tiered Learning
 
-Sub-file for run/SKILL.md. After each task close, regardless of outcome, run this pipeline. See `plugin/CLAUDE.md` §11 for the tiered-learning model. This file covers the run-skill-specific mechanics.
+Sub-file for run/SKILL.md. After each WBS close, regardless of outcome, run this pipeline. See `plugin/CLAUDE.md` §11 for the tiered-learning model. This file covers the run-skill-specific mechanics.
 
 ---
 
@@ -8,7 +8,7 @@ Sub-file for run/SKILL.md. After each task close, regardless of outcome, run thi
 
 1. **Wrong verification strategy** — manifest says "library" but critic needed browser QA; or "web_app" with no dev_command stored.
 2. **Missing manifest fields** — test_command wrong, build_command missing, entry_url incorrect.
-3. **Repeated critic failures** — same failure class across 2+ tasks (e.g., "missing test coverage" every time → test framework needs bootstrap).
+3. **Repeated critic failures** — same failure class across 2+ WBS roots (e.g., "missing test coverage" every time → test framework needs bootstrap).
 4. **Phase friction** — a phase consistently takes 3+ retry cycles.
 5. **New project patterns** — project evolved (added frontend, new framework, new port) but manifest stale.
 
@@ -17,14 +17,14 @@ Sub-file for run/SKILL.md. After each task close, regardless of outcome, run thi
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"harness-improvement","source":"run","key":"SHORT_KEY","insight":"DESCRIPTION","task":"'"<task_id>"'","task_run_id":"'"<task_run_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"harness-improvement","source":"run","key":"SHORT_KEY","insight":"DESCRIPTION","wbs":"'"<wbs_id>"'","wbs_run_id":"'"<wbs_run_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 ## Evidence-backed backlog shaping
 
 Treat dogfooding feedback, retrospectives, QA complaints, and agent-proposed
 harness improvements as hypotheses until the current repository proves them.
-Do not convert a raw claim directly into an implementation task.
+Do not convert a raw claim directly into an implementation WBS.
 
 Before proposing or applying a harness change, inspect the owning code path and
 tests for the named gate, hook, artifact, or workflow. Classify each claim as
@@ -53,14 +53,14 @@ Backlog items produced from feedback must include:
   intent.
 
 Example: "durable docs stale runtime QA" may be only
-`partially-confirmed` if task artifacts, `doc/harness/**`, and `doc/changes/**`
+`partially-confirmed` if WBS artifacts, `doc/harness/**`, and `doc/changes/**`
 are already skipped; the corrected scope may be REQ/GUIDE/ADR/POLICY docs under
 registered roots such as `doc/common/**` still going through runtime staleness
 instead of document-critic freshness.
 
 ## Auto-fix during close (only when safe)
 
-1. **Stale manifest field** — update with the correct value discovered during the task.
+1. **Stale manifest field** — update with the correct value discovered during the WBS.
 2. **Missing dev_command** — if browser QA was needed and dev server was discovered, store it.
 3. **Wrong project type** — if the critic had to switch strategies, update manifest.
 
@@ -70,7 +70,7 @@ Harness improvement: <what was wrong> → <what was fixed>
 ```
 If fix is ambiguous or risky, log the signal only. Modify the manifest only with clear evidence.
 
-Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across tasks. Treat this file as local staging only: it is gitignored and does not share knowledge with future contributors until the lesson is promoted to a committed artifact.
+Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across WBS roots. Treat this file as local staging only: it is gitignored and does not share knowledge with future contributors until the lesson is promoted to a committed artifact.
 
 ---
 
@@ -99,7 +99,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.p
   --command "<final successful command or wrapper script>" \
   --failure-class "<missing-env|wrong-host|crlf-env|missing-tool|dev-server-bootstrap|db-bootstrap>" \
   --source-phase "<develop|qa-browser|qa-api|qa-cli>" \
-  --source-task "<task_id>" \
+  --source-wbs "<wbs_id>" \
   --gotcha "<why the first attempt failed>"
 ```
 
@@ -108,7 +108,7 @@ Do not auto-approve candidates at capture time. Close-time
 
 - `applied` — approve the candidate into `doc/harness/runbooks.yaml` or replace
   it with a committed manifest/script/doc update that prevents recurrence.
-- `deferred` — ask the user first, then record the proposed artifact/task.
+- `deferred` — ask the user first, then record the proposed artifact/WBS.
 - `rejected` — skip noisy, one-off, stale, or unsafe candidates.
 
 Approved runbooks are repo-local execution memory surfaced by
@@ -137,7 +137,7 @@ Each doc starts with a summary table, then concrete details:
 
 | Pattern | Discovered | Source |
 |---------|------------|--------|
-| <pattern> | <date> | TASK__<id> |
+| <pattern> | <date> | WBS__<id> |
 
 ## <Pattern Name>
 
@@ -149,21 +149,21 @@ Each doc starts with a summary table, then concrete details:
 
 Append to existing docs and preserve their current content.
 
-**When to write:** any discovery that saves 5+ min in a future session (build quirks, env vars, ordering, ports, framework specifics). Check after every task close.
+**When to write:** any discovery that saves 5+ min in a future session (build quirks, env vars, ordering, ports, framework specifics). Check after every WBS close.
 
 ## Commit-backed promotion checkpoint
 
-Before task close, classify every reusable discovery, dogfood finding, user
+Before WBS close, classify every reusable discovery, dogfood finding, user
 correction, setup recipe, repeated friction point, and harness-improvement
 signal as one of:
 
-- `captured` — promoted in this task to a committed artifact such as
+- `captured` — promoted in this WBS to a committed artifact such as
   `plugin/skills/**`, `plugin/scripts/**`, `tests/**`,
   `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable
   doc. The final response should list the committed path when relevant.
 - `rejected` — considered but intentionally not shared because it is
-  task-local, noisy, outdated, personal preference, or lacks a trigger/action/
-  verification rule. Record the reason in task state or final response.
+  WBS-local, noisy, outdated, personal preference, or lacks a trigger/action/
+  verification rule. Record the reason in WBS state or final response.
 - `none` — no reusable learning occurred.
 
 `doc/harness/learnings.jsonl` by itself is never enough for `captured`; it is
@@ -192,17 +192,17 @@ When changing runtime-specific harness plugin behavior, review both the canonica
 Verify by explaining in the final response which side changed and why any other side was left unchanged.
 ```
 
-Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are task-local preferences. The close-time requirement is judgment, not forced documentation. Reusable feedback that should affect all future agents must be captured in a committed artifact, not only in `learnings.jsonl`.
+Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are WBS-local preferences. The close-time requirement is judgment, not forced documentation. Reusable feedback that should affect all future agents must be captured in a committed artifact, not only in `learnings.jsonl`.
 
 ---
 
-## Signal-driven candidate reporting (after task close)
+## Signal-driven candidate reporting (after WBS close)
 
 Housekeeping, not a gate. If any step fails, log a warning and continue.
 learnings.jsonl is an append-only raw signal ledger; reporting never rewrites or
 prunes it.
 
-If it returns `"queued"`, report the queued task and stop unless the user
+If it returns `"queued"`, report the queued WBS and stop unless the user
 explicitly asks to continue. If it returns `"none"`, continue the normal
 self-improvement pipeline.
 
@@ -210,34 +210,34 @@ self-improvement pipeline.
 
 Validation and distinct verified-run aggregation are handled by one script.
 It reports Tier 2 candidates but performs no durable writes; applying a
-candidate requires a separately reviewed Harness task. Automatic close-time
-mode always binds the current task and TASK.json run_id:
+candidate requires a separately reviewed Harness WBS. Automatic close-time
+mode always binds the current WBS and WBS.control.json run_id:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py \
-  --task "<task_id>" --task-run-id "<task_run_id>" 2>/dev/null || true
+  --wbs "<wbs_id>" --wbs-run-id "<wbs_run_id>" 2>/dev/null || true
 ```
 
 The validator accepts only knowledge types (`operational`, `pitfall`, `eureka`,
 `feedback`, `feedback-rule`, `harness-improvement`) with canonical UTC `ts`,
-bounded nonempty `key` and human-readable `insight`, plus matching `task` and
-`task_run_id`. Feedback rules also require `trigger`, `action`, and
+bounded nonempty `key` and human-readable `insight`, plus matching `wbs` and
+`wbs_run_id`. Feedback rules also require `trigger`, `action`, and
 `verification`. Diagnostic gate/crash/bypass/stop/codifier rows are retained
 but never promoted. A valid current-run key may count at most
-one valid row from each distinct verified closed task/run for that key
-toward the threshold. Caller/row assertions, open or stale-fingerprint tasks,
+one valid row from each distinct verified closed WBS/run for that key
+toward the threshold. Caller/row assertions, open or stale-fingerprint WBS roots,
 and duplicate rows from one run do not count. With no valid current-run signal,
 candidate reporting is a no-write no-op. Even with qualifying signals, the
 script changes neither Tier 2 patterns nor the raw ledger.
 ### Step 5c: Auto-retro trigger
 
-After promote_learnings.py, check if a retro should fire (>=3 tasks closed since last retro):
+After promote_learnings.py, check if a retro should fire (>=3 WBS roots closed since last retro):
 
 ```bash
 _LAST_RETRO=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1)
 _LAST_RETRO_TS=$(stat -c %Y "$_LAST_RETRO" 2>/dev/null || echo 0)
-_TASKS_SINCE=$(PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --count-closed-since "$_LAST_RETRO_TS" 2>/dev/null || echo 0)
-if [ "${_TASKS_SINCE:-0}" -ge 3 ] && [ "${HARNESS_DISABLE_RETRO:-}" != "1" ]; then
+_WBS_SINCE=$(PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --count-closed-since "$_LAST_RETRO_TS" 2>/dev/null || echo 0)
+if [ "${_WBS_SINCE:-0}" -ge 3 ] && [ "${HARNESS_DISABLE_RETRO:-}" != "1" ]; then
   _RETRO_FIRST=$([ -z "$_LAST_RETRO" ] && echo "true" || echo "false")
   PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --save 2>/dev/null && _RETRO_OUT=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1) || _RETRO_OUT=""
   if [ "$_RETRO_FIRST" = "true" ] && [ -n "$_RETRO_OUT" ]; then
@@ -253,15 +253,15 @@ that no threshold was met.
 
 
 The script:
-- In automatic mode, first requires a valid current task/run signal
+- In automatic mode, first requires a valid current WBS/run signal
 - Reports keys with ≥2 valid occurrences as Tier 2 candidates
-- Requires a separately reviewed Harness task for any durable pattern change
+- Requires a separately reviewed Harness WBS for any durable pattern change
 - Never rewrites or prunes the append-only raw ledger
 
 Use `--dry-run` to preview without modifying files. `--threshold N` to adjust the promotion bar.
 
 ### Step 5b: Promote Tier 2 → Tier 1 (CLAUDE.md)
 
-When a reviewed task identifies a Tier 1 candidate, manually promote the key fact
+When a reviewed WBS identifies a Tier 1 candidate, manually promote the key fact
 as a one-liner into the project `CLAUDE.md` under the appropriate section.
 Details stay in the pattern doc.

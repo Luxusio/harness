@@ -27,7 +27,7 @@ turn while a command or subagent you started is still running.
 
 ## Required inputs and expected behavior
 
-Read `doc/harness/manifest.yaml`, PLAN.md, TASK.json, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, WBS.control.json, REQUEST.md when present,
 linked REQ/durable docs, and `doc/harness/qa/QA_KNOWLEDGE.yaml` when present.
 Use PLAN for ACs and REQUEST for intent gaps. Before interacting, derive each
 expected screen/window/app state, user action and post-action result. Understand
@@ -101,10 +101,10 @@ Use selected capabilities and current tool schemas, not a universal checklist.
 ## Ownership, lifecycle and screenshot privacy
 
 Use only owner-scoped devices and authorized resources. Discovery is read-only;
-create/attach/start only within actual task authority. Do not perform destructive
+create/attach/start only within actual WBS authority. Do not perform destructive
 resets, clears, deletion, or create new paid resources without actual authority.
-Track devices, attachments, apps/processes and recordings created for this task.
-Stop recordings and clean up only task-created resources; preserve pre-existing
+Track devices, attachments, apps/processes and recordings created for this WBS.
+Stop recordings and clean up only WBS-created resources; preserve pre-existing
 devices, attachments and user state. Do not stop or delete a shared existing
 device merely because QA ended.
 
@@ -149,7 +149,7 @@ Interactions performed: <actual supported action list, or none>
 Screenshots: <paths, or redaction notes, or none>
 Keyboard path checked: yes | no | not-applicable
 Desktop blocker: <exact missing target/tool/capability/command/data/token/platform, or none>
-Cleanup: <task-owned resources cleaned; existing resources preserved>
+Cleanup: <WBS-owned resources cleaned; existing resources preserved>
 ```
 
 Treat `interactive-desktop` as the default expectation for required native GUI

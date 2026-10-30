@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook — inject compact harness state on every user prompt.
 
-Emits a short ``[harness-context]`` block on stdout when a harness task is
+Emits a short ``[harness-context]`` block on stdout when a Harness WBS is
 active, so agents don't burn a turn re-reading task artifacts to orient
 themselves in fix rounds.
 
 Suspect-note summaries are intentionally not injected here, so prompt hooks do
-not dilute the active task's attention scope.
+not dilute the active WBS's attention scope.
 
 Output is silent outside harness-enabled repos. Total length is hard-capped at
 400 chars for the compact prompt context; excess truncates with ``…``.
@@ -24,13 +24,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (  # type: ignore
         read_hook_input,
-        read_task_control,
-        task_control_status,
+        read_wbs_control,
+        wbs_control_status,
         find_repo_root,
         is_harness_enabled_repo,
-        TASK_DIR,
+        WBS_DIR,
         _log_gate_error,
-        resolve_active_task_dir,
+        resolve_active_wbs_dir,
         write_session_hint,
     )
 except Exception:
@@ -66,8 +66,8 @@ def _build_goal_block(repo_root: str) -> str:
     )
 
 
-def _find_active_task_dir(repo_root: str) -> str:
-    td = resolve_active_task_dir(repo_root)
+def _find_active_wbs_dir(repo_root: str) -> str:
+    td = resolve_active_wbs_dir(repo_root)
     return td if td and os.path.isdir(td) else ""
 
 
@@ -83,14 +83,14 @@ def _truncate_output(output: str) -> str:
     return output[: MAX_OUTPUT_CHARS - 2].rstrip() + " …"
 
 
-def _build_block(task_dir: str) -> str:
-    control = read_task_control(task_dir)
+def _build_block(wbs_dir: str) -> str:
+    control = read_wbs_control(wbs_dir)
     if not control:
         return ""
-    task_id = os.path.basename(task_dir)
-    status = task_control_status(task_dir, control)
+    wbs_id = os.path.basename(wbs_dir)
+    status = wbs_control_status(wbs_dir, control)
 
-    pieces: list = [PREFIX, f"task={task_id}", f"status={status}"]
+    pieces: list = [PREFIX, f"wbs={wbs_id}", f"status={status}"]
 
     block = " ".join(pieces)
     return _truncate(block)
@@ -131,15 +131,15 @@ def _first_meaningful_line(path: str, cap: int = 180) -> str:
     return ""
 
 
-def _build_restore_block(task_dir: str) -> str:
-    """Build a capped resume digest for the active task."""
-    if not read_task_control(task_dir):
+def _build_restore_block(wbs_dir: str) -> str:
+    """Build a capped resume digest for the active WBS."""
+    if not read_wbs_control(wbs_dir):
         return ""
     lines = ["<system-reminder>[harness-restore]"]
 
     artifact_lines: list[str] = []
     for name in RESTORE_ARTIFACTS:
-        snippet = _first_meaningful_line(os.path.join(task_dir, name))
+        snippet = _first_meaningful_line(os.path.join(wbs_dir, name))
         if snippet:
             artifact_lines.append(f"{name}: {snippet}")
     if artifact_lines:
@@ -162,7 +162,7 @@ def main() -> int:
         return 0
 
     # This hook is one of the few places that receives the real runtime session
-    # id. Record it so task_start can bind the active marker to this session
+    # id. Record it so wbs_open can bind the active marker to this session
     # instead of the unreadable "default" marker. Advisory and fail-safe: a
     # failure here must never block prompt submission.
     try:
@@ -170,17 +170,17 @@ def main() -> int:
     except Exception:
         pass
 
-    task_dir = _find_active_task_dir(repo_root)
+    wbs_dir = _find_active_wbs_dir(repo_root)
 
     output_parts = [DOC_GATE]
     # Prompt submission is advisory and deliberately performs no Git queries.
-    # Authoritative freshness/fingerprint checks remain in task_verify/task_close.
-    if task_dir:
+    # Authoritative freshness/fingerprint checks remain in wbs_verify/wbs_close.
+    if wbs_dir:
         output_parts.append(REVIEW_GATE)
-        block = _build_block(task_dir)
+        block = _build_block(wbs_dir)
         if block:
             output_parts.append(block)
-        restore_block = _build_restore_block(task_dir)
+        restore_block = _build_restore_block(wbs_dir)
         if restore_block:
             output_parts.append(restore_block)
 
@@ -191,7 +191,7 @@ def main() -> int:
         if runbook_block:
             output_parts.append(runbook_block)
 
-    if not task_dir:
+    if not wbs_dir:
         output_parts.append(_build_goal_block(repo_root))
 
     # Recovery is independently capped so normal context cannot truncate it.

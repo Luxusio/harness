@@ -240,7 +240,7 @@ def test_policy_change_preserves_records_but_never_promotes_old_proof(tmp_path):
     state = wbs.read_state(str(td))
     assert state["checks"] == old["checks"] and state["run_id"] == old["run_id"]
     assert progress(repo, td)["percentage"] == 0
-    assert wbs.task_progress(str(td), str(repo), "run", measure=False)["historical_percentage"] == 0
+    assert wbs.wbs_progress(str(td), str(repo), "run", measure=False)["historical_percentage"] == 0
     assert check(repo, td)["passed"]
     assert progress(repo, td)["percentage"] == 100
     (repo / "src.txt").write_text("changed")
@@ -297,7 +297,7 @@ def test_local_block_preserves_independent_next_and_does_not_revive_proofs(tmp_p
     old = wbs.read_state(str(td))
     result = call("block", node_id="A", blocked_reason="External helper provenance unknown", unblock_condition="Verify helper origin")
     assert not result.get("isError"), result
-    assert call("context")["structuredContent"]["task_context"]["status"] == "open"
+    assert call("context")["structuredContent"]["context"]["status"] == "open"
     assert call("next")["structuredContent"]["ready"] == ["C"]
     assert wbs.read_state(str(td))["run_id"] == opened["run_id"]
     for key in ("A", "B"):
@@ -314,9 +314,9 @@ def test_resume_context_failure_restores_block_run_receipts_and_ownership(tmp_pa
     repo, td, call, opened = public(tmp_path)
     assert not call("block", blocked_reason="Waiting for external fixture", unblock_condition="Fixture restored").get("isError")
     blocked = (td / "BLOCKED.md").read_bytes()
-    control = (td / "TASK.json").read_bytes()
+    control = (td / "WBS.control.json").read_bytes()
     wbs_bytes = (td / "WBS.json").read_bytes()
-    tasks = repo / "doc/harness/tasks"
+    tasks = repo / "doc/harness/wbs"
     def markers():
         paths = [tasks / ".active", *list((tasks / ".active_sessions").glob("*.json"))]
         return {str(p): p.read_bytes() for p in paths if p.is_file()}
@@ -328,7 +328,7 @@ def test_resume_context_failure_restores_block_run_receipts_and_ownership(tmp_pa
         result = call("open")
         assert result.get("isError"), result
     assert (td / "BLOCKED.md").read_bytes() == blocked
-    assert (td / "TASK.json").read_bytes() == control and (td / "WBS.json").read_bytes() == wbs_bytes
+    assert (td / "WBS.control.json").read_bytes() == control and (td / "WBS.json").read_bytes() == wbs_bytes
     assert markers() == before
     assert (receipt.read_bytes() if receipt.exists() else None) == receipts
     resumed = call("open")
@@ -396,7 +396,7 @@ def test_identical_scopes_are_measured_once_and_queries_never_rehash(tmp_path, m
     assert len(calls) == 2  # One before and one after, not one per leaf.
     assert check(repo, td, "B")["passed"]
     before = len(calls)
-    result = wbs.task_progress(str(td), str(repo), "run", measure=False)
+    result = wbs.wbs_progress(str(td), str(repo), "run", measure=False)
     assert result["historical_percentage"] == 100 and result["percentage"] is None
     assert len(calls) == before
 

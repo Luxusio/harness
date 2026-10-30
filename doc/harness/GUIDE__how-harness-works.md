@@ -55,12 +55,12 @@ payload 목록에 따라 Claude 트리에서 복사한다.
 
 테스트는 프로젝트에 선언된 명령과 bounded worker 수로 실행한다. 이 저장소는
 보통 `.venv/bin/python -B -m pytest -n 4`를 사용한다. 테스트용 임시 root와
-외부 temp/cache 경로를 사용하고 실제 task 상태와 학습 ledger를 오염시키지 않는다.
+외부 temp/cache 경로를 사용하고 실제 WBS 상태와 학습 ledger를 오염시키지 않는다.
 
 ## 3. 작업 상태와 단일 MCP 도구
 
-유일한 공개 MCP 도구는 `wbs`다. `task_start`, `task_verify`, `task_close` 같은
-이름은 내부 구현 소유자를 가리키며 별도의 공개 도구가 아니다.
+유일한 공개 MCP 도구는 `wbs`다. 모든 실행 전환은 같은 WBS root의 action으로
+수행하며 별도의 Goal/Task 실행 도구나 작업 원장을 만들지 않는다.
 
 | Action | 역할 |
 |---|---|
@@ -73,11 +73,11 @@ payload 목록에 따라 Claude 트리에서 복사한다.
 | `block` | 실제 blocker와 실행 가능한 해제 조건을 기록한다 |
 | `migrate` | 기존 제어 형식을 preview하고 명시적 apply로 변환한다 |
 
-`wbs_id`는 알려진 root 또는 기존 task ID다. worktree 호출에는 검증된 `workspace`를
-항상 보존한다. control root의 session identity와 task workspace의 소스 소유권을
+`wbs_id`는 현재 root의 `WBS__<id>`다. 구형 ID와 기록은 명시적 migrate로 이관한다. worktree 호출에는 검증된 `workspace`를
+항상 보존한다. control root의 session identity와 WBS workspace의 소스 소유권을
 구별하며 임의 cwd나 다른 작업의 마커로 권한을 얻지 않는다.
 
-Only this exact session's current open task/run binding without a conflict
+Only this exact session's current open WBS/run binding without a conflict
 fence grants write focus. Legacy `.active`, shared/default hints, unknown caller
 identity and another workspace's marker grant no authority. Preserve the exact
 registered workspace on every call. A bound managed lead consumes the parent's
@@ -92,7 +92,7 @@ before verify/close; await actual independent code/security review PASS before
 actual QA. No quality synthesis prerequisite or transcriptless codifier run is
 required. Optional codification needs an explicit real transcript.
 
-현재 TASK.json은 네 필드다:
+현재 WBS.control.json은 네 필드다:
 
 ```json
 {
@@ -103,29 +103,29 @@ required. Optional codification needs an explicit real transcript.
 }
 ```
 
-`closed: true`는 공개 close 소유자가 게시한다. task ID는 정규 디렉터리에서
+`closed: true`는 공개 close 소유자가 게시한다. WBS ID는 정규 디렉터리에서
 도출한다. PLAN.md는 수락 의도, WBS.json은 outcome/assertion과 측정 결과,
 BLOCKED.md는 unfinished blocker다. `required_lenses`는 workflow routing에 쓰이며
 machine verifier가 독립 리뷰나 QA를 attested했다고 주장하지 않는다.
 
 일반 `open`은 같은 run과 measured checks를 보존한다. 의도적으로 새 generation을
 시작할 때만 `fresh_run: true`를 사용한다. closed 작업은 기본 open으로 다시 열지
-않는다. 기존 지원 형식의 변환은 `migrate` preview/apply로 수행하고 task/run,
+않는다. 기존 지원 형식의 변환은 `migrate` preview/apply로 수행하고 WBS/run,
 WBS check와 역사 자료를 보존한다. 이미 지원하지 않던 오래된 형식은 자동 복구나
 새 identity 발급으로 우회하지 않는다.
 
 ## 4. 훅과 prewrite gate
 
-훅은 세션 안내, routing, source/task binding과 직접 쓰기 보호를 담당한다.
+훅은 세션 안내, routing, source/WBS binding과 직접 쓰기 보호를 담당한다.
 Subagent start/stop 수집기, rollout watcher, capability 검사나 이름 결속은 없다.
 에이전트 이름은 사람이 작업을 구별하도록 고르며 검증 권한을 부여하지 않는다.
 
 - SessionStart는 프로젝트/재개 안내와 필요한 형식 진단을 제공한다.
-- UserPromptSubmit은 저장된 task context와 run routing을 제공한다.
+- UserPromptSubmit은 저장된 WBS context와 run routing을 제공한다.
 - PostToolUse는 알려진 명령 실패를 안내하고 공개 WBS 결과의 세션 binding을 반영한다.
 - 직접 Write/Edit/apply_patch는 prewrite gate의 계획, 소유권, 범위 검사를 받는다.
 
-보호 대상은 PLAN.md, TASK.json, WBS.json과 retired Goal/migration 자료 및 batch
+보호 대상은 PLAN.md, WBS.control.json, WBS.json과 retired Goal/migration 자료 및 batch
 control이다. 역사적인 RECEIPTS/REVIEWS 파일도 임의 쓰기를 허용하는 대체 제어면이
 아니다. 활성 owner는 새 receipt 파일을 만들거나 읽지 않는다. 소유자의 MCP/생명주기
 명령으로 변경하고 보호 상태를 직접 편집하지 않는다.
@@ -208,7 +208,7 @@ Goal은 objective와 continuation을 제공하고 WBS는 같은 objective의 계
 batch coordinator는 preflight 뒤 정확한 W/branch/HEAD와 bootstrap marker를 검증하고
 실제 host identity로 bind한다. lead는 bind 전 소스를 수정하지 않으며 bind 뒤에도
 자신의 workspace만 변경한다. sibling/main checkout과 선택하지 않은 submodule은
-금지한다. 재개는 exact retained W/task/run을 사용하고 새 checkout을 만들지 않는다.
+금지한다. 재개는 exact retained W/WBS/run을 사용하고 새 checkout을 만들지 않는다.
 
 lead는 실제 review/QA와 WBS close를 마치고 자신의 branch에 commit한다. 통합,
 push, 자기 worktree 제거는 coordinator의 책임이다. coordinator는 stopped writer,
@@ -217,7 +217,7 @@ archive harvest와 cleanup을 수행한다. 충돌과 남은 변경은 retained 
 보고하고 강제로 버리지 않는다. selected S1 submodule은 기존 helper의 object pins,
 identity/content proof와 guarded disposal 규칙은 [S1 submodule 계약](REQ__batch-submodule-support.md)을 따른다.
 
-source task close와 소유한 임시 W/branch 제거는 별개다. 이미 closed여도 남은
+source WBS close와 소유한 임시 W/branch 제거는 별개다. 이미 closed여도 남은
 integration/disposal을 마쳐야 전체 완료다. cleanup만을 위해 리뷰나 close를 반복하지
 않는다. 자세한 절차는 [worktree completion](../../plugin/skills/run/worktree-completion.md)과
 [병렬 작업 REQ](REQ__parallel-tasks-via-worktree-leads.md)를 따른다.
@@ -225,15 +225,15 @@ integration/disposal을 마쳐야 전체 완료다. cleanup만을 위해 리뷰�
 ## 9. 설치, setup과 manifest
 
 setup은 project type, 명령, QA strategy와 필요한 환경을 확인하고 entrypoint,
-managed CONTRACTS, manifest와 critic playbook을 준비한다. manifest와 task 형식의
+managed CONTRACTS, manifest와 critic playbook을 준비한다. manifest와 WBS 형식의
 지원 범위는 명시적으로 검증하며 unsupported 형식의 fallback reader를 추가하지 않는다.
 
 Harness 소스 작업은 마지막 소스 변경과 실제 QA 뒤, close 전에 verified installer를
-실행한다. installer는 신뢰할 수 있는 source/task ownership, 현재 measured WBS
+실행한다. installer는 신뢰할 수 있는 source/WBS ownership, 현재 measured WBS
 applicability, stopped writers와 stable payload snapshot을 확인한다. 이미 같은
 runtime payload면 동기화가 불필요하다. 보존된 과거 영수증은 설치 권한을 부여하지 않는다.
-복사 전에 소유권과 형식을 검증한 TASK/WBS 정의를 메모리에 고정하고 원본과 snapshot의
-payload bytes/mode를 비교한다. 정의를 읽을 때도 기존 TASK 16KiB·WBS 1MiB 한도를 먼저
+복사 전에 소유권과 형식을 검증한 WBS control/outcome 정의를 메모리에 고정하고 원본과 snapshot의
+payload bytes/mode를 비교한다. 정의를 읽을 때도 WBS.control.json 16KiB·WBS.json 1MiB 한도를 먼저
 적용하고, 읽는 중 커지는 파일도 제한한다. 전체 WBS/source/custody 측정은 실행 직전과 직후 두 번만
 수행하며, 같은 정의·호출 세션·payload·경로 집합을 확인한다. 실행 전 변화는 설치를
 거부하고 실행 도중 변화는 성공을 보고하지 않는다. 다음 호출도 새로 측정하며 cache나
@@ -253,9 +253,9 @@ PLAN은 수락 의도, WBS는 실측 outcome이다. 임시 중복 상태 문서�
 소스에 대조한다. checkpoint는 재개 안내이며 완료 권한을 만들지 않는다.
 
 post-close self-improvement는 실제 friction signal만 append-only learnings ledger에
-남긴다. just-closed verified task/run과 관련된 검증된 신호를 사용하며 반복 후보는
+남긴다. just-closed verified WBS/run과 관련된 검증된 신호를 사용하며 반복 후보는
 별도 검토된 후속 작업에서 durable pattern으로 바꾼다. retro의 verified close 판정도
-현재 task control을 사용한다. 기존 health 측정이 없으면 점수나 PASS를 만들지 않는다.
+현재 WBS control을 사용한다. 기존 health 측정이 없으면 점수나 PASS를 만들지 않는다.
 
 ## 11. 문제 해결 FAQ
 
@@ -271,11 +271,11 @@ blocked state와 source applicability를 확인한다. machine verdict는 그 �
 일반 archive 무결성의 보호를 받으며 임의 편집하지 않는다.
 
 **protected-artifact가 거부되었다.** 해당 owner의 공개 MCP 또는 batch lifecycle
-명령을 사용한다. PLAN/TASK/WBS를 직접 편집하거나 다른 task의 binding을 사용하지 않는다.
+명령을 사용한다. PLAN.md/WBS.control.json/WBS.json을 직접 편집하거나 다른 WBS의 binding을 사용하지 않는다.
 
 **이전 TASK 형식이 unsupported다.** `wbs(action="migrate")`로 preview하고 승인된
 명시적 apply 경로를 사용한다. 이미 지원하지 않던 역사 자료는 그대로 보존하고
-보고한다. active/pool-referenced task는 건너뛰지 않는다.
+보고한다. active/pool-referenced WBS는 건너뛰지 않는다.
 
 **source close 뒤 worktree가 남았다.** shared completion procedure의 surviving checkout,
 integration과 disposal을 마친다. 실제 blocker가 있으면 정확한 W/branch와 다음 조치를

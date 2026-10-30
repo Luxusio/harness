@@ -1,6 +1,6 @@
 """Comparison must survive a world-writable checkout, and name what it refuses.
 
-`TASK__install-strips-host-write-bits` stopped the installer from *producing* a
+`WBS__install-strips-host-write-bits` stopped the installer from *producing* a
 guard-rejected tree. Two states it left open, both found after that task closed:
 
 1. The conditional install still died on a world-writable *source*, because

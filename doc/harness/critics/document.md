@@ -61,4 +61,4 @@ can detect a mismatch without reading the old task transcript.
 3. For each required index refresh, confirm the index entry exists and is accurate.
 4. For each changed `REQ__*.md`, compare the note to PLAN.md, the current
    conversation, changed source files, and tests. FAIL if required
-   observable behavior exists only in task artifacts and not in the REQ.
+   observable behavior exists only in WBS artifacts and not in the REQ.

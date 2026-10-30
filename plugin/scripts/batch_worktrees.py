@@ -103,7 +103,7 @@ def _prepare_one(repo, directory, records, data, item):
 def _handoff(item):
     intent = item.get('creation_intent', {})
     return {key: copy.deepcopy(value) for key, value in dict(
-        slug=item['slug'], task_id=item['task_id'], worktree=item.get('worktree') or intent.get('worktree'),
+        slug=item['slug'], wbs_id=item['wbs_id'], worktree=item.get('worktree') or intent.get('worktree'),
         branch=item.get('branch') or intent.get('branch'), spawn_head=item.get('spawn_head'),
         run_id=item.get('run_id'), worker_id=item.get('worker_id'), request=item['request'],
         scopes=batch.effective_scopes(item), off_limits=item.get('off_limits', []),
@@ -123,7 +123,7 @@ def execute(repo, spec, operation='prepare', slug=None, worker_id=None, result=N
     """
     repo = os.path.realpath(repo)
     import work_pack
-    expected = work_pack._spec(spec.get('task_id'), spec.get('requests'), batch_id=spec.get('batch_id'))
+    expected = work_pack._spec(spec.get('wbs_id'), spec.get('requests'), batch_id=spec.get('batch_id'))
     batch.require(expected == spec and batch.IDENT.fullmatch(spec['batch_id']), 'invalid managed batch spec')
     batch.require(operation in {'prepare', 'bind', 'complete', 'resume', 'recover', 'status', 'extend'}, 'unknown managed operation')
     batch.require(recovery_commit is None or operation == 'recover', 'recovery_commit requires explicit recover operation')
@@ -132,10 +132,10 @@ def execute(repo, spec, operation='prepare', slug=None, worker_id=None, result=N
     with batch.locked_records(repo, create=operation == 'prepare', readonly=operation == 'status') as (directory, records):
         if operation == 'prepare' and spec['batch_id'] not in records:
             _call(repo, spec, directory, records, 'init', requests=spec['requests'], max_leads=None,
-                  owner_task_id=spec['task_id'])
+                  owner_wbs_id=spec['wbs_id'])
         batch.require(spec['batch_id'] in records, 'managed pool does not exist')
         data = records[spec['batch_id']]
-        batch.require(data.get('owner_task_id') == spec['task_id']
+        batch.require(data.get('owner_wbs_id') == spec['wbs_id']
                       and batch.normalize_requests(data['requests']) == spec['requests'], 'managed pool intake changed')
         reasons = {}
         answer = None

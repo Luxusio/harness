@@ -26,7 +26,7 @@ def setup_parent(tmp_path, monkeypatch):
     nodes = [dict(id=k, title="Observable result " + k, weight=1) for k in ("A", "B")]
     assert not call("plan", plan=plan(nodes)).get("isError")
     from test_harness_mcp_server import _write_marker_fixture
-    _write_marker_fixture(str(pool.repo), str(pool.repo / 'doc/harness/tasks/TASK__managed'), session_id='codex-prewrite-fixture')
+    _write_marker_fixture(str(pool.repo), str(pool.repo / 'doc/harness/wbs/WBS__managed'), session_id='codex-prewrite-fixture')
     return pool, call
 
 
@@ -48,9 +48,9 @@ def test_public_mcp_owns_creation_and_stopped_completion(tmp_path, monkeypatch):
         (worktree / ("a.txt" if index == 0 else "b.txt")).write_text("implemented\n")
         # Never stage the owner-managed retention marker.
         _git("add", "a.txt" if index == 0 else "b.txt", cwd=worktree)
-        _git("commit", "-qm", slug, "--trailer", "Harness-Task: " + handoff["task_id"], cwd=worktree)
+        _git("commit", "-qm", slug, "--trailer", "Harness-WBS: " + handoff["wbs_id"], cwd=worktree)
         task(worktree, slug, closed=True)  # isolated fixture only
-        actual = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+        actual = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                       commit=_head(worktree), verdict="closed", run_id=RUN, blocked_reason=None)
         assert call("dispatch", operation="complete", slug=slug, worker_id=worker, result=actual).get("isError")
         assert worktree.exists()
@@ -58,7 +58,7 @@ def test_public_mcp_owns_creation_and_stopped_completion(tmp_path, monkeypatch):
         assert not done.get("isError"), done
         assert not worktree.exists()
         assert not _git("branch", "--list", handoff["branch"], cwd=pool.repo)
-        assert (pool.repo / "doc/harness/archive/batch" / handoff["task_id"] / "TASK.json").is_file()
+        assert (pool.repo / "doc/harness/archive/batch" / handoff["wbs_id"] / "WBS.control.json").is_file()
         replay = call("dispatch", operation="complete", slug=slug, worker_id=worker, result=actual, worker_stopped=True)
         assert not replay.get("isError"), replay
         changed = dict(actual, commit="0" * 40)
@@ -76,7 +76,7 @@ def test_invalid_dispatch_arguments_do_not_park_or_create(tmp_path, monkeypatch)
                  dict(operation="prepare", recovery_commit="a" * 40),
                  dict(operation="recover", slug="x", worker_stopped=True, recovery_commit="HEAD")):
         assert call("dispatch", **args).get("isError")
-        assert call("context")["structuredContent"]["task_context"]["status"] == "open"
+        assert call("context")["structuredContent"]["context"]["status"] == "open"
     assert not (pool.repo / "doc/harness/runtime/batches").exists()
 
 
@@ -89,9 +89,9 @@ def test_public_conflict_recovery_requires_exact_acknowledged_tip(tmp_path, monk
     assert not call("dispatch", operation="bind", slug=slug, worker_id="actual-worker").get("isError")
     (worktree / "a.txt").write_text("lead\n")
     _git("add", "a.txt", cwd=worktree)
-    _git("commit", "-qm", "lead", "--trailer", "Harness-Task: " + handoff["task_id"], cwd=worktree)
+    _git("commit", "-qm", "lead", "--trailer", "Harness-WBS: " + handoff["wbs_id"], cwd=worktree)
     task(worktree, slug, closed=True)
-    actual = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+    actual = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                   commit=_head(worktree), verdict="closed", run_id=RUN)
     (pool.repo / "a.txt").write_text("destination\n")
     _git("add", "a.txt", cwd=pool.repo)
@@ -122,9 +122,9 @@ def test_public_complete_retains_unique_ignored_content(tmp_path, monkeypatch):
     assert not call("dispatch", operation="bind", slug=slug, worker_id="actual-worker").get("isError")
     (worktree / "a.txt").write_text("lead\n")
     _git("add", "a.txt", cwd=worktree)
-    _git("commit", "-qm", "lead", "--trailer", "Harness-Task: " + handoff["task_id"], cwd=worktree)
+    _git("commit", "-qm", "lead", "--trailer", "Harness-WBS: " + handoff["wbs_id"], cwd=worktree)
     task(worktree, slug, closed=True)
-    actual = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+    actual = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                   commit=_head(worktree), verdict="closed", run_id=RUN)
     exclude = pool.repo / ".git/info/exclude"
     exclude.write_text(exclude.read_text() + "\nprecious.local\n")
@@ -145,7 +145,7 @@ def test_public_complete_retains_unique_ignored_content(tmp_path, monkeypatch):
 def test_failed_parent_park_has_no_worktree_effect(tmp_path, monkeypatch):
     from test_harness_mcp_server import harness_server
     pool, call = setup_parent(tmp_path, monkeypatch)
-    monkeypatch.setattr(harness_server, "handle_task_blocked", lambda args: harness_server._err("fixture park refusal"))
+    monkeypatch.setattr(harness_server, "handle_wbs_blocked", lambda args: harness_server._err("fixture park refusal"))
     refused = call("dispatch", ownership={"A": ["a.txt"], "B": ["b.txt"]})
     assert refused.get("isError"), refused
     assert not (pool.repo / "doc/harness/runtime/batches").exists()
@@ -187,9 +187,9 @@ def test_public_dirty_original_survives_prepare_integrate_and_dispose(tmp_path, 
         rel = 'a.txt' if index == 0 else 'b.txt'
         (tree / rel).write_text('implemented\n')
         _git('add', rel, cwd=tree)
-        _git('commit', '-qm', slug, '--trailer', 'Harness-Task: ' + handoff['task_id'], cwd=tree)
+        _git('commit', '-qm', slug, '--trailer', 'Harness-WBS: ' + handoff['wbs_id'], cwd=tree)
         task(tree, slug, closed=True)  # isolated existing fixture only
-        result = dict(task_id=handoff['task_id'], worktree=str(tree), branch=handoff['branch'],
+        result = dict(wbs_id=handoff['wbs_id'], worktree=str(tree), branch=handoff['branch'],
                       commit=_head(tree), verdict='closed', run_id=RUN)
         results.append((handoff, worker, result))
     for handoff, worker, result in results:
@@ -230,16 +230,16 @@ def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, mon
     note.write_bytes(b'untracked unrelated\x00\xff')
     status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
     index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
-    original_task = (directory / 'TASK.json').read_bytes()
-    original_intent = (pool.repo / 'doc/harness/tasks/TASK__managed/WBS.json').read_bytes()
+    original_task = (directory / 'WBS.control.json').read_bytes()
+    original_intent = (pool.repo / 'doc/harness/wbs/WBS__managed/WBS.json').read_bytes()
     granted = extend(call, handoff, worktree)
     assert not granted.get('isError'), granted
     assert not extend(call, handoff, worktree).get('isError')
     owner = next(item for item in json.loads(pool.state.read_text())['requests'] if item['slug'] == handoff['slug'])
     assert owner['scopes'] == ['a.txt']
     assert owner['extra_scopes'] == {'b.txt': str(pool.repo / 'b.txt')}
-    assert (directory / 'TASK.json').read_bytes() == original_task
-    assert (pool.repo / 'doc/harness/tasks/TASK__managed/WBS.json').read_bytes() == original_intent
+    assert (directory / 'WBS.control.json').read_bytes() == original_task
+    assert (pool.repo / 'doc/harness/wbs/WBS__managed/WBS.json').read_bytes() == original_intent
     assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == status
     assert _git('ls-files', '--stage', '-z', cwd=pool.repo) == index
     assert shared.read_text() == 'unstaged unrelated\n'
@@ -248,8 +248,8 @@ def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, mon
 
 def test_public_dirty_ownership_overlap_refuses_before_parent_park(tmp_path, monkeypatch):
     pool, call = setup_parent(tmp_path, monkeypatch)
-    parent = pool.repo / 'doc/harness/tasks/TASK__managed'
-    original = {name: (parent / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    parent = pool.repo / 'doc/harness/wbs/WBS__managed'
+    original = {name: (parent / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     user = pool.repo / 'a.txt'
     user.write_bytes(b'uncommitted user implementation\x00\xff')
     refused = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, host=host_snapshot())
@@ -290,9 +290,9 @@ def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
     worktree = Path(first['worktree'])
     (worktree / 'a.py').write_text('A reviewed and verified while B develops\n')
     _git('add', 'a.py', cwd=worktree)
-    _git('commit', '-qm', 'A', '--trailer', 'Harness-Task: '+first['task_id'], cwd=worktree)
+    _git('commit', '-qm', 'A', '--trailer', 'Harness-WBS: '+first['wbs_id'], cwd=worktree)
     task(worktree, first['slug'], closed=True)
-    actual = dict(task_id=first['task_id'], worktree=str(worktree), branch=first['branch'],
+    actual = dict(wbs_id=first['wbs_id'], worktree=str(worktree), branch=first['branch'],
                   commit=_head(worktree), verdict='closed', run_id=RUN)
     done = call('dispatch', operation='complete', slug=first['slug'], worker_id='worker-0',
                 result=actual, worker_stopped=True)
@@ -331,11 +331,11 @@ def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_pa
     pool, call = setup_parent(tmp_path, monkeypatch)
     nodes = [dict(id='A', title='A', weight=1), dict(id='B', title='B', weight=1, depends_on=['A'])]
     assert not call('plan', plan=plan(nodes)).get('isError')
-    td = pool.repo / 'doc/harness/tasks/TASK__managed'
+    td = pool.repo / 'doc/harness/wbs/WBS__managed'
     assert 'deny' == check(pool.repo, pool.repo/'a.py').get('permissionDecision')
-    control = json.loads((td/'TASK.json').read_bytes())
+    control = json.loads((td/'WBS.control.json').read_bytes())
     control['execution_mode'] = 'micro'
-    (td/'TASK.json').write_text(json.dumps(control))
+    (td/'WBS.control.json').write_text(json.dumps(control))
     (td/'MAINTENANCE').write_text('Admission gate regression\n')
     assert 'deny' == check(pool.repo, pool.repo/'a.py').get('permissionDecision')
     assert check(pool.repo, pool.repo/'doc/harness/REQ__admission.md') == {}
@@ -356,11 +356,11 @@ def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_pa
         else: changed['execution_admission']['ownership']['A'] = ['b.py']
         (td/'WBS.json').write_text(json.dumps(changed))
         with pytest.raises(ValueError, match='missing or stale'):
-            wbs.require_source_assignment(str(pool.repo), 'TASK__managed', 'a.py')
+            wbs.require_source_assignment(str(pool.repo), 'WBS__managed', 'a.py')
     (td/'WBS.json').write_bytes(before)
-    assert call('context')['structuredContent']['task_context']['routing']['orchestration_mode'] == 'direct'
+    assert call('context')['structuredContent']['context']['routing']['orchestration_mode'] == 'direct'
     assert not call('block', blocked_reason='Observed prerequisite unavailable', unblock_condition='Restore that prerequisite').get('isError')
-    assert call('context')['structuredContent']['task_context']['source_write_allowed'] is False
+    assert call('context')['structuredContent']['context']['source_write_allowed'] is False
 
 
 def _linked_direct(pool, worktree=None):
@@ -376,8 +376,8 @@ def _linked_direct(pool, worktree=None):
     assert not call('open').get('isError')
     assert not call('plan', plan=plan([dict(id='A', title='Assigned source', weight=1)])).get('isError')
     from test_harness_mcp_server import _write_marker_fixture
-    _write_marker_fixture(str(tree), str(tree / 'doc/harness/tasks/TASK__ordinary'), session_id='codex-prewrite-fixture')
-    return tree, tree / 'doc/harness/tasks/TASK__ordinary', call
+    _write_marker_fixture(str(tree), str(tree / 'doc/harness/wbs/WBS__ordinary'), session_id='codex-prewrite-fixture')
+    return tree, tree / 'doc/harness/wbs/WBS__ordinary', call
 
 
 def _admit_linked_direct(call):
@@ -395,7 +395,7 @@ def test_ordinary_linked_direct_requires_fresh_assignment_and_scope(tmp_path, mo
     assert not (pool.repo / 'doc/harness/runtime/batches').exists()
     assert check(pool.repo, tree / 'a.py').get('permissionDecision') == 'deny'
     _admit_linked_direct(call)
-    assert wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')['mode'] == 'direct'
+    assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
     assert check(pool.repo, tree / 'a.py') == {}
     from test_prewrite_gate_dormant import _invoke_payload
     with monkeypatch.context() as runtime:
@@ -434,7 +434,7 @@ def test_ordinary_linked_direct_with_unrelated_batch(tmp_path, monkeypatch):
     before = pool.state.read_bytes()
     tree, _, call = _linked_direct(pool)
     _admit_linked_direct(call)
-    assert wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')['mode'] == 'direct'
+    assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
     assert check(pool.repo, tree / 'a.py') == {}
     assert check(pool.repo, tree / 'outside.py').get('permissionDecision') == 'deny'
     assert pool.state.read_bytes() == before
@@ -468,11 +468,11 @@ def test_managed_checkout_cannot_escape_through_foreign_direct_task(tmp_path, mo
         tree = Path(handoff['worktree'])
     task(tree)
     with pytest.raises(ValueError, match='managed lead is not currently bound'):
-        wbs.require_source_assignment(str(tree), 'TASK__a', 'a.py')
+        wbs.require_source_assignment(str(tree), 'WBS__a', 'a.py')
     tree, directory, call = _linked_direct(pool, tree)
     _admit_linked_direct(call)
     before = pool.state.read_bytes()
-    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     denied = check(pool.repo, tree / 'a.py')
     assert denied.get('permissionDecision') == 'deny'
     assert 'managed' in denied['permissionDecisionReason']
@@ -500,7 +500,7 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
             if not sudo or subprocess.run([sudo, '-n', 'true'], capture_output=True).returncode:
                 pytest.skip('changing isolated main-root ownership requires root or passwordless sudo')
             elevated = [sudo, '-n']
-    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     try:
         if ancestor == 'symlink-runtime':
             external = tmp_path / 'external-runtime'
@@ -519,7 +519,7 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
                 assert pool.repo.stat().st_uid != os.getuid()
         with pytest.raises(FileNotFoundError):
             batches.lstat()
-        assert wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')['mode'] == 'direct'
+        assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
         assert check(tree, tree / 'a.py') == {}
         denied = check(tree, tree / 'outside.py')
         assert denied.get('permissionDecision') == 'deny'
@@ -553,13 +553,13 @@ def test_ordinary_linked_direct_rejects_inaccessible_batch_ancestor(tmp_path, mo
     batches = pool.repo / 'doc/harness/runtime/batches'
     batches.parent.mkdir()
     original_mode = batches.parent.stat().st_mode & 0o7777
-    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     try:
         batches.parent.chmod(0)
         with pytest.raises(PermissionError):
             batches.lstat()
         with pytest.raises(PermissionError):
-            wbs.require_source_assignment(str(tree), 'TASK__ordinary', 'a.py')
+            wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')
         denied = check(tree, tree / 'a.py')
         assert denied.get('permissionDecision') == 'deny'
         assert 'Permission denied' in denied['permissionDecisionReason']
@@ -596,7 +596,7 @@ def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypa
     content = (os.readlink(evidence) if evidence.is_symlink() else
                sorted(os.listdir(evidence)) if evidence.is_dir() else evidence.read_bytes())
     before = os.lstat(evidence)
-    controls = {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json')}
+    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     assert check(pool.repo, tree / 'a.py').get('permissionDecision') == 'deny'
     after = os.lstat(evidence)
     assert (after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == (
@@ -616,7 +616,7 @@ def test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair(tmp_p
     body = result['structuredContent']
     assert {x['slug'].split('-')[-1] for x in body['handoffs']} == {'A', 'B'}
     assert set(body['execution_admission']['selected']) == {x['slug'] for x in body['handoffs']}
-    state = json.loads((pool.repo/'doc/harness/tasks/TASK__managed/WBS.json').read_bytes())
+    state = json.loads((pool.repo/'doc/harness/wbs/WBS__managed/WBS.json').read_bytes())
     assert len(state['batch']['requests']) == 3
 
 
@@ -626,7 +626,7 @@ def test_standalone_bound_and_resumed_lead_keeps_source_assignment(tmp_path, mon
     from test_codex_worktree_prewrite import check
     pool = Pool(tmp_path, monkeypatch)
     pool.init([request('a', 'a.py')])
-    assert 'owner_task_id' not in json.loads(pool.state.read_bytes())
+    assert 'owner_wbs_id' not in json.loads(pool.state.read_bytes())
     pool.claim()
     worktree, branch = pool.bind()
     directory = task(worktree)
@@ -635,14 +635,14 @@ def test_standalone_bound_and_resumed_lead_keeps_source_assignment(tmp_path, mon
     assert check(pool.repo, worktree / 'a.py') == {}
     assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
     (worktree / 'a.py').write_text('preserved interrupted source\n')
-    proof = (directory / 'TASK.json').read_bytes()
+    proof = (directory / 'WBS.control.json').read_bytes()
     pool.cli('resume', '--slug', 'a', '--worker-stopped')
     assert check(pool.repo, worktree / 'a.py').get('permissionDecision') == 'deny'
     pool.cli('bind', '--slug', 'a', '--worker-id', 'replacement',
              '--worktree', worktree, '--branch', branch)
     assert check(pool.repo, worktree / 'a.py') == {}
     assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
-    assert (directory / 'TASK.json').read_bytes() == proof
+    assert (directory / 'WBS.control.json').read_bytes() == proof
     assert (worktree / 'a.py').read_text() == 'preserved interrupted source\n'
 
 
@@ -690,9 +690,9 @@ def test_public_native_ff_retains_late_ignored_original_collision(tmp_path, monk
     source.parent.mkdir()
     source.write_text('lead replacement\n')
     _git('add', '-f', 'src/local.py', cwd=tree)
-    _git('commit', '-qm', 'owned source', '--trailer', 'Harness-Task: '+lead['task_id'], cwd=tree)
+    _git('commit', '-qm', 'owned source', '--trailer', 'Harness-WBS: '+lead['wbs_id'], cwd=tree)
     task(tree, lead['slug'], closed=True)
-    result = dict(task_id=lead['task_id'], worktree=str(tree), branch=lead['branch'],
+    result = dict(wbs_id=lead['wbs_id'], worktree=str(tree), branch=lead['branch'],
                   commit=_head(tree), verdict='closed', run_id=RUN)
     local = pool.repo / 'src/local.py'
     original_git = batch_finish._git

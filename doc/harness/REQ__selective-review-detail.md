@@ -61,7 +61,7 @@ independent-review-before-QA contract, not additional user requirements.
    LIGHT runs no defect hunter, STANDARD runs exactly one selected correctness/
    data-flow or contract/test hunter, and DEEP runs both fresh hunters (in
    parallel when supported). The tier is not authoritative lifecycle state and
-   adds no dedicated field to `TASK.json`, receipts, or `REVIEWS.jsonl`.
+   adds no dedicated field to `WBS.control.json`, receipts, or `REVIEWS.jsonl`.
    Selected depth and concise evidence may appear as ordinary narrative inside
    the stored, non-authoritative formal-review detail. Within one live attempt
    depth may only increase; resume or recovery recomputes it from current
@@ -90,12 +90,12 @@ independent-review-before-QA contract, not additional user requirements.
    overlap, or evidence loss capable of hiding them selects DEEP.
 
    Batch integration carry (both runtimes): the `review-code` lens of the
-   post-wave `harness:batch` integration task does not re-review a lead range
+   post-wave `harness:batch` integration WBS does not re-review a lead range
    that its own lead already reviewed and QA'd when the integration is proven
    equivalent. A carry requires that lead's closed WBS and integration proof; historical receipts do not bind
    no tree. Per integrated lead the endpoints are `old_base` = the coordinator
    HEAD from batch step b.5, `old_tip` = the lead's returned `commit` (leads
-   commit after `task_close`, so it is the tree their review and QA passed),
+   commit after `wbs(action="close")`, so it is the tree their review and QA passed),
    `new_base` = the main HEAD before that lead's rebase (the previous lead's
    `new_tip`, or `old_base` for the first lead), and `new_tip` = the
    integrated tip. A range is carried only when all three hold: the
@@ -112,7 +112,7 @@ independent-review-before-QA contract, not additional user requirements.
    and contribute no other depth predicate; depth follows the normal
    precedence over the residual only: conflict resolutions (manual-conflict,
    DEEP), cross-lead interactions (overlap with earlier leads, DEEP),
-   non-carried ranges, then the integration task's own edits. An empty
+   non-carried ranges, then the integration WBS's own edits. An empty
    residual is LIGHT. The formal reviewer invocation lists each lead's
    endpoints, patch-id result, and carried or residual status; the reviewer
    sweeps the residual, verifies every carry itself, and reports a carry it

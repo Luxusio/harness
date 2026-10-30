@@ -23,7 +23,7 @@ from pathlib import Path
 
 # Loaded lazily by the argv job path; the legacy manifest runner stays standalone.
 SCHEMA = "harness.verification-execution"
-VERSION = 1
+VERSION = 2
 MAX_FAILURES = 128
 MAX_FAILURE_LOG_BYTES = 32 * 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
@@ -157,7 +157,7 @@ def _job_spec(value, root):
     return job
 
 
-def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_path,
+def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_path,
              capabilities=(), max_workers=4, timeout=60, reuse_only=False):
     """One producer and its read-only consumers; records are advisory, not QA."""
     import verification_target as vt
@@ -169,8 +169,8 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
     _file_path(Path(results_path.anchor), results_path.relative_to(results_path.anchor).as_posix())
     if _is_protected_artifact(str(results_path), repo_root=str(root)):
         raise ValueError("execution results cannot overwrite protected lifecycle artifacts")
-    if os.name != "posix" or not all(isinstance(x, str) and x for x in (task_id, run_id, execution_generation)):
-        raise ValueError("POSIX host and explicit task/run/execution_generation required")
+    if os.name != "posix" or not all(isinstance(x, str) and x for x in (wbs_id, run_id, execution_generation)):
+        raise ValueError("POSIX host and explicit WBS/run/execution_generation required")
     if not isinstance(jobs, list) or not 1 <= len(jobs) <= 32 or not 0 < timeout <= 3600 or not 1 <= max_workers <= 32:
         raise ValueError("bounded jobs, workers and timeout required")
     jobs = [_job_spec(job, root) for job in jobs]
@@ -235,20 +235,23 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
             stored = json.loads(_strict_regular_text_snapshot(str(results_path), max_size=MAX_RESULT_BYTES)["text"])
         except ValueError:
             stored = {}
+        if isinstance(stored, dict) and stored.get('schema') == SCHEMA and (
+                stored.get('version') != VERSION or 'task_id' in stored):
+            raise ValueError('retired verification result schema; preserve this historical store and use a new WBS result path')
         known_store = (isinstance(stored, dict) and stored.get('schema') == SCHEMA
                        and stored.get('version') == VERSION
-                       and all(isinstance(stored.get(k), str) and stored[k] for k in ('task_id', 'run_id')))
+                       and all(isinstance(stored.get(k), str) and stored[k] for k in ('wbs_id', 'run_id')))
         failures = stored.get('failures', []) if known_store else []
         if (not isinstance(failures, list) or len(failures) > MAX_FAILURES
                 or any(not isinstance(r, dict) or r.get('status') != 'FAIL'
                        or type(r.get('returncode')) is not int
-                       or any(not isinstance(r.get(k), str) or not r[k] for k in ('job_id', 'task_id', 'run_id', 'attempt_id'))
+                       or any(not isinstance(r.get(k), str) or not r[k] for k in ('job_id', 'wbs_id', 'run_id', 'attempt_id'))
                        for r in failures)):
             raise ValueError('invalid retained failure history; preserve the result store')
-        failures = [{k: v for k, v in r.items() if k in record_fields | {'task_id', 'run_id'}} for r in failures]
+        failures = [{k: v for k, v in r.items() if k in record_fields | {'wbs_id', 'run_id'}} for r in failures]
         try:
             previous = stored
-            if not isinstance(previous, dict) or any(previous.get(k) != v for k, v in dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id).items()):
+            if not isinstance(previous, dict) or any(previous.get(k) != v for k, v in dict(schema=SCHEMA, version=VERSION, wbs_id=wbs_id, run_id=run_id).items()):
                 previous = {}
             if not isinstance(previous.get("execution_generation"), str) or not previous.get("execution_generation"):
                 previous = {}
@@ -323,7 +326,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
 
         def failure_row(record, origin):
             row = {k: v for k, v in record.items() if k in record_fields}
-            row.update(task_id=origin['task_id'], run_id=origin['run_id'])
+            row.update(wbs_id=origin['wbs_id'], run_id=origin['run_id'])
             # Older version-1 stores had fixed slots but no attempt identity.
             if not row.get('attempt_id'):
                 identity = dict(row)
@@ -338,8 +341,8 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                     or not isinstance(record.get('job_id'), str) or not 0 < len(record['job_id']) <= 128):
                 return
             row = failure_row(record, origin)
-            key = (row['task_id'], row['run_id'], row['job_id'], row['attempt_id'])
-            if not any((r['task_id'], r['run_id'], r['job_id'], r['attempt_id']) == key for r in failures):
+            key = (row['wbs_id'], row['run_id'], row['job_id'], row['attempt_id'])
+            if not any((r['wbs_id'], r['run_id'], r['job_id'], r['attempt_id']) == key for r in failures):
                 failures.append(row)
 
         if known_store:
@@ -360,7 +363,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
         def result_payload():
             ordered = [records[j['job_id']] for j in jobs if j['job_id'] in records]
             ok = len(ordered) == len(jobs) and all(r['status'] == 'PASS' for r in ordered)
-            return dict(schema=SCHEMA, version=VERSION, task_id=task_id, run_id=run_id,
+            return dict(schema=SCHEMA, version=VERSION, wbs_id=wbs_id, run_id=run_id,
                         execution_generation=execution_generation, status='PASS' if ok else 'FAIL',
                         returncode=0 if ok else 1, commands=ordered, failures=failures,
                         successful=[successful[j['job_id']] for j in jobs if j['job_id'] in successful])
@@ -377,7 +380,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                           artifact_manifest=[[name, False, wbs.MAX_ARTIFACT_BYTES, '0' * 64] for name in r['outputs']],
                           output_log=dict(r['output_log'], bytes=1048576, sha256='0' * 64)) for r in active]
             payload = result_payload()
-            payload['failures'] = failures + [failure_row(r, {'task_id': task_id, 'run_id': run_id}) for r in worst]
+            payload['failures'] = failures + [failure_row(r, {'wbs_id': wbs_id, 'run_id': run_id}) for r in worst]
             by_id = {r['job_id']: r for r in worst}
             payload['commands'] = [by_id.get(r['job_id'], r) for r in payload['commands']
                                    if r['job_id'] != pending['job_id']] + [worst[-1]]
@@ -538,7 +541,7 @@ def run_jobs(jobs, repo_root, *, task_id, run_id, execution_generation, results_
                                 record = future.result()
                                 with publication_lock:
                                     preserve_failure(record)
-                                    remember_failure(record, {'task_id': task_id, 'run_id': run_id})
+                                    remember_failure(record, {'wbs_id': wbs_id, 'run_id': run_id})
                                     records[record["job_id"]] = record
                                     if record["status"] == "PASS":
                                         successful[record["job_id"]] = dict(record)
@@ -695,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, help="Exact execution root, including a frozen view without .git.")
     parser.add_argument("--jobs", type=Path, help="JSON array: at most one producer and its read-only consumers (argv only).")
     parser.add_argument("--results", type=Path, help="Durable advisory execution JSON, outside selected inputs/outputs.")
-    parser.add_argument("--task-id")
+    parser.add_argument("--wbs-id")
     parser.add_argument("--run-id")
     parser.add_argument("--generation")
     parser.add_argument("--reuse-only", action="store_true", help="Validate cached jobs without executing their commands on a miss.")
@@ -708,7 +711,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.commands or not args.results:
             parser.error("--jobs requires --results and cannot be combined with shell commands")
         try:
-            payload = run_jobs(json.loads(args.jobs.read_text()), repo_root, task_id=args.task_id,
+            payload = run_jobs(json.loads(args.jobs.read_text()), repo_root, wbs_id=args.wbs_id,
                                run_id=args.run_id, execution_generation=args.generation,
                                results_path=args.results, capabilities=args.capability,
                                max_workers=args.max_workers, timeout=args.timeout or 60, reuse_only=args.reuse_only)

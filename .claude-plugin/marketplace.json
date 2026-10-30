@@ -14,7 +14,7 @@
         "execution-harness",
         "completion-gate",
         "critic-evaluation",
-        "task-verification",
+        "wbs-verification",
         "browser-qa",
         "doc-sync",
         "execution-modes",

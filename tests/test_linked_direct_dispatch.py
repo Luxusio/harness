@@ -46,11 +46,11 @@ def planned(tmp_path, linked_cwd, nodes=('A',)):
     plan = '# Plan\n```wbs\n' + json.dumps([
         dict(id=key, title='Assigned source ' + key, weight=1) for key in nodes]) + '\n```\n'
     assert not public(cwd, tree, 'plan', plan=plan).get('isError')
-    return main, tree, cwd, tree / 'doc/harness/tasks/TASK__ordinary'
+    return main, tree, cwd, tree / 'doc/harness/wbs/WBS__ordinary'
 
 
 def controls(directory):
-    return {name: (directory / name).read_bytes() for name in ('TASK.json', 'WBS.json', 'PLAN.md')}
+    return {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json', 'PLAN.md')}
 
 
 @pytest.mark.parametrize('linked_cwd', [False, True])
@@ -75,7 +75,7 @@ def test_stdio_linked_direct_prepare_and_real_gates(tmp_path, linked_cwd):
         os.environ.clear()
         os.environ.update(env)
     assert write.returncode == 0 and not write.stderr and not write.stdout.strip(), write
-    for name in ('TASK.json', 'PLAN.md', 'WBS.json'):
+    for name in ('WBS.control.json', 'PLAN.md', 'WBS.json'):
         assert check(main, directory / name).get('permissionDecision') == 'deny'
     sibling = _worktree(main, 'sibling')
     assert check(main, sibling / 'a.py').get('permissionDecision') == 'deny'
@@ -90,7 +90,7 @@ def test_stdio_linked_direct_prepare_and_real_gates(tmp_path, linked_cwd):
         (directory / 'WBS.json').write_text(json.dumps(state))
         assert check(main, tree / 'a.py').get('permissionDecision') == 'deny'
     (directory / 'WBS.json').write_bytes(original)
-    marker = tree / 'doc/harness/tasks/.active_sessions' / (SID + '.json')
+    marker = tree / 'doc/harness/wbs/.active_sessions' / (SID + '.json')
     marker_bytes = marker.read_bytes()
     marker.unlink()
     assert check(main, tree / 'a.py').get('permissionDecision') == 'deny'

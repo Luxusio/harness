@@ -42,7 +42,7 @@ from pathlib import Path
 from _lib import emit_compact_context
 import wbs
 td, repo = sys.argv[1:]
-Path(td, 'TASK.json').write_text(json.dumps(dict(run_id='01a1862c-95c1-7f98-b7a3-28d4d6260a72', execution_mode='standard', required_lenses=['review-code', 'qa-cli'], closed=False)))
+Path(td, 'WBS.control.json').write_text(json.dumps(dict(run_id='01a1862c-95c1-7f98-b7a3-28d4d6260a72', execution_mode='standard', required_lenses=['review-code', 'qa-cli'], closed=False)))
 ctx = emit_compact_context(td)
 assert ctx['progress']['status'] == 'invalid', ctx
 assert ctx['progress']['percentage'] is None, ctx

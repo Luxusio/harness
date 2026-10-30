@@ -4,7 +4,7 @@ tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
 updated: 2026-10-28
-task_ref: TASK__harness-architecture
+wbs_ref: WBS__harness-architecture
 
 ---
 
@@ -12,7 +12,7 @@ task_ref: TASK__harness-architecture
 
 Harness uses one WBS for any repo-mutating request. A native Goal supplies
 only its objective and continuation. PLAN owns rolling outcomes, explicit
-checks report verified weight, and internal task/run identities own source ownership and completion. `wbs` is the sole callable MCP tool.
+checks report verified weight, and internal WBS/run identities own source ownership and completion. `wbs` is the sole callable MCP tool.
 
 ## WBS Flow
 
@@ -29,18 +29,18 @@ records and old pack bindings require explicit migration preview/apply; no
 compatibility queue remains. See [measured progress](REQ__measurable-wbs-progress.md)
 and [migration](patterns/native-goals.md).
 
-## Task Loop
+## WBS execution loop
 
-Every repo-mutating child task exposes this public loop:
+Every repo-mutating request uses its one WBS root:
 
 ```text
-task start -> plan -> minimum-sufficient develop -> runtime QA -> close
+WBS open -> plan -> minimum-sufficient develop -> runtime QA -> close
 ```
 
-Independent review and `task_verify` are internal close gates, not additional
+Independent review and `wbs(action="verify")` are internal close gates, not additional
 public stages. No verification is skipped. If an internal gate finds a gap, the
-task returns to develop or creates a follow-up child task when the gap is
-separable.
+WBS returns to development on the affected outcomes. Necessary discoveries
+update that same tree; only a separately authorized objective opens another root.
 
 Planning depth does not determine how many times the user must approve. Intake
 may ask before review only when the target or outcome is too unclear for useful
@@ -51,16 +51,16 @@ post-review interaction. The answer authorizes the resulting plan. A separate
 final approval runs only when the user explicitly requested pre-code approval.
 A later unauthorized material delta returns to the specific decision interaction
 instead of being hidden behind generic plan approval. This authority is retained
-in the existing PLAN intent summary and decision trail, not a new task field or
+in the existing PLAN intent summary and decision trail, not a new WBS field or
 approval ledger.
 
-`task_start` is both the creation and resume entry point; there is no separate
-`task_resume` operation. For an existing valid open or blocked task, the default
-call preserves the same `run_id`, `TASK.json`, and measured WBS checks and only
+`wbs(action="open")` is both the creation and resume entry point; there is no separate
+resume operation. For an existing valid open or blocked WBS, the default
+call preserves the same `run_id`, `WBS.control.json`, and measured WBS checks and only
 rebinds the current session. A blocked resume publishes
 that unchanged-run binding before removing `BLOCKED.md`. Generation replacement
 is destructive and therefore explicit: only `fresh_run: true` rotates the run
-for an intentionally new generation. A closed task refuses the default call and names
+for an intentionally new generation. A closed WBS refuses the default call and names
 that explicit fresh-run choice; invalid or unsafe control artifacts refuse in
 both modes.
 
@@ -68,7 +68,7 @@ Within the open WBS, next selects ready outcomes for development/checks.
 After all required work and independent evidence pass, close the execution and
 then run self-improvement/learning promotion before separately authorized follow-ups. Memory
 and automatic learning are independent of orchestration; runbooks, staged
-learnings, promotion, and search remain active after every child.
+learnings, promotion, and search remain active after each WBS close.
 
 Machine completion authority is current required measured WBS checks, blocked
 state and declared source applicability. Await actual independent code review
@@ -78,16 +78,19 @@ branch, ancestry and archived integration proof. Workspace selection validates
 registered linked-worktree files. These checks preserve progress, isolation and
 integration without a receipt system or replacement ledger.
 
-The plan declares the intended source scope in `PLAN.md`; `TASK.json` stores
-the applicable review/QA lenses. These declarations route work and verification; Harness does
-not prove that every edited file belongs to that scope. Post-review or post-QA
-edits, concurrent mutations, and scope drift are developer-owned risks.
+The plan declares outcomes and acceptance in `PLAN.md`; `WBS.control.json` stores
+the applicable review/QA lenses. Dispatch supplies current execution ownership,
+which the prewrite gate checks. Declared input policies and verification targets
+invalidate affected machine evidence when relevant inputs change. The workflow
+independently judges actual review/QA applicability; it does not machine-attest
+role results or freeze edited paths at initial intake.
 Explicit setup, installer, release, or diagnostic commands may still inspect
 Git or hash a concrete payload when that operation intrinsically requires it.
-Those opt-in checks are not task lifecycle prerequisites.
+Those opt-in checks are not WBS lifecycle prerequisites.
 
-The initialization commit point is a valid `TASK.json` plus the session
-active marker. `task_start` does not persist or return an environment snapshot;
+Open persists a valid `WBS.control.json`; write focus additionally requires its
+exact session/run marker, PLAN and current execution assignment. Deferred identity
+does not grant source-write authority. `wbs(action="open")` does not persist or return an environment snapshot;
 environment facts are recomputed by the operation that needs them.
 
 ## Protected Artifacts
@@ -95,7 +98,8 @@ environment facts are recomputed by the operation that needs them.
 | Artifact | Writer |
 |---|---|
 | `PLAN.md` | WBS plan action |
-| `TASK.json` | WBS open/plan/close lifecycle owners |
+| `WBS.control.json` | WBS open/plan/close lifecycle owners |
+| `WBS.json` | WBS plan/check/dispatch/target owners |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
 Manual evidence writers are intentionally absent. User corrections must be
@@ -104,30 +108,30 @@ promoted directly into `PLAN.md` or durable project documentation.
 ### Control-plane artifact integrity
 
 Public WBS selectors normalize one root to its internal canonical
-`doc/harness/tasks/TASK__<safe-id>` execution directory. Traversal, selector
+`doc/harness/wbs/WBS__<safe-id>` execution directory. Traversal, selector
 mismatches, outside paths and symlink aliases refuse before mutation. Private
-execution helpers retain canonical task selectors, not public tool aliases.
+execution helpers retain canonical WBS selectors, not public tool aliases.
 Goal IDs and child records are interpreted only as explicit migration input.
 
-`write_plan` validates the complete supplied PLAN and required-lens bundle
+`wbs(action="plan")` validates the complete supplied PLAN and required-lens bundle
 before its first write, so invalid input cannot leave a new PLAN or lens update
-behind. `task_blocked` requires an existing valid `TASK.json` before writing
-`BLOCKED.md`. Prior supported task controls require explicit migration preview/apply; ordinary
+behind. `wbs(action="block")` requires an existing valid `WBS.control.json` before writing
+`BLOCKED.md`. Prior supported WBS controls require explicit migration preview/apply; ordinary
 calls do not provide compatibility readers. Unsupported historical controls are
 retained and reported; active or pool-referenced controls cannot be skipped.
 
-Per-session active markers are authoritative only while their canonical task
+Per-session active markers are authoritative only while their canonical WBS
 state is live. Marker leaves must be regular files and are read without
-following symlinks; a session marker's embedded session and task identities
-must match its filename and resolved task. A malformed or mismatched marker,
-or one pointing at a closed/blocked task, falls back to the global `.active`
-marker. That marker remains a conservative Claude/session compatibility bridge
-so Stop and prewrite gates do not silently disengage; active-task iteration
-filters terminal per-session records as well.
+following symlinks; a session marker's embedded session and WBS identities
+must match its filename and resolved WBS. A malformed or mismatched marker,
+or one pointing at a closed/blocked WBS, grants no source-write authority.
+There is no global `.active`, default-session or session-hint fallback. Explicit
+migration archives retired focus metadata without promoting it to a binding;
+active-WBS iteration filters terminal per-session records as well.
 
 The confinement boundary validates lexical and physical paths and avoids
 following pre-existing control-plane leaf symlinks. Plan, block, and
-task-authority publication holds an exclusive lock on the validated task
+WBS-authority publication holds an exclusive lock on the validated WBS
 directory descriptor and uses descriptor-relative atomic writes and rollback.
 Directory replacement or an unsafe leaf fails closed without publishing into
 the replacement path.
@@ -140,7 +144,7 @@ Verification has two responsibilities:
 - intent adequacy check: the result satisfies the user's request and durable
   requirements
 
-A source-changing task requires actual independent read-only code review,
+A source-changing WBS requires actual independent read-only code review,
 conditional security review, then every applicable QA lens. Await direct finals;
 a start, coordinator summary or copied text cannot replace an independent result.
 Fix actual FAILs and publish actual environmental blockers. Missing recording
@@ -148,7 +152,7 @@ never warrants repair, reruns or parking. The active contract is
 [receipt-free execution and completion](REQ__receipt-free-execution-and-completion.md).
 
 PLAN.md owns acceptance intent; existing WBS assertions own measured outcome
-checks. `TASK.json` has `run_id`, `execution_mode`, `required_lenses`, and
+checks. `WBS.control.json` has `run_id`, `execution_mode`, `required_lenses`, and
 `closed: boolean`. Only the public owner publishes closure. Failed, unrun or
 stale required checks block close. No machine verdict claims review/QA attestation.
 
@@ -157,9 +161,9 @@ role when available. The roles report concrete evidence; static inspection
 cannot replace required runtime execution. Scope changes after review/QA require
 substantive freshness assessment by the developer.
 
-Context/verify/close read current task control and WBS state, not historical
+Context/verify/close read current WBS control and WBS state, not historical
 receipt files, transcripts or review appendices. Explicit migration preserves
-historical bytes and task/run/WBS identities. Default resume retains the same
+historical bytes and WBS/run/WBS identities. Default resume retains the same
 run and measured checks. No watcher startup, registration, spawn-name binding,
 recording capability check or missing-attestation parking remains.
 
@@ -171,9 +175,9 @@ enforcement.
 
 Nested repositories and submodules need no source registration for lifecycle
 verification. Crossing a nested Git boundary requires the ancestor Harness
-root's session-specific active-task marker; the repository-wide legacy marker
+root's session-specific active-WBS marker; the repository-wide legacy marker
 cannot authorize it. Hooks bind the session to that control root and active
-task. The plan may
+WBS. The plan may
 name nested source paths for human routing, but the lifecycle neither scans nor
 authorizes them through Git.
 Runtime project-document edits reject symlink components and use a bounded,
@@ -220,4 +224,4 @@ candidates but does not satisfy the durable-memory requirement by itself.
 ## Runtime Boundaries
 
 Harness uses one rolling WBS for ordinary requests and native objectives. Hooks provide compact context
-and protect source/task ownership; MCP tools own explicit state transitions.
+and protect source/WBS ownership; MCP tools own explicit state transitions.

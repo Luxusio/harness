@@ -12,9 +12,9 @@ Skip if the plan has zero new trust boundaries AND zero new writes (pure prose r
 
 S1. **Spoofing / Auth boundary** — does any new codepath cross a trust boundary (user→service, service→DB, external→internal, LLM-output→executor)? If yes, how is the identity or source verified?
 
-S2. **Tampering / Data integrity** — does any new direct write mutate a protected artifact (PLAN.md, TASK.json, RECEIPTS.jsonl)? Is the owning skill, MCP tool, or hook the only normal-workflow writer (C-05 enforced by `prewrite_gate.py`)? Bash/shell mutation is outside Harness PreToolUse enforcement and must be modeled explicitly when relevant.
+S2. **Tampering / Data integrity** — does any new direct write mutate a protected artifact (PLAN.md, WBS.control.json, RECEIPTS.jsonl)? Is the owning skill, MCP tool, or hook the only normal-workflow writer (C-05 enforced by `prewrite_gate.py`)? Bash/shell mutation is outside Harness PreToolUse enforcement and must be modeled explicitly when relevant.
 
-S3. **Information disclosure** — does any new log, error message, prompt, or artifact leak secrets, PII, absolute paths with usernames, internal infra names, or task-specific data that should stay private to the task directory?
+S3. **Information disclosure** — does any new log, error message, prompt, or artifact leak secrets, PII, absolute paths with usernames, internal infra names, or WBS-specific data that should stay private to the WBS directory?
 
 ### Harness-native (this-product lens)
 
@@ -30,8 +30,8 @@ Skip if the plan makes zero mutations to repo state (review-only, advisory-only,
 
 R1. **Blast radius (develop-fail)** — if implementation halts at AC-N where N < last, which file edits are already on disk? What touched paths are already recorded in PROGRESS.md? Zero is the target answer; list all non-zero mutations.
 
-R2. **Schema safety** — does the change alter any on-disk schema (TASK.json, RECEIPTS.jsonl, `hooks.json`, `manifest.yaml`, restore-point format)? If yes, state the cutover and recovery behavior explicitly; unsupported legacy task-control formats must not gain fallback readers.
+R2. **Schema safety** — does the change alter any on-disk schema (WBS.control.json, RECEIPTS.jsonl, `hooks.json`, `manifest.yaml`, restore-point format)? If yes, state the cutover and recovery behavior explicitly; unsupported legacy WBS-control formats must not gain fallback readers.
 
-R3. **Feature-flag path** — can this change be disabled at runtime via a `HARNESS_DISABLE_*` env var or manifest toggle without a code revert? If no, justify why a binary `git revert` is acceptable for this change's blast radius; list the downstream tasks that would need replay.
+R3. **Feature-flag path** — can this change be disabled at runtime via a `HARNESS_DISABLE_*` env var or manifest toggle without a code revert? If no, justify why a binary `git revert` is acceptable for this change's blast radius; list the downstream WBS roots that would need replay.
 
-R4. **Data migration reversibility** — if this change moves, renames, or deletes files under `doc/**`, `plugin/**`, or task directories, is there an undo script or an inverse operation documented in the commit message? `git revert` alone does NOT restore moved task directories if the move crossed a sync boundary.
+R4. **Data migration reversibility** — if this change moves, renames, or deletes files under `doc/**`, `plugin/**`, or WBS directories, is there an undo script or an inverse operation documented in the commit message? `git revert` alone does NOT restore moved WBS directories if the move crossed a sync boundary.

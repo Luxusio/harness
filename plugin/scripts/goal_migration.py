@@ -22,10 +22,10 @@ import stat
 
 LIMIT = 1024 * 1024
 MAX_RECORDS = 256
-ARCHIVE = "doc/harness/archive/goal-migration"
+ARCHIVE = "doc/harness/archive/goal-wbs-migration"
 MANIFEST = ARCHIVE + "/manifest.json"
 GOALS = "doc/harness/goals"
-IDENT = re.compile(r"(?:GOAL|TASK)__[A-Za-z0-9_.-]{1,180}")
+IDENT = re.compile(r"(?:GOAL|WBS)__[A-Za-z0-9_.-]{1,180}")
 
 
 def _require(ok, message):
@@ -431,7 +431,7 @@ def _entries(repo, relative):
 
 
 def _control(repo, relative):
-    from _lib import _validate_task_control
+    from _lib import _validate_wbs_control
     raw = _read(repo, relative)
     return _migration_control(_json(raw)) if raw is not None else {}
 
@@ -456,7 +456,7 @@ def _open_lock(repo, relative, *, directory=False):
         raise
 
 
-def _legacy_spec(goal_id, task_id, value):
+def _legacy_spec(goal_id, wbs_id, value):
     import batch_state as batch
     _require(isinstance(value, dict) and set(value) == {"batch_id", "requests"}, "invalid legacy pack")
     requests = value["requests"]
@@ -467,34 +467,39 @@ def _legacy_spec(goal_id, task_id, value):
     _require(len(requests) >= 2 and all(set(item) <= {"slug", "request", "scopes", "depends_on", "submodules"}
              for item in requests), "invalid legacy intake")
     normalized = copy.deepcopy(batch.normalize_requests(requests))
-    identity = json.dumps([goal_id, task_id], separators=(",", ":")).encode()
-    expected = {"batch_id": "goal-" + hashlib.sha256(identity).hexdigest(), "requests": normalized}
-    _require(value == expected and all("TASK__" + r["slug"] != task_id for r in normalized),
+    # Goal imports may refer to a pre-namespace Task identity. This explicit
+    # importer alone recognizes its deterministic old pack ID; never re-key it.
+    identities = [wbs_id, "TASK__" + wbs_id[5:]]
+    candidates = ["goal-" + hashlib.sha256(json.dumps([goal_id, identity], separators=(",", ":")).encode()).hexdigest()
+                  for identity in identities]
+    _require(value.get("batch_id") in candidates, "legacy pack identity or intake mismatch")
+    expected = {"batch_id": value["batch_id"], "requests": normalized}
+    _require(value == expected and all("WBS__" + r["slug"] != wbs_id for r in normalized),
              "legacy pack identity or intake mismatch")
-    return dict(task_id=task_id, **expected)
+    return dict(wbs_id=wbs_id, **expected)
 
 
-def _binding(repo, goal_id, task_id, spec, recoveries, destination, *, require_pool):
+def _binding(repo, goal_id, wbs_id, spec, recoveries, destination, *, require_pool):
     import work_pack
     _require(isinstance(goal_id, str) and IDENT.fullmatch(goal_id) and goal_id.startswith("GOAL__"),
              "invalid legacy Goal identity")
-    result = _legacy_spec(goal_id, task_id, spec)
+    result = _legacy_spec(goal_id, wbs_id, spec)
     import batch_state as batch
     relative = "doc/harness/runtime/batches/" + result["batch_id"] + ".json"
     raw = _read(repo, relative)
     if raw is None:
-        route = dict(batch_state="missing", next_action="Initialize this exact intake through batch_state with --owner-task-id " + task_id + ".")
+        route = dict(batch_state="missing", next_action="Initialize this exact intake through batch_state with --owner-wbs-id " + wbs_id + ".")
     else:
         data = batch.validate(_json(raw), str(repo), result["batch_id"])
-        _require(data.get("owner_task_id") in (None, task_id), "conflicting pool owner")
-        staged = dict(data, owner_task_id=task_id)
+        _require(data.get("owner_wbs_id") in (None, wbs_id), "conflicting pool owner")
+        staged = dict(data, owner_wbs_id=wbs_id)
         try:
-            route = work_pack.inspect_pool(str(repo), task_id, result, staged)
+            route = work_pack.inspect_pool(str(repo), wbs_id, result, staged)
         except batch.Refusal as exc:
             raise ValueError("Goal migration: invalid pool proof: " + str(exc)) from exc
         if staged != data:
             destination(relative, raw, _encode(staged))
-    recovery = dict(wbs_id="WBS__" + task_id[6:], **result,
+    recovery = dict(**result,
                     next_action=route.get("next_action", "Resume the retained pool through batch_state."))
     if route.get("batch_state") == "missing" and require_pool:
         recovery["blocker"] = "Initialize this exact batch_id and requests through batch_state, then retry migration."
@@ -541,29 +546,39 @@ def _collect(repo):
         destinations[relative] = (before, after)
     for gid, row in sorted(rows.items()):
         wbs_id = native_wbs_id(row["objective"])
-        target = "doc/harness/tasks/TASK__" + wbs_id[5:] + "/MIGRATION.md"
+        target = "doc/harness/wbs/WBS__" + wbs_id[5:] + "/MIGRATION.md"
         notes.setdefault(target, []).append(row)
         children = set()
         for child in row["tasks"]:
-            _require(isinstance(child, dict) and isinstance(child.get("task_id"), str)
-                     and IDENT.fullmatch(child["task_id"]) and child["task_id"].startswith("TASK__"), "invalid child identity")
-            tid = child["task_id"]
+            if isinstance(child, dict) and "task_id" in child:
+                old_id = child["task_id"]
+                _require(isinstance(old_id, str) and re.fullmatch(r"TASK__[A-Za-z0-9_.-]{1,180}", old_id)
+                         and "wbs_id" not in child and "wbs_dir" not in child, "invalid child identity")
+                old_directory = "doc/harness/tasks/" + old_id
+                _require(not child.get("task_dir") or child["task_dir"] in
+                         (old_directory, str(repo / old_directory)), "noncanonical child directory")
+                _path(repo, old_directory)
+                child = {key: val for key, val in child.items() if key not in {"task_id", "task_dir"}}
+                child["wbs_id"] = "WBS__" + old_id[6:]
+            _require(isinstance(child, dict) and isinstance(child.get("wbs_id"), str)
+                     and IDENT.fullmatch(child["wbs_id"]) and child["wbs_id"].startswith("WBS__"), "invalid child identity")
+            tid = child["wbs_id"]
             _require(tid not in children, "duplicate child identity")
             children.add(tid)
-            directory = "doc/harness/tasks/" + tid
-            _require(not child.get("task_dir") or child["task_dir"] in (directory, str(repo / directory)), "noncanonical child directory")
+            directory = "doc/harness/wbs/" + tid
+            _require(not child.get("wbs_dir") or child["wbs_dir"] in (directory, str(repo / directory)), "noncanonical child directory")
             _path(repo, directory)
             if "batch" not in child:
                 continue
             spec = _binding(repo, gid, tid, child["batch"], recoveries, destination, require_pool=True)
-            for identity in [tid] + ["TASK__" + item["slug"] for item in spec["requests"]]:
+            for identity in [tid] + ["WBS__" + item["slug"] for item in spec["requests"]]:
                 _require(identity not in reserved, "duplicate legacy pack reservation")
                 reserved[identity] = gid
             relative = directory + "/WBS.json"
             raw = _read(repo, relative)
             if raw is None:
-                control = _control(repo, directory + "/TASK.json")
-                _require(_read(repo, directory + "/TASK.json") is None or bool(control), "invalid existing task control")
+                control = _control(repo, directory + "/WBS.control.json")
+                _require(_read(repo, directory + "/WBS.control.json") is None or bool(control), "invalid existing WBS execution control")
                 value = dict(version=1, nodes=[], checks={}, run_id=(control or {}).get("run_id", ""),
                              started_at=0, last_progress_at=0, pack_only=True, batch=spec)
                 destination(relative, None, _encode(value))
@@ -579,17 +594,17 @@ def _collect(repo):
                 "They do not create executable work, a WBS baseline, or measured progress.\n\n```json\n"
                 + json.dumps(records, ensure_ascii=False, sort_keys=True, indent=2) + "\n```\n")
         destination(relative, before, text.encode())
-    entries = _entries(repo, "doc/harness/tasks")
+    entries = _entries(repo, "doc/harness/wbs")
     if entries is not None:
         for name, info in entries:
-            if not name.startswith("TASK__"):
+            if not name.startswith("WBS__"):
                 continue
-            _require(IDENT.fullmatch(name), "invalid task directory")
+            _require(IDENT.fullmatch(name), "invalid WBS directory")
             if stat.S_ISLNK(info.st_mode):
                 continue  # Unrelated symlink directories never enter migration ownership.
             if not stat.S_ISDIR(info.st_mode):
                 continue
-            relative = "doc/harness/tasks/" + name + "/WBS.json"
+            relative = "doc/harness/wbs/" + name + "/WBS.json"
             raw = _read(repo, relative)
             if raw is None:
                 continue
@@ -642,7 +657,7 @@ def _manifest(repo):
         if data["status"] == "complete":
             _require(current is None, "retired source recreated; explicit reconciliation required")
     for relative, record in data["destinations"].items():
-        _require(re.fullmatch(r"(?:doc/harness/tasks/TASK__[A-Za-z0-9_.-]{1,180}/(?:WBS.json|MIGRATION.md)|doc/harness/runtime/batches/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json)", relative),
+        _require(re.fullmatch(r"(?:doc/harness/wbs/WBS__[A-Za-z0-9_.-]{1,180}/(?:WBS.json|MIGRATION.md)|doc/harness/runtime/batches/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json)", relative),
                  "invalid migration destination")
         _require(isinstance(record, dict) and set(record) == {"before", "after", "data"}
                  and isinstance(record["after"], str) and re.fullmatch(r"[0-9a-f]{64}", record["after"])
@@ -800,14 +815,14 @@ def _apply_goals(repo_root):
             os.close(fd)
 
 
-CONTROL_ARCHIVE = "doc/harness/archive/task-control-migration"
+CONTROL_ARCHIVE = "doc/harness/archive/wbs-control-migration"
 CONTROL_MANIFEST = CONTROL_ARCHIVE + "/manifest.json"
 
 
 def _migration_control(value):
     """Only explicit migration accepts the retired control schema."""
-    from _lib import _validate_task_control
-    current = _validate_task_control(value)
+    from _lib import _validate_wbs_control
+    current = _validate_wbs_control(value)
     if current:
         return current
     if not isinstance(value, dict) or set(value) != {"run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint"}:
@@ -815,14 +830,14 @@ def _migration_control(value):
     fingerprint = value["close_receipt_fingerprint"]
     if fingerprint is not None and (not isinstance(fingerprint, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint)):
         return {}
-    return _validate_task_control({key: val for key, val in value.items() if key != "close_receipt_fingerprint"}
+    return _validate_wbs_control({key: val for key, val in value.items() if key != "close_receipt_fingerprint"}
                                   | {"closed": fingerprint is not None})
 
 
 def _historical_control(value):
     """Recognize pre-UUIDv7 history without granting it lifecycle authority."""
     from datetime import datetime
-    from _lib import _task_control_lenses
+    from _lib import _wbs_control_lenses
     fields = {"task_run_id", "started_at", "execution_mode", "review_lenses",
               "qa_lenses", "close_receipt_fingerprint"}
     if not isinstance(value, dict) or set(value) != fields:
@@ -842,7 +857,7 @@ def _historical_control(value):
     if (not isinstance(review, list) or not isinstance(qa, list)
             or any(not isinstance(lens, str) or not lens.startswith("review-") for lens in review)
             or any(not isinstance(lens, str) or not lens.startswith("qa-") for lens in qa)
-            or _task_control_lenses(review + qa) is None):
+            or _wbs_control_lenses(review + qa) is None):
         return False
     fingerprint = value["close_receipt_fingerprint"]
     return fingerprint is None or isinstance(fingerprint, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint) is not None
@@ -858,16 +873,16 @@ def _control_json(raw, path):
 def _control_bindings(repo):
     """Inspect raw bindings: normal readers deliberately reject old runs."""
     references = set()
-    legacy = _read(repo, "doc/harness/tasks/.active", 4096)
+    legacy = _read(repo, "doc/harness/wbs/.active", 4096)
     if legacy and legacy.strip():
         # Explicit migration alone reads the retired focus. It cannot safely
         # reinterpret a referenced historical control as a current generation.
         first = legacy.decode("utf-8", errors="replace").strip().splitlines()[0]
         references.add(Path(first.rstrip("/")).name)
-    for name, _ in _entries(repo, "doc/harness/tasks/.active_sessions") or []:
+    for name, _ in _entries(repo, "doc/harness/wbs/.active_sessions") or []:
         if not name.endswith(".json"):
             continue
-        value = _json(_read(repo, "doc/harness/tasks/.active_sessions/" + name))
+        value = _json(_read(repo, "doc/harness/wbs/.active_sessions/" + name))
         _require(isinstance(value, dict), "invalid active session binding: " + name)
         # Conflict fences also retain task identities and must not be ignored.
         conflicts = value.get("conflicts", [])
@@ -875,7 +890,7 @@ def _control_bindings(repo):
                  "unresolved active session conflict: " + name)
         for binding in [value] + conflicts:
             _require(isinstance(binding, dict), "invalid active session conflict: " + name)
-            for key in ("task_id", "task_dir"):
+            for key in ("wbs_id", "wbs_dir"):
                 if isinstance(binding.get(key), str):
                     references.add(Path(binding[key].rstrip("/")).name)
     return references
@@ -950,7 +965,7 @@ def _control_changes(repo):
         batch.validate(value, str(repo), name[:-5])
         pools.append((path, raw, value))
         for item in value["requests"]:
-            pool_tasks.add(item["task_id"])
+            pool_tasks.add(item["wbs_id"])
             worktree = item.get("worktree")
             if worktree and os.path.isdir(worktree):
                 from _lib import resolve_registered_worktree
@@ -958,7 +973,7 @@ def _control_changes(repo):
                 roots.add(worktree)
             checkpoint = item.get("checkpoint") or {}
             if checkpoint.get("archive_fingerprint"):
-                archive = str(repo / ("doc/harness/archive/batch/" + item["task_id"]))
+                archive = str(repo / ("doc/harness/archive/batch/" + item["wbs_id"]))
                 _require((checkpoint.get("harvest") or {}).get("archived") == archive, "archive identity mismatch")
                 # This generic custody check includes historical RECEIPTS/REVIEWS bytes.
                 expected = checkpoint["archive_fingerprint"]
@@ -976,11 +991,11 @@ def _control_changes(repo):
     for root in sorted(roots):
         with _control_workspace(repo, root) as source:
             references = pool_tasks | _control_bindings(source)
-            for name, info in _entries(source, "doc/harness/tasks") or []:
-                if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            for name, info in _entries(source, "doc/harness/wbs") or []:
+                if not name.startswith("WBS__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
                     continue
                 _require(IDENT.fullmatch(name), "invalid task identity")
-                path = "doc/harness/tasks/" + name + "/TASK.json"
+                path = "doc/harness/wbs/" + name + "/WBS.control.json"
                 raw = _read(source, path)
                 if raw is None:
                     continue
@@ -989,15 +1004,15 @@ def _control_changes(repo):
                 if not value and _historical_control(original) and name not in references:
                     retained.append(dict(path=str(source / path), reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle"))
                     continue
-                _require(value, "invalid or referenced historical task control during explicit migration: " + str(source / path))
+                _require(value, "invalid or referenced historical WBS execution control during explicit migration: " + str(source / path))
                 if "close_receipt_fingerprint" in original:
                     add(source, path, raw, _encode(value))
     # Archived controls are format consumers too; preserve every other archived byte.
     references = pool_tasks | _control_bindings(repo)
     for name, info in _entries(repo, "doc/harness/archive/batch") or []:
-        if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        if not name.startswith("WBS__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             continue
-        path = "doc/harness/archive/batch/" + name + "/TASK.json"
+        path = "doc/harness/archive/batch/" + name + "/WBS.control.json"
         raw = _read(repo, path)
         if raw is None:
             continue
@@ -1006,13 +1021,13 @@ def _control_changes(repo):
         if not value and _historical_control(original) and name not in references:
             retained.append(dict(path=str(repo / path), reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle"))
             continue
-        _require(value, "invalid or referenced historical archived task control: " + str(repo / path))
+        _require(value, "invalid or referenced historical archived WBS execution control: " + str(repo / path))
         if "close_receipt_fingerprint" in original:
             after = _encode(value)
             add(repo, path, raw, after)
             archive = str(repo / ("doc/harness/archive/batch/" + name))
             if archive in archives:
-                archives[archive][1]["TASK.json"] = _hash(after)
+                archives[archive][1]["WBS.control.json"] = _hash(after)
     archive_rows = []
     for archive, (before, entries) in sorted(archives.items()):
         after = "sha256:" + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
@@ -1025,7 +1040,7 @@ def _control_changes(repo):
                 checkpoint["archive_fingerprint"] = hashes[checkpoint["harvest"]["archived"]]
         if _json(raw) != value:
             add(repo, path, raw, _encode(value))
-    # Task controls precede pools so a retry must understand the mixed journal state.
+    # WBS execution controls precede pools so a retry must understand the mixed journal state.
     result = dict(version=1, status="prepared", destinations=sorted(changes.values(), key=lambda row: (row["path"].endswith(".json") and "/runtime/batches/" in row["path"], row["root"], row["path"])), archives=archive_rows)
     if retained:
         result["retained_historical_controls"] = retained
@@ -1037,7 +1052,7 @@ def _retained_control_root(repo, path):
     _require(isinstance(path, str) and os.path.isabs(path)
              and str(Path(path)) == path and ".." not in Path(path).parts,
              "invalid historical control path")
-    match = re.fullmatch(r"(.+)/doc/harness/(?:tasks|archive/batch)/TASK__[A-Za-z0-9_.-]{1,180}/TASK.json", path)
+    match = re.fullmatch(r"(.+)/doc/harness/(?:wbs|archive/batch)/WBS__[A-Za-z0-9_.-]{1,180}/WBS.control.json", path)
     _require(match is not None, "invalid historical control path")
     root = Path(match[1])
     from _lib import resolve_registered_worktree
@@ -1054,7 +1069,7 @@ def _control_journal(repo):
     _require(isinstance(value, dict) and set(value) - {"retained_historical_controls"} == {"version", "status", "destinations", "archives"}
              and value["version"] == 1 and value["status"] in {"prepared", "complete"}
              and isinstance(value["destinations"], list) and len(value["destinations"]) <= MAX_RECORDS * 4
-             and isinstance(value["archives"], list), "invalid task-control migration journal")
+             and isinstance(value["archives"], list), "invalid WBS-control migration journal")
     retained = value.get("retained_historical_controls", [])
     _require(isinstance(retained, list) and len(retained) <= MAX_RECORDS * 4
              and all(isinstance(row, dict) and set(row) == {"path", "reason"}
@@ -1067,7 +1082,7 @@ def _control_journal(repo):
     for entry in value["destinations"]:
         _require(isinstance(entry, dict) and set(entry) == {"root", "path", "before", "after"}, "invalid control migration entry")
         _require(isinstance(entry["root"], str) and os.path.isabs(entry["root"]), "invalid migration root")
-        _require(re.fullmatch(r"doc/harness/(?:tasks/TASK__[A-Za-z0-9_.-]{1,180}/TASK.json|archive/batch/TASK__[A-Za-z0-9_.-]{1,180}/TASK.json|runtime/batches/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json)", entry["path"]), "invalid control migration destination")
+        _require(re.fullmatch(r"doc/harness/(?:wbs/WBS__[A-Za-z0-9_.-]{1,180}/WBS.control.json|archive/batch/WBS__[A-Za-z0-9_.-]{1,180}/WBS.control.json|runtime/batches/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json)", entry["path"]), "invalid control migration destination")
         _require((entry["root"], entry["path"]) not in keys, "duplicate migration destination")
         keys.add((entry["root"], entry["path"]))
         decoded = {}
@@ -1075,16 +1090,16 @@ def _control_journal(repo):
             try:
                 data = base64.b64decode(entry[field], validate=True)
             except (ValueError, TypeError) as exc:
-                raise ValueError("Goal migration: invalid task-control journal bytes") from exc
+                raise ValueError("Goal migration: invalid WBS-control journal bytes") from exc
             _require(len(data) <= LIMIT, "oversized migration entry")
             decoded[field] = _json(data)
         before, after = decoded["before"], decoded["after"]
-        if entry["path"].endswith("/TASK.json"):
+        if entry["path"].endswith("/WBS.control.json"):
             _require("close_receipt_fingerprint" in before and _migration_control(before) == after,
                      "journal changes task identity or closure")
             if value["status"] == "complete" and entry["path"].startswith("doc/harness/archive/batch/"):
                 _require(_control_read(repo, entry) == base64.b64decode(entry["after"], validate=True),
-                         "archived task-control changed after migration")
+                         "archived WBS-control changed after migration")
         else:
             import batch_state as batch
             expected = _without_close_fingerprint(before)
@@ -1108,7 +1123,7 @@ def _control_journal(repo):
         if value["status"] == "complete":
             import batch_state as batch
             _require(batch.fingerprint(archive["path"]) == archive["after"],
-                     "archive drift after task-control migration")
+                     "archive drift after WBS-control migration")
     return value
 
 
@@ -1132,7 +1147,7 @@ def _check_retained_controls(repo, journal):
         _require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.json", name), "unsafe pool migration input")
         value = _without_close_fingerprint(_json(_read(repo, "doc/harness/runtime/batches/" + name)))
         batch.validate(value, str(repo), name[:-5])
-        pool_tasks.update(item["task_id"] for item in value["requests"])
+        pool_tasks.update(item["wbs_id"] for item in value["requests"])
     bindings = {}
     for row in retained:
         path = Path(row["path"])
@@ -1143,7 +1158,7 @@ def _check_retained_controls(repo, journal):
             raw = _read(source, str(path.relative_to(source)))
             _require(raw is not None and _historical_control(_json(raw))
                      and path.parent.name not in bindings[root],
-                     "invalid or referenced historical task control during explicit migration: " + str(path))
+                     "invalid or referenced historical WBS execution control during explicit migration: " + str(path))
 
 
 def _control_preview(repo):
@@ -1177,10 +1192,10 @@ def _control_scope(repo):
     roots = (str(repo), *sorted(roots - {str(repo)}))
     for root in roots:
         with _control_workspace(repo, root) as source:
-            for parent in (["doc/harness/tasks", "doc/harness/archive/batch"]
-                           if root == str(repo) else ["doc/harness/tasks"]):
+            for parent in (["doc/harness/wbs", "doc/harness/archive/batch"]
+                           if root == str(repo) else ["doc/harness/wbs"]):
                 for name, info in _entries(source, parent) or []:
-                    if not name.startswith("TASK__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    if not name.startswith("WBS__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
                         continue
                     _require(IDENT.fullmatch(name), "invalid task identity")
                     directories.append((root, parent + "/" + name))
@@ -1189,7 +1204,7 @@ def _control_scope(repo):
 
 def _control_apply(repo):
     from _lib import active_session_transaction
-    # Session focus locks precede task state locks, including migration.
+    # Session focus locks precede WBS state locks, including migration.
     journal = _control_journal(repo)
     if journal is not None and (journal["status"] == "complete" or not journal["destinations"]):
         return dict(_control_report(journal), status="complete")
@@ -1199,7 +1214,7 @@ def _control_apply(repo):
         roots = (str(repo), *sorted((set(roots) | {row["root"] for row in journal["destinations"]}) - {str(repo)}))
         directories = tuple(sorted(set(directories) | {
             (row["root"], str(Path(row["path"]).parent))
-            for row in journal["destinations"] if row["path"].endswith("/TASK.json")}))
+            for row in journal["destinations"] if row["path"].endswith("/WBS.control.json")}))
     from _lib import resolve_registered_worktree
     for root in roots:
         _require(root == str(repo) or resolve_registered_worktree(str(repo), root) == root, "unregistered migration worktree")
@@ -1229,7 +1244,7 @@ def _control_apply(repo):
             if not journal["destinations"]:
                 return dict(_control_report(journal), status="complete")
             _require(len(journal["destinations"]) <= MAX_RECORDS * 4 and len(_encode(journal)) <= 16 * LIMIT,
-                     "task-control migration exceeds record/storage budget")
+                     "WBS-control migration exceeds record/storage budget")
             _write(repo, CONTROL_MANIFEST, _encode(journal))
         else:
             _require(current == journal, "migration journal changed")
@@ -1243,7 +1258,7 @@ def _control_apply(repo):
             if journal["status"] == "complete":
                 # Tasks/pools legitimately evolve after completed migration.
                 continue
-            _require(observed in (before, after), "task-control migration destination drift")
+            _require(observed in (before, after), "WBS-control migration destination drift")
         if journal["status"] == "complete":
             return _control_report(journal)
         # Archive integrity on retry allows precisely the journal's own TASK
@@ -1253,7 +1268,7 @@ def _control_apply(repo):
             for archive in journal["archives"]:
                 _require(isinstance(archive, dict) and set(archive) == {"path", "before", "after"}, "invalid migration archive proof")
                 observed = batch.fingerprint(archive["path"])
-                _require(observed in {archive["before"], archive["after"]}, "archive drift during task-control migration")
+                _require(observed in {archive["before"], archive["after"]}, "archive drift during WBS-control migration")
         for entry in journal["destinations"]:
             before = base64.b64decode(entry["before"], validate=True)
             after = base64.b64decode(entry["after"], validate=True)
@@ -1261,16 +1276,16 @@ def _control_apply(repo):
             if observed == before:
                 _control_write(repo, entry, after, _hash(before))
         for archive in journal["archives"]:
-            _require(batch.fingerprint(archive["path"]) == archive["after"], "archive changed during task-control migration")
+            _require(batch.fingerprint(archive["path"]) == archive["after"], "archive changed during WBS-control migration")
         journal["status"] = "complete"
         _write(repo, CONTROL_MANIFEST, _encode(journal))
         return _control_report(journal)
 
 
 LEGACY_FOCUS_ARCHIVE = CONTROL_ARCHIVE + "/legacy-focus.json"
-LEGACY_FOCUS_PATH = "doc/harness/tasks/.active"
+LEGACY_FOCUS_PATH = "doc/harness/wbs/.active"
 LEGACY_DEFAULT_MARKER_ARCHIVE = CONTROL_ARCHIVE + "/legacy-default-marker.json"
-LEGACY_DEFAULT_MARKER_PATH = "doc/harness/tasks/.active_sessions/default.json"
+LEGACY_DEFAULT_MARKER_PATH = "doc/harness/wbs/.active_sessions/default.json"
 
 
 def _legacy_default_marker(root, raw, *, current=False):
@@ -1278,11 +1293,11 @@ def _legacy_default_marker(root, raw, *, current=False):
     from datetime import datetime
     value = _json(raw)
     _require(isinstance(value, dict)
-             and set(value) == {"session_id", "task_dir", "task_id", "run_id", "updated"}
+             and set(value) == {"session_id", "wbs_dir", "wbs_id", "run_id", "updated"}
              and value["session_id"] == "default"
-             and isinstance(value["task_id"], str) and value["task_id"].startswith("TASK__")
-             and IDENT.fullmatch(value["task_id"])
-             and value["task_dir"] == str(Path(root) / "doc/harness/tasks" / value["task_id"])
+             and isinstance(value["wbs_id"], str) and value["wbs_id"].startswith("WBS__")
+             and IDENT.fullmatch(value["wbs_id"])
+             and value["wbs_dir"] == str(Path(root) / "doc/harness/wbs" / value["wbs_id"])
              and isinstance(value["run_id"], str)
              and isinstance(value["updated"], str)
              and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", value["updated"]),
@@ -1294,16 +1309,15 @@ def _legacy_default_marker(root, raw, *, current=False):
     except ValueError as exc:
         raise ValueError("Goal migration: invalid legacy default marker run/timestamp") from exc
     if current:
-        control = _control(root, "doc/harness/tasks/" + value["task_id"] + "/TASK.json")
+        control = _control(root, "doc/harness/wbs/" + value["wbs_id"] + "/WBS.control.json")
         _require(control and control["run_id"] == value["run_id"],
                  "stale legacy default marker task/run")
 
 
 def _legacy_focus_plan(repo, *, default=False):
     """Preserve shared focus as opaque history, never infer a session owner."""
-    from codex_hook_registration import workspace_roots
-    roots = workspace_roots(str(repo))
-    _require(roots and roots[0] == str(repo), "legacy focus migration requires the common repository root")
+    from wbs_namespace_migration import _project_roots
+    roots = _project_roots(repo)
     archive_path = LEGACY_DEFAULT_MARKER_ARCHIVE if default else LEGACY_FOCUS_ARCHIVE
     source_path = LEGACY_DEFAULT_MARKER_PATH if default else LEGACY_FOCUS_PATH
     raw = _read_publication(repo, archive_path, 16 * LIMIT)
@@ -1368,11 +1382,11 @@ def _legacy_focus_report(repo, archive, *, default=False):
 
 def _legacy_focus_apply(repo, *, default=False):
     from _lib import active_session_transaction
-    from codex_hook_registration import workspace_roots
+    from wbs_namespace_migration import _project_roots
     archive, exists = _legacy_focus_plan(repo, default=default)
     if not archive["entries"]:
         return _legacy_focus_report(repo, archive, default=default)
-    roots = workspace_roots(str(repo))
+    roots = _project_roots(repo)
     with ExitStack() as stack:
         for root in roots:
             stack.enter_context(active_session_transaction(root))
@@ -1413,12 +1427,12 @@ def preview(repo_root):
     # importer accepts both exact forms only within this explicit migration.
     legacy = _preview_goals(repo)
     if legacy["status"] == "complete" and controls["status"] != "complete":
-        legacy = dict(legacy, status=controls["status"], next_action="Apply this explicit task-control migration.")
+        legacy = dict(legacy, status=controls["status"], next_action="Apply this explicit WBS-control migration.")
     if legacy["status"] == "complete" and focus_report["status"] != "complete":
         legacy = dict(legacy, status="preview", next_action="Apply this explicit legacy focus migration.")
     if legacy["status"] == "complete" and default_report["status"] != "complete":
         legacy = dict(legacy, status="preview", next_action="Apply this explicit legacy default marker migration.")
-    return dict(legacy, task_control_migration=controls, legacy_focus_migration=focus_report,
+    return dict(legacy, wbs_control_migration=controls, legacy_focus_migration=focus_report,
                 legacy_default_marker_migration=default_report)
 
 
@@ -1431,5 +1445,5 @@ def apply(repo_root):
     legacy = _apply_goals(repo)
     focus = _legacy_focus_apply(repo)
     default = _legacy_focus_apply(repo, default=True)
-    return dict(legacy, task_control_migration=controls, legacy_focus_migration=focus,
+    return dict(legacy, wbs_control_migration=controls, legacy_focus_migration=focus,
                 legacy_default_marker_migration=default)

@@ -11,7 +11,7 @@ def test_public_target_returns_persistent_frozen_view_and_context_does_not_measu
     target = result["structuredContent"]["target"]
     assert target["run_id"] == opened["run_id"]
     assert "/work/verification-targets/" in target["snapshot_root"]
-    context = call("context")["structuredContent"]["task_context"]
+    context = call("context")["structuredContent"]["context"]
     assert context["verification_targets"]["status"] == "unmeasured"
     assert targets.applicability(str(td), str(repo), measure=True)["status"] == "applicable"
 
@@ -58,7 +58,7 @@ def test_direct_diagnostic_needs_no_native_registration(tmp_path):
     from test_harness_mcp_server import harness_server as server
     _, _, call, _ = public(tmp_path)
     # Receipt collectors and native registration are absent from target issuance.
-    assert not hasattr(server, "_register_task_start_watcher")
+    assert not hasattr(server, "_register_wbs_open_watcher")
     result = call("target", target=dict(specification(purpose="diagnostic"), lenses=[]))
     assert not result.get("isError"), result
     assert result["structuredContent"]["issued"] is True
@@ -118,9 +118,9 @@ def test_retired_lens_missing_metadata_is_not_read_until_reintroduced(tmp_path, 
     (Path(old['snapshot_root']).parent / 'target.json').unlink()
     assert call('check', node_id='A')['structuredContent']['passed']
     real = targets.load_target
-    def load(task_dir, token):
+    def load(wbs_dir, token):
         assert token != old['token'], 'retired target was read'
-        return real(task_dir, token)
+        return real(wbs_dir, token)
     with monkeypatch.context() as guard:
         guard.setattr(targets, 'load_target', load)
         assert call('verify')['structuredContent']['runtime_verdict'] == 'PASS'

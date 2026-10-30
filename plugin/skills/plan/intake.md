@@ -21,7 +21,7 @@ than selecting it. Log: `[spawned-mode] Auto-decide ON within delegated scope.`
 
 ```bash
 _BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-_PLAN_STATUS=$(grep -A8 '^## Review Status' doc/harness/tasks/TASK__<id>/PLAN.md 2>/dev/null || true)
+_PLAN_STATUS=$(grep -A8 '^## Review Status' doc/harness/wbs/WBS__<id>/PLAN.md 2>/dev/null || true)
 echo "BRANCH=$_BRANCH ROWS=$_ROW_COUNT TASTE=$_OPEN_TASTE CHALLENGE=$_OPEN_CHALLENGE"
 ```
 
@@ -30,7 +30,7 @@ present, emit a short welcome-back synthesis strictly from PLAN.md and resume
 without fabricating partially persisted review phases:
 
 ```
-Welcome back to TASK__<id> on branch <_BRANCH>.
+Welcome back to WBS__<id> on branch <_BRANCH>.
 The existing PLAN.md contains a completed Review Status section. Re-run the
 review only when the user requested plan changes; otherwise continue to develop.
 ```
@@ -43,7 +43,7 @@ Use working context by default. Create PLAN_SESSION.json only when the plan must
 survive a turn/context boundary or delegated planning requires shared recovery
 state. Its absence is normal and never an error. When scratch is malformed or
 stale, malformed legacy scratch is equivalent to absent scratch — ignore it
-and reconstruct from PLAN.md/task context. Legacy reviewer-transport-selection
+and reconstruct from PLAN.md/WBS context. Legacy reviewer-transport-selection
 keys from old PLAN_SESSION.json scratch are ignored; they no longer select
 anything.
 
@@ -58,9 +58,9 @@ wbs { action: "open", wbs_id: "<ARGUMENTS>" }
 ```
 Extract: `risk_level`, `planning_mode`, `compat.execution_mode`, `workflow_locked`, `maintenance_task`, `ui_scope`, `must_read`.
 
-## Phase 0.4: Read task pack
+## Phase 0.4: Read WBS pack
 
-Read in order: `TASK.json`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files in `must_read`.
+Read in order: `WBS.control.json`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files in `must_read`.
 
 ## Phase 0.4.1: Git context intake
 
@@ -90,7 +90,7 @@ Store as `BASE_BRANCH`.
 **Trigger:** REQUEST.md absent, gitignored, OR < 15 non-empty lines.
 
 This offer is about whether meaningful read-only review can start, not whether
-the task qualifies for compact planning. If the current conversation names a
+the WBS qualifies for compact planning. If the current conversation names a
 concrete outcome or target that can be inspected, use it as the request summary
 and skip this offer even when Phase 0.7 must select full. Missing acceptance or
 verification detail that repository inspection can resolve is not a reason to
@@ -107,7 +107,7 @@ Emit one AskUserQuestion:
 - B) Point to context → provide an existing issue, spec, file, or command that identifies the target and outcome
 - C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
-After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK.json` — if found, read and append it as `## Design Context` to the final PLAN.md.
+After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/wbs/WBS__<id>/WBS.control.json` — if found, read and append it as `## Design Context` to the final PLAN.md.
 
 Skip cleanly if the trigger is not met or meaningful inspection can begin.
 Never couple this offer to compact/full selection and never loop.
@@ -119,16 +119,16 @@ Never couple this offer to compact/full selection and never loop.
 If prior PLAN.md exists:
 ```bash
 _TS=$(date -u +%Y%m%dT%H%M%SZ)
-mkdir -p doc/harness/tasks/TASK__<id>/restore-points/
-cp doc/harness/tasks/TASK__<id>/PLAN.md \
-   doc/harness/tasks/TASK__<id>/restore-points/pre-plan-${_TS}.md
-cat >> doc/harness/tasks/TASK__<id>/restore-points/pre-plan-${_TS}.md << 'EOF'
+mkdir -p doc/harness/wbs/WBS__<id>/restore-points/
+cp doc/harness/wbs/WBS__<id>/PLAN.md \
+   doc/harness/wbs/WBS__<id>/restore-points/pre-plan-${_TS}.md
+cat >> doc/harness/wbs/WBS__<id>/restore-points/pre-plan-${_TS}.md << 'EOF'
 
 ## Re-run Instructions
 
-1. Copy the block below (`## Original Plan State`) back over `doc/harness/tasks/TASK__<id>/PLAN.md`.
-2. Re-invoke the plan skill with the original task slug:
-   `Skill("harness:plan", "<original-task-slug>")`
+1. Copy the block below (`## Original Plan State`) back over `doc/harness/wbs/WBS__<id>/PLAN.md`.
+2. Re-invoke the plan skill with the original WBS slug:
+   `Skill("harness:plan", "<original-wbs-id>")`
 
 The re-run will pick up the restored PLAN.md as its starting point and rebuild
 its embedded Review Status and Decision Audit Trail.
@@ -142,19 +142,19 @@ Record relative path in memory for Phase 6.2 restore-point comment.
 
 ## Phase 0.6: Scope detection
 
-Read task pack text. Scan keywords (no grep bash).
+Read WBS pack text. Scan keywords (no grep bash).
 
 **UI keywords:** ui_scope, frontend, component, css, html, react, vue, design system, stylesheet, layout, visual, button, modal, dashboard, sidebar, nav, dialog
 
 **2+ match threshold.** False-positive exclusions: `\bpage\b` alone, `\bUI\b` acronym (thread/process).
 
-Honor existing `ui_scope:true` in task pack without re-eval.
+Honor existing `ui_scope:true` in WBS pack without re-eval.
 
 ## Phase 0.7: Planning procedure branch
 
-Do not add or infer a new TASK.json execution mode. `compat.execution_mode`
+Do not add or infer a new WBS.control.json execution mode. `compat.execution_mode`
 remains `standard` or `micro`; micro keeps its existing explicit no-plan
-semantics. For a standard task, select one planning procedure:
+semantics. For a standard WBS, select one planning procedure:
 
 - **compact** only when the request is bounded, unambiguous, low blast radius,
   and every relevant acceptance/test/scope decision is already evident.
@@ -182,4 +182,4 @@ context, cross-component impact, or unresolved decision, abandon compact and
 restart at full Phase 1 before Phase 5/6. The initial prompt classification is
 never sufficient by itself.
 
-**Auto-decide detection:** check `auto_decide: true` in task pack or flag. Independent of planning procedure. If set, retain it in working context and optional scratch, CEO defaults SELECTIVE EXPANSION, and apply "What Auto-Decide Means" rules.
+**Auto-decide detection:** check `auto_decide: true` in WBS pack or flag. Independent of planning procedure. If set, retain it in working context and optional scratch, CEO defaults SELECTIVE EXPANSION, and apply "What Auto-Decide Means" rules.

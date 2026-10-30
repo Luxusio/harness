@@ -2,7 +2,7 @@
 
 `doc/harness/qa/QA_KNOWLEDGE.yaml` accumulates claims about this repo's source
 and nothing re-checks them when that source moves. On 2026-09-18 a task added a
-key to `task_verify`'s payload and thereby falsified a live note two entries
+key to `wbs_verify`'s payload and thereby falsified a live note two entries
 below the ones it was there to correct — in the file the task existed to clean.
 QA caught it by reading. Nothing mechanical did.
 
@@ -300,7 +300,7 @@ class QaNoteFlipTests(unittest.TestCase):
 
 class MarkdownEvidencePreservationTests(unittest.TestCase):
     NOTE = "---\nfreshness: current\ninvalidated_by_paths:\n  - src/example.py\n---\nEvidence.\n"
-    OPERATIONAL = ("archive", "tasks", "runtime", "checkpoints")
+    OPERATIONAL = ("archive", "tasks", "wbs", "runtime", "checkpoints")
 
     def setUp(self):
         import tempfile

@@ -3,7 +3,7 @@
 ## Assign before source edits
 
 A bound managed lead consumes its parent's existing exact assignment: validate
-the actual session, task, run, registered workspace and assigned ownership. It
+the actual session, WBS, run, registered workspace and assigned ownership. It
 does not publish dispatch prepare or refill the parent pool. Its nested helpers
 share the parent's assigned spare capacity; they do not create another pool.
 The coordinator alone owns the prepare/refill operations below.
@@ -44,7 +44,7 @@ concrete file collisions/predecessors, unavailable capabilities and measured
 capacity constraints produce structural serial facts. Do not invent a serial
 reason, reduce capacity or use estimated size as a bypass.
 
-Managed handoffs name the owner task, base commit, branch, checkout, ownership,
+Managed handoffs name the owner WBS, base commit, branch, checkout, ownership,
 dependencies and acceptance command. Bind the actual worker before edits. Each
 lead develops, independently reviews, verifies and closes in its own managed
 checkout. Preserve user changes; use the existing batch resume/recovery flow.
@@ -77,7 +77,7 @@ PASS. Source assignment is not review/QA evidence.
 ## Nested helpers and progress
 
 The existing `parallel_dispatch.py` is a stateless proposal helper for bounded
-nested roles; it grants neither new capacity nor task ownership. Reserve from
+nested roles; it grants neither new capacity nor WBS ownership. Reserve from
 the coordinator's same observed inventory, not a fresh per-lead cap. Preserve
 independent review-before-QA order. Gate authority remains with owner MCP and
 prewrite; display routing uses stored state without runtime authentication.

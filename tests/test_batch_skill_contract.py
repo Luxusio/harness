@@ -1,6 +1,6 @@
-"""Contract guards for the harness:task-lead agent and harness:batch skill.
+"""Contract guards for the harness:wbs-lead agent and harness:batch skill.
 
-Covers TASK__parallel-tasks-in-one-session AC-004: the batch-lead agent
+Covers WBS__parallel-tasks-in-one-session AC-004: the batch-lead agent
 definition, the batch coordinator skill, and the develop skill's batch-lead
 carve-outs.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-TASK_LEAD = REPO / "plugin" / "agents" / "task-lead.md"
+TASK_LEAD = REPO / "plugin" / "agents" / "wbs-lead.md"
 BATCH_SKILL = REPO / "plugin" / "skills" / "batch" / "SKILL.md"
 DEVELOP_SKILL = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
 OWNER_REQ = REPO / "doc/harness/REQ__batch-state-pool-recovery.md"
@@ -50,7 +50,7 @@ def test_task_lead_uses_mcp_checkout_without_host_isolation_and_inherits_tools()
     assert "isolation" not in meta, TASK_LEAD
     assert meta.get("model") == "inherit", TASK_LEAD
     # A lead runs the whole lifecycle: it needs Agent, Skill and the harness MCP
-    # task tools under whatever server name the host exposes (plugin-scoped
+    # WBS tools under whatever server name the host exposes (plugin-scoped
     # `mcp__plugin_harness_harness__*` or a user-level `mcp__harness__*`). A
     # `tools:` allowlist naming one form strips the tools under the other.
     assert "tools" not in meta, f"{TASK_LEAD}: must inherit the session's tools"
@@ -71,7 +71,7 @@ def test_task_lead_keeps_a_one_hour_prompt_cache_per_agent_only():
 
 def test_task_lead_commits_once_with_a_harness_task_trailer():
     norm = _normalized(_text(TASK_LEAD))
-    assert _normalized('git commit --trailer "Harness-Task: <task_id>"') in norm
+    assert _normalized('git commit --trailer "Harness-WBS: <wbs_id>"') in norm
     assert _normalized("in one commit") in norm
     assert "--amend" in norm
 
@@ -123,7 +123,7 @@ def test_batch_skill_names_every_coordinator_step():
 
 def test_batch_skill_covers_conflict_and_blocked_lead_handling():
     _assert_all(_text(BATCH_SKILL), (
-        "GIT_EDITOR=true", "--continue", "integration task", "blocked", "failed", "kept",
+        "GIT_EDITOR=true", "--continue", "integration WBS", "blocked", "failed", "kept",
         "Conflicts, fast-forward refusal or unknown outcomes halt new starts and integration",
         "collect other workers and preserve their results", "finish --resume",
         "Clear the halt only through validated owner recovery",
@@ -155,9 +155,9 @@ def test_batch_skill_integrates_leads_without_merge_commits():
 
 def test_develop_skill_points_to_task_lead_carveouts():
     body = _text(DEVELOP_SKILL)
-    assert "plugin/agents/task-lead.md" in body, DEVELOP_SKILL
+    assert "plugin/agents/wbs-lead.md" in body, DEVELOP_SKILL
     # Referenced once near the write-focus pre-flight and once near auto-install.
-    assert body.count("plugin/agents/task-lead.md") >= 2, DEVELOP_SKILL
+    assert body.count("plugin/agents/wbs-lead.md") >= 2, DEVELOP_SKILL
     _assert_all(
         body,
         (
@@ -171,11 +171,10 @@ def test_develop_skill_points_to_task_lead_carveouts():
 def test_root_claude_md_states_batch_focus_and_install_clauses():
     body = _normalized(_text(REPO / "CLAUDE.md"))
     assert _normalized(
-        "In `harness:batch` mode, batch leads skip this verified install; it runs "
-        "once from the post-merge integration task in the main checkout."
+        "Batch leads skip install; the coordinator installs once after integration."
     ) in body
     assert _normalized(
-        "Each linked git worktree is its own checkout with its own write focus"
+        "Each registered worktree retains its own isolated assignment"
     ) in body
 
 
@@ -203,7 +202,7 @@ def test_batch_skill_routes_managed_finish_through_durable_state_and_integrates_
 def test_c09_batch_clause_is_in_root_and_template_contracts():
     clause = _normalized(
         "Each linked git worktree is a separate checkout with its own write focus; "
-        "a coordinator may run one task per worktree via `harness:batch`"
+        "a coordinator may run one WBS per worktree via `harness:batch`"
     )
     for path in (REPO / "CONTRACTS.md", REPO / "plugin/skills/setup/templates/CONTRACTS.md"):
         body = _text(path)
@@ -227,11 +226,11 @@ def test_this_repo_branches_leads_from_head_and_ignores_worktrees(tmp_path):
 
 def test_batch_skill_rejects_reused_slugs_before_integrating():
     _assert_all(_text(BATCH_SKILL), (
-        "Slugs must be distinct within the batch", "task/archive identity collisions refuse",
+        "Slugs must be distinct within the batch", "WBS/archive identity collisions refuse",
         "Never replace the exact pool to bypass a retained scope",
         "Conflicts, fast-forward refusal or unknown outcomes halt new starts and integration",
     ), BATCH_SKILL)
-    _assert_all(_text(OWNER_REQ), ("reused task/archive identities refuse intake",), OWNER_REQ)
+    _assert_all(_text(OWNER_REQ), ("reused WBS/archive identities refuse intake",), OWNER_REQ)
 
 
 def test_batch_skill_gates_spawning_on_the_repo_shape_preflight():
@@ -239,10 +238,10 @@ def test_batch_skill_gates_spawning_on_the_repo_shape_preflight():
         "preflight classifies every declared scope path",
         "Only a `tracked-area` or validated `selected-submodule` scope may run in a lead",
         "`inside-submodule` or `inside-ignored-nested-repo` is not batched",
-        "ordinary harness task in the main checkout", "`outside-root` scope cannot run in a batch lead",
+        "ordinary Harness WBS in the main checkout", "`outside-root` scope cannot run in a batch lead",
         "control-root shape, clean root/nested repositories", "post-checkout-hook hazards",
         "`.claude/worktrees/` must be ignored", "off-limits",
-        "excluded (ordinary task, done or pending)", "queued (dependency or retained scope)",
+        "excluded (ordinary WBS, done or pending)", "queued (dependency or retained scope)",
         "outside the root, not batchable",
     ), BATCH_SKILL)
     # CLI flag syntax and exit classification are backend behavior tests;
@@ -309,7 +308,7 @@ def test_task_lead_operates_only_its_worktree_wbs_and_defines_verdicts():
 def test_pool_reserves_and_binds_before_authorizing_exact_worker():
     _assert_all(_text(BATCH_SKILL), (
         "owner parks the parent before worktree effects", "records reservations and exact creation intent",
-        "bootstrap-only", "No source or task mutation is permitted before bind",
+        "bootstrap-only", "No source or WBS mutation is permitted before bind",
         "Obtain the actual native worker ID from the host", 'operation="bind", slug=S, worker_id=<actual host ID>',
         "owner uses its recorded W/branch; callers do not choose them",
         "continue that same bound agent", "explicit mutation permission",
@@ -318,13 +317,13 @@ def test_pool_reserves_and_binds_before_authorizing_exact_worker():
     norm = _normalized(_text(BATCH_SKILL))
     assert norm.index('operation="prepare"') < norm.index('operation="bind"') < norm.index("explicit mutation permission")
     _assert_all(_text(TASK_LEAD), (
-        "No task MCP call, task artifacts or commit is permitted before bind",
+        "No WBS MCP call, WBS artifacts or commit is permitted before bind",
         "coordinator continues this same native agent", 'wbs(action="dispatch", operation="bind")',
         "never infer permission from original prose or edited state",
     ), TASK_LEAD)
     _assert_all(_text(OWNER_REQ), (
         "Reserved and running requests consume slots", "Never expire a reservation solely because time passed",
-        "worker, worktree, branch, task and current run, with valid close evidence",
+        "worker, worktree, branch, WBS and current run, with valid close evidence",
     ), OWNER_REQ)
 
 
@@ -335,7 +334,7 @@ def test_pool_capacity_refill_and_serial_integration_keep_lifecycle_gates():
         "Integrate completed leads in completion order and refill through `prepare` without a whole-wave barrier",
         "Never run integrations concurrently",
         "dependencies release only after their predecessor integrates and cleanup completes",
-        "unknown liveness forbids opening a main task",
+        "unknown liveness forbids opening a main WBS",
         "`review-code`, conditional `review-security`, then `qa-cli`",
         "actual review-before-QA order", 'before `wbs(action="close")`',
         "Operational closure never replaces review/QA or closes the WBS itself",
@@ -347,15 +346,15 @@ def test_pool_capacity_refill_and_serial_integration_keep_lifecycle_gates():
 
 
 def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolation():
-    path = REPO / "plugin/agents/task-lead-resume.md"
+    path = REPO / "plugin/agents/wbs-lead-resume.md"
     meta = _frontmatter(path)
-    assert meta["name"] == "task-lead-resume"
+    assert meta["name"] == "wbs-lead-resume"
     assert meta["model"] == "inherit"
     assert "isolation" not in meta
     assert "tools" not in meta
     _assert_all(_text(path), (
-        "Resolve W and pass that exact working directory to every command and nested agent before task tools",
-        "source and task mutations are not",
+        "Resolve W and pass that exact working directory to every command and nested agent before WBS tools",
+        "source and WBS mutations are not",
         "binds your actual host worker identity",
         "explicit mutation permission",
         "wbs(action=\"open\", workspace=W, wbs_id=existing_id)` without `fresh_run`",
@@ -366,7 +365,7 @@ def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolatio
     ), path)
     _assert_all(_text(BATCH_SKILL), (
         "Prefer the original agent",
-        "harness:task-lead-resume",
+        "harness:wbs-lead-resume",
         "non-isolating",
         'operation="resume", slug=S, worker_stopped=true',
         "Confirm through the host that that worker and all nested writers stopped",
@@ -376,14 +375,14 @@ def test_resume_agent_reuses_exact_worktree_and_task_generation_without_isolatio
 def test_abandonment_retains_source_and_truthful_unfinished_disposition():
     _assert_all(_text(BATCH_SKILL), (
         "Only an explicit user choice permits abandonment", "retains source, branch, evidence and unresolved scope ownership",
-        "never cancels/closes the task or satisfies the WBS", "exceptional owner commands in `batch_state.py`",
+        "never cancels/closes the WBS or satisfies the WBS", "exceptional owner commands in `batch_state.py`",
         "actual stopped-writer proof", "Label abandoned requests as retained work or never dispatched",
         "Do not claim overall completion while owned cleanup remains unresolved",
     ), BATCH_SKILL)
     _assert_all(_text(OWNER_REQ), (
         "abandon --slug S --worker-stopped --reason TEXT",
         "Refuse unresolved active work or cleanup; distinguish retained abandonment from integrated completion",
-        "does not delete unintegrated source, force-delete branches, modify task status",
+        "does not delete unintegrated source, force-delete branches, modify WBS status",
         "Unknown post-effect outcomes or pending integrated cleanup remain recoverable and cannot be hidden by abandonment",
     ), OWNER_REQ)
 
@@ -393,21 +392,21 @@ def test_native_bootstrap_retention_precedes_bind_and_exact_worker_message():
     norm = _normalized(_text(BATCH_SKILL))
     assert norm.index("creates the registered worktrees") < norm.index('operation="bind"') < norm.index("native `sendmessage`")
     _assert_all(_text(BATCH_SKILL), (
-        "agent verifies registration, branch/HEAD and helper marker", "No source or task mutation is permitted before bind",
+        "agent verifies registration, branch/HEAD and helper marker", "No source or WBS mutation is permitted before bind",
         "same bound agent", "explicit mutation permission", "including blocked and zero-source returns",
     ), BATCH_SKILL)
     lead = _normalized(_text(TASK_LEAD))
     assert lead.index("helper-created `.harness-batch-bootstrap`") < lead.index("return bootstrap json") < lead.index('operation="bind"') < lead.index("`sendmessage`")
     _assert_all(_text(TASK_LEAD), (
-        "Never create a worktree, write a substitute marker, start a task or edit source",
-        "Keep `.harness-batch-bootstrap` through all final returns, including blocked, failed and task-only/zero-source closed results",
+        "Never create a worktree, write a substitute marker, start a WBS or edit source",
+        "Keep `.harness-batch-bootstrap` through all final returns, including blocked, failed and WBS-only/zero-source closed results",
         "Never stage, edit or remove it", "git add <intended paths>` excluding `.harness-batch-bootstrap`",
         "without a dummy or empty commit",
     ), TASK_LEAD)
 
 
 def test_resume_preserves_marker_and_managed_finish_removes_only_after_harvest():
-    path = REPO / "plugin/agents/task-lead-resume.md"
+    path = REPO / "plugin/agents/wbs-lead-resume.md"
     _assert_all(_text(path), (
         "Preserve any existing `.harness-batch-bootstrap` marker exactly as supplied",
         "never stage, replace or remove it",
@@ -425,7 +424,7 @@ def test_resume_preserves_marker_and_managed_finish_removes_only_after_harvest()
         "Managed completion validates the marker and removes it only after durable harvest, immediately before ordinary or guarded S1 removal",
     ), OWNER_REQ)
     _assert_all(_text(TASK_LEAD), (
-        "It grants no PASS or task authority",
+        "It grants no PASS or WBS authority",
         "managed finish removes it only after durable evidence harvest, immediately before worktree removal",
     ), TASK_LEAD)
 
@@ -453,16 +452,16 @@ def test_selected_module_commits_stay_under_outer_task_lifecycle():
     lead = _normalized(_text(TASK_LEAD))
     assert "commit module changes before the outer gitlink commit" in lead
     assert "`git -c <w/module>`" in lead
-    assert "do not start a separate task inside a module" in lead
+    assert "do not start a separate wbs inside a module" in lead
     assert "lifecycle calls and nested review/qa cwd at w" in lead
     outer = lead[lead.index("## after `wbs(action=\"close\")` reports pass"):]
     assert "outer implementation diff" in outer
-    assert 'git commit --trailer "harness-task: <task_id>"' in outer
+    assert 'git commit --trailer "harness-wbs: <wbs_id>"' in outer
     assert "no push, no merge" in outer
 
 
 def test_selected_resume_preserves_module_identity_and_unfinished_edits():
-    path = REPO / "plugin/agents/task-lead-resume.md"
+    path = REPO / "plugin/agents/wbs-lead-resume.md"
     resume = _normalized(_text(path))
     assert "isolation" not in _frontmatter(path)
     for token in ("original selected-module manifest", "private-store identities",

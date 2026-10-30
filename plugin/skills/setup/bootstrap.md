@@ -147,8 +147,8 @@ device, capability or app prerequisite and keep the default false. GUI ACs stay
 `BLOCKED_ENV` until actual required interaction and inspected screenshot
 evidence exist. Runtime roles branch desktop windows versus mobile app/UI/touch
 by capability; X11 lacks remote exec/UI, mobile lacks desktop window tools.
-Create/attach/start only within actual task authority; preserve existing device
-state and clean up only task-created resources. Do not reset/clear/delete devices
+Create/attach/start only within actual WBS authority; preserve existing device
+state and clean up only WBS-created resources. Do not reset/clear/delete devices
 or create paid resources without actual authority.
 
 ## 3.3 Smart defaults
@@ -186,7 +186,7 @@ This is the idempotent replace/append path. The emitted block routes
 repo-mutating work to `$harness:run` and contains the
 `Durable Decision Documentation Gate`: a durable decision is not handled until it is documented under `doc/`;
 Conversation history is not durable memory, and
-the task records a specific PLAN durable-doc decision when no doc applies.
+the WBS records a specific PLAN durable-doc decision when no doc applies.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
@@ -207,7 +207,7 @@ tests, and observable behavior. PASS when changed durable knowledge is accurate,
 discoverable, and non-contradictory.
 
 Documentation review is performed by the documentation-review subagent and
-`wbs(action="verify")`. It reads typed durable docs, PLAN/TASK.json, and declared lenses
+`wbs(action="verify")`. It reads typed durable docs, PLAN/WBS.control.json, and declared lenses
 paths. It does not require legacy document-sync artifacts.
 
 ## 3.6 doc/harness/ directory
@@ -303,7 +303,7 @@ user-owned content outside it, and does not open or mutate any existing
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 "${_PLUGIN_ROOT}/scripts/contract_lint.py" \
   --path CONTRACTS.md --repo-root . --quick || \
-  echo "WARN: contract_lint reported issues — handle in the active/next harness task"
+  echo "WARN: contract_lint reported issues — handle in the active/next Harness WBS"
 ```
 
 WARN is non-blocking. Use the continuous maintenance flow to repair drift.

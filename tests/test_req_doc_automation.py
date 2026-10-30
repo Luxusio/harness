@@ -36,7 +36,7 @@ def test_req_scaffold_writes_observable_behavior_and_verification_cues(tmp_path)
         "Android back returns to the previous reader screen instead of exiting unexpectedly.",
         "Verify Android APK or emulator behavior separately from browser mobile.",
         "No full reader redesign.",
-        "task: TASK__mobile-reader-polish-and-navigation-fixes",
+        "task: WBS__mobile-reader-polish-and-navigation-fixes",
     )
 
     path = tmp_path / rel
@@ -55,8 +55,8 @@ def test_req_detector_does_not_flag_internal_refactor_path():
 
 
 def test_prewrite_denies_observable_source_edit_without_req_link():
-    with _isolated_task("req-prewrite-no-link") as (root, task_dir):
-        plan = Path(task_dir) / "PLAN.md"
+    with _isolated_task("req-prewrite-no-link") as (root, wbs_dir):
+        plan = Path(wbs_dir) / "PLAN.md"
         plan.write_text("# PLAN\n\n## Durable Docs Decision\nREQ: n/a\n", encoding="utf-8")
         target = Path(root) / "src/mobile/Reader.tsx"
         result = invoke_hook(

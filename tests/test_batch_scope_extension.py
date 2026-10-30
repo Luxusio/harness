@@ -50,9 +50,9 @@ def extend(call, handoff, worktree, **changes):
 
 def test_public_scope_grant_preserves_intent_and_refills_independent_work(tmp_path, monkeypatch):
     pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch, three=True)
-    parent = pool.repo / "doc/harness/tasks/TASK__managed/WBS.json"
+    parent = pool.repo / "doc/harness/wbs/WBS__managed/WBS.json"
     original_intent = parent.read_bytes()
-    original_control = (directory / "TASK.json").read_bytes()
+    original_control = (directory / "WBS.control.json").read_bytes()
     original_marker = (worktree / ".harness-batch-bootstrap").read_bytes()
     granted = extend(call, handoff, worktree, reason="x" * 2000)
     assert not granted.get("isError"), granted
@@ -64,7 +64,7 @@ def test_public_scope_grant_preserves_intent_and_refills_independent_work(tmp_pa
     assert owner["scopes"] == ["a.txt"]
     assert owner["extra_scopes"] == {"b.txt": str(pool.repo / "b.txt")}
     assert parent.read_bytes() == original_intent
-    assert (directory / "TASK.json").read_bytes() == original_control
+    assert (directory / "WBS.control.json").read_bytes() == original_control
     assert (worktree / ".harness-batch-bootstrap").read_bytes() == original_marker
     assert not (directory / "RECEIPTS.jsonl").exists()
     recorded = pool.state.read_bytes()
@@ -78,7 +78,7 @@ def test_public_scope_grant_preserves_intent_and_refills_independent_work(tmp_pa
     _git("add", "a.txt", "b.txt", cwd=worktree)
     _git("commit", "-qm", "implement granted ownership", cwd=worktree)
     task(worktree, handoff["slug"], closed=True)  # isolated fixture, not production evidence
-    result = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+    result = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                   commit=_head(worktree), verdict="closed", run_id=RUN)
     completed = call("dispatch", operation="complete", slug=handoff["slug"], worker_id="worker-a",
                      worker_stopped=True, result=result)
@@ -226,8 +226,8 @@ def test_resumed_scope_grant_preserves_historical_result_and_evidence(tmp_path, 
     receipts = directory / "RECEIPTS.jsonl"
     receipts.write_bytes(b'{"fixture":"historical nonaccepting execution"}\n')
     original_evidence = {name: (directory / name).read_bytes()
-                         for name in ("TASK.json", "PLAN.md", "RECEIPTS.jsonl")}
-    result = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+                         for name in ("WBS.control.json", "PLAN.md", "RECEIPTS.jsonl")}
+    result = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                   verdict=verdict, run_id=RUN, blocked_reason="Original execution requires added caller scope")
     completed = call("dispatch", operation="complete", slug=handoff["slug"], worker_id="worker-a",
                      worker_stopped=True, result=result)
@@ -253,7 +253,7 @@ def test_resumed_scope_grant_preserves_historical_result_and_evidence(tmp_path, 
 @pytest.mark.parametrize("evidence", ["unresumed", "closed", "checkpoint", "finish_result", "closed_control"])
 def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, monkeypatch, evidence):
     pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch)
-    result = dict(task_id=handoff["task_id"], worktree=str(worktree), branch=handoff["branch"],
+    result = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                   verdict="blocked", run_id=RUN)
     assert not call("dispatch", operation="complete", slug=handoff["slug"], worker_id="worker-a",
                     worker_stopped=True, result=result).get("isError")
@@ -276,8 +276,8 @@ def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, m
         owner["closed"] = True
     pool.state.write_text(json.dumps(state))
     before = pool.state.read_bytes()
-    original_control = (directory / "TASK.json").read_bytes()
+    original_control = (directory / "WBS.control.json").read_bytes()
     refused = extend(call, handoff, worktree)
     assert refused.get("isError") and "pre-result" in refused["structuredContent"]["error"], refused
     assert pool.state.read_bytes() == before
-    assert (directory / "TASK.json").read_bytes() == original_control
+    assert (directory / "WBS.control.json").read_bytes() == original_control

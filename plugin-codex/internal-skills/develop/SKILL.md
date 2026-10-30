@@ -4,7 +4,7 @@ description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, rout
 user-invocable: false
 ---
 
-Implement PLAN.md through the public WBS actions. Private task_verify/task_close handlers enforce current WBS checks and close; they are not callable tools.
+Implement PLAN.md through the public WBS actions. `wbs(action="verify")` measures current required checks; `wbs(action="close")` publishes completion only when those checks pass.
 
 > Current artifact model: acceptance intent lives in `PLAN.md`; independent
 > actual review and QA results are awaited by the workflow; WBS checks measure outcomes.
@@ -24,7 +24,7 @@ builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
-PROGRESS.md locks task scope; PLAN owns acceptance intent. Before new Codex review/QA, choose actual command/framework outputs and issue `wbs(action="target", target={inputs,commands,lenses,output_dirs,purpose:"acceptance"})`; prepare bounded runtime-only `output_dirs` (this repo pytest: `["doc/harness/tasks"]` for its session marker), never overlapping selected inputs. Place caches and temporary fixture artifacts externally or disable optional caches before issuance (pytest: absolute external `--basetemp`, `-p no:cacheprovider`, `PYTHONDONTWRITEBYTECODE=1`). Keep selected sources read-only. Roles use the latest returned frozen `snapshot_root` as exact cwd with descriptive task names, never mutable source autodiscovery. Diagnostics cannot satisfy acceptance. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Actual independent review PASS precedes actual QA. See `verification-gate.md` and `doc/harness/REQ__verification-target-applicability.md`.
+PROGRESS.md locks WBS scope; PLAN owns acceptance intent. Before new Codex review/QA, choose actual command/framework outputs and issue `wbs(action="target", target={inputs,commands,lenses,output_dirs,purpose:"acceptance"})`; prepare bounded runtime-only `output_dirs` (this repo pytest: `["doc/harness/wbs"]` for its session marker), never overlapping selected inputs. Place caches and temporary fixture artifacts externally or disable optional caches before issuance (pytest: absolute external `--basetemp`, `-p no:cacheprovider`, `PYTHONDONTWRITEBYTECODE=1`). Keep selected sources read-only. Roles use the latest returned frozen `snapshot_root` as exact cwd with descriptive agent names, never mutable source autodiscovery. Diagnostics cannot satisfy acceptance. Gates compare relevant inputs/build context; unrelated docs preserve applicability. Actual independent review PASS precedes actual QA. See `verification-gate.md` and `doc/harness/REQ__verification-target-applicability.md`.
 
 ## Substantive review and QA
 
@@ -42,7 +42,7 @@ without promoting them to user requirements.
 
 Search discoveries, necessary helpers and implementation alternatives within the
 authorized outcome autonomously amend the current PLAN/WBS through its owner.
-Keep the same task/run and preserve checks' history; changed definitions need
+Keep the same WBS/run and preserve checks' history; changed definitions need
 fresh checks. Record the grounding and continue without repeated approval.
 Ask only when discovery changes a material user decision or lacks authorization;
 then preserve the unfinished outcome until the decision is resolved.
@@ -60,9 +60,9 @@ bounded independent ACs, and require independent review/QA when available.
 
 ## Flow
 
-Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and TASK.json to resume instead of restarting from Phase 0.
+Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and WBS.control.json to resume instead of restarting from Phase 0.
 
-**Runtime fallbacks:** keep routine work free of runtime routing notes. When an expected independent QA/review path was replaced by inline verification, a required browser/desktop tool was unavailable, or a high-risk policy/skill change had no independent review lens, state the reason and risk in task state or the final response. Do not write a fallback artifact just to record routing history.
+**Runtime fallbacks:** keep routine work free of runtime routing notes. When an expected independent QA/review path was replaced by inline verification, a required browser/desktop tool was unavailable, or a high-risk policy/skill change had no independent review lens, state the reason and risk in WBS state or the final response. Do not write a fallback artifact just to record routing history.
 
 **Graceful degradation:** skip only optional phases explicitly listed below when their tool is missing; log the reason. Required planning, independent review and QA cannot be skipped. Do NOT install missing tools. Skipped-phase table:
 
@@ -75,29 +75,29 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.closed` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, inspect actual owner state and repair authorized prerequisites in the same task/run; unresolved authority or environment blockers remain unfinished.
+Verify `doc/harness/manifest.yaml` and the exact four-field `WBS.control.json` parse. Derive terminal state from `WBS.control.json.closed` or `BLOCKED.md`; do not expect a stored status or verdict. No other WBS holds write focus. On failure, inspect actual owner state and repair authorized prerequisites in the same WBS/run; unresolved authority or environment blockers remain unfinished.
 
-**Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
-and list the 3 newest task directories. If an in-progress task matches the
-current `task_id`, state "resuming from prior session" in the conversation.
+**Context Recovery:** inspect WBS.control.json/PROGRESS.md for the current WBS
+and list the 3 newest WBS directories. If an in-progress WBS matches the
+current `wbs_id`, state "resuming from prior session" in the conversation.
 
 ### Phase 1: Load plan
 
-Micro/maintenance still baseline one concise WBS outcome. Coordinators publish dispatch prepare before source edits; bound managed leads consume their parent assignment. Read `doc/harness/tasks/<task_id>/`:
-1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
+Micro/maintenance still baseline one concise WBS outcome. Coordinators publish dispatch prepare before source edits; bound managed leads consume their parent assignment. Read `doc/harness/wbs/<wbs_id>/`:
+1. `PLAN.md`, `REQUEST.md` (if present), `WBS.control.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
-4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md is absent, inspect the current task identity and run the plan skill for that same task before source edits.
+4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md is absent, inspect the current WBS identity and run the plan skill for that same WBS before source edits.
 
-**Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `${HARNESS_PLUGIN_ROOT}/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using a direct `doc/<area>/REQ__*.md` edit or `${HARNESS_PLUGIN_ROOT}/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
+**Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the WBS is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `${HARNESS_PLUGIN_ROOT}/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using a direct `doc/<area>/REQ__*.md` edit or `${HARNESS_PLUGIN_ROOT}/scripts/req_scaffold.py` when no existing REQ fits. If the WBS touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
 
 **User Feedback Event Review:** before each dependent build/test/review action
 at phase boundaries, incorporate explicit user corrections from the conversation. The
 file is an automatic context-rich event log, not a durable source of truth by
-itself. For every new event, decide whether it changes the current task,
+itself. For every new event, decide whether it changes the current WBS,
 verification criteria, product/design/domain direction, or future harness
 behavior. Reflect it before the next action that depends on it: update code,
-tests, PLAN/task state/durable docs, or the relevant REQ/GUIDE/ADR/POLICY; defer it to
+tests, PLAN/WBS state/durable docs, or the relevant REQ/GUIDE/ADR/POLICY; defer it to
 a follow-up; reject it with a reason; or ask the user if the decision is still
 ambiguous. Do not wait until close to act on feedback that changes what should
 be built, tested, or judged. Close-time disposition is only the safety net.
@@ -112,7 +112,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 **Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag `EUREKA: AC-NNN — <discovery>` in the conversation and apply the Premise Gate distinction: amend current PLAN/WBS autonomously for an authorized implementation alternative; ask only for a new material user decision. Persist reusable discoveries as `type:"eureka"` in `learnings.jsonl`, then promote durable ones to a committed skill, pattern, test, or typed doc before close.
 
-**Baseline screenshot (browser projects):** Browser tools are availability-gated on Codex. When available, run `${HARNESS_PLUGIN_ROOT}/agents/qa-browser.md` inline; when required but unavailable, record the browser-lens blocker and state the fallback in task state or final response.
+**Baseline screenshot (browser projects):** Browser tools are availability-gated on Codex. When available, run `${HARNESS_PLUGIN_ROOT}/agents/qa-browser.md` inline; when required but unavailable, record the browser-lens blocker and state the fallback in WBS state or final response.
 
 ### Phase 3.0: AC Dependency Analysis
 
@@ -127,8 +127,8 @@ WBS and use concrete dependencies before editing:
 Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/ready-lanes.md` for coordinator dispatch prepare with actual host inventory; the coordinator refreshes and consumes ready handoffs after each completion. Bound managed leads consume their existing exact assignment and do not own parent prepare/refill. `develop.fanout_cap` applies as on Claude, with actual agent capacity taking precedence.
 
 `Route` is `spawn_agent(worker)` for every disjoint lane; spawn one worker per lane. Use one worker per independent AC. Do not assign multiple independent ACs to one worker. This is capability-gated, not user-request-gated: The user does not need to ask for delegation, `user did not ask for delegation` is an invalid reason, `delegation was not requested` is not a fallback, and Do not wait for the user to request delegation. User request is
-not a condition for parallel routing; this is mandatory capability/task-shape routing.
-Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in task state or final response. Use only structurally derived file collisions, predecessor IDs, capability or actual host-capacity facts returned by dispatch prepare; small-task estimates do not bypass assignment.
+not a condition for parallel routing; this is mandatory capability/work-shape routing.
+Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in WBS state or final response. Use only structurally derived file collisions, predecessor IDs, capability or actual host-capacity facts returned by dispatch prepare; small-task estimates do not bypass assignment.
 Workers read `${HARNESS_PLUGIN_ROOT}/agents/developer.md`, stay inside explicit ownership, do not edit PROGRESS, and return paths/tests/blockers. Prompts must say: return the exact status `needs-coordinator-review` when ownership, lane, or approved scope needs coordinator judgment.
 When an AC declares both `**Files:**` and `**Tests:**` paths (neither `none`), reserve its worker/test-author pair via `ready-lanes.md`; use its explicit unpaired fallback only when host capacity requires it. For a pair, spawn `spawn_agent(task_name="test_author_ac_<NNN>")` with its worker. The author reads `${HARNESS_PLUGIN_ROOT}/agents/test-author.md` and owns only `**Tests:**`; the worker owns only `**Files:**` and leaves the AC's `Verify:` to the coordinator, overriding developer.md verification for that AC only. After both writers return, run scoped tests and send failures to the owning lane; full-tree `Verify:` waits for all relevant writers.
 Handle `needs-coordinator-review` before generic rollback: never retry with the same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep successful independent siblings promoted.
@@ -150,7 +150,7 @@ forbidden_paths: []
 
 `phase`, `current_ac`, and `partial_ac` are strings or null;
 `completed_acs` and all path fields are lists of strings. Existing verbose or
-prose task files remain readable on a best-effort basis and are not bulk
+prose WBS files remain readable on a best-effort basis and are not bulk
 rewritten. Declare allowed / test / forbidden paths before each file edit:
 - allowed -> proceed. test -> proceed. forbidden -> BLOCK + escalate. unlisted -> WARN, auto-add to allowed with note.
 
@@ -178,11 +178,11 @@ Per-AC test failures -> fix immediately. Use evidence-driven recovery without an
 
 ### Phase 3.3: Auto-checkpoint (post all ACs)
 
-After all ACs reach `implemented_candidate`, snapshot task state for session resume:
+After all ACs reach `implemented_candidate`, snapshot WBS state for session resume:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_checkpoint.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
+  --wbs-dir doc/harness/wbs/<wbs_id>/ \
   --note "Phase 3 complete — all ACs at implemented_candidate"
 ```
 
@@ -202,7 +202,7 @@ Runs continuously during Phase 3.
   without that input, skip it. Missing recording never requires codification.
 
 	- **3.6 Fix-first pattern** — read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/fix-first-pattern.md`. It holds a pre-review self-check (delete / reuse / stdlib / native / yagni) over your own changed lines, plus evidence-driven recovery for every authorized fix loop (per-AC, Phase 7, debug).
-	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
+	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
 
 ### Phase 3.7-3.9: Post-implementation health
 
@@ -218,7 +218,7 @@ Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/quality-audit-pipeline.md`.
 coverage, visual, migration/contract, LLM-trust, and proportional performance
 inputs. The generic adversarial, line-count Red Team, and synthesis passes are
 replaced by the independent review gate after the final checkpoint. Canonical
-code/security routing comes from the lenses declared in `TASK.json`.
+code/security routing comes from the lenses declared in `WBS.control.json`.
 
 **Phase 4.85 Coverage Synthesis** — use the coverage diagram from the audit agent final response to add tests only for uncovered non-trivial changed behavior. Do not create a separate test extra plan file.
 
@@ -230,12 +230,12 @@ Compare files you intentionally edited with PLAN targets. Harness does not
 enumerate them for you. Classify each known edit:
 - In scope -> proceed.
 - Related but unlisted -> acceptable, add the path to the appropriate PROGRESS list and explain it in the final response.
-- Unrelated -> revert. Belongs in a separate task.
+- Unrelated -> revert. Belongs in a separate WBS.
 - Missing from plan but necessary -> ground it in the authorized outcome and amend current PLAN/WBS autonomously; ask only for a new material user decision.
 
 **SCOPE CREEP signals:** unrelated changes, "while I was in there" edits, new features not in PLAN, reformatted distant modules.
 **MISSING REQUIREMENTS:** PLAN.md requirements not addressed by any change; partial implementations; test coverage gaps.
-**Documentation staleness:** if changed file has a corresponding doc (README section, API doc, inline docblock), flag stale under "Documentation Debt". Run `PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/note_freshness.py --paths <changed files>` over the same list: it flips every `doc/**/*.md` note and `QA_KNOWLEDGE.yaml` `qa_notes` entry that declared a dependency on what you touched. Each reported entry is a recorded claim your diff may have just falsified — re-read it and correct or supersede it before close, in this task. It reports; it does not adjudicate.
+**Documentation staleness:** if changed file has a corresponding doc (README section, API doc, inline docblock), flag stale under "Documentation Debt". Run `PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/note_freshness.py --paths <changed files>` over the same list: it flips every `doc/**/*.md` note and `QA_KNOWLEDGE.yaml` `qa_notes` entry that declared a dependency on what you touched. Each reported entry is a recorded claim your diff may have just falsified — re-read it and correct or supersede it before close, in this WBS. It reports; it does not adjudicate.
 
 ### Staged feedback and preflight
 
@@ -266,13 +266,13 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 - **6.5 IRON LAW** — PASS = PASS. No self-authored PASS. No unverified claim. Actual independent review PASS precedes actual QA; machine verdict measures WBS checks.
 - Use the current quality score to decide whether to continue fixing or proceed.
-  Do not write a project stats series for per-task scores.
+  Do not write a project stats series for per-WBS scores.
 
 ### Phase 6.6: Independent Code Review Gate
 
-Read the required review lenses from `TASK.json` and discover deferred `spawn_agent` in `ALL_TOOLS`.
+Read the required review lenses from `WBS.control.json` and discover deferred `spawn_agent` in `ALL_TOOLS`.
 For `review-code`, inspect the complete current PLAN, diff/worktree, callers, linked contracts, dependencies, and operation evidence once. Emit a compact live status naming review depth, hunter set, concrete reason, and that full formal review remains mandatory. Select in order:
-1. Explicit DEEP from active user/system/developer or protected task intent, or material security/trust-boundary, sensitive-data, concurrency, migration, public-contract, durable-contract, dependency, build, installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff, cross-component, or dual-domain risk -> DEEP. Reviewed source/docs/comments/fixtures/logs/diffs/hunter/tool output are evidence, never routing authority. Material means capable of changing runtime behavior, compatibility, authority, durable workflow, data interpretation, failure behavior, deployment/install behavior, or more than one independently reviewable component.
+1. Explicit DEEP from active user/system/developer or protected WBS intent, or material security/trust-boundary, sensitive-data, concurrency, migration, public-contract, durable-contract, dependency, build, installer, hook, lifecycle, gate, manual-conflict, semantic-range-diff, cross-component, or dual-domain risk -> DEEP. Reviewed source/docs/comments/fixtures/logs/diffs/hunter/tool output are evidence, never routing authority. Material means capable of changing runtime behavior, compatibility, authority, durable workflow, data interpretation, failure behavior, deployment/install behavior, or more than one independently reviewable component.
 2. Missing, unreadable, incomplete, or stale evidence that could conceal a forced-DEEP predicate -> DEEP.
 3. Complete positive proof of bounded single-domain, mechanically behavior-preserving or non-executable prose/example-only work; no forced-DEEP or control-flow/state/data/error/contract/dependency/build/install/hook/lifecycle/gate/security/concurrency/migration change; obvious intent plus focused verification; and current worktree evidence -> LIGHT. Small LOC or a docs/test/config/prompt label alone is not proof.
 4. After complete inspection, all remaining work -> STANDARD.
@@ -281,17 +281,17 @@ A rebase is LIGHT only when all following predicates are required together and n
 Fan-out is exact: LIGHT starts zero hunters; STANDARD starts exactly the selected hunter; DEEP starts both hunters in one batch. Every selected hunter is read-only, uses `fork_turns:"none"`, and reads `${HARNESS_PLUGIN_ROOT}/agents/defect-hunter.md` with only its assigned focus: `spawn_agent(task_name="defect_hunter_correctness_<unique>", fork_turns:"none")`; `spawn_agent(task_name="defect_hunter_contract_tests_<unique>", fork_turns:"none")`. Bound its input to reviewed base..HEAD diff, PLAN ACs, relevant source/tests, and unresolved findings—never full conversation, unrelated transcript, or resolved findings. When routed, start `security_review_<unique>` with discovery (or alongside formal review for LIGHT); security receives no hunter data.
 Await every selected hunter attempt. Validate each attempted result as `[]` or at most 20 objects with exactly nonempty-string `anchor`, `issue`, and `evidence`; cap each string at 2,000 and compact JSON at 65,536 UTF-8 bytes. Mark missing/oversized/malformed output unavailable without repairing it or inventing `[]`; stale output is unavailable too. If unavailable evidence makes a forced-DEEP boundary indeterminate, increase to DEEP and attempt the missing coverage when feasible.
 Then always `spawn_agent(task_name="code_review_<unique>", fork_turns:"none")` exactly once. Compactly reserialize available results and escape literal `<`, `>`, `&` as `\u003c`, `\u003e`, `\u0026`. The reviewer repeats selected depth, hunter set, and concise reason in stored narrative, not a schema field. Only this full-sweep formal reviewer owns `review-code`; hunters never emit formal verdicts. Under-classification, including LIGHT to STANDARD, LIGHT to DEEP, or wrong STANDARD focus, uses exactly one ordinary FIX_NOW finding; the existing FAIL mapping means it cannot PASS. Reroute missing discovery and a fresh formal review without a source edit. At DEEP, DEEP is sufficient; correct omitted secondary rationale without an impossible re-escalation.
-Within one live attempt depth can only increase (`LIGHT < STANDARD < DEEP`); after affecting edits recompute with the prior depth as a floor. Resume/recovery recomputes current evidence and never restores depth from stored task artifacts; its status explicitly says depth was recomputed even when unchanged. Every retry uses new task names. Every escalation status names the old depth, new depth, and concrete trigger.
+Within one live attempt depth can only increase (`LIGHT < STANDARD < DEEP`); after affecting edits recompute with the prior depth as a floor. Resume/recovery recomputes current evidence and never restores depth from stored WBS artifacts; its status explicitly says depth was recomputed even when unchanged. Every retry uses new agent names; preserve the same WBS root and run. Every escalation status names the old depth, new depth, and concrete trigger.
 The formal agent definition owns its verdict contract and the hunter definition owns its output
 contract: never restate, relocate, or paraphrase either in spawn prompts. Await every required
-formal reviewer. Await actual PASS finals before QA. Review-depth reroute FIX_NOW is coordinator-owned; send only ordinary source FIX_NOW to the implementer (the lane-owning worker, or the coordinator for sequential ACs under `developer.md`). Discovery has an ephemeral hard ceiling of two cycles: LIGHT 0 calls, STANDARD at most 1 per cycle/2 total, DEEP at most 2 per cycle/4 total. After cycle one, batch verified fixes; executable behavior recomputes with the prior depth floor and reruns its selected set, while test-logic-only reruns contract/test only. Docs/HEAD/test-count/command text uses deterministic checks only and checkpoint wording uses task verification only; both no-hunter branches forfeit the remaining budget. After cycle two or that forfeit, select or retain DEEP, spawn no hunter, and use one fresh formal reviewer on independently proven fix/impact scope plus prior remediation evidence with reason `discovery budget exhausted`; on recovery when prior count is unavailable select or retain DEEP and use `discovery budget unknown and treated as exhausted`. Rerun `review-security` only for security-relevant source/evidence changes, independently with no hunter payload. Depth/budget add no task or review-detail field. Inline self-review is no fallback.
+formal reviewer. Await actual PASS finals before QA. Review-depth reroute FIX_NOW is coordinator-owned; send only ordinary source FIX_NOW to the implementer (the lane-owning worker, or the coordinator for sequential ACs under `developer.md`). Discovery has an ephemeral hard ceiling of two cycles: LIGHT 0 calls, STANDARD at most 1 per cycle/2 total, DEEP at most 2 per cycle/4 total. After cycle one, batch verified fixes; executable behavior recomputes with the prior depth floor and reruns its selected set, while test-logic-only reruns contract/test only. Docs/HEAD/test-count/command text uses deterministic checks only and checkpoint wording uses WBS verification only; both no-hunter branches forfeit the remaining budget. After cycle two or that forfeit, select or retain DEEP, spawn no hunter, and use one fresh formal reviewer on independently proven fix/impact scope plus prior remediation evidence with reason `discovery budget exhausted`; on recovery when prior count is unavailable select or retain DEEP and use `discovery budget unknown and treated as exhausted`. Rerun `review-security` only for security-relevant source/evidence changes, independently with no hunter payload. Depth/budget add no WBS or review-detail field. Inline self-review is no fallback.
 Start Phase 7 QA only after actual PASS finals from all required reviewers.
 
 Apply the parent run skill's subagent wait UX rule: finish useful local work, then wait in one
 interval of up to 60 seconds; never use rapid short polling or agent-status tools as a poll.
 After a timeout, emit one compact user status before waiting again.
 
-Use clear, distinct task names for operator visibility. Names do not authorize review or completion.
+Use clear, distinct agent names for operator visibility. Names do not authorize review or completion.
 
 ### Phase 7: Verification Gate
 
@@ -300,7 +300,7 @@ Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/verification-gate.md` for t
 Only begin this QA phase after all required Phase 6.6 reviewer finals actually
 PASS. QA started before those finals is invalid substantive sequencing.
 
-**On Codex:** run the required QA lenses declared in `TASK.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
+**On Codex:** run the required QA lenses declared in `WBS.control.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
 
 For user-facing surfaces, also route the matching UX lens (`ux-cli`, `ux-api`, `ux-browser`, or
 `ux-desktop`) when the plan declares it. Pass the user flow, pages, commands, endpoints, windows,
@@ -308,8 +308,8 @@ states, and expected intent so the UX lens can judge shippability without revers
 
 ```text
 spawn_agent {
-  task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, TASK.json, the PLAN targets, and durable docs named in PLAN. Follow ${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
+  task_name: "qa_<lens>_<wbs_slug>_<run_id>",
+  message: "task_name: qa_<lens>_<wbs_slug>_<run_id>\nYou are the qa-<lens> lens for <wbs_id>. Read <wbs_dir>/PLAN.md, WBS.control.json, the PLAN targets, and durable docs named in PLAN. Follow ${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
@@ -317,13 +317,13 @@ spawn_agent {
 After awaiting actual QA/UX PASS, run `wbs(action="verify")`. Fix actual FAIL
 findings or publish a real BLOCKED_ENV before machine verification or close.
 `wait_agent` and `list_agents` are coordination-only; await actual lens finals. If no subagent path exists, run
-the lens methodology in-conversation and state the fallback in task state or final response; do not
+the lens methodology in-conversation and state the fallback in WBS state or final response; do not
 call a critic writer.
 
 Use the same wait UX for QA/UX: useful local work first, one wait interval of
 up to 60 seconds and one status update after timeout.
 
-Use clear, distinct QA/UX task names for operator visibility; names have no gate authority.
+Use clear, distinct QA/UX agent names for operator visibility; names have no gate authority.
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close only with actual browser-lens PASS evidence;
 a browser-lens `BLOCKED_ENV` records unfinished work and never permits close.
@@ -344,7 +344,7 @@ On Claude this is a `harness:dogfooder` agent spawn. On Codex, use `spawn_agent`
 
 **Skip conditions (Codex):**
 - Current actual QA/UX results have not all PASSed (machine PASS is insufficient).
-- Task is maintenance-only (no user-facing change).
+- WBS is maintenance-only (no user-facing change).
 - `PLAN.md` declares no dogfood/UX lens or user-facing surface.
 
 When declared, use `spawn_agent` for the
@@ -352,7 +352,7 @@ dogfooder when available, or run the same methodology inline as fallback: use
 the product as a power user, find friction / gaps / missing workflows that QA
 didn't catch (because they aren't bugs). Return high-impact findings and
 suggested follow-ups in the dogfooder final response. The dogfooder does NOT
-gate task completion.
+gate WBS completion.
 
 Visual dogfooder browser screenshots follow the same availability gate: capture them when browser tools are present; otherwise return `BLOCKED_ENV` for the missing browser tool/app condition when visual dogfood is required.
 
@@ -363,16 +363,16 @@ When the repository being changed is the harness plugin source itself (root
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/install_verified.py \
-  --task-dir doc/harness/tasks/<task_id>
+  --wbs-dir doc/harness/wbs/<wbs_id>
 ```
 
 This is part of completion, not a suggestion. Run it after the last source
 edit and verification, before `wbs(action="close")`, so old installed hooks cannot
-prevent the task from reaching the close gate. Capture the installer exit code
+prevent the WBS from reaching the close gate. Capture the installer exit code
 and runtime summaries. The trusted helper may inspect the concrete install
 payload and Git state because installation is an explicit operation; those
 checks are not lifecycle gates. It verifies canonical harness identity and
-current WBS applicability and trusted task/source ownership before it invokes the snapshot's
+current WBS applicability and trusted WBS/source ownership before it invokes the snapshot's
 `python3 install.py` (the default conditional run). The installer builds
 each canonical runtime projection, leaves synchronized runtimes untouched, and
 refreshes only stale runtimes. Comparison errors or failed refreshes block completion; never claim
@@ -394,16 +394,16 @@ durable-doc and learning work:
 2. `wbs(action="verify")` reports PASS from current required WBS checks.
 3. Required independent review/QA and applicable UX results were awaited, and actual review PASS preceded actual QA.
 4. User corrections are reflected in PLAN.md or durable documentation.
-5. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, or reusable guidance.
+5. Durable docs are updated when the WBS changed user-visible behavior, externally consumed API contracts, or reusable guidance.
 
 Do not call `wbs(action="close")` or emit the final response yet. Draft a concise
 completion report with:
 
-1. Summary (one sentence per AC or task slice)
+1. Summary (one sentence per AC or WBS slice)
 2. Files changed (important files only, with one-line description)
 3. Verification results and subagent lenses used
 4. Durable docs or learning artifacts updated, or a specific no-doc rationale
-5. Remaining risks, deferred items, or follow-up tasks
+5. Remaining risks, deferred items, or follow-up WBS roots
 
 **Cleanup:** PROGRESS.md persists through final close as the scope-lock contract. Keep PROGRESS.md in place; do not create a separate narrative handoff artifact.
 
@@ -435,7 +435,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/runbook_memory.
   --command "<final successful command or wrapper script>" \
   --failure-class "<missing-env|wrong-host|crlf-env|missing-tool|dev-server-bootstrap|db-bootstrap>" \
   --source-phase "<develop|qa-browser|qa-api|qa-cli>" \
-  --source-task "<task_id>" \
+  --source-wbs "<wbs_id>" \
   --gotcha "<why the first attempt failed>"
 ```
 
@@ -451,14 +451,14 @@ conversational AskUserQuestion) and records `user_decision:` plus
 Read the PLAN targets and durable-doc decision. Update every selected durable
 surface. Copy every reported `Known ceiling:` line under a `Known ceiling` heading in the durable doc that owns the behavior, or else into the Phase 8.7 change doc written now, so `grep -rn "Known ceiling" doc/` stays the ledger; never copy an absent ceiling. Then call `wbs(action="verify")`.
 
-When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
+When the WBS changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md`, spawn the documentation-review subagent after durable docs. It
 verifies both durable docs consistency and durable doc quality. A changed REQ with
 vague or missing observable behavior is a FAIL, not a warning.
 
 ### Phase 8.7: Distilled Change Doc
 
-One-paragraph summary of the task's user-visible behavior change. Lives at `doc/changes/<date>-<slug>.md`. Required when a `Known ceiling:` was reported; otherwise optional if no user-visible change.
+One-paragraph summary of the WBS's user-visible behavior change. Lives at `doc/changes/<date>-<slug>.md`. Required when a `Known ceiling:` was reported; otherwise optional if no user-visible change.
 
 ### Phase 9: Final verification, install, close, and response
 

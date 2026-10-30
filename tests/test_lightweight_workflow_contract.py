@@ -68,7 +68,7 @@ def test_compact_planning_is_procedural_and_fail_closed():
             "high-risk maintenance",
         ):
             assert trigger in normalized
-        assert "TASK.json" in normalized
+        assert "WBS.control.json" in normalized
         assert "standard" in normalized and "micro" in normalized
     assert "user asks for a full plan" in claude
     assert "explicit request" in codex
@@ -91,7 +91,7 @@ def test_optional_plan_session_is_removed_after_publication():
     assert "Its absence is normal" in intake
     assert "malformed legacy scratch is equivalent to absent scratch" in intake
     assert "HARNESS_DISABLE_CROSS_MODEL" not in intake
-    assert "remove task-local PLAN_SESSION.json" in writer
+    assert "remove WBS-local PLAN_SESSION.json" in writer
     assert "Remove it after successful `wbs(action=\"plan\")`" in codex
 
 
@@ -285,7 +285,7 @@ def test_post_close_guidance_uses_current_run_and_verified_close_apis():
     body = (REPO / "plugin/skills/run/self-improvement.md").read_text(
         encoding="utf-8"
     )
-    assert '--task "<task_id>" --task-run-id "<task_run_id>"' in body
+    assert '--wbs "<wbs_id>" --wbs-run-id "<wbs_run_id>"' in body
     assert 'retro.py --count-closed-since "$_LAST_RETRO_TS"' in body
     assert "os.path.getmtime(path)" not in body
 

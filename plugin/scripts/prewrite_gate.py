@@ -26,8 +26,8 @@ times out or crashes (see hook_pre_tool_use.py).
 Native session authentication metadata remains runtime-owned even outside a
 Harness repository. Source-gate dormant behavior follows manifest strictness.
 Strict-compliance repos
-  deny source writes until task_start establishes the canonical loop. Other
-  repos remain fail-open when no task is active.
+  deny source writes until wbs_open establishes the canonical loop. Other
+  repos remain fail-open when no WBS is active.
 """
 from __future__ import annotations
 
@@ -56,11 +56,11 @@ try:
         yaml_array,
         yaml_field,
         now_iso,
-        TASK_DIR,
-        resolve_session_task_binding,
-        iter_active_task_dirs,
-        read_task_control,
-        task_control_status,
+        WBS_DIR,
+        resolve_session_wbs_binding,
+        iter_active_wbs_dirs,
+        read_wbs_control,
+        wbs_control_status,
         current_session_id,
         is_harness_enabled_repo,
     )
@@ -75,22 +75,25 @@ except Exception:
 # Owner values are space-free so the structured reason tail stays grep-stable.
 # Human text in the deny message names the concrete owning tool or lifecycle hook.
 PROTECTED_ARTIFACTS = {
-    "TASK.json": "task-control-mcp",
+    "TASK.json": "legacy-data-migration",
+    "WBS.control.json": "WBS-control-mcp",
     "PLAN.md": "plan-skill",
-    "WBS.json": "task-control-mcp",
-    "RECEIPTS.jsonl": "historical-task-artifacts",
-    "REVIEWS.jsonl": "historical-task-artifacts",
+    "WBS.json": "WBS-control-mcp",
+    "RECEIPTS.jsonl": "historical-wbs-artifacts",
+    "REVIEWS.jsonl": "historical-wbs-artifacts",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
 PROTECTED_ARTIFACT_HUMAN = {
-    "TASK.json": "task control MCP tools",
+    "WBS.control.json": "WBS execution control MCP",
+    "TASK.json": "explicit WBS migration (retired control)",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "WBS.json": "WBS plan/check/dispatch MCP actions",
     "RECEIPTS.jsonl": "preserved historical output (read-only)",
     "REVIEWS.jsonl": "preserved historical output (read-only)",
 }
 RETIRED_GOALS = os.path.join("doc", "harness", "goals")
+RETIRED_TASKS = os.path.join("doc", "harness", "tasks")
 MIGRATION_ARCHIVE = os.path.join("doc", "harness", "archive", "goal-migration")
 CONTROL_MIGRATION_ARCHIVE = os.path.join("doc", "harness", "archive", "task-control-migration")
 
@@ -113,7 +116,7 @@ EXEMPT_PREFIXES = (
 )
 
 # Workflow control surfaces (relative to repo root). Direct writes are only
-# permitted from a task with a MAINTENANCE marker; the maintain/plan skills
+# permitted from a WBS with a MAINTENANCE marker; the maintain/plan skills
 # own specific artifacts inside this set and route through their own flows.
 WORKFLOW_CONTROL_SURFACE = {
     "plugin/CLAUDE.md",
@@ -129,7 +132,7 @@ RULE_DOCS = {
     "C-02-plan-first": "doc/harness/patterns/prewrite-gate.md",
     "C-05-protected-artifact": "doc/harness/patterns/prewrite-gate.md",
     "scope-lock-forbidden": "doc/harness/patterns/scope-lock.md",
-    "no-active-task": "doc/harness/patterns/prewrite-gate.md",
+    "no-active-wbs": "doc/harness/patterns/prewrite-gate.md",
     "invalid-active": "doc/harness/patterns/prewrite-gate.md",
     "workflow-control-surface": "doc/harness/patterns/prewrite-gate.md",
 }
@@ -154,9 +157,19 @@ def _rel(path, repo_root):
 def _is_migration_artifact(path):
     if not path: return False
     normalized = os.path.normpath(str(path))
+    if (normalized == RETIRED_TASKS or normalized.endswith(os.sep + RETIRED_TASKS)
+            or normalized.startswith(RETIRED_TASKS + os.sep)
+            or os.sep + RETIRED_TASKS + os.sep in normalized):
+        return True
+    retired_batch = os.path.join("doc", "harness", "archive", "batch") + os.sep + "TASK__"
+    if normalized.startswith(retired_batch) or os.sep + retired_batch in normalized:
+        return True
     if normalized == RETIRED_GOALS or normalized.endswith(os.sep + RETIRED_GOALS):
         return True
-    for archive in (MIGRATION_ARCHIVE, CONTROL_MIGRATION_ARCHIVE):
+    for archive in (MIGRATION_ARCHIVE, CONTROL_MIGRATION_ARCHIVE,
+                    "doc/harness/archive/goal-wbs-migration",
+                    "doc/harness/archive/wbs-control-migration",
+                    "doc/harness/archive/wbs-namespace-migration"):
         if normalized == archive or normalized.endswith(os.sep + archive) or normalized.startswith(archive + os.sep) or os.sep + archive + os.sep in normalized:
             return True
     marker = os.sep + RETIRED_GOALS + os.sep
@@ -172,12 +185,12 @@ def _is_pool_control_artifact(path):
             or normalized.startswith(marker + os.sep) or os.sep + marker + os.sep in normalized)
 
 
-def _is_task_local_review_detail(path, repo_root=None):
+def _is_wbs_local_review_detail(path, repo_root=None):
     root = os.path.abspath(repo_root or find_repo_root())
     normalized = os.path.abspath(
         str(path) if os.path.isabs(str(path)) else os.path.join(root, str(path))
     )
-    tasks_root = os.path.join(root, TASK_DIR)
+    tasks_root = os.path.join(root, WBS_DIR)
     try:
         relative = os.path.relpath(normalized, tasks_root)
     except ValueError:
@@ -185,7 +198,7 @@ def _is_task_local_review_detail(path, repo_root=None):
     parts = relative.split(os.sep)
     return (
         len(parts) == 2
-        and parts[0].startswith("TASK__")
+        and parts[0].startswith("WBS__")
         and parts[1] == "REVIEWS.jsonl"
     )
 
@@ -219,15 +232,15 @@ def _is_protected_artifact(path, repo_root=None):
             basename in PROTECTED_ARTIFACTS
             and (
                 basename != "REVIEWS.jsonl"
-                or _is_task_local_review_detail(normalized, repo_root=repo_root)
+                or _is_wbs_local_review_detail(normalized, repo_root=repo_root)
             )
         )
         or os.sep + "work" + os.sep + "verification-targets" + os.sep in normalized
         or _is_migration_artifact(normalized)
         or _is_native_session_metadata(normalized)
         or _is_pool_control_artifact(normalized)
-        or normalized.endswith(os.path.join(TASK_DIR, ".active"))
-        or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
+        or normalized.endswith(os.path.join(WBS_DIR, ".active"))
+        or os.path.join(WBS_DIR, ".active_sessions") + os.sep in normalized
     )
 
 
@@ -239,8 +252,8 @@ def _protected_denial(path):
     if _is_native_session_metadata(path):
         return "native-session-runtime", "Native session metadata authenticates source ownership and is runtime-owned; ordinary writes cannot change it. No receipt collection is used."
     if not goal_control and not pool_control and basename in {"RECEIPTS.jsonl", "REVIEWS.jsonl"}:
-        return "historical-task-artifacts", "Historical receipt/review output is preserved read-only. No collector or detail writer exists; keep current findings in actual agent responses."
-    owner = "batch-pool-runtime" if pool_control else "legacy-data-migration" if goal_control else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
+        return "historical-wbs-artifacts", "Historical receipt/review output is preserved read-only. No collector or detail writer exists; keep current findings in actual agent responses."
+    owner = "batch-pool-runtime" if pool_control else "legacy-data-migration" if goal_control else PROTECTED_ARTIFACTS.get(basename, "WBS-control-runtime")
     owner_human = "batch_state.py lifecycle commands" if pool_control else 'wbs(action="migrate")' if goal_control else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
     human = (
         f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
@@ -268,7 +281,7 @@ def _foreign_protected_target(candidates, log_root):
             ):
                 continue
             parent = os.path.dirname(candidate)
-            # A protected file can be a future write target; its task directory
+            # A protected file can be a future write target; its WBS directory
             # need not exist. Resolve ownership from the existing ancestor,
             # without admitting a nonexistent hook cwd as project context.
             while not os.path.lexists(parent):
@@ -293,14 +306,14 @@ def _is_source_file(path, repo_root=None):
     """Return True if ``path`` looks like a gated source file.
 
     Excludes: exempt prefixes, protected artifacts, workflow control surfaces,
-    files inside task directories. Matches ``SOURCE_EXTENSIONS``.
+    files inside WBS directories. Matches ``SOURCE_EXTENSIONS``.
     """
     if not path:
         return False
     root = repo_root or find_repo_root()
     rel = _rel(path, root)
 
-    if rel.startswith(TASK_DIR + os.sep) or rel == TASK_DIR:
+    if rel.startswith(WBS_DIR + os.sep) or rel == WBS_DIR:
         return False
     for prefix in EXEMPT_PREFIXES:
         if rel == prefix or rel.startswith(prefix + os.sep) or rel.startswith(prefix):
@@ -314,12 +327,12 @@ def _is_source_file(path, repo_root=None):
     return ext.lower() in SOURCE_EXTENSIONS
 
 
-def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
+def _wbs_has_req_reference(wbs_dir: str, repo_root: str = "") -> bool:
     import re
     req_re = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
-    # Scan task-local PLAN body for any REQ path string.
+    # Scan WBS-local PLAN body for any REQ path string.
     for name in ("PLAN.md",):
-        path = os.path.join(task_dir, name)
+        path = os.path.join(wbs_dir, name)
         if not os.path.isfile(path):
             continue
         try:
@@ -328,15 +341,15 @@ def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
                     return True
         except OSError:
             continue
-    # Back-link path: walk doc/**/REQ__*.md and look for a `source: task: <id>`
+    # Back-link path: walk doc/**/REQ__*.md and look for a `source: wbs: <id>`
     # line written by req_scaffold.py.
-    task_id = os.path.basename(os.path.normpath(task_dir))
-    if not task_id.startswith("TASK__"):
+    wbs_id = os.path.basename(os.path.normpath(wbs_dir))
+    if not wbs_id.startswith("WBS__"):
         return False
     if not repo_root:
-        # task_dir is always <repo>/doc/harness/tasks/TASK__<id> — walk 4 up.
+        # wbs_dir is always <repo>/doc/harness/wbs/WBS__<id> — walk 4 up.
         repo_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(task_dir)))
+            os.path.dirname(os.path.dirname(os.path.dirname(wbs_dir)))
         )
     doc_root = os.path.join(repo_root, "doc")
     if not os.path.isdir(doc_root):
@@ -345,14 +358,14 @@ def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
     # (req_scaffold.py:55 — `rel = os.path.join("doc", area, f"REQ__{slug}.md")`).
     # Depth-2 scan instead of os.walk keeps gate latency O(area-dirs × REQs-per-area)
     # so this back-link path doesn't dominate every source-edit gate call.
-    back_link = f"source: task: {task_id}"
+    back_link = f"source: wbs: {wbs_id}"
     try:
         areas = os.listdir(doc_root)
     except OSError:
         return False
     for area in areas:
         if area == "harness":
-            # Skip doc/harness/ (contains tasks/, patterns/, etc; no project REQs).
+            # Skip doc/harness/ (contains wbs/, patterns/, runtime/, etc; no project REQs).
             continue
         area_path = os.path.join(doc_root, area)
         if not os.path.isdir(area_path):
@@ -484,10 +497,10 @@ def _tail(rule_id, file_path, owner, repo_root):
 
 
 _RULE_NEXT_ACTION = {
-    "C-02-plan-first": ("Skill('harness:plan', '<task_id>')",
+    "C-02-plan-first": ("Skill('harness:plan', '<wbs_id>')",
                         "plan-skill",
                         "plugin/CLAUDE.md § 4 Plan-first rule"),
-    "invalid-active": ("Open or resume a harness task; use native /goal when an explicit Goal is intended",
+    "invalid-active": ("Open or resume a Harness WBS; use native /goal when an explicit Goal is intended",
                        "harness-goal",
                        "plugin/CLAUDE.md § 6 Auto-routing"),
     "C-05-protected-artifact": ("",  # populated dynamically by callers via owner
@@ -541,7 +554,7 @@ def _deny(rule_id, file_path, owner, human_text, repo_root):
 # ── Scope-lock enforcement ─────────────────────────────────────────────────
 
 
-def _handle_scope_lock(file_path, active_dir, repo_root, task_id):
+def _handle_scope_lock(file_path, active_dir, repo_root, wbs_id):
     """Return ``(should_block, reason_text)`` for the given write.
 
     Pure — does NOT emit on stdout; the caller (``main`` in this module)
@@ -588,11 +601,11 @@ def _handle_scope_lock(file_path, active_dir, repo_root, task_id):
             allowed_summary += ", ..."
         rel = _rel(file_path, repo_root)
         human = (
-            f"scope-lock: {rel} is in forbidden_paths for {task_id}. "
+            f"scope-lock: {rel} is in forbidden_paths for {wbs_id}. "
             f"forbidden: {matching}. allowed: {allowed_summary}. "
-            f"Options: (a) edit doc/harness/tasks/{task_id}/PROGRESS.md to move "
+            f"Options: (a) edit doc/harness/wbs/{wbs_id}/PROGRESS.md to move "
             f"to allowed_paths, (b) revert this edit and move it to a separate "
-            f"task, (c) bypass via HARNESS_DISABLE_SCOPE_LOCK=1 (applies to "
+            f"WBS, (c) bypass via HARNESS_DISABLE_SCOPE_LOCK=1 (applies to "
             f"every write while set in the runtime's environment)."
         )
         tail = _tail("scope-lock-forbidden", file_path, "developer", repo_root)
@@ -604,17 +617,17 @@ def _handle_scope_lock(file_path, active_dir, repo_root, task_id):
 # ── Dormant-repo helper ────────────────────────────────────────────────────
 
 
-def _has_open_tasks(tasks_dir: str) -> bool:
-    """Return whether a canonical task is open; malformed packs fail closed."""
-    if not os.path.isdir(tasks_dir):
+def _has_open_wbs(wbs_root: str) -> bool:
+    """Return whether a canonical WBS is open; malformed packs fail closed."""
+    if not os.path.isdir(wbs_root):
         return False
-    for entry in os.listdir(tasks_dir):
-        if not entry.startswith("TASK__"):
+    for entry in os.listdir(wbs_root):
+        if not entry.startswith("WBS__"):
             continue
         try:
-            task_dir = os.path.join(tasks_dir, entry)
-            control = read_task_control(task_dir)
-            if task_control_status(task_dir, control) in {"open", "invalid"}:
+            wbs_dir = os.path.join(wbs_root, entry)
+            control = read_wbs_control(wbs_dir)
+            if wbs_control_status(wbs_dir, control) in {"open", "invalid"}:
                 return True
         except Exception:
             return True
@@ -663,7 +676,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
     ``protected_only`` limits the check to the C-05 rules (native metadata,
     another checkout's protected artifact, this root's protected artifacts).
     A root with an invalid manifest keeps C-05 because the full gate denies
-    every write there; the other non-C-05 denies and all task-state rules are
+    every write there; the other non-C-05 denies and all WBS-state rules are
     skipped.
     """
     payload_cwd = str(data.get("cwd") or "").strip()
@@ -735,7 +748,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
                 repo_root,
             )
             return 0
-        # Cross-checkout C-05: the physical path first, since the task-local
+        # Cross-checkout C-05: the physical path first, since the WBS-local
         # REVIEWS.jsonl match compares against a realpath'd root.
         foreign = _foreign_protected_target((file_path, requested_path), repo_root)
         if foreign:
@@ -747,16 +760,23 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
                 foreign_root,
             )
         return 0
-    tasks_dir = os.path.join(repo_root, TASK_DIR)
+    wbs_root = os.path.join(repo_root, WBS_DIR)
+    if not protected_only:
+        try:
+            from wbs_namespace_migration import require_complete
+            require_complete(repo_root)
+        except (OSError, ValueError) as error:
+            _deny("wbs-migration-required", file_path, "legacy-data-migration", str(error), repo_root)
+            return 0
     try:
         common = os.path.commonpath([repo_root, file_path])
     except ValueError:
         common = ""
     if common != repo_root:
         return 0
-    inside_task_dir = (
-        file_path == tasks_dir
-        or file_path.startswith(tasks_dir + os.sep)
+    inside_wbs_dir = (
+        file_path == wbs_root
+        or file_path.startswith(wbs_root + os.sep)
     )
 
     if _is_protected_artifact(file_path, repo_root=repo_root):
@@ -766,28 +786,28 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         _deny("C-05-protected-artifact", file_path, owner, human, repo_root)
         return 0
 
-    if protected_only or inside_task_dir:
+    if protected_only or inside_wbs_dir:
         return 0
 
-    # Exempt prefixes (harness operational files) allowed without a task.
+    # Exempt prefixes (harness operational files) allowed without a WBS.
     for prefix in EXEMPT_PREFIXES:
         prefix_abs = os.path.join(repo_root, prefix)
         if file_path == prefix_abs or file_path.startswith(prefix_abs + os.sep):
             return 0
 
-    # Workflow control surface: only permitted from a MAINTENANCE task.
+    # Workflow control surface: only permitted from a MAINTENANCE WBS.
     if _is_workflow_control_surface(file_path, repo_root=repo_root):
         maint = False
-        active_dir = resolve_session_task_binding(repo_root, current_session_id()).get("task_dir", "")
+        active_dir = resolve_session_wbs_binding(repo_root, current_session_id()).get("wbs_dir", "")
         if active_dir and os.path.isdir(active_dir):
             maint = os.path.isfile(os.path.join(active_dir, "MAINTENANCE"))
         if not maint:
             rel = _rel(file_path, repo_root)
             human = (
                 f"{rel} is a workflow-control-surface file. Direct writes are "
-                f"only permitted from tasks with a MAINTENANCE marker. "
-                f"Touch doc/harness/tasks/<task>/MAINTENANCE and record the reason "
-                f"in the task plan or final summary."
+                f"only permitted from WBS roots with a MAINTENANCE marker. "
+                f"Touch doc/harness/wbs/<wbs>/MAINTENANCE and record the reason "
+                f"in the WBS plan or final summary."
             )
             _deny("workflow-control-surface", file_path, "maintain-skill", human, repo_root)
             return 0
@@ -795,16 +815,16 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             from wbs import require_source_assignment
             require_source_assignment(repo_root, os.path.basename(active_dir), _rel(file_path, repo_root))
         except (OSError, ValueError, RuntimeError) as exc:
-            _deny("wbs-execution-assignment", file_path, "task-control-mcp", str(exc), repo_root)
+            _deny("wbs-execution-assignment", file_path, "WBS-control-mcp", str(exc), repo_root)
         return 0
 
-    # Source files require an active task with PLAN.md.
+    # Source files require an active WBS with PLAN.md.
     if not _is_source_file(file_path, repo_root=repo_root):
         return 0
 
-    active_dir = resolve_session_task_binding(repo_root, current_session_id()).get("task_dir", "")
+    active_dir = resolve_session_wbs_binding(repo_root, current_session_id()).get("wbs_dir", "")
     if not active_dir:
-        # Strict-compliance repositories cannot bypass the task/QA close gate
+        # Strict-compliance repositories cannot bypass the WBS/QA close gate
         # merely because this is the first write of a new request.
         strict = str(
             yaml_field(
@@ -812,26 +832,26 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
                 os.path.join(repo_root, "doc", "harness", "manifest.yaml"),
             ) or ""
         ).strip().lower() == "true"
-        if not strict and not _has_open_tasks(tasks_dir):
+        if not strict and not _has_open_wbs(wbs_root):
             return 0
         human = (
-            "No active task. Source writes require the canonical loop. "
-            "On Codex invoke $harness:run to open or resume the task before editing; "
+            "No active WBS. Source writes require the canonical loop. "
+            "On Codex invoke $harness:run to open or resume the WBS before editing; "
             "use native /goal when an explicit Goal is intended."
         )
-        _deny("no-active-task", file_path, "plan-skill", human, repo_root)
+        _deny("no-active-wbs", file_path, "plan-skill", human, repo_root)
         return 0
 
-    if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir)):
+    if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(wbs_root)):
         human = (
-            "Active task points to invalid path. On Codex invoke $harness:run "
+            "Active WBS points to invalid path. On Codex invoke $harness:run "
             "to repair or resume routing before source writes."
         )
         _deny("invalid-active", file_path, "plan-skill", human, repo_root)
         return 0
 
     if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
-        control = read_task_control(active_dir)
+        control = read_wbs_control(active_dir)
         micro_loop = control.get("execution_mode") == "micro"
         if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")) and not micro_loop:
             human = (
@@ -842,28 +862,28 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             return 0
 
     try:
-        from wbs import require_integrated_for_task
-        require_integrated_for_task(repo_root, os.path.basename(active_dir), measure=False)
+        from wbs import require_integrated_for_wbs
+        require_integrated_for_wbs(repo_root, os.path.basename(active_dir), measure=False)
     except (OSError, ValueError, RuntimeError) as exc:
-        _deny("wbs-work-pack", file_path, "task-control-mcp", str(exc), repo_root)
+        _deny("wbs-work-pack", file_path, "WBS-control-mcp", str(exc), repo_root)
         return 0
 
     rel = _rel(file_path, repo_root)
-    if _observable_req_needed_for_path(rel) and not _task_has_req_reference(active_dir):
+    if _observable_req_needed_for_path(rel) and not _wbs_has_req_reference(active_dir):
         human = (
             f"{rel} looks like observable UI/API/native/desktop behavior, but "
-            "the active task has no linked doc/<area>/REQ__*.md. Create or "
+            "the active WBS has no linked doc/<area>/REQ__*.md. Create or "
             "update the durable REQ first directly or with req_scaffold.py, "
             "then retry the source edit."
         )
         _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)
         return 0
 
-    # Scope-lock enforcement as the last check: active task + PLAN.md confirmed.
+    # Scope-lock enforcement as the last check: active WBS + PLAN.md confirmed.
     try:
-        task_id = os.path.basename(active_dir)
+        wbs_id = os.path.basename(active_dir)
         should_block, reason_text = _handle_scope_lock(
-            file_path, active_dir, repo_root, task_id,
+            file_path, active_dir, repo_root, wbs_id,
         )
         if should_block:
             _sc = _RULE_NEXT_ACTION.get("C-09-scope-lock", ("", "", ""))
@@ -879,7 +899,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         from wbs import require_source_assignment
         require_source_assignment(repo_root, os.path.basename(active_dir), rel)
     except (OSError, ValueError, RuntimeError) as exc:
-        _deny("wbs-execution-assignment", file_path, "task-control-mcp", str(exc), repo_root)
+        _deny("wbs-execution-assignment", file_path, "WBS-control-mcp", str(exc), repo_root)
     return 0
 
 

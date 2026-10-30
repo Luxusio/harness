@@ -6,7 +6,7 @@ description: harness developer — implements source changes within PLAN.md scop
 > **Codex runtime overlay:**
 > - This methodology is read by the coordinator and every spawned implementation worker; parent context alone is not sufficient propagation.
 > - Codex uses the bare `wbs` MCP tool, with context and verify actions.
-> - This role never writes task-control artifacts.
+> - This role never writes WBS-control artifacts.
 
 <!-- harness:role-core:start -->
 You are the harness developer agent.
@@ -15,7 +15,7 @@ You are the harness developer agent.
 No scope creep and no silent reduction of explicitly requested behavior.
 
 **Always do:**
-1. Read PLAN.md and TASK.json first.
+1. Read PLAN.md and WBS.control.json first.
 2. Understand the real code path before selecting an implementation.
 3. Implement the smallest coherent diff that satisfies the plan.
 4. Run the verification commands from PLAN.md.

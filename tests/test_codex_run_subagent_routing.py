@@ -20,7 +20,7 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "Treat explicit user invocation or approval of a harness repo-mutating workflow" in body
     assert "authorization to use the subagents required by that workflow" in body
     assert "ordinary\nnon-harness work" in body
-    assert "Route from the current session tools and the task shape" in body
+    assert "Route from the current session tools and the WBS shape" in body
     assert "not from whether the\nuser explicitly requested delegation" in body
     assert '"The user did not ask for parallel\nagents" is not a valid reason' in body
     assert "Do not wait for the user\nto request delegation" in body
@@ -32,7 +32,7 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "track every `agent_id` returned by `spawn_agent`" in body
     assert "`close_agent`" in body
     assert "Completed agents can\ncontinue to count toward the concurrency limit until closed" in body
-    assert 'task_name: "qa_cli_<task_slug>_<run_id>"' in body
+    assert 'task_name: "qa_cli_<wbs_slug>_<run_id>"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
     assert "When `spawn_agent` is available and work is independent, use it" in body
@@ -74,15 +74,15 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "QA subagent pattern on Codex" in body
     assert "Verify recovery (only when develop returned before close)" in body
     assert "not a second QA pass" in body
-    assert "You are the qa-<lens> lens for <task_id>" in body
+    assert "You are the qa-<lens> lens for <wbs_id>" in body
     assert "${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md" in body
-    assert 'task_name: "qa_<lens>_<task_slug>_<run_id>"' in body
+    assert 'task_name: "qa_<lens>_<wbs_slug>_<run_id>"' in body
     assert "prevent collaboration-tree name collisions" in body
     assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
     assert "`missing_for_close`" in body
     assert "they do not attest review/QA" in body
-    assert "state the fallback in task state or final response" in body
+    assert "state the fallback in WBS state or final response" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
 
 
@@ -183,7 +183,7 @@ def test_codex_develop_no_longer_says_agent_absence_is_absolute():
 
     assert "Agent fan-out is capability-gated" in body
     assert "spawn_agent {" in body
-    assert "state the fallback in task state or final response" in body
+    assert "state the fallback in WBS state or final response" in body
 
 
 def test_runtime_fallback_notes_are_exception_only():
@@ -257,14 +257,14 @@ def test_develop_uses_independent_findings_and_explicit_transcript_only():
     codex = _text(CODEX_DEVELOP)
     assert "--transcript <path>" in codex
     assert "without that input, skip it" in codex
-    assert "qa_codifier.py --task-dir" not in codex
+    assert "qa_codifier.py --wbs-dir" not in codex
     assert "Current actual QA/UX results have not all PASSed" in codex
     gate = _text(REPO / "plugin/skills/develop/verification-gate.md")
     assert "After the quality synthesis agent" not in gate
     assert "No quality synthesis agent or synthesized findings table is a prerequisite" in gate
     ready = _text(REPO / "plugin/skills/develop/ready-lanes.md")
     assert "does not publish dispatch prepare or refill the parent pool" in ready
-    assert "actual session, task, run, registered workspace and assigned ownership" in ready
+    assert "actual session, WBS, run, registered workspace and assigned ownership" in ready
 
 
 def test_failure_recovery_preserves_state_and_repairs_authorized_work():
@@ -275,7 +275,7 @@ def test_failure_recovery_preserves_state_and_repairs_authorized_work():
         assert "state before retrying" in recovery
         assert "effects occurred" in recovery and "writer is still active" in recovery
         assert "Retry only when state and effects are known" in recovery
-        assert "same task/run" in recovery and "failure history" in recovery
+        assert "same WBS/run" in recovery and "failure history" in recovery
         assert "Repair authorized failures autonomously" in recovery
         assert "restore affected independent review" in recovery
         assert "never skip failed" in recovery and "actual BLOCKED_ENV" in recovery

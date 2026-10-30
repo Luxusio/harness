@@ -75,7 +75,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         self.assertIn("get_goal", context)
         self.assertIn("wbs(action=open, objective=...)", context)
         self.assertIn("one outcome tree", context)
-        self.assertIn("Do not create a separate Goal/task planning ledger", context)
+        self.assertIn("Keep this WBS as the sole planning and progress authority", context)
 
     def test_post_tool_use_create_goal_is_silent_outside_harness_repo(self):
         mod = _load("hook_post_tool_use")
@@ -148,7 +148,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest.write_text("type: cli\n", encoding="utf-8")
             from _lib import native_wbs_id
             from test_harness_mcp_server import HarnessMcpServerTests
-            td = root / 'doc/harness/tasks' / ('TASK__' + native_wbs_id('Fix setup routing')[5:])
+            td = root / 'doc/harness/wbs' / ('WBS__' + native_wbs_id('Fix setup routing')[5:])
             HarnessMcpServerTests()._make_task(repo, td.name)
             payload = {
                 "cwd": repo,
@@ -172,24 +172,24 @@ class TestCodexHookWrappers(unittest.TestCase):
                  "os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True
              ), \
              mock.patch.object(lib, "_LAST_HOOK_INPUT", {}):
-            task = Path(repo) / "doc/harness/tasks/TASK__thread-marker"
+            task = Path(repo) / "doc/harness/wbs/WBS__thread-marker"
             task.mkdir(parents=True)
-            (task / "TASK.json").write_text(json.dumps({
+            (task / "WBS.control.json").write_text(json.dumps({
                 "run_id": lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
                 "closed": False,
             }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             sid = lib.current_session_id()
-            sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
+            sessions = Path(repo) / "doc/harness/wbs/.active_sessions"
             sessions.mkdir(parents=True)
             (sessions / f"{sid}.json").write_text(json.dumps({
-                "session_id": sid, "task_dir": str(task), "task_id": task.name,
-                "run_id": lib.read_task_control(task)["run_id"], "updated": lib.now_iso(),
+                "session_id": sid, "wbs_dir": str(task), "wbs_id": task.name,
+                "run_id": lib.read_wbs_control(task)["run_id"], "updated": lib.now_iso(),
             }) + "\n", encoding="utf-8")
 
             marker = (
                 Path(repo)
-                / "doc/harness/tasks/.active_sessions/0198c349-5800-7000-8000-000000000001.json"
+                / "doc/harness/wbs/.active_sessions/0198c349-5800-7000-8000-000000000001.json"
             )
             self.assertTrue(marker.is_file())
             self.assertEqual(
@@ -364,7 +364,7 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         def fake_run(*args, **kwargs):
             return subprocess.CompletedProcess(
-                args[0], 0, stdout=b"[harness-context] task=TASK__route", stderr=b"",
+                args[0], 0, stdout=b"[harness-context] wbs=WBS__route", stderr=b"",
             )
 
         with tempfile.TemporaryDirectory() as repo:
@@ -502,12 +502,12 @@ def test_installed_matcher_routes_only_bindable_public_wbs_results():
         assert re.fullmatch(matcher, name)
         for action in ("open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block"):
             body = dict(tool_name=name, tool_input=dict(action=action), tool_response={
-                "structuredContent": dict(task_dir="/repo/doc/harness/tasks/TASK__x", task_id="TASK__x", run_id="run"),
+                "structuredContent": dict(wbs_dir="/repo/doc/harness/wbs/WBS__x", wbs_id="WBS__x", run_id="run"),
             })
-            result = mod._task_result(json.dumps(body).encode())
+            result = mod._wbs_result(json.dumps(body).encode())
             assert bool(result[0]) == (action in {"open", "context"})
             body["tool_response"]["isError"] = True
-            assert mod._task_result(json.dumps(body).encode()) == ("", "", "")
+            assert mod._wbs_result(json.dumps(body).encode()) == ("", "", "")
     assert not re.fullmatch(matcher, "mcp__foreign__wbs")
 
 
@@ -518,11 +518,11 @@ def test_installed_binding_matcher_covers_canonical_tool_allowlist():
     sys.modules[spec.name] = install
     spec.loader.exec_module(install)
     sys.path.insert(0, str(SCRIPTS))
-    from _lib import CODEX_TASK_BINDING_TOOLS
+    from _lib import CODEX_WBS_BINDING_TOOLS
     matcher = install._codex_hooks_config(REPO_ROOT / "installed")["hooks"]["PostToolUse"][0]["matcher"]
-    for name in CODEX_TASK_BINDING_TOOLS:
+    for name in CODEX_WBS_BINDING_TOOLS:
         assert re.fullmatch(matcher, name), name
-    for name in ("mcp__foreign__wbs", "mcp__foreign__task_start", "evil_wbs", "wbs_suffix"):
+    for name in ("mcp__foreign__wbs", "mcp__foreign__wbs_open", "evil_wbs", "wbs_suffix"):
         assert not re.fullmatch(matcher, name), name
 
 
@@ -530,9 +530,9 @@ def test_malformed_wbs_action_never_crashes_posttool_hook():
     mod = _load("codex_hook_registration")
     for action in ([], {}, None, 1, True):
         data = {"tool_name": "wbs", "arguments": {"action": action},
-                "tool_response": {"structuredContent": {"task_dir": "/repo/TASK__x", "task_id": "TASK__x", "run_id": "run"}}}
+                "tool_response": {"structuredContent": {"wbs_dir": "/repo/WBS__x", "wbs_id": "WBS__x", "run_id": "run"}}}
         payload = json.dumps(data)
-        assert mod._task_result(payload.encode()) == ("", "", "")
+        assert mod._wbs_result(payload.encode()) == ("", "", "")
         result = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
                                 input=payload, text=True, capture_output=True, timeout=5)
         assert result.returncode == 0 and not result.stdout and not result.stderr, result.stderr
@@ -554,7 +554,7 @@ def test_posttool_binding_discovery_shares_hard_budget_and_preserves_caller_alar
     payload = json.dumps({"cwd": str(tmp_path), "session_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42"}).encode()
     with mock.patch.object(mod, "_registration_identity", side_effect=lambda _: time.sleep(1)):
         started, status = time.monotonic(), {}
-        assert not mod.register_task_result(payload, budget_seconds=0.05, status_out=status)
+        assert not mod.register_wbs_result(payload, budget_seconds=0.05, status_out=status)
         assert time.monotonic() - started < 0.5
         assert status["status"] == mod.REGISTRATION_FAILED
         delivered = []
@@ -563,7 +563,7 @@ def test_posttool_binding_discovery_shares_hard_budget_and_preserves_caller_alar
         previous = signal.signal(signal.SIGALRM, caller_alarm)
         signal.setitimer(signal.ITIMER_REAL, 0.05)
         try:
-            assert not mod.register_task_result(payload, budget_seconds=0.5)
+            assert not mod.register_wbs_result(payload, budget_seconds=0.5)
             assert delivered == [signal.SIGALRM]
             assert signal.getsignal(signal.SIGALRM) is caller_alarm
         finally:
@@ -576,8 +576,8 @@ def test_deeply_nested_encoded_arguments_are_rejected_before_binding(tmp_path):
     nested = "[" * 10000 + "0" + "]" * 10000
     for alias in ("tool_input", "input", "arguments"):
         body = {"tool_name": "wbs", alias: nested}
-        assert mod._task_arguments(body) is None
-        assert mod._task_result(json.dumps(body).encode()) == ("", "", "")
+        assert mod._wbs_arguments(body) is None
+        assert mod._wbs_result(json.dumps(body).encode()) == ("", "", "")
         result = subprocess.run([sys.executable, str(SCRIPTS / "hook_post_tool_use.py")],
                                 input=json.dumps(body), text=True, cwd=tmp_path,
                                 capture_output=True, timeout=3)
@@ -591,11 +591,11 @@ def _binding_task(repo: Path, name: str):
     manifest = repo / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("version: 5\ntype: library\n")
-    task = repo / "doc/harness/tasks" / name
+    task = repo / "doc/harness/wbs" / name
     task.mkdir(parents=True)
     control = {"run_id": lib.new_uuid7(), "execution_mode": "standard",
                "required_lenses": ["review-code", "qa-cli"], "closed": False}
-    (task / "TASK.json").write_text(json.dumps(control) + "\n")
+    (task / "WBS.control.json").write_text(json.dumps(control) + "\n")
     (task / "PLAN.md").write_text("# Plan\n")
     return task, control
 
@@ -604,7 +604,7 @@ def _binding_payload(repo: Path, task: Path, control: dict, sid: str, **extra):
     data = {"cwd": str(repo), "session_id": sid, "tool_name": "wbs",
             "tool_input": {"action": "context", "wbs_id": task.name},
             "tool_response": {"structuredContent": {
-                "task_dir": str(task), "task_id": task.name, "run_id": control["run_id"]}}}
+                "wbs_dir": str(task), "wbs_id": task.name, "run_id": control["run_id"]}}}
     data.update(extra)
     return json.dumps(data).encode()
 
@@ -613,13 +613,13 @@ def test_hook_result_binds_exact_session_and_preserves_legacy_focus(tmp_path, mo
     mod, lib = _load("codex_hook_registration"), _load("_lib")
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     repo = tmp_path / "repo"
-    task, control = _binding_task(repo, "TASK__bound")
-    legacy = repo / "doc/harness/tasks/.active"
+    task, control = _binding_task(repo, "WBS__bound")
+    legacy = repo / "doc/harness/wbs/.active"
     legacy.write_text("unrelated legacy pointer\n")
     sid = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     status = {}
-    assert mod.register_task_result(_binding_payload(repo, task, control, sid), status_out=status), status
-    assert lib.resolve_session_task_binding(str(repo), sid)["run_id"] == control["run_id"]
+    assert mod.register_wbs_result(_binding_payload(repo, task, control, sid), status_out=status), status
+    assert lib.resolve_session_wbs_binding(str(repo), sid)["run_id"] == control["run_id"]
     assert legacy.read_text() == "unrelated legacy pointer\n"
     assert not (repo / "doc/harness/.codex-watcher").exists()
     assert not (task / "RECEIPTS.jsonl").exists()
@@ -629,33 +629,33 @@ def test_hook_result_keeps_sessions_separate_and_fences_conflicting_tasks(tmp_pa
     mod, lib = _load("codex_hook_registration"), _load("_lib")
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     repo = tmp_path / "repo"
-    a, ac = _binding_task(repo, "TASK__a")
-    b, bc = _binding_task(repo, "TASK__b")
+    a, ac = _binding_task(repo, "WBS__a")
+    b, bc = _binding_task(repo, "WBS__b")
     sa, sb = "019f825b-f25f-70c3-8ee8-071f79fa1c42", "019f834e-1e91-7662-9024-f548103d751e"
-    assert mod.register_task_result(_binding_payload(repo, a, ac, sa))
-    assert mod.register_task_result(_binding_payload(repo, b, bc, sb))
-    assert lib.resolve_session_task_binding(str(repo), sa)["task_dir"] == str(a)
-    assert lib.resolve_session_task_binding(str(repo), sb)["task_dir"] == str(b)
-    assert not mod.register_task_result(_binding_payload(repo, b, bc, sa))
-    assert not lib.resolve_session_task_binding(str(repo), sa)
+    assert mod.register_wbs_result(_binding_payload(repo, a, ac, sa))
+    assert mod.register_wbs_result(_binding_payload(repo, b, bc, sb))
+    assert lib.resolve_session_wbs_binding(str(repo), sa)["wbs_dir"] == str(a)
+    assert lib.resolve_session_wbs_binding(str(repo), sb)["wbs_dir"] == str(b)
+    assert not mod.register_wbs_result(_binding_payload(repo, b, bc, sa))
+    assert not lib.resolve_session_wbs_binding(str(repo), sa)
     assert len(lib.read_active_session_marker(str(repo), sa)["conflicts"]) == 2
-    assert lib.resolve_session_task_binding(str(repo), sb)["task_dir"] == str(b)
+    assert lib.resolve_session_wbs_binding(str(repo), sb)["wbs_dir"] == str(b)
     bc["closed"] = True
-    (b / "TASK.json").write_text(json.dumps(bc) + "\n")
-    assert mod.register_task_result(_binding_payload(repo, a, ac, sa))
-    assert lib.resolve_session_task_binding(str(repo), sa)["task_dir"] == str(a)
+    (b / "WBS.control.json").write_text(json.dumps(bc) + "\n")
+    assert mod.register_wbs_result(_binding_payload(repo, a, ac, sa))
+    assert lib.resolve_session_wbs_binding(str(repo), sa)["wbs_dir"] == str(a)
 
 
 def test_hook_result_rejects_failed_stale_foreign_and_conflicting_identity(tmp_path, monkeypatch):
     mod, lib = _load("codex_hook_registration"), _load("_lib")
     repo = tmp_path / "repo"
-    task, control = _binding_task(repo, "TASK__bound")
+    task, control = _binding_task(repo, "WBS__bound")
     sid = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     good = json.loads(_binding_payload(repo, task, control, sid))
     variants = []
-    for key, value in (("run_id", lib.new_uuid7()), ("task_id", "TASK__wrong"),
-                       ("task_dir", str(tmp_path / "other/doc/harness/tasks" / task.name))):
+    for key, value in (("run_id", lib.new_uuid7()), ("wbs_id", "WBS__wrong"),
+                       ("wbs_dir", str(tmp_path / "other/doc/harness/wbs" / task.name))):
         data = json.loads(json.dumps(good))
         data["tool_response"]["structuredContent"][key] = value
         variants.append(data)
@@ -666,11 +666,11 @@ def test_hook_result_rejects_failed_stale_foreign_and_conflicting_identity(tmp_p
     wrong_ids = json.loads(json.dumps(good)); wrong_ids["thread_id"] = "019f834e-1e91-7662-9024-f548103d751e"
     variants.append(wrong_ids)
     for data in variants:
-        assert not mod.register_task_result(json.dumps(data).encode())
-        assert not lib.resolve_session_task_binding(str(repo), sid)
+        assert not mod.register_wbs_result(json.dumps(data).encode())
+        assert not lib.resolve_session_wbs_binding(str(repo), sid)
     monkeypatch.setenv("CODEX_THREAD_ID", "019f834e-1e91-7662-9024-f548103d751e")
-    assert not mod.register_task_result(json.dumps(good).encode())
-    assert not lib.resolve_session_task_binding(str(repo), sid)
+    assert not mod.register_wbs_result(json.dumps(good).encode())
+    assert not lib.resolve_session_wbs_binding(str(repo), sid)
 
 
 def test_spawn_names_never_invoke_a_collector_or_gate(tmp_path):
@@ -701,7 +701,7 @@ def test_native_session_auth_uses_only_owned_metadata_and_exact_env_identity(tmp
     from datetime import datetime
     mod, lib = _load("codex_hook_registration"), _load("_lib")
     repo = tmp_path / "repo"
-    _binding_task(repo, "TASK__native")
+    _binding_task(repo, "WBS__native")
     sid = lib.new_uuid7()
     home = tmp_path / "codex"
     created = datetime.fromtimestamp(lib.uuid7_timestamp_ms(sid) / 1000).astimezone()

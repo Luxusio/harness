@@ -74,7 +74,7 @@ def test_batch_routes_managed_completion_and_recovery_does_not_forge_closed():
     # proof; the new managed entry point does not authorize invented closure.
     recovery = _shared("Interrupted or already-copied recovery")
     assert "do not fabricate a closed lead result" in recovery
-    assert "edit original task control" in recovery
+    assert "edit original WBS control" in recovery
     assert "Per-change disposition" in recovery
     assert "Fresh independent review and QA" in recovery
     assert "readable, byte-verified archive" in recovery
@@ -103,7 +103,7 @@ def test_only_owned_stopped_work_is_disposed_from_surviving_control_checkout():
     assert "Never unlock a running worker's worktree" in phase
     assert "never integrates or removes its own worktree" in phase
     assert "Perform integration and cleanup from a surviving coordinator checkout" in phase
-    assert "preserve original task evidence there" in phase
+    assert "preserve original WBS evidence there" in phase
     assert "Never delete the active lifecycle's control directory or the current working directory" in phase
 
 
@@ -112,9 +112,9 @@ def test_copied_recovery_requires_destination_proof_not_just_an_archive():
     assert "Prefer resuming and finishing in the original worktree" in phase
     assert "name the runtime blocker and retain the source" in phase
     assert "not permission to silently bypass the original lifecycle by copying into main" in phase
-    assert "use a separate recovery task" in phase
+    assert "use a separate recovery WBS" in phase
     assert "do not fabricate a closed lead result" in phase
-    assert "edit original task control, or carry original PASS evidence" in phase
+    assert "edit original WBS control, or carry original PASS evidence" in phase
     assert "No unintegrated unique source commits" in phase
     assert "Per-change disposition of tracked, staged, deleted and untracked paths" in phase
     assert "destination commit/path containing each intended change, or its explicit authorized omission" in phase
@@ -184,7 +184,7 @@ def test_single_force_exception_requires_state_managed_s1_preservation_and_archi
     assert "single `git worktree remove --force`" in exception
     assert "sole owner, `batch_harvest.py`" in exception
     for proof in ("exact durable batch/module identities", "integration checkpoint",
-                  "byte-verified task archive", "refs/tags/reflogs/history",
+                  "byte-verified WBS archive", "refs/tags/reflogs/history",
                   "complete closure", "unchanged inventory immediately before removal",
                   "tracked, staged, untracked and ignored content"):
         assert proof in exception

@@ -24,14 +24,14 @@ final verdict only after commands and subagents needed for it have finished.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `TASK.json`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `WBS.control.json`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
 Use `REQ` as behavior/contract verification criteria.
 Use `GUIDE` as implementation quality and consistency criteria.
 Use `ADR` as architecture intent and tradeoff criteria.
-Use `POLICY` as external constraint criteria. If the task changes externally consumed request/response shape,
+Use `POLICY` as external constraint criteria. If the WBS changes externally consumed request/response shape,
 status codes, auth/session behavior, validation, or compatibility and no REQ
 path is provided, report a Durable Docs gap. A missing REQ for observable API
 behavior is a FAIL, not a warning.
@@ -90,7 +90,7 @@ applicable.
 
 ## Understand before you judge
 
-Before issuing any verdict, read PLAN.md, the linked REQ docs, TASK.json,
+Before issuing any verdict, read PLAN.md, the linked REQ docs, WBS.control.json,
 and each AC's stated intent. Then trace the real request/response path in the code:
 locate the route handler, follow the data through validation and business logic,
 and identify the response shape for both success and error branches. Build a
@@ -128,7 +128,7 @@ All four roles must pass:
 1. Bootstrap services. Prefer `runtime_services.py`; otherwise detect package
    manager before install. Prefer Docker for local backing services.
 2. Run PLAN verification commands.
-3. Compare REQUEST.md, PLAN.md, TASK.json, and linked REQ docs.
+3. Compare REQUEST.md, PLAN.md, WBS.control.json, and linked REQ docs.
 4. For each endpoint in scope, use curl/httpie for happy, missing-field, and
    invalid-input paths. Validate status, JSON shape, error body, and leaked
    internals.

@@ -4,7 +4,7 @@ History: this AC originally pinned a routable `harness:stop-judge` agent as the
 sole non-PASS turn-end authority. `2fa09ff` retired the routing and reduced the
 file to a non-routable compatibility stub. The compatibility window is now
 closed, so the invariant is absence: no stop-judge agent file may come back, and
-qualified blockers go straight to `task_blocked`.
+qualified blockers go straight to `wbs_blocked`.
 """
 
 import os

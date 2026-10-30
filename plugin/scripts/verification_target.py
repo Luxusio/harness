@@ -28,17 +28,17 @@ def _require(ok, message):
         raise ValueError("verification target: " + message)
 
 
-def _state(task_dir):
-    from _lib import read_task_control
-    state = wbs.read_state(task_dir)
-    control = read_task_control(task_dir)
+def _state(wbs_dir):
+    from _lib import read_wbs_control
+    state = wbs.read_state(wbs_dir)
+    control = read_wbs_control(wbs_dir)
     _require(state is not None and control and state["run_id"] == control["run_id"], "open planned WBS required")
     return state, control
 
 
-def _publish(task_dir, state):
+def _publish(wbs_dir, state):
     from _lib import _atomic_text_write
-    _atomic_text_write(str(Path(task_dir) / wbs.STATE), wbs.encode_state(state))
+    _atomic_text_write(str(Path(wbs_dir) / wbs.STATE), wbs.encode_state(state))
 
 
 def _spec(value):
@@ -168,13 +168,13 @@ def _manifest(repo, paths, *, destination=None, readonly=False, policy=None, _de
     return rows
 
 
-def _root(task_dir, token):
+def _root(wbs_dir, token):
     _require(re.fullmatch(r"[0-9a-f]{16}", token or ""), "invalid token")
-    return Path(task_dir) / "work" / "verification-targets" / token / "source"
+    return Path(wbs_dir) / "work" / "verification-targets" / token / "source"
 
 
-def _record_path(task_dir, token):
-    return _root(task_dir, token).parent / "target.json"
+def _record_path(wbs_dir, token):
+    return _root(wbs_dir, token).parent / "target.json"
 
 
 def _write_private(path, data):
@@ -186,7 +186,7 @@ def _write_private(path, data):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _read_private(path, task_dir):
+def _read_private(path, wbs_dir):
     from install_verified import _read_payload_file
     chunks, size = [], 0
     def consume(chunk):
@@ -194,7 +194,7 @@ def _read_private(path, task_dir):
         size += len(chunk)
         _require(size <= 1024 * 1024, "target metadata exceeds 1 MiB")
         chunks.append(chunk)
-    record = _read_payload_file(Path(task_dir), path.relative_to(task_dir).as_posix(), consume=consume, readonly=True)
+    record = _read_payload_file(Path(wbs_dir), path.relative_to(wbs_dir).as_posix(), consume=consume, readonly=True)
     _require(record is not None, "target metadata missing or unsafe")
     data = b"".join(chunks)
     return json.loads(data), hashlib.sha256(data).hexdigest()
@@ -226,9 +226,9 @@ def _seal_view(root, output_dirs=()):
         os.chmod(directory, 0o700 if any(wbs.covers(p, relative) for p in output_dirs) else 0o500)
 
 
-def issue_target(task_dir, repo, spec, *, output_dirs=()):
+def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
     """Owner transaction required. Copy inputs before issuing a native token."""
-    state, control = _state(task_dir)
+    state, control = _state(wbs_dir)
     output_dirs = spec.get("output_dirs", output_dirs) if isinstance(spec, dict) else output_dirs
     spec = _spec(spec)
     index = state.get(FIELD, {"required": {}, "run_id": control["run_id"]})
@@ -238,26 +238,26 @@ def issue_target(task_dir, repo, spec, *, output_dirs=()):
     wbs.fingerprint(repo, spec["inputs"])
     paths = _paths(Path(repo), spec["inputs"])
     for relative in paths:
-        _require(not wbs.covers("doc/harness/tasks", relative), "task/runtime state cannot be recursively captured")
+        _require(not any(wbs.covers(root, relative) for root in ("doc/harness/wbs", "doc/harness/tasks")), "WBS/runtime state cannot be recursively captured")
     context, expected = _context(spec, repo), _manifest(repo, paths)
     output_dirs = _output_paths(output_dirs, expected, spec["inputs"])
     for token in sorted({ref["token"] for ref in index["required"].values()}):
         try:
-            existing = load_target(task_dir, token)
+            existing = load_target(wbs_dir, token)
         except (OSError, ValueError):
             continue  # Unavailable history cannot be reused or prevent recovery.
         if existing["spec"] == spec and existing["context"] == context and existing["manifest"] == expected:
-            prepared = ensure_snapshot(task_dir, token, repo, output_dirs=output_dirs)
+            prepared = ensure_snapshot(wbs_dir, token, repo, output_dirs=output_dirs)
             if spec["purpose"] == "acceptance":
                 reference = next(ref for ref in index["required"].values() if ref["token"] == token)
                 for lens in spec["lenses"]:
                     index["required"][lens] = dict(reference)
                 state[FIELD] = index
-                _publish(task_dir, state)
+                _publish(wbs_dir, state)
             return prepared
     token = secrets.token_hex(8)
-    root = _root(task_dir, token)
-    current = Path(task_dir)
+    root = _root(wbs_dir, token)
+    current = Path(wbs_dir)
     for part in ("work", "verification-targets", token, "source"):
         current = current / part
         try:
@@ -276,7 +276,7 @@ def issue_target(task_dir, repo, spec, *, output_dirs=()):
         before, after = {row[0]: row for row in manifest}, {row[0]: row for row in observed}
         changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
         _require(not changed, "source changed during target capture: " + ", ".join(changed[:8]))
-        digest = _write_private(_record_path(task_dir, token), record)
+        digest = _write_private(_record_path(wbs_dir, token), record)
     except BaseException:
         # This operation owns only this freshly random unissued directory.
         # Never delete previous views/metadata or any active target pointer.
@@ -288,17 +288,17 @@ def issue_target(task_dir, repo, spec, *, output_dirs=()):
         for lens in spec["lenses"]:
             index["required"][lens] = dict(token=token, digest=digest)
     state[FIELD] = index
-    _publish(task_dir, state)
-    return load_target(task_dir, token)
+    _publish(wbs_dir, state)
+    return load_target(wbs_dir, token)
 
 
-def load_target(task_dir, token):
-    state, control = _state(task_dir)
-    record, digest = _read_private(_record_path(task_dir, token), Path(task_dir))
+def load_target(wbs_dir, token):
+    state, control = _state(wbs_dir)
+    record, digest = _read_private(_record_path(wbs_dir, token), Path(wbs_dir))
     _require(record["token"] == token and record["run_id"] == control["run_id"], "target missing or belongs to another run")
     references = state.get(FIELD, {}).get("required", {})
     _require(all(ref["digest"] == digest for ref in references.values() if ref["token"] == token), "target metadata changed")
-    return dict(record, snapshot_root=str(_root(task_dir, token)))
+    return dict(record, snapshot_root=str(_root(wbs_dir, token)))
 
 
 def _outputs_ready(root, output_dirs):
@@ -316,13 +316,13 @@ def _outputs_ready(root, output_dirs):
     return True
 
 
-def ensure_snapshot(task_dir, token, repo=None, *, output_dirs=()):
+def ensure_snapshot(wbs_dir, token, repo=None, *, output_dirs=()):
     """Prepare an actual immutable view for a new job, reusing durable identity.
 
     Completed results do not depend on this regenerable copy's continued
     existence. Reconstruction creates a new view, never edits an issued view.
     """
-    record = load_target(task_dir, token)
+    record = load_target(wbs_dir, token)
     root = Path(record["snapshot_root"])
     paths = [row[0] for row in record["manifest"]]
     output_dirs = _output_paths(output_dirs, record["manifest"], record["spec"]["inputs"])
@@ -348,26 +348,26 @@ def _active_index(state, control):
                                  if lens in control['required_lenses']})
 
 
-def measure_inputs(task_dir, repo):
+def measure_inputs(wbs_dir, repo):
     """Measure source outside task publication; retain exact owner authority."""
-    from _lib import read_task_control
-    state, control = wbs.read_state(task_dir), read_task_control(task_dir)
+    from _lib import read_wbs_control
+    state, control = wbs.read_state(wbs_dir), read_wbs_control(wbs_dir)
     index = _active_index(state, control)
-    rows = _input_rows(task_dir, repo, index, measure=True) if index and index.get("required") else []
-    return dict(task_dir=os.path.realpath(task_dir), repo=os.path.realpath(repo),
+    rows = _input_rows(wbs_dir, repo, index, measure=True) if index and index.get("required") else []
+    return dict(wbs_dir=os.path.realpath(wbs_dir), repo=os.path.realpath(repo),
                 state=state, control=control, rows=rows)
 
 
-def _input_rows(task_dir, repo, index, *, measure):
+def _input_rows(wbs_dir, repo, index, *, measure):
     tokens = sorted({ref["token"] for ref in index["required"].values()})
     rows = []
     for token in tokens:
         row = dict(token=token, status="unmeasured")
         if measure:
             try:
-                record = load_target(task_dir, token)
+                record = load_target(wbs_dir, token)
                 row.update(purpose=record["spec"]["purpose"], lenses=record["spec"]["lenses"])
-                root = _root(task_dir, token)
+                root = _root(wbs_dir, token)
                 paths = [r[0] for r in record["manifest"]]
                 # Copies are regenerable. Validate every present byte, while
                 # current declared inputs/context determine applicability.
@@ -385,14 +385,14 @@ def _input_rows(task_dir, repo, index, *, measure):
     return rows
 
 
-def applicability(task_dir, repo, *, measure=False, measured_inputs=None):
+def applicability(wbs_dir, repo, *, measure=False, measured_inputs=None):
     """Measure declared snapshot inputs without claiming any role ran."""
-    from _lib import read_task_control
+    from _lib import read_wbs_control
     if measure and measured_inputs is None:
-        measured_inputs = measure_inputs(task_dir, repo)
-    state, control = wbs.read_state(task_dir), read_task_control(task_dir)
+        measured_inputs = measure_inputs(wbs_dir, repo)
+    state, control = wbs.read_state(wbs_dir), read_wbs_control(wbs_dir)
     if measured_inputs is not None:
-        _require(measured_inputs["task_dir"] == os.path.realpath(task_dir)
+        _require(measured_inputs["wbs_dir"] == os.path.realpath(wbs_dir)
                  and measured_inputs["repo"] == os.path.realpath(repo)
                  and measured_inputs["state"] == state and measured_inputs["control"] == control,
                  "authority or target index changed during measurement")
@@ -400,7 +400,7 @@ def applicability(task_dir, repo, *, measure=False, measured_inputs=None):
     index = _active_index(state, control)
     if not index or not index.get("required"):
         return dict(status="unbound", enforced=False, source_binding="wbs_inputs", targets=[])
-    rows = measured_inputs["rows"] if measured_inputs is not None else _input_rows(task_dir, repo, index, measure=False)
+    rows = measured_inputs["rows"] if measured_inputs is not None else _input_rows(wbs_dir, repo, index, measure=False)
     by_token = {row["token"]: row for row in rows}
     missing = []
     if measure:

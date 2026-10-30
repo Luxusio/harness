@@ -324,7 +324,7 @@ def _is_evidence(path, doc_root=None):
                 ancestor = parent
     identities = (os.path.abspath(path), os.path.realpath(path))
     for harness in harness_roots:
-        for name in ("archive", "tasks", "runtime", "checkpoints"):
+        for name in ("archive", "tasks", "wbs", "runtime", "checkpoints"):
             operational = os.path.join(harness, name)
             for boundary in (operational, os.path.realpath(operational)):
                 if any(actual == boundary or actual.startswith(boundary + os.sep) for actual in identities):

@@ -600,7 +600,7 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
     assert not (repo / "doc/harness/.format-version").exists()
     for rel in (
         "doc/harness/goals/current.json",
-        "doc/harness/tasks/TASK__probe/STATE.json",
+        "doc/harness/wbs/WBS__probe/STATE.json",
         "doc/harness/reviews/main-reviews.jsonl",
         "doc/harness/runbook_candidates.yaml",
         "doc/harness/maintenance/probe.json",
@@ -1163,7 +1163,7 @@ def test_migration_converges_every_starting_state_to_v7(tmp_path):
         assert not (repo / "doc/harness/.version").exists(), label
         assert not (repo / "doc/harness/.format-version").exists(), label
         ignores = (repo / ".gitignore").read_text(encoding="utf-8")
-        for entry in ("doc/harness/tasks/", "doc/harness/.watcher-diagnostics.json", ".claude/worktrees/"):
+        for entry in ("doc/harness/wbs/", "doc/harness/.watcher-diagnostics.json", ".claude/worktrees/"):
             assert entry in ignores, label
 
         rerun = subprocess.run(
@@ -1441,4 +1441,4 @@ def test_looping_claude_symlink_does_not_crash_the_migration(tmp_path, monkeypat
     module = load_setup_finalize("setup_finalize_loop_resolve_test")
     monkeypatch.setattr(Path, "resolve", lambda self, strict=False: Path(os.path.abspath(self)))
     assert module._git_visible_path(repo, ".claude/worktrees/__harness_probe__") is None
-    assert module._git_visible_path(repo, "doc/harness/tasks/x") == "doc/harness/tasks/x"
+    assert module._git_visible_path(repo, "doc/harness/wbs/x") == "doc/harness/wbs/x"

@@ -10,7 +10,7 @@ Unrelated documentation edits must not invalidate product QA.
 
 ## Approved correction (2026-10-29)
 
-user_confirmed: “ㄱㄱ 차례대로” approves the immediately preceding audit's finding that a retired review lens still blocks close. Derived from that approval and the current-lens declarations: active applicability follows canonical current `TASK.json.required_lenses`, while immutable historical targets remain available. A retired lens cannot block current checks; reintroducing it again requires applicable target inputs. This does not waive independent reviews or actual QA.
+user_confirmed: “ㄱㄱ 차례대로” approves the immediately preceding audit's finding that a retired review lens still blocks close. Derived from that approval and the current-lens declarations: active applicability follows canonical current `WBS.control.json.required_lenses`, while immutable historical targets remain available. A retired lens cannot block current checks; reintroducing it again requires applicable target inputs. This does not waive independent reviews or actual QA.
 
 ## Derived mechanism
 
@@ -29,7 +29,7 @@ authority. There is no spawn-name parser, watcher or lifecycle attestation.
 
 Declare actual runtime output directories through `output_dirs`. Place caches
 and fixture/temp artifacts outside selected inputs or disable optional caches.
-This repository uses `output_dirs:["doc/harness/tasks"]` for its existing pytest
+This repository uses `output_dirs:["doc/harness/wbs"]` for its existing pytest
 session guard. Every input remains read-only. Output paths cannot overlap or
 be ancestors of selected inputs, and must be explicitly excluded when inside a
 selected source root. Output preparation is not source identity.
@@ -58,9 +58,9 @@ recording warrants a rerun.
   A stale or unavailable target names its actual correction and cannot authorize close.
 - Diagnostic targets may declare no lenses for direct runner experiments. They
   cannot replace required acceptance checks or independent review/QA.
-- Target history remains in existing task work storage, with a bounded active
+- Target history remains in existing WBS work storage, with a bounded active
   lens index in WBS. No second completion ledger or scheduler is introduced.
-- Final publication checks that task/run, control, WBS and target inputs still
+- Final publication checks that WBS/run, control, WBS and target inputs still
   match. Measurement is private in-memory state; close and verified installation
   retain fresh applicability checks and stable source snapshot requirements.
 
@@ -73,7 +73,7 @@ hostile owners and arbitrary shell mutation remain outside this protection.
 Canonical WBS policy and streaming measurement budgets apply. Required files
 are not removed to obtain PASS. Unsupported symlink/nonregular inputs, missing
 dependencies, unsafe ownership/modes, nested checkout roots and recursive
-task/runtime inputs fail explicitly. Select concrete nested-module inputs.
+WBS/runtime inputs fail explicitly. Select concrete nested-module inputs.
 Target metadata is bounded to 1 MiB per immutable record; refine actual scope
 when needed without hiding required evidence.
 

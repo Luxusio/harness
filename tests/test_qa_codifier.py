@@ -13,8 +13,8 @@ FIXTURES = os.path.join(REPO_ROOT, "tests", "fixtures", "gstack_adoption")
 sys.path.insert(0, os.path.join(REPO_ROOT, "plugin", "scripts"))
 
 
-class TestSanitizeTaskId(unittest.TestCase):
-    """Task-id sanitizer: TASK__add-feature -> task_add_feature."""
+class TestSanitizeWbsId(unittest.TestCase):
+    """WBS-id sanitizer: WBS__add-feature -> wbs_add_feature."""
 
     def setUp(self):
         import importlib
@@ -22,21 +22,21 @@ class TestSanitizeTaskId(unittest.TestCase):
         importlib.reload(qa_codifier)
         self.module = qa_codifier
 
-    def test_task_prefix_lowercased(self):
-        self.assertEqual(self.module.sanitize_task_id("TASK__add-feature"), "task_add_feature")
+    def test_wbs_prefix_lowercased(self):
+        self.assertEqual(self.module.sanitize_wbs_id("WBS__add-feature"), "wbs_add_feature")
 
     def test_dashes_to_underscores(self):
-        self.assertEqual(self.module.sanitize_task_id("my-task-name"), "my_task_name")
+        self.assertEqual(self.module.sanitize_wbs_id("my-task-name"), "my_task_name")
 
     def test_dots_to_underscores(self):
-        self.assertEqual(self.module.sanitize_task_id("task.v1"), "task_v1")
+        self.assertEqual(self.module.sanitize_wbs_id("task.v1"), "task_v1")
 
     def test_collapse_consecutive_underscores(self):
-        result = self.module.sanitize_task_id("TASK__foo--bar")
+        result = self.module.sanitize_wbs_id("WBS__foo--bar")
         self.assertNotIn("__", result, "Consecutive underscores should be collapsed")
 
     def test_strip_leading_trailing_underscores(self):
-        result = self.module.sanitize_task_id("_TASK__test_")
+        result = self.module.sanitize_wbs_id("_WBS__test_")
         self.assertFalse(result.startswith("_"), "Should not start with _")
         self.assertFalse(result.endswith("_"), "Should not end with _")
 
@@ -160,17 +160,17 @@ class TestCodifierPipeline(unittest.TestCase):
     def test_codify_with_fixture_exits_0(self):
         """Fixture with codifiable blocks should exit 0 and produce tests."""
         fixture = os.path.join(FIXTURES, "CRITIC_qa_codifiable.md")
-        with tempfile.TemporaryDirectory() as task_dir:
+        with tempfile.TemporaryDirectory() as wbs_dir:
             with tempfile.TemporaryDirectory() as fake_root:
                 manifest_dir = os.path.join(fake_root, "doc", "harness")
                 os.makedirs(manifest_dir, exist_ok=True)
                 with open(os.path.join(manifest_dir, "manifest.yaml"), "w") as f:
                     f.write("test_command: pytest\n")
-                result = self.module.codify(task_dir, transcript_path=fixture,
+                result = self.module.codify(wbs_dir, transcript_path=fixture,
                                             target_root=fake_root)
                 self.assertEqual(result, 0)
                 # Assert moved > 0: at least one .py file landed in target_dir
-                sanitized = self.module.sanitize_task_id(os.path.basename(task_dir))
+                sanitized = self.module.sanitize_wbs_id(os.path.basename(wbs_dir))
                 target_dir = os.path.join(fake_root, "tests", "regression", sanitized)
                 self.assertTrue(os.path.isdir(target_dir),
                                 f"No regression dir created at {target_dir}")
@@ -227,12 +227,12 @@ class TestCodifierPipeline(unittest.TestCase):
             with open(transcript, "w") as f:
                 f.write("codifiable:\n  - behavior: !!garbage yaml\n    command: [not: valid\n")
             result = self.module.codify(d, transcript_path=transcript, target_root=root)
-            task_id = os.path.basename(os.path.normpath(d))
+            wbs_id = os.path.basename(os.path.normpath(d))
             rows = ledger_rows(root)
         self.assertEqual(result, 0, "codify must never crash")
         self.assertEqual(
-            sorted((row.get("type"), row.get("task")) for row in rows),
-            [("codifier-fail", task_id), ("codifier-rejected", task_id)],
+            sorted((row.get("type"), row.get("wbs")) for row in rows),
+            [("codifier-fail", wbs_id), ("codifier-rejected", wbs_id)],
             rows,
         )
 
@@ -519,13 +519,13 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
         self.module = qa_codifier
 
     def _run_codify(self, transcript_text, fake_root):
-        with tempfile.TemporaryDirectory() as task_dir:
-            transcript = os.path.join(task_dir, "CRITIC__qa.md")
+        with tempfile.TemporaryDirectory() as wbs_dir:
+            transcript = os.path.join(wbs_dir, "CRITIC__qa.md")
             with open(transcript, "w") as f:
                 f.write(transcript_text)
-            result = self.module.codify(task_dir, transcript_path=transcript,
+            result = self.module.codify(wbs_dir, transcript_path=transcript,
                                         target_root=fake_root)
-            sanitized = self.module.sanitize_task_id(os.path.basename(task_dir))
+            sanitized = self.module.sanitize_wbs_id(os.path.basename(wbs_dir))
             target_dir = os.path.join(fake_root, "tests", "regression", sanitized)
             learnings_path = os.path.join(fake_root, "doc", "harness", "learnings.jsonl")
             return result, target_dir, learnings_path
@@ -626,7 +626,7 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
     def test_pytest_discovery_compatible_naming(self):
         """All rendered files start with test_ so pytest auto-discovery works.
 
-        Regression for AC-006 of TASK__test-workflow-gaps. Codified tests must land
+        Regression for AC-006 of WBS__test-workflow-gaps. Codified tests must land
         in tests/regression/<sanitized>/ AND be named test_*.py — without the
         prefix, pytest skips them silently and the codifier's output rots.
         """
@@ -695,11 +695,11 @@ class TestTrivialCommandFilter(unittest.TestCase):
         """Trivial command must produce a codifier-rejected log entry."""
         with tempfile.TemporaryDirectory() as fake_root:
             _make_fake_root_with_manifest(fake_root)
-            with tempfile.TemporaryDirectory() as task_dir:
-                transcript = os.path.join(task_dir, "CRITIC__qa.md")
+            with tempfile.TemporaryDirectory() as wbs_dir:
+                transcript = os.path.join(wbs_dir, "CRITIC__qa.md")
                 with open(transcript, "w") as f:
                     f.write(FIXTURE_TRANSCRIPT_TRIVIAL)
-                self.module.codify(task_dir, transcript_path=transcript,
+                self.module.codify(wbs_dir, transcript_path=transcript,
                                    target_root=fake_root)
             learnings = os.path.join(fake_root, "doc", "harness", "learnings.jsonl")
             self.assertTrue(os.path.isfile(learnings), "No learnings.jsonl written")
@@ -719,18 +719,18 @@ class TestTrivialCommandFilter(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as fake_root:
             make_tmp_harness_root(fake_root)
-            with tempfile.TemporaryDirectory() as task_dir:
-                transcript = os.path.join(task_dir, "CRITIC__qa.md")
+            with tempfile.TemporaryDirectory() as wbs_dir:
+                transcript = os.path.join(wbs_dir, "CRITIC__qa.md")
                 with open(transcript, "w") as f:
                     f.write(FIXTURE_TRANSCRIPT_TRIVIAL)
-                self.module.codify(task_dir, transcript_path=transcript,
+                self.module.codify(wbs_dir, transcript_path=transcript,
                                    target_root=fake_root)
-            task_id = os.path.basename(os.path.normpath(task_dir))
+            wbs_id = os.path.basename(os.path.normpath(wbs_dir))
             fake_rows = ledger_rows(fake_root)
         self.assertEqual(
-            sorted((row.get("source"), row.get("type"), row.get("task")) for row in fake_rows),
-            [("qa_codifier", "codifier-fail", task_id),
-             ("qa_codifier", "codifier-rejected", task_id)],
+            sorted((row.get("source"), row.get("type"), row.get("wbs")) for row in fake_rows),
+            [("qa_codifier", "codifier-fail", wbs_id),
+             ("qa_codifier", "codifier-rejected", wbs_id)],
             fake_rows,
         )
         # Raw lines, not `ledger_rows`: the real ledger may hold lines that do
@@ -738,28 +738,28 @@ class TestTrivialCommandFilter(unittest.TestCase):
         real = os.path.join(REPO_ROOT, "doc", "harness", "learnings.jsonl")
         try:
             with open(real, encoding="utf-8", errors="replace") as f:
-                leaked = [line for line in f if task_id in line]
+                leaked = [line for line in f if wbs_id in line]
         except FileNotFoundError:
             leaked = []
         self.assertEqual(leaked, [], "codify leaked a row into the real ledger")
 
     def test_codify_accepts_target_root_kwarg(self):
         """AC-001: codify() writes to target_root, never leaks to real repo."""
-        with tempfile.TemporaryDirectory() as task_dir:
+        with tempfile.TemporaryDirectory() as wbs_dir:
             with tempfile.TemporaryDirectory() as fake_root:
                 _make_fake_root_with_manifest(fake_root)
-                transcript = os.path.join(task_dir, "CRITIC__qa.md")
+                transcript = os.path.join(wbs_dir, "CRITIC__qa.md")
                 with open(transcript, "w") as f:
                     f.write(FIXTURE_TRANSCRIPT_WITH_AC_ID)
-                result = self.module.codify(task_dir, transcript_path=transcript,
+                result = self.module.codify(wbs_dir, transcript_path=transcript,
                                             target_root=fake_root)
                 self.assertEqual(result, 0)
                 regression_dir = os.path.join(fake_root, "tests", "regression")
                 self.assertTrue(os.path.isdir(regression_dir),
                                 f"regression dir missing in fake_root: {fake_root}")
                 real_regression = os.path.join(REPO_ROOT, "tests", "regression")
-                task_id = os.path.basename(os.path.normpath(task_dir))
-                sanitized = self.module.sanitize_task_id(task_id)
+                wbs_id = os.path.basename(os.path.normpath(wbs_dir))
+                sanitized = self.module.sanitize_wbs_id(wbs_id)
                 leaked = os.path.join(real_regression, sanitized)
                 self.assertFalse(os.path.exists(leaked),
                                  f"codify leaked into real repo root: {leaked}")

@@ -1,12 +1,12 @@
 ---
 name: batch
-description: Coordinator procedure for running several independent harness tasks in parallel from one session, one harness:task-lead per linked git worktree, rebased, fast-forwarded, and verified afterward.
+description: Coordinator procedure for running several independent Harness WBS roots in parallel from one session, one harness:wbs-lead per linked git worktree, rebased, fast-forwarded, and verified afterward.
 argument-hint: <N requests, each with a slug and declared path scope>
 user-invocable: true
 allowed-tools: Read, Glob, Grep, Bash, Agent, SendMessage, Skill, mcp__plugin_harness_harness__wbs
 ---
 
-Run independent Claude worktree tasks in a bounded pool: fill, collect,
+Run independent Claude worktree WBS roots in a bounded pool: fill, collect,
 serially integrate, and refill without waiting for a whole wave. Codex uses
 its internal batch workflow and the same pool helpers, with authenticated
 worktree coordinator/lens identities. WBS dispatch owns the exact batch ID and managed worktrees; reuse its
@@ -16,7 +16,7 @@ returned handoffs and reopen the same root after all leads land.
 `doc/harness/REQ__parallel-tasks-via-worktree-leads.md` explains worktree shape.
 `doc/harness/REQ__batch-submodule-support.md` owns the selected-module S1 contract.
 Persistent records under `doc/harness/runtime/batches/<id>.json` are operational
-metadata, never task authority or review/QA evidence. Never edit them by hand.
+metadata, never WBS authority or review/QA evidence. Never edit them by hand.
 
 The owning WBS is the immutable pool owner. Preserve its binding on every
 retry; never attach a different root to an initialized pool. Standalone CLI
@@ -31,7 +31,7 @@ pending outcomes. The owner derives request slugs, titles and dependency edges
 from that same WBS; use its returned identities rather than inventing another
 request graph. Declare independence only when the work can actually run apart.
 Dependencies and overlapping scopes serialize until confirmed integration and
-cleanup. Slugs must be distinct within the batch; task/archive identity
+cleanup. Slugs must be distinct within the batch; WBS/archive identity
 collisions refuse. Never replace the exact pool to bypass a retained scope.
 
 Existing standalone owner intake remains a list of
@@ -48,7 +48,7 @@ The preparation preflight classifies every declared scope path. Only a
 Selected modules reserve the whole gitlink, including sibling descendant scopes.
 A request with an unselected scope
 `inside-submodule` or `inside-ignored-nested-repo` is not batched: run it as
-an ordinary harness task in the main checkout, before or after the pool, never
+an ordinary Harness WBS in the main checkout, before or after the pool, never
 while leads run. An `outside-root` scope cannot run in a batch lead
 at all.
 
@@ -72,8 +72,8 @@ Preflight still owns control-root shape, clean root/nested repositories in stric
 standalone/S1 flows and scoped disjoint user changes in managed ordinary flows,
 literal source scopes, selected S1 modules, ignored worktree location and
 post-checkout-hook hazards. Refusals preserve work and name the blocker. No main
-checkout task may be open while leads can emit lifecycle events; dispatch parks
-its own parent, never an unrelated task. `.claude/worktrees/` must be ignored.
+checkout WBS may be open while leads can emit lifecycle events; dispatch parks
+its own parent, never an unrelated WBS. `.claude/worktrees/` must be ignored.
 Claude native `worktree.baseRef` does not select this MCP-owned checkout.
 
 Count coordinators, leads and nested workers against the actual host limit.
@@ -86,12 +86,12 @@ release only after their predecessor integrates and cleanup completes.
 
 ## c) Bootstrap and bind before work
 
-Spawn the independent returned handoffs in one assistant message; spawn each as a bootstrap-only `harness:task-lead`, without
-native worktree isolation. Its prompt includes request, slug, exact `task_id`,
+Spawn the independent returned handoffs in one assistant message; spawn each as a bootstrap-only `harness:wbs-lead`, without
+native worktree isolation. Its prompt includes request, slug, exact `wbs_id`,
 MCP-created W/branch, spawn HEAD, main checkout, batch ID, scope, off-limits,
 selected modules and bounded pytest worker cap (default 4). Pass the exact
 checkout explicitly; the agent verifies registration, branch/HEAD and helper
-marker, then returns its identity and stops. No source or task mutation is
+marker, then returns its identity and stops. No source or WBS mutation is
 permitted before bind. Do not pass `isolation: worktree` or accept a substituted
 host-created checkout. The marker is operational metadata, never evidence.
 
@@ -124,7 +124,7 @@ Update that lead's existing PLAN/current ownership and explicitly continue the
 same worker only after the grant. Unrelated work need not stop. See the existing
 batch-state recovery REQ for migration and refusal details.
 
-A lead returns its actual fenced JSON object with `task_id`, `worktree`,
+A lead returns its actual fenced JSON object with `wbs_id`, `worktree`,
 `branch`, `commit`, `verdict` and `blocked_reason`. Confirm through the host that
 that worker and all nested writers stopped. Silence or elapsed time is no proof.
 Then call:
@@ -149,25 +149,25 @@ remain exclusively owned by the existing helpers.
 
 On interruption, call `wbs(action="dispatch", wbs_id=<owner>, operation="status")`.
 It is read-only. WBS context/next and existing session/prompt hooks also expose
-pending pools without requiring an active task; advisory discovery never runs
+pending pools without requiring an active WBS; advisory discovery never runs
 Git cleanup or grants permission. Confirm stopped writers before either:
 
 - `operation="recover", slug=S, worker_stopped=true`: reconcile the original
   integration/archive checkpoint and follow its exact next action. After an
   independently reviewed conflict resolution, optional `recovery_commit=<exact
   resolved branch-tip SHA>` explicitly acknowledges that tip. Only the original
-  pre-integration checkpoint can accept it, preserving exact W/branch/task/run,
+  pre-integration checkpoint can accept it, preserving exact W/branch/WBS/run,
   close proof and destination ancestry. Never use it to adopt unexpected
   commits after integration; normal `complete` still matches the original result.
 - `operation="resume", slug=S, worker_stopped=true`: reserve the same retained
-  W/branch/task/run. Prefer the original agent; otherwise use non-isolating
-  `harness:task-lead-resume` bootstrap-only, obtain its real ID and bind through
+  W/branch/WBS/run. Prefer the original agent; otherwise use non-isolating
+  `harness:wbs-lead-resume` bootstrap-only, obtain its real ID and bind through
   MCP before continuation. Preserve existing evidence; never `fresh_run` merely
   to resume.
 
 Blocked/failed leads remain retained with exact blockers. Unknown liveness
 never authorizes unlocking, expiry or disposal. Only an explicit user choice permits abandonment: it retains source, branch,
-evidence and unresolved scope ownership, never cancels/closes the task or
+evidence and unresolved scope ownership, never cancels/closes the WBS or
 satisfies the WBS. Abandonment and unused-reservation release remain exceptional
 owner commands in `batch_state.py`; they require actual stopped-writer proof,
 and release additionally requires confirmed no external work. Do not edit records or bypass checkpoints with direct
@@ -178,17 +178,17 @@ finish. The detailed command/state contract remains in the linked batch REQ.
 After all managed requests integrate and their pool closes, reopen the same
 owning WBS in main through `harness:run`, then perform combined verification
 below. No separate integration child or ledger is needed for that WBS pack.
-For a standalone batch use its ordinary main integration task. First confirm
+For a standalone batch use its ordinary main integration WBS. First confirm
 every lead and nested writer has stopped; unknown liveness forbids opening a
-main task. Queued or halted work remains durable.
+main WBS. Queued or halted work remains durable.
 
-If integration halts, a separate recovery task may resolve the concrete conflict
+If integration halts, a separate recovery WBS may resolve the concrete conflict
 after all writers stop. This repair does not complete the pack. Resolve in the
-recorded lead checkout and preserve its task/run/archive; then return to the
+recorded lead checkout and preserve its WBS/run/archive; then return to the
 same pack and follow managed recovery. Never claim all work integrated merely
-because the recovery task closed.
+because the recovery WBS closed.
 
-1. For a conflict, rerun the rebase under that recovery task in the lead W
+1. For a conflict, rerun the rebase under that recovery WBS in the lead W
    (`git -C <W> rebase --no-autostash <destination-tip>`), resolve each stopped
    commit, stage only intended paths and use `GIT_EDITOR=true git -C <W> rebase
    --continue`. Independently review the resolved result, then call managed
@@ -204,14 +204,14 @@ because the recovery task closed.
    reviewer each lead's `old_base`, `old_tip`, `new_base`, and `new_tip`, its
    patch-id result, and carried or residual status.
 4. In this plugin source repo, before `wbs(action="close")`, run
-   `python3 plugin/scripts/install_verified.py --task-dir <integration task dir>`
+   `python3 plugin/scripts/install_verified.py --wbs-dir <integration WBS dir>`
    — this is the only place `install_verified.py` runs in batch mode; leads
    skip it.
-5. Close the integration task only after the owning pack's integrated archive,
+5. Close the integration WBS only after the owning pack's integrated archive,
    destination ancestry and actual owned worktree/branch absence prove disposal.
    Managed completion already closes eligible pools; inspect `status` rather
    than remembering a separate batch close. Operational closure never replaces
-   review/QA or closes the WBS itself. A halted recovery task does not complete
+   review/QA or closes the WBS itself. A halted recovery WBS does not complete
    the pack: return to the exact pool and resolve retained work first.
 
 ## f) Host visibility
@@ -227,7 +227,7 @@ gap never has it).
 
 ## g) Report
 
-Give the user a table: task slug → branch → verdict → the lead's returned
+Give the user a table: WBS slug → branch → verdict → the lead's returned
 `commit` → integrated tip (`integrated_tip` from `batch_finish.py`). Instead
 of a tip, write "kept, unmerged" for blocked/failed leads and, with the
 `reason`, for closed leads the script kept before the fast-forward (merge
@@ -242,10 +242,10 @@ remaining cleanup. For a failed merge attempt with a null tip, inspect
 and "not integrated" only when absence was confirmed. Closed leads whose
 integration was never attempted are "not integrated". Note every lead
 whose result has `trailer_present: false`: its commits carry no
-`Harness-Task` trailer. Add a row for every request the
-preflight kept out of the pool: "excluded (ordinary task, done or pending)",
+`Harness-WBS` trailer. Add a row for every request the
+preflight kept out of the pool: "excluded (ordinary WBS, done or pending)",
 "queued (dependency or retained scope)", or "outside the root, not batchable". End with
-the integration task's verdict and operational batch disposition. Label abandoned
+the integration WBS's verdict and operational batch disposition. Label abandoned
 requests as retained work or never dispatched, never as completed implementation.
 Distinguish unresolved retained originals from
 verified recovery: report the recovery destination/tip and actual worktree and
@@ -261,6 +261,6 @@ Finish validates actual changed paths as a subset of ownership and rechecks
 disjointness before native fast-forward; unsupported index states retain W
 with recovery guidance. Keep worktrees, unintegrated commits and essential
 results on persistent repository storage; use temporary paths only for caches.
-Resume the exact task/run after checking actual checkout/ref/control presence;
+Resume the exact WBS/run after checking actual checkout/ref/control presence;
 recorded running status never proves a process is alive. Preserve known typed
 ancillary metadata outside W before disposal; unknown ignored content retains W.

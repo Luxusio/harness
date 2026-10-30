@@ -10,54 +10,63 @@ updated: 2026-04-15
 ## Harness routing
 <!-- harness:routing-injected -->
 
-**Default = harness task routing.** On Codex, invoke the public `$harness:run`
-entry skill for repository mutation before editing; it loads the internal
-canonical workflow. Native `/goal` owns explicit goals and broad work. Plain
-repo-mutating requests are also valid task intake. Hooks inject context; they
-do not create tasks automatically.
+**Default = WBS routing.** On Codex, invoke the public `$harness:run`
+entry skill before repository mutation; it loads the canonical workflow and
+opens or resumes one WBS. A native `/goal`, when present, supplies the host
+objective and continuation; it does not create another Harness planning ledger.
+Hooks inject context and enforce existing boundaries; they do not open roots.
 
-- Repo-mutating intent (feature, fix, refactor, behavior change) → Codex uses
-  `$harness:run`; the workflow syncs a native Goal when present and otherwise
-  opens or resumes a harness task directly.
-- Broad goals grow child tasks as bugs, pages, domains, or follow-up gaps are
-  discovered.
-- Known children retain declared order; after each `task_close`, complete
-  self-improvement and learning-candidate reporting before
-  `goal_next_task` selects the next child.
-- Focused goals can remain a single child task.
-- Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`.
-- Read-only question or explanation → answer directly, no harness task.
+- Repo-mutating intent (feature, fix, refactor, behavior change) → `$harness:run`
+  and the same WBS open → plan → develop → QA → close flow.
+- New user requirements or necessary discoveries update the same outcome tree.
+  `wbs(action="next")` selects dependency-ready outcomes. Independent outcomes
+  use `wbs(action="dispatch")` for isolated development, review and verification.
+- Bootstrap or repair → `Skill(harness:setup)`.
+- Read-only question or explanation → answer directly without opening a WBS.
 
 # Operating mode
-- `doc/harness/manifest.yaml` is the initialization marker.
-- Canonical public loop for every repo-mutating child task: **task start → plan when needed → develop → QA → close**. Independent review and `task_verify` remain mandatory internal close gates. Smallest coherent diff per step. No verification skipped. See `plugin/CLAUDE.md` for the authoritative runtime rules.
-- In this harness plugin source repo, a successful repo-mutating development task runs `python3 plugin/scripts/install_verified.py --task-dir doc/harness/tasks/<task_id>` automatically after current-run review+QA PASS and before `task_close`, unless the user explicitly opts out. From a stable payload snapshot, the helper invokes `python3 install.py`, whose default run skips synchronized runtimes and refreshes only stale runtime payloads. It writes no install receipt or deduplication state; retries recompute actual payload equality. Post-close self-improvement may then commit the completed diff; it must not introduce a second install phase. Report the commit hash when applicable and the pre-close conditional delivery result. In `harness:batch` mode, batch leads skip this verified install; it runs once from the post-merge integration task in the main checkout.
-- The hard gate at task completion is receipt-backed `runtime_verdict: PASS` for the current task run. Source edits and scope drift after review/QA are developer-owned.
-- Durable user requirements and reusable discoveries must be promoted to the
-  right committed surface: REQ/GUIDE/ADR/POLICY, skill/pattern docs, or tests.
-  Do not create narrative task artifacts for routine task
-  evidence.
-- Memory and automatic learning are part of every Goal child lifecycle:
-  runbook memory, staged learnings, and learning-candidate reporting remain
-  active when several children execute consecutively; the removed hygiene
-  scheduler does not create follow-up tasks.
-- Browser-first QA is default for web frontend projects when `browser_qa_supported: true` in manifest.
-- Acceptance criteria live in `PLAN.md`; current-run review and QA authority
-  comes only from lifecycle-owned `RECEIPTS.jsonl` entries. Receipt acquisition
-  and storage/gate contracts are owned respectively by
-  `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` and
-  `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
-- Notes under `doc/**/*.md` may carry `freshness: current|suspect|stale` + optional `invalidated_by_paths`. Run `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them; SessionStart does not inspect Git.
-- Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
-  PLAN.md/TASK.json via task MCP tools, and RECEIPTS.jsonl via
-  Codex/Claude lifecycle hooks.
-- Pre-plan source writes are blocked until PLAN.md exists on the active task (plan-first rule).
-- Only one repo-mutating task may hold write focus at a time. While another open task holds this session's focus, `task_start` refuses a second task when it knows the session identity; on Codex, PostToolUse fences a conflicting binding. Close or park the focused task first. Only Goal children queue through `goal_add_task`.
-  Each linked git worktree is its own checkout with its own write focus, so a coordinator running `harness:batch` may run one task per worktree from a single session.
-- Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or verify gates.
-- When an answer-lane exchange turns into repo mutation, make the lane switch
-  explicit and sync/open the native Goal child task or a direct harness task
-  before implementation.
+- `doc/harness/manifest.yaml` is the initialization marker. Outside initialized
+  projects, Harness hooks and normal lifecycle calls remain inactive.
+- Canonical public loop: **WBS open → plan when needed → develop → QA → close**.
+  Actual independent code review and conditional security review PASS precede
+  actual QA. Current measured WBS checks must PASS before close. See
+  `plugin/CLAUDE.md` for authoritative runtime rules.
+- In this Harness source repository, run `python3 plugin/scripts/install_verified.py
+  --wbs-dir doc/harness/wbs/<wbs_id>` after current review/QA PASS and before
+  `wbs(action="close")`, unless the user explicitly opts out. The helper verifies
+  the stable source snapshot. It invokes `python3 install.py`, whose default run skips
+  synchronized runtimes and refreshes only stale runtime payloads.
+  It creates no install receipt or deduplication state; retries recompute actual
+  payload equality. Batch leads skip install; the coordinator installs once
+  after integration. Post-close learning must not introduce a second install phase.
+  Before the final response, commit the completed diff unless the user explicitly
+  opts out; report the commit hash and pre-close conditional verified-delivery result.
+  An already-current source commit need not be repeated after installation.
+- PLAN.md owns acceptance intent. WBS.json owns outcome definitions and measured
+  checks; WBS.control.json owns the execution run, required lenses and close state.
+  Public replies expose `wbs_id`, `wbs_dir` and `context`. Normal execution does
+  not read retired Goal/Task controls; only explicit migration imports them.
+- Review and QA authority comes from actual independent final responses, never
+  historical receipt files or coordinator-authored substitutes. A machine PASS
+  cannot override current actual FAIL or BLOCKED_ENV. Source changes invalidate
+  affected verification scope; retain applicable unaffected evidence.
+- Promote durable user requirements and reusable discoveries to committed
+  REQ/GUIDE/ADR/POLICY, skills or tests. Do not create duplicate narrative ledgers.
+- Learning and self-improvement follow each WBS close. Shared runbook memory and
+  validated learning-candidate reporting remain active; neither creates an
+  unauthorized follow-up root or blocks completion for missing recording.
+- Browser-first QA applies when the manifest and changed outcomes require it.
+- Notes under `doc/**/*.md` may declare freshness and invalidated paths. Run
+  `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them;
+  SessionStart does not inspect Git.
+- PLAN.md, WBS.control.json and WBS.json belong to their public WBS owners.
+  Historical receipt/review bytes and migration archives remain protected.
+- Source writes require PLAN.md and the current exact session/run assignment.
+  One WBS holds this session's write focus per checkout; close or park it before
+  opening another. Each registered worktree retains its own isolated assignment.
+- Short approvals such as `ㅇㅇ ㄱ` authorize only the last explicit transition,
+  without skipping planning, independent review, QA or measured checks.
+- When an answer becomes repository mutation, open/resume the WBS before editing.
 
 # Template sync rule (CRITICAL)
 - This repo IS the harness plugin source. Runtime lives under `plugin/`. Every change to runtime behavior (paths, hook schemas, agent definitions, skill logic, script APIs) MUST stay internally consistent across `plugin/` — grep for the constant/path before landing the change.

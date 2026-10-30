@@ -32,7 +32,7 @@ Source: conversation on2026-10-28, following the nine-area source audit. The use
 
 ## Derived implementation constraints
 
-These are technical decisions supporting the accepted outcomes, not additional user product requirements. Reuse exact session/run bindings and their conflict fences rather than introducing a new authority store. Migrate known legacy focus explicitly; do not recreate legacy runtime readers or silently assign ambiguous shared focus to a session. Preserve existing task/run identities, measured checks, failed evidence and historical bytes.
+These are technical decisions supporting the accepted outcomes, not additional user product requirements. Reuse exact session/run bindings and their conflict fences rather than introducing a new authority store. Migrate known legacy focus explicitly; do not recreate legacy runtime readers or silently assign ambiguous shared focus to a session. Preserve existing WBS/run identities, measured checks, failed evidence and historical bytes.
 
 Keep preparation, publication and immutable-history integrity checks strict. Successful cache candidates and unsuccessful latest attempts must retain distinct applicability; a miss never becomes PASS. Logs may have bounded inline excerpts while their useful execution evidence remains accessible. Ordinary user changes, independent review before actual QA, platform skips and safe Git integration/disposal remain protected.
 

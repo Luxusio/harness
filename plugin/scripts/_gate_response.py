@@ -1,6 +1,6 @@
 """Canonical gate-response shape for all harness gate scripts.
 
-Every active gate (prewrite_gate, task_close)
+Every active gate (prewrite_gate, wbs_close)
 emits the same JSON shape so the orchestrator can resolve a block in one step
 instead of grepping for the helper script. The retro from 2026-05-12 surfaced
 that error messages saying "blocked" without an actionable next step force the

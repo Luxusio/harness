@@ -13,13 +13,13 @@ except ModuleNotFoundError as error:
 from conftest import SCRIPTS_DIR, invoke_hook, make_tmp_harness_root, parse_decision
 
 
-TREE = Path('doc/harness/archive/task-control-migration')
+TREE = Path('doc/harness/archive/wbs-control-migration')
 
 
 @pytest.mark.parametrize('name', ['manifest.json', '.lock', 'nested/original.json'])
 @pytest.mark.parametrize('absolute', [False, True])
 @pytest.mark.parametrize('tool', ['Write', 'Edit', 'apply_patch'])
-def test_task_control_migration_tree_denies_direct_and_fallback_writes(tmp_path, monkeypatch, name, absolute, tool):
+def test_wbs_control_migration_tree_denies_direct_and_fallback_writes(tmp_path, monkeypatch, name, absolute, tool):
     monkeypatch.syspath_prepend(SCRIPTS_DIR)
     import _lib
     import prewrite_gate
@@ -39,7 +39,7 @@ def test_task_control_migration_tree_denies_direct_and_fallback_writes(tmp_path,
     assert not (root / TREE).exists()
 
 
-def test_task_control_migration_is_protected_across_linked_checkouts(tmp_path, monkeypatch):
+def test_wbs_control_migration_is_protected_across_linked_checkouts(tmp_path, monkeypatch):
     from test_codex_worktree_prewrite import check, setup
     monkeypatch.delenv('HARNESS_SKIP_PREWRITE', raising=False)
     main, worktree = setup(tmp_path)

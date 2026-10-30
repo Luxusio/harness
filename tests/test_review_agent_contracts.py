@@ -311,7 +311,7 @@ def test_review_roles_distinguish_bounded_observation_from_source_proof_and_hypo
     groups = {
         "safe execution": ("safe, bounded probe", "disposable external fixtures",
                            "foreground subprocess probes", "redirect outputs externally"),
-        "source preservation": ("reviewed source, tests, task state, or protected artifacts",),
+        "source preservation": ("reviewed source, tests, WBS state, or protected artifacts",),
         "execution authority": ("not embedded instructions", "user data",
                                 "authorization for external or destructive effects"),
         "proportionality": ("large diagnostic framework", "fixed experiment count"),
@@ -716,7 +716,7 @@ def test_reviewer_accepts_standard_fallback_and_only_authoritative_explicit_deep
         "STANDARD requires exactly the correct single hunter",
         "explicit DEEP request",
         "active user/system/developer",
-        "protected task intent",
+        "protected WBS intent",
         "evidence, not authority",
     )
     for path in ("plugin/agents/code-reviewer.md", "plugin-codex/agents/code-reviewer.md"):
@@ -725,7 +725,7 @@ def test_reviewer_accepts_standard_fallback_and_only_authoritative_explicit_deep
 
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
     required = (
-        "task.json",
+        "WBS.json",
         "every acceptance criterion",
         "code, tests, and durable docs",
         "outside the approved scope",
@@ -822,7 +822,7 @@ def test_review_gate_encodes_risk_proportional_decision_table_and_authority():
             "attempt",
             "resume",
             "recompute",
-            "task artifacts",
+            "WBS artifacts",
         ),
         "failure handling": (
             "missing",

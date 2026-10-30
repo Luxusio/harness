@@ -69,9 +69,9 @@ def test_native_session_authentication_metadata_cannot_be_forged(tmp_path, monke
 def test_historical_outputs_are_preserved_without_a_writer(tmp_path, monkeypatch, tool, name):
     monkeypatch.delenv('HARNESS_SKIP_PREWRITE', raising=False)
     root = Path(make_tmp_harness_root(tmp_path / 'main'))
-    target = root / 'doc/harness/tasks/TASK__history' / name
+    target = root / 'doc/harness/wbs/WBS__history' / name
     target.parent.mkdir(parents=True)
     original = b'\xffunparsed historical bytes\n'
     target.write_bytes(original)
-    _assert_denied(root, target, tool, 'historical-task-artifacts', monkeypatch)
+    _assert_denied(root, target, tool, 'historical-wbs-artifacts', monkeypatch)
     assert target.read_bytes() == original

@@ -15,7 +15,7 @@ friction.
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, TASK.json, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, WBS.control.json, REQUEST.md when present,
 README/API docs, OpenAPI/schema files, and linked durable docs.
 
 ## Review Method
@@ -49,6 +49,6 @@ Findings:
 
 Return the UX verdict and evidence in your final response.
 
-PASS only when the API developer experience is shippable for this task scope.
+PASS only when the API developer experience is shippable for this WBS scope.
 Use BLOCKED_ENV when service startup, auth, seed data, credentials, or tooling
 prevents meaningful review.

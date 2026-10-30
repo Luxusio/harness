@@ -99,7 +99,7 @@ Five fields, zero ambiguity.
 - **Bun**: 100x faster than npm install, 4x faster than Node.js runtime. Speed IS DX.
 - 87 interruptions per day average; 25 minutes to recover from each. Devs code only 2-4 hours/day.
 - Each 1-point DXI improvement = 13 minutes saved per developer per week.
-- **GitHub Copilot**: 55.8% faster task completion. PR time from 9.6 days to 2.4 days.
+- **GitHub Copilot**: 55.8% faster WBS completion. PR time from 9.6 days to 2.4 days.
 
 ## Pass 7: Community & Ecosystem
 
@@ -117,9 +117,9 @@ Five fields, zero ambiguity.
 
 Use when reviewing plans for Claude Code skills, MCP servers, or AI agent tools.
 
-- [ ] **AskUserQuestion design**: One issue per call. Re-ground context (project, branch, task). 4-rule body (Re-ground / Simplify / Recommend / Options). Hard cap at 4 options.
+- [ ] **AskUserQuestion design**: One issue per call. Re-ground context (project, branch, WBS). 4-rule body (Re-ground / Simplify / Recommend / Options). Hard cap at 4 options.
 - [ ] **State storage**: PLAN.md owns final planning decisions; `/tmp/` or working context is transient; learnings.jsonl remains the staging stream.
-- [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md and TASK.json lens declarations = plan skill through `wbs(action="plan")`; task closure = WBS execution owner.
+- [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md and WBS.control.json lens declarations = plan skill through `wbs(action="plan")`; WBS closure = WBS execution owner.
 - [ ] **Auto-resume**: A completed PLAN.md Review Status resumes into develop; incomplete planning is reviewed again instead of replaying a side ledger.
 - [ ] **Graceful degradation**: Missing tools skip cleanly, log reason to learnings.jsonl type `operational`. Never install missing tools automatically.
 - [ ] **Kill switches**: HARNESS_DISABLE_* env vars for every auto-behavior. Honored before CLI detection.

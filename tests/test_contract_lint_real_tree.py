@@ -218,7 +218,7 @@ class DurableDocsOnlyReferenceRealTests(unittest.TestCase):
     """A durable doc's coverage claim must still resolve in the real tree.
 
     A mutation table or a "pinned by" sentence is the only record that a guard
-    branch was ever exercised. R5 of `TASK__session-rebinds-receipt-marker`
+    branch was ever exercised. R5 of `WBS__session-rebinds-receipt-marker`
     found a row naming a test that had been renamed, which made the row — the
     sole coverage record for that branch — unreproducible. Verified by hand
     then; machine-checked here.

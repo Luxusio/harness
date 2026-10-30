@@ -135,6 +135,53 @@ def test_read_only_generated_configs_are_writable_only_in_private_copy(tmp_path)
     assert stat.S_IMODE(outside.stat().st_mode) == 0o666
 
 
+def test_private_projection_does_not_copy_virtual_filesystem_ownership_xattrs(tmp_path):
+    install = _load_install_module()
+    source = tmp_path / "source"
+    (source / "mcp").mkdir(parents=True)
+    (source / "mcp/server.py").write_bytes(b"# exact payload bytes\n")
+    uid = (os.getuid() + 1).to_bytes(4, "little")
+    paths = [source, source / "mcp", source / "mcp/server.py"]
+    source.chmod(0o700)
+    (source / "mcp").chmod(0o700)
+    (source / "mcp/server.py").chmod(0o600)
+    try:
+        for path in paths:
+            os.setxattr(path, "user.virtfs.uid", uid)
+    except (AttributeError, OSError) as error:
+        pytest.skip(f"fixture filesystem does not support user xattrs: {error}")
+    # Reproduce the prior copier's real metadata propagation on this filesystem.
+    prior = tmp_path / "prior-copytree"
+    shutil.copytree(source, prior)
+    for path in paths:
+        assert os.getxattr(prior / path.relative_to(source), "user.virtfs.uid") == uid
+    projected = tmp_path / "projected"
+    install._copytree_clean(source, projected)
+    for path in paths:
+        copied = projected / path.relative_to(source)
+        assert "user.virtfs.uid" not in os.listxattr(copied)
+        assert copied.stat().st_uid == os.getuid()
+        assert stat.S_IMODE(copied.stat().st_mode) == stat.S_IMODE(path.stat().st_mode)
+        assert os.getxattr(path, "user.virtfs.uid") == uid
+    assert (projected / "mcp/server.py").read_bytes() == (source / "mcp/server.py").read_bytes()
+
+
+def test_private_projection_foreign_owner_refusal_names_actual_and_installer_uid(tmp_path, monkeypatch):
+    install = _load_install_module()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "payload").write_bytes(b"source unchanged")
+    owner = os.getuid()
+    chmod_calls = []
+    monkeypatch.setattr(install.os, "getuid", lambda: owner + 1)
+    monkeypatch.setattr(install.os, "chmod", lambda *args, **kwargs: chmod_calls.append(args))
+    with pytest.raises(PermissionError) as failure:
+        install._copytree_clean(source, tmp_path / "projection")
+    assert f"uid {owner}, installer uid {owner + 1}" in str(failure.value)
+    assert not chmod_calls
+    assert (source / "payload").read_bytes() == b"source unchanged"
+
+
 def test_post_activation_cleanup_failure_reports_active_and_retained_trees(tmp_path):
     if os.geteuid() == 0:
         pytest.skip("requires effective filesystem permission enforcement")

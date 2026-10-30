@@ -3,7 +3,7 @@
 This is the Codex-runtime tree for the harness plugin. Claude's marketplace installs only `plugin/`, so a Claude marketplace update does not install this sibling tree. The source installer installs each runtime whose CLI is on PATH; use `python3 install.py --codex-only` or `--claude-only` to select one. The manifest's `features.codex_enabled` field is reserved metadata, not an installation switch.
 
 Architecture lives in [`doc/harness/spike-report.md`](../doc/harness/spike-report.md) §3.6 — **MCP-only sharing**:
-- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`TASK.json`, `PLAN.md`, and measured `WBS.json` outcomes).
+- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`WBS.control.json`, `PLAN.md`, and measured `WBS.json` outcomes).
 - Single installer: repo-root `install.py` emits the `~/.codex/config.toml` MCP+hook block that wires the shared substrate into a Codex install.
 - Independent per runtime: SKILL.md trees, agent definitions. Hand-authored on each side, both consuming the same shared substrate.
 
@@ -42,7 +42,7 @@ Further references:
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` for required independent review and QA. If that capability is absent, a strict review gate remains pending; inline work is limited to explicitly advisory roles.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`.
-  Hooks protect source/task ownership and route context. There is no receipt
+  Hooks protect source/WBS ownership and route context. There is no receipt
   watcher, name binding, collector or recording prerequisite. Actual independent
   review PASS precedes actual QA; machine verify/close measure current WBS checks.
   See [receipt-free completion](../doc/harness/REQ__receipt-free-execution-and-completion.md).
@@ -75,7 +75,7 @@ Further references:
 - `developer.md` — source/doc implementation role.
 
 Review depth is ephemeral, not authoritative lifecycle state or a dedicated
-task, receipt, or review-detail field. Selected depth and evidence may appear
+WBS, receipt, or review-detail field. Selected depth and evidence may appear
 inside stored non-authoritative formal-review narrative; resume/recovery still
 recomputes it. Conditional security review is routed separately.
 Rebase-LIGHT requires exact endpoints, conflict-free one-to-one patch

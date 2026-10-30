@@ -23,10 +23,10 @@ import batch_pending as pending
 def record(repo, *, name='pool', status='blocked'):
     item = dict(slug='leaf', request='SECRET REQUEST MUST NOT BE INJECTED',
                 scopes=['src'], resolved_scopes=[str(repo / 'src')],
-                depends_on=[], status=status, task_id='TASK__' + ('leaf' if name == 'pool' else name))
-    item['slug'] = item['task_id'][6:]
+                depends_on=[], status=status, wbs_id='WBS__' + ('leaf' if name == 'pool' else name))
+    item['slug'] = item['wbs_id'][5:]
     data = dict(schema_version=1, repo=str(repo), batch_id=name,
-                owner_task_id='TASK__parent', max_leads=2,
+                owner_wbs_id='WBS__parent', max_leads=2,
                 destination_ref='refs/heads/master', status='open', halted=False,
                 initial_head='a' * 40, created_at='now', updated_at='now',
                 cap_source='explicit', requests=[item])
@@ -45,7 +45,7 @@ def test_pending_is_readonly_no_git_and_no_request_injection(tmp_path, monkeypat
     assert result['pools'][0]['requests'][0]['next_operation'] == 'resume'
     assert 'SECRET' not in json.dumps(result)
     assert path.read_bytes() == before
-    assert 'TASK__parent' in pending.render_prompt_block(tmp_path)
+    assert 'WBS__parent' in pending.render_prompt_block(tmp_path)
 
 
 @pytest.mark.parametrize('corrupt', ['json', 'schema', 'symlink', 'hardlink', 'writable', 'parent'])
@@ -102,19 +102,19 @@ def test_linked_worktree_metadata_discovers_main_state_without_git(tmp_path, mon
 
 
 @pytest.mark.parametrize('active', [False, True])
-def test_prompt_recovery_survives_context_cap_and_no_active_task(tmp_path, active):
+def test_prompt_recovery_survives_context_cap_and_no_active_wbs(tmp_path, active):
     from test_prompt_memory import _build_scratch_repo, _invoke
-    _build_scratch_repo(tmp_path, active_task_id='TASK__ordinary' if active else None)
+    _build_scratch_repo(tmp_path, active_wbs_id='WBS__ordinary' if active else None)
     record(tmp_path)
     response = _invoke(str(tmp_path))
     assert response.returncode == 0
     assert '[harness-worktree-recovery]' in response.stdout
-    assert 'batch=pool owner=TASK__parent' in response.stdout
+    assert 'batch=pool owner=WBS__parent' in response.stdout
     assert len(response.stdout) <= 401 + pending.MAX_PROMPT_CHARS
     assert 'SECRET' not in response.stdout
 
 
-def test_session_recovery_without_active_task(tmp_path):
+def test_session_recovery_without_active_wbs(tmp_path):
     from test_prompt_memory import _build_scratch_repo
     _build_scratch_repo(tmp_path)
     record(tmp_path)

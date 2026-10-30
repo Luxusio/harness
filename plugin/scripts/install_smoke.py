@@ -208,9 +208,9 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
                 return response
             opened = call("open")
             body = opened["structuredContent"]
-            task_dir = body["task_dir"]
+            wbs_dir = body["wbs_dir"]
             if os.environ["HARNESS_RUNTIME"] == "codex":
-                if _lib.active_task_binding_matches(str(repo), task_dir, _lib.read_task_control(task_dir), session_id=sid):
+                if _lib.active_wbs_binding_matches(str(repo), wbs_dir, _lib.read_wbs_control(wbs_dir), session_id=sid):
                     raise RuntimeError("Codex smoke session was bound before PostToolUse")
                 hook = str(Path(plugin_root) / "scripts/hook_post_tool_use.py")
                 payload = json.dumps({"cwd": str(repo), "session_id": sid, "tool_name": "wbs",
@@ -221,8 +221,8 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
                 if result.returncode:
                     raise RuntimeError("installed PostToolUse binding failed: " + result.stderr[-500:])
                 os.environ["HARNESS_SESSION_ID"] = sid
-            control = _lib.read_task_control(task_dir)
-            if not _lib.active_task_binding_matches(str(repo), task_dir, control, session_id=sid):
+            control = _lib.read_wbs_control(wbs_dir)
+            if not _lib.active_wbs_binding_matches(str(repo), wbs_dir, control, session_id=sid):
                 raise RuntimeError("installed runtime lost exact session/task/run focus")
             nodes = [{"id": "A", "title": "Installed runtime reads actual source", "weight": 1,
                       "inputs": {"source": ["source.txt"]},
@@ -234,9 +234,9 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
                         reserved_slots=[], verification_reserve=1,
                         spawn_available=False, continuation_available=False)
             call("dispatch", ownership={"A": ["source.txt"]}, host=host)
-            wbs.require_source_assignment(str(repo), Path(task_dir).name, "source.txt")
+            wbs.require_source_assignment(str(repo), Path(wbs_dir).name, "source.txt")
             try:
-                wbs.require_source_assignment(str(repo), Path(task_dir).name, "outside.txt")
+                wbs.require_source_assignment(str(repo), Path(wbs_dir).name, "outside.txt")
             except ValueError:
                 pass
             else:
@@ -246,8 +246,8 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
             if verified.get("runtime_verdict") != "PASS":
                 raise RuntimeError("installed WBS check is not current: " + str(verified.get("missing_for_close")) + "; " + str(verified.get("progress")))
             call("close")
-            if not _lib.read_task_control(task_dir).get("closed"):
-                raise RuntimeError("installed task owner did not publish closure")
+            if not _lib.read_wbs_control(wbs_dir).get("closed"):
+                raise RuntimeError("installed WBS owner did not publish closure")
             return 0
         except Exception as exc:
             print("FAIL WBS: " + str(exc), file=sys.stderr)

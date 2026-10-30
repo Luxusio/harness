@@ -30,7 +30,7 @@ def _write_task(
     *,
     state: str = "closed",
 ) -> Path:
-    task = Path(repo, "doc", "harness", "tasks", f"TASK__{name}")
+    task = Path(repo, "doc", "harness", "wbs", f"WBS__{name}")
     task.mkdir(parents=True)
     control = {
         "closed": state == "closed",
@@ -38,7 +38,7 @@ def _write_task(
         "required_lenses": ["review-code", "qa-cli"],
         "run_id": "018f0000-0000-7000-8000-000000000001",
     }
-    control_path = task / "TASK.json"
+    control_path = task / "WBS.control.json"
     if state == "invalid":
         control_path.write_text("{not json}\n", encoding="utf-8")
     else:
@@ -100,7 +100,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             self.assertEqual(count, 4, "All tasks should count when no prior retro")
 
     def test_missing_tasks_root_returns_zero(self):
-        """Missing task directory root should return 0."""
+        """Missing WBS directory root should return 0."""
         count = RETRO.count_verified_closes_since("/nonexistent/repo", 0)
         self.assertEqual(count, 0)
 
@@ -116,10 +116,10 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             old = _write_task(d, "touched-only", cutoff - 10)
             os.utime(old, (now, now))
 
-            tasks = RETRO.verified_closed_tasks_since(d, cutoff)
+            tasks = RETRO.verified_closed_wbs_since(d, cutoff)
             self.assertEqual(
                 tasks,
-                [(included.joinpath("TASK.json").stat().st_mtime, "TASK__closed")],
+                [(included.joinpath("WBS.control.json").stat().st_mtime, "WBS__closed")],
             )
 
     def test_malformed_task_names_do_not_count_or_inject_report_markdown(self):
@@ -129,32 +129,32 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             _write_task(d, "bad`\n- injected", now)
             _write_task(d, "bad name", now)
 
-            tasks = RETRO.verified_closed_tasks_since(d, 0)
+            tasks = RETRO.verified_closed_wbs_since(d, 0)
             self.assertEqual(
                 tasks,
-                [(valid.joinpath("TASK.json").stat().st_mtime, "TASK__valid")],
+                [(valid.joinpath("WBS.control.json").stat().st_mtime, "WBS__valid")],
             )
-            report = RETRO._section_tasks(d, 1)
-            self.assertIn("`TASK__valid`", report)
+            report = RETRO._section_wbs(d, 1)
+            self.assertIn("`WBS__valid`", report)
             self.assertNotIn("injected", report)
             self.assertNotIn("bad name", report)
 
     def test_markdown_renderer_fails_closed_for_noncanonical_text(self):
         self.assertEqual(
-            RETRO._markdown_task_name("TASK__safe`\n- injected"),
+            RETRO._markdown_wbs_name("WBS__safe`\n- injected"),
             "[invalid-task]",
         )
 
-    def test_unsafe_task_control_and_symlink_task_are_excluded(self):
+    def test_unsafe_wbs_control_and_symlink_task_are_excluded(self):
         with tempfile.TemporaryDirectory() as d:
             now = datetime.now(timezone.utc).timestamp()
             unsafe = _write_task(d, "unsafe", now)
-            unsafe.joinpath("TASK.json").chmod(0o666)
+            unsafe.joinpath("WBS.control.json").chmod(0o666)
 
             outside = Path(d, "outside")
             outside.mkdir()
-            tasks_root = Path(d, "doc", "harness", "tasks")
-            tasks_root.joinpath("TASK__symlink").symlink_to(outside, target_is_directory=True)
+            tasks_root = Path(d, "doc", "harness", "wbs")
+            tasks_root.joinpath("WBS__symlink").symlink_to(outside, target_is_directory=True)
 
             self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
 
@@ -162,21 +162,21 @@ class TestRetroTriggerThreshold(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             real_root = Path(d, "real-tasks")
             real_root.mkdir()
-            tasks_root = Path(d, "doc", "harness", "tasks")
+            tasks_root = Path(d, "doc", "harness", "wbs")
             tasks_root.parent.mkdir(parents=True)
             tasks_root.symlink_to(real_root, target_is_directory=True)
             self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
 
         with tempfile.TemporaryDirectory() as d:
             _write_task(d, "closed", datetime.now(timezone.utc).timestamp())
-            tasks_root = Path(d, "doc", "harness", "tasks")
+            tasks_root = Path(d, "doc", "harness", "wbs")
             tasks_root.chmod(0o777)
             self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
 
     def test_tasks_root_rebound_during_enumeration_rejects_partial_count(self):
         with tempfile.TemporaryDirectory() as d:
             _write_task(d, "closed", datetime.now(timezone.utc).timestamp())
-            tasks_root = Path(d, "doc", "harness", "tasks")
+            tasks_root = Path(d, "doc", "harness", "wbs")
             displaced = tasks_root.with_name("tasks-displaced")
             original_check = RETRO._verified_close_publication_fd
             rebound = False
@@ -198,7 +198,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             now = datetime.now(timezone.utc).timestamp()
             original = _write_task(d, "target", now, state="open")
-            displaced = original.with_name("TASK__target-original")
+            displaced = original.with_name("WBS__target-original")
             flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
             task_fd = os.open(original, flags)
             try:
@@ -214,23 +214,23 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             attempted = threading.Event()
             acquired = threading.Event()
             writer = None
-            original_status = RETRO.task_control_status
+            original_status = RETRO.wbs_control_status
 
             def write_after_classification():
                 attempted.set()
-                with RETRO.task_control_transaction(str(task)):
+                with RETRO.wbs_control_transaction(str(task)):
                     acquired.set()
 
-            def status_then_race(task_dir, control):
+            def status_then_race(wbs_dir, control):
                 nonlocal writer
-                status = original_status(task_dir, control)
+                status = original_status(wbs_dir, control)
                 writer = threading.Thread(target=write_after_classification)
                 writer.start()
                 self.assertTrue(attempted.wait(1))
                 self.assertFalse(acquired.wait(0.1))
                 return status
 
-            with mock.patch.object(RETRO, "task_control_status", side_effect=status_then_race):
+            with mock.patch.object(RETRO, "wbs_control_status", side_effect=status_then_race):
                 self.assertIsNotNone(RETRO._verified_close_publication(str(task)))
 
             self.assertIsNotNone(writer)
@@ -244,10 +244,10 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             _write_task(d, "closed", now)
             _write_task(d, "open", now, state="open")
 
-            report = RETRO._section_tasks(d, 1)
-            self.assertIn("1** verified task closures", report)
-            self.assertIn("TASK__closed", report)
-            self.assertNotIn("TASK__open", report)
+            report = RETRO._section_wbs(d, 1)
+            self.assertIn("1** verified WBS closures", report)
+            self.assertIn("WBS__closed", report)
+            self.assertNotIn("WBS__open", report)
 
 
 class TestRetroTriggerEnvVar(unittest.TestCase):
@@ -299,13 +299,13 @@ class TestFirstFireBanner(unittest.TestCase):
         path = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
         with open(path, encoding="utf-8") as stream:
             lines = stream.read().splitlines()
-        condition = next(line for line in lines if line.startswith("if [ \"${_TASKS_SINCE"))
+        condition = next(line for line in lines if line.startswith("if [ \"${_WBS_SINCE"))
         enabled = subprocess.run(
-            ["bash", "-c", f"_TASKS_SINCE=3; unset HARNESS_DISABLE_RETRO; {condition}\necho fired\nfi"],
+            ["bash", "-c", f"_WBS_SINCE=3; unset HARNESS_DISABLE_RETRO; {condition}\necho fired\nfi"],
             capture_output=True, text=True, check=False,
         )
         disabled = subprocess.run(
-            ["bash", "-c", f"_TASKS_SINCE=3; HARNESS_DISABLE_RETRO=1; {condition}\necho fired\nfi"],
+            ["bash", "-c", f"_WBS_SINCE=3; HARNESS_DISABLE_RETRO=1; {condition}\necho fired\nfi"],
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(enabled.returncode, 0, enabled.stderr)

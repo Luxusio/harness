@@ -24,7 +24,7 @@ import batch_finish as finish_helper
 import batch_harvest
 import batch_preflight
 import batch_submodules
-from _lib import find_repo_root, read_task_control, task_control_status, resolve_registered_worktree, _trusted_git_env, uuid7_timestamp_ms
+from _lib import find_repo_root, read_wbs_control, wbs_control_status, resolve_registered_worktree, _trusted_git_env, uuid7_timestamp_ms
 
 LIMIT = 1024 * 1024
 MAX_BATCHES = 100
@@ -207,7 +207,7 @@ def validate_extensions(item, repo, schema):
 def validate(data, repo, batch_id):
     require(isinstance(data, dict) and type(data.get('schema_version')) is int and data['schema_version'] in (1, 2, 3), 'unknown state schema')
     require(data.get('repo') == repo and data.get('batch_id') == batch_id, 'state identity mismatch')
-    require(data.get('owner_task_id') is None or isinstance(data['owner_task_id'], str) and batch_harvest.TASK_ID_RE.fullmatch(data['owner_task_id']), 'invalid pool owner')
+    require(data.get('owner_wbs_id') is None or isinstance(data['owner_wbs_id'], str) and batch_harvest.WBS_ID_RE.fullmatch(data['owner_wbs_id']), 'invalid pool owner')
     require(type(data.get('max_leads')) is int and 1 <= data['max_leads'] <= 8, 'invalid capacity')
     require(isinstance(data.get('destination_ref'), str) and data['destination_ref'].startswith('refs/heads/'), 'invalid destination')
     require(data.get('status') in {'open', 'closed'} and type(data.get('halted')) is bool, 'invalid batch status')
@@ -226,7 +226,7 @@ def validate(data, repo, batch_id):
         require('closed' not in item or type(item['closed']) is bool, 'invalid closed state')
         if data['schema_version'] == 1 or not item.get('submodules'):
             require(not any(k in item for k in ('submodules', 'submodule_manifest', 'ownership_scopes')), 'S1 fields in an ordinary request')
-        require(item.get('status') in STATES and item.get('task_id') == 'TASK__' + item['slug'], 'invalid request state')
+        require(item.get('status') in STATES and item.get('wbs_id') == 'WBS__' + item['slug'], 'invalid request state')
         require(isinstance(item.get('resolved_scopes'), list) and len(item['resolved_scopes']) == len(item['scopes'])
                 and all(isinstance(p, str) and os.path.isabs(p) and os.path.commonpath((repo, p)) == repo for p in item['resolved_scopes']), 'invalid scope bindings')
         validate_extensions(item, repo, data['schema_version'])
@@ -260,7 +260,7 @@ def validate(data, repo, batch_id):
         if item.get('result') is not None:
             result = item['result']
             require(isinstance(result, dict) and result.get('verdict') in {'closed', 'blocked', 'failed'}, 'invalid stored result')
-            require(all(result.get(k) == item.get(k) for k in ('task_id', 'worktree', 'branch')), 'stored result identity mismatch')
+            require(all(result.get(k) == item.get(k) for k in ('wbs_id', 'worktree', 'branch')), 'stored result identity mismatch')
         if 'creation_intent' in item:
             intent = item['creation_intent']
             require(isinstance(intent, dict) and set(intent) == {'worktree', 'branch', 'spawn_head', 'token'}
@@ -286,7 +286,7 @@ def validate(data, repo, batch_id):
             if 'recovery_commit' in checkpoint:
                 require(checkpoint['recovery_commit'] == checkpoint['branch_tip'] and re.fullmatch(r'[0-9a-f]{40}', checkpoint['recovery_commit']), 'invalid recovery commit acknowledgement')
             if checkpoint.get('harvest'):
-                require(isinstance(checkpoint['harvest'], dict) and checkpoint['harvest'].get('archived') == os.path.join(repo, 'doc/harness/archive/batch', item['task_id']), 'invalid checkpoint archive')
+                require(isinstance(checkpoint['harvest'], dict) and checkpoint['harvest'].get('archived') == os.path.join(repo, 'doc/harness/archive/batch', item['wbs_id']), 'invalid checkpoint archive')
     return data
 
 
@@ -294,7 +294,7 @@ def load_all(directory, repo):
     names = [name for name in os.listdir(directory) if name.endswith('.json')]
     require(len(names) <= MAX_BATCHES, 'batch history limit reached; retained ownership must not be discarded')
     records = {}
-    ownership = {key: set() for key in ('task_id', 'worktree', 'branch', 'worker_id')}
+    ownership = {key: set() for key in ('wbs_id', 'worktree', 'branch', 'worker_id')}
     for name in sorted(names):
         batch_id = name[:-5]
         require(IDENT.fullmatch(batch_id), 'invalid batch filename')
@@ -303,7 +303,7 @@ def load_all(directory, repo):
         for item in data['requests']:
             for key in ownership:
                 value = item.get(key) or item.get('creation_intent', {}).get(key)
-                if value and (key == 'task_id' or item['status'] != 'integrated'):
+                if value and (key == 'wbs_id' or item['status'] != 'integrated'):
                     require(value not in ownership[key], f'duplicate {key} ownership')
                     ownership[key].add(value)
     require(sum(any(x['status'] in LIVE for x in d['requests']) for d in records.values()) <= 1, 'multiple active pools')
@@ -574,20 +574,20 @@ def bound(repo, item):
 
 
 def control(item, base=None, closed=False):
-    directory = os.path.join(base or item['worktree'], 'doc/harness/tasks', item['task_id'])
+    directory = os.path.join(base or item['worktree'], 'doc/harness/wbs', item['wbs_id'])
     if base is not None:
         directory = base
-    data = read_task_control(directory)
-    require(data, 'task control missing or invalid')
+    data = read_wbs_control(directory)
+    require(data, 'WBS execution control missing or invalid')
     require(item.get('run_id') in (None, data['run_id']), 'task generation changed')
     if closed:
-        require(task_control_status(directory, data) == 'closed', 'task is not validly closed')
+        require(wbs_control_status(directory, data) == 'closed', 'task is not validly closed')
     return data
 
 
 def resume_control(item, observe=False):
     """Pin an unobserved running generation; otherwise require exact presence."""
-    directory = os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id'])
+    directory = os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id'])
     if not item.get('run_id') and not observe:
         require(not os.path.lexists(directory), 'task appeared after recorded absence')
         return None
@@ -595,24 +595,24 @@ def resume_control(item, observe=False):
         require(not item.get('run_id'), 'previously observed task is missing')
         return None
     proof = control(item)
-    status = task_control_status(directory, proof)
+    status = wbs_control_status(directory, proof)
     require(status != 'closed', 'closed task requires genuine final result or integration reconciliation, not resume')
-    require(status in {'open', 'blocked'}, 'task control is not valid open/blocked work')
+    require(status in {'open', 'blocked'}, 'WBS execution control is not valid open/blocked work')
     return proof['run_id']
 
 
-def no_main_task(repo):
-    # Focus markers identify a session's active task, not every open task.
+def no_main_wbs(repo):
+    # Focus markers identify a session's active WBS, not every open WBS.
     # A stopped coordinator can leave valid open control without a marker.
-    directory = os.path.join(repo, 'doc/harness/tasks')
+    directory = os.path.join(repo, 'doc/harness/wbs')
     if not os.path.lexists(directory):
         return
     parents(directory)
     with os.scandir(directory) as entries:
         for entry in entries:
-            if batch_harvest.TASK_ID_RE.fullmatch(entry.name):
+            if batch_harvest.WBS_ID_RE.fullmatch(entry.name):
                 safe(entry.path, True)
-                require(task_control_status(entry.path) != 'open', 'main checkout has an open task')
+                require(wbs_control_status(entry.path) != 'open', 'main checkout has an open WBS')
 
 
 def _fingerprint_entries(path):
@@ -699,7 +699,7 @@ def observation(repo, item):
         result['branch_tip'] = finish_helper._resolve_commit(repo, 'refs/heads/' + item['branch'])
         try:
             result['registered_tip'] = bound(repo, item)
-            result['task_status'] = task_control_status(os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id']))
+            result['wbs_status'] = wbs_control_status(os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id']))
         except Exception as exc:
             result['identity_error'] = str(exc)
             result['next_action'] = 'preserve retained branch/evidence and restore exact registration before same-task resume: ' + str(exc)
@@ -708,14 +708,17 @@ def observation(repo, item):
     return result
 
 
-def require_unused_task_ids(repo, requests, records):
-    ids = {x['task_id'] for data in records.values() for x in data['requests']}
+def require_unused_wbs_ids(repo, requests, records):
+    ids = {x['wbs_id'] for data in records.values() for x in data['requests']}
     for item in requests:
-        task_id = 'TASK__' + item['slug']
-        require(task_id not in ids
-                and not os.path.lexists(os.path.join(repo, 'doc/harness/archive/batch', task_id))
-                and not os.path.lexists(os.path.join(repo, 'doc/harness/tasks', task_id)),
-                'task/archive identity already used')
+        wbs_id = 'WBS__' + item['slug']
+        retired_id = 'TASK__' + item['slug']
+        require(wbs_id not in ids
+                and not os.path.lexists(os.path.join(repo, 'doc/harness/archive/batch', wbs_id))
+                and not os.path.lexists(os.path.join(repo, 'doc/harness/wbs', wbs_id))
+                and not os.path.lexists(os.path.join(repo, 'doc/harness/archive/batch', retired_id))
+                and not os.path.lexists(os.path.join(repo, 'doc/harness/tasks', retired_id)),
+                'WBS/archive identity already used; retired records require explicit migration')
 
 
 def _extension_git(worktree, *args):
@@ -734,8 +737,8 @@ def extension_witness(repo, data, item, head, run_id):
     require(_extension_git(item['worktree'], 'rev-parse', '--verify', 'HEAD').strip().decode('ascii') == head,
             'worktree HEAD differs from expected HEAD')
     proof = control(item)
-    require(proof['run_id'] == run_id and task_control_status(
-        os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id']), proof) in {'open', 'blocked'},
+    require(proof['run_id'] == run_id and wbs_control_status(
+        os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id']), proof) in {'open', 'blocked'},
         'expected run must identify open or blocked task')
     require(not proof['closed'], 'task already has close evidence')
     require(item.get('retention') == retention_contract(data['batch_id'], item), 'bootstrap retention identity missing')
@@ -867,7 +870,7 @@ def extend_scopes(repo, data, item, records, args, save):
                  worker_id=args.worker_id, reason=args.reason, granted_at=now())
     grant_valid(grant)
     require(item.get('run_id') in (None, args.expected_run_id), 'bound task generation changed')
-    no_main_task(repo)
+    no_main_wbs(repo)
     no_git_operation(repo)
     proof = extension_witness(repo, data, item, args.expected_head, args.expected_run_id)
     paths = extension_paths(repo, data, item, args.expected_head)
@@ -875,12 +878,12 @@ def extend_scopes(repo, data, item, records, args, save):
     if replay:
         return {'status': 'running', 'request': copy.deepcopy(item), 'replayed': True,
                 'handoff': dict(scopes=effective_scopes(item), worker_id=item['worker_id'], run_id=args.expected_run_id,
-                                worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'])}
+                                worktree=item['worktree'], branch=item['branch'], wbs_id=item['wbs_id'])}
     require(len(item.get('scope_grants', [])) < MAX_SCOPE_GRANTS, 'scope grant history limit reached')
     require(not any(p in effective_scopes(item) for p in scopes), 'extension scope already granted')
     requests = {item['slug']: scopes}
     require(not batch_preflight._globs_and_lists(repo, requests), 'extension scopes must be literal paths')
-    admission = ordinary_admission_scopes(repo, data['requests'], bool(data.get('owner_task_id')))
+    admission = ordinary_admission_scopes(repo, data['requests'], bool(data.get('owner_wbs_id')))
     if admission is not None:
         admission += [os.path.join(repo, path) for path in scopes]
     report = batch_preflight.preflight(repo, requests, dirty_scopes=admission)
@@ -905,10 +908,10 @@ def extend_scopes(repo, data, item, records, args, save):
                 'extension scope collides with retained owner')
         resolved[path] = absolute
     # Repeat the exact source/control/witness observations immediately before publication.
-    no_main_task(repo)
+    no_main_wbs(repo)
     no_git_operation(repo)
     require(proof == extension_witness(repo, data, item, args.expected_head, args.expected_run_id),
-            'task control changed during scope extension')
+            'WBS execution control changed during scope extension')
     require(paths == extension_paths(repo, data, item, args.expected_head), 'source changed during scope extension')
     item.setdefault('extra_scopes', {}).update(resolved)
     item.setdefault('scope_grants', []).append(grant)
@@ -916,37 +919,37 @@ def extend_scopes(repo, data, item, records, args, save):
     save()
     return {'status': 'running', 'request': copy.deepcopy(item), 'replayed': False,
             'handoff': dict(scopes=effective_scopes(item), worker_id=item['worker_id'], run_id=item['run_id'],
-                            worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'])}
+                            worktree=item['worktree'], branch=item['branch'], wbs_id=item['wbs_id'])}
 
 
 def execute(args, directory, records):
     repo, batch_id = args.repo, args.batch_id
     path = os.path.join(directory, batch_id + '.json')
     if args.command == 'init':
-        owner_task_id = getattr(args, 'owner_task_id', None)
-        require(owner_task_id is None or batch_harvest.TASK_ID_RE.fullmatch(owner_task_id), 'invalid pool owner')
+        owner_wbs_id = getattr(args, 'owner_wbs_id', None)
+        require(owner_wbs_id is None or batch_harvest.WBS_ID_RE.fullmatch(owner_wbs_id), 'invalid pool owner')
         requests = copy.deepcopy(args.requests) if hasattr(args, 'requests') else read_json(args.requests_file)
         requests_valid(requests)
-        maximum, source = cap(repo, args.max_leads, managed=owner_task_id is not None)
+        maximum, source = cap(repo, args.max_leads, managed=owner_wbs_id is not None)
         normalized = normalize_requests(requests)
         if batch_id in records:
             old = records[batch_id]
-            require(old.get('owner_task_id') == owner_task_id, 'conflicting pool owner')
+            require(old.get('owner_wbs_id') == owner_wbs_id, 'conflicting pool owner')
             require(normalize_requests(old['requests']) == normalized
                     and old['max_leads'] == maximum, 'conflicting existing batch')
             return {'status': 'ok', 'batch': old}
         require(len(records) < MAX_BATCHES, 'batch history limit reached')
-        admission = ordinary_admission_scopes(repo, normalized, bool(owner_task_id))
+        admission = ordinary_admission_scopes(repo, normalized, bool(owner_wbs_id))
         ref, head = main_boundary(repo, scopes=admission)
-        require_unused_task_ids(repo, normalized, records)
+        require_unused_wbs_ids(repo, normalized, records)
         for item in normalized:
-            task_id = 'TASK__' + item['slug']
+            wbs_id = 'WBS__' + item['slug']
             resolved, _ = preflight(repo, item, admission)
-            item.update(status='queued', task_id=task_id, resolved_scopes=resolved)
+            item.update(status='queued', wbs_id=wbs_id, resolved_scopes=resolved)
         data = dict(schema_version=2 if any(x.get('submodules') for x in normalized) else 3, batch_id=batch_id, repo=repo, destination_ref=ref, initial_head=head,
                     max_leads=maximum, cap_source=source, created_at=now(), updated_at=now(), status='open', halted=False, requests=normalized)
-        if owner_task_id is not None:
-            data['owner_task_id'] = owner_task_id
+        if owner_wbs_id is not None:
+            data['owner_wbs_id'] = owner_wbs_id
         write_json(path, data)
         return {'status': 'ok', 'batch': data}
     require(batch_id in records, 'batch does not exist')
@@ -972,12 +975,12 @@ def execute(args, directory, records):
     def capacity(target):
         active_pool(records, batch_id)
         require(sum(x is not target and x['status'] in {'reserved', 'running'} for x in data['requests']) < data['max_leads'], 'capacity exhausted')
-    admission = ordinary_admission_scopes(repo, data['requests'], bool(data.get('owner_task_id')))
+    admission = ordinary_admission_scopes(repo, data['requests'], bool(data.get('owner_wbs_id')))
     if args.command == 'claim':
         require(not data['halted'], 'batch halted; recover retained integration first')
         active_pool(records, batch_id)
         _, head = main_boundary(repo, data['destination_ref'], admission)
-        no_main_task(repo)
+        no_main_wbs(repo)
         claims, reasons = [], {}
         slots = data['max_leads'] - sum(x['status'] in {'reserved', 'running'} for x in data['requests'])
         available = getattr(args, 'available_slots', None)
@@ -1035,14 +1038,14 @@ def execute(args, directory, records):
         return extend_scopes(repo, data, item, records, args, save)
     if args.command == 'bootstrap':
         require(not data['halted'] and item['status'] == 'reserved' and not item.get('resuming'), 'bootstrap requires fresh unhalted reservation')
-        no_main_task(repo)
+        no_main_wbs(repo)
         require(os.path.isabs(args.worktree), 'bootstrap requires absolute worktree')
         worktree = os.path.realpath(args.worktree)
         candidate = dict(item, worktree=worktree, branch=args.branch)
         require(bound(repo, candidate) == item['spawn_head'], 'bootstrap HEAD differs from reservation')
         for other in held(records, item):
             require(other.get('worktree') != worktree and other.get('branch') != args.branch, 'worktree/branch already owned')
-        require(not os.path.lexists(os.path.join(worktree, 'doc/harness/tasks', item['task_id'])), 'bootstrap started task before binding')
+        require(not os.path.lexists(os.path.join(worktree, 'doc/harness/wbs', item['wbs_id'])), 'bootstrap started task before binding')
         payload = retention_contract(batch_id, item)
         marker = os.path.join(worktree, finish_helper.RETENTION_MARKER)
         if os.path.lexists(marker):
@@ -1061,7 +1064,7 @@ def execute(args, directory, records):
     if args.command == 'bind':
         require(item['status'] == 'reserved', 'bind requires reservation')
         require(not data['halted'], 'batch halted; recover before authorizing worker')
-        no_main_task(repo)
+        no_main_wbs(repo)
         require(args.worker_id and len(args.worker_id) <= 256 and os.path.isabs(args.worktree), 'invalid worker/worktree')
         require(finish_helper._git(repo, 'check-ref-format', '--branch', args.branch).returncode == 0, 'invalid branch')
         worktree = os.path.realpath(args.worktree)
@@ -1087,7 +1090,7 @@ def execute(args, directory, records):
         else:
             require(bound(repo, candidate) == item['spawn_head'], 'bootstrap HEAD differs from reservation')
             require(not finish_helper.lead_status(worktree, candidate.get('retention')), 'bootstrap modified source before binding')
-            require(not os.path.exists(os.path.join(worktree, 'doc/harness/tasks', item['task_id'])), 'bootstrap started task before binding')
+            require(not os.path.exists(os.path.join(worktree, 'doc/harness/wbs', item['wbs_id'])), 'bootstrap started task before binding')
         if item.get('submodules'):
             if item.get('resuming'):
                 batch_submodules.validate(repo, worktree, item['submodule_manifest'], 'resume')
@@ -1110,7 +1113,7 @@ def execute(args, directory, records):
         require(item['status'] == 'running' and args.worker_id == item['worker_id'], 'result worker/state mismatch')
         result = copy.deepcopy(args.result) if hasattr(args, 'result') else read_json(args.result_file)
         require(isinstance(result, dict) and result.get('verdict') in {'closed', 'blocked', 'failed'}, 'invalid result verdict')
-        for key in ('task_id', 'branch', 'worktree'):
+        for key in ('wbs_id', 'branch', 'worktree'):
             require(result.get(key) == item[key], f'result {key} mismatch')
         require(result.get('worker_id', args.worker_id) == args.worker_id, 'result worker mismatch')
         tip = bound(repo, item)
@@ -1125,15 +1128,15 @@ def execute(args, directory, records):
             require(commit and finish_helper._resolve_commit(repo, commit) == tip, 'closed result commit is not branch tip')
             proof = control(item, closed=True)
         else:
-            proof = read_task_control(os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id']))
+            proof = read_wbs_control(os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id']))
             if proof:
                 control(item)
         if proof:
             require(result.get('run_id', proof['run_id']) == proof['run_id'], 'result run mismatch')
             item.update(run_id=proof['run_id'], closed=proof['closed'])
         else:
-            require(result.get('run_id') is None, 'result claims missing task run')
-            require(not os.path.lexists(os.path.join(item['worktree'], 'doc/harness/tasks', item['task_id'])), 'task control missing or invalid')
+            require(result.get('run_id') is None, 'result claims missing WBS run')
+            require(not os.path.lexists(os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id'])), 'WBS execution control missing or invalid')
             item['run_id'] = None
         item.update(result=result, status='returned' if result['verdict'] == 'closed' else result['verdict'], returned_at=now())
     elif args.command == 'release':
@@ -1165,7 +1168,7 @@ def execute(args, directory, records):
                 or (item['status'] == 'reserved' and item.get('resuming') and item.get('worktree'))),
                 'resume requires a stopped retained worker')
         require(not data['halted'], 'batch halted')
-        no_main_task(repo)
+        no_main_wbs(repo)
         capacity(item)
         main_boundary(repo, data['destination_ref'], admission)
         bound(repo, item)
@@ -1176,8 +1179,8 @@ def execute(args, directory, records):
             batch_submodules.validate(repo, item['worktree'], item['submodule_manifest'], 'resume')
         item.update(status='reserved', resuming=True, worker_stopped=True, run_id=run_id)
         save()
-        handoff = dict(worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'], run_id=item.get('run_id'),
-                       worker_id=item['worker_id'], agent='task-lead-resume', fresh_run=False, scopes=effective_scopes(item))
+        handoff = dict(worktree=item['worktree'], branch=item['branch'], wbs_id=item['wbs_id'], run_id=item.get('run_id'),
+                       worker_id=item['worker_id'], agent='wbs-lead-resume', fresh_run=False, scopes=effective_scopes(item))
         if item.get('submodule_manifest'):
             handoff.update(submodules=copy.deepcopy(item['submodules']), submodule_manifest=copy.deepcopy(item['submodule_manifest']))
         return {'status': 'reserved', 'handoff': handoff}
@@ -1219,7 +1222,7 @@ def execute(args, directory, records):
             options.update(submodules=item['submodule_manifest'], persist_submodules=persist_modules)
         if item.get('retention'):
             options['retention'] = item['retention']
-        result = finish_helper.finish(repo, SimpleNamespace(worktree=item['worktree'], branch=item['branch'], task_id=item['task_id'], commit=item['result']['commit'], resume=args.resume), **options)
+        result = finish_helper.finish(repo, SimpleNamespace(worktree=item['worktree'], branch=item['branch'], wbs_id=item['wbs_id'], commit=item['result']['commit'], resume=args.resume), **options)
         item['finish_result'] = result
         item['status'] = 'integrated' if result['status'] == 'integrated' else 'kept'
         if result['status'] in {'conflict', 'ff-refused', 'error'}:
@@ -1269,7 +1272,7 @@ def execute(args, directory, records):
                 archive = checkpoint['harvest']['archived']
                 require(fingerprint(archive) == checkpoint['archive_fingerprint'], 'archive fingerprint changed')
                 control(item, base=archive, closed=True)
-                batch_harvest.remove_ordinary_residue(repo, item['worktree'], item['task_id'], tip, checkpoint)
+                batch_harvest.remove_ordinary_residue(repo, item['worktree'], item['wbs_id'], tip, checkpoint)
             if os.path.exists(item['worktree']):
                 require(bound(repo, item) == tip, 'worktree tip changed')
                 control(item, closed=True)
@@ -1327,6 +1330,8 @@ def acquire_lock(directory):
 
 @contextlib.contextmanager
 def locked_records(repo, create=False, readonly=False):
+    from wbs_namespace_migration import require_complete
+    require_complete(repo)
     directory = os.path.join(repo, 'doc/harness/runtime/batches')
     parents(directory, create=create)
     fd = None if readonly else acquire_lock(directory)
@@ -1344,7 +1349,7 @@ def main(argv=None):
     init = commands.add_parser('init')
     init.add_argument('--requests-file', required=True)
     init.add_argument('--max-leads')
-    init.add_argument('--owner-task-id', help='Owning WBS execution task; immutable when supplied')
+    init.add_argument('--owner-wbs-id', help='Owning WBS execution task; immutable when supplied')
     for name in ('status', 'close'):
         commands.add_parser(name)
     claim = commands.add_parser('claim')
@@ -1375,6 +1380,8 @@ def main(argv=None):
     try:
         require(IDENT.fullmatch(args.batch_id), 'invalid batch id')
         args.repo = os.path.realpath(args.repo or find_repo_root())
+        from wbs_namespace_migration import require_complete
+        require_complete(args.repo)
         directory = os.path.join(args.repo, 'doc/harness/runtime/batches')
         parents(directory, create=args.command == 'init')
         if args.command != 'status':

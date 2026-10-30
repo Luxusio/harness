@@ -125,11 +125,11 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "Recheck the actual diff after implementation" in body
         assert "update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ" in body
         assert "link it from PLAN.md or the changed durable doc" in body
-        assert "Durable docs are updated when the task changed user-visible behavior" in body
+        assert "Durable docs are updated when the WBS changed user-visible behavior" in body
         assert "Durable docs or learning artifacts updated" in body
         assert "Before `wbs(action=\"close\")`" in body
         assert "specific non-observable reason" in body
-        assert "If the task touches observable UI/API/backoffice/admin screens" in body
+        assert "If the WBS touches observable UI/API/backoffice/admin screens" in body
         assert "keep `REQ: n/a`" in body
         assert "doc/product/" not in body
 
@@ -156,7 +156,7 @@ def test_document_critic_checks_req_quality():
     assert "No durable doc needed" in playbook
     assert "recorded durable-doc decision is coherent" in playbook
     assert "too vague for implementation or QA to verify" in playbook
-    assert "observable behavior exists only in task artifacts and not in the REQ" in playbook
+    assert "observable behavior exists only in WBS artifacts and not in the REQ" in playbook
 
     for path in (CRITIC_DOCUMENT, CODEX_CRITIC_DOCUMENT):
         body = _text(path)

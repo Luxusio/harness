@@ -965,7 +965,7 @@ def test_codex_marketplace_points_at_installed_plugin_tree(tmp_path):
             "source": "./plugins/harness",
             "category": "productivity",
             "version": module._codex_plugin_version(install_root / "plugins" / "harness"),
-            "description": "MCP-backed task planning, development, QA, and docs sync workflow.",
+            "description": "One WBS for planning, development, QA, and documentation.",
         }
     ]
 
@@ -1503,14 +1503,14 @@ def test_sync_claude_payload_keeps_previous_tree_when_staging_fails(tmp_path, mo
     install_root = tmp_path / "claude" / "harness-dev"
     install_root.mkdir(parents=True)
     (install_root / "sentinel.txt").write_text("previous")
-    original = module.shutil.copytree
+    original = module.shutil.copyfile
 
     def fail_first(src, dst, *args, **kwargs):
-        if Path(src) == module.REPO_ROOT / ".claude-plugin":
+        if Path(src).parent == module.REPO_ROOT / ".claude-plugin":
             raise OSError("copy failed")
         return original(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(module.shutil, "copytree", fail_first)
+    monkeypatch.setattr(module.shutil, "copyfile", fail_first)
     try:
         module.sync_claude_payload(install_root)
     except OSError as exc:
@@ -1924,8 +1924,8 @@ def test_codex_hook_wrappers_emit_empty_or_valid_json():
 
 
 def test_claude_payload_over_old_tree_registers_no_stop_hook(tmp_path):
-    """AC-010 (TASK__plan-single-voice-review) plus
-    TASK__remove-dormant-stop-gate-and-taste-contradiction: reinstalling over a
+    """AC-010 (WBS__plan-single-voice-review) plus
+    WBS__remove-dormant-stop-gate-and-taste-contradiction: reinstalling over a
     runtime whose hooks.json still registered `Stop` -> stop_gate.py drops that
     entry, and stop_gate.py/hook_stop.py are no longer shipped at all (deleted,
     not merely dormant)."""

@@ -30,8 +30,8 @@ reduces context or process load, but may run browser tools inline when
 delegation is unavailable or inline work is materially simpler. Harness does
 not inspect every tool call to enforce that preference.
 
-Review and QA freshness, source/task ownership, and `task_verify`/`task_close`
-requirements are unchanged. New direct-write tool names must be added to the
+Independent review PASS before actual QA, source/WBS ownership, and current
+WBS checks at `wbs(action="verify")`/`wbs(action="close")` remain required. New direct-write tool names must be added to the
 selective matcher when a supported runtime introduces them. Bash/shell
 mutation is deliberately outside Harness PreToolUse enforcement.
 

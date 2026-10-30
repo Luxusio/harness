@@ -21,8 +21,8 @@ class TestPromoteLearningsFeedbackRules(unittest.TestCase):
             "type": "feedback-rule",
             "key": "feedback-rule-capture",
             "insight": "Capture a reusable correction.",
-            "task": "TASK__current",
-            "task_run_id": "run-current",
+            "wbs": "WBS__current",
+            "wbs_run_id": "run-current",
             "trigger": "a user correction recurs",
             "action": "capture the conditional behavior",
             "verification": "check the durable result",
@@ -39,8 +39,8 @@ class TestPromoteLearningsFeedbackRules(unittest.TestCase):
             "type": "feedback",
             "key": "feedback-capture",
             "insight": "Preserve this reusable feedback.",
-            "task": "TASK__current",
-            "task_run_id": "run-current",
+            "wbs": "WBS__current",
+            "wbs_run_id": "run-current",
         }
         self.assertTrue(self.module._valid_learning_candidate(entry))
 

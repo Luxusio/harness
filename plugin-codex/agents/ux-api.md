@@ -14,6 +14,6 @@ friction, examples, and client integration fit.
 Transcript must include review depth, endpoints reviewed, client paths tried,
 and findings classified as `PASS`, `FAIL`, or `BACKLOG`.
 
-PASS only when the API developer experience is shippable for this task scope.
+PASS only when the API developer experience is shippable for this WBS scope.
 Use BLOCKED_ENV when service startup, auth, seed data, credentials, or tooling
 prevents meaningful review.

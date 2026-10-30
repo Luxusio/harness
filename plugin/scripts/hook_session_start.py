@@ -63,8 +63,8 @@ def main() -> int:
             if root and is_harness_enabled_repo(root):
                 print(
                     f"harness — ready.\nProject: {os.path.basename(root)}\n"
-                    "Loop: task start → plan → develop → QA → close\n"
-                    "Review and task_verify run as internal close gates.\n"
+                    "Loop: WBS open → plan → develop → QA → close\n"
+                    "Independent review and WBS verification precede close.\n"
                     "Auto-routing on. Just describe what you want.\n"
                     "REQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes."
                 )

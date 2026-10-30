@@ -298,7 +298,7 @@ SKIPPED_SOURCE_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_
 
 OPERATIONAL_SOURCE_DIRS = {
     "doc/harness/" + name for name in (
-        "tasks", "goals", "reviews", "checkpoints", "visual-baselines", "retros",
+        "tasks", "wbs", "goals", "reviews", "checkpoints", "visual-baselines", "retros",
         "runtime", "maintenance", "archive", "benchmark", "audits",
     )
 }
@@ -389,7 +389,7 @@ def check_doc_test_references(repo_root: str = ".") -> list[str]:
     A doc's mutation table or coverage note is the only record that a guard
     branch was ever exercised. When the test it names is renamed the record
     becomes unreproducible, and nothing said so: R5 of
-    `TASK__session-rebinds-receipt-marker` found exactly that by hand. See
+    `WBS__session-rebinds-receipt-marker` found exactly that by hand. See
     `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 
     Reported as soft. The enforcement that fails a build is

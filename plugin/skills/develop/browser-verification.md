@@ -24,7 +24,7 @@ visual baseline for comparison:
 
 This baseline enables:
 - Per-AC visual verification (Phase 3) to compare before vs after
-- qa-browser to detect unintended visual changes outside the task scope
+- qa-browser to detect unintended visual changes outside the WBS scope
 - Design review to verify the implementation matches the intended change
 
 Do NOT modify any files during baseline capture. Read-only.

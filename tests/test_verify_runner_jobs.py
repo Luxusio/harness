@@ -36,7 +36,7 @@ def job(root, name, code, *, kind="consumer", artifacts=(), outputs=(), resource
 
 
 def execute(root, jobs, generation="one", **kwargs):
-    return runner.run_jobs(jobs, root, task_id=kwargs.pop("task_id", "task"), run_id=kwargs.pop("run_id", "run"),
+    return runner.run_jobs(jobs, root, wbs_id=kwargs.pop("wbs_id", "task"), run_id=kwargs.pop("run_id", "run"),
                            execution_generation=generation, results_path=root / "results.json",
                            max_workers=2, timeout=kwargs.pop("timeout", 5), **kwargs)
 
@@ -137,7 +137,7 @@ def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     declaration.write_text(json.dumps(jobs))
     argv = [sys.executable, str(SCRIPTS / "verify_runner.py")]
     assert subprocess.run(argv + ["--help"], capture_output=True).returncode == 0
-    args = ["--jobs", str(declaration), "--root", str(view), "--results", str(tmp_path / "group-results.json"), "--task-id", "task", "--run-id", "run", "--generation", "one"]
+    args = ["--jobs", str(declaration), "--root", str(view), "--results", str(tmp_path / "group-results.json"), "--wbs-id", "task", "--run-id", "run", "--generation", "one"]
     proc = subprocess.run(argv + args, cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["schema"] == runner.SCHEMA
@@ -251,7 +251,7 @@ def test_producer_output_fifo_fails_without_blocking_or_retaining_leases(tmp_pat
     declaration.write_text(json.dumps([item]))
     argv = [sys.executable, str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
             '--jobs', str(declaration), '--results', str(tmp_path / 'results.json'),
-            '--task-id', 'task', '--run-id', 'run', '--generation', 'fifo', '--timeout', '5']
+            '--wbs-id', 'task', '--run-id', 'run', '--generation', 'fifo', '--timeout', '5']
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=15)
     assert proc.returncode == 1, proc.stderr
     failed = json.loads(proc.stdout)['commands'][0]
@@ -356,7 +356,7 @@ def test_cross_process_named_leases_skip_waiters_and_release(tmp_path, ownership
         (tmp_path / "holder.py").write_text("from pathlib import Path\nimport time\nPath('built').write_text('partial')\nPath('ready').touch()\nwhile not Path('release').exists(): time.sleep(.01)\nPath('built').write_text('final')\n")
     declaration = tmp_path / "holder.json"
     declaration.write_text(json.dumps([holder]))
-    args = [sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "holder-result.json"), "--task-id", "other-task", "--run-id", "other-run", "--generation", "one", "--timeout", "10"]
+    args = [sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "holder-result.json"), "--wbs-id", "other-task", "--run-id", "other-run", "--generation", "one", "--timeout", "10"]
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 8
@@ -442,7 +442,7 @@ def test_producer_replacement_before_consumer_admission_is_not_accepted(tmp_path
             assert time.monotonic() < deadline
             time.sleep(.01)
         other = job(tmp_path, "replace", "from pathlib import Path\nPath('built').write_text('replacement')\n", kind="producer", outputs=["built"])
-        assert runner.run_jobs([other], tmp_path, task_id="other", run_id="run", execution_generation="one", results_path=tmp_path / "other-results.json", timeout=5)["status"] == "PASS"
+        assert runner.run_jobs([other], tmp_path, wbs_id="other", run_id="run", execution_generation="one", results_path=tmp_path / "other-results.json", timeout=5)["status"] == "PASS"
     finally:
         for fd in held:
             os.close(fd)
@@ -467,7 +467,7 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
     declaration.write_text(json.dumps([item]))
     argv = [sys.executable, "-B", str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path),
             "--jobs", str(declaration), "--results", str(tmp_path / "result.json"),
-            "--task-id", "t", "--run-id", "r", "--generation", "g", "--timeout", "15"]
+            "--wbs-id", "t", "--run-id", "r", "--generation", "g", "--timeout", "15"]
     if termination == "outer-timeout":
         prefix = "import sys,json;sys.path.insert(0," + repr(str(SCRIPTS)) + ");import wbs;"
         argv = [sys.executable, "-B", "-c", prefix + "print(json.dumps(wbs._execute(" + repr(argv) + "," + repr(str(tmp_path)) + ",4)))"]
@@ -543,7 +543,7 @@ def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path)
         declaration = tmp_path / "jobs.json"
         declaration.write_text(json.dumps(jobs))
         arrivals, accepted, barrier_error = [], 0, None
-        with subprocess.Popen([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "result.json"), "--task-id", "t", "--run-id", "r", "--generation", "g", "--max-workers", "2", "--timeout", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+        with subprocess.Popen([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "result.json"), "--wbs-id", "t", "--run-id", "r", "--generation", "g", "--max-workers", "2", "--timeout", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
             try:
                 with ExitStack() as sockets:
                     connections = []
@@ -730,7 +730,7 @@ def test_invalid_current_results_cannot_be_repaired_by_success_copy(tmp_path, co
         declaration = tmp_path / 'jobs.json'
         declaration.write_text(json.dumps([item]))
         cli = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
-                              '--jobs', str(declaration), '--results', str(path), '--task-id', 'task',
+                              '--jobs', str(declaration), '--results', str(path), '--wbs-id', 'task',
                               '--run-id', 'run', '--generation', 'unreadable', '--reuse-only'],
                              capture_output=True, text=True, timeout=15)
         assert cli.returncode == 2 and 'Traceback' not in cli.stderr
@@ -771,7 +771,7 @@ def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path
     declaration.write_text(json.dumps([item]))
     argv = [sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
             '--jobs', str(declaration), '--results', str(tmp_path / 'results.json'),
-            '--task-id', 'task', '--run-id', 'run', '--generation', 'interrupted', '--timeout', '8']
+            '--wbs-id', 'task', '--run-id', 'run', '--generation', 'interrupted', '--timeout', '8']
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 10
@@ -829,7 +829,7 @@ def test_retained_failure_survives_success_reuse_and_restart(tmp_path, monkeypat
     (tmp_path / 'jobs.json').write_text(json.dumps([item]))
     proc = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
                            '--jobs', str(tmp_path / 'jobs.json'), '--results', str(tmp_path / 'results.json'),
-                           '--task-id', 'task', '--run-id', 'run', '--generation', 'restart', '--reuse-only'],
+                           '--wbs-id', 'task', '--run-id', 'run', '--generation', 'restart', '--reuse-only'],
                           capture_output=True, text=True, timeout=15)
     assert proc.returncode == 0, proc.stderr
     restored = json.loads(proc.stdout)
@@ -907,12 +907,25 @@ def test_retained_failure_oversized_store_is_not_overwritten(tmp_path, monkeypat
     assert log.read_text() == 'authentic failure\n'
 
 
+def test_retired_task_result_store_is_not_reused_or_overwritten(tmp_path):
+    item = job(tmp_path, 'check', "from pathlib import Path\nPath('executed').touch()\n")
+    path = tmp_path / 'results.json'
+    legacy = dict(schema=runner.SCHEMA, version=1, task_id='TASK__old', run_id='same-run',
+                  failures=[dict(status='FAIL', returncode=7, output='authentic old failure')])
+    path.write_text(json.dumps(legacy))
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match='retired verification result schema'):
+        execute(tmp_path, [item])
+    assert path.read_bytes() == original
+    assert not (tmp_path / 'executed').exists()
+
+
 def test_retained_failure_reserves_task_and_run_provenance_before_execution(tmp_path):
     item = job(tmp_path, 'check', "from pathlib import Path\nwith Path('executed').open('a') as f:f.write('x')\nprint('authentic failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
     path = Path(first['failures'][0]['output_log']['path'])
     original = path.read_bytes()
-    refused = execute(tmp_path, [item], 'large-provenance', task_id='t' * (9 * 1024 * 1024))
+    refused = execute(tmp_path, [item], 'large-provenance', wbs_id='t' * (9 * 1024 * 1024))
     assert refused['status'] == 'FAIL' and refused['commands'][0]['returncode'] is None
     assert 'budget' in refused['commands'][0]['error']
     assert (tmp_path / 'executed').read_text() == 'x'
@@ -961,7 +974,7 @@ def test_retained_failure_imports_legacy_last_execution(tmp_path, pending, retur
     assert second['status'] == 'PASS' and len(second['failures']) == expected
     if expected:
         row = second['failures'][0]
-        assert row['returncode'] == 7 and row['task_id'] == 'task' and row['run_id'] == 'run'
+        assert row['returncode'] == 7 and row['wbs_id'] == 'task' and row['run_id'] == 'run'
         assert row['execution_generation'] == 'one'
         assert row['output_log']['available'] and fixed.read_text() == 'legacy failure\n'
 

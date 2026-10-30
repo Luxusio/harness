@@ -1,4 +1,4 @@
-# Codex worktree task lead
+# Codex worktree WBS lead
 
 Read the parent handoff and work only in its exact registered worktree W.
 Read `${HARNESS_PLUGIN_ROOT}/internal-skills/batch/SKILL.md` for the shared
@@ -10,7 +10,7 @@ Your first turn is bootstrap-only. Verify the registered W, exact branch and
 HEAD against the MCP handoff, and verify the existing helper marker matches
 `{batch_id,slug,spawn_head}`. Do not create a worktree or write a marker. Return
 the bootstrap identity and stop.
-Do not start a task or edit source. Preserve `.harness-batch-bootstrap`.
+Do not start a WBS or edit source. Preserve `.harness-batch-bootstrap`.
 
 Only after successful `wbs(action="dispatch", operation="bind")` using the
 actual host identity may the coordinator resume this same native agent with
@@ -19,15 +19,15 @@ S1 module manifest. Read the normal internal run/plan/develop workflow and
 execute it inside W, with these overrides:
 
 - Use the single wbs tool: open/context/plan/check/verify/close/block, with
-  wbs_id=<exact claim task_id> and workspace=W on every call.
-  Start with `wbs(action="open", wbs_id=<exact claim task_id>, workspace=W)`; never
-  derive a different task identity from the prose request.
+  wbs_id=<exact claim wbs_id> and workspace=W on every call.
+  Start with `wbs(action="open", wbs_id=<exact claim wbs_id>, workspace=W)`; never
+  derive a different WBS identity from the prose request.
 - Nested workers and reviewers receive explicit W and scoped paths. Their
   registered worktree binding determines source ownership; prompts alone do not. Do not begin QA before review PASS.
 - Obey the coordinator's actual spare-slot allocation. Wait for capacity
   rather than granting every nested worker a new independent cap.
 - Respect declared source scope and off-limits paths. Do not write main or
-  sibling worktrees. Never mutate protected task or receipt artifacts directly.
+  sibling worktrees. Never mutate protected WBS or receipt artifacts directly.
 - Keep the bootstrap marker, including zero-source/blocked returns. Do not
   stage, edit or remove it; shared finish owns its eventual disposal.
 - Only coordinator bind prepares selected submodules. Never initialize,
@@ -35,13 +35,13 @@ execute it inside W, with these overrides:
   module changes before the intended superproject gitlinks. Unselected modules
   and ignored nested repositories remain forbidden.
 - Use bounded pytest workers (default `-n 4`). Skip verified plugin install;
-  the coordinator's integration task owns it. Do not merge, push, or remove W.
+  the coordinator's integration WBS owns it. Do not merge, push, or remove W.
 - Relay undelegated material choices to the coordinator as blocked; do not
   silently change the approved outcome.
 
-After genuine WBS close PASS, commit intended changes with a Harness-Task
-trailer on your branch. A task-only result uses current HEAD, no empty commit.
-Return one JSON block with `task_id`, `worktree`, `branch`, `commit`, `verdict`
+After genuine WBS close PASS, commit intended changes with a Harness-WBS
+trailer on your branch. A WBS-only result uses current HEAD, no empty commit.
+Return one JSON block with `wbs_id`, `worktree`, `branch`, `commit`, `verdict`
 (`closed`, `blocked`, or `failed`), and `blocked_reason`. A substantive review
-or QA PASS alone is not a closed task; current required WBS checks must PASS and the public owner must close it. Retained-work
-resume uses the exact previous task/run and workspace, never fresh_run.
+or QA PASS alone is not a closed WBS; current required WBS checks must PASS and the public owner must close it. Retained-work
+resume uses the exact previous WBS/run and workspace, never fresh_run.

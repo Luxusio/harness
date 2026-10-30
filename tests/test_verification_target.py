@@ -106,13 +106,13 @@ def test_diagnostic_does_not_certify_acceptance_or_enable_new_gate(tmp_path):
     assert not targets.applicability(str(td), str(repo), measure=True)["enforced"]
 
 
-def test_symlink_and_task_runtime_inputs_fail_without_omission(tmp_path):
+def test_symlink_and_wbs_runtime_inputs_fail_without_omission(tmp_path):
     repo, td, _, _ = public(tmp_path)
     (repo / "alias").symlink_to(repo / "src.txt")
     with unittest.TestCase().assertRaisesRegex(ValueError, "symlink"):
         targets.issue_target(str(td), str(repo), dict(specification(), inputs={"source": ["alias"]}))
     with unittest.TestCase().assertRaisesRegex(ValueError, "recursively captured"):
-        targets.issue_target(str(td), str(repo), dict(specification(), inputs={"source": ["doc/harness/tasks/TASK__sample/PLAN.md"]}))
+        targets.issue_target(str(td), str(repo), dict(specification(), inputs={"source": ["doc/harness/wbs/WBS__sample/PLAN.md"]}))
 
 
 def test_direct_diagnostic_has_no_native_lens_or_acceptance_side_effect(tmp_path):
@@ -153,11 +153,11 @@ def test_missing_history_does_not_prevent_independent_replacement(tmp_path):
 def test_runtime_outputs_are_writable_without_mutating_frozen_inputs(tmp_path):
     repo, td, _, _ = public(tmp_path)
     original = specification()
-    first = targets.issue_target(str(td), str(repo), original, output_dirs=["doc/harness/tasks"])
+    first = targets.issue_target(str(td), str(repo), original, output_dirs=["doc/harness/wbs"])
     root = Path(first["snapshot_root"])
-    (root / "doc/harness/tasks/.active.fixture.lock").write_text("runtime-only")
+    (root / "doc/harness/wbs/.active.fixture.lock").write_text("runtime-only")
     assert (root / "src.txt").stat().st_mode & 0o222 == 0
-    assert targets.issue_target(str(td), str(repo), original, output_dirs=["doc/harness/tasks"])["token"] == first["token"]
+    assert targets.issue_target(str(td), str(repo), original, output_dirs=["doc/harness/wbs"])["token"] == first["token"]
     assert targets.applicability(str(td), str(repo), measure=True)["targets"][0]["status"] == "applicable"
     with unittest.TestCase().assertRaisesRegex(ValueError, "overlaps selected input"):
         targets.issue_target(str(td), str(repo), original, output_dirs=["src.txt"])

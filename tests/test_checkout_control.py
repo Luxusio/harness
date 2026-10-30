@@ -22,7 +22,7 @@ def worktrees(tmp_path):
     git("worktree", "add", "-b", "sibling", str(sibling))
     return main, lead, sibling
 
-def test_marker_writers_lock_session_before_task_control_in_deferred_routes(tmp_path, monkeypatch):
+def test_marker_writers_lock_session_before_wbs_control_in_deferred_routes(tmp_path, monkeypatch):
     from contextlib import contextmanager
     from test_worktree_workspace import _setup, _call, harness_server
     main, lead = _setup(tmp_path)
@@ -30,7 +30,7 @@ def test_marker_writers_lock_session_before_task_control_in_deferred_routes(tmp_
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
     real_session = harness_server.active_session_transaction
-    real_control = harness_server.task_control_transaction
+    real_control = harness_server.wbs_control_transaction
     held = []
     observed = []
 
@@ -50,24 +50,24 @@ def test_marker_writers_lock_session_before_task_control_in_deferred_routes(tmp_
         with real_control(task):
             yield
 
-    with mock.patch.object(harness_server, "active_session_transaction", side_effect=session), mock.patch.object(harness_server, "task_control_transaction", side_effect=control):
+    with mock.patch.object(harness_server, "active_session_transaction", side_effect=session), mock.patch.object(harness_server, "wbs_control_transaction", side_effect=control):
         for workspace in (None, str(lead)):
-            args = {"task_id": "TASK__locks"}
+            args = {"wbs_id": "WBS__locks"}
             if workspace:
                 args["workspace"] = workspace
-            assert not _call(main, "task_start", args).get("isError")
-            assert not _call(main, "task_context", args).get("isError")
-            assert _call(main, "task_close", args).get("isError")  # no verification yet
-            assert not _call(main, "task_blocked", dict(args, blocked_reason="park", unblock_condition="resume")).get("isError")
-    assert {str(main / "doc/harness/tasks/TASK__locks"), str(lead / "doc/harness/tasks/TASK__locks")} <= set(observed)
+            assert not _call(main, "wbs_open", args).get("isError")
+            assert not _call(main, "context", args).get("isError")
+            assert _call(main, "wbs_close", args).get("isError")  # no verification yet
+            assert not _call(main, "wbs_blocked", dict(args, blocked_reason="park", unblock_condition="resume")).get("isError")
+    assert {str(main / "doc/harness/wbs/WBS__locks"), str(lead / "doc/harness/wbs/WBS__locks")} <= set(observed)
 
-def test_task_start_rollback_cannot_replace_a_new_conflict_fence(tmp_path, monkeypatch):
+def test_wbs_open_rollback_cannot_replace_a_new_conflict_fence(tmp_path, monkeypatch):
     from test_worktree_workspace import _setup, _call, harness_server
     main, _ = _setup(tmp_path)
     monkeypatch.setenv("HARNESS_RUNTIME", "codex")
     monkeypatch.setenv("CODEX_THREAD_ID", LEAD)
     monkeypatch.setenv("CODEX_SESSION_ID", LEAD)
-    marker = main / "doc/harness/tasks/.active_sessions" / f"{LEAD}.json"
+    marker = main / "doc/harness/wbs/.active_sessions" / f"{LEAD}.json"
     fence = {"session_id": LEAD, "conflicts": [], "conflicts_overflow": True}
 
     def publish_then_fail(*args, **kwargs):
@@ -77,6 +77,6 @@ def test_task_start_rollback_cannot_replace_a_new_conflict_fence(tmp_path, monke
         raise RuntimeError("publication failed")
 
     with mock.patch.object(harness_server, "write_active_marker", side_effect=publish_then_fail):
-        result = _call(main, "task_start", {"task_id": "TASK__rollback_fence"})
+        result = _call(main, "wbs_open", {"wbs_id": "WBS__rollback_fence"})
     assert result.get("isError"), result
     assert json.loads(marker.read_text()) == fence

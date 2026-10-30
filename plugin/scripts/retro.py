@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Weekly engineering retrospective from durable harness state.
 
-Combines git log, verified task closures, and learnings.jsonl over a configurable
+Combines git log, verified WBS closures, and learnings.jsonl over a configurable
 period (default 7 days) into a structured report.
 
 Sections:
@@ -34,16 +34,16 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
-    canonical_task_dir,
+    canonical_wbs_dir,
     find_repo_root,
-    read_task_control,
-    task_control_transaction,
-    task_control_transaction_fd,
-    task_control_status,
+    read_wbs_control,
+    wbs_control_transaction,
+    wbs_control_transaction_fd,
+    wbs_control_status,
 )
 
 LEARNINGS = "doc/harness/learnings.jsonl"
-TASKS = "doc/harness/tasks"
+WBS_ROOT = "doc/harness/wbs"
 RETROS = "doc/harness/retros"
 RETRO_CLOSE_THRESHOLD = 3
 MAX_LEARNINGS_BYTES = 16 * 1024 * 1024
@@ -268,11 +268,11 @@ def _control_identity(info: os.stat_result) -> tuple[int, ...]:
 
 
 def _verified_close_publication_fd(task_fd: int) -> float | None:
-    """Verify one close generation relative to its bound task directory."""
-    task_dir = f"/proc/self/fd/{task_fd}"
+    """Verify one close generation relative to its bound WBS directory."""
+    wbs_dir = f"/proc/self/fd/{task_fd}"
     try:
-        with task_control_transaction_fd(task_fd):
-            before = os.stat("TASK.json", dir_fd=task_fd, follow_symlinks=False)
+        with wbs_control_transaction_fd(task_fd):
+            before = os.stat("WBS.control.json", dir_fd=task_fd, follow_symlinks=False)
             if (
                 not stat.S_ISREG(before.st_mode)
                 or before.st_uid != os.getuid()
@@ -281,11 +281,11 @@ def _verified_close_publication_fd(task_fd: int) -> float | None:
             ):
                 return None
 
-            control = read_task_control(task_dir)
-            if not control or task_control_status(task_dir, control) != "closed":
+            control = read_wbs_control(wbs_dir)
+            if not control or wbs_control_status(wbs_dir, control) != "closed":
                 return None
 
-            after = os.stat("TASK.json", dir_fd=task_fd, follow_symlinks=False)
+            after = os.stat("WBS.control.json", dir_fd=task_fd, follow_symlinks=False)
             if _control_identity(before) != _control_identity(after):
                 return None
             return before.st_mtime
@@ -293,16 +293,16 @@ def _verified_close_publication_fd(task_fd: int) -> float | None:
         return None
 
 
-def _verified_close_publication(task_dir: str) -> float | None:
+def _verified_close_publication(wbs_dir: str) -> float | None:
     """Path-compatible wrapper that binds the task leaf before verification."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     try:
-        task_fd = os.open(task_dir, flags)
+        task_fd = os.open(wbs_dir, flags)
     except OSError:
         return None
     try:
         opened = os.fstat(task_fd)
-        current = os.lstat(task_dir)
+        current = os.lstat(wbs_dir)
         if (
             not _trusted_directory(opened)
             or stat.S_ISLNK(current.st_mode)
@@ -314,7 +314,7 @@ def _verified_close_publication(task_dir: str) -> float | None:
         os.close(task_fd)
 
 
-def _safe_tasks_root(root: str) -> tuple[int, tuple[int, ...]] | None:
+def _safe_wbs_root(root: str) -> tuple[int, tuple[int, ...]] | None:
     """Open and bind an owner-controlled, non-symlinked tasks directory."""
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -342,7 +342,7 @@ def _safe_tasks_root(root: str) -> tuple[int, tuple[int, ...]] | None:
     return fd, identity
 
 
-def _tasks_root_still_bound(root: str, fd: int, identity: tuple[int, ...]) -> bool:
+def _wbs_root_still_bound(root: str, fd: int, identity: tuple[int, ...]) -> bool:
     try:
         current = os.lstat(root)
         opened = os.fstat(fd)
@@ -355,13 +355,13 @@ def _tasks_root_still_bound(root: str, fd: int, identity: tuple[int, ...]) -> bo
     )
 
 
-def _canonical_bound_task_dir(
+def _canonical_bound_wbs_dir(
     repo_root: str, root: str, root_fd: int, name: str,
 ) -> int | None:
     """Resolve a canonical task ID and bind it to the enumerated directory entry."""
     task_fd = -1
     try:
-        canonical = canonical_task_dir(task_id=name, repo_root=repo_root)
+        canonical = canonical_wbs_dir(wbs_id=name, repo_root=repo_root)
         expected = os.path.join(root, name)
         entry_info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         path_info = os.lstat(canonical)
@@ -384,7 +384,7 @@ def _canonical_bound_task_dir(
     return task_fd
 
 
-def _markdown_task_name(name: str) -> str:
+def _markdown_wbs_name(name: str) -> str:
     """Render only the canonical task-ID alphabet inside a Markdown code span."""
     safe = "".join(
         char for char in name
@@ -393,12 +393,12 @@ def _markdown_task_name(name: str) -> str:
     return safe if safe == name else "[invalid-task]"
 
 
-def verified_closed_tasks_since(
+def verified_closed_wbs_since(
     repo_root: str, cutoff_ts: float,
 ) -> list[tuple[float, str]]:
     """List published task closures published after ``cutoff_ts``."""
-    root = os.path.join(repo_root, TASKS)
-    opened_root = _safe_tasks_root(root)
+    root = os.path.join(repo_root, WBS_ROOT)
+    opened_root = _safe_wbs_root(root)
     if opened_root is None:
         return []
     root_fd, root_identity = opened_root
@@ -411,14 +411,14 @@ def verified_closed_tasks_since(
     try:
         with entries:
             for entry in entries:
-                if not entry.name.startswith("TASK__"):
+                if not entry.name.startswith("WBS__"):
                     continue
                 try:
                     if not entry.is_dir(follow_symlinks=False):
                         continue
                 except OSError:
                     continue
-                task_fd = _canonical_bound_task_dir(
+                task_fd = _canonical_bound_wbs_dir(
                     repo_root, root, root_fd, entry.name
                 )
                 if task_fd is None:
@@ -429,7 +429,7 @@ def verified_closed_tasks_since(
                     os.close(task_fd)
                 if published is not None and published > cutoff_ts:
                     tasks.append((published, entry.name))
-        if not _tasks_root_still_bound(root, root_fd, root_identity):
+        if not _wbs_root_still_bound(root, root_fd, root_identity):
             return []
     finally:
         os.close(root_fd)
@@ -439,18 +439,18 @@ def verified_closed_tasks_since(
 
 def count_verified_closes_since(repo_root: str, cutoff_ts: float) -> int:
     """Count verified task closes for the shared three-close retro cadence."""
-    return len(verified_closed_tasks_since(repo_root, cutoff_ts))
+    return len(verified_closed_wbs_since(repo_root, cutoff_ts))
 
 
-def _section_tasks(repo_root: str, days: int) -> str:
+def _section_wbs(repo_root: str, days: int) -> str:
     cutoff_ts = datetime.now(timezone.utc).timestamp() - (days * 86400)
-    tasks = verified_closed_tasks_since(repo_root, cutoff_ts)
+    tasks = verified_closed_wbs_since(repo_root, cutoff_ts)
     if not tasks:
-        return "## Tasks\n\n(no verified task closures in this period)\n"
+        return "## WBS roots\n\n(no verified WBS closures in this period)\n"
 
-    parts = [f"## Tasks\n\n- **{len(tasks)}** verified task closures"]
+    parts = [f"## WBS roots\n\n- **{len(tasks)}** verified WBS closures"]
     for _, name in tasks[-5:]:
-        parts.append(f"  - `{_markdown_task_name(name)}`")
+        parts.append(f"  - `{_markdown_wbs_name(name)}`")
     return "\n".join(parts) + "\n"
 
 
@@ -480,7 +480,7 @@ def generate(repo_root: str, days: int) -> str:
     sections = [
         header,
         _section_commits(repo_root, days),
-        _section_tasks(repo_root, days),
+        _section_wbs(repo_root, days),
         _section_learnings(learnings),
     ]
     return "\n".join(sections)

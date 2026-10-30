@@ -39,7 +39,7 @@ import _lib as lib  # type: ignore  # noqa: E402
 
 SID = "b1c2d3e4-5f60-7182-93a4-b5c6d7e8f901"
 MANIFEST = "version: 5\nsource_git_roots: []\n"
-TASKS = "doc/harness/tasks"
+TASKS = "doc/harness/wbs"
 
 WORKTREE_PLAN = "# Plan\n\n```wbs\n" + json.dumps([{
     "id": "A", "title": "Worktree contains its own manifest", "weight": 1,
@@ -62,7 +62,7 @@ def _repo(path: Path) -> Path:
     _git(root, "config", "user.name", "t")
     (root / "doc/harness").mkdir(parents=True)
     (root / "doc/harness/manifest.yaml").write_text(MANIFEST, encoding="utf-8")
-    (root / ".gitignore").write_text("doc/harness/tasks/\n.claude/worktrees/\n", encoding="utf-8")
+    (root / ".gitignore").write_text("doc/harness/wbs/\n.claude/worktrees/\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "init")
     return root
@@ -102,58 +102,58 @@ def _snapshot(root: Path) -> dict:
     } if base.is_dir() else {}
 
 
-def test_task_start_with_workspace_creates_task_and_marker_in_worktree(tmp_path):
+def test_wbs_open_with_workspace_creates_task_and_marker_in_worktree(tmp_path):
     repo = _setup(tmp_path)
     main, wt = repo
-    result = _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)})
+    result = _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     assert not result.get("isError"), result
     data = _payload(result)
-    assert data["task_dir"] == str(wt / TASKS / "TASK__lead")
+    assert data["wbs_dir"] == str(wt / TASKS / "WBS__lead")
     # The process supplies its exact identity; a shared hint is not authority.
     assert _markers(wt) == [f"{SID}.json"]
-    assert not (main / TASKS / "TASK__lead").exists()
-    bound = lib.resolve_session_task_binding(str(wt), SID)
-    assert bound["task_dir"] == data["task_dir"]
+    assert not (main / TASKS / "WBS__lead").exists()
+    bound = lib.resolve_session_wbs_binding(str(wt), SID)
+    assert bound["wbs_dir"] == data["wbs_dir"]
     assert not (wt / TASKS / '.active').exists()
 
 
 def test_followup_tools_route_by_workspace_and_miss_without_it(tmp_path):
     repo = _setup(tmp_path)
     main, wt = repo
-    _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)})
+    _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     plan = _call(main, "write_plan", {
-        "task_id": "TASK__lead", "workspace": str(wt),
+        "wbs_id": "WBS__lead", "workspace": str(wt),
         "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     })
     assert not plan.get("isError"), plan
-    assert (wt / TASKS / "TASK__lead/PLAN.md").is_file()
-    ctx = _call(main, "task_context", {"task_id": "TASK__lead", "workspace": str(wt)})
+    assert (wt / TASKS / "WBS__lead/PLAN.md").is_file()
+    ctx = _call(main, "context", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     assert not ctx.get("isError"), ctx
-    verify = _call(main, "task_verify", {"task_id": "TASK__lead", "workspace": str(wt)})
+    verify = _call(main, "wbs_verify", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     assert not verify.get("isError"), verify
     # Forgetting workspace looks in the main checkout, where the task does not exist.
-    missing = _call(main, "task_context", {"task_id": "TASK__lead"})
+    missing = _call(main, "context", {"wbs_id": "WBS__lead"})
     assert missing.get("isError")
 
 
 def test_workspace_equal_to_control_root_is_omitted(tmp_path):
     repo = _setup(tmp_path)
     main, _wt = repo
-    result = _call(main, "task_start", {"task_id": "TASK__main", "workspace": str(main)})
+    result = _call(main, "wbs_open", {"wbs_id": "WBS__main", "workspace": str(main)})
     assert not result.get("isError"), result
-    assert (main / TASKS / "TASK__main/TASK.json").is_file()
+    assert (main / TASKS / "WBS__main/WBS.control.json").is_file()
 
 
 def _refused(main: Path, workspace: str, target: Path | None = None) -> None:
     before = _snapshot(target) if target else None
-    result = _call(main, "task_start", {"task_id": "TASK__x", "workspace": workspace})
+    result = _call(main, "wbs_open", {"wbs_id": "WBS__x", "workspace": workspace})
     assert result.get("isError"), result
     data = _payload(result)
     assert data.get("error_code") == "WORKSPACE_NOT_REGISTERED_WORKTREE", data
-    assert not (main / TASKS / "TASK__x").exists()
+    assert not (main / TASKS / "WBS__x").exists()
     if target is not None:
         assert _snapshot(target) == before
-        assert not (target / TASKS / "TASK__x").exists()
+        assert not (target / TASKS / "WBS__x").exists()
 
 
 def test_refuses_plain_directory(tmp_path):
@@ -200,33 +200,33 @@ def test_refuses_worktree_without_manifest(tmp_path):
     _refused(main, str(bare))
 
 
-def test_task_blocked_on_worktree_task_leaves_main_markers_untouched(tmp_path):
+def test_wbs_blocked_on_worktree_task_leaves_main_markers_untouched(tmp_path):
     repo = _setup(tmp_path)
     main, wt = repo
-    assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
-    assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__main"}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)}).get("isError")
     before = {p: (main / TASKS / ".active_sessions" / p).read_bytes() for p in _markers(main)}
     assert not (main / TASKS / ".active").exists()
-    result = _call(main, "task_blocked", {
-        "task_id": "TASK__lead", "workspace": str(wt),
+    result = _call(main, "wbs_blocked", {
+        "wbs_id": "WBS__lead", "workspace": str(wt),
         "blocked_reason": "probe", "unblock_condition": "probe",
     })
     assert not result.get("isError"), result
-    assert (wt / TASKS / "TASK__lead/BLOCKED.md").is_file()
+    assert (wt / TASKS / "WBS__lead/BLOCKED.md").is_file()
     assert {p: (main / TASKS / ".active_sessions" / p).read_bytes() for p in _markers(main)} == before
     assert not (main / TASKS / ".active").exists()
-    assert lib.resolve_session_task_binding(str(wt), SID) == {}
+    assert lib.resolve_session_wbs_binding(str(wt), SID) == {}
 
 
 def test_routing_reads_the_worktree_manifest(tmp_path, monkeypatch):
     repo = _setup(tmp_path)
     main, wt = repo
-    _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)})
+    _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     (wt / "doc/harness/manifest.yaml").write_text(MANIFEST + "maintenance_default: true\n", encoding="utf-8")
     monkeypatch.chdir(main)
-    routing = lib.compile_routing(str(wt / TASKS / "TASK__lead"))
-    assert routing["maintenance_task"] is True
-    assert lib.compile_routing(str(wt / TASKS / "TASK__lead"), str(main))["maintenance_task"] is False
+    routing = lib.compile_routing(str(wt / TASKS / "WBS__lead"))
+    assert routing["maintenance"] is True
+    assert lib.compile_routing(str(wt / TASKS / "WBS__lead"), str(main))["maintenance"] is False
 
 
 def _hook(script: str, payload: dict, cwd: Path, *args: str) -> subprocess.CompletedProcess:
@@ -253,11 +253,11 @@ def _gate(wt: Path, file_path: Path) -> str | None:
 def test_worktree_plan_alone_does_not_admit_source_writes(tmp_path):
     repo = _setup(tmp_path)
     main, wt = repo
-    assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)}).get("isError")
     source = wt / "src/feature.py"
     assert _gate(wt, source) == "deny"
     assert not _call(main, "write_plan", {
-        "task_id": "TASK__lead", "workspace": str(wt),
+        "wbs_id": "WBS__lead", "workspace": str(wt),
         "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
     assert _gate(wt, source) == "deny"
@@ -267,21 +267,21 @@ def test_full_lifecycle_closes_in_worktree_and_leaves_main_untouched(tmp_path):
     repo = _setup(tmp_path)
 
     main, wt = repo
-    assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__main"}).get("isError")
     main_before = _snapshot(main)
-    assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)}).get("isError")
     assert not _call(main, "write_plan", {
-        "task_id": "TASK__lead", "workspace": str(wt),
+        "wbs_id": "WBS__lead", "workspace": str(wt),
         "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
-    lead_task = str(wt / TASKS / "TASK__lead")
-    assert not _call(main, "wbs", {"action": "check", "wbs_id": "TASK__lead", "workspace": str(wt), "node_id": "A"}).get("isError")
-    verify = _payload(_call(main, "task_verify", {"task_id": "TASK__lead", "workspace": str(wt)}))
+    lead_task = str(wt / TASKS / "WBS__lead")
+    assert not _call(main, "wbs", {"action": "check", "wbs_id": "WBS__lead", "workspace": str(wt), "node_id": "A"}).get("isError")
+    verify = _payload(_call(main, "wbs_verify", {"wbs_id": "WBS__lead", "workspace": str(wt)}))
     assert verify["runtime_verdict"] == "PASS", verify
-    closed = _call(main, "task_close", {"task_id": "TASK__lead", "workspace": str(wt)})
+    closed = _call(main, "wbs_close", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     assert not closed.get("isError"), closed
-    assert lib.task_control_status(lead_task, lib.read_task_control(lead_task)) == "closed"
-    assert lib.resolve_session_task_binding(str(wt), SID) == {}
+    assert lib.wbs_control_status(lead_task, lib.read_wbs_control(lead_task)) == "closed"
+    assert lib.resolve_session_wbs_binding(str(wt), SID) == {}
     # The main checkout's task, markers, and goal state are untouched.
     assert _snapshot(main) == main_before
     assert not (main / "doc/harness/goals").exists()
@@ -291,17 +291,17 @@ def test_codex_runtime_routes_workspace_without_authenticated_native_binding(tmp
     repo = _setup(tmp_path)
     main, wt = repo
     with mock.patch.dict(os.environ, {"HARNESS_RUNTIME": "codex", "CODEX_THREAD_ID": SID}):
-        result = _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)})
+        result = _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)})
     assert not result.get("isError"), result
     data = _payload(result)
     assert data["workspace"] == str(wt)
-    assert data["task_dir"] == str(wt / TASKS / "TASK__lead")
-    assert not lib.resolve_session_task_binding(str(wt), SID)
-    assert not (main / TASKS / "TASK__lead").exists()
+    assert data["wbs_dir"] == str(wt / TASKS / "WBS__lead")
+    assert not lib.resolve_session_wbs_binding(str(wt), SID)
+    assert not (main / TASKS / "WBS__lead").exists()
     with mock.patch.dict(os.environ, {"HARNESS_RUNTIME": "codex", "CODEX_THREAD_ID": SID}):
-        context = _payload(_call(main, "task_context", {"task_id": "TASK__lead", "workspace": str(wt)}))
+        context = _payload(_call(main, "context", {"wbs_id": "WBS__lead", "workspace": str(wt)}))
     assert context["workspace"] == str(wt)
-    assert not lib.resolve_session_task_binding(str(wt), SID)
+    assert not lib.resolve_session_wbs_binding(str(wt), SID)
 
 
 def _native_session(tmp_path, monkeypatch, cwd):
@@ -323,56 +323,56 @@ def _native_session(tmp_path, monkeypatch, cwd):
 
 def _assert_native_workspace_binding(tmp_path, monkeypatch, action):
     main, wt = _setup(tmp_path)
-    assert not _call(main, "wbs", {"action": "open", "wbs_id": "TASK__main"}).get("isError")
+    assert not _call(main, "wbs", {"action": "open", "wbs_id": "WBS__main"}).get("isError")
     if action == "context":
         assert not _call(main, "wbs", {
-            "action": "open", "wbs_id": "TASK__lead", "workspace": str(wt),
+            "action": "open", "wbs_id": "WBS__lead", "workspace": str(wt),
         }).get("isError")
     main_before = _snapshot(main)
     sid = _native_session(tmp_path, monkeypatch, main)
     result = _call(main, "wbs", {
-        "action": action, "wbs_id": "TASK__lead", "workspace": str(wt),
+        "action": action, "wbs_id": "WBS__lead", "workspace": str(wt),
     })
     assert not result.get("isError"), result
     data = _payload(result)
-    task = str(wt / TASKS / "TASK__lead")
-    run = lib.read_task_control(task)["run_id"]
-    assert data["task_dir"] == task
+    task = str(wt / TASKS / "WBS__lead")
+    run = lib.read_wbs_control(task)["run_id"]
+    assert data["wbs_dir"] == task
     assert data["run_id"] == run
     marker = lib.read_active_session_marker(str(wt), sid)
-    assert {key: marker[key] for key in ("session_id", "task_dir", "task_id", "run_id")} == {
-        "session_id": sid, "task_dir": task, "task_id": "TASK__lead", "run_id": run,
+    assert {key: marker[key] for key in ("session_id", "wbs_dir", "wbs_id", "run_id")} == {
+        "session_id": sid, "wbs_dir": task, "wbs_id": "WBS__lead", "run_id": run,
     }
-    binding = lib.resolve_session_task_binding(str(wt), sid)
-    assert binding["task_dir"] == task and binding["run_id"] == run
-    assert not lib.resolve_session_task_binding(str(main), sid)
+    binding = lib.resolve_session_wbs_binding(str(wt), sid)
+    assert binding["wbs_dir"] == task and binding["run_id"] == run
+    assert not lib.resolve_session_wbs_binding(str(main), sid)
     assert _snapshot(main) == main_before
 
 
-def test_authenticated_native_workspace_open_binds_exact_session_task_and_run(tmp_path, monkeypatch):
+def test_authenticated_native_workspace_open_binds_exact_session_wbs_and_run(tmp_path, monkeypatch):
     _assert_native_workspace_binding(tmp_path, monkeypatch, "open")
 
 
-def test_authenticated_native_workspace_context_binds_exact_session_task_and_run(tmp_path, monkeypatch):
+def test_authenticated_native_workspace_context_binds_exact_session_wbs_and_run(tmp_path, monkeypatch):
     _assert_native_workspace_binding(tmp_path, monkeypatch, "context")
 
 
 def test_authenticated_native_workspace_calls_preserve_conflicting_main_focus(tmp_path, monkeypatch):
     main, wt = _setup(tmp_path)
     assert not _call(main, "wbs", {
-        "action": "open", "wbs_id": "TASK__lead", "workspace": str(wt),
+        "action": "open", "wbs_id": "WBS__lead", "workspace": str(wt),
     }).get("isError")
     sid = _native_session(tmp_path, monkeypatch, main)
-    assert not _call(main, "wbs", {"action": "open", "wbs_id": "TASK__main"}).get("isError")
+    assert not _call(main, "wbs", {"action": "open", "wbs_id": "WBS__main"}).get("isError")
     main_before, wt_before = _snapshot(main), _snapshot(wt)
-    for action, task_id in (("open", "TASK__new"), ("context", "TASK__lead")):
+    for action, wbs_id in (("open", "WBS__new"), ("context", "WBS__lead")):
         result = _call(main, "wbs", {
-            "action": action, "wbs_id": task_id, "workspace": str(wt),
+            "action": action, "wbs_id": wbs_id, "workspace": str(wt),
         })
         assert result.get("isError"), result
         assert "another worktree owns this Codex coordinator" in _payload(result)["error"]
-        assert lib.resolve_session_task_binding(str(main), sid)["task_dir"] == str(main / TASKS / "TASK__main")
-        assert not lib.resolve_session_task_binding(str(wt), sid)
+        assert lib.resolve_session_wbs_binding(str(main), sid)["wbs_dir"] == str(main / TASKS / "WBS__main")
+        assert not lib.resolve_session_wbs_binding(str(wt), sid)
         assert _snapshot(main) == main_before
         assert _snapshot(wt) == wt_before
 
@@ -382,22 +382,22 @@ def test_codex_workspace_without_process_identity_does_not_promote_repo_hint(tmp
     monkeypatch.setenv("HARNESS_RUNTIME", "codex")
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
-    for tool in ("task_start", "task_context"):
-        result = _call(main, tool, {"task_id": "TASK__lead", "workspace": str(wt)})
+    for tool in ("wbs_open", "context"):
+        result = _call(main, tool, {"wbs_id": "WBS__lead", "workspace": str(wt)})
         assert not result.get("isError"), result
         assert _payload(result)["workspace"] == str(wt)
-        assert not lib.resolve_session_task_binding(str(wt), SID)
+        assert not lib.resolve_session_wbs_binding(str(wt), SID)
         assert f"{SID}.json" not in _markers(wt)
 
 
 def test_non_string_workspace_is_refused_before_resolution(tmp_path):
     repo = _setup(tmp_path)
     main, _wt = repo
-    result = _call(main, "task_start", {"task_id": "TASK__lead", "workspace": ["/tmp"]})
+    result = _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": ["/tmp"]})
     assert result.get("isError"), result
     data = _payload(result)
     assert data.get("field") == "workspace" and data.get("reason") == "wrong_type", data
-    assert not (main / TASKS / "TASK__lead").exists()
+    assert not (main / TASKS / "WBS__lead").exists()
 
 
 def test_lead_close_never_touches_the_coordinator_goal(tmp_path):
@@ -410,45 +410,45 @@ def test_lead_close_never_touches_the_coordinator_goal(tmp_path):
     (goal_dir / "GOAL__old.json").write_text('{"historical":true}\n')
     goal_before = (main / "doc/harness/goals").glob("*.json")
     goal_before = {p.name: p.read_bytes() for p in goal_before}
-    assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)}).get("isError")
     assert not _call(main, "write_plan", {
-        "task_id": "TASK__lead", "workspace": str(wt),
+        "wbs_id": "WBS__lead", "workspace": str(wt),
         "plan": WORKTREE_PLAN, "required_lenses": ["review-code", "qa-cli"],
     }).get("isError")
-    lead_task = str(wt / TASKS / "TASK__lead")
-    assert not _call(main, "wbs", {"action": "check", "wbs_id": "TASK__lead", "workspace": str(wt), "node_id": "A"}).get("isError")
-    assert not _call(main, "task_close", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
+    lead_task = str(wt / TASKS / "WBS__lead")
+    assert not _call(main, "wbs", {"action": "check", "wbs_id": "WBS__lead", "workspace": str(wt), "node_id": "A"}).get("isError")
+    assert not _call(main, "wbs_close", {"wbs_id": "WBS__lead", "workspace": str(wt)}).get("isError")
     goal_after = {p.name: p.read_bytes() for p in (main / "doc/harness/goals").glob("*.json")}
     assert goal_after == goal_before
 
 
 
 
-def test_codex_task_results_fence_conflicts_across_registered_workspaces(tmp_path, monkeypatch):
+def test_codex_wbs_results_fence_conflicts_across_registered_workspaces(tmp_path, monkeypatch):
     import codex_hook_registration as binding
     main, wt = _setup(tmp_path)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-    assert not _call(main, "task_start", {"task_id": "TASK__main"}).get("isError")
-    assert not _call(main, "task_start", {"task_id": "TASK__lead", "workspace": str(wt)}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__main"}).get("isError")
+    assert not _call(main, "wbs_open", {"wbs_id": "WBS__lead", "workspace": str(wt)}).get("isError")
     sid = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     def result(root, name, workspace=None):
         task = root / TASKS / name
-        control = lib.read_task_control(str(task))
+        control = lib.read_wbs_control(str(task))
         args = {"action": "context", "wbs_id": name}
-        response = {"task_dir": str(task), "task_id": name, "run_id": control["run_id"]}
+        response = {"wbs_dir": str(task), "wbs_id": name, "run_id": control["run_id"]}
         if workspace:
             args["workspace"] = str(workspace)
             response["workspace"] = str(workspace)
         return json.dumps({"cwd": str(main), "session_id": sid, "tool_name": "wbs",
                            "tool_input": args, "tool_response": {"structuredContent": response}}).encode()
-    assert binding.register_task_result(result(main, "TASK__main"))
-    assert not binding.register_task_result(result(wt, "TASK__lead", wt))
-    assert not lib.resolve_session_task_binding(str(main), sid)
-    assert not lib.resolve_session_task_binding(str(wt), sid)
+    assert binding.register_wbs_result(result(main, "WBS__main"))
+    assert not binding.register_wbs_result(result(wt, "WBS__lead", wt))
+    assert not lib.resolve_session_wbs_binding(str(main), sid)
+    assert not lib.resolve_session_wbs_binding(str(wt), sid)
     for root in (main, wt):
         assert len(lib.read_active_session_marker(str(root), sid)["conflicts"]) == 2
-    assert not _call(main, "task_blocked", {"task_id": "TASK__main",
+    assert not _call(main, "wbs_blocked", {"wbs_id": "WBS__main",
                     "blocked_reason": "separate work parked", "unblock_condition": "resume explicitly"}).get("isError")
-    assert binding.register_task_result(result(wt, "TASK__lead", wt))
-    assert lib.resolve_session_task_binding(str(wt), sid)["task_dir"] == str(wt / TASKS / "TASK__lead")
-    assert not lib.resolve_session_task_binding(str(main), sid)
+    assert binding.register_wbs_result(result(wt, "WBS__lead", wt))
+    assert lib.resolve_session_wbs_binding(str(wt), sid)["wbs_dir"] == str(wt / TASKS / "WBS__lead")
+    assert not lib.resolve_session_wbs_binding(str(main), sid)

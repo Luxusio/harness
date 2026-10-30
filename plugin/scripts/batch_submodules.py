@@ -3,7 +3,7 @@
 
 The caller owns serialization and the state journal.  Persist callbacks must
 atomically save the supplied manifest before returning; this module never
-writes task evidence or the batch journal.  Refusal always retains private data.
+writes WBS evidence or the batch journal.  Refusal always retains private data.
 """
 from __future__ import annotations
 

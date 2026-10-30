@@ -27,7 +27,7 @@ def test_discovery_amends_current_outcomes_without_promoting_user_intent():
         assert "fire the Premise Gate conversational ask" not in body
         assert "user-confirmed direction before changing course" not in body
         assert "fresh-task / continue-anyway" not in body
-        assert "run plan skill / check task_id / abort" not in body
+        assert "run plan skill / check wbs_id / abort" not in body
         assert "Required planning, independent review and QA cannot be skipped" in body
 
 

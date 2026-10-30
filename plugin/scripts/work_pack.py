@@ -1,6 +1,6 @@
 """Task-owned work-pack proof for the existing isolated batch pool.
 
-The spec is intent, not close evidence. Batch state and preserved task evidence
+The spec is intent, not close evidence. Batch state and preserved WBS evidence
 must still agree before the owning WBS execution may run or finish.
 """
 from __future__ import annotations
@@ -14,8 +14,8 @@ import re
 import batch_state as batch
 
 
-def _spec(task_id: str, requests: list, *, batch_id=None) -> dict:
-    if not isinstance(task_id, str) or not re.fullmatch(r"TASK__[A-Za-z0-9_.-]{1,180}", task_id):
+def _spec(wbs_id: str, requests: list, *, batch_id=None) -> dict:
+    if not isinstance(wbs_id, str) or not re.fullmatch(r"WBS__[A-Za-z0-9_.-]{1,180}", wbs_id):
         raise ValueError("owning WBS execution identity required")
     batch.requests_valid(requests)
     batch.require(len(requests) >= 2, "work-pack batch requires at least two requests")
@@ -23,20 +23,20 @@ def _spec(task_id: str, requests: list, *, batch_id=None) -> dict:
                       for item in requests), "unknown work-pack batch request field")
     normalized = copy.deepcopy(batch.normalize_requests(requests))
     batch.require(len(json.dumps(normalized).encode()) <= batch.LIMIT, "work-pack batch intake exceeds 1 MiB")
-    if any("TASK__" + item["slug"] == task_id for item in normalized):
+    if any("WBS__" + item["slug"] == wbs_id for item in normalized):
         raise ValueError("integration child cannot also be a batch lead")
-    identity = json.dumps([task_id, normalized], sort_keys=True, separators=(",", ":")).encode()
+    identity = json.dumps([wbs_id, normalized], sort_keys=True, separators=(",", ":")).encode()
     if batch_id is None:
         batch_id = "wbs-" + hashlib.sha256(identity).hexdigest()
     batch.require(isinstance(batch_id, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}", batch_id),
                   "invalid work-pack pool identity")
-    return {"task_id": task_id, "batch_id": batch_id, "requests": normalized}
+    return {"wbs_id": wbs_id, "batch_id": batch_id, "requests": normalized}
 
 
-def make_spec(repo_root: str, task_id: str, requests: list) -> dict:
+def make_spec(repo_root: str, wbs_id: str, requests: list) -> dict:
     """Validate new intake without reserving, opening tasks, or writing state."""
     try:
-        spec = _spec(task_id, requests)
+        spec = _spec(wbs_id, requests)
         repo = os.path.realpath(repo_root)
         directory = os.path.join(repo, "doc/harness/runtime/batches")
         records = {}
@@ -48,12 +48,12 @@ def make_spec(repo_root: str, task_id: str, requests: list) -> dict:
             records = batch.load_all(directory, repo)
         existing = records.get(spec["batch_id"])
         if existing is not None:
-            batch.require(existing.get("owner_task_id") == task_id, "work-pack pool owner mismatch")
+            batch.require(existing.get("owner_wbs_id") == wbs_id, "work-pack pool owner mismatch")
             batch.require(batch.normalize_requests(existing["requests"]) == spec["requests"],
                           "work-pack batch intake differs from existing pool")
         else:
             batch.require(len(records) < batch.MAX_BATCHES, "batch history limit reached")
-            batch.require_unused_task_ids(repo, spec["requests"], records)
+            batch.require_unused_wbs_ids(repo, spec["requests"], records)
         effective_requests = existing['requests'] if existing is not None else spec['requests']
         admission = batch.ordinary_admission_scopes(repo, effective_requests, managed=True)
         for item in effective_requests:
@@ -73,7 +73,7 @@ def _integrated_proof(repo: str, data: dict, *, measure=True) -> None:
         batch.disposal_complete(repo, item)
         checkpoint = item.get("checkpoint", {})
         tip = checkpoint.get("integrated_tip")
-        archive = os.path.join(repo, "doc/harness/archive/batch", item["task_id"])
+        archive = os.path.join(repo, "doc/harness/archive/batch", item["wbs_id"])
         batch.require(checkpoint.get("stage") == "harvested"
                       and isinstance(tip, str) and batch.finish_helper.COMMIT_RE.fullmatch(tip)
                       and checkpoint.get("branch_tip") == tip,
@@ -98,7 +98,7 @@ def _integrated_proof(repo: str, data: dict, *, measure=True) -> None:
         ).returncode == 0, "work-pack batch commit is missing from destination ancestry")
 
 
-def route(repo_root: str, task_id: str, spec: dict, *, measure=True) -> dict:
+def route(repo_root: str, wbs_id: str, spec: dict, *, measure=True) -> dict:
     """Return batch dispatch/resume or integration routing; refuse corrupt proof.
 
 With measure=False this is stored/advisory routing: archive contents are not
@@ -109,13 +109,13 @@ an existing pool keeps its reservation, recovery, and cleanup ownership.
 """
     try:
         batch.require(isinstance(spec, dict), "invalid work-pack batch spec")
-        expected = _spec(task_id, spec.get("requests"), batch_id=spec.get("batch_id"))
+        expected = _spec(wbs_id, spec.get("requests"), batch_id=spec.get("batch_id"))
         batch.require(spec == expected, "work-pack batch spec identity mismatch")
         repo = os.path.realpath(repo_root)
         directory = os.path.join(repo, "doc/harness/runtime/batches")
         path = os.path.join(directory, expected["batch_id"] + ".json")
         result = {**copy.deepcopy(expected), "route": "batch", "batch_state": "missing",
-                  "next_action": "Initialize this exact batch intake with --owner-task-id " + task_id + ", then dispatch ready reservations through batch_state."}
+                  "next_action": "Initialize this exact batch intake with --owner-wbs-id " + wbs_id + ", then dispatch ready reservations through batch_state."}
         if not os.path.lexists(directory):
             # Validate existing ancestors even when this is the first pool.
             existing = directory
@@ -127,15 +127,15 @@ an existing pool keeps its reservation, recovery, and cleanup ownership.
         if not os.path.lexists(path):
             return result
         data = batch.validate(batch.read_json(path), repo, expected["batch_id"])
-        return inspect_pool(repo, task_id, expected, data, measure=measure)
+        return inspect_pool(repo, wbs_id, expected, data, measure=measure)
     except (batch.Refusal, OSError, KeyError, TypeError) as exc:
         raise ValueError("work-pack batch proof refused: " + str(exc)) from exc
 
 
-def inspect_pool(repo, task_id, expected, data, *, measure=True):
+def inspect_pool(repo, wbs_id, expected, data, *, measure=True):
     """Validate a neutral owner-bound pool, including staged importer metadata."""
     data = batch.validate(data, repo, expected["batch_id"])
-    batch.require(data.get("owner_task_id") == task_id, "work-pack pool owner mismatch")
+    batch.require(data.get("owner_wbs_id") == wbs_id, "work-pack pool owner mismatch")
     result = {**copy.deepcopy(expected), "route": "batch", "proof_fresh": bool(measure)}
     batch.require(batch.normalize_requests(data["requests"]) == expected["requests"],
                   "work-pack batch intake differs from existing pool")
@@ -160,8 +160,8 @@ def inspect_pool(repo, task_id, expected, data, *, measure=True):
     return result
 
 
-def require_integrated(repo_root: str, task_id: str, spec: dict) -> None:
+def require_integrated(repo_root: str, wbs_id: str, spec: dict) -> None:
     """Guard WBS completion in addition to its canonical child close checks."""
-    result = route(repo_root, task_id, spec)
+    result = route(repo_root, wbs_id, spec)
     if result["route"] != "integration":
         raise ValueError("work-pack batch is unfinished: " + result["next_action"])

@@ -63,7 +63,7 @@ decision.
 """
 
 OPERATIONAL_IGNORES = (
-    "doc/harness/tasks/",
+    "doc/harness/wbs/",
     "doc/harness/goals/",
     "doc/harness/reviews/",
     "doc/harness/learnings.jsonl",

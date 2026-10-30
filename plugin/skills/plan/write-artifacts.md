@@ -6,12 +6,12 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ## 6.1 Artifact writer
 
-PLAN.md is written through `wbs(action="plan", wbs_id=...)`; the private `write_plan` handler is its internal owner. The same call
-stores the canonical required lens set in `TASK.json`.
+PLAN.md is written through `wbs(action="plan", wbs_id=...)`. The same call
+stores the canonical required lens set in `WBS.control.json`.
 
 ### Measured WBS
 
-Use the acceptance outcomes as the WBS; do not write a second task breakdown.
+Use the acceptance outcomes as the WBS; do not write a second WBS breakdown.
 Include one `wbs` JSON fence in PLAN, with a small number of measurable leaves:
 
 ```wbs
@@ -24,12 +24,12 @@ implementation layout at intake. WBS has no edited-file lists. Optional
 `parent` and `depends_on` name node IDs. A group has no `check`; its children's weights sum
 to its weight (for example, split weight 1 into 0.5 and 0.5). Choose coarse, understandable weights, not invented effort
 precision. One leaf suffices for small work. `wbs(action="plan")` atomically publishes
-the baseline and runtime WBS evidence without changing TASK's schema.
+the baseline and runtime WBS evidence without adding a second execution-control schema.
 Use `wbs(action="check", node_id=...)` only when an outcome is ready to
 check. Context/open/next and plan updates do not hash source: current progress
 is unmeasured and historical credit is labelled separately. Never report that
 history as current completion. Explicit check and final verify/close measure
-current inputs. Never author a percentage or count task
+current inputs. Never author a percentage or count WBS
 additions as accomplishment. Passing commands still need review for adequacy.
 To refine, keep the pending leaf's ID and weight as a group, remove its check
 and add concrete children conserving weight. Adapt pending outcomes, checks
@@ -67,7 +67,7 @@ Omit if no restore point.
 ### Original Request / Intent Summary
 
 Every PLAN.md must preserve the user's request or intent in a committed-process
-artifact, because task-local `REQUEST.md` may be absent, thin, or gitignored. If
+artifact, because WBS-local `REQUEST.md` may be absent, thin, or gitignored. If
 `REQUEST.md` exists, summarize it and cite it. If it is absent, gitignored, or
 under 15 non-empty lines, write a concise intent summary from the current user
 prompt and explicitly label the source as `conversation summary`. Do not rely on
@@ -117,12 +117,12 @@ POLICY: doc/<area>/POLICY__<name>.md | n/a
 Reason: <one sentence>
 ```
 
-Use `REQ` when the task changes behavior or constraints that implementation
+Use `REQ` when the WBS changes behavior or constraints that implementation
 and QA must satisfy: existing screen state, filters, search, sorting, loading,
 empty/error states, localization/copy/visibility, click/input interactions,
 API request or response shape, status codes, auth/session behavior, validation,
 compatibility, externally consumed side effects, or observable bugfixes.
-New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path. A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
+New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path. A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
 
 Happy path: when request text, user feedback, target surfaces, or known file
 paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ path
@@ -137,7 +137,7 @@ skill/pattern docs and write `REQ: n/a` with `Pattern/skill doc enough` in the
 reason. For purely mechanical, test-only, or internal refactors, write
 `No durable doc needed` and name the unchanged durable knowledge surface.
 
-Use `GUIDE` when the task establishes reusable coding, design, testing, or
+Use `GUIDE` when the WBS establishes reusable coding, design, testing, or
 implementation guidance. Use `ADR` when it makes a significant technical
 choice with alternatives or tradeoffs. Use `POLICY` only for external
 security, legal, data-handling, approval, licensing, or organizational
@@ -227,7 +227,7 @@ wbs { action: "plan",
 ```
 
 Choose only the applicable supported lenses. `review-code` is always required;
-add `review-security` when the task has a security boundary. Select QA lenses
+add `review-security` when the WBS has a security boundary. Select QA lenses
 from `qa-cli`, `qa-api`, `qa-browser`, and `qa-desktop`.
 
 ## 6.6 Acceptance criteria
@@ -268,12 +268,12 @@ Tests that pin text or output the implementation itself produces belong in a tes
 
 ## 6.8 Learnings write-back (capture-when-fresh, non-blocking)
 
-When you discover something genuinely useful during the task — a real bug, a workaround that saved time, a pattern that surprised you, a tooling gotcha — log it the moment you find it, **while it's fresh**. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning.
+When you discover something genuinely useful during the WBS — a real bug, a workaround that saved time, a pattern that surprised you, a tooling gotcha — log it the moment you find it, **while it's fresh**. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning.
 
 A good entry names a concrete fact + a concrete fix, both groundable in files / commands / outputs. Examples of what passes the bar:
 
 - `/plugin marketplace add` does NOT expand bash subshell `$(pwd)` — `/plugin` is a Claude Code slash command, not a shell command. Use `./` or a literal path.
-- A duplicated task ledger can drift from PLAN.md; keep acceptance intent in one document.
+- A duplicated WBS ledger can drift from PLAN.md; keep acceptance intent in one document.
 - Plan artifacts are MCP-owned; direct Write/Edit and legacy CLI handshakes are not the canonical path.
 
 Examples that do NOT pass the bar (do not log these):
@@ -287,15 +287,15 @@ Schema (one JSON line per entry, append to `doc/harness/learnings.jsonl`):
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-# echo '{"ts":"'"$_TS"'","type":"operational|pitfall|eureka|feedback","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"FACT + FIX","source":"observed","task":"TASK__<id>","task_run_id":"<TASK.json run_id>"}' >> doc/harness/learnings.jsonl
+# echo '{"ts":"'"$_TS"'","type":"operational|pitfall|eureka|feedback","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"FACT + FIX","source":"observed","wbs":"WBS__<id>","wbs_run_id":"<WBS.control.json run_id>"}' >> doc/harness/learnings.jsonl
 ```
 
-`type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries that contradict conventional wisdom. `type=feedback` for user-stated preferences that should shape future behavior. Creates file if absent. Silent-fail on write error. Never blocks task close.
+`type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries that contradict conventional wisdom. `type=feedback` for user-stated preferences that should shape future behavior. Creates file if absent. Silent-fail on write error. Never blocks WBS close.
 
 ## 6.9 Remove optional planning scratch
 
-After every successful `wbs(action="plan")`, remove task-local PLAN_SESSION.json when it
-exists. PLAN.md and TASK.json are sufficient for resume. Leave scratch in place
+After every successful `wbs(action="plan")`, remove WBS-local PLAN_SESSION.json when it
+exists. PLAN.md and WBS.control.json are sufficient for resume. Leave scratch in place
 only when publication failed and it carries recovery value.
 
 ## 6.10 Completion report
@@ -303,8 +303,8 @@ only when publication failed and it carries recovery value.
 ```
 STATUS: <DONE | DONE_WITH_CONCERNS | BLOCKED>
 
-Task:    TASK__<id>
-Plan:    doc/harness/tasks/TASK__<id>/PLAN.md
+WBS:    WBS__<id>
+Plan:    doc/harness/wbs/WBS__<id>/PLAN.md
 
 Phases run:        <list, e.g. 0, 1, 5, 6>
 Planning procedure:<compact/full>

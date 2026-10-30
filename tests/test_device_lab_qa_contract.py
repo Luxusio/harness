@@ -83,7 +83,7 @@ def test_device_authority_privacy_and_cleanup_survive_migration(path):
     body = normalized(path)
     for term in (
         "without actual authority", "owner-scoped devices", "paid resources",
-        "clean up only task-created resources", "preserve pre-existing",
+        "clean up only WBS-created resources", "preserve pre-existing",
         "Do not stop or delete a shared existing device",
         "Inspect before attaching", "screenshot redacted — contained sensitive UI",
         "Minimize sensitive inventory/diagnostic output",

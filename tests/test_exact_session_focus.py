@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def _task(root, *, maintenance=False):
     from test_prewrite_gate_dormant import _write_task_state
     import wbs
-    task = Path(_write_task_state(str(root / 'doc/harness/tasks'), 'exact', 'open'))
-    run = json.loads((task / 'TASK.json').read_text())['run_id']
+    task = Path(_write_task_state(str(root / 'doc/harness/wbs'), 'exact', 'open'))
+    run = json.loads((task / 'WBS.control.json').read_text())['run_id']
     plan = '# Exact fixture\n```wbs\n' + json.dumps([dict(id='A', title='Exact source', weight=1)]) + '\n```\n'
     (task / 'PLAN.md').write_text(plan)
     if maintenance:
@@ -29,16 +29,16 @@ def _task(root, *, maintenance=False):
                 continuation_available=True)
     wbs.work_pack(str(task), str(root), run, bind=True,
                   ownership={'A': ['engine.py', 'plugin/scripts/prewrite_gate.py']}, host=host)
-    marker = dict(session_id=SID, task_dir=str(task), task_id=task.name,
+    marker = dict(session_id=SID, wbs_dir=str(task), wbs_id=task.name,
                   run_id=run, updated='2026-10-28T00:00:00Z')
-    sessions = root / 'doc/harness/tasks/.active_sessions'
+    sessions = root / 'doc/harness/wbs/.active_sessions'
     sessions.mkdir(exist_ok=True)
     (sessions / (SID + '.json')).write_text(json.dumps(marker))
     return task, marker
 
 
 def _write_marker(root, marker):
-    (root / 'doc/harness/tasks/.active_sessions' / (SID + '.json')).write_text(json.dumps(marker))
+    (root / 'doc/harness/wbs/.active_sessions' / (SID + '.json')).write_text(json.dumps(marker))
 
 
 def _gate(cwd, target, sid=SID):
@@ -60,9 +60,9 @@ def test_source_and_control_need_current_exact_run_not_legacy_or_hint(tmp_path, 
     monkeypatch.syspath_prepend(str(ROOT / 'plugin/scripts'))
     main, _ = setup(tmp_path)
     task, marker = _task(main, maintenance=True)
-    legacy = main / 'doc/harness/tasks/.active'
+    legacy = main / 'doc/harness/wbs/.active'
     legacy.write_text(str(task))
-    (main / 'doc/harness/tasks/.active_sessions/.session-hint').write_text(SID)
+    (main / 'doc/harness/wbs/.active_sessions/.session-hint').write_text(SID)
     for rel in ('engine.py', 'plugin/scripts/prewrite_gate.py'):
         assert _gate(main, main / rel) == {}
         for sid in (None, '', 'default', 'foreign'):
@@ -90,7 +90,7 @@ def test_registered_worktree_to_main_and_sibling_apply_target_local_gates(tmp_pa
             _write_marker(target_root, dict(marker, conflicts_overflow=True))
             assert _gate(lead, target).get('permissionDecision') == 'deny'
             _write_marker(target_root, marker)
-        assert _gate(lead, task / 'TASK.json').get('permissionDecision') == 'deny'
+        assert _gate(lead, task / 'WBS.control.json').get('permissionDecision') == 'deny'
 
 
 def test_claude_hook_configuration_binds_successful_content_result(tmp_path, monkeypatch):
@@ -98,7 +98,7 @@ def test_claude_hook_configuration_binds_successful_content_result(tmp_path, mon
     monkeypatch.syspath_prepend(str(ROOT / 'plugin/scripts'))
     main, _ = setup(tmp_path)
     task, marker = _task(main)
-    path = main / 'doc/harness/tasks/.active_sessions' / (SID + '.json')
+    path = main / 'doc/harness/wbs/.active_sessions' / (SID + '.json')
     path.unlink()
     tool = 'mcp__plugin_harness_harness__wbs'
     config = json.loads((ROOT / 'plugin/hooks/hooks.json').read_text())
@@ -165,7 +165,7 @@ def test_registered_invalid_main_and_sibling_keep_target_gates_and_c05(tmp_path,
                 result = _gate(lead, target_root / rel)
                 assert result.get('permissionDecision') == 'deny', (mutation, result)
                 assert 'invalid-harness-workspace' in result['permissionDecisionReason']
-            target = task / 'TASK.json'
+            target = task / 'WBS.control.json'
             assert _gate(lead, target).get('permissionDecision') == 'deny'
             payload = dict(cwd=str(lead), session_id=SID, tool_name='Write',
                            tool_input=dict(file_path=str(target)))

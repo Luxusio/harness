@@ -16,7 +16,7 @@ isolation/baseRef does not choose a checkout. Do not execute Claude
 
 For WBS dispatch use the exact returned batch ID and request list; existing
 state is resumed, never replaced with another ID. Reopen the same owning WBS
-for combined verification only after the whole pool integrates and closes. No main-checkout task may be open
+for combined verification only after the whole pool integrates and closes. No main-checkout WBS may be open
 while leads run. Independent declared requests automatically use this route
 when the host exposes spawn and same-agent continuation capabilities.
 
@@ -38,10 +38,10 @@ inventory, never a new per-lead host limit. At a host capacity too small for
 one coordinator, one lead and an independent reviewer, report the capability
 blocker before reservations rather than creating an unfinishable lead.
 
-The shared MCP must support authenticated worktree task bindings. An old installed runtime rejecting workspace, missing native
+The shared MCP must support authenticated worktree WBS bindings. An old installed runtime rejecting workspace, missing native
 ancestry, or unavailable independent evidence is a concrete blocker. Do not
-drop `workspace` or bypass task ownership to get around it. If no pool has been
-declared yet, dependent or unavailable work uses the ordinary sequential task
+drop `workspace` or bypass WBS ownership to get around it. If no pool has been
+declared yet, dependent or unavailable work uses the ordinary sequential WBS
 route. Once a WBS work pack is declared, preserve its intent and report its
 specific capability blocker instead of silently marking the pack complete.
 
@@ -55,10 +55,10 @@ specific capability blocker instead of silently marking the pack complete.
    marker before returning handoffs. Repeated preparation returns existing
    reservations safely. Do not run `git worktree add` or native isolation.
 2. Spawn a bootstrap-only agent with a unique name; prompt it to read
-   `${HARNESS_PLUGIN_ROOT}/agents/task-lead.md`, name exact W/branch, batch ID,
-   slug, exact `task_id`, scope, off-limits, selected modules and spawn HEAD.
+   `${HARNESS_PLUGIN_ROOT}/agents/wbs-lead.md`, name exact W/branch, batch ID,
+   slug, exact `wbs_id`, scope, off-limits, selected modules and spawn HEAD.
    Bootstrap verifies the MCP-owned registration/HEAD/marker, returns and stops;
-   it neither starts a task nor writes a replacement marker. Record its actual
+   it neither starts a WBS nor writes a replacement marker. Record its actual
    native worker identity from the host result.
 3. Call `wbs(action="dispatch", wbs_id=<owner>, operation="bind", slug=S, worker_id=<actual host ID>)`.
    MCP uses recorded W/branch; callers do not select them. S1 preparation belongs
@@ -88,12 +88,12 @@ slug=S, worker_id=<bound ID>, result=<actual JSON object>, worker_stopped=true)`
 The same owner validates the result, serializes rebase/fast-forward, harvests
 proof and disposes W/branch; it closes a fully disposed eligible pool. No
 separate remembered result, finish or close call. Matching retries resume saved
-checkpoints, including after worktree deletion. Actual closed task/run evidence
+checkpoints, including after worktree deletion. Actual closed WBS/run evidence
 is required; narrative PASS alone never authorizes integration.
 
 Inspect read-only `operation="status"` on interruption. After actual stopped
 writer confirmation, use `operation="recover"` for integration checkpoints or
-`operation="resume"` for the exact retained W/branch/task/run. After independently
+`operation="resume"` for the exact retained W/branch/WBS/run. After independently
 reviewed conflict resolution, `recover` may acknowledge the exact resolved
 branch tip with optional `recovery_commit=<SHA>`; only the recorded
 pre-integration checkpoint can accept a changed tip, preserving exact identities,
@@ -101,7 +101,7 @@ close proof and destination ancestry. Normal `complete` never replaces the
 original result or authorizes unexpected new commits. Then follow the
 returned next action and bind real worker identity before continuation. Context,
 next and session/prompt discovery surface pending pools even with no active
-task; they do not mutate Git or assert worker liveness. Preserve shared S1 proof,
+WBS; they do not mutate Git or assert worker liveness. Preserve shared S1 proof,
 conflict/error/retention rules and no-force disposal. Do not rerun a lens solely
 for missing recording. Recompute slots and refill via `prepare` without a wave
 barrier, but never run integration concurrently or past an unresolved halt.
@@ -121,6 +121,6 @@ Finish validates actual changed paths as a subset of ownership and rechecks
 disjointness before native fast-forward; unsupported index states retain W
 with recovery guidance. Keep worktrees, unintegrated commits and essential
 results on persistent repository storage; use temporary paths only for caches.
-Resume the exact task/run after checking actual checkout/ref/control presence;
+Resume the exact WBS/run after checking actual checkout/ref/control presence;
 recorded running status never proves a process is alive. Preserve known typed
 ancillary metadata outside W before disposal; unknown ignored content retains W.

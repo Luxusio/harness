@@ -32,7 +32,7 @@ ownership, search, completeness, and conversational asks.
 - The user owns every scope change. Never silently add, remove, or defer scope.
 - Return each unresolved material decision as a candidate with 2-3 lettered options
   and a recommendation. If there is no finding, say so and continue.
-- Base claims on the current plan, repository evidence, task-local decisions, and
+- Base claims on the current plan, repository evidence, WBS-local decisions, and
   relevant external evidence. Do not re-ask recorded decisions.
 - Name files, interfaces, failure modes, user effects, effort, and risk.
 - No `TBD`. Every accepted finding needs an implementation and verification path.
@@ -60,7 +60,7 @@ items become part of every later section; rejected items remain in `NOT in scope
 
 Before Step 0:
 
-1. Read the active task plan and task-local prior decisions.
+1. Read the active WBS plan and WBS-local prior decisions.
 2. Inspect recent history, current diff, TODO/FIXME hotspots, architecture docs,
    relevant design docs, and prior learnings/patterns.
 3. Search the product/category landscape and synthesize tried-and-true practice,
@@ -116,7 +116,7 @@ candidate only when it is unauthorized and materially changes outcome or scope.
 - REDUCTION: split must-ship value from follow-up work and return only unauthorized material cuts as candidates.
 
 For EXPANSION and SELECTIVE, persist decisions in
-`doc/harness/tasks/<task-id>/ceo-plan.md` with vision, mode, proposal table, accepted
+`doc/harness/wbs/<wbs-id>/ceo-plan.md` with vision, mode, proposal table, accepted
 scope, and deferred items. Re-read it adversarially for completeness, consistency,
 clarity, scope, and feasibility; fix and retry up to three times, then record stable
 unresolved concerns.

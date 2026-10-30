@@ -14,7 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location(
-    "task_control_lib", ROOT / "plugin/scripts/_lib.py"
+    "wbs_control_lib", ROOT / "plugin/scripts/_lib.py"
 )
 assert SPEC and SPEC.loader
 lib = importlib.util.module_from_spec(SPEC)
@@ -26,9 +26,9 @@ def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
     manifest = tmp_path / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-    task = tmp_path / "doc/harness/tasks/TASK__no-git"
+    task = tmp_path / "doc/harness/wbs/WBS__no-git"
     task.mkdir(parents=True, exist_ok=True)
-    control_path = task / lib.TASK_CONTROL_NAME
+    control_path = task / lib.WBS_CONTROL_NAME
     if not control_path.exists():
         control_path.write_text(json.dumps({
             "run_id": lib.new_uuid7(), "execution_mode": "standard",
@@ -37,7 +37,7 @@ def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (task / "PLAN.md").write_text("# plan\n", encoding="utf-8")
     if lenses is not None:
-        control = lib.read_task_control(task)
+        control = lib.read_wbs_control(task)
         requested = set(lenses.get("required_lenses", [])) & lib.SUPPORTED_LENSES
         requested.add("review-code")
         if not requested & lib.QA_LENSES:
@@ -45,15 +45,15 @@ def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
         control["required_lenses"] = [
             lens for lens in lib.LENS_ORDER if lens in requested
         ]
-        (task / lib.TASK_CONTROL_NAME).write_text(
+        (task / lib.WBS_CONTROL_NAME).write_text(
             json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
         )
     return task
 
-def test_scaffold_uses_only_exact_task_control_and_does_not_inspect_git(tmp_path):
+def test_scaffold_uses_only_exact_wbs_control_and_does_not_inspect_git(tmp_path):
     task = _task(tmp_path)
     assert not (task / "TASK_BASELINE.json").exists()
-    assert set(lib.read_task_control(task)) == lib.TASK_CONTROL_FIELDS
+    assert set(lib.read_wbs_control(task)) == lib.WBS_CONTROL_FIELDS
     for legacy in (
         "TASK_STATE.yaml", "TASK_RUN.json", "PLAN.meta.json",
         "TASK_CLOSE_RECEIPT.json", "INSTALL_RECEIPT.json",
@@ -61,10 +61,10 @@ def test_scaffold_uses_only_exact_task_control_and_does_not_inspect_git(tmp_path
     ):
         assert not (task / legacy).exists()
 
-def test_task_control_exact_four_field_schema_fails_closed(tmp_path):
+def test_wbs_control_exact_four_field_schema_fails_closed(tmp_path):
     task = _task(tmp_path)
-    valid = lib.read_task_control(task)
-    assert set(valid) == lib.TASK_CONTROL_FIELDS
+    valid = lib.read_wbs_control(task)
+    assert set(valid) == lib.WBS_CONTROL_FIELDS
 
     for mutation in (
         {**valid, "legacy_status": "open"},
@@ -77,11 +77,11 @@ def test_task_control_exact_four_field_schema_fails_closed(tmp_path):
         {**valid, "required_lenses": ["review-code", "qa-cli", "qa-cli"]},
         {**valid, "required_lenses": ["review-code", "qa-unknown"]},
     ):
-        (task / "TASK.json").write_text(json.dumps(mutation) + "\n", encoding="utf-8")
-        assert lib.read_task_control(task) == {}
+        (task / "WBS.control.json").write_text(json.dumps(mutation) + "\n", encoding="utf-8")
+        assert lib.read_wbs_control(task) == {}
 
-    (task / "TASK.json").write_text(json.dumps(valid) + "\n", encoding="utf-8")
-    assert lib.read_task_control(task) == valid
+    (task / "WBS.control.json").write_text(json.dumps(valid) + "\n", encoding="utf-8")
+    assert lib.read_wbs_control(task) == valid
 
 def test_uuid7_identity_is_canonical_timestamped_and_rotates(tmp_path):
     timestamp_ms = 1_786_424_400_900
@@ -90,19 +90,19 @@ def test_uuid7_identity_is_canonical_timestamped_and_rotates(tmp_path):
     assert run_id[14] == "7"
     assert run_id[19] in "89ab"
     assert lib.uuid7_timestamp_ms(run_id) == timestamp_ms
-    assert lib.task_run_started_at({"run_id": run_id}) == "2026-08-11T05:00:00.900Z"
+    assert lib.wbs_run_started_at({"run_id": run_id}) == "2026-08-11T05:00:00.900Z"
 
     task = _task(tmp_path)
-    first = lib.read_task_control(task)["run_id"]
-    rotated = dict(lib.read_task_control(task))
+    first = lib.read_wbs_control(task)["run_id"]
+    rotated = dict(lib.read_wbs_control(task))
     rotated["run_id"] = lib.new_uuid7()
-    (task / lib.TASK_CONTROL_NAME).write_text(
+    (task / lib.WBS_CONTROL_NAME).write_text(
         json.dumps(rotated, indent=2, sort_keys=True) + "\n", encoding="utf-8",
     )
     assert rotated["run_id"] != first
     assert lib.uuid7_timestamp_ms(rotated["run_id"]) >= lib.uuid7_timestamp_ms(first)
 
-def test_task_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp_path):
+def test_wbs_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp_path):
     default_task = _task(tmp_path / "default")
     assert lib.required_review_lenses(default_task) == ["review-code"]
     assert lib._required_qa_lenses(default_task) == ["qa-cli"]
@@ -122,7 +122,7 @@ def test_task_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp
     assert lib._required_qa_lenses(explicit_task) == ["qa-api", "qa-browser"]
 
     malformed_task = _task(tmp_path / "malformed")
-    (malformed_task / "TASK.json").write_text("not json", encoding="utf-8")
+    (malformed_task / "WBS.control.json").write_text("not json", encoding="utf-8")
     assert lib.required_review_lenses(malformed_task) == []
     assert lib._required_qa_lenses(malformed_task) == []
 
@@ -138,7 +138,7 @@ def test_control_writer_rejects_forged_first_module_and_rebinding():
     )
     module.__dict__["bind"] = lib._bind_control_writer
     forged = compile(
-        "def handle_task_start(args):\n  return None\nbind(handle_task_start)\n",
+        "def handle_wbs_open(args):\n  return None\nbind(handle_wbs_open)\n",
         str(expected),
         "exec",
     )
@@ -149,7 +149,7 @@ def test_control_writer_rejects_forged_first_module_and_rebinding():
     server = sys.modules.get("harness_server")
     if server is not None:
         with pytest.raises(PermissionError, match="canonical module import"):
-            lib._bind_control_writer(server.handle_task_start)
+            lib._bind_control_writer(server.handle_wbs_open)
 
 def test_control_writer_accepts_canonical_script_entrypoints():
     for script in (
@@ -161,23 +161,23 @@ def test_control_writer_accepts_canonical_script_entrypoints():
         )
         assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
 
-def test_task_control_and_active_marker_mutators_require_runtime_owner(tmp_path):
+def test_wbs_control_and_active_marker_mutators_require_runtime_owner(tmp_path):
     task = _task(tmp_path)
-    control = lib.read_task_control(task)
+    control = lib.read_wbs_control(task)
     for operation in (
-        lambda: lib.begin_task_run(task),
-        lambda: lib.publish_task_close(task, control),
+        lambda: lib.begin_wbs_run(task),
+        lambda: lib.publish_wbs_close(task, control),
         lambda: lib.write_active_marker(str(tmp_path), str(task), session_id="foreign"),
         lambda: lib.clear_active_marker(str(tmp_path), str(task), session_id="foreign"),
     ):
         try:
             operation()
         except PermissionError as exc:
-            assert "task-control" in str(exc)
+            assert "WBS-control" in str(exc)
         else:
             raise AssertionError("arbitrary control-authority mutation was accepted")
 
-def test_nested_git_never_inherits_ancestor_installation_from_task_binding(tmp_path, monkeypatch):
+def test_nested_git_never_inherits_ancestor_installation_from_wbs_binding(tmp_path, monkeypatch):
     root = tmp_path / "workspace"
     manifest = root / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -189,13 +189,13 @@ def test_nested_git_never_inherits_ancestor_installation_from_task_binding(tmp_p
     monkeypatch.setattr(lib, "_LAST_HOOK_INPUT", {})
     monkeypatch.setenv("HARNESS_SESSION_ID", "nested-root-fixture")
     sid = lib.current_session_id()
-    sessions = root / lib.TASK_DIR / lib.ACTIVE_SESSIONS_DIRNAME
+    sessions = root / lib.WBS_DIR / lib.ACTIVE_SESSIONS_DIRNAME
     sessions.mkdir(parents=True, exist_ok=True)
     (sessions / f"{sid}.json").write_text(json.dumps({
-        "session_id": sid, "task_dir": str(task), "task_id": task.name,
-        "run_id": lib.read_task_control(task)["run_id"], "updated": lib.now_iso(),
+        "session_id": sid, "wbs_dir": str(task), "wbs_id": task.name,
+        "run_id": lib.read_wbs_control(task)["run_id"], "updated": lib.now_iso(),
     }) + "\n", encoding="utf-8")
-    (root / lib.TASK_DIR / ".active").write_text(str(task) + "\n", encoding="utf-8")
+    (root / lib.WBS_DIR / ".active").write_text(str(task) + "\n", encoding="utf-8")
 
     assert lib.harness_root_resolution(nested) == ("", "")
     assert lib.find_harness_root(nested) == ""
@@ -212,21 +212,21 @@ def test_nested_git_never_inherits_ancestor_installation_from_task_binding(tmp_p
     Path(lib._session_active_path(str(root))).unlink()
     assert lib.harness_root_resolution(nested) == ("", "")
 
-def test_task_directory_transaction_is_nested_serialized_and_control_is_mcp_owned(tmp_path):
+def test_wbs_directory_transaction_is_nested_serialized_and_control_is_mcp_owned(tmp_path):
     task = _task(tmp_path / "serialized")
     first_entered = threading.Event()
     release_first = threading.Event()
     second_entered = threading.Event()
 
     def first_worker():
-        with lib.task_control_transaction(task):
-            with lib.task_control_transaction(task):
+        with lib.wbs_control_transaction(task):
+            with lib.wbs_control_transaction(task):
                 first_entered.set()
                 assert release_first.wait(5)
 
     def second_worker():
         assert first_entered.wait(5)
-        with lib.task_control_transaction(task):
+        with lib.wbs_control_transaction(task):
             second_entered.set()
 
     first = threading.Thread(target=first_worker)
@@ -241,9 +241,9 @@ def test_task_directory_transaction_is_nested_serialized_and_control_is_mcp_owne
     assert second_entered.is_set()
 
     original = _task(tmp_path / "replacement")
-    displaced = original.with_name("TASK__displaced")
+    displaced = original.with_name("WBS__displaced")
     try:
-        with lib.task_control_transaction(original):
+        with lib.wbs_control_transaction(original):
             original.rename(displaced)
             original.mkdir()
     except RuntimeError as exc:
@@ -252,37 +252,37 @@ def test_task_directory_transaction_is_nested_serialized_and_control_is_mcp_owne
         raise AssertionError("task-directory replacement must fail closed")
 
     publication = _task(tmp_path / "publication")
-    original_control = lib.read_task_control(publication)
-    displaced = publication.with_name("TASK__publication-displaced")
+    original_control = lib.read_wbs_control(publication)
+    displaced = publication.with_name("WBS__publication-displaced")
     updated = dict(original_control)
     updated["required_lenses"] = ["review-code", "review-security", "qa-cli"]
     try:
-        lib.write_task_control(publication, updated)
+        lib.write_wbs_control(publication, updated)
     except PermissionError as exc:
-        assert "task-control MCP" in str(exc)
+        assert "WBS-control MCP" in str(exc)
     else:
-        raise AssertionError("arbitrary TASK.json mutation was accepted")
-    assert lib.read_task_control(publication) == original_control
+        raise AssertionError("arbitrary WBS.control.json mutation was accepted")
+    assert lib.read_wbs_control(publication) == original_control
 
 def test_task_publication_rejects_replaced_ancestor_chain(tmp_path):
-    for ancestor_name in ("doc", "harness", "tasks"):
+    for ancestor_name in ("doc", "harness", "wbs"):
         root = tmp_path / ancestor_name
         task = _task(root)
-        original = lib.read_task_control(task)
+        original = lib.read_wbs_control(task)
         updated = dict(original)
         updated["required_lenses"] = ["review-code", "review-security", "qa-cli"]
         ancestors = {
             "doc": root / "doc",
             "harness": root / "doc/harness",
-            "tasks": root / "doc/harness/tasks",
+            "tasks": root / "doc/harness/wbs",
         }
         try:
-            lib.write_task_control(task, updated)
+            lib.write_wbs_control(task, updated)
         except PermissionError as exc:
-            assert "task-control MCP" in str(exc)
+            assert "WBS-control MCP" in str(exc)
         else:
             raise AssertionError(f"arbitrary mutation through {ancestor_name} was accepted")
-        assert lib.read_task_control(task) == original
+        assert lib.read_wbs_control(task) == original
 
 def test_symlinked_manifest_remains_untrusted(tmp_path):
     root = tmp_path / "workspace"
@@ -301,10 +301,10 @@ def test_symlinked_manifest_remains_untrusted(tmp_path):
 
 
 def _exact_marker(repo, task, sid, **overrides):
-    sessions = repo / lib.TASK_DIR / lib.ACTIVE_SESSIONS_DIRNAME
+    sessions = repo / lib.WBS_DIR / lib.ACTIVE_SESSIONS_DIRNAME
     sessions.mkdir(parents=True, exist_ok=True)
-    value = {"session_id": sid, "task_dir": str(task), "task_id": task.name,
-             "run_id": lib.read_task_control(task)["run_id"]}
+    value = {"session_id": sid, "wbs_dir": str(task), "wbs_id": task.name,
+             "run_id": lib.read_wbs_control(task)["run_id"]}
     value.update(overrides)
     marker = sessions / (sid + ".json")
     marker.write_text(json.dumps(value), encoding="utf-8")
@@ -314,29 +314,29 @@ def _exact_marker(repo, task, sid, **overrides):
 def test_exact_active_resolution_never_borrows_legacy_or_another_session(tmp_path):
     task = _task(tmp_path)
     _exact_marker(tmp_path, task, "owned")
-    legacy = tmp_path / lib.TASK_DIR / ".active"
+    legacy = tmp_path / lib.WBS_DIR / ".active"
     legacy.write_text(str(task), encoding="utf-8")
-    assert lib.resolve_active_task_dir(str(tmp_path), session_id="owned") == str(task)
+    assert lib.resolve_active_wbs_dir(str(tmp_path), session_id="owned") == str(task)
     for sid in ("", "default", "foreign", "owned/alias"):
-        assert lib.resolve_active_task_dir(str(tmp_path), session_id=sid) == ""
+        assert lib.resolve_active_wbs_dir(str(tmp_path), session_id=sid) == ""
     assert legacy.read_text(encoding="utf-8") == str(task)
 
 
 def test_exact_active_resolution_and_iteration_reject_stale_runs_and_fences(tmp_path):
     task = _task(tmp_path)
     marker = _exact_marker(tmp_path, task, "owned")
-    assert lib.active_task_binding_matches(str(tmp_path), str(task), session_id="owned")
-    assert list(lib.iter_active_task_dirs(str(tmp_path))) == [str(task)]
+    assert lib.active_wbs_binding_matches(str(tmp_path), str(task), session_id="owned")
+    assert list(lib.iter_active_wbs_dirs(str(tmp_path))) == [str(task)]
     for overrides in ({"run_id": lib.new_uuid7()}, {"conflicts": []}, {"conflicts_overflow": True}):
         _exact_marker(tmp_path, task, "owned", **overrides)
-        assert lib.resolve_active_task_dir(str(tmp_path), session_id="owned") == ""
-        assert not lib.active_task_binding_matches(str(tmp_path), str(task), session_id="owned")
-        assert list(lib.iter_active_task_dirs(str(tmp_path))) == []
+        assert lib.resolve_active_wbs_dir(str(tmp_path), session_id="owned") == ""
+        assert not lib.active_wbs_binding_matches(str(tmp_path), str(task), session_id="owned")
+        assert list(lib.iter_active_wbs_dirs(str(tmp_path))) == []
     _exact_marker(tmp_path, task, "owned")
-    control = lib.read_task_control(task)
-    (task / "TASK.json").write_text(json.dumps(dict(control, closed=True)), encoding="utf-8")
-    assert lib.resolve_active_task_dir(str(tmp_path), session_id="owned") == ""
-    assert list(lib.iter_active_task_dirs(str(tmp_path))) == []
+    control = lib.read_wbs_control(task)
+    (task / "WBS.control.json").write_text(json.dumps(dict(control, closed=True)), encoding="utf-8")
+    assert lib.resolve_active_wbs_dir(str(tmp_path), session_id="owned") == ""
+    assert list(lib.iter_active_wbs_dirs(str(tmp_path))) == []
 
 
 def test_missing_session_has_no_default_identity_or_marker_snapshot(tmp_path, monkeypatch):
@@ -345,7 +345,7 @@ def test_missing_session_has_no_default_identity_or_marker_snapshot(tmp_path, mo
     monkeypatch.setattr(lib, "_LAST_HOOK_INPUT", {})
     assert lib.current_session_id() == ""
     assert lib.active_marker_snapshot(str(tmp_path)) == {}
-    assert not (tmp_path / lib.TASK_DIR).exists()
+    assert not (tmp_path / lib.WBS_DIR).exists()
     monkeypatch.setattr(lib, "_LAST_HOOK_INPUT", {"session_id": "bad/session"})
     assert lib.current_session_id() == ""
 
@@ -353,6 +353,6 @@ def test_missing_session_has_no_default_identity_or_marker_snapshot(tmp_path, mo
 def test_active_snapshot_contains_only_the_exact_session(tmp_path):
     task = _task(tmp_path)
     marker = _exact_marker(tmp_path, task, "owned")
-    legacy = tmp_path / lib.TASK_DIR / ".active"
+    legacy = tmp_path / lib.WBS_DIR / ".active"
     legacy.write_text(str(task), encoding="utf-8")
     assert set(lib.active_marker_snapshot(str(tmp_path), session_id="owned")) == {str(marker)}

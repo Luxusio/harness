@@ -7,7 +7,7 @@ invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/hooks/hooks.json
 tier: 2
-freshness_updated: 2026-10-19T06:06:14Z
+freshness_updated: 2026-10-30T00:00:00Z
 ---
 
 # prewrite_gate
@@ -54,27 +54,34 @@ call.
 
 ## Rules (in order)
 
-| # | Rule id | When | Result (`owner=`) |
-|---|---------|------|-------------------|
-| 0 | — | Empty payload, or not a JSON object | silent allow |
-| 1 | (escape) | `HARNESS_SKIP_PREWRITE=1` | silent allow, logs `gate-bypass` |
-| 2 | `C-05-protected-artifact` | Target is native Codex session metadata (`<codex home>/sessions/**/rollout-*.jsonl`) used for source authentication, including aliases and non-Harness cwd | deny (`native-session-runtime`) |
-| 3 | `invalid-harness-workspace` | The payload `cwd`'s Harness root cannot be resolved (manifest or a path component is a symlink, not a regular file, unreadable) | deny (`harness:setup`) |
-| 4 | — | No regular `doc/harness/manifest.yaml` at the root | silent allow |
-| 5 | `symlink-outside-control` | The requested path is inside the root but its realpath is outside | deny (`developer`) |
-| 6 | `C-05-protected-artifact` | Target outside the root that is a protected artifact of *its own* valid Harness root (see [Cross-checkout protection](#cross-checkout-protection)); any other out-of-root target is a silent allow | deny (same owner as rule 7) |
-| 7 | `C-05-protected-artifact` | Target is a protected artifact (see [Protected artifacts](#protected-artifacts)) | deny (owning tool) |
-| 8 | — | Any other path under `doc/harness/tasks/` | silent allow |
-| 9 | — | Path under `EXEMPT_PREFIXES` | silent allow |
-| 10 | `workflow-control-surface` | `WORKFLOW_CONTROL_SURFACE` file and the active task has no `MAINTENANCE` marker; with the marker it is an immediate allow | deny (`maintain-skill`) |
-| 11 | — | Extension not in `SOURCE_EXTENSIONS` | silent allow |
-| 12 | `no-active-task` | No active task, and the manifest sets top-level `strict_compliance_requires_delegation: true` or some task is open or invalid; otherwise silent allow | deny (`plan-skill`) |
-| 13 | `invalid-active` | The active task path is missing, not a directory, or outside `doc/harness/tasks/` | deny (`plan-skill`) |
-| 14 | `C-02-plan-first` | Active task has no PLAN.md, no `MAINTENANCE` marker, and is not `execution_mode: micro` | deny (`plan-skill`) |
-| 15 | `C-REQ-observable-doc-required` | The path looks like observable UI/API/native/desktop behavior and the task links no `doc/<area>/REQ__*.md` | deny (`developer`) |
-| 16 | `scope-lock-forbidden` | Path matches `forbidden_paths` in the active task's `PROGRESS.md` | deny (`developer`) |
+The source of truth is `_check_path` in `plugin/scripts/prewrite_gate.py`.
+The gate uses `doc/harness/wbs/WBS__<id>` and `WBS.control.json`; only an
+exact-session, current-open-run binding without a conflict fence grants write
+focus. Legacy `.active` files and shared hints grant no authority.
 
-A write that hits no deny rule is a silent allow (silence is the trust signal).
+| Order | Check | Result |
+|-------|-------|--------|
+| 1 | Empty/non-object payload, or `HARNESS_SKIP_PREWRITE=1` | allow; the bypass logs `gate-bypass` |
+| 2 | Native Codex session metadata, including aliases and non-Harness cwd | C-05 deny (`native-session-runtime`) |
+| 3 | Invalid Harness workspace; otherwise no enabled Harness root | invalid workspace denies; non-Harness allows |
+| 4 | Registered same-repository worktree target | route to its own root and full gates; the cwd root's symlink escape deny takes precedence |
+| 5 | Target resolves outside the selected root | deny a symlink escape; otherwise apply foreign-checkout C-05 protection, then return |
+| 6 | Incomplete explicit WBS namespace migration | `wbs-migration-required` deny |
+| 7 | Protected artifact, including the entire retired `doc/harness/tasks/` tree | C-05 deny (owning tool) |
+| 8 | Other files inside the canonical WBS root, or `EXEMPT_PREFIXES` | allow |
+| 9 | Workflow-control surface | require a bound WBS with `MAINTENANCE` and `require_source_assignment`; then return |
+| 10 | Non-source extension | allow |
+| 11 | No exact current WBS binding | `no-active-wbs` deny when strict compliance is enabled or an open/invalid WBS exists; otherwise allow |
+| 12 | Invalid bound WBS path | `invalid-active` deny |
+| 13 | Missing PLAN.md | C-02 deny unless the WBS has `MAINTENANCE` or `execution_mode: micro` |
+| 14 | WBS integration custody | `require_integrated_for_wbs(..., measure=False)` failure denies (`wbs-work-pack`) |
+| 15 | Observable UI/API/native/desktop behavior without a linked REQ | `C-REQ-observable-doc-required` deny |
+| 16 | PROGRESS.md `forbidden_paths` match | `scope-lock-forbidden` deny |
+| 17 | Current WBS execution assignment | `require_source_assignment` failure denies (`wbs-execution-assignment`) |
+
+A write that hits no deny rule is a silent allow. These direct-write checks do
+not replace independent review PASS before actual QA, current WBS checks at
+`wbs(action="verify")`/`wbs(action="close")`, or verified installation.
 
 ## Deny-reason structure
 
@@ -101,97 +108,65 @@ tool to route through (for example `wbs(action="plan")` for `PLAN.md`).
 
 | Target | Match | `owner=` |
 |--------|-------|----------|
-| `TASK.json` | basename, anywhere in the root | `task-control-mcp` |
+| `WBS.control.json`, `WBS.json` | basename, anywhere in the root | `WBS-control-mcp` |
 | `PLAN.md` | basename | `plan-skill` |
-| `RECEIPTS.jsonl` | preserved historical output, basename | `historical-task-artifacts` |
-| `REVIEWS.jsonl` | preserved historical output, only `doc/harness/tasks/TASK__*/REVIEWS.jsonl` | `historical-task-artifacts` |
-| `doc/harness/goals/*.json` | retired direct children | `legacy-data-migration` |
-| `doc/harness/runtime/batches/**` | pool metadata, immutable WBS owner and lock | `batch-pool-runtime` |
-| `doc/harness/archive/goal-migration/**` | entire archive, originals and manifest | `legacy-data-migration` |
-| `doc/harness/archive/task-control-migration/**` | entire migration authority tree | `legacy-data-migration` |
-| `doc/harness/tasks/.active`, `doc/harness/tasks/.active_sessions/*` | path | `task-control-runtime` |
-| native Codex session metadata | rule 2, source authentication only | `native-session-runtime` |
+| `TASK.json` | retired control basename | `legacy-data-migration` |
+| `RECEIPTS.jsonl` | preserved historical output, basename | `historical-wbs-artifacts` |
+| `REVIEWS.jsonl` | only canonical `doc/harness/wbs/WBS__*/REVIEWS.jsonl` outside retired trees | `historical-wbs-artifacts` |
+| `doc/harness/tasks/**`, retired batch `archive/batch/TASK__*` trees | entire retired trees | `legacy-data-migration` |
+| `doc/harness/goals` and its direct `*.json` children | retired control | `legacy-data-migration` |
+| `doc/harness/archive/{goal-migration,task-control-migration,goal-wbs-migration,wbs-control-migration,wbs-namespace-migration}/**` | entire migration authority trees | `legacy-data-migration` |
+| `doc/harness/runtime/batches/**` | entire batch control tree | `batch-pool-runtime` |
+| `doc/harness/wbs/.active`, `.active_sessions/*` | runtime markers, not ordinary authoring surfaces | `WBS-control-runtime` |
+| `work/verification-targets/**` | immutable verification targets | `WBS-control-runtime` |
+| native Codex session metadata | source authentication only | `native-session-runtime` |
+
+Migration-owned trees route through explicit `wbs(action="migrate")`; current
+review findings stay in actual independent agent responses. Preserved historical
+receipt/review files have no collector or replacement writer.
 
 ## Cross-checkout protection
 
-A Claude `harness:batch` lead runs with its cwd in a linked worktree
-(`<main>/.claude/worktrees/<name>`). The gate's control root is then the
-worktree, so the main checkout and sibling worktrees lie outside it. Without
-this rule, writes to those checkouts' protected artifacts were allowed. The same
-applies to a main-checkout session writing into an out-of-tree worktree.
+A registered same-repository worktree target receives full checks using its own
+Harness root, exact session binding, plan, integration custody and execution
+assignment. Registration validation includes the canonical gitfile, back-pointer
+and Harness manifest. Lexical traversal preserves the owning checkout boundary.
 
-Before ordinary target rules, the gate walks the target's lexical parents and
-validates a same-repository registered worktree using its canonical gitfile,
-back-pointer and Harness manifest. For a validated target it uses that
-checkout's root for C-05, plan-first, workflow-control, REQ and scope-lock
-checks, including when Codex's native cwd remains main. This also protects
-in-tree worktree task-local REVIEWS.jsonl. The original cwd root's symlink
-escape denial takes precedence; lexical traversal retains the owning worktree
-boundary when a symlink inside it points elsewhere.
+For other out-of-root targets, `_foreign_protected_target` checks physical then
+requested paths. Protected shapes resolve their own Harness root from an existing
+ancestor using filesystem checks; a valid foreign root receives C-05 denial with
+its owner and checkout path. Ordinary foreign source files receive no source
+checks in this fallback. Resolution exceptions log `gate-error` and allow that
+path; subsequent paths in the same tool call are still checked.
 
-For targets not routed to a validated same-repository worktree, the gate
-handles a target outside the cwd's Harness root as follows:
-
-1. It skips targets whose name cannot be a protected artifact: the basename is
-   not a `PROTECTED_ARTIFACTS` key, the path is not goal JSON, and it is not
-   `.active` or under `.active_sessions/`.
-2. For the remaining targets it resolves the target's own root with
-   `harness_root_resolution(dirname(target))`. That call does file checks only
-   and runs no Git subprocess. It tries the realpath first, then the requested
-   path.
-3. If that root is valid (a regular manifest and no resolution error) and the
-   target is one of its protected artifacts (`TASK.json`, `PLAN.md`,
-   `RECEIPTS.jsonl`, task-local `REVIEWS.jsonl`, `doc/harness/goals/*.json`,
-   `doc/harness/tasks/.active`, `doc/harness/tasks/.active_sessions/*`), the
-   gate denies the write:
-   - rule id: `C-05-protected-artifact`;
-   - owner and sentence: the same as an in-root deny;
-   - extra sentence: `The target belongs to another Harness checkout: <root>.`;
-   - tail `path=`: relative to that other root.
-
-Only C-05 applies in this foreign-checkout fallback. Ordinary source files
-outside the selected root are allowed by that fallback. Validated registered
-worktree targets instead receive the full rules above using their own task.
-
-Behavior that does not change:
-- A cwd outside any Harness root keeps its early return.
-- A target outside every Harness root is still a silent allow.
-- An exception in this branch is logged to the cwd's root through
-  `_log_gate_error`, and the write is allowed (C-12). It never ends the loop
-  over the remaining paths of the same tool call.
-
-Known limits:
-- A directory symlink inside a foreign root that points out of every Harness
-  root is allowed.
-- A foreign root with an invalid manifest is not treated as a valid root, so
-  writes into it are allowed.
-- When a checkout's own `.claude` (or `.claude/worktrees`) is a symlink that
-  leaves the repository — a layout manifest v7's ignore migration accepts — a
-  write addressed *through the main checkout's path* into a linked worktree
-  under it (`<main>/.claude/worktrees/<name>/...`) resolves outside the main
-  control root and is denied by `symlink-outside-control`, even for an
-  ordinary source file, before the cross-checkout branch runs. A session
-  working in such a worktree writes under its own root and is unaffected;
-  otherwise use the worktree's real path. For `harness:batch`, preflight
-  accepts external targets as `outside-repo`; an internal target is checked
-  for ignore coverage at the path Git sees. This does not bypass the direct
-  write gate above. See `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`.
+The cwd root's symlink escape denial takes precedence over worktree routing.
+A target outside every Harness root, an invalid foreign manifest, or a foreign
+symlink resolving outside every Harness root is not protected by this fallback.
+A cwd outside Harness returns early, except for native session metadata.
+When `.claude/worktrees` is a symlink leaving the cwd root, address the worktree
+by its real path or work from its own root; the main checkout's symlink path can
+trigger `symlink-outside-control` even for ordinary source. Separately,
+`harness:batch` preflight accepts external targets as `outside-repo` and checks
+ignore coverage at the path Git sees for internal targets, using
+`batch_preflight.worktrees_ignore` and `setup_finalize._git_visible_path`.
+That ignore preflight does not bypass the direct-write gate's symlink denial.
+See `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`.
 
 ## Workflow-control-surface
 
-Files that define harness runtime behaviour. Writes require a task with a
+Files that define harness runtime behaviour. Writes require a bound WBS with a
 `MAINTENANCE` marker. The set currently includes `plugin/CLAUDE.md`,
 `plugin/hooks/hooks.json`, `plugin/scripts/{prewrite_gate,_lib}.py`,
 `plugin/mcp/harness_server.py`, `doc/harness/manifest.yaml`.
 
-Touch `doc/harness/tasks/<task>/MAINTENANCE` to enable writes, and record the
-reason in close-time Self-Healing Candidates. The prewrite gate itself does not
-create this marker. With the marker the gate allows the write at once, so the
-later plan-first, REQ and scope-lock rules do not apply to these files.
+Create `doc/harness/wbs/<wbs>/MAINTENANCE` to enable writes, and record the
+reason in the WBS plan or final summary. The prewrite gate itself does not
+create this marker. With the marker, the gate still checks current execution
+assignment before returning; later plan-first, REQ and scope-lock rules do not apply to these files.
 
 ## Scope lock
 
-If `PROGRESS.md` exists in the active task's directory, a source-extension write
+If `PROGRESS.md` exists in the bound WBS directory, a source-extension write
 that matches `forbidden_paths` is denied with rule `scope-lock-forbidden`.
 `allowed_paths` and `test_paths` do not change the decision, and an unlisted
 path is a silent allow. Details: [`scope-lock.md`](./scope-lock.md).
@@ -201,7 +176,7 @@ path is a silent allow. Details: [`scope-lock.md`](./scope-lock.md).
 | Env var | Effect | Audit |
 |---------|--------|-------|
 | `HARNESS_SKIP_PREWRITE=1` | Skips every rule, C-05 included | a `gate-bypass` row in `doc/harness/learnings.jsonl` per bypassed call |
-| `HARNESS_DISABLE_SCOPE_LOCK=1` | Skips only the scope lock | overwrites `<task>/audit/scope-lock-bypass.flag`; the next evaluation without the variable deletes it |
+| `HARNESS_DISABLE_SCOPE_LOCK=1` | Skips only the scope lock | overwrites `<wbs>/audit/scope-lock-bypass.flag`; the next evaluation without the variable deletes it |
 
 The gate reads both variables on every call and never clears them. Each one
 applies to every write while set in the runtime's environment, meaning the
@@ -209,7 +184,7 @@ environment the runtime gives its hook processes. The Codex wrapper's
 protected-artifact fallback honors `HARNESS_SKIP_PREWRITE` the same way.
 
 Recurring `gate-bypass` rows against the same path are a signal to fix the
-task's scope or run the work under a maintenance task instead.
+WBS scope or run the work under an authorized maintenance WBS instead.
 
 ## Timeouts and killed hooks
 
@@ -219,7 +194,7 @@ the tool.
 | Runtime | Budget | When the budget runs out |
 |---------|--------|--------------------------|
 | Claude | `plugin/hooks/hooks.json` PreToolUse timeout: 10 s, the C-12 maximum | Claude Code kills the hook and runs the tool. **The write proceeds, protected artifacts included.** Nothing on the hook side can make a killed Claude hook deny. |
-| Codex | Outer hook timeout 5 s (set by `install.py`; it is part of the Codex hook trust hash). `hook_pre_tool_use.py` gives the gate child `CHILD_TIMEOUT_SECONDS` = 3.0 s | When the child times out, exits nonzero with empty stdout, or cannot start, the wrapper calls `prewrite_gate.protected_artifact_decision` in-process. That runs only the C-05 rules (4, 6 and 7 above) and the rule-1 escape, and denies protected targets, also under a manifest that fails rule 2. Every other write is allowed (C-12). If the fallback raises, or Codex kills the wrapper at 5 s, the write proceeds. |
+| Codex | Outer hook timeout 5 s (set by `install.py`; it is part of the Codex hook trust hash). `hook_pre_tool_use.py` gives the gate child `CHILD_TIMEOUT_SECONDS` = 3.0 s | When the child times out, exits nonzero with empty stdout, or cannot start, the wrapper calls `prewrite_gate.protected_artifact_decision` in-process. That runs only C-05 protection and the global bypass, and denies protected targets even under an invalid manifest. Every other write is allowed (C-12). If the fallback raises, or Codex kills the wrapper at 5 s, the write proceeds. |
 
 The 2.0 s between the Codex child budget and the outer timeout is reserved for
 wrapper startup, child termination and fallback; it does not guarantee they

@@ -1,9 +1,9 @@
-"""task_blocked stays as the park record; docs no longer describe a live stop gate.
+"""wbs_blocked stays as the park record; docs no longer describe a live stop gate.
 
-User decision 2026-09-25 (TASK__remove-blocked-env-pause-path, re-scoped):
-the 2026-09-02 plan to delete task_blocked / BLOCKED.md was withdrawn after the
+User decision 2026-09-25 (WBS__remove-blocked-env-pause-path, re-scoped):
+the 2026-09-02 plan to delete wbs_blocked / BLOCKED.md was withdrawn after the
 Claude Stop hook was intentionally removed on 2026-09-23. With no turn-end gate
-left, task_blocked only records an unfinished task. See
+left, wbs_blocked only records an unfinished task. See
 doc/harness/REQ__task-blocked-is-the-park-record.md.
 """
 from __future__ import annotations
@@ -43,8 +43,8 @@ def test_parking_remains_available_through_the_sole_wbs_tool():
     from test_harness_mcp_server import harness_server
     assert set(harness_server.TOOLS) == {"wbs"}
     assert "block" in harness_server.TOOLS["wbs"]["inputSchema"]["properties"]["action"]["enum"]
-    assert harness_server._EXECUTION["task_blocked"] is harness_server.handle_task_blocked
-    assert harness_server.call_tool("task_blocked", {}).get("isError")
+    assert harness_server._EXECUTION["wbs_blocked"] is harness_server.handle_wbs_blocked
+    assert harness_server.call_tool("wbs_blocked", {}).get("isError")
 
 
 def test_runtime_doc_names_park_as_not_completion():

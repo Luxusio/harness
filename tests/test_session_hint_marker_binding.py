@@ -1,4 +1,4 @@
-"""Regression tests for exact session hints and active task markers."""
+"""Regression tests for exact session hints and active WBS markers."""
 from __future__ import annotations
 
 def call_execution(*args, **kwargs):
@@ -77,40 +77,40 @@ class TaskStartMarkerBindingTests(unittest.TestCase):
             return call_execution(harness_server, name, args)
 
     def _marker_names(self, repo_root):
-        sessions = Path(repo_root) / "doc/harness/tasks/.active_sessions"
+        sessions = Path(repo_root) / "doc/harness/wbs/.active_sessions"
         return sorted(p.name for p in sessions.glob("*.json")) if sessions.is_dir() else []
 
     def test_shared_hint_never_supplies_server_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             harness_lib.write_session_hint(tmp, REAL_SID)
-            result = self._call(tmp, "task_start", {"task_id": "TASK__hinted"})
+            result = self._call(tmp, "wbs_open", {"wbs_id": "WBS__hinted"})
             self.assertNotIn("isError", result)
             self.assertEqual(self._marker_names(tmp), [])
-            self.assertEqual(harness_lib.resolve_session_task_binding(tmp, REAL_SID), {})
-            self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
+            self.assertEqual(harness_lib.resolve_session_wbs_binding(tmp, REAL_SID), {})
+            self.assertFalse((Path(tmp) / "doc/harness/wbs/.active").exists())
 
     def test_process_identity_binds_only_its_current_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             harness_lib.write_session_hint(tmp, "foreign-session")
-            result = self._call(tmp, "task_start", {"task_id": "TASK__exact"}, REAL_SID)
+            result = self._call(tmp, "wbs_open", {"wbs_id": "WBS__exact"}, REAL_SID)
             self.assertNotIn("isError", result)
             self.assertEqual(self._marker_names(tmp), [REAL_SID + ".json"])
-            task_dir = str(Path(tmp) / "doc/harness/tasks/TASK__exact")
-            bound = harness_lib.resolve_session_task_binding(tmp, REAL_SID)
-            self.assertEqual(bound["task_dir"], task_dir)
-            self.assertEqual(bound["run_id"], harness_lib.read_task_control(task_dir)["run_id"])
-            self.assertEqual(harness_lib.resolve_session_task_binding(tmp, "foreign-session"), {})
-            self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
+            wbs_dir = str(Path(tmp) / "doc/harness/wbs/WBS__exact")
+            bound = harness_lib.resolve_session_wbs_binding(tmp, REAL_SID)
+            self.assertEqual(bound["wbs_dir"], wbs_dir)
+            self.assertEqual(bound["run_id"], harness_lib.read_wbs_control(wbs_dir)["run_id"])
+            self.assertEqual(harness_lib.resolve_session_wbs_binding(tmp, "foreign-session"), {})
+            self.assertFalse((Path(tmp) / "doc/harness/wbs/.active").exists())
 
     def test_no_identity_defers_without_default_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            result = self._call(tmp, "task_start", {"task_id": "TASK__deferred"})
+            result = self._call(tmp, "wbs_open", {"wbs_id": "WBS__deferred"})
             self.assertNotIn("isError", result)
             self.assertEqual(self._marker_names(tmp), [])
-            self.assertEqual(harness_lib.resolve_session_task_binding(tmp, "default"), {})
+            self.assertEqual(harness_lib.resolve_session_wbs_binding(tmp, "default"), {})
 
 
 if __name__ == "__main__":

@@ -1,17 +1,17 @@
 ---
 name: plan
-description: Harness planning pipeline with a compact low-risk branch and a full reviewed branch. Both publish canonical PLAN.md and task lens declarations via MCP.
+description: Harness planning pipeline with a compact low-risk branch and a full reviewed branch. Both publish canonical PLAN.md and WBS lens declarations via MCP.
 user-invocable: false
 ---
 
 Codex planning pipeline with compact and full procedures. Conservatively eligible low-risk work uses a bounded assessment; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish through the protected-artifact MCP.
 
 > Current artifact model: acceptance criteria live in `PLAN.md`; `wbs(action="plan")`
-> publishes it with required lens declarations in `TASK.json`.
+> publishes it with required lens declarations in `WBS.control.json`.
 
 > **Codex runtime notes** (delta from Claude):
 > - **One independent reviewer, capability-mapped.** Discover deferred tools before deciding. When `spawn_agent` is available, run exactly one independent reviewer subagent per phase. Use one inline critical-reviewer pass only when no independent route exists, and record that phase as `coordinator-only` in PLAN.md's Review Status section.
-> - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
+> - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", wbs_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Both procedures collect unresolved material premises and User Challenges into one Phase 5.3 interaction. Phase 5.4.1 runs only for explicit pre-code approval; a later new delta returns to the specific Phase 5.3 format.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `wbs(action="plan")`.
 > - **One MCP tool:** bare `wbs`; use open/context/plan actions. Claude uses the runtime-qualified name of this same tool.
@@ -22,10 +22,10 @@ This skill is split across four sub-files, copied from the Claude tree into the 
 
 | File | Content |
 |------|---------|
-| `intake.md` | Phase 0 (spawned detection, recovery, task context, scope detection, planning-procedure branch) |
+| `intake.md` | Phase 0 (spawned detection, recovery, WBS context, scope detection, planning-procedure branch) |
 | `review-phases.md` | Phase 1 (merged CEO+Eng review template, dimensions, checklists, findings table) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, ask format |
-| `write-artifacts.md` | Phase 6 (PLAN.md / TASK.json lens declarations + MCP writes, learnings, close) |
+| `write-artifacts.md` | Phase 6 (PLAN.md / WBS.control.json lens declarations + MCP writes, learnings, close) |
 
 Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/<file>`.
 
@@ -37,7 +37,7 @@ Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${H
 - **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, close, or install verification.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
-- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
+- **Write via MCP only.** PLAN.md and WBS.control.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
 - **Never abort.** Full planning surfaces review failures and never silently shortens. Compact may escalate to full after inspection, but never bypasses its fail-closed assessment.
@@ -101,7 +101,7 @@ These sub-skills are heavy review pipelines on the Claude side. On Codex, route 
 Keep ordinary same-session planning state in working context. Do not create
 PLAN_SESSION.json by default. It may be used when planning is explicitly
 resumable, delegated across contexts, or otherwise needs recovery across a
-turn. It is never task control or artifact authority.
+turn. It is never WBS control or artifact authority.
 
 | State | Phase | Condition |
 |-------|-------|-----------|
@@ -109,7 +109,7 @@ turn. It is never task control or artifact authority.
 | `write_open` | 6 | At Phase 6 start before MCP artifact writes |
 | `closed` | post-6 | Transitional state immediately before scratch removal |
 
-When used, it contains `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after successful `wbs(action="plan")`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/task context; do not bulk-migrate historical tasks.
+When used, it contains `{"state": "...", "phase": "...", "source": "plan-skill"}`. Remove it after successful `wbs(action="plan")`. Ignore stale or malformed legacy scratch and reconstruct from PLAN.md/WBS context; do not bulk-migrate historical WBS roots.
 
 ---
 
@@ -137,7 +137,7 @@ Full protocol, dimensions, checklists, and findings table: `review-phases.md` (C
 
 ## Phase orchestration
 
-1. **Phase 0** — always runs and selects `compact` or `full` planning procedure; TASK.json remains `standard` or `micro` only.
+1. **Phase 0** — always runs and selects `compact` or `full` planning procedure; WBS.control.json remains `standard` or `micro` only.
 2. **Compact branch** — conservatively classified low-risk standard work gets one bounded assessment, unresolved material decisions only, then canonical publication.
 3. **Full branch Phase 1 — Plan Review** — premise extraction and authorization classification are mandatory analysis. One reviewer subagent (when available) merges CEO (premise/scope) and Engineering (architecture/tests/failure) methodology; adds a UI checklist when `ui_scope=true`.
 4. **Phase 5 — Consolidated Decision Gate** — either procedure asks once only when unresolved material decisions remain.
@@ -274,7 +274,7 @@ Emit §5.1 summary, then ask:
 
 ## Planning procedure branches
 
-TASK.json execution_mode remains exactly `standard|micro`; never persist
+WBS.control.json execution_mode remains exactly `standard|micro`; never persist
 `light`. Micro keeps its explicit no-plan contract. Standard planning selects:
 
 | Procedure | Eligibility | Review shape | Mandatory output |
@@ -311,7 +311,7 @@ close fingerprint, Goal continuation, and verified installation boundaries.
   DDD-style area folder such as `doc/ui/REQ__filter-bar.md`,
   `doc/api/REQ__oauth-login.md`, `doc/auth/ADR__token-storage.md`, or
   `doc/common/GUIDE__coding-style.md`. New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive.
-  PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`; `REQ: n/a` is invalid for observable UI/API behavior.
+  PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`; `REQ: n/a` is invalid for observable UI/API behavior.
   A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
   Happy path: when request text, user feedback, target surfaces, or known file
   paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ
@@ -327,8 +327,8 @@ close fingerprint, Goal continuation, and verified installation boundaries.
 - **User gates.** Both procedures ask once for unresolved material decisions. Explicit request and clarification are reusable authorization; review depth does not manufacture premise or final approval rounds.
 - **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.
-- **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.
-- **Intent is preserved in PLAN.** Every PLAN.md includes `Original Request / Intent Summary`. If `REQUEST.md` exists, summarize it and cite it. If it is absent, gitignored, or under 15 non-empty lines, summarize the current user prompt and explicitly label the source as `conversation summary` so future reviewers can evaluate intent without relying on task-local request artifacts.
+- **Artifacts are deliverables.** PLAN.md and valid required lenses in WBS.control.json must exist before Phase 6 closes the session.
+- **Intent is preserved in PLAN.** Every PLAN.md includes `Original Request / Intent Summary`. If `REQUEST.md` exists, summarize it and cite it. If it is absent, gitignored, or under 15 non-empty lines, summarize the current user prompt and explicitly label the source as `conversation summary` so future reviewers can evaluate intent without relying on WBS-local request artifacts.
 - **Sequential order.** Compact: Phase 0 → bounded assessment → 5 (only if challenged) → 6. Full: Phase 0 → 1 → 5 → 6.
 
 ---

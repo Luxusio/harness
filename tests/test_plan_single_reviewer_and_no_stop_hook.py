@@ -1,6 +1,6 @@
 """Plan review runs one independent reviewer; Claude registers no Stop hook.
 
-User request 2026-09-23 (TASK__plan-single-voice-review):
+User request 2026-09-23 (WBS__plan-single-voice-review):
 - Historical full reviews showed the second plan voice almost never changed a
   decision, and Phase 1 Voice B reran the identical prompt on same-model
   transport. Each full review phase now spawns one independent reviewer
@@ -8,7 +8,7 @@ User request 2026-09-23 (TASK__plan-single-voice-review):
   degradation matrix are gone from both runtimes.
 - The Claude Stop hook turned every wait on a background reviewer into repeated
   "Do not stop" turns. Continuation is native /goal; completion is still gated
-  by task_close.
+  by wbs_close.
 """
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ def test_turn_end_contract_no_longer_claims_hook_enforcement():
 def test_continuation_docs_point_at_goal_not_stop_gate():
     auto_loop = _text(REPO / "doc/harness/patterns/auto-loop.md")
     assert "/goal" in auto_loop
-    assert "task_close" in auto_loop
+    assert 'wbs(action="close")' in auto_loop
     readme = _text(REPO / "README.md")
     assert not re.search(r"^\| Stop \| `stop_gate\.py`", readme, re.MULTILINE)
     assert "Stop hook auto-wait" not in readme
@@ -137,7 +137,7 @@ def test_phase_priorities_have_one_source():
 
 
 def test_dormant_turn_end_gate_is_deleted():
-    """TASK__remove-dormant-stop-gate-and-taste-contradiction: nothing registered
+    """WBS__remove-dormant-stop-gate-and-taste-contradiction: nothing registered
     stop_gate.py / hook_stop.py after the Stop hook removal, so they are gone."""
     for rel in ("plugin/scripts/stop_gate.py", "plugin/scripts/hook_stop.py"):
         assert not (REPO / rel).exists(), rel
@@ -156,7 +156,7 @@ def test_taste_decisions_are_recorded_not_surfaced_at_the_gate():
         assert not hits, f"{path.relative_to(REPO)} still surfaces Taste: {hits}"
 
 
-# --- TASK__plan-review-single-reviewer-consolidation (2026-09-24) ---
+# --- WBS__plan-review-single-reviewer-consolidation (2026-09-24) ---
 # Full plan review collapses CEO+Eng+DX into one Phase 1 reviewer; DX/Design
 # phases are retired from the pipeline (their skill files stay installed and
 # directly invocable per PLAN "NOT in scope").

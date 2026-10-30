@@ -24,15 +24,15 @@ from _lib import (
     _live_binding_conflicts, _BindingConflictOverflow,
     _has_binding_conflict_fence, clear_binding_conflict_fence,
     find_harness_root,
-    is_codex_task_binding_tool,
+    is_codex_wbs_binding_tool,
     read_active_session_marker,
-    read_task_control,
-    task_control_transaction,
+    read_wbs_control,
+    wbs_control_transaction,
     _read_regular_text_file,
     uuid7_timestamp_ms,
-    resolve_session_task_binding,
+    resolve_session_wbs_binding,
     resolve_registered_worktree,
-    task_control_status,
+    wbs_control_status,
     write_active_marker,
     write_binding_conflict_fence,
     _bind_control_writer,
@@ -40,7 +40,7 @@ from _lib import (
 
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
-TASK_RE = re.compile(r"^TASK__[A-Za-z0-9_.-]{1,180}$")
+WBS_RE = re.compile(r"^WBS__[A-Za-z0-9_.-]{1,180}$")
 REGISTRATION_BUDGET_SECONDS = 2.0
 AUTHENTICATION_BUDGET_SECONDS = 6.0
 NATIVE_METADATA_MAX_BYTES = 1024 * 1024
@@ -50,8 +50,8 @@ class _RegistrationTimeout(BaseException):
     pass
 
 
-def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out=None, stage="task binding"):
-    """Run in-process task binding inside the remaining hard budget."""
+def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out=None, stage="WBS binding"):
+    """Run in-process WBS binding inside the remaining hard budget."""
     def failed(reason):
         if status_out is not None and status_out.get("status") != "failed":
             status_out.update(status="failed", stage=stage, reason=f"{stage}: {reason}")
@@ -233,9 +233,9 @@ def _live_conflicts(control_root: str, marker: dict, *, roots=None) -> list[dict
     return _live_binding_conflicts(marker, _conflict_roots(control_root, roots))
 
 
-def _conflict_task_dirs(control_root: str, marker: dict, *, roots=None) -> list[str]:
+def _conflict_wbs_dirs(control_root: str, marker: dict, *, roots=None) -> list[str]:
     """Return structurally valid task directories named by a conflict fence."""
-    tasks_roots = {os.path.realpath(os.path.join(root, "doc", "harness", "tasks"))
+    tasks_roots = {os.path.realpath(os.path.join(root, "doc", "harness", "wbs"))
                    for root in _conflict_roots(control_root, roots)}
     found = []
     if _conflicts_overflow(marker):
@@ -246,14 +246,14 @@ def _conflict_task_dirs(control_root: str, marker: dict, *, roots=None) -> list[
     for item in raw:
         if not isinstance(item, dict):
             continue
-        task_dir = os.path.realpath(str(item.get("task_dir") or ""))
-        task_id = str(item.get("task_id") or "")
+        wbs_dir = os.path.realpath(str(item.get("wbs_dir") or ""))
+        wbs_id = str(item.get("wbs_id") or "")
         if (
-            TASK_RE.fullmatch(task_id)
-            and os.path.dirname(task_dir) in tasks_roots
-            and os.path.basename(task_dir) == task_id
+            WBS_RE.fullmatch(wbs_id)
+            and os.path.dirname(wbs_dir) in tasks_roots
+            and os.path.basename(wbs_dir) == wbs_id
         ):
-            found.append(task_dir)
+            found.append(wbs_dir)
     return found
 
 
@@ -262,7 +262,7 @@ NOT_APPLICABLE = "not_applicable"
 REGISTRATION_FAILED = "failed"
 
 
-def _task_arguments(data: dict) -> dict | None:
+def _wbs_arguments(data: dict) -> dict | None:
     """Decode supported aliases once; malformed or conflicting inputs fail closed."""
     values = []
     for key in ("tool_input", "input", "arguments"):
@@ -282,7 +282,7 @@ def _task_arguments(data: dict) -> dict | None:
     return values[0] if values else {}
 
 
-def _successful_task_response(response):
+def _successful_wbs_response(response):
     """Decode the bounded structured/text envelope used by both MCP runtimes."""
     if not isinstance(response, dict) or response.get("isError") is True or response.get("success") is False:
         return None
@@ -301,12 +301,12 @@ def _successful_task_response(response):
     return candidate
 
 
-def _task_result(payload: bytes) -> tuple[str, str, str]:
+def _wbs_result(payload: bytes) -> tuple[str, str, str]:
     """Extract one successful task result from known Codex hook envelopes."""
     data = _payload_data(payload)
     tool_name = str(data.get("tool_name") or data.get("tool") or "")
-    arguments = _task_arguments(data)
-    if arguments is None or not is_codex_task_binding_tool(tool_name, arguments):
+    arguments = _wbs_arguments(data)
+    if arguments is None or not is_codex_wbs_binding_tool(tool_name, arguments):
         return "", "", ""
     response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
     if (
@@ -316,52 +316,52 @@ def _task_result(payload: bytes) -> tuple[str, str, str]:
         or str(response.get("status") or "").lower() in {"error", "failed"}
     ):
         return "", "", ""
-    candidate = _successful_task_response(response)
+    candidate = _successful_wbs_response(response)
     if candidate is None:
         return "", "", ""
-    task_dir = candidate.get("task_dir")
-    task_id = candidate.get("task_id")
+    wbs_dir = candidate.get("wbs_dir")
+    wbs_id = candidate.get("wbs_id")
     run_id = candidate.get("run_id")
     if not isinstance(run_id, str):
-        context = candidate.get("task_context")
+        context = candidate.get("context")
         run_id = context.get("active_run_id") if isinstance(context, dict) else ""
     return (
-        task_dir if isinstance(task_dir, str) else "",
-        task_id if isinstance(task_id, str) else "",
+        wbs_dir if isinstance(wbs_dir, str) else "",
+        wbs_id if isinstance(wbs_id, str) else "",
         run_id if isinstance(run_id, str) else "",
     )
 
 
-def register_task_result(
+def register_wbs_result(
     payload: bytes,
     *,
     budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
     status_out: dict | None = None,
 ) -> bool:
-    """Bind a successful Harness task result to this exact Codex session."""
+    """Bind a successful Harness WBS result to this exact Codex session."""
     deadline = time.monotonic() + max(0.0, float(budget_seconds))
     result = bool(_call_with_deadline(
-        lambda: _register_task_result(payload, deadline, status_out,
+        lambda: _register_wbs_result(payload, deadline, status_out,
                                      budget_seconds), deadline,
-        status_out=status_out, stage="task binding",
+        status_out=status_out, stage="WBS binding",
     ))
     if not result and time.monotonic() >= deadline and status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
         status_out.update({
             "status": REGISTRATION_FAILED,
-            "reason": "task binding did not complete within its binding budget",
+            "reason": "WBS binding did not complete within its binding budget",
         })
     return result
 
 
-def _task_result_binding(payload: bytes, status_out: dict | None):
+def _wbs_result_binding(payload: bytes, status_out: dict | None):
     cwd, thread_id = _registration_identity(payload)
-    task_dir, task_id, run_id = _task_result(payload)
+    wbs_dir, wbs_id, run_id = _wbs_result(payload)
     if status_out is not None:
         status_out.update({"status": NOT_APPLICABLE, "reason": "task result was not bindable"})
         if thread_id:
             status_out["thread_id"] = thread_id
     if (
-        not cwd or not thread_id or not task_dir or not task_id or not run_id
+        not cwd or not thread_id or not wbs_dir or not wbs_id or not run_id
     ):
         return None
     control_root = find_harness_root(cwd) or ""
@@ -374,40 +374,40 @@ def _task_result_binding(payload: bytes, status_out: dict | None):
                               reason="workspace registry discovery: registry unavailable")
         return None
     data = _payload_data(payload)
-    tool_input = _task_arguments(data)
+    tool_input = _wbs_arguments(data)
     if tool_input is None:
         return None
     requested_workspace = tool_input.get("workspace")
     if requested_workspace is not None:
         response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
-        candidate = _successful_task_response(response)
+        candidate = _successful_wbs_response(response)
         if candidate is None or candidate.get("workspace") != requested_workspace:
             return None
         try:
             control_root = resolve_registered_worktree(roots[0], requested_workspace) or roots[0]
         except (ValueError, RuntimeError):
             return None
-    return cwd, thread_id, control_root, task_dir, task_id, run_id
+    return cwd, thread_id, control_root, wbs_dir, wbs_id, run_id
 
 
-def _register_task_result(
+def _register_wbs_result(
     payload: bytes, deadline: float, status_out: dict | None,
     budget_seconds: float = REGISTRATION_BUDGET_SECONDS,
 ) -> bool:
     binding = _call_with_deadline(
-        lambda: _task_result_binding(payload, status_out),
+        lambda: _wbs_result_binding(payload, status_out),
         min(deadline, time.monotonic() + max(0.0, float(budget_seconds))), None,
-        status_out=status_out, stage="task binding discovery",
+        status_out=status_out, stage="WBS binding discovery",
     )
     if binding is None:
         return False
-    cwd, thread_id, control_root, task_dir, task_id, run_id = binding
-    return _bind_task_session(cwd, thread_id, control_root, task_dir, task_id, run_id, deadline, status_out)
+    cwd, thread_id, control_root, wbs_dir, wbs_id, run_id = binding
+    return _bind_wbs_session(cwd, thread_id, control_root, wbs_dir, wbs_id, run_id, deadline, status_out)
 
 
-def register_native_task(
+def register_native_wbs(
     session_cwd: str, thread_id: str, control_root: str,
-    task_dir: str, task_id: str, run_id: str,
+    wbs_dir: str, wbs_id: str, run_id: str,
     *, budget_seconds: float = REGISTRATION_BUDGET_SECONDS, status_out: dict | None = None,
 ) -> bool:
     """Bind an authenticated process-owned native actor through the hook owner."""
@@ -415,14 +415,14 @@ def register_native_task(
         return False
     deadline = time.monotonic() + max(0.0, float(budget_seconds))
     def publish():
-        return _bind_task_session(session_cwd, thread_id, control_root, task_dir, task_id, run_id,
+        return _bind_wbs_session(session_cwd, thread_id, control_root, wbs_dir, wbs_id, run_id,
                                   deadline, status_out, native=True)
-    return bool(_call_with_deadline(publish, deadline, status_out=status_out, stage="task binding"))
+    return bool(_call_with_deadline(publish, deadline, status_out=status_out, stage="WBS binding"))
 
 
-def _bind_task_session(
-    cwd: str, thread_id: str, control_root: str, task_dir: str,
-    task_id: str, run_id: str, deadline: float, status_out: dict | None, *, native: bool = False,
+def _bind_wbs_session(
+    cwd: str, thread_id: str, control_root: str, wbs_dir: str,
+    wbs_id: str, run_id: str, deadline: float, status_out: dict | None, *, native: bool = False,
 ) -> bool:
     """One cross-workspace lock/fence/marker owner for hooks and native MCP."""
     roots = workspace_roots(control_root)
@@ -431,14 +431,14 @@ def _bind_task_session(
             status_out.update(status=REGISTRATION_FAILED, stage="workspace registry discovery",
                               reason="workspace registry discovery: registry unavailable")
         return False
-    expected_parent = os.path.realpath(os.path.join(control_root, "doc", "harness", "tasks"))
-    canonical_task = os.path.realpath(task_dir)
+    expected_parent = os.path.realpath(os.path.join(control_root, "doc", "harness", "wbs"))
+    canonical_wbs = os.path.realpath(wbs_dir)
     if (
         not control_root
-        or not TASK_RE.fullmatch(task_id)
-        or os.path.dirname(canonical_task) != expected_parent
-        or os.path.basename(canonical_task) != task_id
-        or canonical_task != os.path.abspath(task_dir)
+        or not WBS_RE.fullmatch(wbs_id)
+        or os.path.dirname(canonical_wbs) != expected_parent
+        or os.path.basename(canonical_wbs) != wbs_id
+        or canonical_wbs != os.path.abspath(wbs_dir)
     ):
         return False
     try:
@@ -464,36 +464,36 @@ def _bind_task_session(
                     status_out.update({"status": NOT_APPLICABLE,
                                        "reason": "coordinator conflict fence overflow requires a new coordinator"})
                 return False
-            bindings = {root: resolve_session_task_binding(root, thread_id, strict=True) for root in roots}
-            lock_dirs = {canonical_task}
+            bindings = {root: resolve_session_wbs_binding(root, thread_id, strict=True) for root in roots}
+            lock_dirs = {canonical_wbs}
             for root in roots:
-                lock_dirs.update(_conflict_task_dirs(root, markers[root], roots=roots))
+                lock_dirs.update(_conflict_wbs_dirs(root, markers[root], roots=roots))
                 if bindings[root]:
-                    lock_dirs.add(bindings[root]["task_dir"])
+                    lock_dirs.add(bindings[root]["wbs_dir"])
             with ExitStack() as locks:
                 for locked_task in sorted(lock_dirs):
-                    locks.enter_context(task_control_transaction(locked_task))
+                    locks.enter_context(wbs_control_transaction(locked_task))
                 if native and _native_session_cwd(thread_id) != os.path.realpath(cwd):
                     if status_out is not None:
-                        status_out.update(status=REGISTRATION_FAILED, stage="task binding publication",
-                                          reason="task binding publication: native identity unavailable")
+                        status_out.update(status=REGISTRATION_FAILED, stage="WBS binding publication",
+                                          reason="WBS binding publication: native identity unavailable")
                     return False
-                control = read_task_control(canonical_task)
+                control = read_wbs_control(canonical_wbs)
                 if (
-                    task_control_status(canonical_task, control) != "open"
+                    wbs_control_status(canonical_wbs, control) != "open"
                     or control.get("run_id") != run_id
                 ):
                     return False
                 candidate_binding = {
-                    "task_dir": canonical_task, "task_id": task_id, "run_id": run_id,
+                    "wbs_dir": canonical_wbs, "wbs_id": wbs_id, "run_id": run_id,
                 }
                 live = []
                 for root in roots:
                     live.extend(_live_conflicts(root, markers[root], roots=roots))
-                    binding = resolve_session_task_binding(root, thread_id, strict=True)
+                    binding = resolve_session_wbs_binding(root, thread_id, strict=True)
                     if binding:
-                        live.append({"task_dir": binding["task_dir"],
-                                     "task_id": os.path.basename(binding["task_dir"]),
+                        live.append({"wbs_dir": binding["wbs_dir"],
+                                     "wbs_id": os.path.basename(binding["wbs_dir"]),
                                      "run_id": binding["run_id"]})
                 distinct = {tuple(sorted(item.items())) for item in [*live, candidate_binding]}
                 if len(distinct) >= 2:
@@ -507,7 +507,7 @@ def _bind_task_session(
                     if status_out is not None:
                         status_out.update({
                             "status": NOT_APPLICABLE,
-                            "reason": "conflicting open tasks invalidated exact session binding",
+                            "reason": "conflicting open WBSs invalidated exact session binding",
                         })
                     return False
                 if any(_has_binding_conflict_fence(marker) for marker in markers.values()):
@@ -516,7 +516,7 @@ def _bind_task_session(
                             clear_binding_conflict_fence(root, thread_id)
                 write_active_marker(
                     control_root,
-                    canonical_task,
+                    canonical_wbs,
                     session_id=thread_id,
                 )
                 if status_out is not None:
@@ -524,11 +524,11 @@ def _bind_task_session(
                 return True
     except Exception as exc:
         if status_out is not None and status_out.get("status") != REGISTRATION_FAILED:
-            status_out.update({"status": REGISTRATION_FAILED, "stage": "task binding",
-                               "reason": f"task binding unavailable ({type(exc).__name__})"})
+            status_out.update({"status": REGISTRATION_FAILED, "stage": "WBS binding",
+                               "reason": f"WBS binding unavailable ({type(exc).__name__})"})
         return False
 
 
-_bind_control_writer(register_task_result)
-_bind_control_writer(register_native_task)
+_bind_control_writer(register_wbs_result)
+_bind_control_writer(register_native_wbs)
 del _bind_control_writer

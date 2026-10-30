@@ -16,6 +16,6 @@ expectations, long-running feedback, naming, flags, defaults, and workflow fit.
 Transcript must include review depth, commands tried, paths checked, and
 findings classified as `PASS`, `FAIL`, or `BACKLOG`.
 
-PASS only when the CLI UX is shippable for this task scope. Use BLOCKED_ENV
+PASS only when the CLI UX is shippable for this WBS scope. Use BLOCKED_ENV
 when required tools, fixtures, platform, credentials, or dependencies prevent
 meaningful review.

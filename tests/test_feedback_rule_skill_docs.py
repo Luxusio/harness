@@ -31,7 +31,7 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "user_decision:" in body and "proposed_artifact:" in body
         assert "User Feedback Event Review" in body
         assert "explicit user corrections from the conversation" in body
-        assert "PLAN/task state/durable docs" in body
+        assert "PLAN/WBS state/durable docs" in body
         assert "durable source of truth" in body
         assert "by itself" in body
         assert "before the next action that depends on it" in body
@@ -171,7 +171,7 @@ def test_harness_source_completion_requires_commit_and_conditional_delivery():
     assert "commit the completed diff" in root
     assert "`python3 install.py`, whose default run skips" in root
     assert "--if-stale" not in root
-    assert "before `task_close`" in root
+    assert 'before `wbs(action="close")`' in " ".join(root.split())
     assert "must not introduce a second install phase" in root
 
     for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):

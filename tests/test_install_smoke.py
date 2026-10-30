@@ -290,7 +290,7 @@ def test_the_smoke_covers_every_registered_hook_module():
     registered = set(install_smoke.HOOK_SCRIPT_REFERENCE.findall(hooks_json))
     assert registered, "no hook scripts found in hooks.json"
     assert registered <= set(modules), sorted(registered - set(modules))
-    # Include shared task control and the session-binding owner.
+    # Include shared WBS execution control and the session-binding owner.
     assert {"_lib", "codex_hook_registration"} <= set(modules)
 
 
@@ -347,7 +347,7 @@ def test_codex_smoke_requires_the_installed_hook_to_publish_binding(tmp_path):
     root = _codex_tree(tmp_path)
     hook = root / 'scripts/hook_post_tool_use.py'
     text = hook.read_text()
-    binding_call = '        _register_task_result(payload, deadline=deadline)'
+    binding_call = '        _register_wbs_result(payload, deadline=deadline)'
     assert binding_call in text
     hook.write_text(text.replace(binding_call, '        pass  # simulate lost native binding', 1))
     smoke = _load('codex_binding_required_smoke', SMOKE)
@@ -361,7 +361,7 @@ def test_smoke_rejects_broken_installed_source_assignment(tmp_path):
     root = _codex_tree(tmp_path)
     path = root / "scripts/wbs.py"
     text = path.read_text()
-    old = "def require_source_assignment(repo, task_id, path=None):"
+    old = "def require_source_assignment(repo, wbs_id, path=None):"
     assert old in text
     path.write_text(text.replace(old, old + "\n    return {}", 1))
     ok, lines = smoke.smoke_installed_runtime(str(root), timeout=20)

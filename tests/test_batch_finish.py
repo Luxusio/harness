@@ -29,7 +29,7 @@ else:
     SPEC.loader.exec_module(mod)
 
 IGNORES = (
-    "doc/harness/tasks/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n"
+    "doc/harness/wbs/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n"
     ".claude/worktrees/\n"
 )
 LOCK_REASON = "claude agent agent-x (pid 12345)"
@@ -98,12 +98,12 @@ class Lead:
         self.main = main
         self.name = name
         self.branch = f"worktree-{name}"
-        self.task_id = f"TASK__{name}"
+        self.wbs_id = f"WBS__{name}"
         self.worktree = main / ".claude/worktrees" / name
         _git("worktree", "add", "-q", "-b", self.branch, str(self.worktree), cwd=main)
         if lock:
             _git("worktree", "lock", "--reason", LOCK_REASON, str(self.worktree), cwd=main)
-        _write(self.worktree / "doc/harness/tasks" / self.task_id / "PLAN.md", f"{name} plan\n")
+        _write(self.worktree / "doc/harness/wbs" / self.wbs_id / "PLAN.md", f"{name} plan\n")
         _write(
             self.worktree / "doc/harness/learnings.jsonl",
             json.dumps({"key": name, "insight": f"{name} learned"}) + "\n",
@@ -116,15 +116,15 @@ class Lead:
         _git("add", "-A", cwd=self.worktree)
         args = ["commit", "-q", "-m", f"{self.name} work"]
         if trailer is not None:
-            value = self.task_id if trailer == "own" else trailer
-            args += ["--trailer", f"Harness-Task: {value}"]
+            value = self.wbs_id if trailer == "own" else trailer
+            args += ["--trailer", f"Harness-WBS: {value}"]
         _git(*args, cwd=self.worktree)
         self.commit = _git("rev-parse", "HEAD", cwd=self.worktree)
         return self.commit
 
     def finish(self, *, commit: str | None = None, resume: bool = False) -> dict:
         args = argparse.Namespace(
-            worktree=str(self.worktree), branch=self.branch, task_id=self.task_id,
+            worktree=str(self.worktree), branch=self.branch, wbs_id=self.wbs_id,
             commit=commit or self.commit, resume=resume,
         )
         return mod.finish(str(self.main), args)
@@ -134,7 +134,7 @@ class Lead:
             [
                 sys.executable, str(SCRIPT), "--repo", str(self.main),
                 "--worktree", str(self.worktree), "--branch", self.branch,
-                "--task-id", self.task_id, "--commit", self.commit, *extra,
+                "--wbs-id", self.wbs_id, "--commit", self.commit, *extra,
             ],
             capture_output=True, text=True, check=False,
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
@@ -158,7 +158,7 @@ def _assert_untouched(lead: Lead, main_head: str) -> None:
     assert _tip(lead.main, lead.branch) == lead.commit
     assert lead.worktree.is_dir()
     assert not mod._rebase_in_progress(str(lead.worktree))
-    assert not (lead.main / "doc/harness/archive/batch" / lead.task_id).exists()
+    assert not (lead.main / "doc/harness/archive/batch" / lead.wbs_id).exists()
 
 
 def _commit_on_main(main: Path, rel: str, text: str) -> str:
@@ -187,7 +187,7 @@ def test_two_leads_integrate_in_order_on_a_linear_history(tmp_path, monkeypatch)
     }
     assert not first.worktree.exists()
     assert _git("branch", "--list", first.branch, cwd=main) == ""
-    assert (main / "doc/harness/archive/batch/TASK__a/PLAN.md").read_text() == "a plan\n"
+    assert (main / "doc/harness/archive/batch/WBS__a/PLAN.md").read_text() == "a plan\n"
 
     two = second.finish()
     assert two["status"] == "integrated", two
@@ -206,7 +206,7 @@ def test_trailer_is_reported_not_enforced(tmp_path, monkeypatch):
     main = _main(tmp_path, monkeypatch)
     bare, foreign = Lead(main, "bare"), Lead(main, "foreign")
     bare.commit_files({"bare.txt": "x\n"}, trailer=None)
-    foreign.commit_files({"foreign.txt": "y\n"}, trailer="TASK__someone-else")
+    foreign.commit_files({"foreign.txt": "y\n"}, trailer="WBS__someone-else")
     for lead in (bare, foreign):
         result = lead.finish()
         assert result["status"] == "integrated", result
@@ -284,7 +284,7 @@ def test_unregistered_or_wrong_branch_worktree_is_kept(tmp_path, monkeypatch):
     plain = tmp_path / "plain"
     plain.mkdir()
     args = argparse.Namespace(
-        worktree=str(plain), branch=lead.branch, task_id=lead.task_id,
+        worktree=str(plain), branch=lead.branch, wbs_id=lead.wbs_id,
         commit=lead.commit, resume=False,
     )
     result = mod.finish(str(main), args)
@@ -450,7 +450,7 @@ def test_harvest_refusal_keeps_the_worktree_with_the_integrated_tip(tmp_path, mo
     main = _main(tmp_path, monkeypatch)
     lead = Lead(main, "reused")
     lead.commit_files({"r.txt": "r\n"})
-    _write(main / "doc/harness/archive/batch/TASK__reused/PLAN.md", "an older batch\n")
+    _write(main / "doc/harness/archive/batch/WBS__reused/PLAN.md", "an older batch\n")
 
     result = lead.finish()
     assert result["status"] == "kept", result
@@ -461,8 +461,8 @@ def test_harvest_refusal_keeps_the_worktree_with_the_integrated_tip(tmp_path, mo
     assert _lock_reason(main, lead.worktree) == LOCK_REASON  # never unlocked
 
     # Once the cause is fixed, a rerun finishes the already integrated lead.
-    (main / "doc/harness/archive/batch/TASK__reused/PLAN.md").unlink()
-    (main / "doc/harness/archive/batch/TASK__reused").rmdir()
+    (main / "doc/harness/archive/batch/WBS__reused/PLAN.md").unlink()
+    (main / "doc/harness/archive/batch/WBS__reused").rmdir()
     rerun = lead.finish(resume=True)
     assert rerun["status"] == "integrated", rerun
     assert rerun["integrated_tip"] == lead.commit
@@ -618,7 +618,7 @@ def test_cli_prints_one_json_result_with_distinct_exit_codes(tmp_path, monkeypat
     body = json.loads(integrated.stdout)
     assert body["status"] == "integrated"
     assert set(body) == set(mod._result(argparse.Namespace(
-        task_id="", branch="", commit="", resume=False), "")) | {"destination_ref"}
+        wbs_id="", branch="", commit="", resume=False), "")) | {"destination_ref"}
     assert body["destination_ref"] == "refs/heads/main"
 
     conflict = clash.cli()
@@ -641,13 +641,13 @@ def test_cli_usage_errors_exit_2_without_json(tmp_path, monkeypatch):
     lead.commit_files({"u.txt": "u\n"})
     valid = {
         "--repo": str(main), "--worktree": str(lead.worktree), "--branch": lead.branch,
-        "--task-id": lead.task_id, "--commit": lead.commit,
+        "--wbs-id": lead.wbs_id, "--commit": lead.commit,
     }
     for flag, value in (
         ("--commit", "HEAD"),
         ("--commit", "--all"),
         ("--branch", "-D"),
-        ("--task-id", "not-a-task"),
+        ("--wbs-id", "not-a-task"),
         ("--worktree", "relative/path"),
     ):
         argv = [item for key, val in {**valid, flag: value}.items() for item in (key, val)]
@@ -670,7 +670,7 @@ def test_unexpected_failure_reports_error_and_exit_1(tmp_path, monkeypatch, caps
     monkeypatch.setattr(mod, "_check", boom)
     code = mod.main([
         "--repo", str(main), "--worktree", str(lead.worktree), "--branch", lead.branch,
-        "--task-id", lead.task_id, "--commit", lead.commit,
+        "--wbs-id", lead.wbs_id, "--commit", lead.commit,
     ])
     assert code == 1
     body = json.loads(capsys.readouterr().out)
@@ -773,7 +773,7 @@ def test_real_post_merge_hook_timeout_reports_integrated_tip_without_cleanup(tmp
     assert result["status"] != "integrated", result
     assert result["integrated_tip"] == lead.commit, result
     assert "tim" in result["reason"].lower()
-    assert not (main / "doc/harness/archive/batch" / lead.task_id).exists()
+    assert not (main / "doc/harness/archive/batch" / lead.wbs_id).exists()
     assert not any(result["cleanup"].values())
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
 
@@ -804,7 +804,7 @@ def test_failed_merge_reconciliation_reports_unknown_and_preserves_evidence(tmp_
     assert "unknown" in result["reason"].lower(), result
     assert "reconciliation unavailable" in result["reason"]
     assert not any(result["cleanup"].values())
-    assert not (main / "doc/harness/archive/batch" / lead.task_id).exists()
+    assert not (main / "doc/harness/archive/batch" / lead.wbs_id).exists()
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
 
 
@@ -886,7 +886,7 @@ def test_main_checkout_identity_change_preserves_original_ref_and_lead(
     assert lead.worktree.is_dir()
     assert _tip(main, lead.branch) == _head(lead.worktree) != lead.commit
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
-    assert not (main / "doc/harness/archive/batch" / lead.task_id).exists()
+    assert not (main / "doc/harness/archive/batch" / lead.wbs_id).exists()
     assert not any(result["cleanup"].values()), result
 
 
@@ -910,7 +910,7 @@ def test_post_merge_hook_switching_checkout_preserves_lead_and_original_ref_evid
     assert lead.worktree.is_dir()
     assert _tip(main, lead.branch) == lead.commit
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
-    assert not (main / "doc/harness/archive/batch" / lead.task_id).exists()
+    assert not (main / "doc/harness/archive/batch" / lead.wbs_id).exists()
     assert not any(result["cleanup"].values()), result
 
 
@@ -945,7 +945,7 @@ def test_checkpoint_failure_stops_following_mutations_and_retains_source(
     lead = Lead(main, "checkpoint")
     lead.commit_files({"change.txt": "lead work\n"})
     original_main = _commit_on_main(main, "main-only.txt", "main work\n")
-    evidence = lead.worktree / "doc/harness/tasks" / lead.task_id / "PLAN.md"
+    evidence = lead.worktree / "doc/harness/wbs" / lead.wbs_id / "PLAN.md"
     original_evidence = evidence.read_bytes()
     stages = []
     snapshots = []
@@ -961,7 +961,7 @@ def test_checkpoint_failure_stops_following_mutations_and_retains_source(
             raise OSError("checkpoint persistence failed")
 
     args = argparse.Namespace(
-        worktree=str(lead.worktree), branch=lead.branch, task_id=lead.task_id,
+        worktree=str(lead.worktree), branch=lead.branch, wbs_id=lead.wbs_id,
         commit=lead.commit, resume=False,
     )
     result = mod.finish(str(main), args, checkpoint=checkpoint)
@@ -977,7 +977,7 @@ def test_checkpoint_failure_stops_following_mutations_and_retains_source(
     assert (lead.worktree / "change.txt").read_text() == "lead work\n"
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
     assert not any(result["cleanup"].values())
-    archive = main / "doc/harness/archive/batch" / lead.task_id
+    archive = main / "doc/harness/archive/batch" / lead.wbs_id
     assert archive.exists() is (checkpoint_stage == "harvested")
     if archive.exists():
         assert (archive / "PLAN.md").read_bytes() == original_evidence
@@ -1001,7 +1001,7 @@ def test_checkpoint_receives_deep_copies_without_changing_successful_finish(tmp_
             result["harvest"].clear()
 
     args = argparse.Namespace(
-        worktree=str(lead.worktree), branch=lead.branch, task_id=lead.task_id,
+        worktree=str(lead.worktree), branch=lead.branch, wbs_id=lead.wbs_id,
         commit=lead.commit, resume=False,
     )
     result = mod.finish(str(main), args, checkpoint=checkpoint)
@@ -1025,7 +1025,7 @@ def _s1_finish_fixture(tmp_path, monkeypatch):
     _git("config", "user.email", "s1-finish@example.test", cwd=main)
     _write(main / "doc/harness/manifest.yaml", "version: 7\n")
     with (main / ".gitignore").open("a") as handle:
-        handle.write("doc/harness/tasks/\ndoc/harness/archive/\ndoc/harness/runtime/\ndoc/harness/learnings.jsonl\n")
+        handle.write("doc/harness/wbs/\ndoc/harness/archive/\ndoc/harness/runtime/\ndoc/harness/learnings.jsonl\n")
     fixture._commit(main, "operational ignores")
     fixture._git(work, "rebase", "main")
     helper = fixture._helper()
@@ -1033,19 +1033,19 @@ def _s1_finish_fixture(tmp_path, monkeypatch):
     helper.prepare(main, work, manifest, lambda _: None)
     module_tip = fixture._change(work, paths[0])
     tip = _head(work)
-    task_dir = state_fixture.task(work, slug="lead", closed=True)
-    control = json.loads((task_dir / "TASK.json").read_text())
+    wbs_dir = state_fixture.task(work, slug="lead", closed=True)
+    control = json.loads((wbs_dir / "WBS.control.json").read_text())
     _git("worktree", "lock", "--reason", LOCK_REASON, str(work), cwd=main)
     retention = dict(batch_id=manifest["batch_id"], slug="lead", spawn_head=manifest["spawn_head"])
     (work / mod.RETENTION_MARKER).write_bytes(mod.retention_bytes(retention))
     request = dict(slug="lead", request="module edit", scopes=paths, depends_on=[],
                    resolved_scopes=[str(main / paths[0])], ownership_scopes=[str(main / paths[0])],
                    submodules=paths, submodule_manifest=copy.deepcopy(manifest),
-                   status="integrating", task_id="TASK__lead", worker_id="worker-lead",
+                   status="integrating", wbs_id="WBS__lead", worker_id="worker-lead",
                    worktree=str(work), branch="lead", spawn_head=manifest["spawn_head"],
                    run_id=control["run_id"], closed=True,
                    checkpoint=None,
-                   result=dict(verdict="closed", task_id="TASK__lead", worktree=str(work), branch="lead", commit=tip))
+                   result=dict(verdict="closed", wbs_id="WBS__lead", worktree=str(work), branch="lead", commit=tip))
     state = dict(schema_version=2, batch_id=manifest["batch_id"], repo=str(main),
                  destination_ref="refs/heads/main", initial_head=manifest["spawn_head"],
                  max_leads=3, cap_source="default", status="open", halted=False,
@@ -1076,7 +1076,7 @@ def _s1_finish_fixture(tmp_path, monkeypatch):
     return dict(main=main, work=work, path=paths[0], manifest=manifest, module_tip=module_tip,
                 state_path=state_path, state=state, events=events, persist=persist,
                 checkpoint=checkpoint, retention=retention, helper=helper,
-                args=argparse.Namespace(worktree=str(work), branch="lead", task_id="TASK__lead", commit=tip, resume=False))
+                args=argparse.Namespace(worktree=str(work), branch="lead", wbs_id="WBS__lead", commit=tip, resume=False))
 
 
 def _s1_finish(f, **overrides):
@@ -1123,7 +1123,7 @@ def test_s1_finish_preserves_before_rebase_and_updates_before_checkpoint(tmp_pat
     assert any("rebase" in cmd for cmd in commands)
     assert any("merge" in cmd and "--ff-only" in cmd for cmd in commands)
     assert len([cmd for cmd in commands if cmd[:2] == ("worktree", "remove")]) == 1
-    assert (main / "doc/harness/archive/batch/TASK__lead/TASK.json").exists()
+    assert (main / "doc/harness/archive/batch/WBS__lead/WBS.control.json").exists()
     fixture._git(main / f["path"], "reflog", "expire", "--expire=now", "--all")
     fixture._git(main / f["path"], "gc", "--prune=now")
     assert fixture._git(main / f["path"], "cat-file", "-t", f["module_tip"]) == "commit"
@@ -1137,7 +1137,7 @@ def test_s1_finish_requires_both_durable_callbacks_before_mutation(tmp_path, mon
         assert result["status"] != "integrated", result
         assert _head(f["main"]) == old and f["work"].exists()
         assert _lock_reason(f["main"], f["work"]) == LOCK_REASON
-        assert not (f["main"] / "doc/harness/archive/batch/TASK__lead").exists()
+        assert not (f["main"] / "doc/harness/archive/batch/WBS__lead").exists()
 
 
 def test_s1_finish_resume_after_ff_before_update_or_checkpoint(tmp_path, monkeypatch, s1_interrupt):
@@ -1258,7 +1258,7 @@ def test_s1_finish_retains_actual_postrebase_stale_module_without_incoming_proof
     fixture._git(work / selected, "reset", "--keep", initial)
     (work / "outer-change.txt").write_text("legitimate outer lead change\n")
     fixture._git(work, "add", "--", "outer-change.txt")
-    fixture._git(work, "commit", "-qm", "outer lead change", "--trailer", "Harness-Task: TASK__lead")
+    fixture._git(work, "commit", "-qm", "outer lead change", "--trailer", "Harness-WBS: WBS__lead")
     old_lead = _head(work)
     f["args"].commit = old_lead
     f["state"]["requests"][0]["result"]["commit"] = old_lead
@@ -1297,7 +1297,7 @@ def test_s1_finish_retains_actual_postrebase_stale_module_without_incoming_proof
     assert (work / mod.RETENTION_MARKER).read_bytes() == marker_bytes
     assert _lock_reason(main, work) == LOCK_REASON
     assert not mod._rebase_in_progress(str(work))
-    assert not (main / "doc/harness/archive/batch/TASK__lead").exists()
+    assert not (main / "doc/harness/archive/batch/WBS__lead").exists()
 
 
 def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_path, monkeypatch):
@@ -1307,7 +1307,7 @@ def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_
     _git('merge', '--ff-only', lead.branch, cwd=main)
     retention = dict(batch_id='fixture', slug='lead', spawn_head=lead.commit)
     (lead.worktree / mod.RETENTION_MARKER).write_bytes(mod.retention_bytes(retention))
-    mod.batch_harvest.harvest(str(main), str(lead.worktree), lead.task_id)
+    mod.batch_harvest.harvest(str(main), str(lead.worktree), lead.wbs_id)
     real_git = mod._git
     def partial_remove(repo, *args):
         if args[:2] == ('worktree', 'remove'):
@@ -1318,7 +1318,7 @@ def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_
             return subprocess.CompletedProcess(args, 7, '', 'original Git removal detail')
         return real_git(repo, *args)
     monkeypatch.setattr(mod, '_git', partial_remove)
-    result = {'task_id': lead.task_id, 'cleanup': dict(unlocked=False, relocked=False, removed=False, branch_deleted=False)}
+    result = {'wbs_id': lead.wbs_id, 'cleanup': dict(unlocked=False, relocked=False, removed=False, branch_deleted=False)}
     try:
         mod._cleanup(str(main), str(lead.worktree), lead.branch, result, retention)
         raise AssertionError('expected original removal refusal')

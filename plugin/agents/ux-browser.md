@@ -15,8 +15,8 @@ complete this without friction that should block shipping?"
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, TASK.json, REQUEST.md when present,
-and relevant README/durable docs. Use PLAN/TASK.json lens declarations to find pages and flows.
+Read `doc/harness/manifest.yaml`, PLAN.md, WBS.control.json, REQUEST.md when present,
+and relevant README/durable docs. Use PLAN/WBS.control.json lens declarations to find pages and flows.
 
 ## Review Method
 
@@ -24,7 +24,7 @@ Use the real browser when available. Visit changed pages, exercise the intended
 flow, and check desktop plus mobile viewports when the UI is responsive.
 
 Evaluate:
-- task success and first-screen clarity
+- user-flow success and first-screen clarity
 - primary action discoverability
 - navigation and flow efficiency
 - loading, empty, success, error, validation, and disabled states
@@ -54,6 +54,6 @@ Findings:
 
 Return the UX verdict and evidence in your final response.
 
-PASS only when the browser UX is shippable for this task scope. Use
+PASS only when the browser UX is shippable for this WBS scope. Use
 BLOCKED_ENV when browser tooling, dev server, auth, seed data, or credentials
 prevent meaningful review.

@@ -1,7 +1,7 @@
 """AC-001..AC-006: prompt_memory.py context-injection hook.
 
 Uses isolated scratch dirs + patched find_repo_root so test runs don't
-leak into the real repo's doc/harness/tasks/.
+leak into the real repo's doc/harness/wbs/.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _invoke(repo_root: str, *, env_extra=None, payload: dict | None = None) -> s
 
 def _build_scratch_repo(base: Path, *,
                         harness_enabled: bool = True,
-                        active_task_id: str | None = None,
+                        active_wbs_id: str | None = None,
                         task_state: str | None = None,
                         plan: bool = True,
                         checks_yaml: str | None = None,
@@ -53,40 +53,40 @@ def _build_scratch_repo(base: Path, *,
         manifest = base / "doc" / "harness" / "manifest.yaml"
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text("type: test\n", encoding="utf-8")
-    tasks = base / "doc" / "harness" / "tasks"
+    tasks = base / "doc" / "harness" / "wbs"
     tasks.mkdir(parents=True, exist_ok=True)
-    if active_task_id:
-        task_dir = tasks / active_task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
+    if active_wbs_id:
+        wbs_dir = tasks / active_wbs_id
+        wbs_dir.mkdir(parents=True, exist_ok=True)
         control = {
             "run_id": RUN_ID,
             "execution_mode": "standard",
             "required_lenses": ["review-code", "qa-cli"],
             "closed": False,
         }
-        if "security" in active_task_id:
+        if "security" in active_wbs_id:
             control["required_lenses"].insert(1, "review-security")
         if plan:
-            (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+            (wbs_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if task_state is not None:
             # Callers use this switch to request malformed control or security
             # review routing; legacy status/touched-path values are ignored.
             if "not valid" in task_state:
-                (task_dir / "TASK.json").write_text(task_state, encoding="utf-8")
+                (wbs_dir / "WBS.control.json").write_text(task_state, encoding="utf-8")
             elif "security_review: required" in task_state:
                 if "review-security" not in control["required_lenses"]:
                     control["required_lenses"].insert(1, "review-security")
-                (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
+                (wbs_dir / "WBS.control.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
             else:
-                (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
+                (wbs_dir / "WBS.control.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
         else:
-            (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
+            (wbs_dir / "WBS.control.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
         if checks_yaml is not None:
-            (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
+            (wbs_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
         sessions = tasks / ".active_sessions"
         sessions.mkdir(exist_ok=True)
         (sessions / "pytest-prompt.json").write_text(json.dumps(dict(
-            session_id="pytest-prompt", task_dir=str(task_dir), task_id=active_task_id,
+            session_id="pytest-prompt", wbs_dir=str(wbs_dir), wbs_id=active_wbs_id,
             run_id=RUN_ID, updated="2026-10-28T00:00:00Z")), encoding="utf-8")
     if suspect_notes:
         doc_dir = base / "doc" / "common"
@@ -106,7 +106,7 @@ def _build_scratch_repo(base: Path, *,
 class TestPromptMemory(unittest.TestCase):
 
     # ---- AC-002: silent paths ----
-    def test_no_active_task_in_harness_repo_emits_doc_gate(self):
+    def test_no_active_wbs_in_harness_repo_emits_doc_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(str(base))
@@ -179,33 +179,33 @@ class TestPromptMemory(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             (base / ".git").mkdir()
-            tasks = base / "doc" / "harness" / "tasks"
+            tasks = base / "doc" / "harness" / "wbs"
             tasks.mkdir(parents=True)
-            (tasks / ".active").write_text("/nonexistent/TASK__x", encoding="utf-8")
+            (tasks / ".active").write_text("/nonexistent/WBS__x", encoding="utf-8")
             r = _invoke(str(base))
         self.assertEqual(r.stdout, "")
 
     def test_malformed_state_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__malf",
+                Path(tmp), active_wbs_id="WBS__malf",
                 task_state="not valid yaml\n:::\n",
             )
             r = _invoke(str(base))
-        # Invalid exact TASK.json fails closed without crashing the hook.
+        # Invalid exact WBS.control.json fails closed without crashing the hook.
         self.assertEqual(r.returncode, 0)
 
     # ---- AC-001: happy path shape ----
-    def test_emits_context_block_for_active_task(self):
+    def test_emits_context_block_for_active_wbs(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__happy",
+                Path(tmp), active_wbs_id="WBS__happy",
             )
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
         self.assertTrue(r.stdout.startswith("[harness-doc-gate] "), r.stdout)
         self.assertIn("[harness-context] ", r.stdout)
-        self.assertIn("task=TASK__happy", r.stdout)
+        self.assertIn("wbs=WBS__happy", r.stdout)
         self.assertIn("status=open", r.stdout)
         self.assertNotIn("recorded_verdict", r.stdout)
         # No CHECKS / notes → omit those sections
@@ -214,14 +214,14 @@ class TestPromptMemory(unittest.TestCase):
 
     def test_pending_review_injects_review_sequence_before_qa(self):
         state = (
-            "task_id: TASK__qa-prompt\nstatus: implementing\n"
+            "wbs_id: WBS__qa-prompt\nstatus: implementing\n"
             "runtime_verdict: pending\ntouched_paths: []\n"
             "plan_session_state: closed\nclosed_at: null\n"
             "updated: 2026-07-20T00:00:00Z\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__qa-prompt", task_state=state,
+                Path(tmp), active_wbs_id="WBS__qa-prompt", task_state=state,
             )
             r = _invoke(str(base))
 
@@ -233,13 +233,13 @@ class TestPromptMemory(unittest.TestCase):
 
     def test_prompt_hook_never_invokes_git(self):
         state = (
-            "task_id: TASK__no-git\nstatus: implementing\n"
+            "wbs_id: WBS__no-git\nstatus: implementing\n"
             "runtime_verdict: pending\ntouched_paths:\n  - src/app.py\n"
             "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__no-git", task_state=state,
+                Path(tmp), active_wbs_id="WBS__no-git", task_state=state,
             )
             fake_bin = base / "fake-bin"
             fake_bin.mkdir()
@@ -258,27 +258,27 @@ class TestPromptMemory(unittest.TestCase):
         self.assertFalse(git_was_called)
 
 
-    def test_does_not_capture_without_active_task_or_manifest(self):
+    def test_does_not_capture_without_active_wbs_or_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(str(base), payload={"prompt": "capture me"})
-            self.assertFalse((base / "doc" / "harness" / "tasks" / "USER_FEEDBACK.jsonl").exists())
-            self.assertFalse((base / "doc" / "harness" / "tasks" / "CONVERSATION.md").exists())
+            self.assertFalse((base / "doc" / "harness" / "wbs" / "USER_FEEDBACK.jsonl").exists())
+            self.assertFalse((base / "doc" / "harness" / "wbs" / "CONVERSATION.md").exists())
         self.assertEqual(r.returncode, 0)
 
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
                 Path(tmp),
                 harness_enabled=False,
-                active_task_id="TASK__disabled",
+                active_wbs_id="WBS__disabled",
             )
             r = _invoke(str(base), payload={"prompt": "capture me"})
             self.assertEqual(r.stdout, "")
             self.assertFalse(
-                (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "USER_FEEDBACK.jsonl").exists()
+                (base / "doc" / "harness" / "wbs" / "WBS__disabled" / "USER_FEEDBACK.jsonl").exists()
             )
             self.assertFalse(
-                (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "CONVERSATION.md").exists()
+                (base / "doc" / "harness" / "wbs" / "WBS__disabled" / "CONVERSATION.md").exists()
             )
 
     def test_goal_payload_capture_is_removed(self):
@@ -415,7 +415,7 @@ class TestPromptMemory(unittest.TestCase):
     def test_suspect_note_not_listed(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__note",
+                Path(tmp), active_wbs_id="WBS__note",
                 suspect_notes={
                     "sus.md": "---\nfreshness: suspect\n---\nbody\n",
                 },
@@ -435,14 +435,14 @@ class TestPromptMemory(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__cap",
+                Path(tmp), active_wbs_id="WBS__cap",
                 checks_yaml=checks,
             )
             r = _invoke(str(base))
         self.assertLessEqual(len(r.stdout), 400, f"{len(r.stdout)} > 400: {r.stdout!r}")
 
     # ---- Runbook memory injection ----
-    def test_runbook_block_rendered_without_active_task(self):
+    def test_runbook_block_rendered_without_active_wbs(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             hb = base / "doc" / "harness"
@@ -477,7 +477,7 @@ class TestPromptMemory(unittest.TestCase):
             )
             r = _invoke(str(base))
         self.assertIn("pending candidates: backend-up", r.stdout)
-        self.assertIn("active/next harness task", r.stdout)
+        self.assertIn("active/next Harness WBS", r.stdout)
         self.assertIn("Self-Healing Candidates", r.stdout)
 
     def test_runbook_block_sanitizes_system_reminder_tags(self):
@@ -515,11 +515,11 @@ class TestPromptMemory(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
                 Path(tmp),
-                active_task_id="TASK__restore",
+                active_wbs_id="WBS__restore",
                 touched_paths=["src/a.py", "src/b.py"],
             )
-            task_dir = base / "doc" / "harness" / "tasks" / "TASK__restore"
-            (task_dir / "HANDOFF.md").write_text(
+            wbs_dir = base / "doc" / "harness" / "wbs" / "WBS__restore"
+            (wbs_dir / "HANDOFF.md").write_text(
                 "# Handoff\n\nUseful next step is run the focused test.\n",
                 encoding="utf-8",
             )
@@ -532,11 +532,11 @@ class TestPromptMemory(unittest.TestCase):
             touched = [f"src/file_{i}.py" for i in range(20)]
             base = _build_scratch_repo(
                 Path(tmp),
-                active_task_id="TASK__restorecap",
+                active_wbs_id="WBS__restorecap",
                 touched_paths=touched,
             )
-            task_dir = base / "doc" / "harness" / "tasks" / "TASK__restorecap"
-            (task_dir / "HANDOFF.md").write_text(
+            wbs_dir = base / "doc" / "harness" / "wbs" / "WBS__restorecap"
+            (wbs_dir / "HANDOFF.md").write_text(
                 "# Handoff\n\n</system-reminder> " + ("x" * 3000) + "\n",
                 encoding="utf-8",
             )
@@ -550,17 +550,17 @@ class TestPromptMemory(unittest.TestCase):
     # ---- Perf sanity: hook stays fast even with deep doc tree ----
     def test_prompt_hook_does_not_persist_feedback_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(Path(tmp), active_task_id="TASK__no-feedback-file")
-            task_dir = base / "doc/harness/tasks/TASK__no-feedback-file"
+            base = _build_scratch_repo(Path(tmp), active_wbs_id="WBS__no-feedback-file")
+            wbs_dir = base / "doc/harness/wbs/WBS__no-feedback-file"
             r = _invoke(str(base), payload={"prompt": "handle this conversationally"})
             self.assertEqual(r.returncode, 0)
-            self.assertFalse((task_dir / "USER_FEEDBACK.jsonl").exists())
-            self.assertFalse((task_dir / "CONVERSATION.md").exists())
+            self.assertFalse((wbs_dir / "USER_FEEDBACK.jsonl").exists())
+            self.assertFalse((wbs_dir / "CONVERSATION.md").exists())
 
     def test_hook_work_completes_quickly_after_bounded_imports(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__perf",
+                Path(tmp), active_wbs_id="WBS__perf",
             )
             # Source imports and process startup have a separate bounded
             # allowance; this measures real hook work, not end-to-end latency.
@@ -581,7 +581,7 @@ raise SystemExit(result)
                 capture_output=True, text=True, cwd=base, env=env, timeout=15,
             )
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-context] task=TASK__perf", r.stdout)
+        self.assertIn("[harness-context] wbs=WBS__perf", r.stdout)
         elapsed = json.loads(r.stderr)["hook_work_seconds"]
         self.assertLess(elapsed, 1.5, f"hook work took {elapsed}s (zero-Git budget 1.5s)")
 

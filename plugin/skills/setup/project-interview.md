@@ -3,15 +3,15 @@
 Two useful questions at install time, plus fixed operating defaults. Captures
 project purpose and verification facts without asking users to design Harness.
 Runs once during `setup` Phase 2.0, and can be re-opened by an active harness
-task when the project character has drifted (re-anchor).
+WBS when the project character has drifted (re-anchor).
 
 ## When to skip
 
 - User passed `--skip-interview`.
 - `doc/common/CLAUDE.md` already has a non-empty `summary:` field AND
   `doc/harness/manifest.yaml` exists (upgrade/rerun case). In that case,
-  the active/next harness task may re-open this interview when drift is suspected.
-- `MAINTENANCE` marker in task dir (maintenance-only install).
+  the active/next Harness WBS may re-open this interview when drift is suspected.
+- `MAINTENANCE` marker in WBS dir (maintenance-only install).
 
 ## Voice
 
@@ -43,10 +43,10 @@ Also seeds `doc/common/REQ__project__primary-goals.md` first paragraph.
 
 Record these values as configuration defaults during every setup, never as user-selected intent. (Q3 "status quo" was
 retired 2026-09-26: it only fed a manifest field that no code read.
-Execution mode, planning procedure, and review depth are chosen per task.)
+Execution mode, planning procedure, and review depth are chosen per WBS.)
 
 - Q2 audience: `D` — public library/SaaS
-- Q4 wedge: `C` — full task start → plan → develop → QA → close loop with automatic internal review and verification
+- Q4 wedge: `C` — full WBS open → plan → develop → QA → close loop with automatic internal review and verification
 
 **Maps to:**
 - Q2 (Audience) → `doc/harness/manifest.yaml` `audience:` (신규 필드).
@@ -81,7 +81,7 @@ AskUserQuestion:
 Before any permanent file write, dump the four answers (Q1, Q2, Q4, Q5) to
 `doc/harness/.interview-answers.json` (tmp). This is the single
 authoritative record. If the setup crashes mid-apply, this file lets a later
-setup or active harness task replay the config without re-asking the user.
+setup or active Harness WBS replay the config without re-asking the user.
 
 **Schema (v1):**
 ```json
@@ -130,7 +130,7 @@ interview-derived prose state file.
 ### Step 4 — Log re-interview trigger for continuous maintenance
 
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational","source":"project-interview","key":"initial-interview-done","insight":"wedge=<Q4>, verify=<Q5 short>","task":"setup"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational","source":"project-interview","key":"initial-interview-done","insight":"wedge=<Q4>, verify=<Q5 short>","wbs":"setup"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 ## Re-interview flow (continuous maintenance)

@@ -45,14 +45,14 @@ def owner(monkeypatch):
     monkeypatch.setattr(sys.modules["_lib"], "_trusted_control_writer", lambda: True)
 
 
-def spec(goal="GOAL__old", task="TASK__integration"):
+def spec(goal="GOAL__old", task="WBS__integration"):
     requests = [dict(slug=slug, request="Implement " + slug, scopes=[slug], depends_on=[]) for slug in ("a", "b")]
     identity = json.dumps([goal, task], separators=(",", ":")).encode()
     return dict(batch_id="goal-" + hashlib.sha256(identity).hexdigest(), requests=requests)
 
 
 def test_preview_read_only_and_apply_archive_idempotent(tmp_path, owner):
-    path = row(tmp_path, tasks=[dict(task_id="TASK__ordinary", title="Historical assertion", status="closed")])
+    path = row(tmp_path, tasks=[dict(wbs_id="WBS__ordinary", title="Historical assertion", status="closed")])
     original = path.read_bytes()
     report = migration.preview(tmp_path)
     assert report["status"] == "preview" and len(report["destinations"]) == 1
@@ -62,7 +62,7 @@ def test_preview_read_only_and_apply_archive_idempotent(tmp_path, owner):
     assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / path.name).read_bytes() == original
     note = (tmp_path / report["destinations"][0]).read_text()
     assert "unverified historical intent" in note and "Historical assertion" in note
-    assert not list(tmp_path.rglob("TASK.json")) and not list(tmp_path.rglob("WBS.json"))
+    assert not list(tmp_path.rglob("WBS.control.json")) and not list(tmp_path.rglob("WBS.json"))
     assert migration.apply(tmp_path) == result == migration.preview(tmp_path)
 
 
@@ -83,9 +83,9 @@ def test_bad_inputs_refuse_before_any_publication(tmp_path, owner, corrupt):
     elif corrupt == "filename":
         path.rename(path.with_name("GOAL__wrong.json"))
     elif corrupt == "child_path":
-        row(tmp_path, tasks=[dict(task_id="TASK__a", task_dir="../../outside")])
+        row(tmp_path, tasks=[dict(wbs_id="WBS__a", wbs_dir="../../outside")])
     elif corrupt == "duplicate_child":
-        row(tmp_path, tasks=[dict(task_id="TASK__a"), dict(task_id="TASK__a")])
+        row(tmp_path, tasks=[dict(wbs_id="WBS__a"), dict(wbs_id="WBS__a")])
     else:
         path.write_bytes(b" " * (migration.LIMIT + 1))
     with pytest.raises(ValueError):
@@ -129,11 +129,11 @@ def test_notes_aggregate_objective_without_claiming_user_source(tmp_path, owner)
 
 def test_missing_pool_preview_has_exact_recovery_and_apply_refuses(tmp_path, owner):
     value = spec()
-    row(tmp_path, tasks=[dict(task_id="TASK__integration", batch=value)])
+    row(tmp_path, tasks=[dict(wbs_id="WBS__integration", batch=value)])
     report = migration.preview(tmp_path)
     recovery = report["blockers"][0]
     assert recovery["batch_id"] == value["batch_id"] and recovery["requests"] == value["requests"]
-    assert recovery["task_id"] == "TASK__integration" and recovery["wbs_id"] == "WBS__integration"
+    assert recovery["wbs_id"] == "WBS__integration" and recovery["wbs_id"] == "WBS__integration"
     with pytest.raises(ValueError, match="missing legacy pool"):
         migration.apply(tmp_path)
     assert not (tmp_path / migration.ARCHIVE).exists()
@@ -145,16 +145,16 @@ def test_initialized_pool_import_is_unbaselined_not_new_admission(tmp_path, monk
     value = spec()
     pool.batch = value["batch_id"]
     pool.init(value["requests"])
-    row(pool.repo, tasks=[dict(task_id="TASK__integration", batch=value)])
+    row(pool.repo, tasks=[dict(wbs_id="WBS__integration", batch=value)])
     import work_pack
     monkeypatch.setattr(work_pack, "make_spec", lambda *a: pytest.fail("must not re-admit an existing pool"))
     result = migration.apply(pool.repo)
     assert not result["blockers"]
-    state_path = pool.repo / "doc/harness/tasks/TASK__integration/WBS.json"
+    state_path = pool.repo / "doc/harness/wbs/WBS__integration/WBS.json"
     state = json.loads(state_path.read_text())
     assert state == dict(version=1, nodes=[], checks={}, run_id="", started_at=0, last_progress_at=0,
-                         pack_only=True, batch=dict(task_id="TASK__integration", **value))
-    assert not state_path.with_name("TASK.json").exists()
+                         pack_only=True, batch=dict(wbs_id="WBS__integration", **value))
+    assert not state_path.with_name("WBS.control.json").exists()
     assert json.loads(pool.state.read_text())["batch_id"] == value["batch_id"]
 
 
@@ -164,21 +164,21 @@ def test_wbs_metadata_only_preserves_evidence_and_opaque_pool(tmp_path, owner):
                  checks={}, run_id="existing-run", started_at=19, last_progress_at=23,
                  batch_goal_id="GOAL__wbs-old", batch=value,
                  batch_history=[dict(batch_goal_id="GOAL__wbs-old", batch=value)])
-    path = write(tmp_path, "doc/harness/tasks/TASK__integration/WBS.json", state)
-    control = write(tmp_path, "doc/harness/tasks/TASK__integration/TASK.json", dict(
+    path = write(tmp_path, "doc/harness/wbs/WBS__integration/WBS.json", state)
+    control = write(tmp_path, "doc/harness/wbs/WBS__integration/WBS.control.json", dict(
         run_id=_lib.new_uuid7(), execution_mode="standard",
         required_lenses=["review-code", "qa-cli"], closed=False))
-    receipt = write(tmp_path, "doc/harness/tasks/TASK__integration/RECEIPTS.jsonl", b'old exact receipt bytes')
+    receipt = write(tmp_path, "doc/harness/wbs/WBS__integration/RECEIPTS.jsonl", b'old exact receipt bytes')
     originals = (path.read_bytes(), control.read_bytes(), receipt.read_bytes())
     migration.apply(tmp_path)
     expected = copy.deepcopy(state)
     del expected["batch_goal_id"]
     del expected["batch_history"][0]["batch_goal_id"]
-    expected["batch"]["task_id"] = "TASK__integration"
-    expected["batch_history"][0]["batch"]["task_id"] = "TASK__integration"
+    expected["batch"]["wbs_id"] = "WBS__integration"
+    expected["batch_history"][0]["batch"]["wbs_id"] = "WBS__integration"
     assert json.loads(path.read_text()) == expected
     assert (control.read_bytes(), receipt.read_bytes()) == originals[1:]
-    assert (tmp_path / migration.ARCHIVE / "original/doc/harness/tasks/TASK__integration/WBS.json").read_bytes() == originals[0]
+    assert (tmp_path / migration.ARCHIVE / "original/doc/harness/wbs/WBS__integration/WBS.json").read_bytes() == originals[0]
 
 
 @pytest.mark.parametrize("failure_stage", ["publish", "retire"])
@@ -272,23 +272,23 @@ def test_durable_commit_stages_retry_without_loss(tmp_path, monkeypatch, owner, 
 
 def test_unrelated_symlink_not_traversed_but_referenced_child_refused(tmp_path, owner):
     row(tmp_path)
-    tasks = tmp_path / "doc/harness/tasks"
+    tasks = tmp_path / "doc/harness/wbs"
     tasks.mkdir(parents=True)
-    (tasks / "TASK__unrelated").symlink_to(tmp_path / "outside", target_is_directory=True)
+    (tasks / "WBS__unrelated").symlink_to(tmp_path / "outside", target_is_directory=True)
     assert migration.preview(tmp_path)["status"] == "preview"
-    row(tmp_path, tasks=[dict(task_id="TASK__unrelated")])
+    row(tmp_path, tasks=[dict(wbs_id="WBS__unrelated")])
     with pytest.raises(ValueError, match="symlink"):
         migration.apply(tmp_path)
 
 
 def test_noncanonical_absolute_child_refused(tmp_path, owner):
-    row(tmp_path, tasks=[dict(task_id="TASK__a", task_dir="/elsewhere/doc/harness/tasks/TASK__a")])
+    row(tmp_path, tasks=[dict(wbs_id="WBS__a", wbs_dir="/elsewhere/doc/harness/wbs/WBS__a")])
     with pytest.raises(ValueError, match="noncanonical"):
         migration.preview(tmp_path)
 
 
 def test_existing_absolute_canonical_child_accepted(tmp_path, owner):
-    row(tmp_path, tasks=[dict(task_id="TASK__a", task_dir=str(tmp_path / "doc/harness/tasks/TASK__a"))])
+    row(tmp_path, tasks=[dict(wbs_id="WBS__a", wbs_dir=str(tmp_path / "doc/harness/wbs/WBS__a"))])
     assert migration.apply(tmp_path)["status"] == "complete"
 
 
@@ -297,7 +297,7 @@ def test_copied_legacy_binding_cannot_change_owner(tmp_path, owner):
     state = dict(version=1, nodes=[dict(id="one", title="Observed result", weight=1, parent=None, depends_on=[])],
                  checks={}, run_id="existing-run", started_at=0, last_progress_at=0,
                  batch_goal_id="GOAL__old", batch=value)
-    write(tmp_path, "doc/harness/tasks/TASK__different/WBS.json", state)
+    write(tmp_path, "doc/harness/wbs/WBS__different/WBS.json", state)
     with pytest.raises(ValueError, match="identity or intake"):
         migration.apply(tmp_path)
     assert not (tmp_path / migration.ARCHIVE).exists()
@@ -309,15 +309,15 @@ def test_unstarted_binding_preserves_existing_control_identity(tmp_path, monkeyp
     value = spec()
     pool.batch = value["batch_id"]
     pool.init(value["requests"])
-    row(pool.repo, tasks=[dict(task_id="TASK__integration", batch=value)])
+    row(pool.repo, tasks=[dict(wbs_id="WBS__integration", batch=value)])
     control = dict(run_id=_lib.new_uuid7(), execution_mode="standard", required_lenses=["review-code", "qa-cli"],
                    closed=False)
-    path = write(pool.repo, "doc/harness/tasks/TASK__integration/TASK.json", control)
+    path = write(pool.repo, "doc/harness/wbs/WBS__integration/WBS.control.json", control)
     original = path.read_bytes()
     migration.apply(pool.repo)
     state = json.loads(path.with_name("WBS.json").read_text())
     assert state["run_id"] == control["run_id"] and path.read_bytes() == original
-    assert state["batch"]["task_id"] == "TASK__integration"
+    assert state["batch"]["wbs_id"] == "WBS__integration"
 
 
 def test_active_legacy_writer_refuses_without_retiring_sources(tmp_path, owner):
@@ -342,7 +342,7 @@ def test_migration_manifest_and_originals_are_hook_protected():
         assert prewrite_gate._protected_denial(relative)[0] == 'legacy-data-migration'
 
 
-@pytest.mark.parametrize("relative", ["doc/harness/tasks/TASK__native/MIGRATION.md",
+@pytest.mark.parametrize("relative", ["doc/harness/wbs/WBS__native/MIGRATION.md",
                                       "doc/harness/archive/goal-migration/original/doc/harness/goals/GOAL__old.json"])
 @pytest.mark.parametrize("stage", ["temporary", "publication"])
 def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative, stage):
@@ -581,7 +581,7 @@ def test_wbs_destination_respects_its_existing_writer_lock(tmp_path, owner):
     state = dict(version=1, nodes=[dict(id='A', title='Observed result', weight=1)],
                  checks={}, run_id='old', started_at=1, last_progress_at=1,
                  batch_goal_id='GOAL__wbs-old', batch=value)
-    path = write(tmp_path, 'doc/harness/tasks/TASK__integration/WBS.json', state)
+    path = write(tmp_path, 'doc/harness/wbs/WBS__integration/WBS.json', state)
     before = path.read_bytes()
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -1025,7 +1025,7 @@ def test_public_wbs_migration_uses_its_isolated_root_without_hook_bypass(tmp_pat
     assert not applied.get("isError"), applied
     assert applied["structuredContent"]["status"] == "complete" and not source.exists()
     assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
-    assert not list(tmp_path.rglob("TASK.json")) and not list(tmp_path.rglob(".migration-*"))
+    assert not list(tmp_path.rglob("WBS.control.json")) and not list(tmp_path.rglob(".migration-*"))
 
 
 def test_completed_migration_allows_live_pool_and_wbs_evolution(tmp_path, monkeypatch, owner):
@@ -1034,11 +1034,11 @@ def test_completed_migration_allows_live_pool_and_wbs_evolution(tmp_path, monkey
     value = spec()
     pool.batch = value['batch_id']
     pool.init(value['requests'])
-    row(pool.repo, tasks=[dict(task_id='TASK__integration', batch=value)])
+    row(pool.repo, tasks=[dict(wbs_id='WBS__integration', batch=value)])
     migration.apply(pool.repo)
     archived = tree_snapshot(pool.repo / migration.ARCHIVE)
     assert pool.claim()
-    state_path = pool.repo / 'doc/harness/tasks/TASK__integration/WBS.json'
+    state_path = pool.repo / 'doc/harness/wbs/WBS__integration/WBS.json'
     state = json.loads(state_path.read_text())
     state['last_progress_at'] = 123
     state_path.write_text(json.dumps(state))
@@ -1053,14 +1053,14 @@ def test_completed_migration_allows_live_pool_and_wbs_evolution(tmp_path, monkey
 def test_completed_migration_retains_immutable_custody(tmp_path, owner, corruption):
     state = dict(version=1, nodes=[dict(id='one', title='Observed result', weight=1, parent=None, depends_on=[])],
                  checks={}, run_id='existing-run', started_at=19, last_progress_at=23, batch_goal_id='GOAL__old', batch=spec())
-    write(tmp_path, 'doc/harness/tasks/TASK__integration/WBS.json', state)
+    write(tmp_path, 'doc/harness/wbs/WBS__integration/WBS.json', state)
     source = row(tmp_path)
     result = migration.apply(tmp_path)
     path = next(tmp_path / p for p in result['destinations'] if p.endswith('MIGRATION.md'))
     if corruption == 'source_archive':
         path = tmp_path / migration.ARCHIVE / 'original' / migration.GOALS / source.name
     elif corruption == 'destination_archive':
-        path = tmp_path / migration.ARCHIVE / 'original/doc/harness/tasks/TASK__integration/WBS.json'
+        path = tmp_path / migration.ARCHIVE / 'original/doc/harness/wbs/WBS__integration/WBS.json'
     path.write_bytes(b'changed custody')
     for operation in (migration.preview, migration.apply):
         with pytest.raises(ValueError):

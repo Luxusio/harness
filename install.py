@@ -505,22 +505,9 @@ def _tree_inventory(root: Path) -> tuple[str, dict[str, tuple[str, int, str]], s
 
 
 def _compare_payload_trees(expected: Path, actual: Path) -> tuple[str, str]:
-    # The expected tree is built seconds ago by `copytree(..., copy2)` from the
-    # source checkout, so it inherits the source's modes. On a checkout
-    # bind-mounted from a Windows host every file reads `0o777`, and
-    # `_tree_inventory` then refuses a tree this installer created itself, from
-    # bytes it is about to install anyway: the default run dies with `expected
-    # payload unavailable`, which takes out `install_verified.py` — the
-    # harness's own delivery path — while `--force` still works.
-    #
-    # Normalizing here is a correction, not a loosening. The expected tree is
-    # the *canonical projection* of what an install produces, and since
-    # `_normalize_payload_modes` an install produces cleared `0o022` bits; the
-    # projection was simply missing the installer's own last step. No source
-    # mode is trusted, compared, or allowed into a verdict — it is removed from
-    # the installer's own scratch copy before that copy is inventoried. The
-    # `actual` side is deliberately not normalized here: this function reads an
-    # installed tree, and the install paths own mutating it.
+    # Compare the installer's canonical scratch projection, normalizing only
+    # that owned tree. Existing installed bytes/modes must remain untouched by
+    # comparison, so an unsafe actual tree still fails the guarded inventory.
     # See `doc/harness/REQ__installed-tree-modes-are-installer-owned.md`.
     _normalize_payload_modes(expected)
     expected_state, expected_inventory, expected_reason = _tree_inventory(expected)
@@ -803,7 +790,7 @@ def _reject_real_install_root_under_test(path: Path) -> None:
     the live runtime, and the damage is normally invisible: on 2026-09-09 a
     review round widened `_prune_bytecode_caches` to `rmtree(cache.parent)` and
     the suite deleted the installed `plugin/scripts` and `plugin/mcp`, silently
-    disabling runtime task operations for the session that ran it.
+    disabling runtime WBS operations for the session that ran it.
 
     The user's home comes from the password database, not `Path.home()`: a test
     that points `HOME` at `tmp_path` is exactly the isolated case this guard
@@ -863,11 +850,10 @@ def _prune_bytecode_caches(root: Path) -> list[str]:
 def _normalize_payload_modes(root: Path) -> list[str]:
     """Clear group/other-write bits across an installer-owned tree.
 
-    The payload is copied with `shutil.copytree(..., copy2)`, which preserves
-    source modes. On a checkout bind-mounted from a Windows host every file
-    reads as `0o777`, so the installed runtime lands world-writable — and
-    canonical source validation refuses writable runtime modules. Normalize
-    installed modes before smoke testing, including synchronized payloads.
+    Private content projections choose normalized modes without copying source
+    xattrs. Existing payloads may still carry host-derived writable modes from
+    older installs. Normalize installed modes before smoke testing, including
+    synchronized payloads; canonical validation keeps rejecting unsafe modules.
 
     Normalizing here rather than relaxing the guards is deliberate. The mode
     check is a real security property — a world-writable module is one any local
@@ -948,27 +934,45 @@ def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple
 
 
 def _copytree_clean(src: Path, dst: Path, *, extra_ignores: tuple[str, ...] = ()) -> None:
+    """Copy payload content without importing filesystem ownership metadata."""
     if dst.exists():
         shutil.rmtree(dst)
-    shutil.copytree(
-        src,
-        dst,
-        ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", ".pytest_cache", ".omc", *extra_ignores,
-        ),
+    ignore = shutil.ignore_patterns(
+        "__pycache__", "*.pyc", ".pytest_cache", ".omc", *extra_ignores,
     )
-    # Only this newly copied private projection is changed. Generated files
-    # and child projections must remain writable even from a read-only source.
-    for parent, dirs, files in os.walk(dst, followlinks=False):
-        for path in [Path(parent), *(Path(parent) / name for name in dirs + files)]:
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode):
+
+    def owned_mode(path: Path, mode: int) -> None:
+        info = path.lstat()
+        if info.st_uid != os.getuid():
+            raise PermissionError(
+                f"private projection is not owned by this installer: {path} "
+                f"(uid {info.st_uid}, installer uid {os.getuid()})"
+            )
+        os.chmod(path, mode, follow_symlinks=False)
+
+    def copy_directory(source: Path, destination: Path) -> None:
+        destination.mkdir(parents=True)
+        owned_mode(destination, 0o700)
+        source_mode = stat.S_IMODE(source.stat().st_mode)
+        entries = list(source.iterdir())
+        ignored = ignore(str(source), [entry.name for entry in entries])
+        for entry in entries:
+            if entry.name in ignored:
                 continue
-            if info.st_uid != os.getuid():
-                raise PermissionError(f"private projection is not owned by this installer: {path}")
-            mode = (stat.S_IMODE(info.st_mode) | stat.S_IWUSR) & ~0o022
-            if stat.S_IMODE(info.st_mode) != mode:
-                os.chmod(path, mode, follow_symlinks=False)
+            target = destination / entry.name
+            info = entry.stat()
+            if stat.S_ISDIR(info.st_mode):
+                copy_directory(entry, target)
+            else:
+                # copy2/copystat copy directory and file xattrs, including
+                # ownership metadata interpreted by mapped virtual filesystems.
+                # copyfile transfers bytes only; source links retain the prior
+                # dereference semantics, without changing their targets.
+                shutil.copyfile(entry, target)
+                owned_mode(target, (stat.S_IMODE(info.st_mode) | stat.S_IWUSR) & ~0o022)
+        owned_mode(destination, (source_mode | stat.S_IWUSR) & ~0o022)
+
+    copy_directory(Path(src), Path(dst))
 
 
 def _activate_staged_tree(staged: Path, target: Path) -> None:
@@ -1125,7 +1129,7 @@ def _codex_marketplace_payload(version: str) -> dict:
     return {
         "name": "harness",
         "display_name": "Harness",
-        "description": "Task harness plugin for Codex.",
+        "description": "WBS execution harness plugin for Codex.",
         "owner": {"name": "harness", "url": "https://example.invalid/harness"},
         "plugins": [
             {
@@ -1133,7 +1137,7 @@ def _codex_marketplace_payload(version: str) -> dict:
                 "source": "./plugins/harness",
                 "category": "productivity",
                 "version": version,
-                "description": "MCP-backed task planning, development, QA, and docs sync workflow.",
+                "description": "One WBS for planning, development, QA, and documentation.",
             }
         ],
     }
@@ -1248,10 +1252,17 @@ def _verify_claude_selected_cache(mirror: Path, steps: list[str]) -> tuple[bool,
         entry = selected[0]
         version = json.loads((mirror / ".claude-plugin" / "plugin.json").read_text())["version"]
         cache = Path(entry["installPath"])
-        expected = config / "plugins" / "cache" / "harness" / "harness" / version
+        if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,179}", version):
+            raise ValueError("expected version is not a safe cache component")
+        cache_parent = config / "plugins" / "cache" / "harness" / "harness"
+        # Claude may normalize semver build metadata '+' to '-' in its cache
+        # directory name. Registry identity and payload version remain exact.
+        components = {version, version.replace("+", "-")}
         if entry.get("version") != version:
             raise ValueError(f"selected version {entry.get('version')!r} differs from expected {version}")
-        if not cache.is_absolute() or cache != expected or cache.resolve() != expected.absolute():
+        if (not cache.is_absolute() or cache.parent != cache_parent
+                or cache.name not in components or cache.resolve() != cache.absolute()):
+            expected = ", ".join(str(cache_parent / name) for name in sorted(components))
             raise ValueError(f"selected cache path {cache} differs from expected {expected}")
         # Existing guarded comparison refuses unsafe ancestors, modes and links.
         # Build the expected projection independently: never normalize the selected cache.
@@ -1330,7 +1341,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                             "type": "command",
                             "command": f"{_python_hook_cmd()} {shlex.quote(str(hooks['PostToolUse']))}",
                             "timeout": 10,
-                            "statusMessage": "Checking harness task routing",
+                            "statusMessage": "Checking Harness WBS routing",
                         }
                     ],
                 }
@@ -2026,7 +2037,7 @@ def _install_codex(*, dry_run: bool, force: bool,
                         return InstallResult(
                             "codex", False,
                             "installed Codex runtime failed its smoke test — "
-                            "installed runtime task operations are unavailable",
+                            "installed runtime WBS operations are unavailable",
                             steps,
                         )
             return InstallResult(
@@ -2076,7 +2087,7 @@ def _install_codex(*, dry_run: bool, force: bool,
             return InstallResult(
                 "codex", False,
                 "installed Codex runtime failed its smoke test — hooks cannot "
-                "perform task operations from this tree",
+                "perform WBS operations from this tree",
                 steps,
             )
 
@@ -2225,7 +2236,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     else:
         installed_plugin_root = sync_claude_payload(claude_install_root)
         steps.append(f"synced plugin payload to {claude_install_root} (.git excluded)")
-        # `copytree` preserved the source modes; normalize before the smoke
+        # Older payloads may retain source modes; normalize before the smoke
         # imports anything out of this tree.
         steps.extend(_normalize_payload_modes(claude_install_root))
         smoke_ok, smoke_steps = _smoke_installed_runtime(installed_plugin_root)
@@ -2234,7 +2245,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
             return InstallResult(
                 "claude", False,
                 "installed Claude runtime failed its smoke test — hooks cannot "
-                "perform task operations from this tree",
+                "perform WBS operations from this tree",
                 steps,
             )
 

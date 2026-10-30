@@ -13,7 +13,7 @@ invalidated_by_paths:
   - plugin/scripts/batch_submodules.py
   - plugin/scripts/setup_finalize.py
   - plugin/scripts/batch_preflight.py
-  - plugin/agents/task-lead.md
+  - plugin/agents/wbs-lead.md
   - plugin/skills/batch/SKILL.md
   - CONTRACTS.md
 freshness_updated: 2026-10-19T06:06:13Z
@@ -35,7 +35,7 @@ freshness_updated: 2026-10-19T06:06:13Z
   합칠때 그냥 rebase fast-forward로 해줘". The main branch history stays
   linear.
 - (2026-09-28) Lead agents keep their prompt cache for one hour through the
-  per-agent `experimental: { cacheTtl: 1h }` in `plugin/agents/task-lead.md`
+  per-agent `experimental: { cacheTtl: 1h }` in `plugin/agents/wbs-lead.md`
   (wave 1 measured 89% of lead cache writes as 5-minute expiries; see
   `doc/harness/GUIDE__how-harness-works.md` §10.6). A
   session-wide `subagentPromptCacheTtl` was rejected; add none anywhere.
@@ -44,7 +44,7 @@ freshness_updated: 2026-10-19T06:06:13Z
 
 ## Worktree completion intent and derived mechanism (2026-10-20)
 
-User source: current conversation, “야 지금 작업하면서 자꾸 worktree제대로 정리 안 하는 현상 있는데? 이것도 고쳐야겠는데?” The requested outcome is completion and cleanup of task-owned temporary worktrees while preserving their intended changes.
+User source: current conversation, “야 지금 작업하면서 자꾸 worktree제대로 정리 안 하는 현상 있는데? 이것도 고쳐야겠는데?” The requested outcome is completion and cleanup of WBS-owned temporary worktrees while preserving their intended changes.
 
 Derived implementation decision: authenticate process-owned Codex native identity before eager workspace binding and reuse the existing binding/registration owners. This is an engineering mechanism for the requested completion outcome, not a claim that the user requested a particular authentication design. Retention of unresolved work remains required; successful integration and evidence harvest precede disposal.
 
@@ -63,7 +63,7 @@ real host identity before mutation. Actual stopped-worker completion validates
 closure and runs existing serial integration, archive and removal; retries use
 original checkpoints. A derived optional `recover recovery_commit=<exact SHA>`
 acknowledges an independently reviewed conflict-resolved tip only at its original
-pre-integration checkpoint, with stopped writers, unchanged W/branch/task/run
+pre-integration checkpoint, with stopped writers, unchanged W/branch/WBS/run
 and valid close proof, plus destination ancestry. It does not rewrite the lead
 result; normal `complete` accepts only that original result.
 Hooks/context discover pending work, never authorize or
@@ -73,52 +73,52 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
 ## Requirement
 
 - One Claude Code session can run several harness tasks at once. The main
-  session is the coordinator. It spawns one `harness:task-lead` subagent per
-  task, and each lead receives its exact MCP-created linked checkout under
+  session is the coordinator. It spawns one `harness:wbs-lead` subagent per
+  WBS, and each lead receives its exact MCP-created linked checkout under
   `<repo>/.claude/worktrees/<name>`. Claude does not request native isolation;
   both runtimes verify and reuse the managed handoff (see "Worktree location").
 - Codex uses the same pool with MCP-created registered worktrees and
-  native lead agents. Its task tools pass canonical workspace while native cwd
+  native lead agents. Its WBS tools pass canonical workspace while native cwd
   may remain main; the shared binding owner binds the authenticated coordinator to the
   worktree. See `plugin-codex/internal-skills/batch/SKILL.md` and the
   [receipt-free execution contract](REQ__receipt-free-execution-and-completion.md).
 - Each linked worktree is a separate checkout with its own write focus (C-09).
-  Task state under `doc/harness/tasks/` is gitignored, so every worktree has
-  its own task namespace, focus markers, and measured WBS checks.
+  Task state under `doc/harness/wbs/` is gitignored, so every worktree has
+  its own WBS namespace, focus markers, and measured WBS checks.
 - A lead runs the normal lifecycle (`wbs(action="open")` → plan → develop → review/QA
   → `wbs(action="close")`) inside its worktree and commits on its branch, in one commit
-  carrying a `Harness-Task: <task_id>` trailer (`git commit --trailer`), so
-  the task stays traceable after the rebase gives that commit a new id. It
+  carrying a `Harness-WBS: <wbs_id>` trailer (`git commit --trailer`), so
+  the WBS stays traceable after the rebase gives that commit a new id. It
   never asks the user; undelegated material decisions go back to the
   coordinator.
 - The coordinator integrates lead branches into the main checkout one at a
   time. For each closed lead it rebases the lead branch onto the main
   checkout's current HEAD inside the lead's worktree
   (`git -C <W> rebase --no-autostash <main HEAD>`), fast-forwards the main
-  checkout (`git merge --ff-only <branch>`), harvests the lead's task
+  checkout (`git merge --ff-only <branch>`), harvests the lead's WBS
   evidence, then removes the worktree and branch;
   MCP `dispatch operation="complete"` runs that whole step for one lead via
   `batch_state.py` and `batch_finish.py`, then closes an eligible disposed pool. No
   merge commit is created. After every lead integrates and cleanup completes,
   reopen the same owning WBS in main for the full suite, review, QA and — in
   the harness source repo — verified install. A standalone batch uses its
-  ordinary integration task. Leads never run `install_verified.py`.
+  ordinary integration WBS. Leads never run `install_verified.py`.
 - The coordinator persists requests, reservations, worker/worktree identity and
   integration checkpoints through `batch_state.py`. It refills available slots
   without waiting for a whole wave; dependent requests wait for confirmed
   integration and cleanup. MCP creates the validated retention marker; bootstrap-only leads verify it
   and return identity before `bind` permits their normal lifecycle. The
   marker preserves operational ownership and earlier retained native worktrees
-  until durable harvest; it is never staged or treated as task authority. Exact restart, retained-scope reservations,
+  until durable harvest; it is never staged or treated as WBS authority. Exact restart, retained-scope reservations,
   cap selection and abandonment semantics are owned by
   [Batch state, bounded scheduling and recovery](REQ__batch-state-pool-recovery.md).
 - The coordinator procedure (intake, preflight, spawn, rebase/conflict path,
   harvest, integration) is owned by `plugin/skills/batch/SKILL.md`; the lead's
-  rules and its JSON return shape by `plugin/agents/task-lead.md`.
-- While any lead runs, no harness task may be open in the main checkout for the
+  rules and its JSON return shape by `plugin/agents/wbs-lead.md`.
+- While any lead runs, no harness WBS may be open in the main checkout for the
   same session. A late lens stop from a lead whose worktree was already
   removed resolves its `cwd` up to the main checkout, and it must find no open
-  task there to bind to.
+  WBS there to bind to.
 
 ## Integration by rebase and fast-forward
 
@@ -147,7 +147,7 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   progress?" when the rebase never started). A conflict and a dirty-worktree
   refusal both exit 1, so the coordinator tells them apart by the conflicted
   paths (`git -C <W> diff --name-only --diff-filter=U`) listed before the
-  abort. A conflict stops the wave and is carried into the integration task,
+  abort. A conflict stops the wave and is carried into the integration WBS,
   which reruns the rebase, resolves in the worktree, and continues with
   `GIT_EDITOR=true git -C <W> rebase --continue` once per stopped commit;
   without an editor, `--continue` fails. Any other failure (dirty worktree,
@@ -156,16 +156,16 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   continues. An `--ff-only` refusal means the main checkout moved; the
   coordinator stops and reports it.
 - Known limit: a rebase treats ignored files as expendable. If the main
-  history tracks a file at a path that is ignored task evidence in a lead
+  history tracks a file at a path that is ignored WBS evidence in a lead
   worktree (only possible by force-adding it), the rebase overwrites that
   evidence silently before harvest copies it.
 - Every lead after the first gets new commit ids. Those rebased commits are
-  not the exact tree that lead's reviewers and QA saw; the integration task's
+  not the exact tree that lead's reviewers and QA saw; the integration WBS's
   full suite, review, and QA run on the combined result, as they did for merge
   commits before. The lead's returned `commit` is its pre-rebase tip, so the
   coordinator records the main HEAD after each fast-forward, and the report
   lists both.
-- `plugin/scripts/batch_finish.py --repo --worktree --branch --task-id
+- `plugin/scripts/batch_finish.py --repo --worktree --branch --wbs-id
   --commit` owns SKILL step d for one closed lead. Before it changes
   anything it checks that the worktree is a registered linked worktree of
   the repository with no rebase in progress and the branch checked out, that
@@ -192,14 +192,14 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   rebase writes commits and a container or CI identity may exist only
   there. It prints one JSON object whose twelve keys are present on every
   status, a failed check and `error` included: `status`, `reason`,
-  `task_id`, `branch`, `worktree` (realpath), `returned_commit` (the full
+  `wbs_id`, `branch`, `worktree` (realpath), `returned_commit` (the full
   sha once it resolves), `branch_tip`, `integrated_tip`,
   `conflicted_paths`, `trailer_present`, `harvest` (the harvest summary or
   null), and `cleanup` with the booleans `unlocked`, `relocked`, `removed`,
   and `branch_deleted` (`removed: true` with `branch_deleted: false` means
   only the branch was kept). It exits with the status: `integrated` 0,
   `kept` 3 (this lead stays, the wave goes on), `conflict` 4 (stop,
-  resolve in the integration task), `ff-refused` 5 (the main checkout is
+  resolve in the integration WBS), `ff-refused` 5 (the main checkout is
   dirty, detached, changed branch identity, or refused the fast-forward: stop), `error` 1 (an
   unexpected failure: stop). Whatever the status, a non-null
   `integrated_tip` means the commits are on the original main branch. The
@@ -213,12 +213,12 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   not evidence that integration did not happen. Usage errors
   exit 2 without JSON and change nothing: `--commit` not 7-64 hex
   characters, `--branch` starting with `-` or holding whitespace or any of
-  ``~^:?*[\``, `--task-id` not matching `TASK__[A-Za-z0-9._-]+`, a
+  ``~^:?*[\``, `--wbs-id` not matching `WBS__[A-Za-z0-9._-]+`, a
   relative `--worktree`, or a missing required flag (`--repo` defaults to
   the checkout found from the current directory). When the bad value came
   from a lead's result (for example `"commit": null`), only that lead is
   affected.
-- `--resume` serves integration-task step e.1: after the coordinator reran
+- `--resume` serves integration-WBS step e.1: after the coordinator reran
   the rebase, resolved each stopped commit, and ran
   `GIT_EDITOR=true git -C <W> rebase --continue`, the branch tip no longer
   equals the returned commit. Resume only drops that tip check (the returned
@@ -232,13 +232,13 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
 - Cleanliness checks explicitly include untracked files, irrespective of
   `status.showUntrackedFiles`. Native worktree removal also overrides that
   setting, so an untracked file introduced after the check still refuses
-  removal. Ignored task evidence is harvested before removal as above.
+  removal. Ignored WBS evidence is harvested before removal as above.
 - When `git worktree remove` refuses or raises after the script released the
   agent lock, it attempts to restore the original lock reason on a retained
   registered worktree. The original failure and any failed restoration are
   reported; restoration is best effort, not a guarantee against pruning.
 - `trailer_present` is true when every commit between the main HEAD and the
-  lead tip carries `Harness-Task: <task_id>`, false when one does not, and
+  lead tip carries `Harness-WBS: <wbs_id>`, false when one does not, and
   null when that range is empty or was not read. It is reported, not
   enforced: a lead without the trailer still integrates.
 - Known limit: the repositories' own hooks run as for any rebase and
@@ -288,7 +288,7 @@ and every parent spawn edge authenticate that actor. An environment ID alone
 is insufficient. Omitting workspace selects the control root. Both direct
 and hook binding use the existing cross-root session locks and conflict fences;
 neither may acquire simultaneous authority for different open tasks. The
-native session cwd may remain main while the canonical task root is a linked
+native session cwd may remain main while the canonical WBS root is a linked
 worktree. Invalid workspace proof publishes no new exact binding or registration.
 Existing exact main-call behavior retains its shared session-lock protection.
 
@@ -297,7 +297,7 @@ workspace. Session identity (the Claude session hint) and
 gate-warn learnings stay on the control root, because only the main checkout
 receives `UserPromptSubmit` and every Claude lead shares the main session id.
 Codex leads instead have distinct authenticated native coordinator threads;
-their exact task binding markers live under their own task workspaces.
+their exact WBS binding markers live under their own WBS workspaces.
 For a process-owned exact Codex actor, close and block snapshot, remove and
 validate cleanup of that same actor’s marker, even when an inherited session
 ID names its parent. Failure restores that actor’s marker; it must not alter
@@ -305,10 +305,10 @@ the parent’s marker. Existing conflict fences remain intact.
 
 Claude hooks need no argument: they already resolve the repo from the payload `cwd`,
 and a nested reviewer/QA subagent spawned by a lead runs with the worktree as
-its cwd, so its source ownership stays in the worktree task.
-Codex instead uses the exact echoed workspace/task/run and native hook identity;
+its cwd, so its source ownership stays in the worktree WBS.
+Codex instead uses the exact echoed workspace/WBS/run and native hook identity;
 the authenticated lead's direct reviewer/QA children inherit that binding.
-Native cwd alone does not select a Codex worktree task.
+Native cwd alone does not select a Codex worktree WBS.
 
 ## Host visibility
 
@@ -434,7 +434,7 @@ Default rules and selected S1 extension:
   existing path such as `app/[locale]` is fine, and each path gets its own
   `--request`) is a usage error: exit 2 and no report. `ok` covers only these
   checks; the coordinator's other preflight conditions (no open
-  main-checkout task, the recorded HEAD) still apply. The
+  main-checkout WBS, the recorded HEAD) still apply. The
   coordinator acts on `verdict` and on `refusals`, `excluded_requests`,
   `overlaps`, and `off_limits`, and reruns the script after adjusting a wave;
   `control_root.shape` is informational (it reads `non-git` with an empty
@@ -476,10 +476,10 @@ Default rules and selected S1 extension:
   submodule or nested repo (`libs` around `libs/sub`); `off_limits` is what
   keeps a lead out of the repos inside such a scope. A separate class for
   ignored non-repo scopes is deferred: a lead's edits there are never
-  committed, which is a task-planning problem rather than a repo-shape hazard.
+  committed, which is a WBS-planning problem rather than a repo-shape hazard.
   `tracked-area` may run in a lead. Explicit per-request `--submodule SLUG=PATH`
   selection additionally admits `selected-submodule` scopes after S1 validation.
-  An unselected submodule or ignored nested repo runs as an ordinary task in the main checkout,
+  An unselected submodule or ignored nested repo runs as an ordinary WBS in the main checkout,
   outside the wave; an `outside-root` scope cannot run in `harness:batch` at
   all. `excluded_requests` keeps every exclusion reason of a request.
 - Two requests overlap when one of their symlink-resolved scopes equals or is
@@ -548,13 +548,13 @@ remain outside S1 and use the ordinary sequential route.
 
 - Receipt binding (AC-003 gate, run before the lead agent and batch skill were
   written): a real `isolation: worktree` subagent at
-  `.claude/worktrees/agent-aeae57aab7846dbfb` started `TASK__worktree-probe`
+  `.claude/worktrees/agent-aeae57aab7846dbfb` started `WBS__worktree-probe`
   through the `workspace` handler and spawned one nested
-  `harness:code-reviewer`. That worktree task's `RECEIPTS.jsonl` then held
+  `harness:code-reviewer`. That worktree WBS's `RECEIPTS.jsonl` then held
   exactly one `started` and one `completed`/`PASS` row for
   `runtime_id claude:2774b58d-f281-4368-8f64-34972245bcc3:adfefaec07fe5afcf`
-  under `task_run_id 01a0e225-300e-7298-940b-c47ffdf31b0d`, and
-  `task_context` reported `review_verdict: PASS`. The probe worktree was
+  under `wbs_run_id 01a0e225-300e-7298-940b-c47ffdf31b0d`, and
+  `context` reported `review_verdict: PASS`. The probe worktree was
   removed afterwards without harvest, so the rows themselves are gone; the
   historical receipt regression was tests/test_worktree_workspace.py::test_nested_lens_start_and_stop_in_worktree_bind_to_worktree_task (retired with receipt collection on 2026-10-28).
 
@@ -613,7 +613,7 @@ remain outside S1 and use the ordinary sequential route.
   The Codex internal batch workflow requires actual spawn/continuation
   capabilities and reserves room for independent review/QA. Leads operate
   only their worktree WBS; close never updates a second Goal ledger.
-  A task-owned work pack releases its parent only after all requests integrate
+  A WBS-owned work pack releases its parent only after all requests integrate
   and the exact pool closes. Codex MCP returns canonical workspace and either
   defers to genuine PostToolUse or binds its process-owned actor after native
   metadata/cwd/full-ancestry authentication under the shared binding owner.
@@ -621,7 +621,7 @@ remain outside S1 and use the ordinary sequential route.
 - Cross-checkout protection: when a lead's Edit/Write target lies outside its
   worktree, the prewrite gate resolves the target's own harness root and
   applies the C-05 protected-artifact rules there, so the main checkout's or a
-  sibling worktree's `TASK.json`/`PLAN.md`/`RECEIPTS.jsonl`/`REVIEWS.jsonl`,
+  sibling worktree's `WBS.control.json`/`PLAN.md`/`RECEIPTS.jsonl`/`REVIEWS.jsonl`,
   goal state, and focus markers are denied from a lead. Validated same-repository
   worktree targets receive that checkout's source gates as well, even when native
   cwd remains main; the original symlink escape denial still takes precedence.
@@ -633,19 +633,19 @@ remain outside S1 and use the ordinary sequential route.
   unresolved, never force-removed. A later verified recovery may finish its
   disposition under the completion rules below. Evidence harvest
   (`plugin/scripts/batch_harvest.py`) copies
-  `<worktree>/doc/harness/tasks/<task_id>` to
-  `doc/harness/archive/batch/<task_id>/` and appends the lead's learnings
+  `<worktree>/doc/harness/wbs/<wbs_id>` to
+  `doc/harness/archive/batch/<wbs_id>/` and appends the lead's learnings
   before `git worktree remove` and `git branch -d`. It refuses to replace an
-  existing archive that holds different evidence for the same task id.
+  existing archive that holds different evidence for the same WBS id.
 
 ## Temporary-worktree completion and interrupted recovery
 
-Temporary worktrees explicitly owned or adopted by the task are development
+Temporary worktrees explicitly owned or adopted by the WBS are development
 resources: completion includes integrating their intended changes by rebase
 and fast-forward only, then removing the worktrees and disposable branches.
 No merge-commit fallback is allowed. Ordinary closed batch leads retain the
 existing `batch_finish.py` sequence: rebase, fast-forward, harvest, remove;
-the coordinator's integration task subsequently reviews and tests the combined
+the coordinator's integration WBS subsequently reviews and tests the combined
 result before reporting completion. Leads never remove their own checkout.
 
 Both runtimes' normal develop completion and run recovery completion load
@@ -654,7 +654,7 @@ skills). That shared procedure owns the execution details. The coordinator
 records each owned source path/branch, intended destination, worker and final
 disposition. Unrelated worktrees, running or unknown workers, unintegrated
 changes, failed archives and cleanup refusals remain intact with a concrete
-remaining action; a closed implementation task does not imply cleanup passed.
+remaining action; a closed implementation WBS does not imply cleanup passed.
 
 Resume interrupted work in its original worktree where possible. An unsupported
 runtime is a blocker to that lifecycle, not permission to silently copy changes
@@ -664,14 +664,14 @@ independently reviewed and QA-passed destination, preserve byte-verified source
 and non-cache ignored evidence outside the removed tree, and recheck ownership,
 stopped writers, branch identity and the exact inventory before narrow cleanup.
 An archive alone or an ancestor branch alone does not prove dirty changes were
-integrated. Unaccounted changes remain protected. Original task status and
+integrated. Unaccounted changes remain protected. Original WBS status and
 receipts are not rewritten or relabeled as closed; recovery evidence is separate.
 Verified, fully accounted originals are then removed rather than kept forever.
 
 For WBS-owned packs this is enforced by managed dispatch and the owning WBS
 completion proof: archive/ancestry alone are insufficient while an owned
 worktree or disposable branch still exists. Lead source close remains the
-current measured WBS task gate; it does not remove its own checkout. Standalone
+current measured WBS WBS gate; it does not remove its own checkout. Standalone
 temporary-worktree recovery still follows the shared coordinator procedure.
 Actual completion reporting names the integrated destination and removed
 resources, or exact retained work and blocker.
@@ -687,9 +687,9 @@ resources, or exact retained work and blocker.
   forged back-pointer and non-string value; ordinary Codex routing defers exact
   binding; control root
   treated as omitted; marker file named after the control-root session hint;
-  `task_blocked` and full-lifecycle `task_close` leave the main checkout
+  `wbs(action="block")` and full-lifecycle `wbs(action="close")` leave the main checkout
   byte-identical; a lead close never touches coordinator state; source ownership from
-  `cwd=<worktree>` remains scoped to that worktree task.
+  `cwd=<worktree>` remains scoped to that worktree WBS.
 - Native binding tests cover authenticated workspace open/context, invalid
   proof without fresh authority, main cwd distinct from target workspace and
   cross-root conflicts/fences without lifecycle collection.
@@ -773,7 +773,7 @@ resources, or exact retained work and blocker.
   retain linear rebase/fast-forward, no-force ordinary disposal, exact result
   and evidence preservation requirements. Existing C-09 and ignore contracts
   continue to apply; native baseRef no longer selects managed creation.
-- Live probe: a real worktree subagent starts a task with `workspace` and its
+- Live probe: a real worktree subagent starts a WBS with `workspace` and its
   nested reviewer works in the registered worktree and returns actual findings.
 
 ## Durable dirty-original isolation
@@ -809,7 +809,7 @@ coordinator; supported occupied review/QA lenses fulfill the mandatory reserve
 without double counting. Unknown roles consume capacity without claiming
 verification capacity. This is not authentication or a reservation service.
 
-Owner publication binds assignment to the task run, current WBS graph, checks,
+Owner publication binds assignment to the WBS run, current WBS graph, checks,
 blocks and selected execution ownership. Changing source bytes alone does not
 stale assignment. Prewrite checks current direct assignment or existing exact
 managed lead binding, including micro/maintenance; PLAN/REQ preparation remains
@@ -842,7 +842,7 @@ actual review/QA results. Unmeasured outcomes request measurement, not invented 
 implementation or a replacement pool after integration.
 
 Coverage: `test_public_dispatch_admission_and_completion_refill` exercises real
-public A/B/C lifecycle with isolated task-close fixtures, not native attestation.
+public A/B/C lifecycle with isolated WBS-close fixtures, not native attestation.
 `test_public_direct_assignment_is_fresh_control_not_source_fingerprint` checks
 actual prewrite denial, micro/maintenance, REQ preparation, input changes and
 stale control/ownership. `test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair`

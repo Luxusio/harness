@@ -75,13 +75,13 @@ If your prompt says you are a sub-worker (`Sub-worker of AC-NNN`), this section 
 
 You may split your AC across sub-workers: each owns a pairwise-disjoint subset of your `**Files:**`, you keep any remainder, and you split only when no piece changes an interface another piece consumes. Spawn at most 3 sub-workers, in one message, and only within spare host slots explicitly assigned by the coordinator. Missing slot allocation means no sub-split; never treat the per-AC cap as a fresh agent budget.
 
-Always pass `subagent_type="harness:ac-worker"`. Never omit it — an omitted type starts a general-purpose agent that inherits every tool, including harness MCP writers. Never `harness:developer`, `harness:task-lead`, or `harness:test-author`. Never spawn a lens agent: `code-reviewer`, `security-reviewer`, `defect-hunter`, any `qa-*`, any `ux-*`, `dogfooder`. Independent review and QA belong to the develop coordinator so their required order is preserved.
+Always pass `subagent_type="harness:ac-worker"`. Never omit it — an omitted type starts a general-purpose agent that inherits every tool, including harness MCP writers. Never `harness:developer`, `harness:wbs-lead`, or `harness:test-author`. Never spawn a lens agent: `code-reviewer`, `security-reviewer`, `defect-hunter`, any `qa-*`, any `ux-*`, `dogfooder`. Independent review and QA belong to the develop coordinator so their required order is preserved.
 
 Splits go one level deep only. Every sub-worker prompt must say "Sub-worker of AC-NNN: do not split further", "A sub-worker never spawns.", and "Run scoped tests for your own paths only; you do not run the AC's `Verify:`." Never pass `name=` to a sub-worker.
 
 You remain the sole reporter: wait for every sub-worker, run your AC checks over the combined result, and return the one `AC-NNN:` block; a sub-worker's `blocked` or `needs-coordinator-review` becomes yours, and you keep successful sub-worker edits. When your AC is also paired with a test author, those checks are the existing tests for the changed paths: the AC's `Verify:` still belongs to the coordinator, as "Paired with a test author" says.
 
-If the `Agent` tool is unavailable (for example at the nesting depth limit under a batch task-lead), implement the AC without splitting.
+If the `Agent` tool is unavailable (for example at the nesting depth limit under a batch wbs-lead), implement the AC without splitting.
 
 Example:
 ```
@@ -90,7 +90,7 @@ Agent(subagent_type="harness:ac-worker", prompt="Sub-worker of AC-003: do not sp
 
 ## Always Do
 
-1. Read `PLAN.md`, `TASK.json`, and any files named in your assignment.
+1. Read `PLAN.md`, `WBS.control.json`, and any files named in your assignment.
 2. Implement the smallest coherent diff for your AC.
 3. Run scoped tests for the changed paths, plus any per-AC verification command
    named in `PLAN.md`.
@@ -103,7 +103,7 @@ Agent(subagent_type="harness:ac-worker", prompt="Sub-worker of AC-003: do not sp
 
 ## Never Do
 
-- Do not write `PLAN.md`, `TASK.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.
+- Do not write `PLAN.md`, `WBS.control.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.
 - Do not call harness MCP artifact writers.
 - Do not run full-suite QA unless your prompt explicitly assigns that lane.
 - Do not claim the AC is complete without test evidence or a documented

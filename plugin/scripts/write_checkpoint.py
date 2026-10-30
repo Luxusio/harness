@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Write a task checkpoint snapshot for mid-task resume.
+"""Write a WBS checkpoint snapshot for WBS resume.
 
-Captures git state, derived TASK.json state, PROGRESS.md status, and a next-action
-line into doc/harness/checkpoints/<TASK_ID>.md. Overwrites prior
-checkpoint for the same task (one checkpoint per task — latest wins).
+Captures git state, derived WBS.control.json state, PROGRESS.md status, and a next-action
+line into doc/harness/checkpoints/<WBS_ID>.md. Overwrites prior
+checkpoint for the same WBS (one checkpoint per WBS — latest wins).
 
 The directory doc/harness/checkpoints/ is gitignored (see setup/bootstrap.md).
 
 Purpose: provide a compact resume snapshot. Survives compaction / session
-resume so the next session can recover where a task left off
+resume so the next session can recover where a WBS left off
 mid-implementation.
 
 Invocation:
-  python3 write_checkpoint.py --task-dir doc/harness/tasks/TASK__xxx/ [--note "..."]
+  python3 write_checkpoint.py --wbs-dir doc/harness/wbs/WBS__xxx/ [--note "..."]
 """
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
-    find_repo_root, now_iso, read_task_control,
-    task_control_status,
+    find_repo_root, now_iso, read_wbs_control,
+    wbs_control_status,
 )
 
 
@@ -53,17 +53,17 @@ def _git_context(repo_root: str) -> dict:
     }
 
 
-def _next_action(task_dir: str, control: dict) -> str:
-    status = task_control_status(task_dir, control)
-    if not os.path.isfile(os.path.join(task_dir, "PLAN.md")) and control.get("execution_mode") != "micro":
+def _next_action(wbs_dir: str, control: dict) -> str:
+    status = wbs_control_status(wbs_dir, control)
+    if not os.path.isfile(os.path.join(wbs_dir, "PLAN.md")) and control.get("execution_mode") != "micro":
         return "Open plan skill — PLAN.md not yet created."
     if status == "closed":
         return "Task closed."
     return "Resume the current PROGRESS.md step, complete independent review and QA, then run WBS checks and close."
 
 
-def _progress_summary(task_dir: str) -> list[str]:
-    path = os.path.join(task_dir, "PROGRESS.md")
+def _progress_summary(wbs_dir: str) -> list[str]:
+    path = os.path.join(wbs_dir, "PROGRESS.md")
     try:
         with open(path, encoding="utf-8") as stream:
             lines = [line.rstrip() for line in stream if line.startswith(("phase:", "current_ac:", "partial_ac:"))]
@@ -72,32 +72,32 @@ def _progress_summary(task_dir: str) -> list[str]:
     return lines or ["(PROGRESS.md has no compact phase fields)"]
 
 
-def write_checkpoint(task_dir: str, note: str = "") -> str:
-    task_dir = os.path.abspath(task_dir)
-    if not os.path.isdir(task_dir):
-        raise FileNotFoundError(f"task dir not found: {task_dir}")
+def write_checkpoint(wbs_dir: str, note: str = "") -> str:
+    wbs_dir = os.path.abspath(wbs_dir)
+    if not os.path.isdir(wbs_dir):
+        raise FileNotFoundError(f"WBS directory not found: {wbs_dir}")
 
-    repo_root = find_repo_root(task_dir)
-    task_id = os.path.basename(os.path.normpath(task_dir))
-    control = read_task_control(task_dir) or {}
+    repo_root = find_repo_root(wbs_dir)
+    wbs_id = os.path.basename(os.path.normpath(wbs_dir))
+    control = read_wbs_control(wbs_dir) or {}
     git_ctx = _git_context(repo_root)
-    progress = _progress_summary(task_dir)
-    next_act = _next_action(task_dir, control)
-    status = task_control_status(task_dir, control)
+    progress = _progress_summary(wbs_dir)
+    next_act = _next_action(wbs_dir, control)
+    status = wbs_control_status(wbs_dir, control)
 
     ck_dir = os.path.join(repo_root, "doc", "harness", "checkpoints")
     os.makedirs(ck_dir, exist_ok=True)
-    ck_path = os.path.join(ck_dir, f"{task_id}.md")
+    ck_path = os.path.join(ck_dir, f"{wbs_id}.md")
 
     lines = [
-        f"# Checkpoint — {task_id}",
+        f"# Checkpoint — {wbs_id}",
         "",
         f"- written: {now_iso()}",
         f"- branch: {git_ctx['branch']}",
         f"- head: {git_ctx['head']} ({git_ctx['last_subject']})",
         f"- dirty files: {git_ctx['dirty_count']}",
         "",
-        "## Task state",
+        "## WBS state",
         "",
         f"- status: {status}",
         f"- execution_mode: {control.get('execution_mode') or 'unknown'}",
@@ -126,12 +126,12 @@ def write_checkpoint(task_dir: str, note: str = "") -> str:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Write a task checkpoint snapshot")
-    p.add_argument("--task-dir", required=True)
+    p = argparse.ArgumentParser(description="Write a WBS checkpoint snapshot")
+    p.add_argument("--wbs-dir", required=True)
     p.add_argument("--note", default="", help="Optional free-form note")
     args = p.parse_args()
     try:
-        path = write_checkpoint(args.task_dir, args.note)
+        path = write_checkpoint(args.wbs_dir, args.note)
     except (FileNotFoundError, OSError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

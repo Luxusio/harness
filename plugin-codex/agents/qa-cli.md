@@ -22,7 +22,7 @@ always safe.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `TASK.json`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `WBS.control.json`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, relevant durable docs, and
 `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 

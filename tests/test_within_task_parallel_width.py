@@ -259,7 +259,7 @@ def test_test_author_writes_only_tests_from_plan_intent():
                 "including an import of a new symbol PLAN.md names, fail until the AC lands",
                 "never make a red test green by loosening its assertion",
                 "once the whole batch returns",
-                "Do not write `PLAN.md`, `TASK.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.",
+                "Do not write `PLAN.md`, `WBS.control.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.",
                 "Do not call harness MCP artifact writers.",
                 spawn_rule,
                 "Do not run full-suite QA.",
@@ -452,7 +452,7 @@ def test_ac_worker_never_spawns_lens_agents():
         (
             'Always pass `subagent_type="harness:ac-worker"`. Never omit it',
             "a general-purpose agent that inherits every tool, including harness MCP writers",
-            "Never `harness:developer`, `harness:task-lead`, or `harness:test-author`.",
+            "Never `harness:developer`, `harness:wbs-lead`, or `harness:test-author`.",
             "- Do not spawn any agent type other than `harness:ac-worker`, "
             "and only under Sub-split.",
         ),

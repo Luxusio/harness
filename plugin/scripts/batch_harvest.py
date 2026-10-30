@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Harvest one lead's task evidence from a linked worktree before removal.
+"""Harvest one lead's WBS evidence from a linked worktree before removal.
 
-`doc/harness/tasks/` and `doc/harness/learnings.jsonl` are gitignored, so a
-batch lead's task evidence and learnings only exist inside its own linked
+`doc/harness/wbs/` and `doc/harness/learnings.jsonl` are gitignored, so a
+batch lead's WBS evidence and learnings only exist inside its own linked
 worktree. Before the coordinator runs `git worktree remove` it must copy that
 evidence into the main checkout, or it is lost.
 
 Usage:
   python3 plugin/scripts/batch_harvest.py --worktree <abs path> \
-      --task-id <TASK__x> [--repo <main checkout>]
+      --wbs-id <WBS__x> [--repo <main checkout>]
 
 Refuses (non-zero exit, nothing written) unless:
   - `<worktree>` is a registered linked worktree of `--repo` (a regular,
@@ -22,7 +22,7 @@ Refuses (non-zero exit, nothing written) unless:
 
 Idempotent: re-running after a successful harvest is a no-op for the archive
 copy (byte-identical tree) and appends zero learnings rows. An existing archive
-with different content for the same task id is refused, never replaced. Never removes the
+with different content for the same WBS ID is refused, never replaced. Never removes the
 worktree, branch, or any git state — that stays the coordinator's job with
 plain `git worktree remove` / `git branch -d`. The internal S1 removal
 entrypoint below is the sole guarded exception for state-managed submodules.
@@ -53,7 +53,7 @@ from _lib import (  # type: ignore  # noqa: E402
     find_repo_root,
 )
 
-TASK_ID_RE = re.compile(r"^TASK__[A-Za-z0-9._-]+$")
+WBS_ID_RE = re.compile(r"^WBS__[A-Za-z0-9._-]+$")
 
 
 class HarvestError(RuntimeError):
@@ -129,7 +129,7 @@ def _refuse_non_regular_tree(root: str) -> None:
             mode = os.lstat(full).st_mode
             if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
                 raise HarvestError(
-                    f"refusing non-regular entry in task evidence: {full}"
+                    f"refusing non-regular entry in WBS evidence: {full}"
                 )
 
 
@@ -168,18 +168,18 @@ def _tree_entries(root: str) -> dict:
     return entries
 
 
-def _archive_task(repo_root: str, worktree: str, task_id: str) -> str:
-    if not TASK_ID_RE.match(task_id):
-        raise HarvestError(f"invalid task_id: {task_id}")
-    source_dir = _refuse_links_below(worktree, "doc", "harness", "tasks", task_id)
+def _archive_wbs(repo_root: str, worktree: str, wbs_id: str) -> str:
+    if not WBS_ID_RE.match(wbs_id):
+        raise HarvestError(f"invalid wbs_id: {wbs_id}")
+    source_dir = _refuse_links_below(worktree, "doc", "harness", "wbs", wbs_id)
     if not os.path.isdir(source_dir):
-        raise HarvestError(f"task directory not found in worktree: {source_dir}")
+        raise HarvestError(f"WBS directory not found in worktree: {source_dir}")
     # A lead's worktree is untrusted input: copy only plain files and dirs so a
     # planted link or FIFO can neither pull outside files in nor hang the copy.
     _refuse_non_regular_tree(source_dir)
 
     dest_root = os.path.join(repo_root, "doc", "harness", "archive", "batch")
-    dest_dir = os.path.join(dest_root, task_id)
+    dest_dir = os.path.join(dest_root, wbs_id)
     os.makedirs(dest_root, exist_ok=True)
 
     if os.path.lexists(dest_dir):
@@ -192,11 +192,11 @@ def _archive_task(repo_root: str, worktree: str, task_id: str) -> str:
         # A different tree under the same id is an earlier batch's evidence
         # (e.g. a reused slug); never replace it.
         raise HarvestError(
-            f"archive already holds different evidence for {task_id}: {dest_dir}; "
+            f"archive already holds different evidence for {wbs_id}: {dest_dir}; "
             "refusing to overwrite it"
         )
 
-    tmp_dir = tempfile.mkdtemp(dir=dest_root, prefix=f".{task_id}.tmp-")
+    tmp_dir = tempfile.mkdtemp(dir=dest_root, prefix=f".{wbs_id}.tmp-")
     try:
         # mkdtemp already created tmp_dir; copytree requires the destination to
         # not exist, so drop the empty placeholder before copying into it.
@@ -253,7 +253,7 @@ def _append_learnings(repo_root: str, rows: list) -> int:
     return len(new_rows)
 
 
-def harvest(repo_root: str, worktree: str, task_id: str) -> dict:
+def harvest(repo_root: str, worktree: str, wbs_id: str) -> dict:
     repo_root = os.path.realpath(repo_root)
     if not os.path.isabs(worktree):
         raise HarvestError(f"--worktree must be an absolute path: {worktree}")
@@ -266,7 +266,7 @@ def harvest(repo_root: str, worktree: str, task_id: str) -> dict:
     rows = _read_learnings_rows(
         _refuse_links_below(worktree, "doc", "harness", "learnings.jsonl")
     )
-    dest_dir = _archive_task(repo_root, worktree, task_id)
+    dest_dir = _archive_wbs(repo_root, worktree, wbs_id)
     appended = _append_learnings(repo_root, rows)
     return {"archived": dest_dir, "learnings_appended": appended}
 
@@ -312,9 +312,23 @@ def _s1_git_text(root, *args):
     return result.stdout.rstrip('\n')
 
 
-def _s1_content(worktree, task_id, source_entries, manifest, repo, *, ordinary_allowed=(), ordinary_caches=False):
+def _s1_content(worktree, wbs_id, source_entries, manifest, repo, *, ordinary_allowed=(), ordinary_caches=False,
+                ordinary_links=None):
     """Every outer file must be tracked or have an exact preserved counterpart."""
     from batch_submodules import reject_hidden_index_flags
+    ordinary_links = ordinary_links or {}
+    _s1_require(all(relative.startswith('doc/harness/tasks/TASK__' + wbs_id[5:] + '/work/')
+                    and isinstance(row, dict) and 'link' in row for relative, row in ordinary_links.items()),
+                'invalid historical link scope')
+
+    def historical_link(relative):
+        if relative not in ordinary_links:
+            return False
+        from pathlib import Path
+        import wbs_namespace_migration
+        _s1_require(wbs_namespace_migration._link_file(Path(worktree), relative) == ordinary_links[relative],
+                    'historical link changed during removal proof: ' + relative)
+        return True
 
     reject_hidden_index_flags(worktree)
     _s1_require(not _s1_git_text(worktree, 'diff', '--cached', '--name-only', 'HEAD', '--ignore-submodules=none')
@@ -322,7 +336,7 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo, *, ordinary_a
                 "tracked or staged S1 worktree content changed")
     tracked = set(filter(None, _s1_git_text(worktree, 'ls-files', '-z').split('\0')))
     selected = {m['path'] for m in manifest['modules']}
-    task_rel = 'doc/harness/tasks/' + task_id
+    task_rel = 'doc/harness/wbs/' + wbs_id
     allowed = set(tracked) | {task_rel + '/' + rel for rel in source_entries} | set(ordinary_allowed)
     allowed.add(task_rel)
     learning_rel = 'doc/harness/learnings.jsonl'
@@ -358,13 +372,15 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo, *, ordinary_a
         for name in dirs:
             rel = '/'.join(filter(None, (relroot, name)))
             full = os.path.join(worktree, rel)
+            if historical_link(rel):
+                continue  # Prove lexical link bytes only; never enter its target.
             _s1_require(name != '.git', 'unexpected nested repository')
             if os.path.islink(full):
                 _s1_require(rel in tracked, 'unknown symlink directory in worktree removal proof')
                 continue  # tracked link bytes are integrated; never follow its target
             if rel in selected:
                 continue  # shared helper independently proves all module content
-            if ordinary_caches and name in ORDINARY_CACHES:
+            if ordinary_caches and name in ORDINARY_CACHES and rel not in ordinary_allowed:
                 count += _ordinary_cache(full)
                 _s1_require(count <= 100000, 'worktree content inventory exceeds bound')
                 continue
@@ -375,6 +391,8 @@ def _s1_content(worktree, task_id, source_entries, manifest, repo, *, ordinary_a
             rel = '/'.join(filter(None, (relroot, name)))
             if rel == '.git':
                 continue  # registered worktree gitfile proved separately
+            if historical_link(rel):
+                continue
             _s1_require(name != '.git', 'unexpected nested repository')
             _s1_require(rel in allowed, 'unknown ignored or untracked content: ' + rel)
             mode = os.lstat(os.path.join(worktree, rel)).st_mode
@@ -418,12 +436,12 @@ def _ordinary_bytes(path, limit=65536):
     return raw
 
 
-def _ordinary_markers(worktree, task_id):
-    from _lib import read_task_control, task_control_status, sanitize_session_id
-    task_rel = 'doc/harness/tasks/' + task_id
+def _ordinary_markers(worktree, wbs_id):
+    from _lib import read_wbs_control, wbs_control_status, sanitize_session_id
+    task_rel = 'doc/harness/wbs/' + wbs_id
     source = os.path.join(worktree, task_rel)
-    control = read_task_control(source)
-    if not control or task_control_status(source, control) != 'closed':
+    control = read_wbs_control(source)
+    if not control or wbs_control_status(source, control) != 'closed':
         return set()  # standalone legacy evidence can be archived, never infer marker ownership
     allowed = set()
     tasks = os.path.dirname(source)
@@ -431,7 +449,7 @@ def _ordinary_markers(worktree, task_id):
     owned_sessions = set()
     if os.path.lexists(sessions):
         _s1_path(sessions, True)
-        allowed.add('doc/harness/tasks/.active_sessions')
+        allowed.add('doc/harness/wbs/.active_sessions')
         for name in os.listdir(sessions):
             if not name.endswith('.json'):
                 continue  # unknown entries are rejected by the full inventory
@@ -444,18 +462,18 @@ def _ordinary_markers(worktree, task_id):
                 return result
             marker = json.loads(raw, object_pairs_hook=unique)
             sid = name[:-5]
-            _s1_require(isinstance(marker, dict) and set(marker) == {'session_id', 'task_dir', 'task_id', 'run_id', 'updated'}
+            _s1_require(isinstance(marker, dict) and set(marker) == {'session_id', 'wbs_dir', 'wbs_id', 'run_id', 'updated'}
                         and all(isinstance(v, str) and v for v in marker.values())
                         and sid != 'default' and marker['session_id'] == sid and sanitize_session_id(sid) == sid
-                        and marker['task_dir'] == source and marker['task_id'] == task_id
+                        and marker['wbs_dir'] == source and marker['wbs_id'] == wbs_id
                         and marker['run_id'] == control['run_id'], 'session marker does not belong to exact closed task')
             owned_sessions.add(sid)
-            allowed.add('doc/harness/tasks/.active_sessions/' + name)
+            allowed.add('doc/harness/wbs/.active_sessions/' + name)
         hint = os.path.join(sessions, '.session-hint')
         if os.path.lexists(hint):
             sid = _ordinary_bytes(hint, 4096).decode('utf-8').strip()
             _s1_require(sid in owned_sessions, 'session hint lacks exact closed-task marker')
-            allowed.add('doc/harness/tasks/.active_sessions/.session-hint')
+            allowed.add('doc/harness/wbs/.active_sessions/.session-hint')
     return allowed
 
 
@@ -474,7 +492,7 @@ def _ordinary_learning_proof(source, destination):
 
 
 
-def _ordinary_ancillary(repo, worktree, task_id, *, control_dir=None, preserve=True):
+def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=True):
     """Preserve exact typed runtime snapshots outside the immutable task archive.
 
     These files are advisory, never review/QA evidence. The checkpoint producer
@@ -483,21 +501,21 @@ def _ordinary_ancillary(repo, worktree, task_id, *, control_dir=None, preserve=T
     their sidecar location records disposal context, never generation ownership.
     Closing clears session markers, so their absence is expected here.
     """
-    from _lib import read_task_control, task_control_status, sanitize_session_id
+    from _lib import read_wbs_control, wbs_control_status, sanitize_session_id
 
-    task = control_dir or os.path.join(worktree, 'doc/harness/tasks', task_id)
-    control = read_task_control(task)
+    task = control_dir or os.path.join(worktree, 'doc/harness/wbs', wbs_id)
+    control = read_wbs_control(task)
     candidates = [('doc/harness/.watcher-diagnostics.json', 'watcher-diagnostics.json'),
-                  ('doc/harness/checkpoints/' + task_id + '.md', 'checkpoint.md')]
+                  ('doc/harness/checkpoints/' + wbs_id + '.md', 'checkpoint.md')]
     present = [(rel, name) for rel, name in candidates if os.path.lexists(os.path.join(worktree, rel))]
     if not present and preserve:
         return set()
-    _s1_require(control and task_control_status(task, control) == 'closed',
+    _s1_require(control and wbs_control_status(task, control) == 'closed',
                 'ancillary snapshots require exact closed task')
     run = control.get('run_id')
     _s1_require(isinstance(run, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', run),
                 'unsafe ancillary snapshot run identity')
-    root = os.path.join(repo, 'doc/harness/archive/worktree-recovery', task_id, run)
+    root = os.path.join(repo, 'doc/harness/archive/worktree-recovery', wbs_id, run)
     if not preserve:
         present = [(rel, name) for rel, name in candidates
                    if os.path.lexists(os.path.join(worktree, rel)) or os.path.lexists(os.path.join(root, name))]
@@ -536,12 +554,12 @@ def _ordinary_ancillary(repo, worktree, task_id, *, control_dir=None, preserve=T
                         'watcher diagnostics have unsafe root identity')
         else:
             text = raw.decode('utf-8')
-            _s1_require(text.startswith('# Checkpoint — ' + task_id + '\n\n- written: ')
+            _s1_require(text.startswith('# Checkpoint — ' + wbs_id + '\n\n- written: ')
                         and all(section in text for section in
-                                ('\n## Task state\n', '\n## Progress\n', '\n## Next action\n')),
+                                ('\n## WBS state\n', '\n## Progress\n', '\n## Next action\n')),
                         'unknown or foreign task checkpoint')
         snapshots.append((rel, name, raw))
-    # No mutable manifest and no mutation of closed task evidence. Exact bytes
+    # No mutable manifest and no mutation of closed WBS evidence. Exact bytes
     # themselves are the preservation proof; an existing different copy refuses.
     for directory in (os.path.join(repo, 'doc/harness/archive'),
                       os.path.join(repo, 'doc/harness/archive/worktree-recovery'),
@@ -589,29 +607,288 @@ def _ordinary_ancillary(repo, worktree, task_id, *, control_dir=None, preserve=T
     return preserved
 
 
-def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=None):
+def _preserve_namespace_file(repo, worktree, relative, destination, expected):
+    """Stream an already-declared historical file into existing recovery storage."""
+    from pathlib import Path
+    import wbs_namespace_migration as namespace
+    import base64
+
+    storage = namespace.storage
+    saved = {**expected} if 'link' not in expected else {
+        'sha256': expected['sha256'], 'size': expected['size'], 'mode': 0o600}
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid,
+                             info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    parts = storage._parts(destination)
+    temporary = '.namespace-' + hashlib.sha256(destination.encode()).hexdigest()[:32]
+    with storage._directory(Path(repo), parts[:-1], create=True) as (parent, bound):
+        try:
+            published = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            published = None
+        if published is not None and published.st_nlink == 2:
+            try:
+                stage = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                stage = None
+            _s1_require(stage is not None and stage.st_nlink == 2 and storage._same(published, stage),
+                        'unaccounted namespace recovery publication links')
+            observed = namespace._hash_at(parent, parts[-1], destination, publication=temporary)
+            _s1_require(observed == saved, 'namespace recovery publication copy changed: ' + relative)
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+            try:
+                opened = os.fstat(fd)
+                _s1_require(storage._same(opened, published) and opened.st_nlink == 2,
+                            'namespace recovery publication changed before normalization')
+                os.fsync(fd)
+                bound()
+                stage = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+                current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+                _s1_require(storage._same(stage, opened) and storage._same(current, opened)
+                            and stage.st_nlink == current.st_nlink == 2,
+                            'namespace recovery publication pair changed')
+                # Make the canonical name durable before retiring its one
+                # reserved hardlink alias; unrelated links never reach here.
+                os.fsync(parent)
+                os.unlink(temporary, dir_fd=parent)
+                os.fsync(parent)
+            finally:
+                os.close(fd)
+        if published is not None:
+            existing = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+            try:
+                opened = os.fstat(existing)
+                _s1_require(storage._same(opened, published)
+                            and namespace._hash_at(parent, parts[-1], destination, descriptor=existing) == saved,
+                            'namespace recovery copy changed: ' + relative)
+                os.fsync(existing)
+                bound()
+                current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+                _s1_require(identity(os.fstat(existing)) == identity(opened) and storage._same(current, opened),
+                            'namespace recovery destination changed before durability sync')
+                os.fsync(parent)
+            finally:
+                os.close(existing)
+            return
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=parent)
+        except FileExistsError:
+            orphan = os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                             dir_fd=parent)
+            try:
+                opened = os.fstat(orphan)
+                _s1_require(namespace._hash_at(parent, temporary, destination, descriptor=orphan) == saved,
+                            'interrupted namespace recovery copy changed')
+                stage = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+                _s1_require(storage._same(stage, opened) and os.fstat(orphan).st_nlink == 1,
+                            'namespace recovery orphan staging name changed')
+                os.fsync(orphan)
+                bound()
+                stage = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+                _s1_require(storage._same(stage, opened) and identity(os.fstat(orphan)) == identity(opened),
+                            'namespace recovery orphan changed before publication')
+                storage._rename_new(parent, temporary, parts[-1])
+                os.fsync(parent)
+            finally:
+                os.close(orphan)
+            return
+        opened = os.fstat(fd)
+        try:
+            if 'link' in expected:
+                _s1_require(namespace._link_file(Path(worktree), relative) == expected,
+                            'namespace link changed during preservation: ' + relative)
+                raw = memoryview(base64.b64decode(expected['link'], validate=True))
+                while raw:
+                    count = os.write(fd, raw)
+                    _s1_require(count > 0, 'short historical link descriptor write')
+                    raw = raw[count:]
+                _s1_require(namespace._link_file(Path(worktree), relative) == expected,
+                            'namespace link changed during preservation: ' + relative)
+            else:
+                _s1_require(namespace._hash_file(Path(worktree), relative, destination=fd) == expected,
+                            'namespace history changed during preservation: ' + relative)
+            os.fchmod(fd, saved['mode'])
+            os.fsync(fd)
+            bound()
+            stage = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+            _s1_require(storage._same(stage, opened) and os.fstat(fd).st_nlink == 1,
+                        'namespace recovery staging name changed')
+            storage._rename_new(parent, temporary, parts[-1])
+            os.fsync(parent)
+        finally:
+            try:
+                stage = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+                if storage._same(stage, opened) and os.fstat(fd).st_nlink == 1:
+                    os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            finally:
+                os.close(fd)
+
+
+def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, preserve=True):
+    """Preserve exact declared pre-WBS bytes, never treat them as current proof.
+
+    Namespace import deliberately retains historical payloads. The existing
+    removal inventory must account for those bytes before removing their Git
+    worktree. The migration's immutable manifest supplies the bounded inventory;
+    this function writes no new ledger and admits no undeclared legacy paths.
+    """
+    import base64
+    from pathlib import Path
+    from _lib import read_wbs_control, wbs_control_status
+    import wbs_namespace_migration as namespace
+
+    repo, worktree = os.path.abspath(repo), os.path.abspath(worktree)
+    control_path = control_dir or os.path.join(worktree, 'doc/harness/wbs', wbs_id)
+    control = read_wbs_control(control_path)
+    if not control:
+        return {}
+    recovery = 'doc/harness/archive/worktree-recovery/' + wbs_id + '/' + control['run_id'] + '/namespace-history'
+    selected = None
+    for candidate in (Path(repo), Path(worktree), Path(repo) / recovery):
+        if not os.path.lexists(candidate):
+            continue
+        for manifest_path, value in namespace.journals(candidate):
+            _s1_require(value['status'] == 'complete', 'namespace migration is unfinished')
+            rows = [row for row in value['trees'] if row['root'] == worktree
+                    and row['destination'] == 'doc/harness/wbs/' + wbs_id]
+            _s1_require(len(rows) <= 1, 'ambiguous namespace history ownership')
+            if rows:
+                tree = rows[0]
+                prefix = value.get('archive_prefix', namespace.ARCHIVE + '/original')
+                original_path = prefix + '/' + tree['source'] + '/TASK.json'
+                original_location = Path(worktree) / original_path
+                if not os.path.lexists(original_location) and not preserve:
+                    original_location = Path(repo) / recovery / original_path
+                if not os.path.lexists(original_location):
+                    continue  # A disposed earlier checkout does not own this one.
+                raw = _ordinary_bytes(str(original_location), 16384)
+                original = tree['entries']['TASK.json']
+                old_control = namespace.storage._migration_control(namespace.storage._json(raw))
+                _s1_require(hashlib.sha256(raw).hexdigest() == original['sha256'] and old_control,
+                            'namespace original authority changed')
+                if old_control['run_id'] != control['run_id']:
+                    continue  # Never select an older generation by ID alone.
+                selected = (value, candidate, manifest_path, tree, original_path, original, prefix)
+                break
+        if selected is not None:
+            break
+    if selected is None:
+        return {}
+    journal, owner, manifest_path, tree, original_path, original, prefix = selected
+    _s1_require(wbs_control_status(control_path, control) == 'closed',
+                'namespace history preservation requires the exact closed WBS')
+    expected, directories = {}, {tree['source']}
+    _s1_require(not os.path.lexists(Path(worktree) / tree['source'] / 'TASK.json'),
+                'retired namespace authority reappeared')
+    expected[original_path] = dict(original, mode=0o600)
+    for name, row in tree['entries'].items():
+        if name == 'TASK.json':
+            continue
+        relative = tree['source'] + '/' + name
+        if row.get('directory'):
+            directories.add(relative)
+            if os.path.lexists(Path(worktree) / relative):
+                info = os.lstat(_s1_path(str(Path(worktree) / relative), True))
+                _s1_require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode)
+                            in {row['mode'], row['mode'] | stat.S_IWUSR}, 'namespace history directory changed')
+            else:
+                _s1_require(not preserve, 'namespace history directory disappeared')
+        else:
+            expected[relative] = row
+    for change in journal['changes']:
+        if change['root'] == worktree and change['destination'].startswith(prefix + '/'):
+            raw = base64.b64decode(change['after'], validate=True)
+            expected[change['destination']] = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=0o600)
+    # A migration invoked from the lead itself owns a local manifest and lock.
+    # Preserve those exact bytes too; a coordinator-owned manifest stays in main.
+    if owner == Path(worktree) or owner == Path(repo) / recovery:
+        for relative in (manifest_path, namespace.ARCHIVE + '/.lock',
+                         'doc/harness/runtime/batches/.lock'):
+            source = Path(worktree) / relative
+            if os.path.lexists(source):
+                row = namespace._hash_file(Path(worktree), relative)
+                _s1_require(relative == manifest_path or row['size'] == 0, 'nonempty migration lock')
+                expected[relative] = row
+            elif not preserve and os.path.lexists(Path(repo) / recovery / relative):
+                expected[relative] = namespace._hash_file(Path(repo), recovery + '/' + relative)
+    old_checkpoint = 'doc/harness/checkpoints/TASK__' + wbs_id[5:] + '.md'
+    checkpoint_source = Path(worktree) / old_checkpoint
+    checkpoint_copy = Path(repo) / recovery / old_checkpoint
+    if os.path.lexists(checkpoint_source) or not preserve and os.path.lexists(checkpoint_copy):
+        path = checkpoint_source if os.path.lexists(checkpoint_source) else checkpoint_copy
+        raw = _ordinary_bytes(str(path))
+        text = raw.decode('utf-8')
+        _s1_require(text.startswith('# Checkpoint — TASK__' + wbs_id[5:] + '\n\n- written: ')
+                    and all(section in text for section in ('\n## Task state\n', '\n## Progress\n', '\n## Next action\n')),
+                    'unknown or foreign historical checkpoint')
+        expected[old_checkpoint] = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=stat.S_IMODE(path.stat().st_mode))
+    for relative, row in expected.items():
+        destination = recovery + '/' + relative
+        source_exists = os.path.lexists(Path(worktree) / relative)
+        _s1_require(source_exists or not preserve, 'namespace history disappeared: ' + relative)
+        if source_exists:
+            observed = (namespace._link_file(Path(worktree), relative) if 'link' in row
+                        else namespace._hash_file(Path(worktree), relative))
+            _s1_require(observed == row,
+                        'namespace history changed: ' + relative)
+        if preserve:
+            _preserve_namespace_file(repo, worktree, relative, destination, row)
+        saved = row if 'link' not in row else {'sha256': row['sha256'], 'size': row['size'], 'mode': 0o600}
+        _s1_require(namespace._hash_file(Path(repo), destination) == saved,
+                    'namespace history is not durably preserved: ' + relative)
+    old_sessions = namespace.OLD_ROOT + '/.active_sessions'
+    if os.path.lexists(Path(worktree) / old_sessions):
+        _s1_require(not namespace.storage._entries(Path(worktree), old_sessions), 'unpreserved legacy session metadata')
+        directories.add(old_sessions)
+    return {**{relative: row if 'link' in row else row['sha256'] for relative, row in expected.items()},
+            **{relative: None for relative in directories}}
+
+
+def _thaw_namespace_history(repo, worktree, wbs_id):
+    """Only after complete removal proof, unseal already-preserved history."""
+    entries = _ordinary_namespace_history(repo, worktree, wbs_id)
+    for relative, digest in entries.items():
+        if digest is not None:
+            continue
+        path = _s1_path(os.path.join(worktree, relative), True)
+        before = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            _s1_require((info.st_dev, info.st_ino, info.st_mode) == (before.st_dev, before.st_ino, before.st_mode),
+                        'namespace history directory changed before disposal')
+            os.fchmod(fd, stat.S_IMODE(info.st_mode) | stat.S_IWUSR)
+        finally:
+            os.close(fd)
+
+
+def ordinary_removal_proof(repo, worktree, wbs_id, retention=None, checkpoint=None):
     """Refuse ordinary disposal until every noncache byte is accounted for.
 
-    This is a removal guard, not an additional archive or task authority. Its
+    This is a removal guard, not an additional archive or WBS authority. Its
     inventory runs after integration/harvest, immediately before unlocking.
     """
     try:
         _verify_registered_worktree(repo, worktree)
-        source = _s1_path(os.path.join(worktree, 'doc/harness/tasks', task_id), True)
-        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+        source = _s1_path(os.path.join(worktree, 'doc/harness/wbs', wbs_id), True)
+        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
         for directory in (source, archive):
             _refuse_non_regular_tree(directory)
         entries = _tree_entries(source)
-        _s1_require(entries == _tree_entries(archive), 'task evidence differs from preserved archive')
+        _s1_require(entries == _tree_entries(archive), 'WBS evidence differs from preserved archive')
         if checkpoint is not None:
             fingerprint = 'sha256:' + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
             _s1_require(checkpoint.get('stage') == 'harvested'
                         and checkpoint.get('harvest', {}).get('archived') == archive
                         and checkpoint.get('archive_fingerprint') == fingerprint,
                         'task archive differs from durable removal checkpoint')
-        allowed = _ordinary_markers(worktree, task_id)
-        ancillary = _ordinary_ancillary(repo, worktree, task_id)
+        allowed = _ordinary_markers(worktree, wbs_id)
+        ancillary = _ordinary_ancillary(repo, worktree, wbs_id)
         allowed.update(ancillary)
+        namespace = _ordinary_namespace_history(repo, worktree, wbs_id)
+        allowed.update(namespace)
         learning = os.path.join(worktree, 'doc/harness/learnings.jsonl')
         if os.path.lexists(learning):
             _ordinary_learning_proof(learning, os.path.join(repo, 'doc/harness/learnings.jsonl'))
@@ -619,32 +896,37 @@ def ordinary_removal_proof(repo, worktree, task_id, retention=None, checkpoint=N
             from batch_finish import RETENTION_MARKER, validate_retention
             validate_retention(worktree, retention)
             allowed.add(RETENTION_MARKER)
-        _s1_content(worktree, task_id, entries, {'modules': []}, repo,
-                    ordinary_allowed=allowed, ordinary_caches=True)
-        _s1_require(_ordinary_ancillary(repo, worktree, task_id) == ancillary,
+        _s1_content(worktree, wbs_id, entries, {'modules': []}, repo,
+                    ordinary_allowed=allowed, ordinary_caches=True,
+                    ordinary_links={rel: row for rel, row in namespace.items() if isinstance(row, dict)})
+        _s1_require(_ordinary_ancillary(repo, worktree, wbs_id) == ancillary,
                     'ancillary snapshot inventory changed')
+        _s1_require(_ordinary_namespace_history(repo, worktree, wbs_id) == namespace,
+                    'namespace history inventory changed')
         _s1_require(_tree_entries(source) == entries and _tree_entries(archive) == entries,
-                    'task evidence changed during removal inventory')
+                    'WBS evidence changed during removal inventory')
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise HarvestError('ordinary removal proof refused: ' + str(exc)) from exc
 
 
-def thaw_verification_sources(repo, worktree, task_id, retention, checkpoint):
+def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     """Only after full ordinary proof and durable archive, unseal typed copies."""
     if checkpoint is None:
-        ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
+        ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
+        _thaw_namespace_history(repo, worktree, wbs_id)
         return
     # Admit only the registered checkout and safe paths before collecting
     # candidates. The complete byte inventory follows collection, before chmod.
     _verify_registered_worktree(repo, worktree)
     from verification_target import _spec
-    task = _s1_path(os.path.join(worktree, 'doc/harness/tasks', task_id), True)
+    task = _s1_path(os.path.join(worktree, 'doc/harness/wbs', wbs_id), True)
     store = os.path.join(task, 'work/verification-targets')
     if not os.path.isdir(store):
-        ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
+        ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
+        _thaw_namespace_history(repo, worktree, wbs_id)
         return
     _s1_path(store, True)
-    archive_task = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+    archive_task = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
     _s1_require(checkpoint.get('stage') == 'harvested'
                 and checkpoint.get('harvest', {}).get('archived') == archive_task,
                 'task archive differs from durable removal checkpoint')
@@ -673,7 +955,7 @@ def thaw_verification_sources(repo, worktree, task_id, retention, checkpoint):
                 info = os.lstat(current)
                 directories.append((current, info.st_dev, info.st_ino, info.st_mode))
     # Inventory/proof must finish before any permission change.
-    ordinary_removal_proof(repo, worktree, task_id, retention, checkpoint)
+    ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
     for path, dev, ino, mode in directories:
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -683,6 +965,7 @@ def thaw_verification_sources(repo, worktree, task_id, retention, checkpoint):
             os.fchmod(fd, stat.S_IMODE(mode) | stat.S_IWUSR)
         finally:
             os.close(fd)
+    _thaw_namespace_history(repo, worktree, wbs_id)
 
 
 def ordinary_unregistered(repo, worktree):
@@ -712,14 +995,14 @@ def ordinary_unregistered(repo, worktree):
     return True
 
 
-def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
+def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
     """Dispose only a proven remaining subset; caller owns closed-run authority."""
     _s1_require(ordinary_unregistered(repo, worktree), 'residue is still registered')
     _s1_path(worktree, True)
     _s1_require(os.path.abspath(worktree) == os.path.realpath(worktree)
                 and os.path.commonpath([repo, worktree]) != worktree,
                 'unsafe residue root')
-    archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+    archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
     _s1_require(os.path.commonpath([archive, worktree]) != worktree, 'archive lies inside residue')
     _refuse_non_regular_tree(archive)
     archived = _tree_entries(archive)
@@ -741,14 +1024,17 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
             gitlinks.add(path)
         # Tracked symlinks remain unsupported residue.
     directories.update(gitlinks)
-    ancillary = _ordinary_ancillary(repo, worktree, task_id, control_dir=archive, preserve=False)
+    ancillary = _ordinary_ancillary(repo, worktree, wbs_id, control_dir=archive, preserve=False)
+    namespace = _ordinary_namespace_history(repo, worktree, wbs_id, control_dir=archive, preserve=False)
     ancillary_entries = {rel: hashlib.sha256(_ordinary_bytes(os.path.join(worktree, rel))).hexdigest()
                          for rel in ancillary if os.path.lexists(os.path.join(worktree, rel))}
-    task_rel = 'doc/harness/tasks/' + task_id
+    ancillary_entries.update({rel: digest for rel, digest in namespace.items() if isinstance(digest, str)})
+    directories.update(rel for rel, digest in namespace.items() if digest is None)
+    task_rel = 'doc/harness/wbs/' + wbs_id
     preserved = {task_rel + '/' + rel: digest for rel, digest in archived.items() if digest is not None}
     directories.add(task_rel)
     directories.update(task_rel + '/' + rel for rel, digest in archived.items() if digest is None)
-    for path in list(directories) + list(preserved) + list(ancillary):
+    for path in list(directories) + list(preserved) + list(ancillary) + list(namespace):
         while '/' in path:
             path = path.rsplit('/', 1)[0]
             directories.add(path)
@@ -766,6 +1052,15 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
                 identity = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
                 _s1_require(info.st_uid == os.getuid() and info.st_nlink == 1 or stat.S_ISDIR(info.st_mode)
                             and info.st_uid == os.getuid(), 'unsafe residue ownership/link count')
+                if stat.S_ISLNK(info.st_mode):
+                    from pathlib import Path
+                    import wbs_namespace_migration
+                    row = namespace.get(rel)
+                    _s1_require(isinstance(row, dict) and 'link' in row
+                                and wbs_namespace_migration._link_file(Path(worktree), rel) == row,
+                                'unknown or changed historical residue link: ' + rel)
+                    found[rel] = identity
+                    continue  # Its held parent removes this link, never its target.
                 parent = os.path.dirname(rel) or '.'
                 in_cache = parent in cache_dirs or rel in cache_dirs
                 if in_cache:
@@ -817,8 +1112,10 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
     _s1_require(inventory() == expected, 'residue inventory changed')
     _s1_require(ordinary_unregistered(repo, worktree), 'residue registered during proof')
     _s1_require(_tree_entries(archive) == archived, 'archive changed during residue proof')
-    _s1_require(_ordinary_ancillary(repo, worktree, task_id, control_dir=archive, preserve=False) == ancillary,
+    _s1_require(_ordinary_ancillary(repo, worktree, wbs_id, control_dir=archive, preserve=False) == ancillary,
                 'ancillary preservation changed during residue proof')
+    _s1_require(_ordinary_namespace_history(repo, worktree, wbs_id, control_dir=archive, preserve=False) == namespace,
+                'namespace preservation changed during residue proof')
     # Keep verified directory descriptors through deletion; never traverse a
     # newly replaced parent by pathname while removing its children.
     handles = {}
@@ -861,13 +1158,13 @@ def remove_ordinary_residue(repo, worktree, task_id, tip, checkpoint):
         os.close(parent_fd)
 
 
-def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner=None):
+def remove_s1_worktree(repo, worktree, wbs_id, manifest, checkpoint, git_runner=None):
     """Single-force disposal after durable state, evidence and module proofs.
 
     Finish owns lock/retention restoration and ordinary branch deletion. This
     callable grants no permission to standalone harvest or ordinary finish.
     """
-    from _lib import _read_json_file, read_task_control, task_control_status
+    from _lib import _read_json_file, read_wbs_control, wbs_control_status
     import batch_submodules
 
     try:
@@ -876,7 +1173,7 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
         _s1_path(worktree, True)
         batch_submodules.validate_manifest(manifest)
         _s1_require(manifest['repo'] == repo and manifest['worktree'] == worktree
-                    and task_id == 'TASK__' + manifest['slug'], 'S1 removal identity mismatch')
+                    and wbs_id == 'WBS__' + manifest['slug'], 'S1 removal identity mismatch')
         _verify_registered_worktree(repo, worktree)
         state_path = _s1_path(os.path.join(repo, 'doc/harness/runtime/batches', manifest['batch_id'] + '.json'))
         data = _read_json_file(state_path)
@@ -887,7 +1184,7 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
         matching = [item for item in requests if isinstance(item, dict) and item.get('slug') == manifest['slug']]
         _s1_require(len(matching) == 1, 'missing or ambiguous durable S1 request')
         item = matching[0]
-        _s1_require(item.get('status') == 'integrating' and item.get('task_id') == task_id
+        _s1_require(item.get('status') == 'integrating' and item.get('wbs_id') == wbs_id
                     and item.get('worktree') == worktree and item.get('spawn_head') == manifest['spawn_head']
                     and item.get('submodule_manifest') == manifest and item.get('checkpoint') == checkpoint,
                     'durable S1 removal proof does not match request')
@@ -904,23 +1201,27 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
                     and isinstance(item.get('branch'), str)
                     and _s1_git_text(worktree, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + item['branch'],
                     'integrated branch or destination changed')
-        source = _s1_path(os.path.join(worktree, 'doc/harness/tasks', task_id), True)
-        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', task_id), True)
+        source = _s1_path(os.path.join(worktree, 'doc/harness/wbs', wbs_id), True)
+        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
         _s1_require(isinstance(checkpoint.get('harvest'), dict) and checkpoint['harvest'].get('archived') == archive,
                     'checkpoint archive path mismatch')
         for directory in (source, archive):
             _refuse_non_regular_tree(directory)
-            control = read_task_control(directory)
-            _s1_require(control and task_control_status(directory, control) == 'closed'
+            control = read_wbs_control(directory)
+            _s1_require(control and wbs_control_status(directory, control) == 'closed'
                         and control.get('run_id') == item.get('run_id')
                         and control['closed'] is True and item.get('closed') is True,
                         'task source/archive is not the exact closed generation')
         source_entries, archive_entries = _tree_entries(source), _tree_entries(archive)
         fingerprint = 'sha256:' + hashlib.sha256(json.dumps(archive_entries, sort_keys=True).encode()).hexdigest()
         _s1_require(source_entries == archive_entries and checkpoint.get('archive_fingerprint') == fingerprint,
-                    'task evidence differs from durable archive')
+                    'WBS evidence differs from durable archive')
         batch_submodules.removal_proof(repo, worktree, manifest)
-        _s1_content(worktree, task_id, source_entries, manifest, repo)
+        namespace = _ordinary_namespace_history(repo, worktree, wbs_id)
+        markers = _ordinary_markers(worktree, wbs_id)
+        allowed = set(namespace) | markers
+        links = {rel: row for rel, row in namespace.items() if isinstance(row, dict)}
+        _s1_content(worktree, wbs_id, source_entries, manifest, repo, ordinary_allowed=allowed, ordinary_links=links)
         # Re-read authoritative state after potentially expensive inventories, and
         # repeat module proof immediately before the one destructive operation.
         _s1_require(_read_json_file(_s1_path(state_path)) == data, 'durable state changed during removal proof')
@@ -929,8 +1230,11 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
             _s1_path(directory, True)
             _refuse_non_regular_tree(directory)
         _s1_require(_tree_entries(source) == source_entries and _tree_entries(archive) == archive_entries,
-                    'task evidence changed during removal proof')
-        _s1_content(worktree, task_id, source_entries, manifest, repo)
+                    'WBS evidence changed during removal proof')
+        _s1_require(_ordinary_namespace_history(repo, worktree, wbs_id) == namespace,
+                    'namespace preservation changed during S1 proof')
+        _s1_require(_ordinary_markers(worktree, wbs_id) == markers, 'session metadata changed during S1 proof')
+        _s1_content(worktree, wbs_id, source_entries, manifest, repo, ordinary_allowed=allowed, ordinary_links=links)
         _s1_require(_s1_git_text(repo, 'rev-parse', 'HEAD') == tip
                     and _s1_git_text(worktree, 'rev-parse', 'HEAD') == tip
                     and _s1_git_text(repo, 'symbolic-ref', '-q', 'HEAD') == data['destination_ref']
@@ -938,13 +1242,14 @@ def remove_s1_worktree(repo, worktree, task_id, manifest, checkpoint, git_runner
                     'branch identity changed during removal proof')
     except (batch_submodules.SubmoduleError, OSError, ValueError, subprocess.SubprocessError) as exc:
         raise HarvestError('S1 removal proof refused: ' + str(exc)) from exc
+    _thaw_namespace_history(repo, worktree, wbs_id)
     return (git_runner or _s1_git)(repo, 'worktree', 'remove', '--force', worktree)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worktree", required=True, help="absolute path to the linked worktree")
-    parser.add_argument("--task-id", required=True, help="TASK__... id to harvest")
+    parser.add_argument("--wbs-id", required=True, help="WBS__... id to harvest")
     parser.add_argument(
         "--repo", default=None,
         help="main checkout root (default: discover from cwd)",
@@ -953,7 +1258,7 @@ def main() -> int:
 
     repo_root = args.repo or find_repo_root()
     try:
-        summary = harvest(repo_root, args.worktree, args.task_id)
+        summary = harvest(repo_root, args.worktree, args.wbs_id)
     except HarvestError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

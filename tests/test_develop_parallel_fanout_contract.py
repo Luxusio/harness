@@ -209,7 +209,7 @@ def test_claude_develop_forbids_collapsing_independent_acs_into_one_executor():
     # receipt outright and makes every named lane indistinguishable from a lost
     # one — so the example this file pins must not teach it. See
     # doc/harness/REQ__runtime-surfaces-name-the-actual-blocker.md.
-    assert 'Lane <task_id>:AC-001' in body
+    assert 'Lane <wbs_id>:AC-001' in body
     assert 'subagent_type="harness:ac-worker"' in body
     assert "Use one Agent per independent AC" in body
     assert "Do not assign multiple independent ACs to one" in body
@@ -296,7 +296,7 @@ def test_harness_ac_worker_is_scoped_to_one_ac_and_no_shared_artifacts():
     body = _text(AC_WORKER)
 
     assert "Implement only the assigned AC or lane" in body
-    assert "Do not write `PLAN.md`, `TASK.json`" in body
+    assert "Do not write `PLAN.md`, `WBS.control.json`" in body
     assert "or `PROGRESS.md`" in body
     assert "Do not collapse multiple independent ACs into your lane" in body
 
@@ -311,7 +311,7 @@ def test_codex_develop_uses_spawn_agent_lane_analysis_not_sequential_default():
     assert "spawn one worker per" in body
     assert "Use one worker per independent AC" in body
     assert "Do not assign multiple independent ACs to one" in body
-    assert "state the fallback in task state or final response" in body
+    assert "state the fallback in WBS state or final response" in body
     assert "For sequential batches, work **one AC at a time**" in body
     assert "1. **One AC at a time**, in order." not in body
 
@@ -325,7 +325,7 @@ def test_codex_develop_rejects_user_request_based_parallel_skip():
     assert "`delegation was not requested`" in body
     assert "Do not wait for the user to request delegation" in body
     assert "User request is\nnot a condition for parallel routing" in body
-    assert "mandatory capability/task-shape routing" in body
+    assert "mandatory capability/work-shape routing" in body
 
 
 def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
@@ -353,7 +353,7 @@ def test_codex_review_gate_has_risk_proportional_fanout_before_formal_verifier()
     assert "`\\u003c`, `\\u003e`, `\\u0026`" in body
     assert "only this full sweep formal reviewer" in _policy_text(body)
     assert "hunters never emit formal verdicts" in _normalized(body)
-    assert "Every retry uses new task names" in body
+    assert "Every retry uses new agent names" in body
     assert "security receives no hunter data" in body
 
 

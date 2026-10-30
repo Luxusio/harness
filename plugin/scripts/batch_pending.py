@@ -100,7 +100,7 @@ def pending(repo):
                     names.append(entry.name)
         owner.require(len(names) <= owner.MAX_BATCHES, 'batch limit')
         total = 0
-        ownership = {key: set() for key in ('task_id', 'worktree', 'branch', 'worker_id')}
+        ownership = {key: set() for key in ('wbs_id', 'worktree', 'branch', 'worker_id')}
         live_pools = 0
         for name in sorted(names):
             batch_id = name[:-5]
@@ -113,7 +113,7 @@ def pending(repo):
             for item in data['requests']:
                 for key, values in ownership.items():
                     value = item.get(key) or item.get('creation_intent', {}).get(key)
-                    if value and (key == 'task_id' or item['status'] != 'integrated'):
+                    if value and (key == 'wbs_id' or item['status'] != 'integrated'):
                         owner.require(value not in values, 'duplicate ownership')
                         values.add(value)
             live_pools += any(item['status'] in owner.LIVE for item in data['requests'])
@@ -126,7 +126,7 @@ def pending(repo):
                 continue
             result['truncated'] |= len(requests) > MAX_REQUESTS
             projection = {
-                'owner_task_id': data.get('owner_task_id'), 'batch_id': batch_id,
+                'owner_wbs_id': data.get('owner_wbs_id'), 'batch_id': batch_id,
                 'status': data['status'], 'pending_requests': len(requests),
                 'next_operation': 'inspect' if data['halted'] else
                     (_operation(requests[0]['status']) if requests else 'close'),
@@ -155,7 +155,7 @@ def render_prompt_block(repo):
     lines = ['[harness-worktree-recovery] advisory; use wbs(context/next), then dispatch lifecycle; no automatic deletion.']
     for pool in state['pools']:
         # Only allow identifier characters into the prompt, never arbitrary paths.
-        owner_id = pool['owner_task_id'] or 'unassigned'
+        owner_id = pool['owner_wbs_id'] or 'unassigned'
         actions = ','.join(item['slug'] + ':' + item['next_operation']
                            for item in pool['requests'][:3]) or pool['next_operation']
         line = f"batch={pool['batch_id']} owner={owner_id} pending={pool['pending_requests']} next={actions}"

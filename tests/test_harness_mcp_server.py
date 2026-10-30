@@ -20,8 +20,8 @@ SERVER_PATH = REPO_ROOT / "plugin" / "mcp" / "harness_server.py"
 
 # Reuse an existing instance. `_lib`'s control-writer authority binds the
 # `harness_server` code objects it first observes, so a second module object for
-# the same file is not recognised as a legitimate caller and every TASK.json
-# mutation raises `PermissionError: TASK.json mutation requires the task-control
+# the same file is not recognised as a legitimate caller and every WBS.control.json
+# mutation raises `PermissionError: WBS.control.json mutation requires the WBS-control
 # MCP`. `tests/test_session_hint_marker_binding.py` already guarded this and its
 # comment claims to match this file; it did not. Under xdist `--dist worksteal`
 # the two files land in one worker only sometimes, which made the resulting
@@ -49,14 +49,14 @@ def call_execution(server, name, args):
 EXPECTED_TOOLS = {"wbs"}
 
 
-def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -> None:
+def _write_marker_fixture(repo_root: str, wbs_dir: str, session_id: str = "") -> None:
     sid = session_id or "pytest-mcp"
-    sessions = Path(repo_root) / "doc/harness/tasks/.active_sessions"
+    sessions = Path(repo_root) / "doc/harness/wbs/.active_sessions"
     sessions.mkdir(parents=True, exist_ok=True)
-    control = harness_server.read_task_control(task_dir)
+    control = harness_server.read_wbs_control(wbs_dir)
     payload = {
-        "session_id": sid, "task_dir": task_dir,
-        "task_id": Path(task_dir).name, "run_id": control["run_id"],
+        "session_id": sid, "wbs_dir": wbs_dir,
+        "wbs_id": Path(wbs_dir).name, "run_id": control["run_id"],
         "updated": harness_lib.now_iso(),
     }
     (sessions / f"{sid}.json").write_text(
@@ -86,11 +86,11 @@ class HarnessMcpServerTests(unittest.TestCase):
             text=True,
         )
 
-    def _make_task(self, base_dir: str, task_id: str) -> str:
+    def _make_task(self, base_dir: str, wbs_id: str) -> str:
         initialize_fixture_project(base_dir)
-        task_dir = Path(base_dir) / "doc" / "harness" / "tasks" / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
-        task_dir.joinpath("TASK.json").write_text(
+        wbs_dir = Path(base_dir) / "doc" / "harness" / "wbs" / wbs_id
+        wbs_dir.mkdir(parents=True, exist_ok=True)
+        wbs_dir.joinpath("WBS.control.json").write_text(
             json.dumps({
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
@@ -99,44 +99,44 @@ class HarnessMcpServerTests(unittest.TestCase):
             }, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        (task_dir / "PLAN.md").write_text("# Plan\n\nSmall plan.\n", encoding="utf-8")
-        return str(task_dir)
+        (wbs_dir / "PLAN.md").write_text("# Plan\n\nSmall plan.\n", encoding="utf-8")
+        return str(wbs_dir)
 
     def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
         with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
             return call_execution(harness_server, name, args)
 
-    def _write_control_fixture(self, task_dir: str, control: dict) -> None:
-        Path(task_dir, "TASK.json").write_text(
+    def _write_control_fixture(self, wbs_dir: str, control: dict) -> None:
+        Path(wbs_dir, "WBS.control.json").write_text(
             json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
         )
 
-    def _close_fixture(self, task_dir: str) -> None:
-        control = harness_server.read_task_control(task_dir)
+    def _close_fixture(self, wbs_dir: str) -> None:
+        control = harness_server.read_wbs_control(wbs_dir)
         control["closed"] = True
-        self._write_control_fixture(task_dir, control)
+        self._write_control_fixture(wbs_dir, control)
 
-    def _write_marker_fixture(self, repo_root: str, task_dir: str, session_id: str = "") -> None:
-        _write_marker_fixture(repo_root, task_dir, session_id)
+    def _write_marker_fixture(self, repo_root: str, wbs_dir: str, session_id: str = "") -> None:
+        _write_marker_fixture(repo_root, wbs_dir, session_id)
 
-    def _write_historical_receipts(self, task_dir: str) -> None:
-        Path(task_dir, "RECEIPTS.jsonl").write_bytes(b"opaque historical receipt bytes\n")
+    def _write_historical_receipts(self, wbs_dir: str) -> None:
+        Path(wbs_dir, "RECEIPTS.jsonl").write_bytes(b"opaque historical receipt bytes\n")
 
     def test_server_info_is_harness(self):
         self.assertEqual(harness_server.SERVER_INFO["name"], "harness")
         self.assertEqual(harness_server.SERVER_INFO["title"], "harness Control Plane")
 
     def test_control_writer_rejects_foreign_globals_clone(self):
-        foreign_globals = dict(harness_server.handle_task_start.__globals__)
+        foreign_globals = dict(harness_server.handle_wbs_open.__globals__)
         foreign_globals["__name__"] = "harness_server"
         clone = FunctionType(
-            harness_server.handle_task_start.__code__,
+            harness_server.handle_wbs_open.__code__,
             foreign_globals,
-            harness_server.handle_task_start.__name__,
-            harness_server.handle_task_start.__defaults__,
-            harness_server.handle_task_start.__closure__,
+            harness_server.handle_wbs_open.__name__,
+            harness_server.handle_wbs_open.__defaults__,
+            harness_server.handle_wbs_open.__closure__,
         )
-        clone.__kwdefaults__ = harness_server.handle_task_start.__kwdefaults__
+        clone.__kwdefaults__ = harness_server.handle_wbs_open.__kwdefaults__
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".git").mkdir()
@@ -146,12 +146,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             prior_cwd = os.getcwd()
             os.chdir(tmp)
             try:
-                with self.assertRaisesRegex(PermissionError, "task-control"):
-                    clone({"task_id": "TASK__foreign-control-clone"})
+                with self.assertRaisesRegex(PermissionError, "WBS-control"):
+                    clone({"wbs_id": "WBS__foreign-control-clone"})
             finally:
                 os.chdir(prior_cwd)
             self.assertFalse(
-                (root / "doc/harness/tasks/TASK__foreign-control-clone/TASK.json").exists()
+                (root / "doc/harness/wbs/WBS__foreign-control-clone/WBS.control.json").exists()
             )
 
     def test_control_writer_rejects_replaced_helper_confused_deputy(self):
@@ -161,7 +161,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             manifest = root / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            foreign = root / "doc/harness/tasks/TASK__foreign-helper"
+            foreign = root / "doc/harness/wbs/WBS__foreign-helper"
             foreign.mkdir(parents=True)
             control = {
                 "run_id": harness_lib.new_uuid7(),
@@ -171,26 +171,26 @@ class HarnessMcpServerTests(unittest.TestCase):
             }
 
             def confused_helper(*_args, **_kwargs):
-                harness_server.write_task_control(str(foreign), control)
-                raise AssertionError("replaced helper reached task-control authority")
+                harness_server.write_wbs_control(str(foreign), control)
+                raise AssertionError("replaced helper reached WBS-control authority")
 
             prior_cwd = os.getcwd()
             os.chdir(tmp)
             try:
                 with mock.patch.object(
-                    harness_server, "ensure_task_scaffold", confused_helper,
+                    harness_server, "ensure_wbs_scaffold", confused_helper,
                 ):
-                    with self.assertRaisesRegex(PermissionError, "task-control"):
-                        harness_server.handle_task_start(
-                            {"task_id": "TASK__confused-deputy-trigger"}
+                    with self.assertRaisesRegex(PermissionError, "WBS-control"):
+                        harness_server.handle_wbs_open(
+                            {"wbs_id": "WBS__confused-deputy-trigger"}
                         )
             finally:
                 os.chdir(prior_cwd)
-            self.assertFalse((foreign / "TASK.json").exists())
+            self.assertFalse((foreign / "WBS.control.json").exists())
 
     def test_internal_control_helpers_are_not_authority_entrypoints(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task = Path(tmp) / "TASK__internal-helper"
+            task = Path(tmp) / "WBS__internal-helper"
             task.mkdir()
             control = {
                 "run_id": harness_lib.new_uuid7(),
@@ -198,7 +198,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "required_lenses": ["review-code", "qa-cli"],
                 "closed": False,
             }
-            (task / "TASK.json").write_text(
+            (task / "WBS.control.json").write_text(
                 json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
             )
             result = harness_server._publish_write_plan(
@@ -210,7 +210,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_live_control_writer_rebinding_is_rejected(self):
         with self.assertRaisesRegex(PermissionError, "canonical module import"):
-            harness_lib._bind_control_writer(harness_server.handle_task_start)
+            harness_lib._bind_control_writer(harness_server.handle_wbs_open)
 
 
     def test_start_and_context_never_enter_git_snapshot_helpers(self):
@@ -222,22 +222,24 @@ class HarnessMcpServerTests(unittest.TestCase):
             manifest = Path(tmp) / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__no-git-handlers"
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__no-git-handlers"
             prior_cwd = os.getcwd()
-            with mock.patch.object(harness_lib.subprocess, "run", side_effect=forbidden):
-                os.chdir(tmp)
-                started = harness_server.handle_task_start(
-                    {"task_id": "TASK__no-git-handlers"}
-                )
-                self.assertNotIn("isError", started)
-                (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
-                self._write_historical_receipts(str(task_dir))
-                context = harness_server.handle_task_context(
-                    {"task_id": "TASK__no-git-handlers"}
-                )
+            try:
+                with mock.patch.object(harness_lib.subprocess, "run", side_effect=forbidden):
+                    os.chdir(tmp)
+                    started = harness_server.handle_wbs_open(
+                        {"wbs_id": "WBS__no-git-handlers"}
+                    )
+                    self.assertNotIn("isError", started)
+                    (wbs_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+                    self._write_historical_receipts(str(wbs_dir))
+                    context = harness_server.handle_wbs_context(
+                        {"wbs_id": "WBS__no-git-handlers"}
+                    )
+            finally:
                 os.chdir(prior_cwd)
             self.assertNotIn("isError", context)
-            self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
+            self.assertFalse((wbs_dir / "TASK_BASELINE.json").exists())
 
     def test_tool_registry_matches_expected_tool_surface(self):
         tools = {tool["name"] for tool in harness_server.list_tools()}
@@ -291,7 +293,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         )
 
 
-    def test_task_start_rejects_traversal_and_outside_paths_without_mutation(self):
+    def test_wbs_open_rejects_traversal_and_outside_paths_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             git_dir = Path(tmp) / ".git"
@@ -301,12 +303,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             escaped = Path(tmp).parent / "escaped-task"
             outside = Path(tmp) / "outside"
             for args in (
-                {"task_id": "TASK__/../../../escaped-task"},
-                {"task_dir": str(outside)},
-                {"task_dir": "doc/harness/tasks/../tasks/TASK__safe"},
-                {"task_id": "TASK__safe\n"},
+                {"wbs_id": "WBS__/../../../escaped-task"},
+                {"wbs_dir": str(outside)},
+                {"wbs_dir": "doc/harness/wbs/../tasks/WBS__safe"},
+                {"wbs_id": "WBS__safe\n"},
             ):
-                result = self._call_in_repo(tmp, "task_start", args)
+                result = self._call_in_repo(tmp, "wbs_open", args)
                 self.assertTrue(result.get("isError"), args)
                 self.assertIn("canonical", result["structuredContent"]["error"])
                 self.assertIn("next_action", result["structuredContent"])
@@ -314,7 +316,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse(outside.exists())
             self.assertTrue(index_lock.exists(), "invalid selectors must not clean repository locks")
 
-    def test_task_start_never_removes_repository_index_lock(self):
+    def test_wbs_open_never_removes_repository_index_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
@@ -327,41 +329,41 @@ class HarnessMcpServerTests(unittest.TestCase):
             lock.write_bytes(b"")
 
             result = self._call_in_repo(
-                tmp, "task_start", {"task_id": "TASK__preserve-index-lock"},
+                tmp, "wbs_open", {"wbs_id": "WBS__preserve-index-lock"},
             )
 
             self.assertNotIn("isError", result)
             self.assertTrue(lock.exists())
 
-    def test_task_start_rejects_invalid_existing_control_before_side_effects(self):
+    def test_wbs_open_rejects_invalid_existing_control_before_side_effects(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__expected"))
-            state = task_dir / "TASK.json"
+            wbs_dir = Path(self._make_task(tmp, "WBS__expected"))
+            state = wbs_dir / "WBS.control.json"
             state.write_text("{}\n", encoding="utf-8")
             git_dir = Path(tmp) / ".git"
             git_dir.mkdir()
             lock = git_dir / "index.lock"
             lock.write_bytes(b"")
-            before = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+            before = {path.name: path.read_bytes() for path in wbs_dir.iterdir() if path.is_file()}
 
-            result = self._call_in_repo(tmp, "task_start", {"task_id": "TASK__expected"})
+            result = self._call_in_repo(tmp, "wbs_open", {"wbs_id": "WBS__expected"})
 
             self.assertTrue(result.get("isError"))
-            self.assertIn("invalid TASK.json", result["structuredContent"]["error"])
-            after = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+            self.assertIn("invalid WBS.control.json", result["structuredContent"]["error"])
+            after = {path.name: path.read_bytes() for path in wbs_dir.iterdir() if path.is_file()}
             self.assertEqual(after, before)
             self.assertTrue(lock.exists())
-            self.assertFalse((task_dir.parent / ".active").exists())
-            self.assertFalse((task_dir.parent / ".active_sessions").exists())
+            self.assertFalse((wbs_dir.parent / ".active").exists())
+            self.assertFalse((wbs_dir.parent / ".active_sessions").exists())
 
-    def test_task_start_rejects_old_six_field_control_with_new_task_guidance(self):
+    def test_wbs_open_rejects_old_six_field_control_with_new_task_guidance(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__old-control"
-            task_dir.mkdir(parents=True)
-            state = task_dir / "TASK.json"
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__old-control"
+            wbs_dir.mkdir(parents=True)
+            state = wbs_dir / "WBS.control.json"
             state.write_text(json.dumps({
-                "task_run_id": "a" * 32,
+                "wbs_run_id": "a" * 32,
                 "started_at": "2026-08-12T00:00:00Z",
                 "execution_mode": "standard",
                 "review_lenses": ["review-code"],
@@ -371,81 +373,81 @@ class HarnessMcpServerTests(unittest.TestCase):
             before = state.read_bytes()
 
             result = self._call_in_repo(
-                tmp, "task_start", {"task_id": "TASK__old-control"},
+                tmp, "wbs_open", {"wbs_id": "WBS__old-control"},
             )
 
             payload = result["structuredContent"]
             self.assertTrue(result.get("isError"))
-            self.assertIn("unsupported task-control schema", payload["error"])
+            self.assertIn("unsupported WBS-control schema", payload["error"])
             self.assertIn("new wbs_id", payload["next_action"])
             self.assertNotIn("Correct the named selector", payload["next_action"])
             self.assertEqual(state.read_bytes(), before)
 
-    def test_fresh_task_start_rejects_directory_replacement_before_publication(self):
+    def test_fresh_wbs_open_rejects_directory_replacement_before_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__fresh-race"
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__fresh-race"
             real_atomic_write = harness_lib._atomic_text_write
-            displaced = task_dir.with_name("TASK__fresh-race-displaced")
+            displaced = wbs_dir.with_name("WBS__fresh-race-displaced")
             raced = False
 
-            def replace_task_dir(path, text):
+            def replace_wbs_dir(path, text):
                 nonlocal raced
-                if not raced and Path(path).name == "TASK.json":
+                if not raced and Path(path).name == "WBS.control.json":
                     raced = True
-                    task_dir.rename(displaced)
-                    task_dir.symlink_to(displaced, target_is_directory=True)
+                    wbs_dir.rename(displaced)
+                    wbs_dir.symlink_to(displaced, target_is_directory=True)
                 return real_atomic_write(path, text)
 
             with (
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
-                    harness_lib, "_atomic_text_write", side_effect=replace_task_dir,
+                    harness_lib, "_atomic_text_write", side_effect=replace_wbs_dir,
                 ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "integrity"):
-                    harness_server.handle_task_start({"task_id": "TASK__fresh-race"})
+                    harness_server.handle_wbs_open({"wbs_id": "WBS__fresh-race"})
 
-            self.assertFalse((displaced / "TASK.json").exists())
+            self.assertFalse((displaced / "WBS.control.json").exists())
 
     def test_task_selectors_accept_canonical_paths_and_reject_mismatch_or_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task = Path(self._make_task(tmp, "TASK__safe"))
+            task = Path(self._make_task(tmp, "WBS__safe"))
             relative = task.relative_to(tmp).as_posix()
             self.assertEqual(
-                harness_server.canonical_task_dir(task_dir=relative, repo_root=tmp),
+                harness_server.canonical_wbs_dir(wbs_dir=relative, repo_root=tmp),
                 str(task),
             )
             self.assertEqual(
-                harness_server.canonical_task_dir(
-                    task_id="safe", task_dir=str(task), repo_root=tmp
+                harness_server.canonical_wbs_dir(
+                    wbs_id="safe", wbs_dir=str(task), repo_root=tmp
                 ),
                 str(task),
             )
             with self.assertRaisesRegex(ValueError, "disagree"):
-                harness_server.canonical_task_dir(
-                    task_id="TASK__other", task_dir=str(task), repo_root=tmp
+                harness_server.canonical_wbs_dir(
+                    wbs_id="WBS__other", wbs_dir=str(task), repo_root=tmp
                 )
             outside = Path(tmp) / "outside-target"
             outside.mkdir()
-            alias = task.parent / "TASK__alias"
+            alias = task.parent / "WBS__alias"
             alias.symlink_to(outside, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "real directory"):
-                harness_server.canonical_task_dir(task_dir=str(alias), repo_root=tmp)
+                harness_server.canonical_wbs_dir(wbs_dir=str(alias), repo_root=tmp)
             for tool_args in (
-                ("task_start", {"task_id": "TASK__alias"}),
-                ("write_plan", {"task_id": "TASK__alias", "plan": "# escaped\n"}),
-                ("task_blocked", {
-                    "task_id": "TASK__alias",
+                ("wbs_open", {"wbs_id": "WBS__alias"}),
+                ("write_plan", {"wbs_id": "WBS__alias", "plan": "# escaped\n"}),
+                ("wbs_blocked", {
+                    "wbs_id": "WBS__alias",
                     "blocked_reason": "x",
                     "unblock_condition": "y",
                 }),
             ):
                 result = self._call_in_repo(tmp, tool_args[0], tool_args[1])
                 self.assertTrue(result.get("isError"), tool_args[0])
-                self.assertEqual(result["structuredContent"]["field"], "task_id")
-                self.assertEqual(result["structuredContent"]["rejected_value"], repr("TASK__alias"))
-                self.assertIn("TASK__", result["structuredContent"]["expected"])
+                self.assertEqual(result["structuredContent"]["field"], "wbs_id")
+                self.assertEqual(result["structuredContent"]["rejected_value"], repr("WBS__alias"))
+                self.assertIn("WBS__", result["structuredContent"]["expected"])
                 self.assertIn("next_action", result["structuredContent"])
             self.assertEqual(list(outside.iterdir()), [])
 
@@ -454,17 +456,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_dir.mkdir(parents=True)
             outside = Path(tmp) / "outside-task-root"
             outside.mkdir()
-            (harness_dir / "tasks").symlink_to(outside, target_is_directory=True)
-            with self.assertRaisesRegex(ValueError, "task root"):
-                harness_server.canonical_task_dir(task_id="TASK__safe", repo_root=tmp)
+            (harness_dir / "wbs").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "WBS root"):
+                harness_server.canonical_wbs_dir(wbs_id="WBS__safe", repo_root=tmp)
 
         with tempfile.TemporaryDirectory() as tmp:
             outside = Path(tmp) / "outside-doc"
             outside.mkdir()
             (Path(tmp) / "doc").symlink_to(outside, target_is_directory=True)
-            result = self._call_in_repo(tmp, "task_start", {"task_id": "TASK__escape"})
+            result = self._call_in_repo(tmp, "wbs_open", {"wbs_id": "WBS__escape"})
             self.assertTrue(result.get("isError"))
-            self.assertFalse((outside / "harness" / "tasks" / "TASK__escape").exists())
+            self.assertFalse((outside / "harness" / "wbs" / "WBS__escape").exists())
 
     def test_stdio_transport_accepts_content_length_frames(self):
         request = {
@@ -522,8 +524,8 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("WBS-first control plane", instructions)
         self.assertIn("wbs", instructions)
         self.assertIn("plain repo-mutating request", instructions)
-        self.assertIn("hooks do not create tasks automatically", instructions)
-        self.assertIn("Task open preserves", instructions)
+        self.assertIn("hooks do not open WBS roots automatically", instructions)
+        self.assertIn("WBS open preserves", instructions)
         self.assertIn("fresh_run=true", instructions)
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
@@ -711,23 +713,23 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(response["error"]["code"], -32601)
         self.assertIn("Method not found", response["error"]["message"])
 
-    def test_task_context_returns_structured_content(self):
+    def test_wbs_context_returns_structured_content(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__mcp")
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            wbs_dir = self._make_task(tmp, "WBS__mcp")
+            original_ctd = harness_server.canonical_wbs_dir
+            harness_server.canonical_wbs_dir = lambda wbs_id=None, **kw: wbs_dir
             try:
-                # Through `_call_in_repo`: `task_context` binds the calling
+                # Through `_call_in_repo`: `wbs_context` binds the calling
                 # session's active marker, so a handler left pointed at the real
                 # repository writes this fixture's tmp task into it.
-                result = self._call_in_repo(tmp, "task_context", {"task_id": "TASK__mcp"})
+                result = self._call_in_repo(tmp, "context", {"wbs_id": "WBS__mcp"})
             finally:
-                harness_server.canonical_task_dir = original_ctd
+                harness_server.canonical_wbs_dir = original_ctd
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
-            self.assertEqual(structured["task_id"], "TASK__mcp")
-            context = structured["task_context"]
-            self.assertEqual(context["task_id"], "TASK__mcp")
+            self.assertEqual(structured["wbs_id"], "WBS__mcp")
+            context = structured["context"]
+            self.assertEqual(context["wbs_id"], "WBS__mcp")
             self.assertEqual(context["verification_basis"], "current_wbs_checks")
             for removed in ("watcher_status", "review_verdict", "receipt_recording", "report_path"):
                 self.assertNotIn(removed, context)
@@ -739,7 +741,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             result = call_execution(harness_server,
                 tool,
                 {
-                    "task_id": "TASK__removed",
+                    "wbs_id": "WBS__removed",
                     "verdict": "PASS",
                     "summary": "self-authored pass",
                     "transcript": "not a receipt",
@@ -752,7 +754,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         result = call_execution(harness_server,
             "record_ac_evidence",
             {
-                "task_id": "TASK__removed",
+                "wbs_id": "WBS__removed",
                 "ac_id": "AC-001",
                 "evidence": "self-authored claim",
             },
@@ -764,21 +766,21 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_micro_execution_mode_requires_plan_and_measured_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__micro"
-            original_ctd = harness_server.canonical_task_dir
+            wbs_dir = Path(tmp) / "doc" / "harness" / "wbs" / "WBS__micro"
+            original_ctd = harness_server.canonical_wbs_dir
             original_root = harness_server.find_repo_root
-            harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: str(task_dir)
+            harness_server.canonical_wbs_dir = lambda wbs_id=None, slug=None, repo_root=None, **kw: str(wbs_dir)
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
                 start = call_execution(harness_server,
-                    "task_start",
-                    {"task_id": "TASK__micro", "execution_mode": "micro"},
+                    "wbs_open",
+                    {"wbs_id": "WBS__micro", "execution_mode": "micro"},
                 )
-                close = call_execution(harness_server, "task_close", {"task_id": "TASK__micro"})
+                close = call_execution(harness_server, "wbs_close", {"wbs_id": "WBS__micro"})
             finally:
-                harness_server.canonical_task_dir = original_ctd
+                harness_server.canonical_wbs_dir = original_ctd
                 harness_server.find_repo_root = original_root
-        ctx = start["structuredContent"]["task_context"]
+        ctx = start["structuredContent"]["context"]
         self.assertFalse(ctx["source_write_allowed"])
         self.assertEqual(ctx["routing"]["orchestration_mode"], "unassigned")
         self.assertIn("PLAN.md", ctx["why_source_write_blocked"])
@@ -788,28 +790,28 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(close.get("isError"))
         self.assertTrue(close["structuredContent"]["missing_for_close"])
 
-    def test_task_blocked_records_pause_state_and_artifact(self):
+    def test_wbs_blocked_records_pause_state_and_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__blocked")
-            original_ctd = harness_server.canonical_task_dir
+            wbs_dir = self._make_task(tmp, "WBS__blocked")
+            original_ctd = harness_server.canonical_wbs_dir
             original_root = harness_server.find_repo_root
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            harness_server.canonical_wbs_dir = lambda wbs_id=None, **kw: wbs_dir
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
                 result = call_execution(harness_server,
-                    "task_blocked",
+                    "wbs_blocked",
                     {
-                        "task_id": "TASK__blocked",
+                        "wbs_id": "WBS__blocked",
                         "blocked_reason": "CI service is unavailable on this host.",
                         "unblock_condition": "Run CI where the service exists.",
                     },
                 )
             finally:
-                harness_server.canonical_task_dir = original_ctd
+                harness_server.canonical_wbs_dir = original_ctd
                 harness_server.find_repo_root = original_root
             self.assertNotIn("isError", result)
             self.assertEqual(result["structuredContent"]["status"], "blocked")
-            body = (Path(task_dir) / "BLOCKED.md").read_text(encoding="utf-8")
+            body = (Path(wbs_dir) / "BLOCKED.md").read_text(encoding="utf-8")
             self.assertIn("CI service is unavailable", body)
             self.assertIn("wbs(action='open')", body)
             self.assertIn("fresh_run", body)
@@ -819,15 +821,15 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("fresh_run", payload["next_action"])
             self.assertIn("preserv", payload["next_action"].lower())
             self.assertEqual(
-                harness_server.task_control_status(
-                    task_dir, harness_server.read_task_control(task_dir)
+                harness_server.wbs_control_status(
+                    wbs_dir, harness_server.read_wbs_control(wbs_dir)
                 ), "blocked",
             )
 
-    def test_task_blocked_argument_errors_name_the_actual_field_without_echoing_content(self):
+    def test_wbs_blocked_argument_errors_name_the_actual_field_without_echoing_content(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__blocked-arguments"))
-            state_before = (task_dir / "TASK.json").read_bytes()
+            wbs_dir = Path(self._make_task(tmp, "WBS__blocked-arguments"))
+            state_before = (wbs_dir / "WBS.control.json").read_bytes()
             cases = (
                 ({"unblock_condition": "resume"}, "blocked_reason", "missing", "<missing>"),
                 (
@@ -852,8 +854,8 @@ class HarnessMcpServerTests(unittest.TestCase):
                 with self.subTest(field=field, reason=reason):
                     result = self._call_in_repo(
                         tmp,
-                        "task_blocked",
-                        {"task_id": task_dir.name, **extra},
+                        "wbs_blocked",
+                        {"wbs_id": wbs_dir.name, **extra},
                     )
                     payload = result["structuredContent"]
                     self.assertTrue(result.get("isError"))
@@ -864,10 +866,10 @@ class HarnessMcpServerTests(unittest.TestCase):
                     self.assertIn(field, payload["next_action"])
                     self.assertNotIn("SECRET_REASON_TEXT", json.dumps(result))
                     self.assertNotIn("SECRET_CONDITION_TEXT", json.dumps(result))
-                    self.assertFalse((task_dir / "BLOCKED.md").exists())
-                    self.assertEqual((task_dir / "TASK.json").read_bytes(), state_before)
+                    self.assertFalse((wbs_dir / "BLOCKED.md").exists())
+                    self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), state_before)
 
-    def test_task_blocked_preserves_long_unicode_fields_through_public_transports(self):
+    def test_wbs_blocked_preserves_long_unicode_fields_through_public_transports(self):
         reason = "  REASON_START\r\n" + ("막힌 이유🙂 {\"reason\": true}\r둘째 줄 'quote'\\slash\n" * 320) + "REASON_END\t "
         unblock = "\rUNBLOCK_START\n" + ("해제 조건🚦 [unblock]\r\n다른 줄 \"double\"\\path\r" * 340) + "UNBLOCK_END  "
         self.assertGreater(len(reason.encode("utf-8")), 12 * 1024)
@@ -875,20 +877,20 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         for mode in ("direct", "newline", "framed"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
-                task_dir = Path(self._make_task(tmp, f"TASK__long-{mode}"))
+                wbs_dir = Path(self._make_task(tmp, f"WBS__long-{mode}"))
                 args = {
-                    "task_id": task_dir.name,
+                    "wbs_id": wbs_dir.name,
                     "blocked_reason": reason,
                     "unblock_condition": unblock,
                 }
                 if mode == "direct":
-                    result = self._call_in_repo(tmp, "task_blocked", args)
+                    result = self._call_in_repo(tmp, "wbs_blocked", args)
                 else:
                     request = {
                         "jsonrpc": "2.0",
                         "id": 41,
                         "method": "tools/call",
-                        "params": {"name": "wbs", "arguments": {"action": "block", "wbs_id": args["task_id"], **{k: v for k, v in args.items() if k != "task_id"}}},
+                        "params": {"name": "wbs", "arguments": {"action": "block", "wbs_id": args["wbs_id"], **{k: v for k, v in args.items() if k != "wbs_id"}}},
                     }
                     following = {
                         "jsonrpc": "2.0", "id": 42, "method": "ping", "params": {},
@@ -934,7 +936,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     result = responses[0]["result"]
 
                 self.assertNotIn("isError", result)
-                body = (task_dir / "BLOCKED.md").read_bytes()
+                body = (wbs_dir / "BLOCKED.md").read_bytes()
                 expected = (
                     f"## Blocked Reason\n{reason}\n\n"
                     f"## Unblock Condition\n{unblock}\n\n## Resume\n"
@@ -943,47 +945,47 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertEqual(body.count(reason.encode("utf-8")), 1)
                 self.assertEqual(body.count(unblock.encode("utf-8")), 1)
 
-    def test_task_blocked_enforces_utf8_byte_limit_before_mutation(self):
+    def test_wbs_blocked_enforces_utf8_byte_limit_before_mutation(self):
         exact = "가" * (122_880 // len("가".encode("utf-8")))
         self.assertEqual(len(exact.encode("utf-8")), 122_880)
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__limit-both-exact"))
-            result = self._call_in_repo(tmp, "task_blocked", {
-                "task_id": task_dir.name,
+            wbs_dir = Path(self._make_task(tmp, "WBS__limit-both-exact"))
+            result = self._call_in_repo(tmp, "wbs_blocked", {
+                "wbs_id": wbs_dir.name,
                 "blocked_reason": exact,
                 "unblock_condition": exact,
             })
             self.assertNotIn("isError", result)
-            self.assertLess((task_dir / "BLOCKED.md").stat().st_size, 256 * 1024)
+            self.assertLess((wbs_dir / "BLOCKED.md").stat().st_size, 256 * 1024)
 
         for field in ("blocked_reason", "unblock_condition"):
             with self.subTest(field=field, boundary="exact"), tempfile.TemporaryDirectory() as tmp:
-                task_dir = Path(self._make_task(tmp, f"TASK__limit-exact-{field}"))
+                wbs_dir = Path(self._make_task(tmp, f"WBS__limit-exact-{field}"))
                 args = {
-                    "task_id": task_dir.name,
+                    "wbs_id": wbs_dir.name,
                     "blocked_reason": "reason",
                     "unblock_condition": "resume",
                 }
                 args[field] = exact
-                result = self._call_in_repo(tmp, "task_blocked", args)
+                result = self._call_in_repo(tmp, "wbs_blocked", args)
                 self.assertNotIn("isError", result)
-                body = (task_dir / "BLOCKED.md").read_text(encoding="utf-8")
+                body = (wbs_dir / "BLOCKED.md").read_text(encoding="utf-8")
                 self.assertIn(exact, body)
 
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
-                task_dir = Path(self._make_task(tmp, f"TASK__limit-{field}"))
-                self._write_marker_fixture(tmp, str(task_dir))
-                task_before = (task_dir / "TASK.json").read_bytes()
-                marker = Path(tmp) / "doc/harness/tasks/.active_sessions/pytest-mcp.json"
+                wbs_dir = Path(self._make_task(tmp, f"WBS__limit-{field}"))
+                self._write_marker_fixture(tmp, str(wbs_dir))
+                task_before = (wbs_dir / "WBS.control.json").read_bytes()
+                marker = Path(tmp) / "doc/harness/wbs/.active_sessions/pytest-mcp.json"
                 marker_before = marker.read_bytes()
                 args = {
-                    "task_id": task_dir.name,
+                    "wbs_id": wbs_dir.name,
                     "blocked_reason": "reason",
                     "unblock_condition": "resume",
                 }
                 args[field] = exact + "x"
 
-                result = self._call_in_repo(tmp, "task_blocked", args)
+                result = self._call_in_repo(tmp, "wbs_blocked", args)
 
                 payload = result["structuredContent"]
                 self.assertTrue(result.get("isError"))
@@ -995,32 +997,32 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertEqual(
                     payload["rejected_value"], "<string: 122881 UTF-8 bytes>",
                 )
-                self.assertFalse((task_dir / "BLOCKED.md").exists())
-                self.assertEqual((task_dir / "TASK.json").read_bytes(), task_before)
+                self.assertFalse((wbs_dir / "BLOCKED.md").exists())
+                self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), task_before)
                 self.assertEqual(marker.read_bytes(), marker_before)
 
-    def test_task_blocked_invalid_unicode_names_the_field_over_direct_and_framed_calls(self):
+    def test_wbs_blocked_invalid_unicode_names_the_field_over_direct_and_framed_calls(self):
         for mode in ("direct", "framed"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
-                task_dir = Path(self._make_task(tmp, f"TASK__invalid-unicode-{mode}"))
-                self._write_marker_fixture(tmp, str(task_dir))
-                task_before = (task_dir / "TASK.json").read_bytes()
-                marker = Path(tmp) / "doc/harness/tasks/.active_sessions/pytest-mcp.json"
+                wbs_dir = Path(self._make_task(tmp, f"WBS__invalid-unicode-{mode}"))
+                self._write_marker_fixture(tmp, str(wbs_dir))
+                task_before = (wbs_dir / "WBS.control.json").read_bytes()
+                marker = Path(tmp) / "doc/harness/wbs/.active_sessions/pytest-mcp.json"
                 marker_before = marker.read_bytes()
                 args = {
-                    "task_id": task_dir.name,
+                    "wbs_id": wbs_dir.name,
                     "blocked_reason": "reason",
                     "unblock_condition": "bad\ud800SECRET_SURROGATE",
                 }
 
                 if mode == "direct":
-                    result = self._call_in_repo(tmp, "task_blocked", args)
+                    result = self._call_in_repo(tmp, "wbs_blocked", args)
                 else:
                     request = {
                         "jsonrpc": "2.0",
                         "id": 73,
                         "method": "tools/call",
-                        "params": {"name": "wbs", "arguments": {"action": "block", "wbs_id": args["task_id"], **{k: v for k, v in args.items() if k != "task_id"}}},
+                        "params": {"name": "wbs", "arguments": {"action": "block", "wbs_id": args["wbs_id"], **{k: v for k, v in args.items() if k != "wbs_id"}}},
                     }
                     body = json.dumps(request).encode("utf-8")
                     raw_input = (
@@ -1048,19 +1050,19 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertEqual(payload["reason"], "invalid_utf8")
                 self.assertEqual(payload["rejected_value"], "<string: invalid UTF-8>")
                 self.assertNotIn("SECRET_SURROGATE", json.dumps(result))
-                self.assertFalse((task_dir / "BLOCKED.md").exists())
-                self.assertEqual((task_dir / "TASK.json").read_bytes(), task_before)
+                self.assertFalse((wbs_dir / "BLOCKED.md").exists())
+                self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), task_before)
                 self.assertEqual(marker.read_bytes(), marker_before)
 
     def test_task_selector_errors_report_only_forms_the_field_accepts(self):
-        for task_id, canonical in (
-            ("bare-safe", "TASK__bare-safe"),
-            ("TASK__canonical-safe", "TASK__canonical-safe"),
+        for wbs_id, canonical in (
+            ("bare-safe", "WBS__bare-safe"),
+            ("WBS__canonical-safe", "WBS__canonical-safe"),
         ):
-            with self.subTest(task_id=task_id), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(wbs_id=wbs_id), tempfile.TemporaryDirectory() as tmp:
                 self._make_task(tmp, canonical)
-                accepted = self._call_in_repo(tmp, "task_blocked", {
-                    "task_id": task_id,
+                accepted = self._call_in_repo(tmp, "wbs_blocked", {
+                    "wbs_id": wbs_id,
                     "blocked_reason": "reason",
                     "unblock_condition": "resume",
                 })
@@ -1070,39 +1072,39 @@ class HarnessMcpServerTests(unittest.TestCase):
             initialize_fixture_project(tmp)
             result = self._call_in_repo(
                 tmp,
-                "task_blocked",
+                "wbs_blocked",
                 {
-                    "task_id": "doc/harness/tasks/TASK__not-an-id",
+                    "wbs_id": "doc/harness/wbs/WBS__not-an-id",
                     "blocked_reason": "reason",
                     "unblock_condition": "resume",
                 },
             )
         payload = result["structuredContent"]
         self.assertTrue(result.get("isError"))
-        self.assertEqual(payload["field"], "task_id")
-        self.assertIn("TASK__<safe-id> or <safe-id>", payload["expected"])
+        self.assertEqual(payload["field"], "wbs_id")
+        self.assertIn("WBS__<safe-id> or <safe-id>", payload["expected"])
         self.assertIn("1-180 ASCII", payload["expected"])
-        self.assertNotIn("doc/harness/tasks", payload["expected"])
+        self.assertNotIn("doc/harness/wbs", payload["expected"])
 
-    def test_local_argument_errors_do_not_fall_back_to_task_id(self):
+    def test_local_argument_errors_do_not_fall_back_to_wbs_id(self):
         cases = (
             (
-                {"task_id": "TASK__bad-fresh", "fresh_run": "true"},
+                {"wbs_id": "WBS__bad-fresh", "fresh_run": "true"},
                 "fresh_run", "wrong_type", "'true'",
             ),
             (
-                {"task_id": "TASK__bad-mode", "execution_mode": "large"},
+                {"wbs_id": "WBS__bad-mode", "execution_mode": "large"},
                 "execution_mode", "invalid_choice", "'large'",
             ),
             (
-                {"task_id": "TASK__bad-mode-type", "execution_mode": []},
+                {"wbs_id": "WBS__bad-mode-type", "execution_mode": []},
                 "execution_mode", "wrong_type", "<non-string: list>",
             ),
         )
         for args, field, reason, rejected in cases:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
                 initialize_fixture_project(tmp)
-                result = self._call_in_repo(tmp, "task_start", args)
+                result = self._call_in_repo(tmp, "wbs_open", args)
                 payload = result["structuredContent"]
                 self.assertTrue(result.get("isError"))
                 self.assertEqual(payload["error_code"], "INVALID_ARGUMENT")
@@ -1115,12 +1117,12 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_selector_expected_text_is_field_specific(self):
         cases = (
             (
-                "task_start",
-                {"task_dir": "outside/TASK__safe"},
-                "task_dir",
-                "doc/harness/tasks/TASK__<safe-id>",
+                "wbs_open",
+                {"wbs_dir": "outside/WBS__safe"},
+                "wbs_dir",
+                "doc/harness/wbs/WBS__<safe-id>",
             ),
-            ("task_start", {"slug": "bad/path"}, "slug", "1-180 ASCII"),
+            ("wbs_open", {"slug": "bad/path"}, "slug", "1-180 ASCII"),
         )
         for tool, args, field, expected_fragment in cases:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
@@ -1131,98 +1133,98 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertEqual(payload["field"], field)
                 self.assertIn(expected_fragment, payload["expected"])
 
-    def test_task_blocked_rolls_back_when_marker_cleanup_is_not_confirmed(self):
+    def test_wbs_blocked_rolls_back_when_marker_cleanup_is_not_confirmed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__blocked-marker-failure")
-            self._write_marker_fixture(tmp, task_dir)
+            wbs_dir = self._make_task(tmp, "WBS__blocked-marker-failure")
+            self._write_marker_fixture(tmp, wbs_dir)
             with (
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=task_dir,
+                    harness_server, "canonical_wbs_dir", return_value=wbs_dir,
                 ),
                 mock.patch.object(
                     harness_server, "clear_active_marker",
                     side_effect=OSError("marker cleanup unavailable"),
                 ),
             ):
-                result = call_execution(harness_server, "task_blocked", {
-                    "task_id": "TASK__blocked-marker-failure",
+                result = call_execution(harness_server, "wbs_blocked", {
+                    "wbs_id": "WBS__blocked-marker-failure",
                     "blocked_reason": "pause",
                     "unblock_condition": "resume",
                 })
             self.assertTrue(result.get("isError"))
-            self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
+            self.assertFalse((Path(wbs_dir) / "BLOCKED.md").exists())
             self.assertEqual(
-                Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
-                Path(task_dir).resolve(),
+                Path(harness_server.resolve_active_wbs_dir(tmp)).resolve(),
+                Path(wbs_dir).resolve(),
             )
 
-    def test_task_start_rejects_terminal_leaf_symlinks_without_touching_targets(self):
+    def test_wbs_open_rejects_terminal_leaf_symlinks_without_touching_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__leaf-safe"
-            task_dir.mkdir(parents=True)
+            wbs_dir = Path(tmp) / "doc" / "harness" / "wbs" / "WBS__leaf-safe"
+            wbs_dir.mkdir(parents=True)
             sentinel = Path(tmp) / "task-sentinel"
             sentinel.write_text("keep", encoding="utf-8")
             request = Path(tmp) / "request.txt"
             request.write_text("request body", encoding="utf-8")
-            (task_dir / "REQUEST.md").symlink_to(sentinel)
-            (task_dir / "BLOCKED.md").symlink_to(sentinel)
-            active = task_dir.parent / ".active"
+            (wbs_dir / "REQUEST.md").symlink_to(sentinel)
+            (wbs_dir / "BLOCKED.md").symlink_to(sentinel)
+            active = wbs_dir.parent / ".active"
             active.symlink_to(sentinel)
 
             start = self._call_in_repo(
                 tmp,
-                "task_start",
-                {"task_id": "TASK__leaf-safe", "request_file": str(request)},
+                "wbs_open",
+                {"wbs_id": "WBS__leaf-safe", "request_file": str(request)},
             )
             self.assertTrue(start.get("isError"))
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
-            self.assertFalse((task_dir / "REQUEST.md").is_symlink())
-            self.assertTrue((task_dir / "BLOCKED.md").is_symlink())
+            self.assertFalse((wbs_dir / "REQUEST.md").is_symlink())
+            self.assertTrue((wbs_dir / "BLOCKED.md").is_symlink())
 
-    def test_task_start_existing_task_refuses_unsafe_blocker_for_default_and_fresh(self):
+    def test_wbs_open_existing_task_refuses_unsafe_blocker_for_default_and_fresh(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__unsafe-blocker"))
+            wbs_dir = Path(self._make_task(tmp, "WBS__unsafe-blocker"))
             external = Path(tmp) / "external-blocker.md"
             external.write_bytes(b"do not touch\n")
-            blocker = task_dir / "BLOCKED.md"
+            blocker = wbs_dir / "BLOCKED.md"
             blocker.symlink_to(external)
-            control_before = (task_dir / "TASK.json").read_bytes()
+            control_before = (wbs_dir / "WBS.control.json").read_bytes()
 
             for args in (
-                {"task_id": task_dir.name},
-                {"task_id": task_dir.name, "fresh_run": True},
+                {"wbs_id": wbs_dir.name},
+                {"wbs_id": wbs_dir.name, "fresh_run": True},
             ):
                 with self.subTest(args=args):
-                    result = self._call_in_repo(tmp, "task_start", args)
+                    result = self._call_in_repo(tmp, "wbs_open", args)
                     self.assertTrue(result.get("isError"))
                     self.assertIn("fresh_run is not repair authority", result["structuredContent"]["next_action"])
-                    self.assertEqual((task_dir / "TASK.json").read_bytes(), control_before)
+                    self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), control_before)
                     self.assertEqual(external.read_bytes(), b"do not touch\n")
                     self.assertTrue(blocker.is_symlink())
 
-    def test_task_blocked_missing_task_leaves_no_orphan_directory(self):
+    def test_wbs_blocked_missing_task_leaves_no_orphan_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__typo"
+            wbs_dir = Path(tmp) / "doc" / "harness" / "wbs" / "WBS__typo"
             result = self._call_in_repo(
                 tmp,
-                "task_blocked",
+                "wbs_blocked",
                 {
-                    "task_id": "TASK__typo",
+                    "wbs_id": "WBS__typo",
                     "blocked_reason": "missing",
                     "unblock_condition": "start it first",
                 },
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("wbs(action='open')", result["structuredContent"].get("next_action", ""))
-            self.assertFalse(task_dir.exists())
+            self.assertFalse(wbs_dir.exists())
 
-    def test_task_blocked_rejects_symlinked_state_without_touching_target(self):
+    def test_wbs_blocked_rejects_symlinked_state_without_touching_target(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__unsafe-state"))
-            state = task_dir / "TASK.json"
+            wbs_dir = Path(self._make_task(tmp, "WBS__unsafe-state"))
+            state = wbs_dir / "WBS.control.json"
             external = Path(tmp) / "external-state.json"
             external.write_text(state.read_text(encoding="utf-8"), encoding="utf-8")
             state.unlink()
@@ -1230,9 +1232,9 @@ class HarnessMcpServerTests(unittest.TestCase):
             before = external.read_bytes()
             result = self._call_in_repo(
                 tmp,
-                "task_blocked",
+                "wbs_blocked",
                 {
-                    "task_id": "TASK__unsafe-state",
+                    "wbs_id": "WBS__unsafe-state",
                     "blocked_reason": "environment",
                     "unblock_condition": "restore environment",
                 },
@@ -1243,104 +1245,104 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_task_mutators_reject_invalid_control_before_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__expected"))
-            state = task_dir / "TASK.json"
+            wbs_dir = Path(self._make_task(tmp, "WBS__expected"))
+            state = wbs_dir / "WBS.control.json"
             state.write_text("{}\n", encoding="utf-8")
-            before = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+            before = {path.name: path.read_bytes() for path in wbs_dir.iterdir() if path.is_file()}
 
             plan = self._call_in_repo(
                 tmp,
                 "write_plan",
-                {"task_id": "TASK__expected", "plan": "# Replacement\n"},
+                {"wbs_id": "WBS__expected", "plan": "# Replacement\n"},
             )
             blocked = self._call_in_repo(
                 tmp,
-                "task_blocked",
+                "wbs_blocked",
                 {
-                    "task_id": "TASK__expected",
+                    "wbs_id": "WBS__expected",
                     "blocked_reason": "environment",
                     "unblock_condition": "restore environment",
                 },
             )
             self.assertTrue(plan.get("isError"))
             self.assertTrue(blocked.get("isError"))
-            self.assertIn("invalid TASK.json", plan["structuredContent"]["error"])
-            self.assertIn("invalid TASK.json", blocked["structuredContent"]["error"])
-            after = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+            self.assertIn("invalid WBS.control.json", plan["structuredContent"]["error"])
+            self.assertIn("invalid WBS.control.json", blocked["structuredContent"]["error"])
+            after = {path.name: path.read_bytes() for path in wbs_dir.iterdir() if path.is_file()}
             self.assertEqual(after, before)
-            self.assertFalse((task_dir / "BLOCKED.md").exists())
+            self.assertFalse((wbs_dir / "BLOCKED.md").exists())
 
-    def test_task_start_explicitly_resumes_blocked_task(self):
+    def test_wbs_open_explicitly_resumes_blocked_task(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__resume-blocked")
-            self._write_historical_receipts(task_dir)
-            (Path(task_dir) / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
-            control_before = Path(task_dir, "TASK.json").read_bytes()
-            receipts_before = Path(task_dir, "RECEIPTS.jsonl").read_bytes()
-            run_before = harness_server.read_task_control(task_dir)["run_id"]
-            original_ctd = harness_server.canonical_task_dir
+            wbs_dir = self._make_task(tmp, "WBS__resume-blocked")
+            self._write_historical_receipts(wbs_dir)
+            (Path(wbs_dir) / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
+            control_before = Path(wbs_dir, "WBS.control.json").read_bytes()
+            receipts_before = Path(wbs_dir, "RECEIPTS.jsonl").read_bytes()
+            run_before = harness_server.read_wbs_control(wbs_dir)["run_id"]
+            original_ctd = harness_server.canonical_wbs_dir
             original_root = harness_server.find_repo_root
-            harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
+            harness_server.canonical_wbs_dir = lambda wbs_id=None, slug=None, repo_root=None, **kw: wbs_dir
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
                 result = call_execution(harness_server,
-                    "task_start", {"task_id": "TASK__resume-blocked"}
+                    "wbs_open", {"wbs_id": "WBS__resume-blocked"}
                 )
             finally:
-                harness_server.canonical_task_dir = original_ctd
+                harness_server.canonical_wbs_dir = original_ctd
                 harness_server.find_repo_root = original_root
 
             self.assertNotIn("isError", result)
-            context = result["structuredContent"]["task_context"]
+            context = result["structuredContent"]["context"]
             self.assertEqual(context["status"], "open")
             self.assertEqual(context["runtime_verdict"], "PENDING")
-            self.assertFalse(result["structuredContent"]["task_created"])
+            self.assertFalse(result["structuredContent"]["wbs_created"])
             self.assertTrue(result["structuredContent"]["resumed"])
             self.assertEqual(result["structuredContent"]["run_action"], "preserved")
             self.assertTrue(result["structuredContent"]["evidence_preserved"])
             self.assertEqual(result["structuredContent"]["run_id"], run_before)
-            self.assertEqual(Path(task_dir, "TASK.json").read_bytes(), control_before)
-            self.assertEqual(Path(task_dir, "RECEIPTS.jsonl").read_bytes(), receipts_before)
-            self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
+            self.assertEqual(Path(wbs_dir, "WBS.control.json").read_bytes(), control_before)
+            self.assertEqual(Path(wbs_dir, "RECEIPTS.jsonl").read_bytes(), receipts_before)
+            self.assertFalse((Path(wbs_dir) / "BLOCKED.md").exists())
             self.assertEqual(
-                harness_server.task_control_status(
-                    task_dir, harness_server.read_task_control(task_dir)
+                harness_server.wbs_control_status(
+                    wbs_dir, harness_server.read_wbs_control(wbs_dir)
                 ), "open",
             )
 
-    def test_task_start_requires_fresh_run_for_closed_task(self):
+    def test_wbs_open_requires_fresh_run_for_closed_task(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__resume-closed")
-            self._close_fixture(task_dir)
-            original_ctd = harness_server.canonical_task_dir
+            wbs_dir = self._make_task(tmp, "WBS__resume-closed")
+            self._close_fixture(wbs_dir)
+            original_ctd = harness_server.canonical_wbs_dir
             original_root = harness_server.find_repo_root
-            harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
+            harness_server.canonical_wbs_dir = lambda wbs_id=None, slug=None, repo_root=None, **kw: wbs_dir
             harness_server.find_repo_root = lambda *a, **kw: tmp
             try:
                 result = call_execution(harness_server,
-                    "task_start", {"task_id": "TASK__resume-closed"}
+                    "wbs_open", {"wbs_id": "WBS__resume-closed"}
                 )
             finally:
-                harness_server.canonical_task_dir = original_ctd
+                harness_server.canonical_wbs_dir = original_ctd
                 harness_server.find_repo_root = original_root
 
             self.assertTrue(result.get("isError"))
             self.assertIn("fresh_run", result["structuredContent"]["next_action"])
             self.assertTrue(
-                harness_server.read_task_control(task_dir)["closed"]
+                harness_server.read_wbs_control(wbs_dir)["closed"]
             )
 
-    def test_task_start_fresh_run_reopens_closed_task(self):
+    def test_wbs_open_fresh_run_reopens_closed_task(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__fresh-closed")
-            self._write_historical_receipts(task_dir)
-            self._close_fixture(task_dir)
-            old_run_id = harness_server.read_task_control(task_dir)["run_id"]
+            wbs_dir = self._make_task(tmp, "WBS__fresh-closed")
+            self._write_historical_receipts(wbs_dir)
+            self._close_fixture(wbs_dir)
+            old_run_id = harness_server.read_wbs_control(wbs_dir)["run_id"]
 
             result = self._call_in_repo(
                 tmp,
-                "task_start",
-                {"task_id": "TASK__fresh-closed", "fresh_run": True},
+                "wbs_open",
+                {"wbs_id": "WBS__fresh-closed", "fresh_run": True},
             )
 
             payload = result["structuredContent"]
@@ -1349,15 +1351,15 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["previous_run_id"], old_run_id)
             self.assertNotEqual(payload["run_id"], old_run_id)
             self.assertFalse(
-                harness_server.read_task_control(task_dir)["closed"]
+                harness_server.read_wbs_control(wbs_dir)["closed"]
             )
-            self.assertTrue(Path(task_dir, "RECEIPTS.jsonl").exists())
+            self.assertTrue(Path(wbs_dir, "RECEIPTS.jsonl").exists())
 
 
-    def test_task_start_rejects_mutating_existing_options_without_writes(self):
+    def test_wbs_open_rejects_mutating_existing_options_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__preserve-options"))
-            self._write_historical_receipts(str(task_dir))
+            wbs_dir = Path(self._make_task(tmp, "WBS__preserve-options"))
+            self._write_historical_receipts(str(wbs_dir))
             request = Path(tmp, "replacement.md")
             request.write_text("replacement\n", encoding="utf-8")
 
@@ -1369,48 +1371,48 @@ class HarnessMcpServerTests(unittest.TestCase):
                 with self.subTest(extra=extra):
                     before = {
                         path.name: path.read_bytes()
-                        for path in task_dir.iterdir() if path.is_file()
+                        for path in wbs_dir.iterdir() if path.is_file()
                     }
                     result = self._call_in_repo(
                         tmp,
-                        "task_start",
-                        {"task_id": task_dir.name, **extra},
+                        "wbs_open",
+                        {"wbs_id": wbs_dir.name, **extra},
                     )
                     self.assertTrue(result.get("isError"))
                     self.assertTrue(result["structuredContent"]["next_action"])
                     after = {
                         path.name: path.read_bytes()
-                        for path in task_dir.iterdir() if path.is_file()
+                        for path in wbs_dir.iterdir() if path.is_file()
                     }
                     self.assertEqual(after, before)
 
-    def test_task_start_requires_a_real_boolean_fresh_run(self):
+    def test_wbs_open_requires_a_real_boolean_fresh_run(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__strict-fresh-run")
-            before = Path(task_dir, "TASK.json").read_bytes()
+            wbs_dir = self._make_task(tmp, "WBS__strict-fresh-run")
+            before = Path(wbs_dir, "WBS.control.json").read_bytes()
 
             result = self._call_in_repo(
                 tmp,
-                "task_start",
-                {"task_id": "TASK__strict-fresh-run", "fresh_run": "true"},
+                "wbs_open",
+                {"wbs_id": "WBS__strict-fresh-run", "fresh_run": "true"},
             )
 
             self.assertTrue(result.get("isError"))
             self.assertIn("must be a boolean", result["structuredContent"]["error"])
-            self.assertEqual(Path(task_dir, "TASK.json").read_bytes(), before)
+            self.assertEqual(Path(wbs_dir, "WBS.control.json").read_bytes(), before)
 
-    def test_task_start_absent_task_refuses_competing_open_focus_without_scaffold(self):
+    def test_wbs_open_absent_task_refuses_competing_open_focus_without_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
-            focused = Path(self._make_task(tmp, "TASK__focused-open"))
+            focused = Path(self._make_task(tmp, "WBS__focused-open"))
             self._write_marker_fixture(tmp, str(focused), session_id="pytest-mcp")
             marker_paths = [
-                Path(tmp) / "doc/harness/tasks/.active_sessions/pytest-mcp.json",
+                Path(tmp) / "doc/harness/wbs/.active_sessions/pytest-mcp.json",
             ]
             marker_before = {path: path.read_bytes() for path in marker_paths}
-            candidate = Path(tmp) / "doc/harness/tasks/TASK__must-stay-absent"
+            candidate = Path(tmp) / "doc/harness/wbs/WBS__must-stay-absent"
 
             result = self._call_in_repo(
-                tmp, "task_start", {"task_id": candidate.name},
+                tmp, "wbs_open", {"wbs_id": candidate.name},
             )
 
             self.assertTrue(result.get("isError"))
@@ -1420,42 +1422,42 @@ class HarnessMcpServerTests(unittest.TestCase):
                 {path: path.read_bytes() for path in marker_paths}, marker_before,
             )
 
-    def test_task_start_open_resume_preserves_generation_and_evidence(self):
+    def test_wbs_open_open_resume_preserves_generation_and_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__resume-open")
-            old_run_id = harness_server.read_task_control(task_dir)["run_id"]
-            self._write_historical_receipts(task_dir)
-            control_before = Path(task_dir, "TASK.json").read_bytes()
-            receipts_before = Path(task_dir, "RECEIPTS.jsonl").read_bytes()
+            wbs_dir = self._make_task(tmp, "WBS__resume-open")
+            old_run_id = harness_server.read_wbs_control(wbs_dir)["run_id"]
+            self._write_historical_receipts(wbs_dir)
+            control_before = Path(wbs_dir, "WBS.control.json").read_bytes()
+            receipts_before = Path(wbs_dir, "RECEIPTS.jsonl").read_bytes()
 
 
             result = self._call_in_repo(
-                tmp, "task_start", {"task_id": "TASK__resume-open"},
+                tmp, "wbs_open", {"wbs_id": "WBS__resume-open"},
             )
 
             payload = result["structuredContent"]
-            resumed = harness_server.read_task_control(task_dir)
+            resumed = harness_server.read_wbs_control(wbs_dir)
             self.assertNotIn("isError", result)
             self.assertTrue(payload["resumed"])
             self.assertEqual(payload["run_id"], old_run_id)
             self.assertEqual(payload["run_id"], resumed["run_id"])
             self.assertEqual(payload["run_action"], "preserved")
             self.assertTrue(payload["evidence_preserved"])
-            self.assertEqual(payload["task_context"]["runtime_verdict"], "PENDING")
-            self.assertEqual(Path(task_dir, "TASK.json").read_bytes(), control_before)
-            self.assertEqual(Path(task_dir, "RECEIPTS.jsonl").read_bytes(), receipts_before)
+            self.assertEqual(payload["context"]["runtime_verdict"], "PENDING")
+            self.assertEqual(Path(wbs_dir, "WBS.control.json").read_bytes(), control_before)
+            self.assertEqual(Path(wbs_dir, "RECEIPTS.jsonl").read_bytes(), receipts_before)
 
 
-    def test_task_start_fresh_run_rotates_generation_and_preserves_history(self):
+    def test_wbs_open_fresh_run_rotates_generation_and_preserves_history(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__fresh-open")
-            old_run_id = harness_server.read_task_control(task_dir)["run_id"]
-            self._write_historical_receipts(task_dir)
+            wbs_dir = self._make_task(tmp, "WBS__fresh-open")
+            old_run_id = harness_server.read_wbs_control(wbs_dir)["run_id"]
+            self._write_historical_receipts(wbs_dir)
 
             result = self._call_in_repo(
                 tmp,
-                "task_start",
-                {"task_id": "TASK__fresh-open", "fresh_run": True},
+                "wbs_open",
+                {"wbs_id": "WBS__fresh-open", "fresh_run": True},
             )
 
             payload = result["structuredContent"]
@@ -1464,19 +1466,19 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse(payload["evidence_preserved"])
             self.assertEqual(payload["previous_run_id"], old_run_id)
             self.assertNotEqual(payload["run_id"], old_run_id)
-            self.assertTrue((Path(task_dir) / "RECEIPTS.jsonl").exists())
+            self.assertTrue((Path(wbs_dir) / "RECEIPTS.jsonl").exists())
 
-    def test_task_start_fresh_run_rotates_blocked_task_and_preserves_history(self):
+    def test_wbs_open_fresh_run_rotates_blocked_task_and_preserves_history(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__fresh-blocked"))
-            self._write_historical_receipts(str(task_dir))
-            (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
-            old_run_id = harness_server.read_task_control(str(task_dir))["run_id"]
+            wbs_dir = Path(self._make_task(tmp, "WBS__fresh-blocked"))
+            self._write_historical_receipts(str(wbs_dir))
+            (wbs_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
+            old_run_id = harness_server.read_wbs_control(str(wbs_dir))["run_id"]
 
             result = self._call_in_repo(
                 tmp,
-                "task_start",
-                {"task_id": task_dir.name, "fresh_run": True},
+                "wbs_open",
+                {"wbs_id": wbs_dir.name, "fresh_run": True},
             )
 
             payload = result["structuredContent"]
@@ -1484,15 +1486,15 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["run_action"], "reset")
             self.assertEqual(payload["previous_run_id"], old_run_id)
             self.assertNotEqual(payload["run_id"], old_run_id)
-            self.assertTrue((task_dir / "RECEIPTS.jsonl").exists())
-            self.assertFalse((task_dir / "BLOCKED.md").exists())
+            self.assertTrue((wbs_dir / "RECEIPTS.jsonl").exists())
+            self.assertFalse((wbs_dir / "BLOCKED.md").exists())
 
-    def test_task_start_blocked_preserve_restores_blocker_when_marker_publish_fails(self):
+    def test_wbs_open_blocked_preserve_restores_blocker_when_marker_publish_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__preserve-marker-failure"))
-            blocked = task_dir / "BLOCKED.md"
+            wbs_dir = Path(self._make_task(tmp, "WBS__preserve-marker-failure"))
+            blocked = wbs_dir / "BLOCKED.md"
             blocked.write_bytes(b"# BLOCKED\nexact blocker\n")
-            control_before = (task_dir / "TASK.json").read_bytes()
+            control_before = (wbs_dir / "WBS.control.json").read_bytes()
             blocker_before = blocked.read_bytes()
             real_replace = harness_lib.os.replace
             marker_failed = False
@@ -1508,18 +1510,18 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_lib.os, "replace", side_effect=fail_first_marker_replace,
             ):
                 result = self._call_in_repo(
-                    tmp, "task_start", {"task_id": task_dir.name},
+                    tmp, "wbs_open", {"wbs_id": wbs_dir.name},
                 )
 
             self.assertTrue(result.get("isError"))
             self.assertIn("marker unavailable", result["structuredContent"]["error"])
-            self.assertEqual((task_dir / "TASK.json").read_bytes(), control_before)
+            self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), control_before)
             self.assertEqual(blocked.read_bytes(), blocker_before)
 
-    def test_task_start_blocked_preserve_restores_marker_when_unlink_fails(self):
+    def test_wbs_open_blocked_preserve_restores_marker_when_unlink_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__preserve-unlink-failure"))
-            blocked = task_dir / "BLOCKED.md"
+            wbs_dir = Path(self._make_task(tmp, "WBS__preserve-unlink-failure"))
+            blocked = wbs_dir / "BLOCKED.md"
             blocked.write_bytes(b"# BLOCKED\nexact blocker\n")
             marker_before = harness_server.active_marker_snapshot(tmp, session_id="pytest-mcp")
             real_unlink = harness_server.os.unlink
@@ -1531,7 +1533,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
             with mock.patch.object(harness_server.os, "unlink", side_effect=fail_blocker_unlink):
                 result = self._call_in_repo(
-                    tmp, "task_start", {"task_id": task_dir.name},
+                    tmp, "wbs_open", {"wbs_id": wbs_dir.name},
                 )
 
             self.assertTrue(result.get("isError"))
@@ -1541,15 +1543,15 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.active_marker_snapshot(tmp, session_id="pytest-mcp"), marker_before,
             )
 
-    def test_task_start_blocked_preserve_attempts_both_rollback_legs(self):
+    def test_wbs_open_blocked_preserve_attempts_both_rollback_legs(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__preserve-rollback-legs"))
-            (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
+            wbs_dir = Path(self._make_task(tmp, "WBS__preserve-rollback-legs"))
+            (wbs_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
             marker_restore = mock.Mock()
 
             with (
                 mock.patch.object(
-                    harness_server, "active_task_binding_matches", return_value=False,
+                    harness_server, "active_wbs_binding_matches", return_value=False,
                 ),
                 mock.patch.object(
                     harness_server, "_restore_text_snapshots",
@@ -1560,7 +1562,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 ),
             ):
                 result = self._call_in_repo(
-                    tmp, "task_start", {"task_id": task_dir.name},
+                    tmp, "wbs_open", {"wbs_id": wbs_dir.name},
                 )
 
             self.assertTrue(result.get("isError"))
@@ -1568,35 +1570,35 @@ class HarnessMcpServerTests(unittest.TestCase):
             marker_restore.assert_called_once()
 
 
-    def test_task_start_resume_waits_for_task_transaction(self):
+    def test_wbs_open_resume_waits_for_task_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__resume-serialized")
-            original_run = harness_server.read_task_control(task_dir)["run_id"]
+            wbs_dir = self._make_task(tmp, "WBS__resume-serialized")
+            original_run = harness_server.read_wbs_control(wbs_dir)["run_id"]
             finished = threading.Event()
             result = {}
 
             def resume():
                 result.update(self._call_in_repo(
-                    tmp, "task_start", {"task_id": "TASK__resume-serialized"},
+                    tmp, "wbs_open", {"wbs_id": "WBS__resume-serialized"},
                 ))
                 finished.set()
 
-            with harness_server.task_control_transaction(task_dir):
+            with harness_server.wbs_control_transaction(wbs_dir):
                 worker = threading.Thread(target=resume)
                 worker.start()
                 time.sleep(0.1)
                 self.assertFalse(finished.is_set())
                 self.assertEqual(
-                    harness_server.read_task_control(task_dir)["run_id"], original_run,
+                    harness_server.read_wbs_control(wbs_dir)["run_id"], original_run,
                 )
             worker.join(5)
             self.assertTrue(finished.is_set())
             self.assertNotIn("isError", result)
             self.assertEqual(
-                harness_server.read_task_control(task_dir)["run_id"], original_run,
+                harness_server.read_wbs_control(wbs_dir)["run_id"], original_run,
             )
 
-    def test_task_start_returns_ready_with_warnings_after_committed_scaffold(self):
+    def test_wbs_open_returns_ready_with_warnings_after_committed_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
@@ -1605,11 +1607,11 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__context-warning"
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__context-warning"
 
             with (
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                    harness_server, "canonical_wbs_dir", return_value=str(wbs_dir)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
@@ -1618,33 +1620,33 @@ class HarnessMcpServerTests(unittest.TestCase):
                     side_effect=RuntimeError("context scan exceeded request budget"),
                 ),
             ):
-                result = harness_server.handle_task_start(
-                    {"task_id": "TASK__context-warning"}
+                result = harness_server.handle_wbs_open(
+                    {"wbs_id": "WBS__context-warning"}
                 )
 
             self.assertNotIn("isError", result)
             payload = result["structuredContent"]
             self.assertEqual(payload["start_status"], "ready_with_warnings")
-            self.assertTrue(payload["task_created"])
+            self.assertTrue(payload["wbs_created"])
             self.assertFalse(payload["resumed"])
             self.assertEqual(payload["run_action"], "created")
             self.assertFalse(payload["evidence_preserved"])
             self.assertIsNone(payload["previous_run_id"])
-            self.assertIsInstance(payload["task_context"], dict)
-            self.assertFalse(payload["task_context"]["context_complete"])
-            self.assertFalse(payload["task_context"]["source_write_allowed"])
+            self.assertIsInstance(payload["context"], dict)
+            self.assertFalse(payload["context"]["context_complete"])
+            self.assertFalse(payload["context"]["source_write_allowed"])
             self.assertIn("Do not call wbs(action='open') again", payload["next_action"])
-            self.assertEqual(payload["warnings"][0]["code"], "TASK_CONTEXT_DEFERRED")
-            self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
-            self.assertTrue((task_dir / "TASK.json").is_file())
+            self.assertEqual(payload["warnings"][0]["code"], "WBS_CONTEXT_DEFERRED")
+            self.assertFalse((wbs_dir / "TASK_BASELINE.json").exists())
+            self.assertTrue((wbs_dir / "WBS.control.json").is_file())
 
-    def test_task_start_fresh_run_on_absent_task_reports_creation_not_preservation(self):
+    def test_wbs_open_fresh_run_on_absent_task_reports_creation_not_preservation(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             result = self._call_in_repo(
                 tmp,
-                "task_start",
-                {"task_id": "TASK__fresh-absent", "fresh_run": True},
+                "wbs_open",
+                {"wbs_id": "WBS__fresh-absent", "fresh_run": True},
             )
 
             payload = result["structuredContent"]
@@ -1653,7 +1655,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse(payload["evidence_preserved"])
             self.assertIsNone(payload["previous_run_id"])
 
-    def test_task_start_defers_error_shaped_compact_context_after_committed_scaffold(self):
+    def test_wbs_open_defers_error_shaped_compact_context_after_committed_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
             self._run_git(tmp, "init", "-q")
@@ -1662,11 +1664,11 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__context-error-result"
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__context-error-result"
 
             with (
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                    harness_server, "canonical_wbs_dir", return_value=str(wbs_dir)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
@@ -1675,16 +1677,16 @@ class HarnessMcpServerTests(unittest.TestCase):
                     return_value={"error": "context scan unavailable"},
                 ),
             ):
-                result = harness_server.handle_task_start(
-                    {"task_id": "TASK__context-error-result"}
+                result = harness_server.handle_wbs_open(
+                    {"wbs_id": "WBS__context-error-result"}
                 )
 
             self.assertNotIn("isError", result)
             payload = result["structuredContent"]
             self.assertEqual(payload["start_status"], "ready_with_warnings")
-            self.assertEqual(payload["warnings"][0]["code"], "TASK_CONTEXT_DEFERRED")
+            self.assertEqual(payload["warnings"][0]["code"], "WBS_CONTEXT_DEFERRED")
             self.assertIn("context scan unavailable", payload["warnings"][0]["detail"])
-            self.assertFalse(payload["task_context"]["source_write_allowed"])
+            self.assertFalse(payload["context"]["source_write_allowed"])
 
     def test_preserved_resume_context_failure_refuses_and_restores_focus(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1695,9 +1697,9 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__resumed-warning"
-            task_dir.mkdir(parents=True)
-            self._write_control_fixture(str(task_dir), {
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__resumed-warning"
+            wbs_dir.mkdir(parents=True)
+            self._write_control_fixture(str(wbs_dir), {
                 "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
                 "closed": False,
@@ -1705,7 +1707,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                    harness_server, "canonical_wbs_dir", return_value=str(wbs_dir)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
@@ -1714,32 +1716,32 @@ class HarnessMcpServerTests(unittest.TestCase):
                     side_effect=RuntimeError("context delayed"),
                 ),
             ):
-                before_control = (task_dir / "TASK.json").read_bytes()
+                before_control = (wbs_dir / "WBS.control.json").read_bytes()
                 with self.assertRaisesRegex(RuntimeError, "context delayed"):
-                    harness_server.handle_task_start({"task_id": "TASK__resumed-warning"})
-                self.assertEqual((task_dir / "TASK.json").read_bytes(), before_control)
-                self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
+                    harness_server.handle_wbs_open({"wbs_id": "WBS__resumed-warning"})
+                self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), before_control)
+                self.assertFalse((Path(tmp) / "doc/harness/wbs/.active").exists())
 
     def test_failed_existing_resume_restores_state_and_receipts(self):
         for terminal_status in ("open", "closed", "blocked"):
             with self.subTest(status=terminal_status), tempfile.TemporaryDirectory() as tmp:
                 initialize_fixture_project(tmp)
-                task_dir = Path(tmp) / f"doc/harness/tasks/TASK__resume-{terminal_status}"
-                task_dir.mkdir(parents=True)
-                self._write_control_fixture(str(task_dir), {
+                wbs_dir = Path(tmp) / f"doc/harness/wbs/WBS__resume-{terminal_status}"
+                wbs_dir.mkdir(parents=True)
+                self._write_control_fixture(str(wbs_dir), {
                     "run_id": harness_lib.new_uuid7(),
                     "execution_mode": "standard",
                     "required_lenses": ["review-code", "qa-cli"],
                     "closed": False,
                 })
                 if terminal_status in {"open", "closed"}:
-                    self._write_historical_receipts(str(task_dir))
+                    self._write_historical_receipts(str(wbs_dir))
                 if terminal_status == "closed":
-                    self._close_fixture(str(task_dir))
+                    self._close_fixture(str(wbs_dir))
                 elif terminal_status == "blocked":
-                    (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
-                state = harness_server.read_task_control(str(task_dir))
-                receipt = task_dir / "RECEIPTS.jsonl"
+                    (wbs_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
+                state = harness_server.read_wbs_control(str(wbs_dir))
+                receipt = wbs_dir / "RECEIPTS.jsonl"
                 prior_receipt = receipt.read_text(encoding="utf-8") if receipt.exists() else None
                 (Path(tmp) / ".git").mkdir()
                 prior_cwd = os.getcwd()
@@ -1754,17 +1756,17 @@ class HarnessMcpServerTests(unittest.TestCase):
                     os.chdir(tmp)
                     try:
                         with self.assertRaisesRegex(OSError, "marker unavailable"):
-                            harness_server.handle_task_start(
+                            harness_server.handle_wbs_open(
                                 {
-                                    "task_id": f"TASK__resume-{terminal_status}",
+                                    "wbs_id": f"WBS__resume-{terminal_status}",
                                     "fresh_run": True,
                                 }
                             )
                     finally:
                         os.chdir(prior_cwd)
-                restored = harness_server.read_task_control(str(task_dir))
+                restored = harness_server.read_wbs_control(str(wbs_dir))
                 self.assertEqual(restored, state)
-                self.assertEqual(harness_server.task_control_status(str(task_dir), restored), terminal_status)
+                self.assertEqual(harness_server.wbs_control_status(str(wbs_dir), restored), terminal_status)
                 if prior_receipt is None:
                     self.assertFalse(receipt.exists())
                 else:
@@ -1773,21 +1775,21 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_invalid_execution_mode_does_not_create_or_reopen_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             initialize_fixture_project(tmp)
-            new_task = Path(tmp) / "doc/harness/tasks/TASK__invalid-mode-new"
+            new_task = Path(tmp) / "doc/harness/wbs/WBS__invalid-mode-new"
             with (
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(new_task)
+                    harness_server, "canonical_wbs_dir", return_value=str(new_task)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
             ):
                 with self.assertRaisesRegex(ValueError, "execution_mode"):
-                    harness_server.handle_task_start({
-                        "task_id": "TASK__invalid-mode-new",
+                    harness_server.handle_wbs_open({
+                        "wbs_id": "WBS__invalid-mode-new",
                         "execution_mode": "bogus",
                     })
-            self.assertFalse((new_task / "TASK.json").exists())
+            self.assertFalse((new_task / "WBS.control.json").exists())
 
-            terminal_task = Path(tmp) / "doc/harness/tasks/TASK__invalid-mode-closed"
+            terminal_task = Path(tmp) / "doc/harness/wbs/WBS__invalid-mode-closed"
             terminal_task.mkdir(parents=True)
             original = {
                 "run_id": harness_lib.new_uuid7(),
@@ -1798,17 +1800,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._write_control_fixture(str(terminal_task), original)
             with (
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(terminal_task)
+                    harness_server, "canonical_wbs_dir", return_value=str(terminal_task)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
             ):
                 with self.assertRaisesRegex(ValueError, "execution_mode"):
-                    harness_server.handle_task_start({
-                        "task_id": "TASK__invalid-mode-closed",
+                    harness_server.handle_wbs_open({
+                        "wbs_id": "WBS__invalid-mode-closed",
                         "execution_mode": "bogus",
                     })
             self.assertEqual(
-                harness_server.read_task_control(str(terminal_task)), original
+                harness_server.read_wbs_control(str(terminal_task)), original
             )
 
     def test_old_only_pack_starts_fresh_without_migrating_legacy_leaves(self):
@@ -1820,28 +1822,28 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__resume-cleanup"
-            task_dir.mkdir(parents=True)
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__resume-cleanup"
+            wbs_dir.mkdir(parents=True)
             obsolete = (
                 "TASK_STATE.yaml", "TASK_RUN.json", "PLAN.meta.json",
                 "TASK_CLOSE_RECEIPT.json", "INSTALL_RECEIPT.json",
                 "AUDIT_TRAIL.md", "ENVIRONMENT_SNAPSHOT.md", ".receipts.lock",
             )
             for name in obsolete:
-                (task_dir / name).write_text("legacy\n", encoding="utf-8")
+                (wbs_dir / name).write_text("legacy\n", encoding="utf-8")
             with (
                 mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                    harness_server, "canonical_wbs_dir", return_value=str(wbs_dir)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
             ):
-                result = harness_server.handle_task_start(
-                    {"task_id": "TASK__resume-cleanup"}
+                result = harness_server.handle_wbs_open(
+                    {"wbs_id": "WBS__resume-cleanup"}
                 )
             self.assertNotIn("isError", result)
-            self.assertTrue(harness_server.read_task_control(str(task_dir)))
+            self.assertTrue(harness_server.read_wbs_control(str(wbs_dir)))
             for name in obsolete:
-                self.assertEqual((task_dir / name).read_text(), "legacy\n")
+                self.assertEqual((wbs_dir / name).read_text(), "legacy\n")
 
     def test_failed_resume_preserves_preexisting_active_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1852,14 +1854,14 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__active-resume"
-            task_dir.mkdir(parents=True)
-            self._write_control_fixture(str(task_dir), {
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__active-resume"
+            wbs_dir.mkdir(parents=True)
+            self._write_control_fixture(str(wbs_dir), {
                 "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
                 "closed": False,
             })
-            self._write_marker_fixture(tmp, str(task_dir))
+            self._write_marker_fixture(tmp, str(wbs_dir))
             real_replace = harness_lib.os.replace
 
             def fail_marker(src, dst, *args, **kwargs):
@@ -1872,14 +1874,14 @@ class HarnessMcpServerTests(unittest.TestCase):
                 os.chdir(tmp)
                 try:
                     with self.assertRaisesRegex(RuntimeError, "rollback was incomplete"):
-                        harness_server.handle_task_start(
-                            {"task_id": "TASK__active-resume"}
+                        harness_server.handle_wbs_open(
+                            {"wbs_id": "WBS__active-resume"}
                         )
                 finally:
                     os.chdir(prior_cwd)
             self.assertEqual(
-                Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
-                task_dir.resolve(),
+                Path(harness_server.resolve_active_wbs_dir(tmp)).resolve(),
+                wbs_dir.resolve(),
             )
 
     def test_new_start_refuses_different_preexisting_open_marker(self):
@@ -1891,8 +1893,8 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_a = Path(tmp) / "doc/harness/tasks/TASK__active-a"
-            task_b = Path(tmp) / "doc/harness/tasks/TASK__failed-b"
+            task_a = Path(tmp) / "doc/harness/wbs/WBS__active-a"
+            task_b = Path(tmp) / "doc/harness/wbs/WBS__failed-b"
             task_a.mkdir(parents=True)
             self._write_control_fixture(str(task_a), {
                 "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
@@ -1903,20 +1905,20 @@ class HarnessMcpServerTests(unittest.TestCase):
             prior_cwd = os.getcwd()
             os.chdir(tmp)
             try:
-                result = harness_server.handle_task_start({"task_id": "TASK__failed-b"})
+                result = harness_server.handle_wbs_open({"wbs_id": "WBS__failed-b"})
             finally:
                 os.chdir(prior_cwd)
             self.assertTrue(result.get("isError"))
             self.assertEqual(result["structuredContent"]["status"], "absent")
             self.assertEqual(
-                Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
+                Path(harness_server.resolve_active_wbs_dir(tmp)).resolve(),
                 task_a.resolve(),
             )
             self.assertFalse(task_b.exists())
 
     def test_active_marker_snapshot_cannot_be_restored_by_arbitrary_caller(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tasks = Path(tmp) / "doc/harness/tasks"
+            tasks = Path(tmp) / "doc/harness/wbs"
             sessions = tasks / ".active_sessions"
             sessions.mkdir(parents=True)
             outside = Path(tmp) / "outside-marker"
@@ -1926,7 +1928,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             snapshot = harness_server.active_marker_snapshot(tmp)
             marker.unlink()
             marker.write_text("replacement\n", encoding="utf-8")
-            with self.assertRaisesRegex(PermissionError, "task-control runtime"):
+            with self.assertRaisesRegex(PermissionError, "WBS-control runtime"):
                 harness_server.restore_active_marker_snapshot(snapshot)
             self.assertFalse(marker.is_symlink())
             self.assertEqual(marker.read_text(encoding="utf-8"), "replacement\n")
@@ -1942,7 +1944,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__marker-failure"
+            wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__marker-failure"
             real_replace = harness_lib.os.replace
 
             def fail_marker(src, dst, *args, **kwargs):
@@ -1954,21 +1956,21 @@ class HarnessMcpServerTests(unittest.TestCase):
             with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker):
                 os.chdir(tmp)
                 with self.assertRaisesRegex(OSError, "marker unavailable"):
-                    harness_server.handle_task_start(
-                        {"task_id": "TASK__marker-failure"}
+                    harness_server.handle_wbs_open(
+                        {"wbs_id": "WBS__marker-failure"}
                     )
                 os.chdir(prior_cwd)
-            self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
-            self.assertFalse((task_dir / "TASK_STATE.yaml").exists())
+            self.assertFalse((wbs_dir / "TASK_BASELINE.json").exists())
+            self.assertFalse((wbs_dir / "TASK_STATE.yaml").exists())
 
     def test_write_plan_updates_required_lenses_without_audit_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__planmcp")
+            wbs_dir = self._make_task(tmp, "WBS__planmcp")
             result = self._call_in_repo(
                 tmp,
                 "write_plan",
                 {
-                    "task_dir": task_dir,
+                    "wbs_dir": wbs_dir,
                     "plan": "# MCP Plan\n",
                     "required_lenses": ["qa-api", "review-security", "review-code"],
                 },
@@ -1976,38 +1978,38 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("isError", result)
             self.assertEqual(
                 result["structuredContent"]["written"],
-                ["PLAN.md", "TASK.json"],
+                ["PLAN.md", "WBS.control.json"],
             )
             bytes_written = result["structuredContent"]["bytes_written"]
             self.assertGreater(bytes_written["PLAN.md"], 0)
-            self.assertGreater(bytes_written["TASK.json"], 0)
-            self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
-            self.assertEqual((Path(task_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
-            control = json.loads((Path(task_dir) / "TASK.json").read_text(encoding="utf-8"))
+            self.assertGreater(bytes_written["WBS.control.json"], 0)
+            self.assertFalse((Path(wbs_dir) / "CHECKS.yaml").exists())
+            self.assertEqual((Path(wbs_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
+            control = json.loads((Path(wbs_dir) / "WBS.control.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 control["required_lenses"],
                 ["review-code", "review-security", "qa-api"],
             )
-            self.assertFalse((Path(task_dir) / "PLAN.meta.json").exists())
-            self.assertFalse((Path(task_dir) / "AUDIT_TRAIL.md").exists())
+            self.assertFalse((Path(wbs_dir) / "PLAN.meta.json").exists())
+            self.assertFalse((Path(wbs_dir) / "AUDIT_TRAIL.md").exists())
 
     def test_terminal_task_rejects_plan_and_blocked_mutations(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__terminal-mutators")
-            self._write_historical_receipts(task_dir)
-            self._close_fixture(task_dir)
-            plan_path = Path(task_dir) / "PLAN.md"
-            control_path = Path(task_dir) / "TASK.json"
+            wbs_dir = self._make_task(tmp, "WBS__terminal-mutators")
+            self._write_historical_receipts(wbs_dir)
+            self._close_fixture(wbs_dir)
+            plan_path = Path(wbs_dir) / "PLAN.md"
+            control_path = Path(wbs_dir) / "WBS.control.json"
             original_plan = plan_path.read_bytes()
             original_control = control_path.read_bytes()
 
             plan = self._call_in_repo(tmp, "write_plan", {
-                "task_id": "TASK__terminal-mutators",
+                "wbs_id": "WBS__terminal-mutators",
                 "plan": "# changed\n",
                 "required_lenses": ["review-code", "review-security", "qa-cli"],
             })
-            blocked = self._call_in_repo(tmp, "task_blocked", {
-                "task_id": "TASK__terminal-mutators",
+            blocked = self._call_in_repo(tmp, "wbs_blocked", {
+                "wbs_id": "WBS__terminal-mutators",
                 "blocked_reason": "late",
                 "unblock_condition": "restart",
             })
@@ -2018,12 +2020,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("not open", blocked["structuredContent"]["error"])
             self.assertEqual(plan_path.read_bytes(), original_plan)
             self.assertEqual(control_path.read_bytes(), original_control)
-            self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
+            self.assertFalse((Path(wbs_dir) / "BLOCKED.md").exists())
 
-    def test_plan_and_blocked_mutators_use_task_control_transaction(self):
+    def test_plan_and_blocked_mutators_use_wbs_control_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__serialized-mutators")
-            original_transaction = harness_server.task_control_transaction
+            wbs_dir = self._make_task(tmp, "WBS__serialized-mutators")
+            original_transaction = harness_server.wbs_control_transaction
             entered = []
 
             from contextlib import contextmanager
@@ -2035,47 +2037,47 @@ class HarnessMcpServerTests(unittest.TestCase):
                     yield
 
             with mock.patch.object(
-                harness_server, "task_control_transaction",
+                harness_server, "wbs_control_transaction",
                 side_effect=observed_transaction,
             ):
                 plan = self._call_in_repo(tmp, "write_plan", {
-                    "task_id": "TASK__serialized-mutators", "plan": "# plan\n",
+                    "wbs_id": "WBS__serialized-mutators", "plan": "# plan\n",
                 })
-                blocked = self._call_in_repo(tmp, "task_blocked", {
-                    "task_id": "TASK__serialized-mutators",
+                blocked = self._call_in_repo(tmp, "wbs_blocked", {
+                    "wbs_id": "WBS__serialized-mutators",
                     "blocked_reason": "pause", "unblock_condition": "resume",
                 })
             self.assertNotIn("isError", plan)
             self.assertNotIn("isError", blocked)
             self.assertEqual(entered, [
-                "TASK__serialized-mutators", "TASK__serialized-mutators",
+                "WBS__serialized-mutators", "WBS__serialized-mutators",
             ])
 
     def test_write_plan_rejects_empty_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__emptyplan")
+            wbs_dir = self._make_task(tmp, "WBS__emptyplan")
             result = self._call_in_repo(
                 tmp,
                 "write_plan",
-                {"task_dir": task_dir, "plan": " \n\t"},
+                {"wbs_dir": wbs_dir, "plan": " \n\t"},
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("empty PLAN.md", result["structuredContent"]["error"])
 
     def test_write_plan_rejects_removed_audit_argument_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__emptyaudit")
-            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            wbs_dir = self._make_task(tmp, "WBS__emptyaudit")
+            before = {p.name: p.read_bytes() for p in Path(wbs_dir).iterdir() if p.is_file()}
             result = self._call_in_repo(
                 tmp,
                 "write_plan",
-                {"task_dir": task_dir, "plan": "# Replacement\n", "audit": "removed"},
+                {"wbs_dir": wbs_dir, "plan": "# Replacement\n", "audit": "removed"},
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("unsupported", result["structuredContent"]["error"])
-            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            after = {p.name: p.read_bytes() for p in Path(wbs_dir).iterdir() if p.is_file()}
             self.assertEqual(after, before)
-            self.assertFalse((Path(task_dir) / "AUDIT_TRAIL.md").exists())
+            self.assertFalse((Path(wbs_dir) / "AUDIT_TRAIL.md").exists())
 
 
 if __name__ == "__main__":

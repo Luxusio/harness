@@ -210,7 +210,7 @@ def install_trees_lose_no_files():
     On 2026-09-09 a whole-suite mutation run deleted the installed
     `plugin/scripts` and `plugin/mcp` and broke runtime imports for the
     session that ran it. Six review rounds had invariant checks in place, but
-    every one of them watched `doc/harness/tasks/.active_sessions/` — task
+    every one of them watched `doc/harness/wbs/.active_sessions/` — task
     artifacts — and none watched the tree the hooks actually execute from.
     See `doc/harness/REQ__guards-are-verified-where-they-run.md`.
 
@@ -432,8 +432,8 @@ def isolate_claude_install_root(tmp_path_factory):
 def active_marker_lock(repo_root: str | None = None):
     """Serialize the isolated exact test-session marker across pytest workers."""
     root = repo_root or REPO_ROOT
-    tasks_dir = os.path.join(root, "doc", "harness", "tasks")
-    os.makedirs(tasks_dir, exist_ok=True)
+    wbs_root = os.path.join(root, "doc", "harness", "wbs")
+    os.makedirs(wbs_root, exist_ok=True)
     lock_key = hashlib.sha256(os.path.realpath(root).encode()).hexdigest()
     lock_path = os.path.join(tempfile.gettempdir(), f"harness-fixture-{os.getuid()}-{lock_key}.lock")
     fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -504,11 +504,11 @@ def scratch_task_in_real_repo(
     """
     root = repo_root or REPO_ROOT
     with active_marker_lock(root):
-        tasks_dir = os.path.join(root, "doc", "harness", "tasks")
-        task_id = f"TASK__{name}"
-        task_dir = os.path.join(tasks_dir, task_id)
-        os.mkdir(task_dir)
-        sessions = os.path.join(tasks_dir, ".active_sessions")
+        wbs_root = os.path.join(root, "doc", "harness", "wbs")
+        wbs_id = f"WBS__{name}"
+        wbs_dir = os.path.join(wbs_root, wbs_id)
+        os.mkdir(wbs_dir)
+        sessions = os.path.join(wbs_root, ".active_sessions")
         os.makedirs(sessions, exist_ok=True)
         marker = os.path.join(sessions, "pytest-hook.json")
         backup = f"{marker}.fixture-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
@@ -516,25 +516,25 @@ def scratch_task_in_real_repo(
         if had_existing:
             os.rename(marker, backup)
         try:
-            # UUIDv7 is the task-control schema, independent of wall-clock age.
+            # UUIDv7 is the WBS-control schema, independent of wall-clock age.
             run_id = "0198c349-5800-7000-8000-" + uuid.uuid4().hex[:12]
-            with open(os.path.join(task_dir, "TASK.json"), "w", encoding="utf-8") as f:
+            with open(os.path.join(wbs_dir, "WBS.control.json"), "w", encoding="utf-8") as f:
                 json.dump({"run_id": run_id, "execution_mode": "standard",
                            "required_lenses": ["review-code", "qa-cli"], "closed": False}, f)
             if plan:
-                with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
+                with open(os.path.join(wbs_dir, "PLAN.md"), "w", encoding="utf-8") as f:
                     f.write("# Test plan\n")
             if maintenance:
-                open(os.path.join(task_dir, "MAINTENANCE"), "w").close()
+                open(os.path.join(wbs_dir, "MAINTENANCE"), "w").close()
             if progress is not None:
-                with open(os.path.join(task_dir, "PROGRESS.md"), "w", encoding="utf-8") as f:
+                with open(os.path.join(wbs_dir, "PROGRESS.md"), "w", encoding="utf-8") as f:
                     f.write(progress)
             with open(marker, "w", encoding="utf-8") as f:
-                json.dump({"session_id": "pytest-hook", "task_id": task_id,
-                           "task_dir": task_dir, "run_id": run_id, "updated": "fixture"}, f)
-            yield task_dir
+                json.dump({"session_id": "pytest-hook", "wbs_id": wbs_id,
+                           "wbs_dir": wbs_dir, "run_id": run_id, "updated": "fixture"}, f)
+            yield wbs_dir
         finally:
-            shutil.rmtree(task_dir, ignore_errors=True)
+            shutil.rmtree(wbs_dir, ignore_errors=True)
             try:
                 os.unlink(marker)
             except FileNotFoundError:

@@ -8,7 +8,7 @@ to tests/regression/<sanitized-task-id>/<behavior>.<ext>.
 Stdlib only. Never blocks task close (always exits 0).
 
 Usage:
-  python3 qa_codifier.py --task-dir <path>
+  python3 qa_codifier.py --wbs-dir <path>
   python3 qa_codifier.py --transcript <path>
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _log(repo_root: str, type_: str, key: str, insight: str, task: str = "") -> None:
+def _log(repo_root: str, type_: str, key: str, insight: str, wbs_id: str = "") -> None:
     """Append a learning entry (best-effort)."""
     try:
         path = os.path.join(repo_root, LEARNINGS)
@@ -44,7 +44,7 @@ def _log(repo_root: str, type_: str, key: str, insight: str, task: str = "") -> 
             "source": "qa_codifier",
             "key": key,
             "insight": insight,
-            "task": task,
+            "wbs": wbs_id,
         })
         with open(path, "a", encoding="utf-8") as f:
             f.write(entry + "\n")
@@ -52,9 +52,9 @@ def _log(repo_root: str, type_: str, key: str, insight: str, task: str = "") -> 
         pass
 
 
-def sanitize_task_id(task_id: str) -> str:
-    """TASK__add-feature -> task_add_feature"""
-    s = task_id.lower()
+def sanitize_wbs_id(wbs_id: str) -> str:
+    """WBS__add-feature -> task_add_feature"""
+    s = wbs_id.lower()
     s = re.sub(r"[^a-z0-9_]", "_", s)
     s = re.sub(r"_+", "_", s)
     return s.strip("_")
@@ -316,20 +316,20 @@ def _is_trivial_command(cmd: str) -> bool:
 _RE_VALID_AC_ID = re.compile(r"^AC-\d+$")
 
 
-def codify(task_dir: str, transcript_path: str | None = None, target_root: str | None = None) -> int:
+def codify(wbs_dir: str, transcript_path: str | None = None, target_root: str | None = None) -> int:
     """Main codification pipeline. Always returns 0."""
     try:
         repo_root = target_root if target_root is not None else find_repo_root()
-        task_id = os.path.basename(os.path.normpath(task_dir))
+        wbs_id = os.path.basename(os.path.normpath(wbs_dir))
 
         # Read transcript
         if transcript_path is None:
             _log(repo_root, "codifier-empty", "codifier-empty",
-                 "no transcript path provided", task_id)
+                 "no transcript path provided", wbs_id)
             return 0
         if not os.path.isfile(transcript_path):
             _log(repo_root, "codifier-empty", "codifier-empty",
-                 f"no transcript at {transcript_path}", task_id)
+                 f"no transcript at {transcript_path}", wbs_id)
             return 0
 
         with open(transcript_path, "r", encoding="utf-8") as f:
@@ -338,7 +338,7 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
         blocks = _parse_codifiable_blocks(transcript)
         if not blocks:
             _log(repo_root, "codifier-empty", "codifier-empty",
-                 "no codifiable blocks found in transcript", task_id)
+                 "no codifiable blocks found in transcript", wbs_id)
             return 0
 
         # Infer test format (uses the resolved repo_root, not a second find_repo_root())
@@ -346,10 +346,10 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
         fmt = _infer_test_format(manifest_path)
         ext = "py" if fmt == "pytest" else ("js" if fmt == "js" else "sh")
 
-        sanitized = sanitize_task_id(task_id)
+        sanitized = sanitize_wbs_id(wbs_id)
 
         # Staging dir
-        staging_dir = os.path.join(task_dir, "audit", "regression-draft", sanitized)
+        staging_dir = os.path.join(wbs_dir, "audit", "regression-draft", sanitized)
         os.makedirs(staging_dir, exist_ok=True)
 
         # Target dir
@@ -368,7 +368,7 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
             # AC-003: validate ac_id — skip + log on missing or malformed
             ac_id = block.get("ac_id")
             if ac_id is None:
-                _log(repo_root, "codifier-rejected", "missing-ac_id", behavior, task_id)
+                _log(repo_root, "codifier-rejected", "missing-ac_id", behavior, wbs_id)
                 continue
             # Validate scalar or list
             if isinstance(ac_id, list):
@@ -378,12 +378,12 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
                 valid = bool(_RE_VALID_AC_ID.match(str(ac_id)))
                 first_ac = ac_id
             if not valid or first_ac is None:
-                _log(repo_root, "codifier-rejected", "invalid-ac_id", behavior, task_id)
+                _log(repo_root, "codifier-rejected", "invalid-ac_id", behavior, wbs_id)
                 continue
             # Build filename prefix: ac_001__ from first ac_id
             ac_num = re.search(r"\d+", str(first_ac))
             ac_prefix = f"ac_{int(ac_num.group()):03d}__" if ac_num else "ac_000__"
-            # Prefix with 'test_' so pytest auto-discovers under tests/regression/<task>/.
+            # Prefix with 'test_' so pytest auto-discovers under tests/regression/<wbs>/.
             # Without this prefix, files land in the right directory but the runner
             # skips them because pytest only globs test_*.py / *_test.py by default.
             prefixed_behavior = "test_" + ac_prefix + behavior
@@ -391,7 +391,7 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
             # AC-004: reject trivial commands — skip + log
             if _is_trivial_command(command):
                 _log(repo_root, "codifier-rejected", "trivial-command",
-                     f"{behavior}::{command}", task_id)
+                     f"{behavior}::{command}", wbs_id)
                 continue
 
             # Render
@@ -418,8 +418,8 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
 
             if not ok:
                 _log(repo_root, "codifier-fail", "codifier-fail",
-                     f"compile-check failed for {prefixed_behavior} in {task_id}, left in staging",
-                     task_id)
+                     f"compile-check failed for {prefixed_behavior} in {wbs_id}, left in staging",
+                     wbs_id)
                 continue
 
             # Move to target
@@ -432,7 +432,7 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
 
         if moved == 0 and blocks:
             _log(repo_root, "codifier-fail", "codifier-fail",
-                 f"all {len(blocks)} blocks failed compile-check in {task_id}", task_id)
+                 f"all {len(blocks)} blocks failed compile-check in {wbs_id}", wbs_id)
 
     except Exception as exc:
         try:
@@ -446,18 +446,18 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Codify QA transcript into regression tests")
-    p.add_argument("--task-dir", default=None)
+    p.add_argument("--wbs-dir", default=None)
     p.add_argument("--transcript", default=None)
     args = p.parse_args()
 
-    if args.task_dir is None and args.transcript is None:
-        p.error("provide --task-dir or --transcript")
+    if args.wbs_dir is None and args.transcript is None:
+        p.error("provide --wbs-dir or --transcript")
 
-    task_dir = args.task_dir
-    if task_dir is None:
-        task_dir = os.path.dirname(os.path.abspath(args.transcript))
+    wbs_dir = args.wbs_dir
+    if wbs_dir is None:
+        wbs_dir = os.path.dirname(os.path.abspath(args.transcript))
 
-    return codify(task_dir, args.transcript)
+    return codify(wbs_dir, args.transcript)
 
 
 if __name__ == "__main__":

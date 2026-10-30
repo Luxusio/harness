@@ -1,6 +1,6 @@
 # harness
 
-Execution harness for AI-assisted repository work. Enforces a **WBS open → plan → develop → QA → close** loop on every repo-mutating task. Internal review and verification gates remain mandatory.
+Execution harness for AI-assisted repository work. Enforces a **WBS open → plan → develop → QA → close** loop on every repo-mutating WBS. Internal review and verification gates remain mandatory.
 
 ## Install
 
@@ -40,7 +40,7 @@ doc/harness/critics/             # plan.md, runtime.md, document.md playbooks
 
 ## The loop
 
-Every repo-mutating task follows this public sequence:
+Every repo-mutating WBS follows this public sequence:
 
 ```
 WBS open → plan → develop → QA → close
@@ -48,20 +48,20 @@ WBS open → plan → develop → QA → close
 
 | Step | What happens |
 |------|-------------|
-| **WBS open** | Create or resume one exact task generation and bind it to the current runtime session |
-| **plan** | Review the request, write PLAN.md, and declare required lenses in TASK.json |
+| **WBS open** | Create or resume one exact WBS generation and bind it to the current runtime session |
+| **plan** | Review the request, write PLAN.md, and declare required lenses in WBS.control.json |
 | **develop** | Implement per-AC; independent review runs as an internal end-of-develop gate |
 | **QA** | Run the declared runtime QA lens and record its observed completion |
 | **close** | Internally run `wbs(action="verify")`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
 
 After the same WBS root closes, the coordinator performs self-improvement
 before any separately authorized follow-up execution: it may append friction signals to `learnings.jsonl`,
-then reports recurring keys from distinct verified task runs as Tier 2
+then reports recurring keys from distinct verified WBS runs as Tier 2
 candidates. The candidate-reporting step changes neither the raw ledger nor
 pattern files; durable pattern changes require a separately reviewed Harness
-task.
+WBS.
 
-## TASK.json (4 fields)
+## WBS.control.json (4 fields)
 
 ```json
 {
@@ -72,7 +72,7 @@ task.
 }
 ```
 
-`task_id` is derived from the canonical directory. The public owner publishes
+`wbs_id` is derived from the canonical directory. The public owner publishes
 `closed: true` on successful close. `BLOCKED.md` represents an unfinished
 external blocker. Existing supported controls require explicit migration
 preview/apply; historical receipt bytes are preserved and ignored by active calls.
@@ -95,8 +95,8 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `developer` | Implements PLAN.md per AC |
 | `ac-worker` | Implements one AC's owned files; may split disjoint work one level deep on Claude |
 | `test-author` | Writes one AC's tests from PLAN.md intent inside its `Tests:` paths alongside the implementation lane |
-| `task-lead` | `harness:batch` lead: retains its `isolation: worktree` bootstrap with a validated untracked marker, waits for durable worker binding, then runs one task lifecycle and commits on its branch |
-| `task-lead-resume` | Continues the exact retained worktree/task/run after worker binding; allocates no new checkout |
+| `wbs-lead` | `harness:batch` lead: retains its `isolation: worktree` bootstrap with a validated untracked marker, waits for durable worker binding, then runs one WBS lifecycle and commits on its branch |
+| `wbs-lead-resume` | Continues the exact retained worktree/WBS/run after worker binding; allocates no new checkout |
 | `defect-hunter` | Non-attesting evidence-only discovery: LIGHT runs 0, STANDARD 1 selected focus, and DEEP both focuses |
 | `code-reviewer` | Always runs fresh after discovery, independently sweeps the full scope, and is the sole `review-code` verdict authority |
 | `security-reviewer` | Conditional trust-boundary and exploitability specialist; sole `review-security` authority |
@@ -111,7 +111,7 @@ Review discovery is deterministic and ephemeral: LIGHT runs no hunters,
 STANDARD runs one selected correctness or contract/test hunter, and DEEP runs
 both. Every tier still runs one fresh full-scope formal code reviewer; the
 conditional security review remains separate. Depth is not authoritative
-lifecycle state and has no dedicated task, receipt, or review-detail field;
+lifecycle state and has no dedicated WBS, receipt, or review-detail field;
 selected depth and evidence may appear in stored non-authoritative formal-review
 narrative. Rebase-LIGHT requires exact old/new endpoints,
 conflict-free one-to-one patch equivalence, affirmative semantic non-overlap,
@@ -138,14 +138,14 @@ All under `plugin/scripts/`. Stdlib only.
 |--------|---------|--------|
 | `health.py` | Weighted composite 0-10 score | stdout |
 | `promote_learnings.py` | Current-run-validated Tier 2 candidate reporting; no durable writes | stdout |
-| `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/` |
+| `write_checkpoint.py` | Mid-WBS resume snapshot | `doc/harness/checkpoints/` |
 | `retro.py` | Weekly retrospective (git + verified closes + learnings) | stdout; `--save` writes `doc/harness/retros/` |
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `mutation_probe.py` | Mutates the changed lines of a diff and reports the mutations no test noticed; every survivor is re-run against the full suite first | stdout |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
-| `codex_hook_registration.py` | Bind native sessions to the exact task/run and source workspace | Session focus |
+| `codex_hook_registration.py` | Bind native sessions to the exact WBS/run and source workspace | Session focus |
 | `setup_finalize.py` | Canonical setup validation, manifest version migration, operational ignores, and legacy version-file cleanup | `.gitignore`, `doc/harness/manifest.yaml` |
 | `project_format_check.py` | Read-only SessionStart reminder for older Harness project file formats and missing operational ignores | stdout |
 | `verification_target.py` | Persistent copied verification inputs and separate source applicability for authentic review/QA results |
@@ -154,16 +154,17 @@ All under `plugin/scripts/`. Stdlib only.
 | `wbs.py` | Measure verified outcomes and preserve WBS refinement evidence | `WBS.json` |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `install_verified.py` | Stateless trusted post-QA delivery wrapper; compares canonical payloads from an isolated verified snapshot and refreshes only stale runtimes | stdout / exit status |
-| `batch_state.py` | Durable batch records, bounded pool claims, validated bootstrap retention, exact worker/result binding, serialized finish checkpoints, status/recovery, same-worktree resume and explicit retained abandonment; operational state never grants task PASS | `doc/harness/runtime/batches/` |
+| `batch_state.py` | Durable batch records, bounded pool claims, validated bootstrap retention, exact worker/result binding, serialized finish checkpoints, status/recovery, same-worktree resume and explicit retained abandonment; operational state never grants WBS PASS | `doc/harness/runtime/batches/` |
 | `batch_worktrees.py` | Routes managed WBS worktree preparation, binding, completion and recovery through the existing batch owners | Managed pool result |
 | `batch_pending.py` | Read-only discovery of retained worktree pools and their next lifecycle action after restart; never deletes resources | Pending-pool advisory |
-| `work_pack.py` | Validates task-owned isolated work packs and integration evidence before completion | Library routing result |
+| `work_pack.py` | Validates WBS-owned isolated work packs and integration evidence before completion | Library routing result |
+| `wbs_namespace_migration.py` | Explicitly imports retired Task controls and registered execution bindings into the WBS namespace, preserving run/check/history identities and exact source archives; normal calls never use a legacy fallback | WBS migrate preview/apply report |
 | `goal_migration.py` | Explicitly previews/imports retired Goal records and pack bindings, preserving historical identities and evidence | WBS migrate report |
 | `parallel_dispatch.py` | Proposes ready AC lanes from dependencies, path ownership and observed host capacity; the coordinator reserves actual slots | stdout (JSON) |
 | `batch_submodules.py` | Shared S1 selection, private named-branch preparation, durable local object pins, exact checkout reconciliation and module-removal proof; used by the existing batch owners | Embedded batch manifest and private/main Git stores |
 | `batch_preflight.py` | `harness:batch` intake/preflight: read-only repo-shape report — control-root shape, submodules, ignored nested repos, a post-checkout hook whose text mentions `submodule`, per-scope class, explicit selected-module validation and whole-gitlink ownership, cleanliness of the main checkout plus every populated submodule and nested repo, whether `.claude/worktrees/` is gitignored at the path git sees (a `.claude` symlink leaving the repository passes), and scope overlap between requests; exits 0 only when those checks allow the requested set | stdout (JSON) |
-| `batch_finish.py` | Integration helper (wrapped by `batch_state.py finish` for managed pools) for one closed lead: checks (returned commit is the branch tip, no merge commit, lead worktree clean, main checkout clean and on a branch), rebases in the lead worktree, fast-forwards the main checkout, harvests through `batch_harvest.py`, unlocks only a locked worktree, then plain `git worktree remove` and `git branch -d`; selected state-managed S1 delegates its sole guarded single-force removal to `batch_harvest.py`; `--resume` for a lead resolved by hand in the integration task; status `integrated`/`kept`/`conflict`/`ff-refused` as exit 0/3/4/5 (`error`, exit 1, on an unexpected failure) | stdout (JSON) |
-| `batch_harvest.py` | `harness:batch` coordinator step: copies an integrated (rebased and fast-forwarded) lead worktree's gitignored task evidence and learnings into the main checkout before `git worktree remove`; refuses unregistered, not-yet-integrated, or detached-HEAD (mid-rebase) worktrees, links, non-regular files, and archive collisions. Also owns guarded S1 disposal after durable archive, identity/content and preserved-object proof; ordinary removal stays no-force | `doc/harness/archive/batch/`, `doc/harness/learnings.jsonl` |
+| `batch_finish.py` | Integration helper (wrapped by `batch_state.py finish` for managed pools) for one closed lead: checks (returned commit is the branch tip, no merge commit, lead worktree clean, main checkout clean and on a branch), rebases in the lead worktree, fast-forwards the main checkout, harvests through `batch_harvest.py`, unlocks only a locked worktree, then plain `git worktree remove` and `git branch -d`; selected state-managed S1 delegates its sole guarded single-force removal to `batch_harvest.py`; `--resume` for a lead resolved by hand in the integration WBS; status `integrated`/`kept`/`conflict`/`ff-refused` as exit 0/3/4/5 (`error`, exit 1, on an unexpected failure) | stdout (JSON) |
+| `batch_harvest.py` | `harness:batch` coordinator step: copies an integrated (rebased and fast-forwarded) lead worktree's gitignored WBS evidence and learnings into the main checkout before `git worktree remove`; refuses unregistered, not-yet-integrated, or detached-HEAD (mid-rebase) worktrees, links, non-regular files, and archive collisions. Also owns guarded S1 disposal after durable archive, identity/content and preserved-object proof; ordinary removal stays no-force | `doc/harness/archive/batch/`, `doc/harness/learnings.jsonl` |
 | `install_smoke.py` | Drives an installed runtime tree once — imports registered hook modules and checks the receipt-free public WBS lifecycle; run by `install.py` after each sync and on the default run's SYNCHRONIZED skip path | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
@@ -183,7 +184,7 @@ doc/harness/learnings.jsonl   # Tier 3: append-only raw signal ledger
 ```
 
 Within the post-close self-improvement pass, candidate reporting identifies keys
-repeated across 2+ verified task runs for a separately reviewed Tier 2
+repeated across 2+ verified WBS runs for a separately reviewed Tier 2
 change. That reporting step performs no durable writes; other self-improvement
 steps may append signals or save a due retro. The pass completes before
 any separately authorized follow-up execution, so each completed run contributes to subsequent work.
@@ -301,4 +302,4 @@ attribution, the pinned upstream revisions, and the full refusal list.
 
 ## Self-dogfooding
 
-This repo uses harness on itself. After installing locally (see [CONTRIBUTING.md](CONTRIBUTING.md)), start a new Claude Code session — the harness SessionStart hooks activate automatically. Use `/harness:setup` to repair or upgrade if needed. The `MAINTENANCE` marker in a task dir bypasses plan-first for urgent fixes.
+This repo uses harness on itself. After installing locally (see [CONTRIBUTING.md](CONTRIBUTING.md)), start a new Claude Code session — the harness SessionStart hooks activate automatically. Use `/harness:setup` to repair or upgrade if needed. The `MAINTENANCE` marker in a WBS dir bypasses plan-first for urgent fixes.

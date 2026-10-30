@@ -1,6 +1,6 @@
 """Prompt-contract tests for the batch integration `review-code` carry rule.
 
-The post-wave `harness:batch` integration task carries a lead range that its
+The post-wave `harness:batch` integration wbs carries a lead range that its
 own lead already reviewed and QA'd when rebase plus fast-forward is proven
 patch-equivalent, and selects review depth over the residual only. Selection
 is orchestration instruction, not lifecycle code, so these tests pin the
@@ -102,7 +102,7 @@ def _assert_residual(section: str) -> None:
         ("1. conflict resolutions", ("step e", "manual-conflict, deep")),
         ("2. cross-lead interactions", ("overlaps what earlier leads changed", "(deep)")),
         ("3. non-carried ranges", ("outside every lead range",)),
-        ("4. the integration task's own edits", ()),
+        ("4. the integration wbs's own edits", ()),
     )
     for part, (head, terms) in zip(parts, expected, strict=True):
         assert part.startswith(head), f"residual order broken at {head!r}: {part!r}"
@@ -132,8 +132,8 @@ def test_section_applies_to_both_runtimes_and_scopes_the_integration_review_code
     assert "claude-only" not in normalized
     for term in (
         "`review-code` lens",
-        "`harness:batch` integration task",
-        "`task__batch-integrate-<slug>`",
+        "`harness:batch` integration wbs",
+        "`wbs__batch-integrate-<slug>`",
         "a carry inherits the trust of that lead's close.",
     ):
         assert term in normalized, term
@@ -300,10 +300,10 @@ def _assert_reviewer_carry_tail(body: str) -> str:
     core, after = body.split(CORE_END, 1)
     assert "harness:batch" not in core
     tail = _norm(after)
-    assert tail.startswith("both runtimes, for the `harness:batch` integration task")
+    assert tail.startswith("both runtimes, for the `harness:batch` integration wbs")
     assert "claude-only" not in tail
     for term in (
-        "`task__batch-integrate-<slug>`",
+        "`wbs__batch-integrate-<slug>`",
         "approved sweep scope is the residual",
         "each carried range is in scope only to verify its carry",
         "verify each carried proof yourself",
@@ -316,7 +316,7 @@ def _assert_reviewer_carry_tail(body: str) -> str:
         "rebase-light proof at that lead's fast-forward point",
         "sweep the complete residual",
         "conflict resolutions, cross-lead interactions, non-carried ranges, and the "
-        "integration task's own edits",
+        "integration wbs's own edits",
         "a carry you cannot reproduce is a wrong carry and under-classification",
         "existing single ordinary fix_now finding",
         "run the missing discovery, and a fresh formal review",

@@ -97,7 +97,7 @@ def goal_hint_main() -> int:
         "[harness-goal] Native Goal was created. Invoke $harness:run; before "
         "implementation call get_goal, then wbs(action=open, objective=...) "
         "to open or resume one outcome tree. Use wbs context/plan/check/dispatch/verify/close. "
-        "Do not create a separate Goal/task planning ledger. Do not treat "
+        "Keep this WBS as the sole planning and progress authority. Do not treat "
         "create_goal alone as harness activation."
     )
     return 0

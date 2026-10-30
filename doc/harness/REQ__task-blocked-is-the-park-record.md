@@ -1,6 +1,6 @@
 ---
-tags: [harness, lifecycle, task_blocked, turn-end, contracts]
-summary: task_blocked 와 BLOCKED.md 는 미완료 태스크의 durable park 기록으로 유지한다. park 는 종결이 아니며 close 는 여전히 C-04 PASS 만 인정한다. "PASS 만 턴을 끝낸다" 방향(2026-09-02)은 Stop 훅 제거(2026-09-23)로 소멸했고 복원하지 않는다.
+tags: [harness, lifecycle, wbs, turn-end, contracts]
+summary: wbs(action="block") 와 BLOCKED.md 는 미완료 WBS의 durable park 기록으로 유지한다. park 는 종결이 아니며 close 는 여전히 C-04 PASS 만 인정한다. "PASS 만 턴을 끝낸다" 방향(2026-09-02)은 Stop 훅 제거(2026-09-23)로 소멸했고 복원하지 않는다.
 updated: 2026-09-25
 freshness: current
 invalidated_by_paths:
@@ -11,21 +11,21 @@ invalidated_by_paths:
 freshness_updated: 2026-10-19T06:06:13Z
 ---
 
-# REQ — task_blocked is the park record, not a turn-end escape
+# REQ — wbs(action="block") is the park record, not a turn-end escape
 
 ## Requirement
 
 - The `wbs(action="block")` operation and the `BLOCKED.md` it writes stay in the
-  runtime. They are the durable record of *why* an open task stopped and *what*
+  runtime. They are the durable record of *why* an open WBS stopped and *what*
   unblocks it.
-- Parking is not completion. A parked task grants no PASS, does not satisfy or
-  bypass C-04, and does not close the task. It stays in `blocked` status,
-  which `task_close` refuses, until plain `task_start` resumes it with the run
+- Parking is not completion. A parked WBS grants no PASS, does not satisfy or
+  bypass C-04, and does not close the WBS. It stays in `blocked` status,
+  which `wbs(action="close")` refuses, until plain `wbs(action="open")` resumes it with the run
   and measured WBS checks preserved.
-- Close stays PASS-only: `task_close` requires current measured WBS checks
+- Close stays PASS-only: `wbs(action="close")` requires current measured WBS checks
   `runtime_verdict: PASS` (C-04). Actual independent review PASS before actual QA
   remains required by the workflow (C-14).
-- No Claude `Stop` hook gates turn-end. A turn may end while a task is open;
+- No Claude `Stop` hook gates turn-end. A turn may end while a WBS is open;
   continuation across turns is native `/goal` with the close condition in the
   goal condition (C-17, `doc/harness/patterns/auto-loop.md`).
 
@@ -58,10 +58,10 @@ details. This API conversion derives from the current explicit WBS request.
 
 ## Accepted cost
 
-A turn can end on an open task without PASS and without a park record. That is
+A turn can end on an open WBS without PASS and without a park record. That is
 the same state as before this decision, because the Stop hook is already gone.
-Nothing can close such a task except C-04 PASS, so the risk is an abandoned open
-task, not a false completion. `/goal` is the intended way to keep working until
+Nothing can close such a WBS except C-04 PASS, so the risk is an abandoned open
+WBS, not a false completion. `/goal` is the intended way to keep working until
 close.
 
 ## Verification

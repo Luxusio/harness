@@ -23,7 +23,7 @@ SPEC.loader.exec_module(lib)
 
 
 def marker(repo):
-    return repo / 'doc/harness/tasks/.active_sessions/pytest-hook.json'
+    return repo / 'doc/harness/wbs/.active_sessions/pytest-hook.json'
 
 
 @pytest.mark.parametrize('raises', [False, True])
@@ -38,9 +38,9 @@ def test_fixture_restores_exact_marker_on_success_and_exception(tmp_path, raises
     legacy.write_bytes(b'unknown legacy input\n')
     try:
         with scratch_task_in_real_repo('fixture', repo_root=str(tmp_path)) as td:
-            binding = lib.resolve_session_task_binding(str(tmp_path), 'pytest-hook')
-            assert binding['task_dir'] == td
-            assert lib.read_task_control(td)['run_id'] == binding['run_id']
+            binding = lib.resolve_session_wbs_binding(str(tmp_path), 'pytest-hook')
+            assert binding['wbs_dir'] == td
+            assert lib.read_wbs_control(td)['run_id'] == binding['run_id']
             assert legacy.read_bytes() == b'unknown legacy input\n'
             if raises:
                 raise RuntimeError('body failed')
@@ -49,13 +49,13 @@ def test_fixture_restores_exact_marker_on_success_and_exception(tmp_path, raises
     assert path.read_bytes() == prior
     assert foreign.read_bytes() == b'live session bytes\x00\xff'
     assert legacy.read_bytes() == b'unknown legacy input\n'
-    assert not (path.parent.parent / 'TASK__fixture').exists()
+    assert not (path.parent.parent / 'WBS__fixture').exists()
     assert not list(path.parent.glob('*.fixture-backup.*'))
 
 
 def test_fixture_without_marker_leaves_no_binding(tmp_path):
     with scratch_task_in_real_repo('fixture', repo_root=str(tmp_path)) as td:
-        assert lib.resolve_active_task_dir(str(tmp_path), 'pytest-hook') == td
+        assert lib.resolve_active_wbs_dir(str(tmp_path), 'pytest-hook') == td
     assert not marker(tmp_path).exists()
     assert not (marker(tmp_path).parent.parent / '.active').exists()
 
@@ -72,15 +72,15 @@ def test_exact_resolution_never_falls_back_to_legacy(tmp_path, mutation):
         elif mutation == 'fenced':
             value['conflicts'] = []
         elif mutation == 'wrong-id':
-            value['task_id'] = 'TASK__other'
+            value['wbs_id'] = 'WBS__other'
         elif mutation == 'closed':
-            control = json.loads((task / 'TASK.json').read_text())
+            control = json.loads((task / 'WBS.control.json').read_text())
             control['closed'] = True
-            (task / 'TASK.json').write_text(json.dumps(control))
+            (task / 'WBS.control.json').write_text(json.dumps(control))
         elif mutation == 'parked':
             (task / 'BLOCKED.md').write_text('blocked')
         path.write_text(json.dumps(value))
-        assert lib.resolve_active_task_dir(str(tmp_path), 'pytest-hook') == ''
-        assert list(lib.iter_active_task_dirs(str(tmp_path))) == []
-        assert lib.resolve_active_task_dir(str(tmp_path), 'other-session') == ''
-        assert lib.resolve_active_task_dir(str(tmp_path), 'default') == ''
+        assert lib.resolve_active_wbs_dir(str(tmp_path), 'pytest-hook') == ''
+        assert list(lib.iter_active_wbs_dirs(str(tmp_path))) == []
+        assert lib.resolve_active_wbs_dir(str(tmp_path), 'other-session') == ''
+        assert lib.resolve_active_wbs_dir(str(tmp_path), 'default') == ''

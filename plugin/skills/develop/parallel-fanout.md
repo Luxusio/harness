@@ -13,14 +13,14 @@ serial facts replace optional small-task fallbacks. Start each finished lead's
 review/QA while siblings develop; after completion refresh host inventory and
 prepare the next ready lane immediately. Existing resource leases serialize
 only their conflicting execution, and one coordinator integrates serially.
-This takes precedence over older within-task fanout examples below.
+This takes precedence over older within-WBS fanout examples below.
 
 The orchestrator uses three Claude Code primitives. Pick the smallest primitive
 type that fits the work; do not reduce worker count for independent ACs.
 Parallel is the default posture. Mandatory parallel delegation is
-capability/task-shape based: when `Agent(...)` is available and the work has
+capability/work-shape based: when `Agent(...)` is available and the work has
 independent lanes, spawn one worker per lane. This is mandatory
-capability/task-shape routing; the user does not need to request delegation.
+capability/work-shape routing; the user does not need to request delegation.
 "User did not ask for delegation" is an invalid skip rationale. Sequential
 execution needs a declared dependency, unavailable Agent tool, or actual observed host/resource capacity, and any sequential fallback after a matched fanout
 trigger must be stated in the lane table before editing.
@@ -28,8 +28,8 @@ Do not wait for the user to request delegation. User request is not a condition
 for parallel routing.
 
 1. `Agent(subagent_type="...", model="...", prompt="...")` — one-shot subagent with isolated context. Default for the Phase 4.5 audit inputs, Phase 6.6 review lenses, per-AC worker fanout, multi-lens QA, and dogfooder. Use `harness:ac-worker` for Phase 3 per-AC implementation.
-2. `TeamCreate({team_name, description})` — bounded multi-agent pipeline with shared task list, dependency tracking, and inter-agent `SendMessage`. Use when the work decomposes into 3+ stages with cross-stage handoffs.
-3. `Task({team_name, name, subagent_type, prompt})` — spawn a worker INTO an existing team. Worker reads `TaskList` to claim, calls `TaskUpdate` to complete, reports via `SendMessage` to `team-lead`.
+2. `TeamCreate({team_name, description})` — bounded multi-agent pipeline with a native collaboration assignment list, dependency tracking, and inter-agent `SendMessage`. Use when the work decomposes into 3+ stages with cross-stage handoffs.
+3. `Task({team_name, name, subagent_type, prompt})` — spawn a worker INTO an existing team. Worker reads `TaskList` to claim, calls `TaskUpdate` to complete, reports via `SendMessage` to `team-lead`. These are native collaboration APIs, not additional Harness WBS roots. Native assignment completion never grants WBS progress or close authority.
 
 The **spawn-all-in-one-message** rule (borrowed from `oh-my-claudecode/skills/team/SKILL.md:354`):
 
@@ -62,17 +62,17 @@ Concretely:
 # Issue these N Agent calls in ONE assistant message.
 # Give each lane clear scope and ownership in its prompt.
 Agent(subagent_type="harness:ac-worker",
-      prompt="Lane <task_id>:AC-001. Implement AC-001 per PLAN.md ...")
+      prompt="Lane <wbs_id>:AC-001. Implement AC-001 per PLAN.md ...")
 Agent(subagent_type="harness:ac-worker",
-      prompt="Lane <task_id>:AC-002. Implement AC-002 per PLAN.md ...")
+      prompt="Lane <wbs_id>:AC-002. Implement AC-002 per PLAN.md ...")
 Agent(subagent_type="harness:ac-worker",
-      prompt="Lane <task_id>:AC-NNN. Implement AC-NNN per PLAN.md ...")
+      prompt="Lane <wbs_id>:AC-NNN. Implement AC-NNN per PLAN.md ...")
 
 # Paired example (same message): an AC declaring both **Files:** and **Tests:**.
 Agent(subagent_type="harness:ac-worker",
-      prompt="Lane <task_id>:AC-001. Implement AC-001 per PLAN.md ... You own only its **Files:**; harness:test-author owns its **Tests:** for this AC.")
+      prompt="Lane <wbs_id>:AC-001. Implement AC-001 per PLAN.md ... You own only its **Files:**; harness:test-author owns its **Tests:** for this AC.")
 Agent(subagent_type="harness:test-author",
-      prompt="Lane <task_id>:AC-001-tests. Write AC-001's tests per PLAN.md, only in its **Tests:** paths.")
+      prompt="Lane <wbs_id>:AC-001-tests. Write AC-001's tests per PLAN.md, only in its **Tests:** paths.")
 ```
 
 ## Batch cap
@@ -149,7 +149,7 @@ Advisory, not a fanout trigger. Additional concern-area specialists return findi
 Follow `quality-audit-pipeline.md`'s two-cycle ceiling and remediation matrix.
 The second cycle is the last: executable behavior recomputes from the prior
 depth floor, test-logic-only work reruns contract/test only, and narrative or
-task-artifact wording uses deterministic checks without hunters and forfeits
+WBS-artifact wording uses deterministic checks without hunters and forfeits
 the remaining discovery budget. After the ceiling, that forfeit, or when prior
 cycle count is unavailable on recovery, select or retain DEEP, spawn no hunter,
 and let one fresh formal reviewer verify the final diff and prior remediation
@@ -179,7 +179,7 @@ never overrides a ready independent pair with capacity. Reject
 ### Invalid skip rationales
 
 User-request-based routing is forbidden. The fanout decision comes from runtime
-capability plus task shape: available `Agent(...)`, independent ACs, applicable
+capability plus WBS shape: available `Agent(...)`, independent ACs, applicable
 QA lenses, or independent audit workers. Do not use `user-did-not-ask`, "user
 did not ask for delegation", "not requested", or equivalent wording to justify
 inline execution. If the trigger matches and the run goes sequential, record

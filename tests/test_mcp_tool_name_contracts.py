@@ -43,15 +43,15 @@ def test_codex_skills_use_bare_tool_names_not_claude_prefixes():
     ])
     assert "mcp__harness__" not in body
     assert "mcp__plugin_harness_harness__" not in body
-    for name in ("task_start", "task_verify", "task_close"):
-        assert name in body
+    for action in ("open", "verify", "close"):
+        assert f'wbs(action="{action}")' in body
 
 
 def test_codex_qa_docs_do_not_suggest_claude_agent_subagent_type_call_shape():
     run = (REPO_ROOT / "plugin-codex" / "internal-skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
     assert "QA subagent pattern on Codex" in run
     assert "spawn_agent {" in run
-    assert 'task_name: "qa_<lens>_<task_slug>_<run_id>"' in run
+    assert 'task_name: "qa_<lens>_<wbs_slug>_<run_id>"' in run
     qa_section = run.split("QA subagent pattern on Codex:", 1)[1].split("When the QA lens returns", 1)[0]
     assert "Agent(subagent_type=" not in qa_section
     assert "harness:qa-browser" not in qa_section
@@ -75,7 +75,7 @@ def test_task_tools_declare_optional_workspace_and_goal_tools_do_not():
     assert {tool["name"] for tool in server.list_tools()} == {"wbs"}
     assert schemas["wbs"]["properties"]["workspace"]["type"] == "string"
     assert set(schemas) == set(server.TOOLS) == {"wbs"}
-    for name in ("task_start", "task_context", "write_plan", "task_verify", "task_close", "task_blocked",
+    for name in ("wbs_open", "context", "write_plan", "wbs_verify", "wbs_close", "wbs_blocked",
                  "goal_start", "goal_context", "goal_add_task", "goal_next_task", "goal_finish"):
         assert server.call_tool(name, {}).get("isError"), name
 
@@ -83,7 +83,7 @@ def test_task_tools_declare_optional_workspace_and_goal_tools_do_not():
 def test_deeply_nested_encoded_binding_arguments_are_not_applicable():
     import sys
     sys.path.insert(0, str(REPO_ROOT / "plugin/scripts"))
-    from _lib import is_codex_task_binding_tool
+    from _lib import is_codex_wbs_binding_tool
     nested = "[" * 10000 + "0" + "]" * 10000
     for name in ("wbs", "mcp__harness__wbs", "mcp__plugin_harness_harness__wbs"):
-        assert not is_codex_task_binding_tool(name, nested)
+        assert not is_codex_wbs_binding_tool(name, nested)

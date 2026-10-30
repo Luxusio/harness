@@ -17,7 +17,7 @@ For every failing test, classify into one of four categories:
 |-------|-------|---------|--------|
 | **T1** | In-branch, caused by our changes | Test was passing on base, our diff broke it | Fix our code, re-verify |
 | **T2** | In-branch, new test is wrong | New test we wrote has a bug | Fix the test, re-verify |
-| **T3** | Pre-existing, unrelated | Test was already failing on base branch | Create follow-up or mention in final response, do not fix in this task |
+| **T3** | Pre-existing, unrelated | Test was already failing on base branch | Create follow-up or mention in final response, do not fix in this WBS |
 | **T4** | Pre-existing, exposed by our changes | Test was latent-failing, our changes made it visible | Assess if fix is in scope; otherwise create follow-up |
 
 ### Step 3: Verify pre-existing classification
@@ -48,7 +48,7 @@ If the test passes on base: it is T1/T2, NOT pre-existing. Fix it.
 
 **T3 (pre-existing, unrelated):**
 1. Create a follow-up or mention it in final response as a pre-existing failure.
-2. Do NOT fix in this task — it is out of scope.
+2. Do NOT fix in this WBS — it is out of scope.
 3. Report the scope accurately. A T3 label cannot override a current required
    GATE check or actual QA FAIL/BLOCKED_ENV; unresolved required work remains unfinished.
 
@@ -62,7 +62,7 @@ If the test passes on base: it is T1/T2, NOT pre-existing. Fix it.
 
 ### Step 5: Report triage results
 
-Include this in final response or the follow-up task:
+Include this in final response or the follow-up WBS:
 
 ```
 ## Test Failure Triage

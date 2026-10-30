@@ -3,7 +3,7 @@
 tags: [harness, routing, intent]
 status: draft
 created: 2026-04-09
-task_ref: TASK__harness-architecture
+task_ref: WBS__harness-architecture
 
 Auto-routing is harness's zero-learning-curve interface. When a user expresses intent in natural language, harness reads the pattern and routes to the appropriate specialist without requiring slash commands.
 
@@ -157,7 +157,7 @@ Auto-routing is harness's zero-learning-curve interface. When a user expresses i
 **Activates when:**
 - "문서 업데이트", "docs update", "sync documentation"
 - "update the docs", "post-ship docs", "documentation sync"
-- After a task closes with pending doc changes
+- After a WBS closes with pending doc changes
 - "CLAUDE.md 업데이트", "README 업데이트"
 - "keep docs in sync"
 
@@ -185,7 +185,7 @@ documentation review methodology against the diff and those docs.
 | Past patterns / learnings | learn | |
 | Retrospective / sprint review | retro | |
 | Doc sync / update docs | direct durable-doc update + review | |
-| New task / feature request | plan-skill (canonical loop start) | |
+| New WBS / feature request | plan-skill (canonical loop start) | |
 | Question / explanation | direct answer (no routing) | Not all requests need routing |
 
 ---
@@ -213,7 +213,7 @@ These are answered directly without invoking a specialist:
 
 **Announcement format:**
 ```
-Routing to investigate — looks like a debugging task.
+Routing to investigate — looks like a debugging WBS.
 [investigate output follows]
 ```
 

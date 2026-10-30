@@ -123,21 +123,21 @@ def test_unsupported_dry_run_never_falls_back_to_live_command(delivered_develop,
 
 
 def _issued_git_target(tmp_path, monkeypatch):
-    repo, task_dir, _, _ = public(tmp_path)
+    repo, wbs_dir, _, _ = public(tmp_path)
     (repo / "notes.md").write_text("user notes\n")
     subprocess.run(["git", "add", ".gitignore", "src.txt", "notes.md"], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], cwd=repo, check=True)
     monkeypatch.setenv("FLOW_GUIDANCE_CONTEXT", "original")
     command = [sys.executable, "-B", "-c", "from pathlib import Path; assert Path('src.txt').read_text() == 'ok'; print('frozen QA PASS')"]
-    target = targets.issue_target(str(task_dir), str(repo), dict(
+    target = targets.issue_target(str(wbs_dir), str(repo), dict(
         inputs={"source": ["src.txt"]}, commands=[command], lenses=["review-code", "qa-cli"],
         environment=["FLOW_GUIDANCE_CONTEXT"],
     ))
-    return repo, task_dir, target
+    return repo, wbs_dir, target
 
 
 def test_frozen_qa_checks_selected_inputs_despite_dirty_parent_git(delivered_develop, tmp_path, monkeypatch):
-    repo, task_dir, target = _issued_git_target(tmp_path, monkeypatch)
+    repo, wbs_dir, target = _issued_git_target(tmp_path, monkeypatch)
     notes = repo / "notes.md"
     notes.write_text("uncommitted user work\n")
     frozen = Path(target["snapshot_root"])
@@ -145,8 +145,8 @@ def test_frozen_qa_checks_selected_inputs_despite_dirty_parent_git(delivered_dev
     parent = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=frozen, text=True).strip()
     assert Path(parent) == repo
     assert "notes.md" in subprocess.check_output(["git", "status", "--porcelain"], cwd=frozen, text=True)
-    assert targets.ensure_snapshot(str(task_dir), target["token"], str(repo))["snapshot_root"] == str(frozen)
-    assert targets.applicability(str(task_dir), str(repo), measure=True)["status"] == "applicable"
+    assert targets.ensure_snapshot(str(wbs_dir), target["token"], str(repo))["snapshot_root"] == str(frozen)
+    assert targets.applicability(str(wbs_dir), str(repo), measure=True)["status"] == "applicable"
     result = subprocess.run(target["spec"]["commands"][0], cwd=frozen, capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "frozen QA PASS"
     assert notes.read_text() == "uncommitted user work\n"
@@ -158,7 +158,7 @@ def test_frozen_qa_checks_selected_inputs_despite_dirty_parent_git(delivered_dev
 
 @pytest.mark.parametrize("drift", ["source", "context", "missing-target"])
 def test_real_issued_target_still_blocks_relevant_drift_or_missing_target(tmp_path, monkeypatch, drift):
-    repo, task_dir, target = _issued_git_target(tmp_path, monkeypatch)
+    repo, wbs_dir, target = _issued_git_target(tmp_path, monkeypatch)
     if drift == "source":
         (repo / "src.txt").write_text("relevant change")
     elif drift == "context":
@@ -166,7 +166,7 @@ def test_real_issued_target_still_blocks_relevant_drift_or_missing_target(tmp_pa
     else:
         (Path(target["snapshot_root"]).parent / "target.json").unlink()
         with pytest.raises((OSError, ValueError)):
-            targets.load_target(str(task_dir), target["token"])
-    state = targets.applicability(str(task_dir), str(repo), measure=True)
+            targets.load_target(str(wbs_dir), target["token"])
+    state = targets.applicability(str(wbs_dir), str(repo), measure=True)
     assert state["status"] == "stale"
     assert state["missing_lenses"] == ["qa-cli", "review-code"]

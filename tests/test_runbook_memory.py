@@ -21,6 +21,23 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 class TestRunbookMemory(unittest.TestCase):
+    def test_approving_another_runbook_preserves_historical_attribution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(tmp)
+            path = repo / "doc/harness/runbooks.yaml"
+            path.write_text('runbooks:\n  historical:\n    description: "Existing command"\n'
+                            '    command: "echo existing"\n'
+                            '    source_task: "TASK__original-origin"\n')
+            added = _run(repo, "add-candidate", "--id", "new-command",
+                         "--description", "New command", "--command", "echo new",
+                         "--source-wbs", "WBS__current")
+            self.assertEqual(added.returncode, 0, added.stderr)
+            approved = _run(repo, "approve", "new-command")
+            self.assertEqual(approved.returncode, 0, approved.stderr)
+            text = path.read_text()
+            self.assertIn('source_task: "TASK__original-origin"', text)
+            self.assertIn('source_wbs: "WBS__current"', text)
+
     def _repo(self, tmp: str) -> Path:
         repo = Path(tmp)
         (repo / ".git").mkdir()
@@ -61,7 +78,7 @@ class TestRunbookMemory(unittest.TestCase):
                 "--command", "VITE_API_PROXY_TARGET=http://localhost:8080 npm run dev -- --host 127.0.0.1",
                 "--failure-class", "missing-env",
                 "--source-phase", "qa-browser",
-                "--source-task", "TASK__demo",
+                "--source-wbs", "WBS__demo",
                 "--gotcha", "VITE proxy target is required",
             )
             self.assertEqual(capture.returncode, 0, capture.stderr)

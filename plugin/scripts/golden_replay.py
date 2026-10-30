@@ -10,7 +10,7 @@ Covered today:
    2. note_freshness.py — current → suspect flip on path match.
    3. contract_lint.py --check-weight — flags over-budget SKILL.md files.
    4. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
-   5. harness_server.task_close — blocks when runtime verification is missing.
+   5. harness_server.wbs_close — blocks when runtime verification is missing.
    6. prompt_memory.py — emits compact current task/verdict context.
    7. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
 
@@ -156,8 +156,8 @@ def test_prewrite_json_deny_on_protected_artifact() -> TestResult:
     gate = os.path.join(SCRIPTS, "prewrite_gate.py")
     with tempfile.TemporaryDirectory() as repo:
         os.makedirs(os.path.join(repo, ".git"))
-        tasks_root = os.path.join(repo, "doc", "harness", "tasks")
-        scratch = os.path.join(tasks_root, "TASK__golden-replay-prewrite")
+        tasks_root = os.path.join(repo, "doc", "harness", "wbs")
+        scratch = os.path.join(tasks_root, "WBS__golden-replay-prewrite")
         os.makedirs(scratch)
         with open(os.path.join(repo, "doc", "harness", "manifest.yaml"), "w") as f:
             f.write("type: library\n")
@@ -200,15 +200,15 @@ def test_prompt_memory_emits_context_block() -> TestResult:
     with tempfile.TemporaryDirectory() as tmp:
         base = tmp
         _os.makedirs(_os.path.join(base, ".git"))
-        tasks = _os.path.join(base, "doc", "harness", "tasks")
+        tasks = _os.path.join(base, "doc", "harness", "wbs")
         _os.makedirs(tasks)
         with open(_os.path.join(base, "doc", "harness", "manifest.yaml"), "w") as f:
             f.write('test_command: "python3 -m pytest"\n')
-        task_dir = _os.path.join(tasks, "TASK__gr-pr3")
-        _os.makedirs(task_dir)
-        with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
+        wbs_dir = _os.path.join(tasks, "WBS__gr-pr3")
+        _os.makedirs(wbs_dir)
+        with open(_os.path.join(wbs_dir, "PLAN.md"), "w") as f:
             f.write("# plan\n")
-        with open(_os.path.join(task_dir, "TASK.json"), "w") as f:
+        with open(_os.path.join(wbs_dir, "WBS.control.json"), "w") as f:
             json.dump({
                 "run_id": "01890a5d-ac96-774b-bcce-b3020998df21",
                 "execution_mode": "standard",
@@ -226,8 +226,8 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         sessions = _os.path.join(tasks, ".active_sessions")
         _os.makedirs(sessions)
         with open(_os.path.join(sessions, session_id + ".json"), "w") as f:
-            json.dump({"session_id": session_id, "task_dir": task_dir,
-                       "task_id": "TASK__gr-pr3", "run_id": "01890a5d-ac96-774b-bcce-b3020998df21"}, f)
+            json.dump({"session_id": session_id, "wbs_dir": wbs_dir,
+                       "wbs_id": "WBS__gr-pr3", "run_id": "01890a5d-ac96-774b-bcce-b3020998df21"}, f)
 
         env = _os.environ.copy()
         # Dual-name env (AC-006). Drop CLAUDE_PLUGIN_ROOT in v2.5 per CHANGELOG.
@@ -242,7 +242,7 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         return TestResult("prompt_memory_context_block", False,
                           f"exit {r.returncode}: {r.stderr[:200]}")
     out = r.stdout
-    for needle in ("[harness-context]", "task=TASK__gr-pr3", "status=open"):
+    for needle in ("[harness-context]", "wbs=WBS__gr-pr3", "status=open"):
         if needle not in out:
             return TestResult("prompt_memory_context_block", False,
                               f"missing {needle!r} in stdout: {out!r}")

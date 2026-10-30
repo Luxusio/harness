@@ -225,6 +225,32 @@ def test_healthy_mirror_does_not_certify_corrupt_selected_cache(tmp_path, monkey
     assert install._claude_payload_state()[0] == install.PAYLOAD_SYNCHRONIZED
 
 
+def test_selected_cache_accepts_claude_normalized_build_metadata_component(tmp_path, monkeypatch):
+    install = _load_install_module()
+    root = tmp_path / "mirror"
+    mirror = install.sync_claude_payload(root)
+    config = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    _fake_run(root)(UPDATE, False)
+    registry = config / "plugins" / "installed_plugins.json"
+    data = json.loads(registry.read_text())
+    entry = data["plugins"]["harness@harness"][0]
+    exact = Path(entry["installPath"])
+    normalized = exact.with_name(entry["version"].replace("+", "-"))
+    exact.rename(normalized)
+    entry["installPath"] = str(normalized)
+    registry.write_text(json.dumps(data))
+    steps = []
+    ok, reason = install._verify_claude_selected_cache(mirror, steps)
+    assert ok, reason
+    assert any(str(normalized) in step for step in steps)
+    assert any("ok WBS:" in step for step in steps), steps
+    # Directory normalization cannot turn a corrupt selected payload into PASS.
+    (normalized / "scripts/_lib.py").write_text("corrupt selected cache\n")
+    ok, reason = install._verify_claude_selected_cache(mirror, [])
+    assert not ok and "STALE" in reason, reason
+
+
 def test_selected_cache_rejects_missing_stale_ambiguous_and_unsafe_entries(tmp_path, monkeypatch):
     install = _load_install_module()
     root = tmp_path / "mirror"
@@ -237,13 +263,19 @@ def test_selected_cache_rejects_missing_stale_ambiguous_and_unsafe_entries(tmp_p
     _fake_run(root)(UPDATE, False)
     registry = config / "plugins" / "installed_plugins.json"
     original = json.loads(registry.read_text())
-    for change, expected in (("version", "selected version"), ("path", "selected cache path"), ("duplicate", "exactly one"), ("mode", "unsafe regular file")):
+    for change, expected in (("version", "selected version"), ("path", "selected cache path"), ("normalized_suffix", "selected cache path"), ("normalized_symlink", "selected cache path"), ("duplicate", "exactly one"), ("mode", "unsafe regular file")):
         data = json.loads(json.dumps(original))
         entry = data["plugins"]["harness@harness"][0]
         if change == "version":
             entry["version"] = "old"
         elif change == "path":
             entry["installPath"] = str(mirror)
+        elif change == "normalized_suffix":
+            entry["installPath"] = str(Path(entry["installPath"]).with_name(entry["version"].replace("+", "-") + "unexpected"))
+        elif change == "normalized_symlink":
+            linked = Path(entry["installPath"]).with_name(entry["version"].replace("+", "-"))
+            linked.symlink_to(entry["installPath"], target_is_directory=True)
+            entry["installPath"] = str(linked)
         elif change == "duplicate":
             data["plugins"]["harness@harness"].append(dict(entry))
         else:

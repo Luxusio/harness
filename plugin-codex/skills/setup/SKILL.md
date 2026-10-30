@@ -190,7 +190,7 @@ Direct, concrete, practical. Senior engineer helping a colleague, not a consulta
 
 **User sovereignty.** The user has context you don't. Recommendations, not decisions. The user decides.
 
-**Connect recommendations to user outcomes.** Not "configures the verification pipeline" but "every task gets a PASS/FAIL before close, so you'll catch bugs before they land."
+**Connect recommendations to user outcomes.** Not "configures the verification pipeline" but "every WBS gets a PASS/FAIL before close, so you'll catch bugs before they land."
 
 ---
 
@@ -200,7 +200,7 @@ Direct, concrete, practical. Senior engineer helping a colleague, not a consulta
 if [ -d "$_ROOT/doc/harness" ]; then
   [ -f "$_ROOT/doc/harness/manifest.yaml" ] && echo "MANIFEST: exists" && head -5 "$_ROOT/doc/harness/manifest.yaml"
   ls -t "$_ROOT/doc/changes/"*.md 2>/dev/null | head -3
-  ls -dt "$_ROOT/doc/harness/tasks/TASK__"* 2>/dev/null | head -3
+  ls -dt "$_ROOT/doc/harness/wbs/WBS__"* 2>/dev/null | head -3
   [ -f "$_ROOT/doc/harness/learnings.jsonl" ] && echo "LEARNINGS: $(wc -l < "$_ROOT/doc/harness/learnings.jsonl" | tr -d ' ')"
 fi
 ```
@@ -236,7 +236,7 @@ Assume the user hasn't looked at this window in 20 min. If you'd need to read so
 
 AI makes completeness near-free. Always recommend complete setup over shortcuts. A "lake" (full config, critic playbooks, gitignore, AGENTS.md) is boilable; an "ocean" (full codebase migration) is not.
 
-| Task type     | Human team | Codex+harness | Compression |
+| WBS type     | Human team | Codex+harness | Compression |
 |---------------|-----------|----------------|-------------|
 | Boilerplate   | 2 days    | 15 min         | ~100× |
 | Tests setup   | 1 day     | 15 min         | ~50× |
@@ -296,14 +296,14 @@ fi
 
 # Maintenance-only install
 if [ "$_SKIP_INTERVIEW" = "false" ] \
-   && ls doc/harness/tasks/TASK__*/MAINTENANCE 2>/dev/null | head -1 | grep -q .; then
-  _SKIP_INTERVIEW="true"; _SKIP_REASON="MAINTENANCE marker in task dir"
+   && ls doc/harness/wbs/WBS__*/MAINTENANCE 2>/dev/null | head -1 | grep -q .; then
+  _SKIP_INTERVIEW="true"; _SKIP_REASON="MAINTENANCE marker in WBS dir"
 fi
 
 [ "$_SKIP_INTERVIEW" = "true" ] && echo "Phase 2.0 skipped: $_SKIP_REASON"
 ```
 
-If any condition matched: skip Phase 2.0. The active/next harness task can re-open the interview later when drift is suspected.
+If any condition matched: skip Phase 2.0. The active/next Harness WBS can re-open the interview later when drift is suspected.
 
 Interview output narrows Q1-Q3 below — check
 `doc/harness/.interview-answers.json` before asking each remaining question.
@@ -328,7 +328,7 @@ Ask:
 Skip if build/test commands auto-detected.
 
 Ask:
-> I need build and test commands so harness can verify tasks.
+> I need build and test commands so harness can verify WBS roots.
 > A) Auto-detected: `{build_cmd}` / `{test_cmd}` — looks right
 > B) Let me specify
 
@@ -355,7 +355,7 @@ Preserve existing manifest fields: `desktop_qa_supported`,
 When native QA is requested and the selected target has the required tools,
 enable it and report the target. Otherwise default to false and report the
 exact missing connection/backend/device/capability/app prerequisite; do not
-require unrelated platforms. Provision/attach/start only within actual task
+require unrelated platforms. Provision/attach/start only within actual WBS
 authority; no destructive reset/clear or new paid resources without authority.
 Readiness alone cannot pass a GUI AC. The runtime roles select supported desktop
 window/input or mobile app/UI/touch flows and require real action plus inspected

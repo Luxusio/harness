@@ -78,7 +78,7 @@ Before Step 0:
 
 1. Read the active plan, README/install/quickstart files, package metadata, design docs,
    examples/tutorials, actual CLI help/API surface, and representative error text.
-2. Inspect recent DX-related history and task-local prior decisions so resolved choices
+2. Inspect recent DX-related history and WBS-local prior decisions so resolved choices
    are not re-raised.
 3. Load only relevant DX learnings.
 4. If no public DX artifact exists for an applicable product, flag a critical gap.

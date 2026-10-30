@@ -251,7 +251,7 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             "'required_lenses':['review-code','qa-cli'],'closed':False};"
             "\ndef attempt():\n"
             "    try:\n"
-            "        _lib.write_task_control('/tmp/harness-refusal-probe', ctl)\n"
+            "        _lib.write_wbs_control('/tmp/harness-refusal-probe', ctl)\n"
             "        return 'NONE'\n"
             "    except PermissionError as exc:\n"
             "        return str(exc)\n"
@@ -267,14 +267,14 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
     def test_unbound_and_wrong_frame_are_distinguishable(self):
         unbound, wrong_frame = self._both_refusals()
 
-        self.assertIn("no task-control writer is bound", unbound)
+        self.assertIn("no WBS-control writer is bound", unbound)
         self.assertIn("reloading _lib empties the binding", unbound)
-        self.assertIn("not the bound task-control writer", wrong_frame)
+        self.assertIn("not the bound WBS-control writer", wrong_frame)
         self.assertNotEqual(unbound, wrong_frame)
         # Both still name the attempted action, so the message did not lose
         # what it already carried.
         for message in (unbound, wrong_frame):
-            self.assertIn("TASK.json mutation requires the task-control MCP", message)
+            self.assertIn("WBS.control.json mutation requires the WBS-control MCP", message)
 
     def test_the_refusal_leaks_no_identity_values(self):
         """AC-3a — the category is safe to print; the comparisons are not.
@@ -294,12 +294,12 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
                 for leak in ("inode", "uid", "st_", "0o", "/home/", "/project/", "0x"):
                     self.assertNotIn(leak, lowered, reason)
 
-    def test_a_foreign_binding_is_not_mistaken_for_a_task_control_writer(self):
+    def test_a_foreign_binding_is_not_mistaken_for_a_wbs_control_writer(self):
         """`marker` must select the same subset `authorized()` consults.
 
         `codex_hook_registration` binds a writer under its own role, not
         `harness_server`. `authorized(marker=False)` ignores it, so a
-        task-control write in such a process is refused for want of any bound
+        WBS-control write in such a process is refused for want of any bound
         writer — but a category keyed on `bool(bindings)` alone sees a
         non-empty dict and reports the wrong-frame case instead. That is
         exactly the "harness_server was never imported" situation the caller
@@ -315,7 +315,7 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             "ctl={'run_id':_lib.new_uuid7(),'execution_mode':'standard',"
             "'required_lenses':['review-code','qa-cli'],'closed':False};"
             "\ntry:\n"
-            "    _lib.write_task_control('/tmp/harness-refusal-probe', ctl)\n"
+            "    _lib.write_wbs_control('/tmp/harness-refusal-probe', ctl)\n"
             "    print('NONE')\n"
             "except PermissionError as exc:\n"
             "    print(exc)\n"
@@ -324,15 +324,15 @@ class ControlWriterRefusalNamesTheCategory(unittest.TestCase):
             [sys.executable, "-c", script], capture_output=True, text=True, check=True,
         ).stdout.strip()
 
-        self.assertIn("no task-control writer is bound", message, message)
-        self.assertNotIn("not the bound task-control writer", message, message)
+        self.assertIn("no WBS-control writer is bound", message, message)
+        self.assertNotIn("not the bound WBS-control writer", message, message)
 
     def test_the_decision_bit_is_unchanged_by_diagnosis(self):
         """The category is computed after the verdict, never as part of it."""
         self.assertFalse(_lib._trusted_control_writer())
         self.assertFalse(_lib._trusted_control_writer(marker=True))
         with self.assertRaises(PermissionError):
-            _lib.write_task_control("/tmp/harness-refusal-probe", self._control())
+            _lib.write_wbs_control("/tmp/harness-refusal-probe", self._control())
 
 
 

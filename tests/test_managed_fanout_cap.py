@@ -37,7 +37,7 @@ def test_managed_init_and_prepare_replay_pin_cap(tmp_path, monkeypatch, developm
     manifest = pool.repo / 'doc/harness/manifest.yaml'
     manifest.write_text(f'develop:\n  fanout_cap: {development}\nbatch:\n  max_leads: {batch_cap}\n')
     requests = [request('a'), request('b')]
-    spec = work_pack.make_spec(str(pool.repo), 'TASK__owner', requests)
+    spec = work_pack.make_spec(str(pool.repo), 'WBS__owner', requests)
     pool.batch = spec['batch_id']
     # Claim nothing: this exercises real pool creation/replay without allocating worktrees.
     first = batch_worktrees.execute(str(pool.repo), spec, available_slots=0)
@@ -76,7 +76,7 @@ def test_managed_cli_explicit_limit_is_an_additional_bound(tmp_path, monkeypatch
     from test_batch_state import Pool, request
     pool = Pool(tmp_path, monkeypatch)
     (pool.repo / 'doc/harness/manifest.yaml').write_text('develop:\n  fanout_cap: 6\n')
-    result = pool.init([request('a'), request('b')], cap='1', owner='TASK__owner')
+    result = pool.init([request('a'), request('b')], cap='1', owner='WBS__owner')
     assert result['batch']['max_leads'] == 1
     assert result['batch']['cap_source'] == 'explicit'
     assert [item['slug'] for item in pool.claim()] == ['a']
@@ -258,7 +258,7 @@ def test_managed_init_claim_respects_development_limit(tmp_path, monkeypatch, de
     from test_batch_state import Pool, request
     pool = Pool(tmp_path, monkeypatch)
     (pool.repo / 'doc/harness/manifest.yaml').write_text(f'develop:\n  fanout_cap: {development}\n')
-    result = pool.init([request(f'lane-{n}') for n in range(7)], owner='TASK__owner')
+    result = pool.init([request(f'lane-{n}') for n in range(7)], owner='WBS__owner')
     assert result['batch']['max_leads'] == development
     assert len(pool.claim()) == development
 

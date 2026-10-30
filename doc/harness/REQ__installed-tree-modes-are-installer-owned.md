@@ -1,7 +1,7 @@
 ---
 tags: [harness, install, guards, permissions, diagnostics]
 summary: 설치된 런타임 트리의 권한 모드는 설치기의 책임이다. 가드가 group/other-writable 모듈을 거부하는 것은 정상이며, 완화 대상이 아니라 설치기가 그런 트리를 만들지 않아야 한다. 그리고 거부 메시지는 실제로 거부한 조건을 말해야 한다.
-updated: 2026-10-20
+updated: 2026-10-30
 freshness: current
 invalidated_by_paths:
   - install.py
@@ -262,3 +262,32 @@ User correction: “영어로 해라”. Installer-owned result labels are Engli
 `SUCCESS`, `FAILED`, `DRY RUN`, and the `Error:` prefix. Runtime names and the
 concise line structure stay the same. Existing OS/runtime diagnostic details
 are preserved.
+
+## Selected Claude cache names and private filesystem metadata (2026-10-30)
+
+User-reported installation failures: Claude selected a cache directory named
+`2.3.0-h…` while the installer expected `2.3.0+h…`; Codex rejected a
+newly copied private `mcp` directory whose owner differed from the installer.
+Repairing these failures is explicit user intent. The mechanisms below are
+derived constraints, not additional user requirements.
+
+- Accept Claude's exact stamped version component or that component with `+`
+  replaced by `-`, beneath the same exact Harness cache parent. Keep the
+  registered version equality, no-symlink path checks, guarded full payload
+  comparison and installed runtime smoke. No fuzzy version or arbitrary-path
+  matching is permitted.
+- Build private projections from newly created directories and file contents;
+  do not import source xattrs, ownership metadata or timestamps. Preserve the
+  existing mode policy `(source_mode | owner_write) & ~group_other_write`,
+  including restrictive read permissions and executable intent. Keep strict
+  owner checks before changing copied nodes; never chown foreign data. A
+  refusal identifies both observed UID and installer UID.
+
+The prior `shutil.copytree` path demonstrably copies `user.virtfs.uid` xattrs
+from source directories and files on an isolated native filesystem. Virtual
+filesystem mappings can interpret such metadata as ownership; the original
+reported UID failure's production cause remains unconfirmed. Local source
+xattrs were empty. Tests cover the metadata transfer and its removal, preserved
+source bytes/modes/xattrs, normalized Claude cache selection, corrupt payloads,
+unsafe paths and foreign-owner refusal. They do not establish a successful
+reinstall on the user's machine or an available real Claude CLI.

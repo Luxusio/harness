@@ -1,19 +1,19 @@
 ---
 name: run
 description: Orchestrate the public WBS open → plan → develop → QA → close lifecycle.
-argument-hint: <task-slug-or-description>
+argument-hint: <wbs-id-or-description>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs
 ---
 
-Orchestrate the full harness development cycle for a task.
+Orchestrate the full harness development cycle for a WBS.
 
 > `PLAN.md` owns acceptance intent; existing WBS assertions own measured outcome checks.
 
 Before entering this workflow, resolve the current project with the existing
 Harness manifest guard. Run only in a project initialized by `harness:setup`
 (`doc/harness/manifest.yaml`); a nested Git checkout needs its own setup.
-Outside an initialized project, continue ordinary work without Harness tasks,
+Outside an initialized project, continue ordinary work without Harness WBS roots,
 planning, routing reminders or automatic setup. Explicit setup remains available.
 
 ## Substantive review and QA
@@ -22,8 +22,8 @@ Await actual independent code review and conditional security review PASS before
 
 Explicit user invocation or approval of this harness repo-mutating workflow
 authorizes the subagents required by the workflow's verification and review
-gates. Examples include "use harness", "run/continue/close the harness task",
-native `/goal`, or clear approval to proceed with a harness task. This workflow
+gates. Examples include "use harness", "run/continue/close the Harness WBS",
+native `/goal`, or clear approval to proceed with a Harness WBS. This workflow
 authorization does not apply to read-only answers or ordinary non-harness work.
 
 When the runtime exposes explicit close tools such as `close_agent`, track each
@@ -35,7 +35,7 @@ continue to count toward the concurrency limit until closed.
 
 ## Sub-file
 
-`self-improvement.md` — signal detection, auto-fix, and validated tiered-learning promotion with an append-only raw ledger (runs after each task close).
+`self-improvement.md` — signal detection, auto-fix, and validated tiered-learning promotion with an append-only raw ledger (runs after each WBS close).
 
 ## Voice
 
@@ -43,22 +43,21 @@ Direct, terse. Status updates, not narration. "Phase N done." not "I have comple
 
 ## One public WBS interface
 
-Use only `wbs` MCP for this workflow. Names below identify internal owners,
-not additional public tools: task_start → wbs(action="open"), task_context →
-context, write_plan → plan, task_verify → verify, task_close → close,
-task_blocked → block. Pass `wbs_id` using the known root or legacy task ID;
-plan/check/dispatch share that same tree. check uses node_id; dispatch accepts
-current execution ownership and parks the parent automatically. Preserve
-workspace on every worktree call. No separate Goal WBS or child task queue.
+Use only `wbs` MCP for this workflow. Open or resume one root and keep its
+`wbs_id` and `wbs_dir`; open/context responses expose current routing in
+`context`. plan/check/dispatch share that same tree. check uses node_id;
+dispatch accepts current execution ownership and parks the parent automatically.
+Preserve workspace on every worktree call. Retired Goal/Task records are read
+only by explicit `wbs(action="migrate")` preview/apply, never normal execution.
 
 ## Flow
 
 Execute phases in strict order. Each phase must complete before the next begins. On failure, inspect actual state and follow Error Handling; repair authorized failures without repeating approval.
 
-Plain repo-mutating requests are valid task intake. Do not require the user to
+Plain repo-mutating requests are valid WBS intake. Do not require the user to
 re-issue a clear feature, fix, refactor, behavior change, or durable process/doc
-request as `/goal`. If no active task can be resolved, create or resume the
-harness task yourself and continue through this flow.
+request as `/goal`. If no active WBS can be resolved, create or resume the
+Harness WBS yourself and continue through this flow.
 
 ### Native Goal continuation
 
@@ -76,8 +75,8 @@ measured completion, without a second Goal ledger.
 
 ### Phase 0: Resume detection
 
-Before creating a new task, check whether this session already has an active
-harness task. If one exists, call `wbs(action="context")`
+Before creating a new WBS, check whether this session already has an active
+Harness WBS. If one exists, call `wbs(action="context")`
 and resume rather than creating a duplicate.
 
 Resume routing:
@@ -94,39 +93,38 @@ Resume routing:
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
 
-Only call `wbs(action="open")` when no active task can be resolved, or when the user
-explicitly asks for a new task.
+Only call `wbs(action="open")` when no active WBS can be resolved, or when the user
+explicitly asks for a new WBS.
 
 If only a native Goal is active, open/resume its one WBS root; never attach a second planning ledger.
 
-### Phase 1: Start task
+### Phase 1: Open WBS
 
 `wbs(action="open")` is also the only resume operation. On an existing valid open or
-blocked task, omit `fresh_run` to preserve the same run and measured checks.
-Use `fresh_run: true` only when deliberately starting a new generation and
-starting a new generation; a closed task refuses the default call.
+blocked WBS, omit `fresh_run` to preserve the same run and measured checks.
+Use `fresh_run: true` only when deliberately starting a new generation; a closed WBS refuses the default call.
 
 ```
 wbs { action: "open", wbs_id: "<ARGUMENTS>" }
 ```
 
-Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
+Store the returned `wbs_dir` and `wbs_id` for all subsequent phases. Report: WBS created/resumed, wbs_dir path.
 
 ### Phase 2: Plan
 
 ```
-Skill("harness:plan", "<task_id>")
+Skill("harness:plan", "<wbs_id>")
 ```
 
 The plan skill conservatively selects the compact or full planning procedure
 and writes PLAN.md. Compact planning may skip only plan-time Engineering
 Review; implementation-time independent `review-code` remains mandatory. On
-completion: PLAN.md exists in task_dir. If BLOCKED: stop and report.
+completion: PLAN.md exists in wbs_dir. If BLOCKED: stop and report.
 
 ### Phase 3: Develop
 
 ```
-Skill("harness:develop", "<task_id>")
+Skill("harness:develop", "<wbs_id>")
 ```
 
 The develop skill reads PLAN.md, implements changes, runs scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, actual independent review and QA passed and `wbs(action="verify")` reports PASS. If BLOCKED: preserve the unfinished blocker and unblock condition; ask only for a missing user decision or authorization.
@@ -138,7 +136,7 @@ does not maintain a separate feedback sidecar.
 
 ### Phase 4: Verify recovery (only when develop returned before close)
 
-Skip this phase when Phase 3 closed the task. Develop Phase 7 owns QA lens
+Skip this phase when Phase 3 closed the WBS. Develop Phase 7 owns QA lens
 selection and spawning, and develop Phase 6.6 owns review; this phase is a
 recovery path for an interrupted or older develop flow, not a second QA pass.
 
@@ -189,7 +187,7 @@ failure as a QA verdict or offer an override of substantive failure.
 **Persist QA failure patterns** after each retry cycle:
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
-echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","wbs":"'"<wbs_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 ### Phase 4.5: Health reporting
@@ -205,14 +203,14 @@ only lists planned checks and produces no measurement.
 ### Phase 5: Close
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/run/worktree-completion.md`. Skip
-`wbs(action="close")` when develop already closed the task; finish any outstanding
+`wbs(action="close")` when develop already closed the WBS; finish any outstanding
 coordinator disposal under that procedure without repeating review solely for
 cleanup. Otherwise close once after Phase 4 restores PASS, then complete the
 procedure before claiming overall completion. Batch leads return to their
 coordinator without integrating or removing their own worktree.
 
 ```
-wbs { action: "close", wbs_id: "<task_id>" }
+wbs { action: "close", wbs_id: "<wbs_id>" }
 ```
 
 If blocked: report `missing_for_close`, fix the stated gate, retry.
@@ -220,7 +218,7 @@ If success: run self-improvement pipeline (see `self-improvement.md`) before
 emitting the completion report.
 
 For harness-source changes, develop Phase 7.8 installs the verified payload
-before this close attempt. Do not defer installation until after close. The installer checks trusted source/task ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
+before this close attempt. Do not defer installation until after close. The installer checks trusted source/WBS ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
 
 Within an open root, use `wbs(action="next")`, development and checks to
 continue pending outcomes. Close only after all required outcomes, integration
@@ -229,7 +227,7 @@ before a separately authorized follow-up execution. Respect explicit stops,
 budgets and agreed go/no-go boundaries.
 
 For this harness plugin source repo, successful repo-mutating development is
-not complete at task close. Phase 7.8 must already have run the verified
+not complete at WBS close. Phase 7.8 must already have run the verified
 auto-install helper after the last source edit and fresh QA. After
 post-close self-improvement has run, commit the completed diff
 before the final response unless the user explicitly says not to. Include
@@ -238,9 +236,9 @@ the commit hash and pre-close conditional verified-delivery result in the comple
 ## Completion Report
 
 Before writing DONE, assert:
-- primary task is closed
+- primary WBS is closed
 - owned temporary worktree disposition is complete under the shared rule
-- runtime_verdict is PASS or task is BLOCKED
+- runtime_verdict is PASS or WBS is BLOCKED
 - post-close self-improvement has run
 - if this WBS belongs to a native Goal, that objective is done/blocked/stopped/budgeted
   or the next slice is already active/queued
@@ -250,9 +248,9 @@ Before writing DONE, assert:
 ```
 DONE
 
-Task:    <task_id>
+WBS:    <wbs_id>
 Status:  closed
-Dir:     <task_dir>
+Dir:     <wbs_dir>
 
 Phases completed: WBS open, plan, develop, QA, close
 Runtime verdict:  PASS
@@ -268,7 +266,7 @@ inspect actual owner state via `wbs(action="context")` plus the affected operati
 state before retrying. A timeout does not prove failure or completion. Determine
 whether effects occurred and whether any writer is still active; do not duplicate
 unknown or non-idempotent effects. Retry only when state and effects are known
-and the retry is safe. Preserve the same task/run, applicable proofs, actual
+and the retry is safe. Preserve the same WBS/run, applicable proofs, actual
 failure history and filesystem guards; do not use fresh_run as recovery.
 
 Repair authorized failures autonomously and restore affected independent review
@@ -283,13 +281,13 @@ remain binding; a green machine check never clears substantive failure.
 
 ## Self-Improvement (post-close)
 
-After every task close, run the pipeline in `self-improvement.md`:
+After every WBS close, run the pipeline in `self-improvement.md`:
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)
-- Promote learnings only when a validated entry matches the just-closed verified task/run; distinct verified historical task/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
+- Promote learnings only when a validated entry matches the just-closed verified WBS/run; distinct verified historical WBS/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
 - Preserve `learnings.jsonl` as append-only; promotion never rewrites or prunes raw rows, and no-signal runs remain no-write
-- Trigger retro independently after three verified task closes, using retro.py's shared close predicate rather than task-directory activity
+- Trigger retro independently after three verified WBS closes, using retro.py's shared close predicate rather than WBS-directory activity
 
-Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up tasks
+Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up WBS roots
 are different: they must be run or explicitly blocked before DONE.

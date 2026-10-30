@@ -20,18 +20,18 @@ SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 GATE = SCRIPTS / "prewrite_gate.py"
 SID = "c0ffee00-1111-4222-8333-444455556666"
 MANIFEST = "version: 5\nsource_git_roots: []\n"
-TASKS = "doc/harness/tasks"
+TASKS = "doc/harness/wbs"
 
 # (relative path inside a checkout, owner= value the in-root C-05 deny uses)
 PROTECTED = (
-    (f"{TASKS}/TASK__x/TASK.json", "task-control-mcp"),
-    (f"{TASKS}/TASK__x/PLAN.md", "plan-skill"),
-    (f"{TASKS}/.active_sessions/{SID}.json", "task-control-runtime"),
-    (f"{TASKS}/.active", "task-control-runtime"),
+    (f"{TASKS}/WBS__x/WBS.control.json", "WBS-control-mcp"),
+    (f"{TASKS}/WBS__x/PLAN.md", "plan-skill"),
+    (f"{TASKS}/.active_sessions/{SID}.json", "WBS-control-runtime"),
+    (f"{TASKS}/.active", "WBS-control-runtime"),
     ("doc/harness/goals/current.json", "legacy-data-migration"),
 )
 IN_ROOT_TASK_JSON_TEXT = (
-    "TASK.json is owned by task control MCP tools. Use the owning skill or MCP "
+    "WBS.control.json is owned by WBS execution control MCP. Use the owning skill or MCP "
     "tool (e.g. wbs action=plan for PLAN.md)."
 )
 
@@ -97,7 +97,7 @@ class CrossCheckoutFixture(unittest.TestCase):
         (main / "doc/harness").mkdir(parents=True)
         (main / "doc/harness/manifest.yaml").write_text(MANIFEST, encoding="utf-8")
         (main / ".gitignore").write_text(
-            "doc/harness/tasks/\ndoc/harness/goals/\n.claude/worktrees/\n", encoding="utf-8",
+            "doc/harness/wbs/\ndoc/harness/goals/\n.claude/worktrees/\n", encoding="utf-8",
         )
         (main / "src").mkdir()
         (main / "src/app.py").write_text("x = 1\n", encoding="utf-8")
@@ -151,7 +151,7 @@ class TestWorktreeCwdProtectsOtherCheckouts(CrossCheckoutFixture):
         self.assert_c05_deny(self.lead, self.main, rel, owner, "apply_patch")
 
     def test_cross_checkout_deny_keeps_the_in_root_owner_and_sentence(self):
-        target = self.main / f"{TASKS}/TASK__x/TASK.json"
+        target = self.main / f"{TASKS}/WBS__x/WBS.control.json"
         in_root = _gate(self.main, target)
         cross = _gate(self.lead, target)
         self.assertEqual(in_root[0], "deny")
@@ -161,7 +161,7 @@ class TestWorktreeCwdProtectsOtherCheckouts(CrossCheckoutFixture):
         self.assertNotIn("another Harness checkout", in_root[1])
 
     def test_relative_traversal_into_main_checkout_denied(self):
-        rel = f"{TASKS}/TASK__x/TASK.json"
+        rel = f"{TASKS}/WBS__x/WBS.control.json"
         relative = os.path.relpath(self.main / rel, self.lead)
         self.assertTrue(relative.startswith(".."))
         decision, reason = _gate(self.lead, relative)
@@ -170,11 +170,11 @@ class TestWorktreeCwdProtectsOtherCheckouts(CrossCheckoutFixture):
 
     def test_out_of_root_symlink_to_foreign_artifact_denied(self):
         # Neither alias basename is protected: only the realpath candidate
-        # matches, and task-local TASK.json needs the realpath'd root.
+        # matches, and WBS-local WBS.control.json needs the realpath'd root.
         outside = self.base / "plain-links"
         outside.mkdir(exist_ok=True)
         for name, rel, owner in (
-            ("reviews-alias.json", f"{TASKS}/TASK__x/TASK.json", "task-control-mcp"),
+            ("reviews-alias.json", f"{TASKS}/WBS__x/WBS.control.json", "WBS-control-mcp"),
         ):
             with self.subTest(rel=rel):
                 alias = outside / name
@@ -216,7 +216,7 @@ class TestUnchangedBehavior(CrossCheckoutFixture):
     def test_non_harness_target_is_unaffected(self):
         plain = self.base / "plain"
         for target in (
-            plain / f"{TASKS}/TASK__x/TASK.json",
+            plain / f"{TASKS}/WBS__x/WBS.control.json",
             plain / "doc/harness/goals/current.json",
             plain / "notes.txt",
         ):
@@ -224,7 +224,7 @@ class TestUnchangedBehavior(CrossCheckoutFixture):
                 self.assertEqual(_gate(self.lead, target), (None, ""))
 
     def test_worktree_own_protected_artifact_is_still_denied_in_root(self):
-        decision, reason = _gate(self.lead, self.lead / f"{TASKS}/TASK__x/PLAN.md")
+        decision, reason = _gate(self.lead, self.lead / f"{TASKS}/WBS__x/PLAN.md")
         self.assertEqual(decision, "deny")
         self.assertIn("rule=C-05-protected-artifact", reason)
         self.assertNotIn("another Harness checkout", reason)
@@ -246,7 +246,7 @@ class TestFailSafe(CrossCheckoutFixture):
 
     def test_unregistered_foreign_discovery_error_logs_and_allows(self):
         gate = _load_gate_module()
-        target = str(self.base / "unregistered" / f"{TASKS}/TASK__x/TASK.json")
+        target = str(self.base / "unregistered" / f"{TASKS}/WBS__x/WBS.control.json")
         out = io.StringIO()
         with mock.patch.object(
             gate, "harness_root_resolution", side_effect=self._resolution_failing_outside(gate),
@@ -258,7 +258,7 @@ class TestFailSafe(CrossCheckoutFixture):
 
     def test_protected_classifier_error_degrades_to_allow(self):
         gate = _load_gate_module()
-        target = str(self.sibling / f"{TASKS}/TASK__x/PLAN.md")
+        target = str(self.sibling / f"{TASKS}/WBS__x/PLAN.md")
         out = io.StringIO()
         with mock.patch.object(gate, "_is_protected_artifact", side_effect=ValueError("bad")), \
                 mock.patch.object(gate, "_log_gate_error"), \
@@ -269,10 +269,10 @@ class TestFailSafe(CrossCheckoutFixture):
 
     def test_foreign_error_does_not_drop_a_later_in_root_deny(self):
         # One apply_patch touching a foreign path first and the lead's own
-        # TASK.json second: the first path's error must not end the loop.
+        # WBS.control.json second: the first path's error must not end the loop.
         gate = _load_gate_module()
-        foreign = self.base / "unregistered" / f"{TASKS}/TASK__x/TASK.json"
-        own = self.lead / f"{TASKS}/TASK__x/TASK.json"
+        foreign = self.base / "unregistered" / f"{TASKS}/WBS__x/WBS.control.json"
+        own = self.lead / f"{TASKS}/WBS__x/WBS.control.json"
         patch = (
             "*** Begin Patch\n"
             f"*** Update File: {foreign}\n@@\n-a\n+b\n"

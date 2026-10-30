@@ -6,8 +6,8 @@ harness scaffold (manifest.yaml + tasks dir) inside a tempdir, then invokes
 prewrite_gate.py via subprocess with a Write payload for a .py file.
 
 Failure modes tested:
-  AC-001 — no open tasks → fail-open (exit 0, no deny JSON)
-  AC-002 — open task present but .active absent → still deny no-active-task
+  AC-001 — no open WBSs → fail-open (exit 0, no deny JSON)
+  AC-002 — open WBS present but .active absent → still deny no-active-wbs
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def _parse_decision(stdout: str):
 
 
 def _scaffold(tmpdir: str, *, strict: bool = False) -> str:
-    """Create minimal harness scaffold; return absolute path to tasks_dir."""
+    """Create minimal harness scaffold; return absolute path to wbs_root."""
     manifest_dir = os.path.join(tmpdir, "doc", "harness")
     os.makedirs(manifest_dir, exist_ok=True)
     # Touch manifest.yaml so find_repo_root recognises tmpdir as repo root.
@@ -80,16 +80,16 @@ def _scaffold(tmpdir: str, *, strict: bool = False) -> str:
         f.write("version: 4\n")
         if strict:
             f.write("capabilities:\n  strict_compliance_requires_delegation: true\n")
-    tasks_dir = os.path.join(manifest_dir, "tasks")
-    os.makedirs(tasks_dir, exist_ok=True)
-    return tasks_dir
+    wbs_root = os.path.join(manifest_dir, "wbs")
+    os.makedirs(wbs_root, exist_ok=True)
+    return wbs_root
 
 
-def _write_task_state(tasks_dir: str, task_name: str, status: str) -> str:
-    """Create TASK__<task_name>/TASK.json with a derived status. Returns task dir."""
-    task_dir = os.path.join(tasks_dir, f"TASK__{task_name}")
-    os.makedirs(task_dir, exist_ok=True)
-    state_path = os.path.join(task_dir, "TASK.json")
+def _write_task_state(wbs_root: str, task_name: str, status: str) -> str:
+    """Create WBS__<task_name>/WBS.control.json with a derived status. Returns task dir."""
+    wbs_dir = os.path.join(wbs_root, f"WBS__{task_name}")
+    os.makedirs(wbs_dir, exist_ok=True)
+    state_path = os.path.join(wbs_dir, "WBS.control.json")
     control = {
         "run_id": "0198c349-5800-7000-8000-000000000001",
         "execution_mode": "standard",
@@ -99,7 +99,7 @@ def _write_task_state(tasks_dir: str, task_name: str, status: str) -> str:
     with open(state_path, "w") as f:
         json.dump(control, f)
         f.write("\n")
-    return task_dir
+    return wbs_dir
 
 
 class TestDormantRepoFailsOpen(unittest.TestCase):
@@ -119,8 +119,8 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
     def test_dormant_repo_with_closed_tasks_fails_open(self):
         """tasks dir contains only a closed task → fail-open."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            _write_task_state(tasks_dir, "old", "closed")
+            wbs_root = _scaffold(tmpdir)
+            _write_task_state(wbs_root, "old", "closed")
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke(tmpdir, target)
             self.assertEqual(r.returncode, 0)
@@ -129,10 +129,10 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
                                 f"closed task should fail-open. stdout={r.stdout!r}")
 
     def test_removed_stale_label_is_open_without_active_marker(self):
-        """TASK.json has no stale state; an open task without .active denies."""
+        """WBS.control.json has no stale state; an open WBS without .active denies."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            _write_task_state(tasks_dir, "old", "stale")
+            wbs_root = _scaffold(tmpdir)
+            _write_task_state(wbs_root, "old", "stale")
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke(tmpdir, target)
             self.assertEqual(r.returncode, 0)
@@ -149,13 +149,13 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
 
 
 class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
-    """AC-002: open task exists but .active absent → still deny no-active-task."""
+    """AC-002: open WBS exists but .active absent → still deny no-active-wbs."""
 
     def test_open_task_without_active_pointer_still_denies(self):
-        """TASK__wip status=created + no .active → deny with no-active-task reason."""
+        """WBS__wip status=created + no .active → deny with no-active-wbs reason."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            _write_task_state(tasks_dir, "wip", "created")
+            wbs_root = _scaffold(tmpdir)
+            _write_task_state(wbs_root, "wip", "created")
             # No .active file written.
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke(tmpdir, target)
@@ -163,16 +163,16 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             decision, reason = _parse_decision(r.stdout)
             self.assertEqual(decision, "deny",
                              f"Expected deny but got: stdout={r.stdout!r}")
-            self.assertIn("no-active-task", reason or "",
-                          f"Expected no-active-task in reason: {reason!r}")
+            self.assertIn("no-active-wbs", reason or "",
+                          f"Expected no-active-wbs in reason: {reason!r}")
             self.assertIn("$harness:run", reason or "")
 
     def test_mixed_closed_and_open_still_denies(self):
-        """One closed + one created → open task triggers deny."""
+        """One closed + one created → open WBS triggers deny."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            _write_task_state(tasks_dir, "done", "closed")
-            _write_task_state(tasks_dir, "wip", "created")
+            wbs_root = _scaffold(tmpdir)
+            _write_task_state(wbs_root, "done", "closed")
+            _write_task_state(wbs_root, "wip", "created")
             # No .active file.
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke(tmpdir, target)
@@ -180,13 +180,13 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             decision, reason = _parse_decision(r.stdout)
             self.assertEqual(decision, "deny",
                              f"Mixed tasks should deny. stdout={r.stdout!r}")
-            self.assertIn("no-active-task", reason or "",
-                          f"Expected no-active-task in reason: {reason!r}")
+            self.assertIn("no-active-wbs", reason or "",
+                          f"Expected no-active-wbs in reason: {reason!r}")
 
     def test_repo_outside_tmp_write_is_out_of_scope(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            _write_task_state(tasks_dir, "wip", "created")
+            wbs_root = _scaffold(tmpdir)
+            _write_task_state(wbs_root, "wip", "created")
             outside = os.path.join(tempfile.gettempdir(), "harness-prewrite-outside.py")
             r = _invoke(tmpdir, outside)
             self.assertEqual(r.returncode, 0)
@@ -195,14 +195,14 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
 
     def test_session_active_marker_allows_matching_session(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            task_dir = _write_task_state(tasks_dir, "session", "created")
-            with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
+            wbs_root = _scaffold(tmpdir)
+            wbs_dir = _write_task_state(wbs_root, "session", "created")
+            with open(os.path.join(wbs_dir, "PLAN.md"), "w", encoding="utf-8") as f:
                 f.write("# plan\n")
-            sessions = os.path.join(tasks_dir, ".active_sessions")
+            sessions = os.path.join(wbs_root, ".active_sessions")
             os.makedirs(sessions, exist_ok=True)
             with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
-                json.dump({"session_id": "s1", "task_id": "TASK__session", "task_dir": task_dir, "run_id": "0198c349-5800-7000-8000-000000000001"}, f)
+                json.dump({"session_id": "s1", "wbs_id": "WBS__session", "wbs_dir": wbs_dir, "run_id": "0198c349-5800-7000-8000-000000000001"}, f)
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke_payload(tmpdir, {
                 "tool_name": "Write",
@@ -216,19 +216,19 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
 
     def test_nested_uninitialized_git_does_not_inherit_outer_micro_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            task_dir = _write_task_state(tasks_dir, "micro", "created")
-            control_path = os.path.join(task_dir, "TASK.json")
+            wbs_root = _scaffold(tmpdir)
+            wbs_dir = _write_task_state(wbs_root, "micro", "created")
+            control_path = os.path.join(wbs_dir, "WBS.control.json")
             with open(control_path, encoding="utf-8") as f:
                 control = json.load(f)
             control["execution_mode"] = "micro"
             with open(control_path, "w", encoding="utf-8") as f:
                 json.dump(control, f)
                 f.write("\n")
-            sessions = os.path.join(tasks_dir, ".active_sessions")
+            sessions = os.path.join(wbs_root, ".active_sessions")
             os.makedirs(sessions, exist_ok=True)
             with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
-                json.dump({"session_id": "s1", "task_id": "TASK__micro", "task_dir": task_dir, "run_id": "0198c349-5800-7000-8000-000000000001"}, f)
+                json.dump({"session_id": "s1", "wbs_id": "WBS__micro", "wbs_dir": wbs_dir, "run_id": "0198c349-5800-7000-8000-000000000001"}, f)
             nested = os.path.join(tmpdir, "packages", "child")
             os.makedirs(nested)
             os.mkdir(os.path.join(tmpdir, "packages", ".git"))
@@ -245,7 +245,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             self.assertEqual(r.returncode, 0)
             decision, reason = _parse_decision(r.stdout)
             self.assertIsNone(decision, reason)
-            self.assertFalse(os.path.exists(os.path.join(task_dir, "PLAN.md")))
+            self.assertFalse(os.path.exists(os.path.join(wbs_dir, "PLAN.md")))
 
 if __name__ == "__main__":
     unittest.main()

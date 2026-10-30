@@ -150,7 +150,7 @@ Competitive/market risk and 6-month trajectory dimensions are recorded `n/a`
 unless the plan itself claims a competitive positioning or multi-month
 rollout risk worth evaluating.
 
-**Auto-decide default:** SELECTIVE EXPANSION unless task pack overrides.
+**Auto-decide default:** SELECTIVE EXPANSION unless WBS pack overrides.
 
 ### 1.3 Required outputs (checklist)
 
@@ -188,11 +188,11 @@ fallback still creates no separate user interaction.
 
 ## Deferred Scope Surface (runs during Phase 1)
 
-`deferred-scope.md` is task-local, NOT protected. Write directly via heredoc.
+`deferred-scope.md` is WBS-local, NOT protected. Write directly via heredoc.
 
 Phase 1 appends:
 ```bash
-cat >> doc/harness/tasks/TASK__<id>/deferred-scope.md << EOF
+cat >> doc/harness/wbs/WBS__<id>/deferred-scope.md << EOF
 ### Phase 1 deferred items
 - <item>: deferred because <rationale> (principle: <P#>)
 EOF

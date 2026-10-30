@@ -31,7 +31,7 @@ healthcheck_command: ""
 #         - ./gradlew --stop
 #         - ./gradlew clean assemble
 
-# --- Verify commands (MCP task_verify is authoritative; these are CLI fallback) ---
+# --- Verify commands (MCP wbs(action="verify") is authoritative; these are CLI fallback) ---
 verify_commands:
   - uv run pytest tests/
 
@@ -42,7 +42,7 @@ qa:
   browser_qa_supported: false
   # Opt-in close gate for surface-specific UX review. When true, touched CLI,
   # API, browser, or desktop user-facing surfaces require the matching
-  # ux-* receipt lens PASS before task_close.
+  # actual ux-* lens PASS before wbs(action="close").
   ux_review_supported: false
 
 browser:

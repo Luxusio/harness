@@ -10,7 +10,7 @@ import sys
 
 
 REPO = Path(__file__).resolve().parents[1]
-CHILD = 'TASK__integration'
+CHILD = 'WBS__integration'
 GOAL = 'GOAL__automatic-pack'
 
 
@@ -28,17 +28,17 @@ def declare(context):
     import work_pack
     pool, call, requests = context
     spec = work_pack.make_spec(str(pool.repo), CHILD, requests)
-    directory = pool.repo / 'doc/harness/tasks' / CHILD
+    directory = pool.repo / 'doc/harness/wbs' / CHILD
     directory.mkdir(parents=True)
     state = dict(version=1, nodes=[], checks={}, run_id='', started_at=0,
                  last_progress_at=0, pack_only=True, batch=spec)
     (directory / 'WBS.json').write_text(json.dumps(state))
     pool.batch = spec['batch_id']
-    return dict(task_id=CHILD, batch=spec)
+    return dict(wbs_id=CHILD, batch=spec)
 
 
 def current_bytes(pool):
-    return (pool.repo / 'doc/harness/tasks' / CHILD / 'WBS.json').read_bytes()
+    return (pool.repo / 'doc/harness/wbs' / CHILD / 'WBS.json').read_bytes()
 
 
 def test_unbaselined_pack_refuses_open_and_remains_unknown(tmp_path, monkeypatch):
@@ -48,9 +48,9 @@ def test_unbaselined_pack_refuses_open_and_remains_unknown(tmp_path, monkeypatch
     declare(context)
     result = call('wbs', dict(action='open', wbs_id=CHILD))
     assert result.get('isError') and 'unfinished' in result['structuredContent']['error']
-    td = pool.repo / 'doc/harness/tasks' / CHILD
-    assert not (td / 'TASK.json').exists()
-    assert wbs.task_progress(str(td), str(pool.repo), '')['percentage'] is None
+    td = pool.repo / 'doc/harness/wbs' / CHILD
+    assert not (td / 'WBS.control.json').exists()
+    assert wbs.wbs_progress(str(td), str(pool.repo), '')['percentage'] is None
     before = current_bytes(pool)
     import pytest
     with pytest.raises(ValueError, match='finish the active work pack'):

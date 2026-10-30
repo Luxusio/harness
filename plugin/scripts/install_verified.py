@@ -22,12 +22,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from _lib import (  # type: ignore  # noqa: E402
     _git_changed_paths,
-    active_task_binding_matches,
+    active_wbs_binding_matches,
     current_session_id,
     find_repo_root,
-    read_task_control,
+    read_wbs_control,
     emit_compact_context,
-    task_control_transaction,
+    wbs_control_transaction,
 )
 
 CANONICAL_REMOTE = "https://github.com/Luxusio/harness"
@@ -65,13 +65,13 @@ def _trusted_harness_repo(repo_root: Path) -> tuple[bool, str]:
     return True, ""
 
 
-def _verification_state(task_dir: Path) -> tuple[bool, str, str]:
+def _verification_state(wbs_dir: Path) -> tuple[bool, str, str]:
     import wbs
-    state = read_task_control(str(task_dir))
-    context = emit_compact_context(str(task_dir), measure_wbs=True)
+    state = read_wbs_control(str(wbs_dir))
+    context = emit_compact_context(str(wbs_dir), measure_wbs=True)
     basis = {
-        "task": state,
-        "wbs": wbs.read_state(str(task_dir)),
+        "execution": state,
+        "wbs": wbs.read_state(str(wbs_dir)),
         "verification_targets": context.get("verification_targets"),
     }
     fingerprint = "sha256:" + hashlib.sha256(
@@ -90,30 +90,30 @@ def _verification_policies(state: dict) -> list:
     return [wbs.verification_inputs(state, node) for node in wbs.leaves(state["nodes"])] or [state.get("inputs")]
 
 
-def _verification_definition(task_dir: Path) -> str:
+def _verification_definition(wbs_dir: Path) -> str:
     """Freeze validated, owner-controlled authority without measuring source/custody."""
     import wbs
     records = {
-        name: _read_payload_file(task_dir, name, source_input=True, max_bytes=limit)
-        # Match the canonical TASK and WBS readers before collecting raw bytes.
-        for name, limit in (("TASK.json", 16 * 1024), ("WBS.json", 1024 * 1024))
+        name: _read_payload_file(wbs_dir, name, source_input=True, max_bytes=limit)
+        # Match the canonical WBS control and outcome readers before collecting raw bytes.
+        for name, limit in (("WBS.control.json", 16 * 1024), ("WBS.json", 1024 * 1024))
     }
     if any(record is None for record in records.values()):
-        raise ValueError("unsafe or unreadable task/WBS definition")
-    task = read_task_control(str(task_dir))
-    state = wbs.read_state(str(task_dir))
+        raise ValueError("unsafe or unreadable WBS definition")
+    task = read_wbs_control(str(wbs_dir))
+    state = wbs.read_state(str(wbs_dir))
     if not task or state is None or any(
         json.loads(records[name][0]) != value
-        for name, value in (("TASK.json", task), ("WBS.json", state))
+        for name, value in (("WBS.control.json", task), ("WBS.json", state))
     ):
-        raise ValueError("task/WBS definition changed while read")
+        raise ValueError("WBS definition changed while read")
     for policy in _verification_policies(state):
         if policy is not None:
             wbs.required_inputs(policy)
             wbs.require(not policy["deny"] or "source" in policy,
                         "deny requires explicit source inputs; Git metadata reads cannot be confined")
     # Serialize now: subsequent mutations must not modify the baseline object.
-    return json.dumps({"task": task, "wbs": state}, sort_keys=True, separators=(",", ":"))
+    return json.dumps({"execution": task, "wbs": state}, sort_keys=True, separators=(",", ":"))
 
 
 def _is_install_payload_path(path: str) -> bool:
@@ -298,7 +298,7 @@ def _tracked_install_payload(repo_root: Path) -> set[str]:
     return {path for path in paths if path}
 
 
-def _snapshot_paths(repo_root: Path, task_dir: Path) -> set[str]:
+def _snapshot_paths(repo_root: Path, wbs_dir: Path) -> set[str]:
     candidates = _tracked_install_payload(repo_root) | _dirty_install_payload(repo_root)
     # A deletion remains absent from the isolated source snapshot; install.py
     # then prunes the stale target copy.
@@ -340,19 +340,24 @@ def _resolved_session_id(repo_root: Path) -> str:
     return current_session_id()
 
 
-def _validate_task_dir(repo_root: Path, task_dir: Path, session_id: str) -> tuple[bool, str]:
+def _validate_wbs_dir(repo_root: Path, wbs_dir: Path, session_id: str) -> tuple[bool, str]:
+    from wbs_namespace_migration import require_complete
+    try:
+        require_complete(repo_root)
+    except (OSError, ValueError) as error:
+        return False, str(error)
     if not session_id or session_id in {"default", "unknown"}:
         return False, "calling session identity unavailable; run verified install from the owning session with its native session ID"
-    expected_parent = (repo_root / "doc/harness/tasks").resolve()
-    if task_dir.parent != expected_parent or not task_dir.name.startswith("TASK__"):
-        return False, "task directory is not canonical"
-    if not read_task_control(str(task_dir)):
-        return False, "missing or invalid TASK.json"
-    control = read_task_control(str(task_dir))
-    if not active_task_binding_matches(
-        str(repo_root), str(task_dir), control, session_id=session_id,
+    expected_parent = (repo_root / "doc/harness/wbs").resolve()
+    if wbs_dir.parent != expected_parent or not wbs_dir.name.startswith("WBS__"):
+        return False, "WBS directory is not canonical"
+    if not read_wbs_control(str(wbs_dir)):
+        return False, "missing or invalid WBS.control.json"
+    control = read_wbs_control(str(wbs_dir))
+    if not active_wbs_binding_matches(
+        str(repo_root), str(wbs_dir), control, session_id=session_id,
     ):
-        return False, "task is not the open active TASK.json generation"
+        return False, "WBS is not the open active WBS.control.json generation"
     return True, ""
 
 
@@ -372,24 +377,24 @@ def _global_lock_path() -> Path:
     return Path.home() / ".cache/harness/install.lock"
 
 
-def install_verified(task_dir: Path) -> int:
-    task_dir = task_dir.resolve()
-    repo_root = Path(find_repo_root(str(task_dir))).resolve()
+def install_verified(wbs_dir: Path) -> int:
+    wbs_dir = wbs_dir.resolve()
+    repo_root = Path(find_repo_root(str(wbs_dir))).resolve()
     # Resolve the native caller once for both binding checks; shared hints are advisory.
     session_id = _resolved_session_id(repo_root)
     lock_path = _global_lock_path()
-    task_dir.mkdir(parents=True, exist_ok=True)
+    wbs_dir.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as lock:
         if fcntl is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        with task_control_transaction(str(task_dir)):
-            valid_task, reason = _validate_task_dir(repo_root, task_dir, session_id)
+        with wbs_control_transaction(str(wbs_dir)):
+            valid_task, reason = _validate_wbs_dir(repo_root, wbs_dir, session_id)
             if not valid_task:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
                 return 2
             try:
-                definition = _verification_definition(task_dir)
+                definition = _verification_definition(wbs_dir)
             except (OSError, RuntimeError, ValueError) as exc:
                 print(f"ERROR: automatic install refused: {exc}", file=sys.stderr)
                 return 3
@@ -408,7 +413,7 @@ def install_verified(task_dir: Path) -> int:
             if not trusted:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
                 return 2
-            snapshot_paths = _snapshot_paths(repo_root, task_dir)
+            snapshot_paths = _snapshot_paths(repo_root, wbs_dir)
             if denied(snapshot_paths):
                 print("ERROR: automatic install refused: install payload is denied by WBS input policy", file=sys.stderr)
                 return 3
@@ -429,18 +434,18 @@ def install_verified(task_dir: Path) -> int:
                 if _payload_fingerprint(snapshot_root, snapshot_paths) != payload_fingerprint:
                     print("ERROR: payload changed while snapshot was captured", file=sys.stderr)
                     return 5
-                verified_before, reason_before, fingerprint_before = _verification_state(task_dir)
+                verified_before, reason_before, fingerprint_before = _verification_state(wbs_dir)
                 payload_before = _payload_fingerprint(repo_root, snapshot_paths)
-                valid_before, task_reason_before = _validate_task_dir(repo_root, task_dir, session_id)
+                valid_before, task_reason_before = _validate_wbs_dir(repo_root, wbs_dir, session_id)
                 try:
-                    definition_before = _verification_definition(task_dir)
+                    definition_before = _verification_definition(wbs_dir)
                 except (OSError, RuntimeError, ValueError):
                     definition_before = ""
                 if (
                     not verified_before
                     or not valid_before
                     or definition_before != definition
-                    or _snapshot_paths(repo_root, task_dir) != snapshot_paths
+                    or _snapshot_paths(repo_root, wbs_dir) != snapshot_paths
                     or payload_before != payload_fingerprint
                     or not _payload_modes_match_index(repo_root, snapshot_paths)
                 ):
@@ -455,13 +460,13 @@ def install_verified(task_dir: Path) -> int:
             if result.returncode != 0:
                 print(f"ERROR: installer exited {result.returncode}", file=sys.stderr)
                 return result.returncode
-            verified_after, reason_after, fingerprint_after = _verification_state(task_dir)
-            valid_after, task_reason_after = _validate_task_dir(repo_root, task_dir, session_id)
+            verified_after, reason_after, fingerprint_after = _verification_state(wbs_dir)
+            valid_after, task_reason_after = _validate_wbs_dir(repo_root, wbs_dir, session_id)
             try:
-                definition_after = _verification_definition(task_dir)
+                definition_after = _verification_definition(wbs_dir)
             except (OSError, RuntimeError, ValueError):
                 definition_after = ""
-            snapshot_paths_after = _snapshot_paths(repo_root, task_dir)
+            snapshot_paths_after = _snapshot_paths(repo_root, wbs_dir)
             payload_after = _payload_fingerprint(repo_root, snapshot_paths_after)
             if (
                 not verified_after
@@ -484,9 +489,9 @@ def install_verified(task_dir: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task-dir", required=True)
+    parser.add_argument("--wbs-dir", required=True)
     args = parser.parse_args()
-    return install_verified(Path(args.task_dir))
+    return install_verified(Path(args.wbs_dir))
 
 
 if __name__ == "__main__":
