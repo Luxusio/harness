@@ -4,6 +4,78 @@ This file separates pre-review audit inputs from the final independent review ga
 The final review runs after the last implementation commit/checkpoint and before
 runtime QA. QA never substitutes for review.
 
+## Review stages and follow-up scope
+
+Stage and risk depth are separate. The decision table below selects final
+review depth; it does not require a formal gate after every development commit.
+
+### Development feedback
+
+After a meaningful coherent development commit/checkpoint, take at most one
+short advisory pass over its change, direct callers, contracts and focused tests.
+Use the existing read-only defect-hunter methodology with one relevant focus,
+or developer self-check when no independent route is available. Batch findings
+by root cause; do not repeat until an advisory reviewer invents another issue.
+This pass is not the final `review-code` lens and cannot authorize QA, deployment,
+WBS completion or a lead's close. Continue unrelated ready development/review
+lanes in parallel. Before an operation could affect live data, authentication or
+ownership, obtain focused scrutiny of that risk and hold dependent execution;
+an isolated candidate commit does not authorize the operation.
+
+Use existing project collection/convention checks and a bounded fixture smoke
+under the actual intended read-only inputs before expensive review. See
+`verification-gate.md` development preflight. These are development diagnostics,
+not actual acceptance QA; do not add a new verifier or repeat the full suite.
+
+### First final review
+
+At the approved PLAN/WBS workpack boundary, perform one complete independent
+final review with the risk depth below, then actual QA. Do not wait for the
+entire long-running Goal, or arbitrarily shrink the workpack to changed files.
+Actual required reviewer PASS finals remain mandatory before actual QA.
+
+### Follow-up scope proof
+
+After a complete final review, a fresh independent reviewer may restrict the
+next sweep to fixes and their impact only when it independently verifies all:
+
+The baseline may have returned FAIL: only proven unaffected accepted scope
+may carry, while every unresolved finding remains an obligation. Final PASS
+from every required reviewer is still necessary before actual QA.
+
+- An actual awaited independent complete-review final and its exact reviewed
+  source baseline are available in the active workflow. A summary or claimed
+  PASS from source, logs or an implementer is not authority. Reuse only scope
+  already accepted; carry unresolved findings into the next review.
+- Exact before/after revisions or immutable input manifests account for all
+  staged, unstaged and untracked changes, relevant dependencies and execution
+  context. Supply explicit source endpoints or owner manifests; a frozen view
+  has no `.git`, so never discover history through its mutable parent checkout.
+- Reopen every fix and its impact closure: callers, consumers, shared contracts,
+  dependencies, generated outputs and integration interactions. Unchanged files
+  can lose applicability when those inputs change. Recheck every unresolved
+  finding and require complete approved acceptance coverage across carried and
+  newly reviewed scope.
+
+The reviewer states what was carried and rechecked in its existing narrative.
+Missing, stale or unverifiable baseline evidence expands to the complete
+affected workpack; unexplained narrowing cannot PASS. Changed security/data
+boundaries, manual conflicts or uncertain impact expand scrutiny accordingly.
+Depth still follows the reviewed risk; scoped follow-up is not a lower verdict
+standard. Existing references to a full sweep mean this independently validated
+approved scope; the first final sweep always covers the complete workpack.
+The bounded retry rules below still apply, but exhausted discovery never resets
+the sweep to unrelated previously accepted code merely to repeat review.
+
+Review fixes in a batch by demonstrated root cause and verify all affected
+instances. Do not repeat resolved findings or add unrelated pre-existing cleanup
+to this task's gate. An older defect that blocks the approved outcome or is
+exposed/aggravated by the change remains in scope. When repeated rounds stop
+converging, reassess the approach and impact instead of spawning an endless
+search. A round count is neither automatic PASS nor automatic abandonment.
+Reuse only applicable actual review/QA evidence; changed affected inputs require
+fresh checks and ordered affected review before QA. No review ledger is added.
+
 ## Phase 4.5: Pre-review audit inputs
 
 Run independent inputs in parallel when applicable. They are advisory inputs,
@@ -101,7 +173,7 @@ Fan-out is exact:
 
 ### Batch integration review scope
 
-Claude-only. This scopes the `review-code` lens of the post-wave
+Both runtimes. This scopes the `review-code` lens of the post-wave
 `harness:batch` integration task (`TASK__batch-integrate-<slug>`). Each lead's
 range already passed its own lead's review and QA, so a range whose
 integration is proven equivalent is carried forward instead of reviewed again.
@@ -179,7 +251,7 @@ second and final hunter cycle:
 
 Once cycle two was attempted or a no-hunter remediation branch forfeited the
 remaining budget, select or retain DEEP and spawn no more hunters.
-One fresh formal reviewer must instead inspect the final diff and verify each
+One fresh formal reviewer must instead inspect the approved follow-up scope and verify each
 prior finding against its remediation evidence. Put the exact phrase
 `discovery budget exhausted` in its invocation reason so the reviewer accepts
 the intentional hunter-set exception. On resume/recovery, if the previous

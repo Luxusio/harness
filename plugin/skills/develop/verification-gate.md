@@ -5,6 +5,18 @@ test freshness.
 
 ---
 
+## Development preflight (before expensive review)
+
+During development, run existing cheap collection, import/convention checks and
+the changed tests' bounded fixture smoke in the intended execution environment.
+For a read-only source target, prove fixtures create writable private copies and
+put caches/build outputs outside selected inputs; never chmod the frozen source.
+In this repository use the existing third-party-import contract check and changed
+test collection/fixture cases. Reuse their applicable results rather than adding
+a verifier framework or running the whole suite at every commit. A preflight
+failure is actionable development feedback, not a QA verdict. Independent final
+review PASS must still precede actual acceptance QA.
+
 ## Step 0: Verify the issued execution target
 
 Before running tests against a frozen source view, confirm the current task/run's

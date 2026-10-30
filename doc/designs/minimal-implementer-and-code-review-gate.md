@@ -1,6 +1,6 @@
 ---
 date: 2026-07-20
-status: accepted
+status: superseded
 scope: harness develop workflow
 references:
   ponytail: 16f29800fd2681bdf24f3eb4ccffe38be3baec6b
@@ -9,6 +9,20 @@ references:
 ---
 
 # Minimal implementer and independent code review gate
+
+## Reading status
+
+The entire body before **Approved incremental review (2026-10-30)** is a
+historical design record, including its own proposed prompt, lifecycle,
+delivery and acceptance prescriptions. None of those earlier prescriptions
+is current workflow authority. They include retired receipt collection,
+persisted review-final storage and receipt-only gates; do not implement or
+wait for them. Current authority is [the review REQ](../harness/REQ__selective-review-detail.md),
+[receipt-free execution](../harness/REQ__receipt-free-execution-and-completion.md)
+and the shared `plugin/skills/develop/quality-audit-pipeline.md`.
+Older full-diff/full-sweep wording likewise does not override current rules:
+the first final review covers the complete approved workpack, while follow-up
+scope requires independent applicability proof and expands if proof is missing.
 
 ## Decision
 
@@ -23,17 +37,17 @@ The target flow is:
 ```text
 PLAN
   -> minimal implementation + focused tests
-  -> independent code review
+  -> independent complete workpack review
   -> fix required findings
-  -> fresh re-review
+  -> independent fixes-and-impact re-review with validated prior proof
   -> independent runtime QA
   -> close gate
 ```
 
 Code review is not another name for QA. Review checks whether the solution is
 the right shape, safe, and proportionate. QA checks whether the final solution
-actually works. After a source edit, the developer starts a fresh review cycle
-before QA so runtime verification is not spent on a statically rejected design;
+actually works. After a source edit, the developer obtains affected independent re-review
+under the shared pipeline scope proof before QA so runtime verification is not spent on a statically rejected design;
 receipt files themselves do not bind or detect source state.
 
 ## What the reference implementations establish
@@ -501,3 +515,18 @@ Refactor it as follows:
 - oh-my-claudecode: `agents/architect.md`, `agents/code-reviewer.md`,
   `agents/security-reviewer.md`, `agents/code-simplifier.md`,
   `skills/autopilot/SKILL.md`, `src/verification/tier-selector.ts`
+
+## Approved incremental review (2026-10-30)
+
+Actual independent finals and current WBS/target applicability own the present
+workflow, without receipt collection or a replacement ledger. The reading-status
+notice above supersedes all earlier prescriptions, not only external references.
+
+The shared `plugin/skills/develop/quality-audit-pipeline.md` owns stage and scope
+proof. Development commit feedback is advisory; a first independent complete
+workpack review remains required before actual QA. Follow-up validates carried
+baseline evidence and rechecks every fix, affected consumer/contract/context and
+unresolved finding; missing proof widens the scope. Both runtimes may carry
+proven equivalent closed leads, preserving residual review and combined QA.
+Use existing cheap collection/read-only fixture checks before expensive review.
+No new receipt, review ledger, MCP action or persistent stage field is needed.

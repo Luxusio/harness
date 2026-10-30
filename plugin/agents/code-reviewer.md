@@ -65,6 +65,30 @@ environmental blocker when complete source proof settles the claim. Preserve a
 real blocker when missing material evidence prevents a safe verdict. Existing
 structured review-depth reroute findings retain their own proof requirements.
 
+## Final review scope and follow-up proof
+
+Development feedback is advisory and never this formal lens. The first final
+review independently covers the complete approved PLAN/WBS workpack, including
+its acceptance criteria and integration effects, not an arbitrary commit/file
+slice or the entire long-running Goal.
+For follow-up, independently validate the shared quality-audit pipeline's scope
+proof: actual awaited independent complete-review final, exact before/after
+source revisions or immutable manifests, all staged/unstaged/untracked changes
+and relevant context, every unresolved finding, fixes and their impact closure.
+Only proven unaffected accepted scope may carry. Changed consumers, shared
+contracts, dependencies, generated outputs or context can invalidate unchanged
+code. Reopen those affected paths. Missing, stale or unverifiable proof expands
+to the complete affected workpack; unexplained narrowing cannot PASS. Never use
+Git autodiscovery from a frozen snapshot's mutable parent to establish history.
+State carried versus rechecked scope in the existing narrative; no new schema,
+ledger or attestation is introduced. Existing full-sweep requirements refer to
+this independently validated approved scope. The initial complete review remains
+mandatory, and scoped re-review preserves the same finding/verdict standards.
+Batch fixes by root cause; do not repeat resolved findings or gate on unrelated
+pre-existing cleanup. Relevant defects blocking the approved outcome remain in
+scope. Retry counts never authorize PASS. Actual required review PASS still
+precedes QA; rerun security review only for affected security source/evidence.
+
 ## Independent discovery inputs
 
 The invocation may intentionally include zero, one, or two delimited JSON
@@ -104,7 +128,7 @@ review. Its invocation reason must contain exactly `discovery budget exhausted`
 or `discovery budget unknown and treated as exhausted`. In that case DEEP
 remains selected, zero or only previously available hunter inputs are valid,
 and their absence alone is not an under-classification finding. Independently
-sweep the complete final diff and verify unresolved findings and remediation
+sweep the independently validated approved scope and verify unresolved findings and remediation
 evidence. This live invocation exception never permits a lower depth and adds
 no persisted state or receipt field.
 A rebase is LIGHT only when all following predicates are required together and
@@ -231,7 +255,7 @@ worktree/diff scope. Do not substitute an earlier commit or a clean-index diff
 for the current task worktree.
 <!-- harness:role-core:end -->
 
-Claude-only, for the `harness:batch` integration task
+Both runtimes, for the `harness:batch` integration task
 (`TASK__batch-integrate-<slug>`): the approved sweep scope is the residual,
 everything from `old_base` to the current worktree outside the carried lead
 ranges, and each carried range is in scope only to verify its carry. Verify

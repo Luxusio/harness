@@ -1,8 +1,8 @@
 ---
 tags: [harness, review, receipts, evidence]
-summary: 정식 리뷰 원문은 영수증과 같은 해시로 태스크 로컬 저장되며 한 번에 한 건만 선택 조회된다.
-updated: 2026-09-28
-freshness: suspect
+summary: 개발 중 피드백과 최종 독립 리뷰를 구분하고, 검증 가능한 기존 근거가 있을 때 수정 영향 범위를 재리뷰한다.
+updated: 2026-10-30
+freshness: current
 invalidated_by_paths:
   - plugin/skills/batch/SKILL.md
   - plugin/agents/defect-hunter.md
@@ -22,6 +22,36 @@ freshness_updated: 2026-09-18T08:10:49Z
 ---
 
 # REQ — formal review detail is selectively readable
+
+## Staged review and provenance
+
+User-confirmed: the user proposed “개발 커밋하고 나서 가볍게 리뷰하고 다 끝나고
+나서 무겁게 리뷰”, then approved the concrete four-part proposal with “ㅇㅇ 좋은듯”:
+separate review stages, narrow re-review to changes and impact, run existing
+cheap checks earlier, and reuse proven equivalent parallel work.
+The following mechanics are derived from that approved scope and the existing
+independent-review-before-QA contract, not additional user requirements.
+
+- Development commit feedback is advisory and cannot satisfy final review,
+  security or QA. A coherent checkpoint is not deployment or outcome completion.
+- First final review covers the complete approved PLAN/WBS workpack, not the
+  whole long-running Goal or an arbitrary file slice. Independent reviewer PASS
+  still precedes actual QA. Risky data/auth operations need early focused
+  scrutiny before dependent execution; unrelated development can continue.
+- Follow-up may reuse only an applicable actual independent complete-review
+  baseline. Verify exact before/after source or immutable input manifests,
+  unresolved findings, all edits and their impact closure. Changed consumers,
+  shared contracts, dependencies or execution context can invalidate unchanged
+  code. Missing, stale or unverifiable evidence expands review to the complete
+  affected workpack; a caller's claimed PASS never suffices.
+- The shared quality-audit pipeline owns scope proof and bounded discovery.
+  Review depth and review stage are separate. Repeated findings are batched by
+  root cause; a retry count never authorizes PASS or waives a real blocker.
+- Existing collection, convention and read-only-fixture checks run as cheap
+  development diagnostics before expensive review. They do not replace QA.
+- Equivalent lead carry applies on both runtimes with unchanged equivalence,
+  archive, residual review and combined-QA requirements. No new ledger, receipt,
+  MCP action or review-state schema is introduced.
 
 ## Expected normal behavior
 
@@ -59,7 +89,7 @@ freshness_updated: 2026-09-18T08:10:49Z
    and worktree. Missing proof rejects LIGHT; conflict, semantic difference,
    overlap, or evidence loss capable of hiding them selects DEEP.
 
-   Batch integration carry (Claude-only): the `review-code` lens of the
+   Batch integration carry (both runtimes): the `review-code` lens of the
    post-wave `harness:batch` integration task does not re-review a lead range
    that its own lead already reviewed and QA'd when the integration is proven
    equivalent. A carry requires that lead's closed WBS and integration proof; historical receipts do not bind
@@ -112,7 +142,7 @@ freshness_updated: 2026-09-18T08:10:49Z
    corrections use deterministic checks without hunters and forfeit the
    remaining discovery budget. Cycle two is final.
    An exhausted or unknown recovery budget selects or retains DEEP, then runs one fresh formal reviewer on
-   the final diff and prior remediation evidence without another hunter.
+   the independently validated approved scope and prior remediation evidence without another hunter.
    Its live invocation reason is exactly `discovery budget exhausted` or
    `discovery budget unknown and treated as exhausted`; the reviewer keeps DEEP
    but accepts the intentional hunter-set exception without persisting it.
@@ -158,7 +188,7 @@ freshness_updated: 2026-09-18T08:10:49Z
   carry: section placement after the fan-out rules, the four endpoints and
   their sources, the all-of carry conditions, the residual complement and its
   precedence order with DEEP mappings, empty residual LIGHT, the invocation
-  listing, unchanged full suite and `qa-cli`, the Claude-only reviewer
+  listing, unchanged full suite and `qa-cli`, both runtime reviewers
   paragraph outside the shared role core, and avoidance of the anchors the
   existing review contract tests locate by first or last occurrence.
 - Installation checks prove both runtime bundles retain the hunter role and

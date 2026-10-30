@@ -237,6 +237,17 @@ enumerate them for you. Classify each known edit:
 **MISSING REQUIREMENTS:** PLAN.md requirements not addressed by any change; partial implementations; test coverage gaps.
 **Documentation staleness:** if changed file has a corresponding doc (README section, API doc, inline docblock), flag stale under "Documentation Debt". Run `PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/note_freshness.py --paths <changed files>` over the same list: it flips every `doc/**/*.md` note and `QA_KNOWLEDGE.yaml` `qa_notes` entry that declared a dependency on what you touched. Each reported entry is a recorded claim your diff may have just falsified — re-read it and correct or supersede it before close, in this task. It reports; it does not adjudicate.
 
+### Staged feedback and preflight
+
+Read `quality-audit-pipeline.md` review stages and follow-up scope. After coherent
+development commits/checkpoints use short advisory feedback while unrelated
+lanes continue; it cannot satisfy final review, security, QA or close. Run the
+existing cheap collection/convention and read-only-fixture development preflight
+from `verification-gate.md` before expensive review. First final review covers
+the approved PLAN/WBS workpack; later full sweeps use the independently proven
+fix/impact scope, expanding when proof is stale or missing. Keep actual final
+review PASS before actual QA and all existing carry/close safeguards.
+
 ### Phase 6: Bisectable Commits
 
 Split into coherent commits in this order:
@@ -273,7 +284,7 @@ Then always `spawn_agent(task_name="code_review_<unique>", fork_turns:"none")` e
 Within one live attempt depth can only increase (`LIGHT < STANDARD < DEEP`); after affecting edits recompute with the prior depth as a floor. Resume/recovery recomputes current evidence and never restores depth from stored task artifacts; its status explicitly says depth was recomputed even when unchanged. Every retry uses new task names. Every escalation status names the old depth, new depth, and concrete trigger.
 The formal agent definition owns its verdict contract and the hunter definition owns its output
 contract: never restate, relocate, or paraphrase either in spawn prompts. Await every required
-formal reviewer. Await actual PASS finals before QA. Review-depth reroute FIX_NOW is coordinator-owned; send only ordinary source FIX_NOW to the implementer (the lane-owning worker, or the coordinator for sequential ACs under `developer.md`). Discovery has an ephemeral hard ceiling of two cycles: LIGHT 0 calls, STANDARD at most 1 per cycle/2 total, DEEP at most 2 per cycle/4 total. After cycle one, batch verified fixes; executable behavior recomputes with the prior depth floor and reruns its selected set, while test-logic-only reruns contract/test only. Docs/HEAD/test-count/command text uses deterministic checks only and checkpoint wording uses task verification only; both no-hunter branches forfeit the remaining budget. After cycle two or that forfeit, select or retain DEEP, spawn no hunter, and use one fresh formal reviewer on final diff plus prior remediation evidence with reason `discovery budget exhausted`; on recovery when prior count is unavailable select or retain DEEP and use `discovery budget unknown and treated as exhausted`. Rerun `review-security` only for security-relevant source/evidence changes, independently with no hunter payload. Depth/budget add no task or review-detail field. Inline self-review is no fallback.
+formal reviewer. Await actual PASS finals before QA. Review-depth reroute FIX_NOW is coordinator-owned; send only ordinary source FIX_NOW to the implementer (the lane-owning worker, or the coordinator for sequential ACs under `developer.md`). Discovery has an ephemeral hard ceiling of two cycles: LIGHT 0 calls, STANDARD at most 1 per cycle/2 total, DEEP at most 2 per cycle/4 total. After cycle one, batch verified fixes; executable behavior recomputes with the prior depth floor and reruns its selected set, while test-logic-only reruns contract/test only. Docs/HEAD/test-count/command text uses deterministic checks only and checkpoint wording uses task verification only; both no-hunter branches forfeit the remaining budget. After cycle two or that forfeit, select or retain DEEP, spawn no hunter, and use one fresh formal reviewer on independently proven fix/impact scope plus prior remediation evidence with reason `discovery budget exhausted`; on recovery when prior count is unavailable select or retain DEEP and use `discovery budget unknown and treated as exhausted`. Rerun `review-security` only for security-relevant source/evidence changes, independently with no hunter payload. Depth/budget add no task or review-detail field. Inline self-review is no fallback.
 Start Phase 7 QA only after actual PASS finals from all required reviewers.
 
 Apply the parent run skill's subagent wait UX rule: finish useful local work, then wait in one

@@ -4,7 +4,7 @@ The post-wave `harness:batch` integration task carries a lead range that its
 own lead already reviewed and QA'd when rebase plus fast-forward is proven
 patch-equivalent, and selects review depth over the residual only. Selection
 is orchestration instruction, not lifecycle code, so these tests pin the
-wording relations in the pipeline, the Claude reviewer, and the REQ.
+wording relations in the pipeline, both runtime reviewers, and the REQ.
 """
 
 import re
@@ -126,9 +126,10 @@ def test_section_sits_between_fanout_bullets_and_discovery_retries():
     assert "\n#" not in between
 
 
-def test_section_is_claude_only_and_scopes_the_integration_review_code_lens():
+def test_section_applies_to_both_runtimes_and_scopes_the_integration_review_code_lens():
     normalized = _norm(_section())
-    assert normalized.startswith(_norm(HEADING) + " claude-only.")
+    assert normalized.startswith(_norm(HEADING) + " both runtimes.")
+    assert "claude-only" not in normalized
     for term in (
         "`review-code` lens",
         "`harness:batch` integration task",
@@ -294,13 +295,13 @@ def test_existing_rebase_light_proof_still_owns_the_first_anchors():
     assert len(templates) == 2
 
 
-def test_claude_reviewer_verifies_carries_outside_the_shared_core():
-    body = _text(REVIEWER)
+def _assert_reviewer_carry_tail(body: str) -> str:
     assert body.count(CORE_END) == 1
     core, after = body.split(CORE_END, 1)
     assert "harness:batch" not in core
     tail = _norm(after)
-    assert tail.startswith("claude-only, for the `harness:batch` integration task")
+    assert tail.startswith("both runtimes, for the `harness:batch` integration task")
+    assert "claude-only" not in tail
     for term in (
         "`task__batch-integrate-<slug>`",
         "approved sweep scope is the residual",
@@ -325,14 +326,17 @@ def test_claude_reviewer_verifies_carries_outside_the_shared_core():
     assert tail.index("verify each carried proof") < tail.index(
         "run verification commands in the foreground"
     )
-    codex = _text(CODEX_REVIEWER)
-    assert "harness:batch" not in codex
-    assert "TASK__batch-integrate" not in codex
+    return after
+
+
+def test_both_reviewers_independently_verify_identical_carry_proofs():
+    tails = [_assert_reviewer_carry_tail(_text(path)) for path in (REVIEWER, CODEX_REVIEWER)]
+    assert tails[0] == tails[1], "batch carry proof guards drifted between runtimes"
 
 
 def test_req_records_the_carry_and_its_verification():
     req = _norm(_text(REQ))
-    start = req.index("batch integration carry (claude-only)")
+    start = req.index("batch integration carry (both runtimes)")
     requirement = req[start:req.index("every invoked hunter", start)]
     for term in (
         "`old_base` = the coordinator head from batch step b.5",

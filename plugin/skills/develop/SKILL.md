@@ -263,6 +263,17 @@ set without inspecting paths or diff content.
 **MISSING REQUIREMENTS:** PLAN.md requirements not addressed by any change; partial implementations (model exists but controller missing); test coverage gaps.
 **Documentation staleness:** if changed file has a corresponding doc (README section, API doc, inline docblock), flag stale under "Documentation Debt" — writer skill fixes, not here. Run `PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/note_freshness.py --paths <changed files>` over the same list: it flips every `doc/**/*.md` note and `QA_KNOWLEDGE.yaml` `qa_notes` entry that declared a dependency on what you touched. Each reported entry is a recorded claim your diff may have just falsified — re-read it and correct or supersede it before close, in this task. It reports; it does not adjudicate.
 
+### Staged feedback and preflight
+
+Read `quality-audit-pipeline.md` review stages and follow-up scope. After coherent
+development commits/checkpoints use short advisory feedback while unrelated
+lanes continue; it cannot satisfy final review, security, QA or close. Run the
+existing cheap collection/convention and read-only-fixture development preflight
+from `verification-gate.md` before expensive review. First final review covers
+the approved PLAN/WBS workpack; later full sweeps use the independently proven
+fix/impact scope, expanding when proof is stale or missing. Keep actual final
+review PASS before actual QA and all existing carry/close safeguards.
+
 ### Phase 6: Bisectable Commits
 
 Split into coherent commits in this order:
