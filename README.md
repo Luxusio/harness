@@ -237,6 +237,7 @@ control root without a workspace argument.
 | Skill | Description |
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
+| `/harness:report-friction` | Produce a copyable report of a real Harness blockage for its improvement developer |
 | `/harness:run` | Codex public entry for any repository-mutating workflow |
 | `/harness:batch` | Claude: run a bounded worktree-lead pool from one session, persist/resume exact ownership, refill after serial rebase/fast-forward integration, then review and verify |
 
@@ -246,7 +247,11 @@ explicitly; it loads the internal canonical workflow. Native `/goal` remains
 the native objective and continuation context; the run skill opens that same
 objective's WBS and continues dependency-ready outcomes. Claude Code uses the
 same WBS control plane. `plan`, `develop`, and the four plan-review sub-skills
-remain internal. Retired Goal records and old pack bindings require explicit
+remain internal. Invoke `/harness:report-friction` on Claude Code or
+`$harness:report-friction` on Codex to capture a blocked or inefficient workflow.
+It reports existing context and essential evidence without changing the work;
+copy its output to the Harness improvement developer.
+Retired Goal records and old pack bindings require explicit
 `wbs(action="migrate")` preview followed by `apply=true`; there is no live child
 queue or compatibility execution path.
 

@@ -6,8 +6,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-CLAUDE_PUBLIC_SKILLS = {"setup"}
-CODEX_PUBLIC_SKILLS = {"setup", "run"}
+CLAUDE_PUBLIC_SKILLS = {"setup", "report-friction"}
+CODEX_PUBLIC_SKILLS = {"setup", "run", "report-friction"}
 INTERNAL_SKILLS = {
     "run",
     "plan",
