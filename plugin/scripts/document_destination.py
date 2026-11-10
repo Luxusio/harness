@@ -57,7 +57,9 @@ def select_destination(environment=None):
         # Match Java URI's server-authority rules, including DNS versus IPv4.
         host = origin.hostname
         if origin.netloc.startswith("["):
-            if ":" not in host:  # Python also parses IPvFuture; Java does not.
+            # urlsplit validates IPv6; restrict its extra IPvFuture/zone forms
+            # to Java URI's IPv6 address and scope-ID alphabet.
+            if not re.fullmatch(r"[A-Fa-f0-9:.]+(?:%[A-Za-z0-9_.]+)?", host):
                 raise ValueError("invalid host")
         else:
             labels = host.removesuffix(".").split(".")
