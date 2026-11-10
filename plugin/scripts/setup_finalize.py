@@ -52,13 +52,12 @@ ROUTING_BLOCK = """## Harness routing
 
 ### Durable Decision Documentation Gate
 
-A user-stated durable decision is not handled until it is documented under `doc/`.
-If the user establishes, corrects, or confirms a lasting product, design,
-architecture, domain, workflow, or implementation rule, update the matching
-`doc/` file before finalizing. Conversation history is not durable memory. If
-no matching document exists, create one under the appropriate `doc/` area; if no
-doc is needed, record the specific no-doc rationale in the PLAN durable-doc
-decision.
+A user-stated durable decision is not handled until documented at the runtime-selected
+document destination. The Harness prompt supplies that destination; planning reads
+`scripts/document_destination.py` for its concrete policy. Conversation history is
+not durable memory. Preserve the PLAN durable-doc decision and source provenance.
+Repository runtime instructions, product assets and WBS remain local. If no doc is
+needed, record the specific no-doc rationale in the PLAN durable-doc decision.
 <!-- /harness:routing-injected -->
 """
 

@@ -70,15 +70,25 @@ Harness improvement: <what was wrong> → <what was fixed>
 ```
 If fix is ambiguous or risky, log the signal only. Modify the manifest only with clear evidence.
 
-Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across WBS roots. Treat this file as local staging only: it is gitignored and does not share knowledge with future contributors until the lesson is promoted to a committed artifact.
+Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across WBS roots. Treat this file as local staging only: it is gitignored and does not share knowledge with future contributors until the lesson is recorded at the selected durable destination or implemented
+in a committed source/runtime artifact.
 
 ---
+
+## Document destination
+
+Run `PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/document_destination.py`
+and apply its selected policy before recording reusable knowledge. On Codex the
+script is under `${HARNESS_PLUGIN_ROOT}/scripts/`. WBS diagnostics, source fixes,
+manifest/settings, runtime skills and executable tests remain repository-owned.
+Business knowledge and reusable command explanations use the selected document
+destination. An unavailable configured destination leaves that recording pending.
 
 ## Runbook candidates from discovered commands
 
 When develop or QA turns a failing setup/test/dev-server command into a working
-command, capture it as a pending runbook candidate instead of baking the
-project-specific command into harness core. This applies to repo-local facts
+command, record the reusable recipe at the selected document destination instead
+of baking the project-specific command into harness core. This applies to repo-local facts
 such as required env vars, container fallback commands, local DB wrappers,
 dev-server ports, migration apply recipes, and browser QA bootstrap commands.
 
@@ -89,7 +99,9 @@ Capture only when all of these are true:
 - no secret-like value is present; redact tokens, passwords, and private keys;
 - the lesson is a repeatable command recipe, not just a one-off error message.
 
-Use the helper so the candidate stays pending until close-time review:
+In local mode, use the helper so the candidate stays pending until close-time
+review. In external mode, record the recipe and its actual execution evidence
+with the selected document MCP; retain native references/versions for review:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
@@ -106,19 +118,22 @@ PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.p
 Do not auto-approve candidates at capture time. Close-time
 `Self-Healing Candidates` owns the decision:
 
-- `applied` — approve the candidate into `doc/harness/runbooks.yaml` or replace
-  it with a committed manifest/script/doc update that prevents recurrence.
+- `applied` — persist the reviewed recipe at the selected destination (local:
+  `doc/harness/runbooks.yaml`; external: native document reference/version), or
+  apply a committed manifest/script change that prevents recurrence.
 - `deferred` — ask the user first, then record the proposed artifact/WBS.
 - `rejected` — skip noisy, one-off, stale, or unsafe candidates.
 
-Approved runbooks are repo-local execution memory surfaced by
-`prompt_memory.py`; pending candidates are visible but advisory.
+Local approved runbooks are repo-local execution memory surfaced by
+`prompt_memory.py`; pending candidates are visible but advisory. External recipes
+are retrieved through the selected document MCP without a second local copy.
 
 ---
 
 ## Write learnings as docs (primary path)
 
-Most learnings go directly into readable Tier 2 docs under `doc/harness/patterns/`:
+Write business learnings as readable knowledge at the selected destination. In
+local mode, Tier 2 document examples are:
 
 ```
 doc/harness/patterns/
@@ -128,7 +143,8 @@ doc/harness/patterns/
 └── architecture.md     # module boundaries, dependency patterns, gotchas
 ```
 
-**Rule: write a doc immediately when you discover something.** Capture useful discoveries while they are fresh.
+**Rule: record useful discoveries at the selected destination while fresh.**
+Source fixes, executable tests and runtime instructions remain local code/assets.
 
 Each doc starts with a summary table, then concrete details:
 
@@ -157,10 +173,11 @@ Before WBS close, classify every reusable discovery, dogfood finding, user
 correction, setup recipe, repeated friction point, and harness-improvement
 signal as one of:
 
-- `captured` — promoted in this WBS to a committed artifact such as
-  `plugin/skills/**`, `plugin/scripts/**`, `tests/**`,
-  `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable
-  doc. The final response should list the committed path when relevant.
+- `captured` — applied to a committed source/runtime artifact such as
+  `plugin/skills/**`, `plugin/scripts/**` or `tests/**`, or recorded in a reviewed
+  durable document at the selected destination (local:
+  `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`; external: native document
+  reference/version). The final response names the applicable evidence.
 - `rejected` — considered but intentionally not shared because it is
   WBS-local, noisy, outdated, personal preference, or lacks a trigger/action/
   verification rule. Record the reason in WBS state or final response.
@@ -168,7 +185,8 @@ signal as one of:
 
 `doc/harness/learnings.jsonl` by itself is never enough for `captured`; it is
 only the staging queue. Before close, reusable learnings must either be promoted
-to a committed artifact or explicitly rejected/deferred with a concrete reason.
+to the selected durable destination or committed source/runtime artifact, or
+explicitly rejected/deferred with a concrete reason.
 
 ## Feedback-derived rules (user correction → readable behavior)
 
@@ -192,7 +210,8 @@ When changing runtime-specific harness plugin behavior, review both the canonica
 Verify by explaining in the final response which side changed and why any other side was left unchanged.
 ```
 
-Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are WBS-local preferences. The close-time requirement is judgment, not forced documentation. Reusable feedback that should affect all future agents must be captured in a committed artifact, not only in `learnings.jsonl`.
+Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are WBS-local preferences. The close-time requirement is judgment, not forced documentation. Reusable feedback that should affect all future agents must be captured at the selected durable destination or implemented in a
+committed runtime artifact, not only in `learnings.jsonl`.
 
 ---
 

@@ -256,7 +256,7 @@ Phases completed: WBS open, plan, develop, QA, close
 Runtime verdict:  PASS
 Health score:     <score>/10 (only if an applicable measurement was already reported; otherwise omit this line)
 Files changed:    <count>
-Doc:              doc/changes/<date>-<slug>.md
+Doc:              <selected document reference/version or local change-doc path>
 ```
 
 ## Recovery and Error Handling
@@ -283,7 +283,9 @@ remain binding; a green machine check never clears substantive failure.
 
 After every WBS close, run the pipeline in `self-improvement.md`:
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
-- Log harness-improvement entries to `learnings.jsonl`
+- Keep execution diagnostics in `learnings.jsonl`; record reusable business
+  knowledge and runbooks at the code-selected document destination through
+  `document_destination.py`. Source/runtime instructions and tests remain local.
 - Auto-fix safe manifest updates (reported to user before write)
 - Promote learnings only when a validated entry matches the just-closed verified WBS/run; distinct verified historical WBS/runs for the same key may satisfy repetition thresholds, while duplicates from one run count once
 - Preserve `learnings.jsonl` as append-only; promotion never rewrites or prunes raw rows, and no-signal runs remain no-write

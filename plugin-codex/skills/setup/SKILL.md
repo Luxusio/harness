@@ -170,7 +170,7 @@ Do not ask about either setting. On every fresh, repair, or upgrade setup:
 
 The routing block includes the Durable Decision Documentation Gate. Setup
 owns these defaults and reapplies them on rerun so onboarding stays consistent.
-User-stated durable decisions are not handled until documented under `doc/` or
+User-stated durable decisions are not handled until documented at the runtime-selected document destination or
 given a specific no-doc rationale in the PLAN durable-doc decision.
 
 ---

@@ -78,6 +78,8 @@ authorizes a material premise or scope, summarize that authority here and keep
 the corresponding rationale in the existing Decision Audit Trail. Do not add
 an approval field, ledger, or sidecar.
 
+Run `PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/document_destination.py` before selecting document references. Its returned policy selects local, external or unavailable in code. Use native references/observed versions for external documents; use repository paths only in local mode. WBS and repository product/runtime assets remain local. Required documentation never falls back locally after a configured backend failure.
+
 ### Durable Docs Decision
 
 For each new or changed normative claim, preserve provenance in the same REQ:
@@ -110,10 +112,10 @@ Then list which durable docs should be created or updated:
 
 ```md
 ## Durable Docs Decision
-REQ: doc/<area>/REQ__<name>.md | n/a
-GUIDE: doc/<area>/GUIDE__<name>.md | n/a
-ADR: doc/<area>/ADR__<name>.md | n/a
-POLICY: doc/<area>/POLICY__<name>.md | n/a
+REQ: <selected-destination reference> | n/a
+GUIDE: <selected-destination reference> | n/a
+ADR: <selected-destination reference> | n/a
+POLICY: <selected-destination reference> | n/a
 Reason: <one sentence>
 ```
 
@@ -122,13 +124,13 @@ and QA must satisfy: existing screen state, filters, search, sorting, loading,
 empty/error states, localization/copy/visibility, click/input interactions,
 API request or response shape, status codes, auth/session behavior, validation,
 compatibility, externally consumed side effects, or observable bugfixes.
-New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path. A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
+New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path. A concrete REQ reference is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
 
-Happy path: when request text, user feedback, target surfaces, or known file
+Local-mode examples below use repository paths; external mode uses native document references. Happy path: when request text, user feedback, target surfaces, or known file
 paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ path
 proactively. If no suitable REQ exists, select a new path such as
 `doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
-a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` before source edits. Safety gates exist
+the selected document destination before source edits (local mode: a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py`). Safety gates exist
 only to catch misses, not as the normal discovery mechanism.
 
 When the change affects harness process, agent instructions, coding patterns, or
@@ -143,7 +145,7 @@ choice with alternatives or tradeoffs. Use `POLICY` only for external
 security, legal, data-handling, approval, licensing, or organizational
 constraints that harness cannot fully enforce by itself.
 
-Write docs under the DDD-style area or bounded-context folder, for example
+For local mode, write docs under the DDD-style area or bounded-context folder, for example
 `doc/ui/REQ__filter-bar.md`, `doc/api/REQ__oauth-login.md`,
 `doc/auth/ADR__token-storage.md`, or `doc/common/GUIDE__coding-style.md`.
 Use `n/a` when a type is not needed; the reason must say which durable

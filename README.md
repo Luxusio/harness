@@ -167,6 +167,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `batch_harvest.py` | `harness:batch` coordinator step: copies an integrated (rebased and fast-forwarded) lead worktree's gitignored WBS evidence and learnings into the main checkout before `git worktree remove`; refuses unregistered, not-yet-integrated, or detached-HEAD (mid-rebase) worktrees, links, non-regular files, and archive collisions. Also owns guarded S1 disposal after durable archive, identity/content and preserved-object proof; ordinary removal stays no-force | `doc/harness/archive/batch/`, `doc/harness/learnings.jsonl` |
 | `install_smoke.py` | Drives an installed runtime tree once — imports registered hook modules and checks the receipt-free public WBS lifecycle; run by `install.py` after each sync and on the default run's SYNCHRONIZED skip path | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
+| `document_destination.py` | Select local or configured external business-document policy without network calls | User-home knowledge connection configuration |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: compares source against the scripts dir it is executing from, so a session loading a different tree is visible (silent in non-dev / non-harness repos) | — |
@@ -233,6 +234,14 @@ preserve that checkout's execution ownership. Migration runs at the
 control root without a workspace argument.
 
 ## Skills
+
+Business knowledge can be owned by the independent
+[Confluence knowledge plugin](knowledge-confluence/README.md). It shares an
+automatically synchronized home corpus across projects and provides document
+search, native edits, comments and history through the `confluence` MCP.
+Harness selects its documentation policy from that plugin's global activation;
+without an external connection, existing local documentation behavior remains.
+WBS, source assets and runtime instructions stay repository-owned.
 
 | Skill | Description |
 |-------|-------------|

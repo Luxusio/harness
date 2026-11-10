@@ -31,7 +31,7 @@ Read, in order:
 3. PLAN.md for objective, ACs, verification commands, and `Durable Docs Decision`.
 4. changed files for implementation notes.
 5. REQUEST.md when present for intent.
-6. Linked durable docs under `doc/<area>/<TYPE>__*.md`.
+6. Linked durable documents from the PLAN-selected destination: native references/versions and original content, or local `doc/<area>/<TYPE>__*.md` paths.
    Use `REQ` as behavior/contract verification criteria.
    Use `GUIDE` as implementation quality and consistency criteria.
    Use `ADR` as architecture intent and tradeoff criteria.

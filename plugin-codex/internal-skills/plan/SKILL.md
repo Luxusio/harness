@@ -295,29 +295,31 @@ close fingerprint, Goal continuation, and verified installation boundaries.
 ## Important Rules
 
 - **Never abort.** Record every decision in PLAN.md; never silently redirect to a shorter path.
+Run `PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/document_destination.py` before selecting document references. Its returned policy selects local, external or unavailable in code. Use native references/observed versions for external documents; use repository paths only in local mode. WBS and repository product/runtime assets remain local. Required documentation never falls back locally after a configured backend failure.
+
 - **Durable Docs Decision.** Every PLAN.md classifies documentation impact
   before develop starts. This is a judgment step, not a blanket REQ
   requirement. Use one of these outcomes in the reason: `REQ needed`,
   `Pattern/skill doc enough`, or `No durable doc needed`. Then include:
-  `REQ: doc/<area>/REQ__<name>.md | n/a`,
-  `GUIDE: doc/<area>/GUIDE__<name>.md | n/a`,
-  `ADR: doc/<area>/ADR__<name>.md | n/a`,
-  `POLICY: doc/<area>/POLICY__<name>.md | n/a`,
+  `REQ: <selected-destination reference> | n/a`,
+  `GUIDE: <selected-destination reference> | n/a`,
+  `ADR: <selected-destination reference> | n/a`,
+  `POLICY: <selected-destination reference> | n/a`,
   and `Reason: <one sentence>`. Use `REQ` for observable behavior or contracts
   that implementation and QA must satisfy, `GUIDE` for reusable coding/design/
   testing guidance, `ADR` for significant technical choices with alternatives
   or tradeoffs, and `POLICY` only for external security/legal/data/approval
-  constraints that harness cannot fully enforce by itself. Write docs under a
+  constraints that harness cannot fully enforce by itself. In local mode, write docs under a
   DDD-style area folder such as `doc/ui/REQ__filter-bar.md`,
   `doc/api/REQ__oauth-login.md`, `doc/auth/ADR__token-storage.md`, or
   `doc/common/GUIDE__coding-style.md`. New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive.
   PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`; `REQ: n/a` is invalid for observable UI/API behavior.
-  A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
-  Happy path: when request text, user feedback, target surfaces, or known file
+  A concrete REQ reference is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
+  Local-mode examples below use repository paths; external mode uses native document references. Happy path: when request text, user feedback, target surfaces, or known file
   paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ
   path proactively. If no suitable REQ exists, select a new path such as
   `doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
-  a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` before source edits. Safety gates exist
+  the selected document destination before source edits (local mode: a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py`). Safety gates exist
   only to catch misses, not as the normal discovery mechanism.
   When the change affects harness process, agent instructions, coding patterns,
   or verification practice but not a product/runtime contract, prefer `GUIDE`

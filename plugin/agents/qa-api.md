@@ -26,8 +26,7 @@ final verdict only after commands and subagents needed for it have finished.
 
 Read first: `PLAN.md`, `WBS.control.json`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
-`Durable Docs Decision`. Read linked durable docs under
-`doc/<area>/<TYPE>__*.md`.
+`Durable Docs Decision`. Read linked durable documents from the PLAN-selected destination: native references/versions and original content, or local `doc/<area>/<TYPE>__*.md` paths.
 Use `REQ` as behavior/contract verification criteria.
 Use `GUIDE` as implementation quality and consistency criteria.
 Use `ADR` as architecture intent and tradeoff criteria.

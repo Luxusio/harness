@@ -44,7 +44,7 @@ registered linked worktree; WBS paths and focus resolve there while session
 identity stays on the control checkout. See
 `doc/harness/REQ__parallel-tasks-via-worktree-leads.md`.
 
-Durable docs such as `doc/<area>/REQ__*.md` are ordinary repository documents.
+Business documents use the code-selected destination from `scripts/document_destination.py`: local mode uses ordinary repository documents such as `doc/<area>/REQ__*.md`; external mode uses native MCP references and versions.
 Distinguish quoted user intent from derived engineering decisions and unconfirmed
 assumptions. Keep WBS outcomes coarse and observable, update them for new user
 requests or necessary discoveries, and choose assertions when ready. Never
@@ -250,7 +250,8 @@ back to `test_command` when no components are declared.
 
 ## 11. Tiered Learning
 
-Every skill logs discoveries. Three tiers:
+Keep source/runtime instructions and execution diagnostics local. Business knowledge
+and reusable runbooks use the code-selected document destination. Local-mode tiers:
 
 ```
 CLAUDE.md                    # Tier 1: loaded every session. Key facts only.
@@ -258,14 +259,16 @@ doc/harness/patterns/*.md    # Tier 2: detailed patterns. Read when relevant.
 doc/harness/learnings.jsonl  # Tier 3: append-only raw signals.
 ```
 
-**All skills write to Tier 3.** Automatic candidate reporting requires a valid signal
+**Execution diagnostics use Tier 3.** External business knowledge is recorded through
+the selected document MCP, without duplicate local patterns. Automatic candidate reporting requires a valid signal
 from the just-closed verified WBS/run. A key may promote after valid
 occurrences from 2+ distinct verified closed WBS/runs; duplicate rows
 from one run count once, and historical backlog alone cannot trigger reporting.
 The reporting pass never rewrites or prunes the raw ledger and never changes
 Tier 2 patterns. Apply a reported candidate only in a separately reviewed
-Harness WBS. When a Tier 2 doc is referenced in 2+ WBS roots, promote the key fact
-to Tier 1 (CLAUDE.md).
+Harness WBS. Promote a selected-document lesson to local Tier 1 (CLAUDE.md) only
+when it is an actual runtime instruction needed in every session; business detail
+remains at its selected destination.
 
 **Tier 1 entries are one-liners.** Details stay in pattern docs.
 

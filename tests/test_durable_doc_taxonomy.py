@@ -57,7 +57,7 @@ def test_setup_routing_includes_durable_decision_doc_gate():
     bootstrap = _text(BOOTSTRAP)
     for needle in (
         "Durable Decision Documentation Gate",
-        "not handled until it is documented under `doc/`",
+        "not handled until it is documented at the runtime-selected document destination",
         "Conversation history is not durable memory",
         "PLAN durable-doc",
     ):
@@ -66,7 +66,7 @@ def test_setup_routing_includes_durable_decision_doc_gate():
     for path in (CLAUDE_SETUP, CODEX_SETUP):
         body = _text(path)
         assert "Durable Decision Documentation Gate" in body
-        assert "not handled until documented under `doc/`" in body
+        assert "not handled until documented at the runtime-selected document destination" in body
         assert "PLAN durable-doc decision" in body
 
 
@@ -80,19 +80,19 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "`REQ needed`" in body
         assert "`Pattern/skill doc enough`" in body
         assert "`No durable doc needed`" in body
-        assert "REQ: doc/<area>/REQ__<name>.md | n/a" in body
-        assert "GUIDE: doc/<area>/GUIDE__<name>.md | n/a" in body
-        assert "ADR: doc/<area>/ADR__<name>.md | n/a" in body
-        assert "POLICY: doc/<area>/POLICY__<name>.md | n/a" in body
+        assert "REQ: <selected-destination reference> | n/a" in body
+        assert "GUIDE: <selected-destination reference> | n/a" in body
+        assert "ADR: <selected-destination reference> | n/a" in body
+        assert "POLICY: <selected-destination reference> | n/a" in body
         assert "doc/auth/ADR__token-storage.md" in body
         assert "doc/common/GUIDE__coding-style.md" in body
         assert "New pages, admin/backoffice screens, routes, controllers, and endpoints" in body
         assert "REQ-required even when additive" in body
         assert "PLAN.md acceptance criteria" in body
-        assert "REQ path is required before develop starts" in body
+        assert "REQ reference is required before develop starts" in body
         assert "blocking plan defect" in body
         assert "do not defer this to close" in body
-        assert "doc/<area>/REQ__*.md" in body
+        assert "selected document destination" in body
         assert "Safety gates exist" in body
         assert "Original Request / Intent Summary" in body
         assert "conversation summary" in body
@@ -114,7 +114,7 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "`REQ needed`" in body
         assert "`Pattern/skill doc enough`" in body
         assert "`No durable doc needed`" in body
-        assert "doc/<area>/REQ__*.md" in body
+        assert "selected document destination" in body
         assert "req_scaffold.py" in body
         assert "doc/<area>/<TYPE>__<name>.md" in body
         assert "Use `REQ` for user-visible behavior" in body

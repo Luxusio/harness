@@ -21,6 +21,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from document_destination import select_destination
 try:
     from _lib import (  # type: ignore
         read_hook_input,
@@ -172,7 +173,8 @@ def main() -> int:
 
     wbs_dir = _find_active_wbs_dir(repo_root)
 
-    output_parts = [DOC_GATE]
+    destination = select_destination()
+    output_parts = [destination["notice"]]
     # Prompt submission is advisory and deliberately performs no Git queries.
     # Authoritative freshness/fingerprint checks remain in wbs_verify/wbs_close.
     if wbs_dir:
@@ -186,7 +188,7 @@ def main() -> int:
 
     # Approved runbooks + pending candidates are repo-local execution memory.
     # They are advisory and capped inside runbook_memory.py.
-    if _render_runbook_block is not None:
+    if destination["mode"] == "local" and _render_runbook_block is not None:
         runbook_block = _render_runbook_block(repo_root)
         if runbook_block:
             output_parts.append(runbook_block)

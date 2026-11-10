@@ -59,14 +59,20 @@ def main() -> int:
     if "--claude-banner" in sys.argv[1:]:
         try:
             from _lib import find_harness_root, is_harness_enabled_repo
+            from document_destination import select_destination
             root = find_harness_root(cwd or os.getcwd())
             if root and is_harness_enabled_repo(root):
+                destination = select_destination()
+                reminder = (
+                    "REQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes."
+                    if destination["mode"] == "local" else destination["notice"]
+                )
                 print(
                     f"harness — ready.\nProject: {os.path.basename(root)}\n"
                     "Loop: WBS open → plan → develop → QA → close\n"
                     "Independent review and WBS verification precede close.\n"
                     "Auto-routing on. Just describe what you want.\n"
-                    "REQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes."
+                    + reminder
                 )
         except Exception:
             pass

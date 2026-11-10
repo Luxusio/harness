@@ -88,7 +88,7 @@ Micro/maintenance still baseline one concise WBS outcome. Coordinators publish d
 1. `PLAN.md`, `REQUEST.md` (if present), `WBS.control.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** use completed outcome records and input-bound verification target applicability; preserve unchanged proofs across restored paths, recheck changed/affected inputs and never infer validity from mtimes.
-4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md is absent, inspect the current WBS identity and run the plan skill for that same WBS before source edits.
+4. **Document destination:** run `PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/document_destination.py` and apply its returned policy. It selects local, external or unavailable in code. Business-document references throughout this workflow use that destination; WBS, runtime instructions and product assets stay local. In local mode, read existing repo learnings/patterns. If PLAN.md is absent, plan the same WBS before source edits.
 
 **Durable Docs Preflight:** read PLAN.md `Durable Docs Decision` as a
 documentation-impact judgment, not a rote REQ checklist, and confirm whether the WBS
@@ -96,7 +96,7 @@ is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Phase
 3.6.1 owns the type taxonomy, area vocabulary, and observable-behavior examples —
 do not restate them here.
 
-What this phase uniquely owns is **ordering**: a selected REQ doc is written
+What this phase uniquely owns is **ordering**: a selected REQ document is written
 before any source edit, not after the code is done. When the decision is
 ambiguous, run `plugin/scripts/req_detector.py` (or reason it through) against the
 request, feedback, target files, and planned surfaces.
@@ -227,7 +227,7 @@ Runs continuously during Phase 3.
   QA agents may include `codifiable:` YAML blocks in their final response for
   future regression-test extraction. Do not write critic artifacts for this.
 	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`: a pre-review self-check (delete / reuse / stdlib / native / yagni) over your own changed lines, plus evidence-driven recovery for every authorized fix loop (per-AC, Phase 7, browser debug).
-	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use `direct REQ doc edit` / `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
+	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected document at the runtime-selected destination (local mode: `doc/<area>/<TYPE>__<name>.md`); selected REQ docs must be written before source implementation, not after code is done. In local mode use `direct REQ doc edit` / `req_scaffold.py` when observable behavior is detected and no existing REQ fits; external mode uses the selected document MCP. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are WBS-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ at the selected destination and link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Link selected REQ references and observed versions from PLAN.md; persist business docs only at the selected destination. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
 
 ### Phase 3.7–3.9: Post-implementation health
 
@@ -334,7 +334,7 @@ critic artifact is written.
 
 **No verification opt-in prompt.** If Phase 7 reveals a now-available live/API/browser/CLI verification route, run it through the appropriate qa-* lens. Do not ask the user whether to perform the verification. A rebuild, local service restart, local seed, or dev-only token generation is normal verification work unless it crosses the destructive/external boundary above.
 
-When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
+When durable docs changed, provide the QA lens their selected-destination references and observed content/version as intent evidence (local mode: `doc/<area>/<TYPE>__*.md`). QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 
 **Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message so independent QA lanes run concurrently.
 
@@ -444,9 +444,9 @@ the skill, script, test or durable doc that changed a committed rule — a
 | Feedback-Derived Rules (judgment required, capture optional) | Capture only reusable rules shaped `When X, do Y. Verify by Z.` Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them. Blame, urgency and WBS-local preference are not rules. |
 | Self-Healing Candidates (development friction, QA-discovered gaps, agent suggestions) | Treat as hypotheses until checked against the repo. Classify `confirmed`, `partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or `needs-runtime-check`. Preserve a gate's safety with an alternative evidence tier rather than weakening it. |
 
-If develop or QA discovered a working repo-local setup/test/dev-server command
+In local mode, if develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before close as a pending runbook
-candidate:
+candidate. External mode records reusable knowledge with the selected document MCP instead:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
@@ -467,10 +467,9 @@ committed artifact. Deferred requires an `AskUserQuestion` decision and records
 `doc/harness/runbooks.yaml` or another committed artifact; reject one-off noise.
 
 ### Phase 8.6: durable docs
-Mechanical. Read the WBS's changed paths and `doc/CLAUDE.md` registered roots. For each file, map to doc root. Copy every reported `Known ceiling:` line under a `Known ceiling` heading in the durable doc that owns the behavior, or else into the Phase 8.7 change doc written now, so `grep -rn "Known ceiling" doc/` stays the ledger; never copy an absent ceiling. Call `wbs(action="verify")`.
+Read the changed surfaces and PLAN document references. Update their documents at the selected destination. Preserve every reported `Known ceiling:` in the owning document or Phase 8.7 change summary; never invent a ceiling. Keep native references/versions or local paths as evidence. Call `wbs(action="verify")`.
 
-When the WBS changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
-`POLICY__*.md` OR the current WBS contains explicit durable user corrections,
+When the WBS changes REQ/GUIDE/ADR/POLICY documents at either destination OR the current WBS contains explicit durable user corrections,
 spawn the documentation-review subagent after
 durable docs. It verifies both durable docs consistency and durable doc quality, and
 runs the Retrospective REQ pass over the conversation to catch user-stated
@@ -481,4 +480,4 @@ Retrospective pass land with `status: candidate` frontmatter and do not block
 close on their own.
 
 ### Phase 8.7: Distilled Change Doc
-One-paragraph summary of the WBS's user-visible behavior change. Lives at `doc/changes/<date>-<slug>.md`. Required when a `Known ceiling:` was reported; otherwise optional if no user-visible change. Writer skill consumes this for release notes.
+One-paragraph summary of the WBS's user-visible behavior change. Persist at the selected document destination (local mode: `doc/changes/<date>-<slug>.md`). Required when a `Known ceiling:` was reported; otherwise optional if no user-visible change. Writer skill consumes this for release notes.

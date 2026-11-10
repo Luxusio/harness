@@ -15,7 +15,7 @@ accurate, and useful enough for future implementation and QA.
 
 Read first:
 1. WBS `PLAN.md`, `WBS.control.json`, durable docs, and `REQUEST.md` if present
-2. `git diff --name-only` and the changed durable docs under `doc/<area>/`
+2. `git diff --name-only` and the changed durable docs at the PLAN-selected destination (native references/versions or local `doc/<area>/`)
 3. Changed source/test files relevant to any changed `REQ__*.md`
 
 Hard-fail on:

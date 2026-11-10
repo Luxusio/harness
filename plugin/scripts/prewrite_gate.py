@@ -329,6 +329,18 @@ def _is_source_file(path, repo_root=None):
 
 def _wbs_has_req_reference(wbs_dir: str, repo_root: str = "") -> bool:
     import re
+    from document_destination import select_destination
+    destination = select_destination()
+    if destination["mode"] == "unavailable":
+        return False
+    if destination["mode"] == "external":
+        # This is the same presence check as the local path branch below,
+        # never a claim that a remote document was read/reviewed or accepted.
+        try:
+            with open(os.path.join(wbs_dir, "PLAN.md"), encoding="utf-8") as stream:
+                return re.search(r"(?m)^\s*REQ:\s*confluence:[1-9][0-9]*@[1-9][0-9]*(?=\s|$)", stream.read()) is not None
+        except OSError:
+            return False
     req_re = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
     # Scan WBS-local PLAN body for any REQ path string.
     for name in ("PLAN.md",):
@@ -870,12 +882,17 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
 
     rel = _rel(file_path, repo_root)
     if _observable_req_needed_for_path(rel) and not _wbs_has_req_reference(active_dir):
-        human = (
-            f"{rel} looks like observable UI/API/native/desktop behavior, but "
-            "the active WBS has no linked doc/<area>/REQ__*.md. Create or "
-            "update the durable REQ first directly or with req_scaffold.py, "
-            "then retry the source edit."
-        )
+        from document_destination import select_destination
+        destination = select_destination()
+        if destination["mode"] == "local":
+            human = (f"{rel} looks like observable UI/API/native/desktop behavior, but "
+                     "the active WBS has no linked doc/<area>/REQ__*.md. Create or "
+                     "update the durable REQ first directly or with req_scaffold.py, "
+                     "then retry the source edit.")
+        else:
+            human = (f"{rel} requires a linked durable requirement at the configured document backend. "
+                     "Read/update it with confluence MCP and link REQ: confluence:<page-id>@<version> "
+                     "from PLAN. An unavailable backend does not authorize local fallback writes.")
         _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)
         return 0
 
