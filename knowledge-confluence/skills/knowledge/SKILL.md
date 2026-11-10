@@ -36,4 +36,3 @@ The agent that learned the facts writes the knowledge. For substantive knowledge
 consolidation, correction or migration, use the independent document reviewer at
 `../../agents/document-reviewer.md`; a short source append does not require a
 new development workflow. No WBS/Jira issue is required for ordinary wiki work.
-

@@ -76,6 +76,12 @@ python3 install.py --skip-build --runtime codex
 
 The installer prepares a versioned standalone payload and registers its local
 marketplace through the selected host CLI. It preserves existing plugin trees;
+the installed MCP configuration resolves the Python interpreter and private
+launcher path explicitly, without relying on host plugin-variable expansion.
+The registered marketplace path stays stable across upgrades. A private,
+installer-locked selection points to an immutable payload; existing processes
+retain their original runtime path while the next installation selects a new
+version. Unknown marketplace metadata or selections are preserved and refused.
 `--prepare-only` prepares the payload without registration. Restart/reconnect
 the host to load a changed MCP or skill. Installation does not configure a
 company connection, import documents, replace Talos or publish remote content.

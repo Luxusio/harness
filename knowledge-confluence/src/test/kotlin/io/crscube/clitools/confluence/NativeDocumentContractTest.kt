@@ -1544,4 +1544,63 @@ class NativeDocumentContractTest {
         provider.assertNoEffects()
     }
 
+    @Test fun `cold status distinguishes initial pending from failed synchronization and sanitizes failure codes`() {
+        val provider = Provider()
+        provider.use(local = true, synchronize = false, observeCorpus = { corpus ->
+            val initial = Json.parseToJsonElement(corpus.status()).jsonObject
+            assertEquals("pending", initial.getValue("status").jsonPrimitive.content)
+            assertEquals("replica_missing", initial.getValue("reason").jsonPrimitive.content)
+            assertEquals(JsonNull, initial.getValue("syncError"))
+            corpus.syncFailed("http_401")
+        }) { registry ->
+            val failed = call(registry, "connection_status", buildJsonObject {})
+            assertEquals("failed", failed.getValue("status").jsonPrimitive.content)
+            assertEquals(JsonPrimitive(false), failed.getValue("ready"))
+            assertEquals("http_401", failed.getValue("code").jsonPrimitive.content)
+            assertTrue(failed.getValue("syncError").jsonPrimitive.content.contains("http_401"))
+            assertFalse(failed.getValue("message").jsonPrimitive.content.contains("running"))
+        }
+        provider.use(local = true, synchronize = false, observeCorpus = { it.syncFailed("http_401\nAuthorization: Bearer fixture-private-value") }) { registry ->
+            val redacted = call(registry, "connection_status", buildJsonObject {})
+            assertEquals("sync_failed", redacted.getValue("code").jsonPrimitive.content)
+            assertFalse(redacted.toString().contains("fixture-private-value"))
+            assertFalse(redacted.toString().contains("Authorization"))
+        }
+        assertTrue(provider.requests.isEmpty(), "Status must expose the recorded failure without contacting the service")
+    }
+
+    @Test fun `successful cold synchronization clears a previous failure and reports a readable snapshot`() {
+        val provider = Provider()
+        provider.use(local = true, synchronize = false, observeCorpus = { corpus ->
+            corpus.syncFailed("http_401")
+            assertEquals("failed", Json.parseToJsonElement(corpus.status()).jsonObject.getValue("status").jsonPrimitive.content)
+            runBlocking { corpus.synchronize() }
+        }) { registry ->
+            val ready = call(registry, "connection_status", buildJsonObject {})
+            assertEquals("ready", ready.getValue("status").jsonPrimitive.content)
+            assertEquals(JsonPrimitive(true), ready.getValue("ready"))
+            assertFalse(ready.containsKey("syncError"))
+            assertEquals(JsonNull, ready.getValue("freshness").jsonObject.getValue("syncError"))
+        }
+        assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" })
+        provider.assertNoEffects()
+    }
+
+    @Test fun `status reports active writer as busy without hiding a previous synchronization error`() {
+        val provider = Provider()
+        provider.use(local = true, observeCorpus = { it.syncFailed("http_403") }) { registry ->
+            FileChannel.open(root.resolve("confluence/COMMON/.sync/sync.lock"), StandardOpenOption.WRITE).use { channel ->
+                channel.lock().use {
+                    val busy = call(registry, "connection_status", buildJsonObject {})
+                    assertEquals("busy", busy.getValue("status").jsonPrimitive.content)
+                    assertEquals("replica_busy", busy.getValue("reason").jsonPrimitive.content)
+                    assertEquals(JsonPrimitive(false), busy.getValue("ready"))
+                    assertEquals("http_403", busy.getValue("code").jsonPrimitive.content)
+                    assertTrue(busy.getValue("syncError").jsonPrimitive.content.contains("http_403"))
+                }
+            }
+        }
+        provider.assertNoEffects()
+    }
+
 }

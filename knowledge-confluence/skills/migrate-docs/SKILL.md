@@ -22,4 +22,3 @@ the destination audience requires authorization for that specific action.
 Before authorized deletion, establish committed recoverability. Do not silently
 remove originals, bulk rewrite company spaces, or treat this skill as publication
 authorization. No generic migration ledger or retry queue is required.
-

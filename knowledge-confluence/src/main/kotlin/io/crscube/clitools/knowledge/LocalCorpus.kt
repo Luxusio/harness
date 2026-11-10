@@ -20,9 +20,20 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         pendingRepair.add(pageId)
         onRepair?.invoke()
     }
-    @Volatile private var lastError: String? = null
+    private enum class ReadState(val code: String) {
+        MISSING("replica_missing"), BUSY("replica_busy"), RECOVERY("replica_recovery_pending"),
+        INCOMPLETE("replica_incomplete"), UNAVAILABLE("replica_unavailable")
+    }
+    private class ReadFailure(val reason: ReadState) : RuntimeException(reason.code)
+    private data class SyncFailure(val code: String) {
+        val message: String get() = "Automatic synchronization failed ($code); this replica may be stale"
+    }
+    @Volatile private var lastFailure: SyncFailure? = null
     @Volatile private var lastSuccess: String? = null
-    fun syncFailed(code: String = "sync_failed") { lastError = "Automatic synchronization failed ($code); this replica may be stale" }
+    fun syncFailed(code: String = "sync_failed") {
+        val safeCode = code.takeIf { it.matches(Regex("[a-z][a-z0-9_]{0,63}")) } ?: "sync_failed"
+        lastFailure = SyncFailure(safeCode)
+    }
     private fun checkpoint(control: Path): JsonObject {
         val path = ContextFiles.safe(control, "state.json")
         if (!Files.exists(path)) return buildJsonObject {}
@@ -72,7 +83,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
                         }
                     }
                 }
-                lastSuccess = Instant.now().toString(); lastError = null
+                lastSuccess = Instant.now().toString(); lastFailure = null
             }
         }
     }
@@ -81,27 +92,57 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         put("permissionScope", "as_of_last_sync"); put("bodyRefresh", "shared_authoritative_sweep_per_interval")
         val config = ContextConfig.load(settings.corpusRoot, settings)!!
         val refreshed = bodyTimestamp(checkpoint(ContextFiles.safe(settings.corpusRoot, "confluence/${config.space}/.sync")))
-        put("lastAuthoritativeBodySync", refreshed?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull); put("syncError", lastError?.let(::JsonPrimitive) ?: JsonNull)
+        put("lastAuthoritativeBodySync", refreshed?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull); put("syncError", lastFailure?.message?.let(::JsonPrimitive) ?: JsonNull)
     }
     @McpTool(name = "connection_status", description = "Show local corpus readiness, freshness and synchronization errors without reading credentials.")
-    fun status(): String = try { withManifest { manifest, _ -> buildJsonObject {
-        put("enabled", true); put("documents", manifest["pages"]?.jsonObject?.size ?: 0); put("freshness", freshness(manifest))
-    }}.toString() } catch (_: Exception) { buildJsonObject { put("enabled", true); put("ready", false); put("message", "Corpus not ready or busy; automatic sync is running") }.toString() }
+    fun status(): String = try { withManifest { manifest, _ ->
+        val failure = lastFailure
+        buildJsonObject {
+            put("enabled", true); put("ready", true)
+            put("status", if (failure == null) "ready" else "failed")
+            put("documents", manifest["pages"]?.jsonObject?.size ?: 0)
+            put("freshness", freshness(manifest))
+            failure?.let { put("code", it.code); put("syncError", it.message) }
+        }
+    }.toString() } catch (e: Exception) {
+        val reason = (e as? ReadFailure)?.reason ?: ReadState.UNAVAILABLE
+        val failure = lastFailure
+        val status = when {
+            reason == ReadState.BUSY -> "busy"
+            failure != null -> "failed"
+            reason in setOf(ReadState.MISSING, ReadState.RECOVERY, ReadState.INCOMPLETE) -> "pending"
+            else -> "unavailable"
+        }
+        buildJsonObject {
+            put("enabled", true); put("ready", false); put("status", status); put("reason", reason.code)
+            put("code", failure?.code ?: reason.code)
+            put("syncError", failure?.message?.let(::JsonPrimitive) ?: JsonNull)
+            put("message", when (status) {
+                "busy" -> "A corpus writer is active; retry the read after synchronization"
+                "failed" -> "Synchronization failed; check the reported code and connection configuration. No readable snapshot is available"
+                "pending" -> "No complete readable snapshot is available yet; automatic synchronization will retry"
+                else -> "Corpus or connection metadata is unavailable; check configuration and restart MCP if the connection changed"
+            })
+        }.toString()
+    }
     private fun <T> withManifest(block: (JsonObject, Path) -> T): T {
         KnowledgeSettings.safePath(settings.corpusRoot)
         val identity = settings.identity()
         val config = ContextConfig.load(settings.corpusRoot, settings)!!
         val base = ContextFiles.safe(settings.corpusRoot, "confluence/${config.space}")
+        if (!Files.exists(base, LinkOption.NOFOLLOW_LINKS)) throw ReadFailure(ReadState.MISSING)
+        if (!Files.isDirectory(base, LinkOption.NOFOLLOW_LINKS)) throw ReadFailure(ReadState.UNAVAILABLE)
         val manifest = ContextFiles.safe(base, ".sync/manifest.json")
-        require(Files.isRegularFile(manifest) && Files.size(manifest) <= 16L * 1024 * 1024) { "Corpus not ready; automatic synchronization has not completed" }
+        if (!Files.exists(manifest, LinkOption.NOFOLLOW_LINKS)) throw ReadFailure(ReadState.MISSING)
+        if (!Files.isRegularFile(manifest) || Files.size(manifest) > 16L * 1024 * 1024) throw ReadFailure(ReadState.UNAVAILABLE)
         val lockPath = ContextFiles.safe(base, ".sync/sync.lock")
         FileChannel.open(lockPath, CREATE, READ, WRITE).use { channel ->
             val lock = try { channel.tryLock(0, Long.MAX_VALUE, true) } catch (_: OverlappingFileLockException) { null }
-            require(lock != null) { "Corpus busy; retry read" }
+            if (lock == null) throw ReadFailure(ReadState.BUSY)
             lock.use {
-                require(!Files.exists(ContextFiles.safe(base, ".sync/transaction.json"))) { "Corpus recovery pending; retry after automatic sync" }
+                if (Files.exists(ContextFiles.safe(base, ".sync/transaction.json"))) throw ReadFailure(ReadState.RECOVERY)
                 val record = ContextMirror(settings.corpusRoot, remote).manifest(config)
-                require(record["inventoryComplete"] == JsonPrimitive(true)) { "Corpus inventory incomplete; automatic sync must finish" }
+                if (record["inventoryComplete"] != JsonPrimitive(true)) throw ReadFailure(ReadState.INCOMPLETE)
                 val result = block(record, base)
                 require(settings.identity() == identity) { "Connection changed during read" }
                 return result
@@ -183,6 +224,13 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         }} catch (e: Exception) {
             val message = e.message.orEmpty()
             val (code, next) = when {
+                e is ReadFailure -> when (e.reason) {
+                    ReadState.MISSING -> "replica_missing" to "No snapshot exists yet; check connection_status for synchronization errors"
+                    ReadState.BUSY -> "replica_busy" to "Retry after the active synchronization finishes"
+                    ReadState.RECOVERY -> "replica_recovery_pending" to "Automatic synchronization must finish the interrupted publication"
+                    ReadState.INCOMPLETE -> "replica_incomplete" to "Wait for a complete synchronization; partial inventory is not readable"
+                    ReadState.UNAVAILABLE -> "replica_unavailable" to "Check connection_status and the configured corpus location"
+                }
                 message.contains("Query") || message.contains("Continued") -> "invalid_query" to "Use a nonempty query or a bounded read with its returned version"
                 message.contains("snapshot changed") -> "snapshot_changed" to "Restart search against the current snapshot"
                 message.contains("busy") -> "replica_busy" to "Retry after the active synchronization finishes"

@@ -18,4 +18,3 @@ Return PASS, FAIL or BLOCKED_ENV with the exact reviewed document revisions,
 concrete findings and inspection limits. A document-review PASS does not claim
 product QA, installation or production deployment. Return substantive corrections
 to the original writer and review the changed scope after fixes.
-

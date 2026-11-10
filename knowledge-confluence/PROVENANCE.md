@@ -13,4 +13,3 @@ replaced by this plugin's global connection boundary.
 
 The archive's historical 523-test PASS and installed JAR are not this plugin's
 acceptance results. New behavior requires its own actual verification.
-

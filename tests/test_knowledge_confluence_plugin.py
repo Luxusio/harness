@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 try:
     import pytest
@@ -28,7 +27,7 @@ def _jar():
     return jar.resolve()
 
 
-def _calls(jar, cwd, env, launcher=None):
+def _calls(jar, cwd, env, command=None):
     java = env.get("KNOWLEDGE_CONFLUENCE_JAVA", "java")
     rows = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -37,7 +36,7 @@ def _calls(jar, cwd, env, launcher=None):
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
-    command = [sys.executable, "-I", str(launcher)] if launcher else [java, "-jar", str(jar)]
+    command = command if command is not None else [java, "-jar", str(jar)]
     result = subprocess.run(command, cwd=cwd, env=env,
         input="".join(json.dumps(row) + "\n" for row in rows), text=True,
         capture_output=True, timeout=30)
@@ -80,7 +79,8 @@ def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
     assert (packaged / "lib/knowledge-confluence.jar").read_bytes() == jar.read_bytes()
     for name in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
         assert json.loads((packaged / name).read_text())["name"] == "knowledge-confluence"
-    assert set(json.loads((packaged / ".mcp.json").read_text())["mcpServers"]) == {"confluence"}
+    transport = json.loads((packaged / ".mcp.json").read_text())["mcpServers"]
+    assert set(transport) == {"confluence"}
     assert module.prepare(tmp_path / "data", jar) == market
     cwd = tmp_path / "unregistered-project"
     cwd.mkdir()
@@ -94,7 +94,7 @@ def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
     if "KNOWLEDGE_CONFLUENCE_JAVA" in os.environ:
         env["KNOWLEDGE_CONFLUENCE_JAVA"] = os.environ["KNOWLEDGE_CONFLUENCE_JAVA"]
     replies = _calls(packaged / "lib/knowledge-confluence.jar", cwd, env,
-                     launcher=packaged / "scripts/launch.py")
+                     command=[transport["confluence"]["command"], *transport["confluence"]["args"]])
     assert next(row["result"]["tools"] for row in replies if row.get("id") == 2) == []
     assert not list(cwd.iterdir())
 
@@ -127,3 +127,38 @@ def test_installer_rejects_writable_storage_and_substituted_publication(tmp_path
     monkeypatch.setattr(module.os, "rename", replace_at_publication)
     with pytest.raises(ValueError, match="Published plugin directory changed"):
         module.prepare(data, jar)
+
+
+def test_marketplace_source_stays_stable_across_versions_and_serializes_updates(tmp_path):
+    import importlib.util
+    import shutil
+    import zipfile
+    spec = importlib.util.spec_from_file_location("knowledge_install_upgrade", PLUGIN / "install.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    jar = _jar()
+    first = module.prepare(tmp_path / "data", jar)
+    second_jar = tmp_path / "next.jar"
+    shutil.copyfile(jar, second_jar)
+    with zipfile.ZipFile(second_jar, "a") as archive:
+        archive.comment = b"next release fixture: unchanged executable entries"
+    second = module.prepare(tmp_path / "data", second_jar)
+    assert first != second
+    with module.marketplace(first) as stable:
+        assert (stable / "plugin").resolve() == first / "plugin"
+        with pytest.raises(BlockingIOError):
+            with module.marketplace(second):
+                pytest.fail("A concurrent installer changed the selected payload")
+        assert (stable / "plugin").resolve() == first / "plugin"
+    with module.marketplace(second) as updated:
+        assert updated == stable
+        assert (updated / "plugin").resolve() == second / "plugin"
+        assert (first / "plugin/lib/knowledge-confluence.jar").read_bytes() == jar.read_bytes()
+    outside = tmp_path / "unowned-selection"
+    outside.mkdir()
+    (stable / "plugin").unlink()
+    (stable / "plugin").symlink_to(outside)
+    with pytest.raises(ValueError, match="outside managed packages"):
+        with module.marketplace(first):
+            pytest.fail("An unknown selection was overwritten")
+    assert (stable / "plugin").resolve() == outside
