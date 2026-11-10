@@ -236,10 +236,10 @@ control root without a workspace argument.
 ## Skills
 
 Business knowledge can be owned by the independent
-[Confluence knowledge plugin](knowledge-confluence/README.md). It shares an
+[Atlassian wiki plugin](wiki-atlassian/README.md). It shares an
 automatically synchronized home corpus across projects and provides document
-search, native edits, comments and history through the `confluence` MCP.
-Harness selects its documentation policy from that plugin's global activation;
+search, native edits, comments and history through the `atlassian` MCP.
+Harness selects its documentation policy from the plugin's injected connection environment;
 without an external connection, existing local documentation behavior remains.
 WBS, source assets and runtime instructions stay repository-owned.
 

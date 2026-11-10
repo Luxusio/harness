@@ -21,8 +21,11 @@ Confluence, without imposing its interface on future providers.
 
 ## Implementation decisions
 
-Start with a standalone `knowledge-confluence` package, a service-named
-`confluence` MCP and global connection configuration. Home storage is partitioned
+Use the user-requested `wiki-atlassian` package and `atlassian` MCP. The user
+clarified that connection settings come only from injected environment variables;
+`mise.local.toml` is an environment setup example, never a file the plugin reads.
+No JSON connection file or automatic mise invocation remains. The initial
+implemented capabilities are Confluence documents, comments and history. Home storage is partitioned
 by remote origin, authenticated credential identity and registered root. Read
 replicas and manifests are derived; Confluence remains the document authority.
 Native storage and safe mutation logic are extracted from the supplied Talos

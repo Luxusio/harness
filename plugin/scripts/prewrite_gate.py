@@ -891,7 +891,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
                      "then retry the source edit.")
         else:
             human = (f"{rel} requires a linked durable requirement at the configured document backend. "
-                     "Read/update it with confluence MCP and link REQ: confluence:<page-id>@<version> "
+                     "Read/update it with atlassian MCP and link REQ: confluence:<page-id>@<version> "
                      "from PLAN. An unavailable backend does not authorize local fallback writes.")
         _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)
         return 0

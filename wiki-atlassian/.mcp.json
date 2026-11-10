@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "atlassian": {
+      "command": "python3",
+      "args": [
+        "-I",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/launch.py"
+      ],
+      "env_vars": [
+        "HOME",
+        "JAVA_HOME",
+        "XDG_DATA_HOME",
+        "WIKI_ATLASSIAN_JAVA",
+        "ATLASSIAN_EMAIL",
+        "ATLASSIAN_API_TOKEN",
+        "WIKI_ATLASSIAN_ENABLED",
+        "WIKI_ATLASSIAN_SITE",
+        "WIKI_ATLASSIAN_SPACE",
+        "WIKI_ATLASSIAN_SPACE_ID",
+        "WIKI_ATLASSIAN_ROOT_PAGE_ID",
+        "WIKI_ATLASSIAN_MEMORY_PAGE_ID",
+        "WIKI_ATLASSIAN_FEEDBACK_PAGE_ID",
+        "WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS"
+      ]
+    }
+  }
+}

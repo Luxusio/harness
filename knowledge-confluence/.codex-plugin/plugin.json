@@ -1,7 +1,0 @@
-{
-  "name": "knowledge-confluence",
-  "version": "0.1.0",
-  "description": "Shared Confluence knowledge and native document operations; independent of project workflows.",
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
-}

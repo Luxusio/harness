@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select documentation policy from the knowledge plugin's global activation.
+"""Select documentation policy from the wiki plugin's injected environment.
 
 This is a read-only selection, not authentication or a remote health check.
 No repository paths, credentials or document contents are copied into state.
@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
-import stat
 from urllib.parse import urlsplit
 
 
@@ -19,7 +17,7 @@ LOCAL_NOTICE = (
     "if no doc applies, keep the PLAN durable-doc rationale specific."
 )
 REMOTE_NOTICE = (
-    "[harness-doc-gate] Business knowledge: search/read/update with confluence MCP. "
+    "[harness-doc-gate] Business knowledge: search/read/update with atlassian MCP. "
     "Keep WBS, runtime instructions and product assets in the repository."
 )
 UNAVAILABLE_NOTICE = (
@@ -28,64 +26,56 @@ UNAVAILABLE_NOTICE = (
 )
 
 
-def _config_path(environment):
-    value = environment.get("KNOWLEDGE_CONFLUENCE_CONFIG")
-    if value is not None:
-        path = Path(value)
-        if not value or not path.is_absolute() or str(path) != value or ".." in path.parts:
-            raise ValueError("invalid config path")
-        return path
-    return Path(environment.get("HOME") or str(Path.home())) / ".config/knowledge-confluence/config.json"
+CONNECTION_FIELDS = ("SITE", "SPACE", "SPACE_ID", "ROOT_PAGE_ID", "MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID", "POLL_INTERVAL_SECONDS")
+PREFIX = "WIKI_ATLASSIAN_"
 
 
 def select_destination(environment=None):
-    """Return local/external/unavailable without exposing untrusted config text."""
-    environment = os.environ if environment is None else environment
+    """Select without reading configuration files, executing mise, or exposing values."""
+    environment = dict(os.environ if environment is None else environment)
     try:
-        path = _config_path(environment)
-        # Read config through no-follow descriptors: a symlink or special file
-        # must not turn an advisory hook into an arbitrary home-file reader.
-        if not os.path.lexists(path):
-            if "KNOWLEDGE_CONFLUENCE_CONFIG" in environment:
-                raise ValueError("explicit config is missing")
+        enabled = environment.get(PREFIX + "ENABLED")
+        if enabled == "false":
             return {"mode": "local", "notice": LOCAL_NOTICE}
-        for parent in path.parents:
-            if parent.is_symlink():
-                raise ValueError("symlink config parent")
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as stream:
-            before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_mode & 0o022 or before.st_size > 65536:
-                raise ValueError("unsafe config")
-            data = stream.read(65537)
-            after = os.fstat(stream.fileno())
-            if len(data) > 65536 or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-                raise ValueError("config changed")
-        current = path.lstat()
-        if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
-            raise ValueError("config replaced")
-        document = json.loads(data)
-        if not isinstance(document, dict) or type(document.get("schemaVersion", 1)) is not int or document.get("schemaVersion", 1) != 1:
-            raise ValueError("invalid schema")
-        enabled = document.get("enabled", False)
-        if not isinstance(enabled, bool):
+        if enabled is None and not any(PREFIX + key in environment for key in CONNECTION_FIELDS):
+            return {"mode": "local", "notice": LOCAL_NOTICE}
+        if enabled != "true":
             raise ValueError("invalid activation")
-        if not enabled:
-            return {"mode": "local", "notice": LOCAL_NOTICE}
-        site = document.get("site")
-        if not isinstance(site, str):
-            raise ValueError("invalid origin")
+        def text(key):
+            value = environment.get(PREFIX + key)
+            if not isinstance(value, str):
+                raise ValueError("missing connection setting")
+            return value
+        site = text("SITE")
         origin = urlsplit(site)
-        if origin.scheme != "https" or not origin.hostname or origin.username or origin.password or origin.path not in ("", "/") or origin.query or origin.fragment:
+        if (origin.scheme != "https" or not site.startswith("https://") or not origin.hostname
+                or origin.username is not None or origin.password is not None
+                or origin.path not in ("", "/") or "?" in site or "#" in site
+                or any(c.isspace() or ord(c) < 32 for c in site) or "\\" in site
+                or origin.netloc.endswith(":") or origin.port is not None and not 1 <= origin.port <= 65535):
             raise ValueError("invalid origin")
-        if not isinstance(document.get("space"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", document["space"]):
+        # Java URI accepts ASCII DNS names (including trailing dot) and bracketed IPv6.
+        host = origin.hostname
+        if ":" not in host and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9.])?", host):
+            raise ValueError("invalid host")
+        if ":" not in host and any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", part) for part in host.rstrip(".").split(".")):
+            raise ValueError("invalid host")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", text("SPACE")):
             raise ValueError("invalid space")
-        for key in ("spaceId", "rootPageId"):
-            if not isinstance(document.get(key), str) or not re.fullmatch(r"[1-9][0-9]*", document[key]):
-                raise ValueError("invalid root")
-        return {"mode": "external", "backend": "confluence", "notice": REMOTE_NOTICE}
-    except (OSError, ValueError, TypeError):
-        return {"mode": "unavailable", "backend": "confluence", "notice": UNAVAILABLE_NOTICE}
+        for key in ("SPACE_ID", "ROOT_PAGE_ID") + tuple(k for k in ("MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID") if PREFIX + k in environment):
+            if not re.fullmatch(r"[1-9][0-9]*", text(key)):
+                raise ValueError("invalid native ID")
+        if PREFIX + "POLL_INTERVAL_SECONDS" in environment:
+            poll = text("POLL_INTERVAL_SECONDS")
+            if not re.fullmatch(r"[0-9]{1,20}", poll) or not 30 <= int(poll) <= 86400:
+                raise ValueError("invalid polling interval")
+        for key in ("ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"):
+            value = environment.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("missing credential")
+        return {"mode": "external", "backend": "atlassian", "notice": REMOTE_NOTICE}
+    except (ValueError, TypeError):
+        return {"mode": "unavailable", "backend": "atlassian", "notice": UNAVAILABLE_NOTICE}
 
 
 def policy(environment=None):
@@ -93,7 +83,7 @@ def policy(environment=None):
     if selected["mode"] == "local":
         guidance = "Business-document references are repository doc/<area>/<TYPE>__<name>.md paths. Read/write selected requirements before source implementation; local req_scaffold.py may help. Keep source provenance and independent document review."
     elif selected["mode"] == "external":
-        guidance = "Business-document references are native document IDs/URLs with observed versions from confluence MCP; use REQ: confluence:<page-id>@<version> in PLAN for requirement presence checks. Use that MCP for requirements, guidance, decisions, knowledge and reusable runbooks; provide original evidence to reviewers/QA. Do not create duplicate business-knowledge files in the repository. Repository product documentation, source assets, runtime instructions and WBS controls remain repository-owned. A failed/unavailable MCP does not authorize local fallback writes."
+        guidance = "Business-document references are native document IDs/URLs with observed versions from atlassian MCP; use REQ: confluence:<page-id>@<version> in PLAN for requirement presence checks. Use that MCP for requirements, guidance, decisions, knowledge and reusable runbooks; provide original evidence to reviewers/QA. Do not create duplicate business-knowledge files in the repository. Repository product documentation, source assets, runtime instructions and WBS controls remain repository-owned. A failed/unavailable MCP does not authorize local fallback writes."
     else:
         guidance = "Business-document writes and required documentation completion are pending until the configured connection is usable. Continue independent product work where possible; retain actual unresolved documentation blockers. Do not infer that an invalid connection means local mode."
     return {**selected, "policy": guidance}
