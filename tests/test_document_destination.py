@@ -83,7 +83,7 @@ def test_partial_environment_is_pending_and_valid_boundaries_are_accepted():
         assert destination.policy(env)["mode"] == "unavailable"
     for seconds in ("30", "86400"):
         assert destination.policy(connection(WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS=seconds))["mode"] == "external"
-    for site in ("https://example.invalid:1", "https://example.invalid:65535/", "https://[::1]:443", "https://[::1%eth_0]"):
+    for site in ("https://example.invalid:1", "https://example.invalid:65535/", "https://[::1]:443", "https://[::1%eth_0]", "https://123."):
         assert destination.policy(connection(WIKI_ATLASSIAN_SITE=site))["mode"] == "external"
 
 

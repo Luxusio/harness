@@ -65,7 +65,7 @@ def select_destination(environment=None):
             labels = host.removesuffix(".").split(".")
             if any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", part) for part in labels):
                 raise ValueError("invalid host")
-            if "." in host and not re.match(r"[A-Za-z]", labels[-1]):
+            if len(labels) > 1 and not re.match(r"[A-Za-z]", labels[-1]):
                 if host.endswith(".") or len(labels) != 4 or any(not re.fullmatch(r"[0-9]+", part) or int(part) > 255 for part in labels):
                     raise ValueError("invalid IPv4 host")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", text("SPACE")):
