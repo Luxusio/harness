@@ -54,12 +54,18 @@ def select_destination(environment=None):
                 or any(c.isspace() or ord(c) < 32 for c in site) or "\\" in site
                 or origin.netloc.endswith(":") or origin.port is not None and not 1 <= origin.port <= 65535):
             raise ValueError("invalid origin")
-        # Java URI accepts ASCII DNS names (including trailing dot) and bracketed IPv6.
+        # Match Java URI's server-authority rules, including DNS versus IPv4.
         host = origin.hostname
-        if ":" not in host and not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9.])?", host):
-            raise ValueError("invalid host")
-        if ":" not in host and any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", part) for part in host.rstrip(".").split(".")):
-            raise ValueError("invalid host")
+        if origin.netloc.startswith("["):
+            if ":" not in host:  # Python also parses IPvFuture; Java does not.
+                raise ValueError("invalid host")
+        else:
+            labels = host.removesuffix(".").split(".")
+            if any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", part) for part in labels):
+                raise ValueError("invalid host")
+            if "." in host and not re.match(r"[A-Za-z]", labels[-1]):
+                if host.endswith(".") or len(labels) != 4 or any(not re.fullmatch(r"[0-9]+", part) or int(part) > 255 for part in labels):
+                    raise ValueError("invalid IPv4 host")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", text("SPACE")):
             raise ValueError("invalid space")
         for key in ("SPACE_ID", "ROOT_PAGE_ID") + tuple(k for k in ("MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID") if PREFIX + k in environment):

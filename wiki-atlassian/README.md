@@ -9,7 +9,7 @@ WBS, Jira or repository-local document copies.
 ## Connection through injected environment
 
 The plugin reads only its process environment. It does not open JSON or TOML
-connection files and does not execute mise. Set variables in your own ignored
+connection files and does not invoke mise to load connection settings. Set variables in your own ignored
 `mise.local.toml`, for example:
 
 ```toml
