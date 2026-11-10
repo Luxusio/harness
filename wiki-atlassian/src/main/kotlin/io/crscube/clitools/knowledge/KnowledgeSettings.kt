@@ -102,6 +102,12 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             if (!ContextConfig.validOrigin(site) || site.any { it.isWhitespace() || it.isISOControl() || it == '\\' }) return false
             val uri = java.net.URI(site)
             if (uri.port == 0 || uri.rawAuthority.endsWith(":")) return false
+            // Match Python's IPv6 parser: embedded IPv4 uses canonical decimal octets.
+            if (uri.host.startsWith("[")) {
+                val address = uri.host.removeSurrounding("[", "]").substringBefore('%')
+                if ('.' in address && address.substringAfterLast(':').split('.').any {
+                        it.length > 1 && it.startsWith('0') }) return false
+            }
             return true
         }
         fun validate(value: JsonObject) {

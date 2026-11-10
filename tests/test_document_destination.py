@@ -57,6 +57,7 @@ def test_absent_disabled_and_shared_credentials_use_local_without_state(tmp_path
     dict(WIKI_ATLASSIAN_SITE="https://example.invalid:"), dict(WIKI_ATLASSIAN_SITE="https://example.invalid?"),
     dict(WIKI_ATLASSIAN_SITE="https://example.invalid/#"), dict(WIKI_ATLASSIAN_SITE="https://bad_host.invalid"),
     dict(WIKI_ATLASSIAN_SITE="https://example.invalid\\evil"), dict(WIKI_ATLASSIAN_SITE=" https://example.invalid"),
+    dict(WIKI_ATLASSIAN_SITE="https://[::ffff:0127.0.0.1]:9"),
     dict(WIKI_ATLASSIAN_SITE="https://1.2.3"), dict(WIKI_ATLASSIAN_SITE="https://999.999.999.999"),
     dict(WIKI_ATLASSIAN_SITE="https://example.123"), dict(WIKI_ATLASSIAN_SITE="https://[v1.fe]"),
     dict(WIKI_ATLASSIAN_SITE="https://[v1.fe:abcd]"), dict(WIKI_ATLASSIAN_SITE="https://[::1%eth-0]"),
@@ -83,7 +84,7 @@ def test_partial_environment_is_pending_and_valid_boundaries_are_accepted():
         assert destination.policy(env)["mode"] == "unavailable"
     for seconds in ("30", "86400"):
         assert destination.policy(connection(WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS=seconds))["mode"] == "external"
-    for site in ("https://example.invalid:1", "https://example.invalid:65535/", "https://[::1]:443", "https://[::1%eth_0]", "https://123."):
+    for site in ("https://example.invalid:1", "https://example.invalid:65535/", "https://[::1]:443", "https://[::1%eth_0]", "https://123.", "https://[::ffff:127.0.0.1]:9"):
         assert destination.policy(connection(WIKI_ATLASSIAN_SITE=site))["mode"] == "external"
 
 

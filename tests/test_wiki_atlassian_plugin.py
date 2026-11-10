@@ -113,7 +113,7 @@ def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
 
 @pytest.mark.parametrize("changes", [{"WIKI_ATLASSIAN_ENABLED":"TRUE"}, {"WIKI_ATLASSIAN_ENABLED":None},
     {"ATLASSIAN_API_TOKEN":None}, {"WIKI_ATLASSIAN_SITE":"https://sensitive-secret@example.invalid"},
-    {"WIKI_ATLASSIAN_SITE":"https://127.0.0.1:65536"}, {"WIKI_ATLASSIAN_MEMORY_PAGE_ID":""},
+    {"WIKI_ATLASSIAN_SITE":"https://127.0.0.1:65536"}, {"WIKI_ATLASSIAN_SITE":"https://[::ffff:0127.0.0.1]:9"}, {"WIKI_ATLASSIAN_MEMORY_PAGE_ID":""},
     {"WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS":"+300"}])
 def test_invalid_environment_fails_before_creating_corpus_without_leaking_values(tmp_path, changes):
     env = enabled_environment(tmp_path)

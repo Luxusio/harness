@@ -49,13 +49,13 @@ class KnowledgeSettingsTest {
 
     @Test fun `origin accepts HTTPS origins and rejects unsafe authority path and port forms`() {
         for (site in listOf("https://example.atlassian.net", "https://example.atlassian.net/",
-            "https://example.atlassian.net:1", "https://example.atlassian.net:65535/", "https://[::1]:443")) {
+            "https://example.atlassian.net:1", "https://example.atlassian.net:65535/", "https://[::1]:443", "https://[::ffff:127.0.0.1]:9")) {
             assertEquals(site.trimEnd('/'), settings(mapOf("WIKI_ATLASSIAN_SITE" to site)).credentials.baseUrl)
         }
         for (site in listOf("http://example.test", "HTTPS://example.test", "https://", "https://example.test/path",
             "https://user:password@example.test", "https://example.test?query", "https://example.test#fragment",
             "https://example.test:0", "https://example.test:65536", "https://example.test:", "https://example.test:-1",
-            "https://example.test:abc", "https://example.test\\path", " https://example.test", "https://example.test\n",
+            "https://[::ffff:0127.0.0.1]:9", "https://example.test:abc", "https://example.test\\path", " https://example.test", "https://example.test\n",
             "https://example..test", "https://bad_host.test", "https://example.test/?", "https://example.test/#")) {
             assertFailsWith<IllegalArgumentException>(site) { settings(mapOf("WIKI_ATLASSIAN_SITE" to site)) }
         }
