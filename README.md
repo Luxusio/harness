@@ -2,7 +2,39 @@
 
 Execution harness for AI-assisted repository work. Enforces a **WBS open → plan → develop → QA → close** loop on every repo-mutating WBS. Internal review and verification gates remain mandatory.
 
-## Install
+## Quick start
+
+Open your project in Claude Code or Codex and paste one line.
+
+**Local knowledge**
+
+```text
+Read https://github.com/Luxusio/harness and install and set up Harness in this project with local document knowledge.
+```
+
+**Confluence knowledge**
+
+```text
+Read https://github.com/Luxusio/harness and set up Harness + wiki-atlassian using my logged-in Chrome; ask which Confluence spaces and optional root pages to use.
+```
+
+**Local Harness development + personal feedback inbox**
+
+```text
+Follow https://github.com/Luxusio/harness to set up this Harness checkout for development and a private feedback inbox; ask which Confluence page should receive reports.
+```
+
+The agent follows the guide for your runtime and verifies the setup. Space/page
+choices and browser login or MFA may still need your input. The developer inbox
+and its separate authentication stay under your home directory; configuring it
+does not send reports. See [personal inbox settings](#personal-improvement-inbox).
+
+<details>
+<summary>Manual installation and project setup</summary>
+
+### Install
+
+For Codex commands, see [README.codex.md](README.codex.md#install--3-commands).
 
 Run these commands in Claude Code:
 
@@ -22,7 +54,7 @@ copies the same root marketplace manifest plus the plugin payload into
 
 Contributors / local development → see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Setup
+### Setup
 
 Run in your target project:
 
@@ -37,6 +69,8 @@ CLAUDE.md                        # root entrypoint (creates or appends)
 doc/harness/manifest.yaml        # project config + initialization marker
 doc/harness/critics/             # plan.md, runtime.md, document.md playbooks
 ```
+
+</details>
 
 ## The loop
 

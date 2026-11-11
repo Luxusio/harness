@@ -1,6 +1,6 @@
 # harness on Codex CLI — install + first run
 
-This guide gets a Codex CLI user from `git clone` to first PASS verdict on a Harness WBS. Time to hello world target: ≤ 5 minutes on a clean Codex 1.1+ install.
+For guided installation, copy one of the [one-line setup prompts](README.md#quick-start): local knowledge, Confluence, or local Harness development with a private feedback inbox. The manual Codex CLI instructions follow below.
 
 If you're a Claude Code user, see the root [`README.md`](README.md) — your install path is `/plugin marketplace add`. The instructions below DO NOT apply to Claude Code.
 
