@@ -2,6 +2,7 @@ package io.crscube.clitools.knowledge
 
 import io.crscube.clitools.confluence.ContextConfig
 import io.crscube.clitools.confluence.ContextFiles
+import io.crscube.clitools.confluence.ContextMirror
 import io.crscube.clitools.confluence.CorpusFileLock
 import io.crscube.clitools.confluence.WikiChanges
 import io.crscube.clitools.jirafetcher.config.JiraConfig
@@ -57,7 +58,7 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
                 if (Files.exists(ContextFiles.safe(sourceControl, "transaction.json"))) return
                 val manifestPath = ContextFiles.safe(sourceControl, "manifest.json")
                 if (!Files.isRegularFile(manifestPath) || Files.size(manifestPath) > 16L * 1024 * 1024) return
-                val manifest = Json.parseToJsonElement(Files.readString(manifestPath)).jsonObject
+                val manifest = ContextMirror.readSnapshot(manifestPath)
                 require(manifest["spaceId"] == initial["spaceId"] && manifest["homePageId"] == initial["rootPageId"] &&
                     manifest["site"]?.jsonPrimitive?.content?.trimEnd('/') == credentials.baseUrl.trimEnd('/')) { "Legacy corpus identity differs" }
                 val pages = manifest["pages"]?.jsonObject ?: return

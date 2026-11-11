@@ -745,9 +745,13 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         val stage = ContextFiles.safe(control, stageName)
         val next = read(ContextFiles.safe(stage, "manifest.json"))
         validateIdentity(next, config)
-        if (!allowCredentialSwitch || transaction["files"] != null) {
+        if (!allowCredentialSwitch) {
             requireCredentialBinding(previous, config)
             requireCredentialBinding(next, config)
+        } else if (config.isKnowledge && transaction["files"] != null) {
+            // Finish a retired credential's local journal without changing its authority.
+            // Only the subsequent complete inventory may admit the current credential.
+            require(previous["credentialBinding"] == next["credentialBinding"]) { "Partial mirror transaction changes credential binding" }
         }
         val pages = next.getValue("pages").jsonObject
         val priorPages = previous["pages"]?.jsonObject ?: buildJsonObject {}
@@ -840,48 +844,53 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         put("type", n.type); put("spaceId", n.spaceId); put("version", n.version); put("status", n.status)
         put("path", path); put("storage", storage); put("bodyHash", bodyHash)
     }
-    private fun decode(o: JsonObject) = RemoteNode(o.getValue("id").jsonPrimitive.content, o.getValue("title").jsonPrimitive.content,
-        o["parentId"]?.jsonPrimitive?.contentOrNull, o.getValue("type").jsonPrimitive.content, o.getValue("spaceId").jsonPrimitive.content,
-        o.getValue("version").jsonPrimitive.int, o.getValue("status").jsonPrimitive.content)
-    private fun read(path: Path): JsonObject {
-        val text = String(Files.readAllBytes(path), Charsets.UTF_8)
-        return try {
-            val value = Json.parseToJsonElement(text).jsonObject
-            val nativeId = Regex("[1-9][0-9]*")
-            val pages = value["pages"]?.jsonObject
-            pages?.forEach { (id, item) ->
-                val record = item.jsonObject
-                val node = decode(record)
-                require(nativeId.matches(id) && node.id == id && nativeId.matches(node.spaceId) &&
-                    (node.parentId == null || nativeId.matches(node.parentId)) && node.type == "page" && node.version > 0)
-                listOf("path", "storage").forEach { key -> record[key]?.jsonPrimitive?.content?.let {
-                    val relative = Paths.get(it)
-                    require(!relative.isAbsolute && relative.none { part -> part.toString() == ".." })
-                } }
-            }
-            listOf("explicitPages", "unavailable").forEach { key -> value[key]?.jsonArray?.forEach {
-                val id = it.jsonPrimitive.content
-                require(nativeId.matches(id))
-            } }
-            value["folderParents"]?.jsonObject?.let { folders ->
-                require(folders.size <= 20000)
-                val home = value["homePageId"]?.jsonPrimitive?.content
-                val knowledgeRoot = value["knowledgeRootPageId"]?.jsonPrimitive?.content
-                folders.forEach { (id, parent) ->
-                    val parentId = parent.jsonPrimitive
-                    require(id != home && id != knowledgeRoot && id !in pages.orEmpty() && nativeId.matches(id) &&
-                        parentId.isString && parentId.content != id && nativeId.matches(parentId.content))
+    private fun read(path: Path): JsonObject = readSnapshot(path)
+
+    internal companion object {
+        private fun decode(o: JsonObject) = RemoteNode(o.getValue("id").jsonPrimitive.content, o.getValue("title").jsonPrimitive.content,
+            o["parentId"]?.jsonPrimitive?.contentOrNull, o.getValue("type").jsonPrimitive.content, o.getValue("spaceId").jsonPrimitive.content,
+            o.getValue("version").jsonPrimitive.int, o.getValue("status").jsonPrimitive.content)
+        internal fun readSnapshot(path: Path): JsonObject {
+            val text = String(Files.readAllBytes(path), Charsets.UTF_8)
+            return try {
+                val value = Json.parseToJsonElement(text).jsonObject
+                val nativeId = Regex("[1-9][0-9]*")
+                val pages = value["pages"]?.jsonObject
+                pages?.forEach { (id, item) ->
+                    val record = item.jsonObject
+                    val node = decode(record)
+                    require(nativeId.matches(id) && node.id == id && nativeId.matches(node.spaceId) &&
+                        (node.parentId == null || nativeId.matches(node.parentId)) && node.type == "page" && node.version > 0)
+                    listOf("path", "storage").forEach { key -> record[key]?.jsonPrimitive?.content?.let {
+                        val relative = Paths.get(it)
+                        require(!relative.isAbsolute && relative.none { part -> part.toString() == ".." })
+                    } }
                 }
+                listOf("explicitPages", "unavailable").forEach { key -> value[key]?.jsonArray?.forEach {
+                    val id = it.jsonPrimitive.content
+                    require(nativeId.matches(id))
+                } }
+                value["folderParents"]?.jsonObject?.let { folders ->
+                    require(folders.size <= 20000)
+                    val home = value["homePageId"]?.jsonPrimitive?.content
+                    val knowledgeRoot = value["knowledgeRootPageId"]?.jsonPrimitive?.content
+                    folders.forEach { (id, parent) ->
+                        val parentId = parent.jsonPrimitive
+                        require(id != home && id != knowledgeRoot && id !in pages.orEmpty() && nativeId.matches(id) &&
+                            parentId.isString && parentId.content != id && nativeId.matches(parentId.content))
+                    }
+                }
+                value["credentialBinding"]?.let { require(it is JsonPrimitive && it.isString && it.content.matches(Regex("[a-f0-9]{64}"))) }
+                value["inventoryComplete"]?.jsonPrimitive?.boolean
+                value["cursor"]?.jsonPrimitive?.content?.let(Instant::parse)
+                WikiChanges.validate(value)
+                value
+            } catch (_: RuntimeException) {
+                throw ContextRemoteException("invalid_mirror_snapshot", "Synchronized mirror data is malformed; archive the disposable mirror and run sync")
             }
-            value["credentialBinding"]?.let { require(it is JsonPrimitive && it.isString && it.content.matches(Regex("[a-f0-9]{64}"))) }
-            value["inventoryComplete"]?.jsonPrimitive?.boolean
-            value["cursor"]?.jsonPrimitive?.content?.let(Instant::parse)
-            WikiChanges.validate(value)
-            value
-        } catch (_: RuntimeException) {
-            throw ContextRemoteException("invalid_mirror_snapshot", "Synchronized mirror data is malformed; archive the disposable mirror and run sync")
         }
     }
+
     private fun deleteTree(path: Path) {
         if (!Files.exists(path)) return
         Files.walk(path).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }

@@ -194,6 +194,46 @@ class WikiChangesTest {
         }
     }
 
+    @Test fun `rotated full sync recovers retired partial journal before fresh admission and rejects cross bound journal`() = runBlocking {
+        Provider().use { retired ->
+            retired.mirror.sync(config)
+            val oldBinding = manifest().getValue("credentialBinding")
+            val baseline = json(feedPath)
+            val page = retired.pages.getValue("211")
+            val before = page.native()
+            page.body = "<p>Retired credential verified storage</p>"
+            Files.delete(feedPath); Files.createDirectory(feedPath)
+            assertFailsWith<IOException> { retired.mirror.publishVerified(config, page.native(), before) }
+            val journal = json(control.resolve("transaction.json"))
+            assertNotNull(journal["files"], "Exercise an actual interrupted partial publication")
+            val staged = control.resolve(journal.getValue("stage").jsonPrimitive.content).resolve("manifest.json")
+            val stagedManifest = json(staged)
+            Files.delete(feedPath); ContextFiles.atomic(feedPath, baseline.toString())
+            Provider("rotated-token").use { active ->
+                active.pages.getValue("211").body = page.body
+                val newBinding = JsonPrimitive(KnowledgeSettings.credentialFingerprint(JiraConfig(origin, "fixture@example.test", "rotated-token")))
+                ContextFiles.atomic(staged, JsonObject(stagedManifest + ("credentialBinding" to newBinding)).toString())
+                assertFailsWith<IllegalArgumentException> { active.mirror.sync(config) }
+                assertEquals(oldBinding, manifest()["credentialBinding"], "A partial journal cannot switch credential authority")
+                ContextFiles.atomic(staged, stagedManifest.toString())
+                var freshInventory = false
+                active.overrideStatus = { path ->
+                    if (path == "pages/210/direct-children") {
+                        freshInventory = true
+                        assertFalse(Files.exists(control.resolve("transaction.json")), "Local recovery completes before fresh inventory")
+                        assertEquals(oldBinding, manifest()["credentialBinding"], "Recovered data retains the retired binding until full admission")
+                    }
+                    null
+                }
+                active.mirror.sync(config)
+                assertTrue(freshInventory)
+                assertEquals(newBinding, manifest()["credentialBinding"])
+                assertEquals(newBinding, json(control.resolve("state.json"))["credentialBinding"])
+                assertFalse(Files.exists(control.resolve("transaction.json")))
+            }
+        }
+    }
+
     @Test fun `verified write recovers its original event after interrupted feed publication`() = runBlocking {
         Provider().use { provider ->
             val mirror = provider.mirror

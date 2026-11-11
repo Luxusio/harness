@@ -1642,6 +1642,35 @@ class NativeDocumentContractTest {
         provider.assertNoEffects()
     }
 
+    @Test fun `valid JSON legacy seed with invalid cursor or node metadata falls back to fresh authorized sync`() {
+        val provider = Provider()
+        provider.use(local = true) { }
+        Files.move(root, settings.legacyCorpusRoot)
+        val legacyManifest = settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
+        val original = Json.parseToJsonElement(Files.readString(legacyManifest)).jsonObject
+        val malformed = listOf(
+            JsonObject(original + ("cursor" to JsonPrimitive("invalid-private-cursor"))),
+            JsonObject(original + ("pages" to JsonObject(original.getValue("pages").jsonObject.toMutableMap().apply {
+                val row = getValue("201").jsonObject
+                put("201", JsonObject(row + ("version" to JsonPrimitive(0))))
+            }))))
+        for (value in malformed) {
+            ContextFiles.atomic(legacyManifest, value.toString())
+            val fresh = KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data"))
+            fresh.prepareCorpus()
+            val target = root.resolve("confluence/COMMON/.sync/manifest.json")
+            assertFalse(Files.exists(target), "Malformed metadata must not become a permanent stable snapshot")
+            assertEquals(value.toString(), Files.readString(legacyManifest), "Rejected optional reuse preserves originals")
+            provider.requests.clear()
+            provider.use(connection = fresh, local = true) { registry ->
+                assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content"))
+            }
+            assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "A rejected seed requires a normal authorized cold fetch")
+            Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.delete(it) } }
+        }
+        provider.assertNoEffects()
+    }
+
     @Test fun `already replaced token cannot guess another opaque legacy directory`() {
         val provider = Provider()
         provider.use(local = true) { }
