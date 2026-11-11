@@ -513,7 +513,7 @@ def automatic_delivery_required(wbs_dir: Path) -> tuple[bool, str]:
                               env=environment, capture_output=True, timeout=5)
     if ancestry.returncode != 0:
         return True, 'delivery baseline is not current ancestry; conservative verification required'
-    changed = subprocess.run(['git', 'diff', '--name-only', '-z', base, 'HEAD', '--'], cwd=repo,
+    changed = subprocess.run(['git', 'diff', '--no-renames', '--name-only', '-z', base, 'HEAD', '--'], cwd=repo,
                              env=environment, capture_output=True, timeout=5)
     if changed.returncode or len(changed.stdout) > 2 * 1024 * 1024:
         return True, 'delivery change range unavailable; conservative verification required'

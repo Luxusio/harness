@@ -12,6 +12,7 @@ KINDS = frozenset({"development", "document", "plan"})
 DEFAULT_DOCUMENT_PATHS = ["doc/common", "docs", "README.md", "README.codex.md", "CHANGELOG.md"]
 FIELDS = frozenset({"document_review", "verification", "install", "document_paths", "executable_paths"})
 INSTRUCTION_NAMES = frozenset({"agents.md", "claude.md", "contracts.md", "skill.md"})
+BUILD_TEXT_NAMES = frozenset({"cmakelists.txt", "cmakecache.txt"})
 EXECUTABLE_ROOTS = ("plugin", "plugin-codex", "doc/harness", ".git", ".github", ".claude", ".codex", ".agents")
 INSTRUCTION_DIRS = frozenset({"skills", "internal-skills", "agents", "prompts"})
 
@@ -139,7 +140,10 @@ def document_path(policy, path):
             or any(p in {"", ".", ".."} for p in path.split("/"))):
         return False
     parts = PurePosixPath(path).parts
-    if (parts[-1].casefold() in INSTRUCTION_NAMES or any(p.casefold() in INSTRUCTION_DIRS for p in parts[:-1])
+    name = parts[-1].casefold()
+    if (name in INSTRUCTION_NAMES or name in BUILD_TEXT_NAMES
+            or re.fullmatch(r"(?:requirements|constraints)(?:[-_.][a-z0-9_.-]+)?\.txt", name)
+            or any(p.casefold() in INSTRUCTION_DIRS for p in parts[:-1])
             or any(_covers(root.casefold(), path.casefold()) for root in EXECUTABLE_ROOTS)
             or any(_covers(root, path) for root in policy["executable_paths"])):
         return False

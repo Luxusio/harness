@@ -139,6 +139,8 @@ def test_duplicate_project_policy_keys_cannot_select_weaker_settings(tmp_path, t
     "docs/prompts/normal.md", "docs/skills/normal.md", "docs/config.yaml",
     "docs/build.sh", "plugin/README.md", "doc/harness/manifest.yaml",
     "docs/runtime.md", "../docs/normal.md",
+    "docs/CMakeLists.txt", "docs/CMakeCache.txt", "docs/requirements.txt",
+    "docs/requirements-dev.txt", "docs/constraints.txt",
 ])
 def test_broad_document_roles_do_not_admit_runtime_or_config_paths(tmp_path, path):
     repo = tmp_path / "repo"
@@ -299,6 +301,23 @@ def test_actual_prewrite_accepts_exact_bound_document_without_host_dispatch(tmp_
     result = invoke_hook(gate, "Write", {"file_path": str(repo / "doc/common/note.md")}, cwd=str(repo), env_extra={"HARNESS_SESSION_ID": "work-policy-native", "HARNESS_SKIP_PREWRITE": "0"})
     assert result.returncode == 0 and parse_decision(result.stdout)[0] != "deny", (result.stdout, result.stderr)
     assert not wbs.read_state(str(td)).get("execution_admission")
+
+
+@pytest.mark.parametrize('name', ['CMakeLists.txt', 'requirements.txt', 'constraints-dev.txt'])
+@pytest.mark.parametrize('kind', ['document', 'plan'])
+def test_actual_prewrite_requires_development_for_known_text_configuration(tmp_path, name, kind):
+    from conftest import invoke_hook, parse_decision
+    from test_harness_mcp_server import _write_marker_fixture
+    repo, td, call, _ = document_fixture(tmp_path)
+    if kind == 'plan':
+        assert not call('plan', plan=work_plan(kind)).get('isError')
+    _write_marker_fixture(str(repo), str(td), 'work-policy-native')
+    gate = str(Path(work_policy.__file__).with_name('prewrite_gate.py'))
+    result = invoke_hook(gate, 'Write', {'file_path': str(repo / 'docs' / name)}, cwd=str(repo),
+                         env_extra={'HARNESS_SESSION_ID': 'work-policy-native', 'HARNESS_SKIP_PREWRITE': '0'})
+    assert result.returncode == 0
+    assert parse_decision(result.stdout)[0] == 'deny', (result.stdout, result.stderr)
+    assert 'promote' in result.stdout
 
 
 @pytest.mark.parametrize("binding", ["missing", "stale", "foreign"])

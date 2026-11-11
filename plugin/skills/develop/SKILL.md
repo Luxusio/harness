@@ -2,11 +2,12 @@
 name: develop
 description: Implement PLAN.md through scoped development, independent review, QA, verified install when applicable, and WBS close.
 
-Development-only: the run workflow handles effective document/plan work separately. Promote executable or unknown impact in the same WBS before entering here.
 argument-hint: <wbs-id>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
 ---
+
+Development-only: the run workflow handles effective document/plan work separately. Promote executable or unknown impact in the same WBS before entering here.
 
 Implement PLAN.md through the public WBS actions. `wbs(action="verify")` measures current required checks; `wbs(action="close")` publishes completion only when those checks pass.
 

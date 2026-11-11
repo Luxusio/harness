@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'plugin/scripts'))
 import install_verified
@@ -42,6 +43,18 @@ def test_dirty_and_untracked_payload_changes_are_detected(tmp_path):
     assert install_verified.automatic_delivery_required(td)[0] is True
     payload.write_text('original\n')
     (payload.parent / 'new.py').write_text('new\n')
+    assert install_verified.automatic_delivery_required(td)[0] is True
+
+
+@pytest.mark.parametrize('committed', [False, True])
+def test_payload_rename_outside_install_scope_still_requires_delivery(tmp_path, committed):
+    repo, td, _, payload, git = committed_fixture(tmp_path)
+    (repo / 'archive').mkdir()
+    git('mv', 'plugin/example.py', 'archive/example.py')
+    if committed:
+        git('commit', '-qm', 'move payload outside installation')
+        assert git('status', '--porcelain') == ''
+    assert not payload.exists()
     assert install_verified.automatic_delivery_required(td)[0] is True
 
 

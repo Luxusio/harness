@@ -2472,8 +2472,8 @@ def _git_changed_paths(repo_root):
         return set()
     base = ["git", "-c", f"safe.directory={repo_root}"]
     commands = (
-        base + ["diff", "--name-only", "-z", "HEAD"],
-        base + ["diff", "--cached", "--name-only", "-z", "HEAD"],
+        base + ["diff", "--no-renames", "--name-only", "-z", "HEAD"],
+        base + ["diff", "--cached", "--no-renames", "--name-only", "-z", "HEAD"],
         base + ["ls-files", "--others", "--exclude-standard", "-z"],
     )
     changed = set()
