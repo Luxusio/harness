@@ -204,7 +204,7 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
                         enclosing = parents.get(node)
                         while enclosing is not None and not isinstance(enclosing, (ast.FunctionDef, ast.AsyncFunctionDef)):
                             enclosing = parents.get(enclosing)
-                        if enclosing is not None and enclosing.name == "_read_config":
+                        if enclosing is not None and enclosing.name == "_yaml_mapping":
                             continue
                     if name.split(".")[0] not in allowed:
                         violations.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {name}")

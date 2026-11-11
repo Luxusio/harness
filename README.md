@@ -167,7 +167,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `batch_harvest.py` | `harness:batch` coordinator step: copies an integrated (rebased and fast-forwarded) lead worktree's gitignored WBS evidence and learnings into the main checkout before `git worktree remove`; refuses unregistered, not-yet-integrated, or detached-HEAD (mid-rebase) worktrees, links, non-regular files, and archive collisions. Also owns guarded S1 disposal after durable archive, identity/content and preserved-object proof; ordinary removal stays no-force | `doc/harness/archive/batch/`, `doc/harness/learnings.jsonl` |
 | `install_smoke.py` | Drives an installed runtime tree once — imports registered hook modules and checks the receipt-free public WBS lifecycle; run by `install.py` after each sync and on the default run's SYNCHRONIZED skip path | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
-| `document_destination.py` | Select local or configured external business-document policy without network calls | User-home knowledge connection configuration |
+| `document_destination.py` | Select local or configured external business-document policy without network calls | Project common YAML |
+| `personal_feedback.py` | Inspect a private improvement inbox, check access, or send stdin once with independent authentication | User-home settings; explicit native comment |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: compares source against the scripts dir it is executing from, so a session loading a different tree is visible (silent in non-dev / non-harness repos) | — |
@@ -260,6 +261,65 @@ remain internal. Invoke `/harness:report-friction` on Claude Code or
 `$harness:report-friction` on Codex to capture a blocked or inefficient workflow.
 It reports existing context and essential evidence without changing the work;
 copy its output to the Harness improvement developer.
+
+### Personal improvement inbox
+
+The optional personal Harness inbox is separate from project knowledge. Keep its
+address in `~/.config/harness/feedback.yaml`, outside project Git:
+
+```yaml
+backend: atlassian
+page: "https://YOUR-SITE.atlassian.net/wiki/spaces/TEAM/pages/123456"
+```
+
+Keep its own authentication in `~/.config/harness/mise.local.toml`:
+
+```toml
+[env]
+ATLASSIAN_BASE_URL = "https://YOUR-SITE.atlassian.net"
+ATLASSIAN_EMAIL = "YOUR_EMAIL"
+ATLASSIAN_API_TOKEN = "YOUR_TOKEN"
+```
+
+Use owner-only files (`chmod 600`), an owned directory (`chmod 700
+~/.config/harness`), and trust only that file after reviewing it:
+`mise trust ~/.config/harness/mise.local.toml`. Private parent directories must
+not be writable by other users. These examples are placeholders, not an enabled
+connection. Do not commit real destination URLs, reports or credentials.
+
+Both project and inbox use the standard variable names in separate evaluations.
+The sender removes inherited project variables and requires all three values to
+originate from the exact home mise file. Missing values never borrow global or
+project credentials. The private origin pin must match the configured page.
+No additional MCP is registered, and the project wiki connection is unchanged.
+
+Run `python -B <plugin-root>/scripts/personal_feedback.py status` to inspect the
+destination without loading credentials or making requests. `check` verifies
+account and page access without writing. `send` reads a redacted plain UTF-8
+report from stdin and appends a native footer comment; ask `report-friction` to
+send it when desired. Configuring the destination or invoking ordinary reporting
+does not send anything. The helper does not write settings, report files, queues
+or caches, and never prints tokens or report bodies.
+
+Accepted page links are HTTPS `/wiki/spaces/KEY/pages/ID[/title]`,
+`/spaces/KEY/pages/ID[/title]`, and `/wiki/pages/viewpage.action?pageId=ID`
+(or `/pages/viewpage.action?pageId=ID`). Remove tracking queries and fragments;
+short/share links need their full page URL. YAML accepts only `backend` and
+`page`. Status is still usable without PyYAML when settings are absent; configured
+settings require PyYAML in the selected Python, and authentication requires mise.
+The private-file path checks require a POSIX host. This sender supports Confluence
+Cloud V2 with compatible personal-token Basic auth, not Jira or Data Center.
+
+Success is reported only after exact native comment readback, including its page,
+body, status, initial version and authenticated author. Timeout, missing ID or
+readback mismatch after POST returns `unknown`: inspect the page and known comment
+ID before another submission. No automatic retry occurs. CLI exit codes are
+0 for status/check/send success, 1 for unavailable or missing requested setup,
+2 for invalid arguments, and 3 for an uncertain write. Local limits are 64 KiB
+per settings file, 128 KiB per report and 1 MiB per HTTP/mise result. These are
+resource bounds. Replies, attachments and page replacement are outside this
+narrow sender. Saving a report does not notify or automatically start a Harness
+developer; request that the developer read the inbox.
 Retired Goal records and old pack bindings require explicit
 `wbs(action="migrate")` preview followed by `apply=true`; there is no live child
 queue or compatibility execution path.

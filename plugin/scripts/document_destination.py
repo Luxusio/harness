@@ -100,7 +100,19 @@ def _read_config(cwd):
     source = raw.decode("utf-8", errors="strict")
     if _proves_no_wiki(source):
         return None
-    # Ordinary manifests without wiki remain usable with the standard library.
+    manifest = _yaml_mapping(source)
+    if "wiki" not in manifest:
+        return None
+    config = manifest["wiki"]
+    if not isinstance(config, dict) or set(config) - (CONFIG_FIELDS | {"backend"}):
+        raise ValueError("invalid project configuration")
+    if ("backend" in config and config["backend"] != "atlassian") or (config.get("enabled") is True and "backend" not in config):
+        raise ValueError("unsupported wiki backend")
+    return {key: value for key, value in config.items() if key != "backend"}
+
+
+def _yaml_mapping(source):
+    """Bounded callers share strict YAML; ordinary no-wiki paths need no parser."""
     import yaml
 
     class ProjectLoader(yaml.SafeLoader):
@@ -140,14 +152,7 @@ def _read_config(cwd):
         raise ValueError("invalid project configuration") from None
     if not isinstance(manifest, dict):
         raise ValueError("invalid project configuration")
-    if "wiki" not in manifest:
-        return None
-    config = manifest["wiki"]
-    if not isinstance(config, dict) or set(config) - (CONFIG_FIELDS | {"backend"}):
-        raise ValueError("invalid project configuration")
-    if ("backend" in config and config["backend"] != "atlassian") or (config.get("enabled") is True and "backend" not in config):
-        raise ValueError("unsupported wiki backend")
-    return {key: value for key, value in config.items() if key != "backend"}
+    return manifest
 
 
 def _origin(site):

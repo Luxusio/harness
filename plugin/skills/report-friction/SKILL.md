@@ -1,6 +1,6 @@
 ---
 name: report-friction
-description: Produce a self-contained, copyable report of a real Harness blockage or workflow inefficiency for its improvement developer. Use when asked to report friction or hand off a blocked Harness experience; reporting itself is read-only.
+description: Produce a self-contained, copyable report of a real Harness blockage or workflow inefficiency for its improvement developer. Use when asked to report friction or hand off a blocked Harness experience. Reporting is read-only; deliver to the personal inbox only when requested.
 user-invocable: true
 ---
 
@@ -77,3 +77,27 @@ evidence. Do not send it externally or save a report file unless requested.
 If implementation is also explicitly requested, preserve that authorization and
 continue through `harness:run`; the report itself grants no additional authority.
 
+
+## Personal improvement inbox (optional)
+
+Inspect the personal destination with `python -B <plugin-root>/scripts/personal_feedback.py status`;
+use this skill's actual plugin root (`CLAUDE_PLUGIN_ROOT` on Claude,
+`HARNESS_PLUGIN_ROOT` on Codex). It reads only `~/.config/harness/feedback.yaml`,
+never project wiki destinations. Missing settings or a failed lookup must not
+prevent the copyable report. Configuration does not authorize publication.
+
+When the user asks to send/save the report to the improvement inbox, pass the
+redacted report as stdin to the same command with `send`. Do not save a temporary
+report in the repository or put the report/credentials in command arguments.
+The helper evaluates the inbox's private `~/.config/harness/mise.local.toml`,
+independent of project credentials, and appends one native Confluence comment.
+`check` performs only read-only authentication/page checks. Do not redirect this
+submission through a project MCP or use project `feedbackPageId` as a fallback.
+
+Report `sent` only from a verified helper result and retain its page/comment ID.
+An `unknown` result may already have created the comment: inspect the page or
+known comment before any new submission; never automatically retry. Otherwise
+show the actual blocker and still return the copyable report. No automatic
+retrieval, notification or developer response is promised. Setup and accepted
+URL forms are documented in the repository README's Personal improvement inbox
+section; keep real destinations and authentication outside project Git.

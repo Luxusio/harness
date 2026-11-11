@@ -61,6 +61,34 @@ company document changes or automatic migration/deletion. Preserve the provided
 archive and unrelated workspace changes. Existing Talos test results establish
 only its historical baseline and do not approve this extraction.
 
+## Personal Harness feedback
+
+User explicit correction on 2026-11-11: the personal improvement inbox must
+not be committed with the project. The user approved implementing that private
+setting and identified the need for a separate account from project wiki auth.
+Project knowledge selections remain in the shared manifest; the personal
+Harness feedback destination and its authentication remain outside repositories.
+
+Derived implementation: `~/.config/harness/feedback.yaml` selects one existing
+Confluence Cloud page with `backend: atlassian` and `page: <HTTPS page URL>`.
+`~/.config/harness/mise.local.toml` supplies its own `ATLASSIAN_BASE_URL`,
+`ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN`. Evaluate this file independently;
+inherited project or global credentials cannot supply missing private values.
+The credential origin must match the selected page before any network request.
+No project setting, environment destination override or additional registered
+MCP selects the personal inbox.
+
+Reporting remains printable and read-only by default. Only an explicit request
+to publish invokes the short-lived personal sender. It appends a native footer
+comment without overwriting the page, accepts report text on stdin and does not
+save it to Git or echo credentials/report content in results. A successful
+result requires readback of the exact comment, page, body and authenticated
+author. An uncertain response remains unknown and must not trigger automatic
+resubmission. Missing/invalid configuration or unavailable authentication leaves
+publication pending without suppressing the copyable report or falling back to
+the project's wiki. Local fixtures must demonstrate separate project/private
+accounts, zero requests on pin mismatch and one POST on uncertain outcomes.
+
 ## Knowledge retrieval and change context
 
 The user requested the remaining knowledge features from the Talos handoff,
