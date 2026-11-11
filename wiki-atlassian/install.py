@@ -200,9 +200,7 @@ def main() -> int:
         if not gradle:
             parser.error("Gradle is required to build; use --skip-build only after a verified build")
         subprocess.run([gradle, "--no-daemon", "shadowJar"], cwd=ROOT, check=True)
-    base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
-    if not base.is_absolute():
-        parser.error("XDG_DATA_HOME must be absolute")
+    base = Path.home() / ".local/share"
     destination = prepare(base / "wiki-atlassian", ROOT / "build/libs/wiki-atlassian.jar")
     runtimes = args.runtime or [name for name in ("codex", "claude") if shutil.which(name)]
     if not runtimes and not args.prepare_only:

@@ -13,7 +13,7 @@ fun main(args: Array<String>) {
         return
     }
     val settings = KnowledgeSettings.fromEnvironment(environment)
-    KnowledgeSettings.prepareCorpus(settings.corpusRoot)
+    settings.prepareCorpus()
     val remote = ConfluenceRemote(settings.credentials)
     val corpus = LocalCorpus(settings, remote)
     val native = WikiTools(settings.credentials, launchRoot = settings.corpusRoot, runtimeSettings = settings)

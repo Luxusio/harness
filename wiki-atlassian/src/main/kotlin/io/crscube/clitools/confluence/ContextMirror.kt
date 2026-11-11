@@ -89,6 +89,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             require(lock != null) { "Confluence sync busy; retry later" }
             lock.use {
                 recheck()
+                requireCredentialBinding(readManifest(control.resolve("manifest.json"), config), config)
                 if (Files.exists(ContextFiles.safe(control, "transaction.json"))) {
                     require(!noticeAccessDenied(control)) { "A current inventory is required before mirror recovery" }
                     if (config.isKnowledge) requireRootAccess(control, config, knowledgeRoot(config))
@@ -224,7 +225,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             withSyncRootAccess(lock, control, config, scopeRoot) {
                 val priorDenial = if (config.isKnowledge && mode != "pages") noticeDenialToken(control) else null
                 if (config.isKnowledge) remote.requireScope(config, scopeRoot)
-                recover(base, control, config)
+                if (mode == "pages") requireCredentialBinding(readManifest(control.resolve("manifest.json"), config), config)
+                recover(base, control, config, allowCredentialSwitch = mode != "pages")
                 val manifestPath = control.resolve("manifest.json")
                 val previous = readManifest(manifestPath, config)
                 val old = previous["pages"]?.jsonObject ?: buildJsonObject {}
@@ -452,6 +454,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         config.knowledgeRootPageId?.let { put("knowledgeRootPageId", it) }
                         put("explicitPages", JsonArray(pinned.map(::JsonPrimitive)))
                         put("inventoryComplete", full || (!selectionChanged && inventoryComplete))
+                        if (config.isKnowledge) put("credentialBinding", remote.credentialFingerprint)
                         put("cursor", if ((mode == "pages" || unresolved.isNotEmpty()) && previous["cursor"] != null) previous.getValue("cursor") else JsonPrimitive(now.toString()))
                         put("pages", JsonObject(next)); put("unavailable", JsonArray(unresolved.map(::JsonPrimitive)))
                         val folders = selected.asSequence().flatMap { chain(it).orEmpty().asSequence() }
@@ -463,8 +466,12 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     ContextFiles.atomic(staged.resolve("manifest.json"), WikiChanges.documents(previous, complete).toString())
                     // Once this pointer exists, recovery only finishes local projection; never repeats remote writes.
                     ContextFiles.atomic(control.resolve("transaction.json"), buildJsonObject { put("stage", staged.fileName.toString()) }.toString())
-                    recover(base, control, config)
-                    if (full && priorDenial != null) clearRootDenial(control, priorDenial)
+                    withNoticeAccessLock(control) {
+                        recoverLocked(base, control, config, allowCredentialSwitch = full)
+                        if (full && (previous["credentialBinding"] != JsonPrimitive(remote.credentialFingerprint) ||
+                                priorDenial != null && readDenialToken(control) == priorDenial))
+                            Files.deleteIfExists(noticeDenialPath(control))
+                    }
                     return buildJsonObject {
                         put("status", if (unresolved.isEmpty()) "synced" else "synced_with_unavailable")
                         put("pages", next.size); put("changes", JsonArray(changes)); put("unavailable", JsonArray(unresolved.map(::JsonPrimitive)))
@@ -494,12 +501,10 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         withNoticeAccessLock(control) { readDenialToken(control) }
 
     private suspend fun recordRootDenial(control: Path) = withNoticeAccessLock(control) {
-        ContextFiles.atomic(noticeDenialPath(control), UUID.randomUUID().toString())
-    }
-
-    private suspend fun clearRootDenial(control: Path, observed: String): Unit = withNoticeAccessLock(control) {
-        // Authorization that began before a new denial may not clear that newer observation.
-        if (readDenialToken(control) == observed) Files.deleteIfExists(noticeDenialPath(control))
+        val manifest = ContextFiles.safe(control, "manifest.json")
+        // Retired credentials cannot revoke or overwrite the active credential's observation.
+        if (Files.isRegularFile(manifest) && read(manifest)["credentialBinding"] == JsonPrimitive(remote.credentialFingerprint))
+            ContextFiles.atomic(noticeDenialPath(control), UUID.randomUUID().toString())
     }
 
     internal suspend fun recordNoticeRootDenial(config: ContextConfig) {
@@ -553,7 +558,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         val watchedRows = withSyncLock(control) {
             if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock null
             val current = readManifest(manifest, config)
-            if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock null
+            if (current["inventoryComplete"] != JsonPrimitive(true) || !credentialBindingMatches(current, config)) return@withSyncLock null
             val admitted = WikiChanges.admitted(current)
             pageIds.sortedBy { WikiChanges.commentAttemptedAt(current, it) ?: Long.MIN_VALUE }.mapNotNull { id ->
                 admitted[id]?.takeIf { WikiChanges.commentDue(current, id, started, intervalSeconds * 1000) }?.let { id to it }
@@ -604,7 +609,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         withSyncLock(control) {
             if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock
             val current = readManifest(manifest, config)
-            if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock
+            if (current["inventoryComplete"] != JsonPrimitive(true) || !credentialBindingMatches(current, config)) return@withSyncLock
             val currentPages = WikiChanges.admitted(current)
             val confirmed = observed.filterKeys { currentPages[it] == watchedRows[it] }
             val next = WikiChanges.comments(current, started, attempted, confirmed)
@@ -627,6 +632,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         withTimeoutOrNull(5_000) {
             val lockPath = ContextFiles.safe(control, "sync.lock")
             awaitCorpusLock(lockPath).use {
+                if (!credentialBindingMatches(readManifest(control.resolve("manifest.json"), config), config)) return@use false
                 if (!noticeAccessDenied(control)) recheckRootAccess(control, config, knowledgeRoot(config))
                 !noticeAccessDenied(control)
             }
@@ -639,7 +645,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         }
     }
 
-    private fun <T> withSyncLock(control: Path, block: () -> T): T? =
+    private suspend inline fun <T> withSyncLock(control: Path, block: () -> T): T? =
         CorpusFileLock.tryAcquire(ContextFiles.safe(control, "sync.lock"))?.use { block() }
 
     fun manifest(config: ContextConfig): JsonObject {
@@ -719,7 +725,17 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         return files to directories
     }
 
-    private fun recover(base: Path, control: Path, config: ContextConfig) {
+    private fun credentialBindingMatches(manifest: JsonObject, config: ContextConfig): Boolean =
+        !config.isKnowledge || manifest["credentialBinding"] == JsonPrimitive(remote.credentialFingerprint)
+
+    private fun requireCredentialBinding(manifest: JsonObject, config: ContextConfig) {
+        require(credentialBindingMatches(manifest, config)) { "Credential reauthorization requires a complete inventory sync" }
+    }
+
+    private suspend fun recover(base: Path, control: Path, config: ContextConfig, allowCredentialSwitch: Boolean = false) =
+        withNoticeAccessLock(control) { recoverLocked(base, control, config, allowCredentialSwitch) }
+
+    private fun recoverLocked(base: Path, control: Path, config: ContextConfig, allowCredentialSwitch: Boolean = false) {
         val previous = readManifest(ContextFiles.safe(control, "manifest.json"), config)
         val journal = ContextFiles.safe(control, "transaction.json")
         if (!Files.exists(journal)) return
@@ -729,6 +745,10 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         val stage = ContextFiles.safe(control, stageName)
         val next = read(ContextFiles.safe(stage, "manifest.json"))
         validateIdentity(next, config)
+        if (!allowCredentialSwitch || transaction["files"] != null) {
+            requireCredentialBinding(previous, config)
+            requireCredentialBinding(next, config)
+        }
         val pages = next.getValue("pages").jsonObject
         val priorPages = previous["pages"]?.jsonObject ?: buildJsonObject {}
         val retained = JsonObject(next["unavailable"]?.jsonArray?.map { it.jsonPrimitive.content }?.distinct()?.associateWith { id ->
@@ -780,6 +800,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         val priorState = control.resolve("state.json").takeIf { Files.exists(it) }?.let(::read)
         ContextFiles.atomic(control.resolve("state.json"), buildJsonObject {
             put("cursor", next.getValue("cursor")); put("status", "synced")
+            next["credentialBinding"]?.let { put("credentialBinding", it) }
             // Inventory and write-through do not establish authoritative body freshness.
             priorState?.get("bodyRefreshedAt")?.let { put("bodyRefreshedAt", it) }
         }.toString())
@@ -852,6 +873,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         parentId.isString && parentId.content != id && nativeId.matches(parentId.content))
                 }
             }
+            value["credentialBinding"]?.let { require(it is JsonPrimitive && it.isString && it.content.matches(Regex("[a-f0-9]{64}"))) }
             value["inventoryComplete"]?.jsonPrimitive?.boolean
             value["cursor"]?.jsonPrimitive?.content?.let(Instant::parse)
             WikiChanges.validate(value)

@@ -72,6 +72,7 @@ internal fun normalizeNativeSpaceId(metadata: JsonObject): String {
 /** Complete reads, origin-bound credentials, and single-attempt mutations. No Markdown roundtrips. */
 class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = null,
                        private val cache: ConfluencePageCache? = null) : AutoCloseable {
+    internal val credentialFingerprint = io.crscube.clitools.knowledge.KnowledgeSettings.credentialFingerprint(config)
     private val origin = config.baseUrl.trimEnd('/').also {
         require(ContextConfig.validOrigin(it)) { "Configured Atlassian URL must be an HTTPS origin" }
     }

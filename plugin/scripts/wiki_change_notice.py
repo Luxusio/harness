@@ -28,21 +28,25 @@ KINDS = {
 }
 
 
+def _key(parts):
+    encoded = json.dumps(parts, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _control(env):
     if select_destination(env)["mode"] != "external":
         return None
     home = env.get("HOME", "")
     if not home.strip():
         home = pwd.getpwuid(os.getuid()).pw_dir
-    data = Path(env.get("XDG_DATA_HOME", str(Path(home) / ".local/share")))
+    data = Path(home) / ".local/share"
     if not data.is_absolute() or ".." in data.parts:
         return None
-    identity = "\0".join((
+    partition = _key([
         env["WIKI_ATLASSIAN_SITE"].rstrip("/"), env["ATLASSIAN_EMAIL"],
-        env["ATLASSIAN_API_TOKEN"], env["WIKI_ATLASSIAN_ROOT_PAGE_ID"],
+        env["WIKI_ATLASSIAN_ROOT_PAGE_ID"],
         env["WIKI_ATLASSIAN_SPACE_ID"],
-    ))
-    partition = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    ])
     return data / "wiki-atlassian" / partition / "confluence" / env["WIKI_ATLASSIAN_SPACE"] / ".sync"
 
 
@@ -141,7 +145,7 @@ def _write_cursors(directory, cursors):
             pass
 
 
-def _consume(directory, session):
+def _consume(directory, session, credential):
     # The protected directory owns the lock inode. Older mirrors may have
     # created it using the process umask. Its contents are never read.
     lock = _open_file(directory, "sync.lock", private=False)
@@ -149,6 +153,9 @@ def _consume(directory, session):
         # Java FileChannel uses POSIX record locks on this file.
         fcntl.lockf(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         if _present(directory, "transaction.json") or _present(directory, "notice-access-denied"):
+            return ""
+        state = _read(directory, "state.json")
+        if not isinstance(state, dict) or state.get("credentialBinding") != credential:
             return ""
         feed = _read(directory, "changes.json")
         if feed is None:
@@ -204,8 +211,10 @@ def render_notice(data, runtime, environment=None):
         if control is None:
             return ""
         key = hashlib.sha256((runtime + "\0" + sid).encode()).hexdigest()
+        credential = _key([env["WIKI_ATLASSIAN_SITE"].rstrip("/"),
+                           env["ATLASSIAN_EMAIL"], env["ATLASSIAN_API_TOKEN"]])
         with _directory(control) as directory:
-            return _consume(directory, key)
+            return _consume(directory, key, credential)
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return ""
 

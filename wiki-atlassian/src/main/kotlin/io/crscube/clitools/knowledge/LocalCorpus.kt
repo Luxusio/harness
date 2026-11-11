@@ -23,7 +23,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
     }
     private enum class ReadState(val code: String) {
         MISSING("replica_missing"), BUSY("replica_busy"), RECOVERY("replica_recovery_pending"),
-        INCOMPLETE("replica_incomplete"), UNAVAILABLE("replica_unavailable")
+        INCOMPLETE("replica_incomplete"), REAUTHORIZATION("credential_reauthorization_pending"), UNAVAILABLE("replica_unavailable")
     }
     private class ReadFailure(val reason: ReadState) : RuntimeException(reason.code)
     private class RetrievalFailure(val code: String, message: String) : RuntimeException(message)
@@ -44,6 +44,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
     }
     private fun bodyTimestamp(state: JsonObject): Long? = (state["bodyRefreshedAt"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
     suspend fun synchronize(authoritativeBodies: Boolean = true) {
+        settings.prepareCorpus()
         val before = settings.identity()
         val config = ContextConfig.load(settings.corpusRoot, settings)!!
         val control = ContextFiles.safe(settings.corpusRoot, "confluence/${config.space}/.sync")
@@ -52,7 +53,9 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         val lease = CorpusFileLock.tryAcquire(sweepPath) ?: return
         lease.use {
             val mirror = ContextMirror(settings.corpusRoot, remote)
-            val existing = mirror.manifest(config)["pages"]?.jsonObject?.keys.orEmpty()
+            val priorManifest = mirror.manifest(config)
+            val existing = priorManifest["pages"]?.jsonObject?.keys.orEmpty()
+            val reauthorizing = existing.isNotEmpty() && priorManifest["credentialBinding"] != JsonPrimitive(settings.credentialFingerprint)
             val started = System.currentTimeMillis()
             val previous = bodyTimestamp(checkpoint(control))
             val due = previous == null || previous < 0 || previous > started || started - previous >= settings.pollIntervalSeconds * 1000
@@ -64,7 +67,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             // Native inline markers may change without a page revision. One leased pass
             // authoritatively refreshes existing bodies per interval across all projects.
             // A known publish failure bypasses the timestamp only for its exact pages.
-            val fullPass = authoritativeBodies && due
+            val fullPass = authoritativeBodies && due && !reauthorizing
             val authoritative = ((if (fullPass) existing else emptySet()) + requested).filter { it in pages && it !in unavailable }
             for (batch in authoritative.filter { pages[it]?.jsonObject?.get("type") == JsonPrimitive("page") }.chunked(100)) {
                 require(settings.identity() == before) { "Connection changed during synchronization" }
@@ -79,6 +82,9 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
                 require(lock != null) { "Corpus busy before authoritative checkpoint" }
                 lock.use {
                     require(!Files.exists(ContextFiles.safe(control, "transaction.json"))) { "Corpus recovery pending" }
+                    require(mirror.manifest(config)["credentialBinding"] == JsonPrimitive(settings.credentialFingerprint)) {
+                        "Credential binding changed during body synchronization"
+                    }
                     val state = checkpoint(control)
                     ContextFiles.atomic(ContextFiles.safe(control, "state.json"), JsonObject(state + ("bodyRefreshedAt" to JsonPrimitive(started))).toString())
                 }
@@ -113,7 +119,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         val status = when {
             reason == ReadState.BUSY -> "busy"
             failure != null -> "failed"
-            reason in setOf(ReadState.MISSING, ReadState.RECOVERY, ReadState.INCOMPLETE) -> "pending"
+            reason in setOf(ReadState.MISSING, ReadState.RECOVERY, ReadState.INCOMPLETE, ReadState.REAUTHORIZATION) -> "pending"
             else -> "unavailable"
         }
         buildJsonObject {
@@ -143,6 +149,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         return lock.use {
             if (Files.exists(ContextFiles.safe(base, ".sync/transaction.json"))) throw ReadFailure(ReadState.RECOVERY)
             val record = ContextMirror(settings.corpusRoot, remote).manifest(config)
+            if (record["credentialBinding"] != JsonPrimitive(settings.credentialFingerprint)) throw ReadFailure(ReadState.REAUTHORIZATION)
             if (record["inventoryComplete"] != JsonPrimitive(true)) throw ReadFailure(ReadState.INCOMPLETE)
             val result = block(record, base)
             require(settings.identity() == identity) { "Connection changed during read" }
@@ -335,6 +342,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
                     ReadState.BUSY -> "replica_busy" to "Retry after the active synchronization finishes"
                     ReadState.RECOVERY -> "replica_recovery_pending" to "Automatic synchronization must finish the interrupted publication"
                     ReadState.INCOMPLETE -> "replica_incomplete" to "Wait for a complete synchronization; partial inventory is not readable"
+                    ReadState.REAUTHORIZATION -> "credential_reauthorization_pending" to "Wait for a complete inventory synchronization with the current credentials"
                     ReadState.UNAVAILABLE -> "replica_unavailable" to "Check connection_status and the configured corpus location"
                 }
                 message.contains("Query") || message.contains("Continued") -> "invalid_query" to "Use a nonempty query or a bounded read with its returned version"

@@ -192,3 +192,23 @@ def test_marketplace_source_stays_stable_across_versions_and_serializes_updates(
         with module.marketplace(first):
             pytest.fail("An unknown selection was overwritten")
     assert (stable / "plugin").resolve() == outside
+
+
+def test_installer_uses_user_home_when_xdg_location_is_supplied(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("wiki_install_fixed_home", PLUGIN / "install.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    home = tmp_path / "home"
+    override = tmp_path / "unused-override"
+    monkeypatch.setenv("XDG_DATA_HOME", str(override))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    real_prepare = module.prepare
+    jar = _jar()
+    monkeypatch.setattr(module, "prepare", lambda data, ignored_jar: real_prepare(data, jar))
+    monkeypatch.setattr(module.sys, "argv", ["install.py", "--skip-build", "--prepare-only"])
+    assert module.main() == 0
+    market = Path(capsys.readouterr().out.strip())
+    assert market == home / ".local/share/wiki-atlassian/marketplace"
+    assert (market / "plugin/skills/setup/SKILL.md").is_file()
+    assert not override.exists()

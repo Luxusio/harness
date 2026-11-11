@@ -60,7 +60,7 @@ class WikiChangesTest {
         }
     }
 
-    private inner class Provider : AutoCloseable {
+    private inner class Provider(token: String = "fixture-token") : AutoCloseable {
         val pages = linkedMapOf("210" to Page("210", null), "211" to Page("211"))
         val comments = mutableListOf(Comment("310", "211", "footer"), Comment("320", "211", "inline"))
         val denied = mutableSetOf<String>()
@@ -100,7 +100,7 @@ class WikiChangesTest {
             if (request.url.parameters["body-format"] == "storage" && parts[0] == "pages" && parts.size == 2) afterStorage(id)
             respond(result.toString(), HttpStatusCode.OK, responseHeaders)
         })
-        private val remote = ConfluenceRemote(JiraConfig(origin, "fixture@example.test", "fixture-token"), client)
+        private val remote = ConfluenceRemote(JiraConfig(origin, "fixture@example.test", token), client)
         val mirror = ContextMirror(root, remote)
         override fun close() { remote.close(); client.close() }
     }
@@ -108,8 +108,8 @@ class WikiChangesTest {
     @Test fun `initial complete snapshot is quiet and admitted row changes are sequenced`() = runBlocking {
         Provider().use { provider ->
             val mirror = provider.mirror
-            mirror.sync(config, "pages", listOf("211"))
-            assertEquals(0L, json(feedPath).getValue("head").jsonPrimitive.long)
+            assertFailsWith<IllegalArgumentException> { mirror.sync(config, "pages", listOf("211")) }
+            assertFalse(Files.exists(feedPath), "Partial publication cannot establish credential admission")
             mirror.sync(config)
             val baseline = json(feedPath)
             assertEquals(setOf("epoch", "head", "events"), baseline.keys)
@@ -138,6 +138,59 @@ class WikiChangesTest {
             provider.denied.clear()
             mirror.sync(config)
             assertEquals(notice(6, "updated", "211"), events(json(feedPath)).last())
+        }
+    }
+
+    @Test fun `foreign credential partial writers wait for full inventory and narrowed admission excludes old bodies`() = runBlocking {
+        Provider().use { active ->
+            active.mirror.sync(config)
+            val baseline = manifest()
+            Provider("rotated-token").use { rotated ->
+                assertFailsWith<IllegalArgumentException> { rotated.mirror.refreshAdmittedBodies(config, listOf("211")) }
+                assertFailsWith<IllegalArgumentException> { rotated.mirror.publishVerified(config, rotated.pages.getValue("211").native()) }
+                rotated.mirror.pollComments(config, listOf("211"), 0)
+                assertEquals(0, rotated.commentReads, "Foreign watcher must not select targets from another credential's admission")
+                assertEquals(baseline, manifest())
+                rotated.denied += "211"
+                rotated.mirror.sync(config)
+                assertNotEquals(baseline["credentialBinding"], manifest()["credentialBinding"])
+                assertEquals(JsonArray(listOf(JsonPrimitive("211"))), manifest()["unavailable"])
+                assertFalse("211" in WikiChanges.admitted(manifest()))
+                assertEquals(manifest()["credentialBinding"], json(control.resolve("state.json"))["credentialBinding"])
+            }
+        }
+    }
+
+    @Test fun `retired credential cannot overwrite active denial marker or late comment checkpoint`() = runBlocking {
+        Provider().use { retired ->
+            retired.mirror.sync(config)
+            val sent = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            retired.overrideStatus = { path ->
+                if (path == "pages/211/footer-comments") {
+                    sent.complete(Unit); release.await()
+                }
+                null
+            }
+            val watch = async { retired.mirror.pollComments(config, listOf("211"), 0) }
+            try {
+                withTimeout(5_000) { sent.await() }
+                Provider("rotated-token").use { active ->
+                    active.mirror.sync(config)
+                    val admitted = manifest()
+                    active.mirror.recordNoticeRootDenial(config)
+                    val marker = Files.readString(denialPath)
+                    retired.mirror.recordNoticeRootDenial(config)
+                    assertEquals(marker, Files.readString(denialPath))
+                    release.complete(Unit); watch.await()
+                    assertEquals(admitted, manifest(), "In-flight old watcher cannot commit under the new credential binding")
+                    assertEquals(marker, Files.readString(denialPath))
+                    active.mirror.sync(config)
+                    assertFalse(Files.exists(denialPath))
+                    retired.mirror.recordNoticeRootDenial(config)
+                    assertFalse(Files.exists(denialPath), "Late retired denial cannot pause the admitted credential")
+                }
+            } finally { release.complete(Unit) }
         }
     }
 

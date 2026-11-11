@@ -16,7 +16,7 @@ class KnowledgeSettingsTest {
         "WIKI_ATLASSIAN_ENABLED" to "true", "WIKI_ATLASSIAN_SITE" to credentials.baseUrl,
         "WIKI_ATLASSIAN_SPACE" to "COMMON", "WIKI_ATLASSIAN_SPACE_ID" to "20",
         "WIKI_ATLASSIAN_ROOT_PAGE_ID" to "210", "ATLASSIAN_EMAIL" to credentials.email,
-        "ATLASSIAN_API_TOKEN" to credentials.apiToken, "XDG_DATA_HOME" to home.resolve("data").toString())
+        "ATLASSIAN_API_TOKEN" to credentials.apiToken, "HOME" to home.toString())
     private fun settings(extra: Map<String, String> = emptyMap()) = KnowledgeSettings.fromEnvironment(environment() + extra)
 
     @Test fun `activation is explicit and shared credentials or launcher settings do not activate`() {
@@ -117,13 +117,17 @@ class KnowledgeSettingsTest {
         assertEquals(JsonNull, connections.getValue("effective").jsonObject["jira"])
     }
 
-    @Test fun `same connection shares corpus while credential site space and root changes isolate it`() {
+    @Test fun `token rotation shares corpus while account site space and root changes isolate it`() {
         val first = settings()
         assertEquals(first.corpusRoot, settings().corpusRoot)
-        val variants = listOf(mapOf("ATLASSIAN_API_TOKEN" to "other-fixture"), mapOf("ATLASSIAN_EMAIL" to "other@example.test"),
+        assertEquals(first.corpusRoot, settings(mapOf("ATLASSIAN_API_TOKEN" to "other-fixture")).corpusRoot)
+        assertNotEquals(first.credentialFingerprint, settings(mapOf("ATLASSIAN_API_TOKEN" to "other-fixture")).credentialFingerprint)
+        assertEquals(first.corpusRoot, settings(mapOf("WIKI_ATLASSIAN_SITE" to credentials.baseUrl + "/")).corpusRoot)
+        assertEquals(home.resolve(".local/share/wiki-atlassian"), KnowledgeSettings.defaultDataHome(environment() + ("XDG_DATA_HOME" to "/ignored")))
+        val variants = listOf(mapOf("ATLASSIAN_EMAIL" to "other@example.test"),
             mapOf("WIKI_ATLASSIAN_SITE" to "https://other.atlassian.net"), mapOf("WIKI_ATLASSIAN_SPACE_ID" to "21"),
             mapOf("WIKI_ATLASSIAN_ROOT_PAGE_ID" to "211"))
-        assertEquals(6, (variants.map { settings(it).corpusRoot } + listOf(first.corpusRoot)).toSet().size)
+        assertEquals(5, (variants.map { settings(it).corpusRoot } + listOf(first.corpusRoot)).toSet().size)
         assertFalse(first.corpusRoot.toString().contains(credentials.email))
         assertFalse(first.corpusRoot.toString().contains(credentials.apiToken))
         assertFalse(Files.exists(first.corpusRoot))
@@ -149,6 +153,30 @@ class KnowledgeSettingsTest {
             assertFalse(error.stackTraceToString().contains(sentinel))
         }
         assertFalse(Files.exists(home.resolve("data")))
+    }
+
+    @Test fun `corrupt and symlink legacy candidates cannot block a fresh empty corpus`() {
+        val bound = settings()
+        val source = bound.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
+        KnowledgeSettings.prepareCorpus(source.parent)
+        Files.writeString(source, "not-json-private-legacy")
+        bound.prepareCorpus()
+        assertTrue(Files.isDirectory(bound.corpusRoot))
+        assertFalse(Files.exists(bound.corpusRoot.resolve("confluence/COMMON/.sync/manifest.json")))
+        assertEquals("not-json-private-legacy", Files.readString(source))
+        Files.delete(source)
+        val outside = home.resolve("outside.json")
+        Files.writeString(outside, "private-source")
+        Files.createSymbolicLink(source, outside)
+        settings().prepareCorpus()
+        assertFalse(Files.exists(bound.corpusRoot.resolve("confluence/COMMON/.sync/manifest.json")))
+        assertEquals("private-source", Files.readString(outside))
+        // Once failed, the same process must not retry large/corrupt optional migration on each poll.
+        Files.delete(source)
+        Files.writeString(source, "still-invalid")
+        Files.delete(source.parent.resolve("sync.lock"))
+        bound.prepareCorpus()
+        assertFalse(Files.exists(source.parent.resolve("sync.lock")), "Repeated polling must not revisit the legacy source")
     }
 
     @Test fun `corpus preparation rejects symlink paths and group writable metadata`() {

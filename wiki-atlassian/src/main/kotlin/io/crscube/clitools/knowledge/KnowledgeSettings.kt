@@ -2,12 +2,14 @@ package io.crscube.clitools.knowledge
 
 import io.crscube.clitools.confluence.ContextConfig
 import io.crscube.clitools.confluence.ContextFiles
+import io.crscube.clitools.confluence.CorpusFileLock
 import io.crscube.clitools.confluence.WikiChanges
 import io.crscube.clitools.jirafetcher.config.JiraConfig
 import kotlinx.serialization.json.*
 import java.nio.file.*
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** One immutable connection snapshot from the environment, independent of project cwd. */
 class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
@@ -20,9 +22,74 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             "Credential origin differs from configured connection"
         }
     }
-    val corpusRoot: Path = dataHome.resolve(ContextFiles.hash(listOf(credentials.baseUrl,
+    val credentialFingerprint: String = credentialFingerprint(credentials)
+    val corpusRoot: Path = dataHome.resolve(ContextFiles.hash(JsonArray(listOf(credentials.baseUrl.trimEnd('/'),
+        credentials.email, initial.getValue("rootPageId").jsonPrimitive.content,
+        initial.getValue("spaceId").jsonPrimitive.content).map(::JsonPrimitive)).toString()))
+    internal val legacyCorpusRoot: Path = dataHome.resolve(ContextFiles.hash(listOf(credentials.baseUrl,
         credentials.email, credentials.apiToken, initial.getValue("rootPageId").jsonPrimitive.content,
         initial.getValue("spaceId").jsonPrimitive.content).joinToString("\u0000")))
+    @Volatile private var legacyImportFailed = false
+
+    private val legacySeedAttempted = AtomicBoolean(false)
+
+    /** Only the exact current credential's legacy directory is a provable reuse candidate. */
+    fun prepareCorpus() {
+        prepareCorpus(corpusRoot)
+        if (legacyImportFailed) return
+        try { importLegacyCorpus() }
+        catch (_: Exception) {
+            legacyImportFailed = true
+            // Reuse is optional. An unsafe, corrupt or oversized seed must not block fresh authorization.
+            System.err.println("Atlassian legacy cache reuse was unavailable; synchronization will rebuild the replica")
+        }
+    }
+
+    private fun importLegacyCorpus() {
+        val space = initial.getValue("space").jsonPrimitive.content
+        val destination = corpusRoot.resolve("confluence/$space/.sync")
+        if (Files.exists(destination.resolve("manifest.json")) || !Files.exists(legacyCorpusRoot)) return
+        safePath(legacyCorpusRoot); owned(legacyCorpusRoot)
+        val sourceBase = ContextFiles.safe(legacyCorpusRoot, "confluence/$space")
+        val sourceControl = ContextFiles.safe(legacyCorpusRoot, "confluence/$space/.sync")
+        if (!Files.isDirectory(sourceControl)) return
+        prepareCorpus(destination)
+        CorpusFileLock.tryAcquire(destination.resolve("sync.lock"))?.use {
+            if (Files.exists(destination.resolve("manifest.json"))) return
+            CorpusFileLock.tryAcquire(ContextFiles.safe(sourceControl, "sync.lock"))?.use {
+                if (Files.exists(ContextFiles.safe(sourceControl, "transaction.json"))) return
+                val manifestPath = ContextFiles.safe(sourceControl, "manifest.json")
+                if (!Files.isRegularFile(manifestPath) || Files.size(manifestPath) > 16L * 1024 * 1024) return
+                val manifest = Json.parseToJsonElement(Files.readString(manifestPath)).jsonObject
+                require(manifest["spaceId"] == initial["spaceId"] && manifest["homePageId"] == initial["rootPageId"] &&
+                    manifest["site"]?.jsonPrimitive?.content?.trimEnd('/') == credentials.baseUrl.trimEnd('/')) { "Legacy corpus identity differs" }
+                val pages = manifest["pages"]?.jsonObject ?: return
+                require(pages.size <= 20000) { "Legacy corpus exceeds page budget" }
+                var totalBytes = 0L
+                for ((id, value) in pages) {
+                    require(id.matches(Regex("[1-9][0-9]*")))
+                    val row = value.jsonObject
+                    val markdown = row.getValue("path").jsonPrimitive.content
+                    val storage = row.getValue("storage").jsonPrimitive.content
+                    require(markdown.startsWith("pages/") && markdown.endsWith(".md") &&
+                        storage.startsWith(".sync/storage/") && storage.endsWith(".xhtml")) { "Invalid legacy body path" }
+                    for (relative in listOf(markdown, storage)) {
+                        val source = ContextFiles.safe(sourceBase, relative)
+                        require(Files.isRegularFile(source) && Files.size(source) <= 8L * 1024 * 1024)
+                        totalBytes += Files.size(source)
+                        require(totalBytes <= 256L * 1024 * 1024) { "Legacy corpus exceeds byte budget" }
+                        val body = Files.readString(source)
+                        if (relative == storage) require(ContextFiles.hash(body) == row["bodyHash"]?.jsonPrimitive?.content)
+                        ContextFiles.atomic(ContextFiles.safe(corpusRoot.resolve("confluence/$space"), relative), body)
+                    }
+                }
+                // Never import old authorization, notifications, denial markers or writer journals.
+                val seed = JsonObject(manifest - "credentialBinding" - WikiChanges.noticesKey - "wikiCommentWatch" +
+                    ("inventoryComplete" to JsonPrimitive(false)))
+                ContextFiles.atomic(destination.resolve("manifest.json"), seed.toString())
+            }
+        }
+    }
     val pollIntervalSeconds: Long get() = initial["pollIntervalSeconds"]?.jsonPrimitive?.long ?: 300L
     val watchedCommentPages: List<String> = WikiChanges.watchPages(initial["watchCommentPages"]?.jsonPrimitive?.content)
     fun identity(): String = ContextFiles.hash(initial.toString())
@@ -39,6 +106,8 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
         return buildJsonObject { put("common", connection); put("project", connection); put("effective", connection); put("role", "") }
     }
     companion object {
+        fun credentialFingerprint(credentials: JiraConfig): String = ContextFiles.hash(JsonArray(listOf(
+            credentials.baseUrl.trimEnd('/'), credentials.email, credentials.apiToken).map(::JsonPrimitive)).toString())
         fun home(): Path = System.getenv("HOME")?.takeIf { it.isNotBlank() }?.let { Paths.get(it).also { p -> require(p.isAbsolute) } }
             ?: Paths.get(System.getProperty("user.home"))
         private fun owned(path: Path) {
@@ -77,8 +146,7 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             owned(path)
         }
         fun defaultDataHome(environment: Map<String, String> = System.getenv()): Path = try {
-            val base = environment["XDG_DATA_HOME"]?.let { Paths.get(it).also { p -> require(p.isAbsolute) } }
-                ?: environment["HOME"]?.takeIf { it.isNotBlank() }?.let { Paths.get(it).also { p -> require(p.isAbsolute) } }
+            val base = environment["HOME"]?.takeIf { it.isNotBlank() }?.let { Paths.get(it).also { p -> require(p.isAbsolute) } }
                     ?.resolve(".local/share") ?: Paths.get(System.getProperty("user.home")).resolve(".local/share")
             base.resolve("wiki-atlassian")
         } catch (_: Exception) { throw IllegalArgumentException("Invalid corpus data home") }

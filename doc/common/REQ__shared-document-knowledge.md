@@ -26,7 +26,7 @@ clarified that connection settings come only from injected environment variables
 `mise.local.toml` is an environment setup example, never a file the plugin reads.
 No JSON connection file or automatic mise invocation remains. The initial
 implemented capabilities are Confluence documents, comments and history. Home storage is partitioned
-by remote origin, authenticated credential identity and registered root. Read
+by remote origin, account identity and registered root. Read
 replicas and manifests are derived; Confluence remains the document authority.
 Native storage and safe mutation logic are extracted from the supplied Talos
 snapshot. No credentials, company pages or bundled old application JAR enter Git.
@@ -99,3 +99,20 @@ account-policy, secret-transfer and host-reload blockers without claiming a
 saved configuration proves a working connection. Verify the chosen ROOT with
 read-only native/MCP operations. Authoring this skill does not authorize live
 company installation or token issuance from an example request.
+
+## Account cache reuse
+
+The user objects to downloading a new corpus after API token replacement and
+requests removal of environment-based cache location overrides. Use the
+standard user-home location and ignore XDG_DATA_HOME for wiki data and plugin
+installation. Preserve the injected environment contract for connection data.
+
+Isolate content by site, exact account email, space ID and ROOT ID. Token
+replacement requires fresh authorization before cached content and notices
+are accessible, while intact unchanged bodies can be reused. Only a complete
+authorized inventory switches the current credential binding. Partial writes
+must not mix another credential's admitted contents into that snapshot.
+Retired credential failures must not invalidate the replacement's admission.
+Preserve normal body-refresh detection and existing cache bytes during any
+one-time migration. Unknown opaque legacy directories cannot establish
+account ownership by proximity or matching space alone.

@@ -342,7 +342,7 @@ class NativeDocumentContractTest {
             return result
         }
 
-        fun <T> use(launch: Path = root, cache: ConfluencePageCache? = null, context: Boolean = false, local: Boolean = false, synchronize: Boolean = true, observeCorpus: ((LocalCorpus) -> Unit)? = null, action: (ToolRegistry) -> T): T {
+        fun <T> use(launch: Path = root, connection: KnowledgeSettings = settings, cache: ConfluencePageCache? = null, context: Boolean = false, local: Boolean = false, synchronize: Boolean = true, observeCorpus: ((LocalCorpus) -> Unit)? = null, action: (ToolRegistry) -> T): T {
             HttpClient(MockEngine { request ->
                 assertEquals("example.atlassian.net", request.url.host, "Credentials cannot follow foreign resources/cursors")
                 requests += request; beforeRequest(request)
@@ -360,10 +360,10 @@ class NativeDocumentContractTest {
                 else if (conflictOnUpdate && request.method == HttpMethod.Put) respond("{}", HttpStatusCode.Conflict, headers)
                 else respond(transform(request, if (request.method == HttpMethod.Get) get(request) else mutate(request)).toString(), headers = headers)
             }).use { client ->
-                WikiTools(credentials, client, launch, cache = cache, runtimeSettings = settings).use { tools ->
+                WikiTools(connection.credentials, client, launch, cache = cache, runtimeSettings = connection).use { tools ->
                     val registry = ToolRegistry(); registry.register(tools)
-                    if (local) ConfluenceRemote(credentials, client).use { remote ->
-                        val corpus = LocalCorpus(settings, remote)
+                    if (local) ConfluenceRemote(connection.credentials, client).use { remote ->
+                        val corpus = LocalCorpus(connection, remote)
                         if (synchronize) runBlocking { corpus.synchronize() }
                         tools.service.localReads = corpus::execute
                         tools.service.replicaRepair = corpus::requestRepair
@@ -1611,6 +1611,80 @@ class NativeDocumentContractTest {
 
     @Test fun `restarted corpus repairs persisted same version inline marker without a durable retry queue`() {
         sameVersionInlineRepair(restart = true)
+    }
+
+    @Test fun `exact current token legacy seed preserves originals and reauthorizes without unchanged body transfer`() {
+        val provider = Provider()
+        provider.use(local = true) { }
+        val source = settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
+        Files.move(root, settings.legacyCorpusRoot)
+        val original = Files.readString(source)
+        checkNotNull(CorpusFileLock.tryAcquire(source.parent.resolve("sync.lock"))).use {
+            settings.prepareCorpus()
+            assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")), "Active legacy writer prevents reuse")
+        }
+        // A fresh process may reuse the now-idle source; one settings instance never retries migration.
+        KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data")).prepareCorpus()
+        val copied = root.resolve("confluence/COMMON/.sync/manifest.json")
+        val seed = Json.parseToJsonElement(Files.readString(copied)).jsonObject
+        assertEquals(JsonPrimitive(false), seed["inventoryComplete"])
+        assertNull(seed["credentialBinding"])
+        assertNull(seed[WikiChanges.noticesKey])
+        assertFalse(Files.exists(copied.resolveSibling("state.json")), "Old body-refresh checkpoint is not admission evidence")
+        provider.requests.clear()
+        provider.use(local = true, synchronize = false, observeCorpus = { corpus ->
+            assertEquals(JsonPrimitive("credential_reauthorization_pending"), corpus.execute("get_document", strings("document" to "201"))?.get("code"))
+            runBlocking { corpus.synchronize() }
+            assertFalse(provider.requests.any { it.url.parameters["body-format"] == "storage" })
+            assertNull(Json.parseToJsonElement(Files.readString(copied.resolveSibling("state.json"))).jsonObject["bodyRefreshedAt"])
+        }) { registry -> assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content")) }
+        assertEquals(original, Files.readString(source), "Migration must preserve the legacy original")
+        provider.assertNoEffects()
+    }
+
+    @Test fun `already replaced token cannot guess another opaque legacy directory`() {
+        val provider = Provider()
+        provider.use(local = true) { }
+        Files.move(root, settings.legacyCorpusRoot)
+        val rotated = KnowledgeSettings(settings.read(), credentials.copy(apiToken = "already-replaced-token"), runtimeHome.resolve("data"))
+        rotated.prepareCorpus()
+        assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")))
+        assertTrue(Files.isRegularFile(settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")))
+    }
+
+    @Test fun `rotated token waits for inventory then reuses unchanged bodies without advancing sweep freshness`() {
+        val provider = Provider()
+        provider.use(local = true) { }
+        val checkpoint = root.resolve("confluence/COMMON/.sync/state.json")
+        val oldState = Json.parseToJsonElement(Files.readString(checkpoint)).jsonObject
+        Files.writeString(checkpoint, JsonObject(oldState + ("bodyRefreshedAt" to JsonPrimitive(0))).toString())
+        val rotated = KnowledgeSettings(settings.read(), credentials.copy(apiToken = "rotated-fixture-token"), runtimeHome.resolve("data"))
+        assertEquals(root, rotated.corpusRoot)
+        provider.requests.clear()
+        provider.use(connection = rotated, local = true, synchronize = false, observeCorpus = { corpus ->
+            val status = Json.parseToJsonElement(corpus.status()).jsonObject
+            assertEquals(JsonPrimitive(false), status["ready"])
+            assertEquals(JsonPrimitive("credential_reauthorization_pending"), status["reason"])
+            assertEquals(JsonPrimitive("credential_reauthorization_pending"), corpus.execute("get_document", strings("document" to "201"))?.get("code"))
+            provider.denied["/wiki/api/v2/pages/210"] = HttpStatusCode.Forbidden
+            assertFailsWith<ContextRemoteException> { runBlocking { corpus.synchronize() } }
+            assertEquals(oldState["credentialBinding"], Json.parseToJsonElement(Files.readString(checkpoint)).jsonObject["credentialBinding"])
+            provider.denied.clear(); provider.requests.clear()
+            runBlocking { corpus.synchronize() }
+            assertTrue(provider.requests.isNotEmpty(), "Rotation must reauthorize metadata and complete inventory")
+            assertFalse(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "Same-version validated local bodies avoid transfer during token admission")
+            val admitted = Json.parseToJsonElement(Files.readString(checkpoint)).jsonObject
+            assertEquals(JsonPrimitive(rotated.credentialFingerprint), admitted["credentialBinding"])
+            assertEquals(JsonPrimitive(0), admitted["bodyRefreshedAt"], "Inventory reuse cannot claim authoritative body refresh")
+            provider.requests.clear()
+            provider.pages.getValue("201").content += "<p>Same version marker discovered by normal sweep</p>"
+            runBlocking { corpus.synchronize() }
+            assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" })
+        }) { registry ->
+            val document = call(registry, "get_document", strings("document" to "201"))
+            assertTrue(document.getValue("content").jsonPrimitive.content.contains("Same version marker discovered by normal sweep"))
+        }
+        provider.assertNoEffects()
     }
 
     @Test fun `another corpus instance skips recent authoritative body sweep but expires it at the shared checkpoint`() {

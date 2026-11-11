@@ -9,7 +9,6 @@
       "env_vars": [
         "HOME",
         "JAVA_HOME",
-        "XDG_DATA_HOME",
         "WIKI_ATLASSIAN_JAVA",
         "ATLASSIAN_EMAIL",
         "ATLASSIAN_API_TOKEN",

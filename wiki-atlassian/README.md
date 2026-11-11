@@ -33,7 +33,7 @@ for example `mise exec -- codex` or `mise exec -- claude`. Merely creating the
 file does not change an already running host or MCP; reconnect/restart after
 changing the environment. The MCP receives a fixed connection for its lifetime.
 Different projects receiving the same connection share the home corpus without
-project registration. Projects using different sites, accounts, tokens, spaces
+project registration. Projects using different sites, accounts, spaces
 or roots receive separate hashed corpus directories. Run each host/MCP with
 that project's environment; changing cwd in an existing MCP does not switch
 its account. A host that shares one MCP process across projects needs separate
@@ -69,15 +69,24 @@ including Talos, retains that product's installer and settings.
 
 ## Shared corpus and operations
 
-The read projection lives under `~/.local/share/wiki-atlassian/` (or
-`$XDG_DATA_HOME/wiki-atlassian/`). Different projects share the same
-injected connection; site, credential identity and selected ROOT partition
-the corpus. A SHA-256 connection key includes origin, account, credential and
-space/root IDs; raw credentials never appear in directory names. Token rotation
-selects a new partition rather than trusting a prior permission snapshot. Do not
+The read projection lives under `~/.local/share/wiki-atlassian/`. The corpus
+and plugin installation use the standard user-home location and ignore
+`XDG_DATA_HOME`. Different projects share the same account/site/space/ROOT
+corpus. Its SHA-256 directory key includes origin, exact account email and
+space/root IDs. A separate credential fingerprint binds a completed inventory
+to the current token. After token rotation, the MCP freshly authorizes the
+selected documents before reusing intact same-version bodies. Cached reads
+and hook notices wait for that authorization. No token text appears in paths.
+Overlapping tokens can each publish a fresh inventory; a process waits for
+its own credential binding before reading the shared replica. Do not
 edit generated Markdown/storage/manifests. Remote documents
 remain authoritative. Cached reads describe snapshot freshness; offline access
 does not prove that remote access permissions are still current.
+
+An exact legacy directory derived from the currently supplied credentials can
+seed the new account corpus. The old directory is preserved and its prior
+authorization is discarded. If the token changed before upgrading, the old
+opaque directory cannot be assigned to an account safely; it remains intact.
 
 The MCP owns automatic startup/periodic synchronization and publication of
 verified writes. Search/read queries use the shared corpus; history, comments

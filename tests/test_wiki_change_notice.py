@@ -26,7 +26,8 @@ def setup_wiki(tmp_path):
            if not key.startswith(("HARNESS_", "CLAUDE_", "CODEX_", "WIKI_", "ATLASSIAN_"))}
     env.update(
         PYTHONDONTWRITEBYTECODE="1",
-        XDG_DATA_HOME=str(tmp_path / "share"),
+        HOME=str(tmp_path / "home"),
+        XDG_DATA_HOME=str(tmp_path / "ignored-override"),
         WIKI_ATLASSIAN_ENABLED="true",
         WIKI_ATLASSIAN_SITE="https://example.invalid/",
         WIKI_ATLASSIAN_SPACE="TEAM",
@@ -35,12 +36,14 @@ def setup_wiki(tmp_path):
         ATLASSIAN_EMAIL="fixture@example.invalid",
         ATLASSIAN_API_TOKEN="fixture-token",
     )
-    # Use the native storage key contract, with explicit delimiters.
-    identity = "\0".join(("https://example.invalid", "fixture@example.invalid", "fixture-token", "456", "123"))
-    partition = hashlib.sha256(identity.encode()).hexdigest()
-    control = tmp_path / "share/wiki-atlassian" / partition / "confluence/TEAM/.sync"
+    identity = ["https://example.invalid", "fixture@example.invalid", "456", "123"]
+    partition = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
+    control = tmp_path / "home/.local/share/wiki-atlassian" / partition / "confluence/TEAM/.sync"
     control.mkdir(parents=True)
     (control / "sync.lock").touch()
+    credential = ["https://example.invalid", "fixture@example.invalid", "fixture-token"]
+    binding = hashlib.sha256(json.dumps(credential, separators=(",", ":")).encode()).hexdigest()
+    (control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
     return repo, env, control
 
 
@@ -135,6 +138,20 @@ def test_wrong_connection_scope_malformed_and_unsafe_feed_are_inert(setup_wiki, 
     feed.symlink_to(moved)
     assert not hook(repo, env)
     assert not (control / "harness-cursors.json").exists()
+
+
+def test_replaced_token_reuses_feed_only_after_current_authorization(setup_wiki, tmp_path):
+    repo, env, control = setup_wiki
+    publish(control, [page_event(1, 101)])
+    replacement = dict(env, ATLASSIAN_API_TOKEN="replacement-token")
+    assert not hook(repo, replacement)
+    assert not (control / "harness-cursors.json").exists()
+    binding = hashlib.sha256(json.dumps(["https://example.invalid", "fixture@example.invalid", "replacement-token"],
+        separators=(",", ":")).encode()).hexdigest()
+    (control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
+    assert "page 101" in hook(repo, replacement)
+    assert not hook(repo, env, session="retired-session")
+    assert not (tmp_path / "ignored-override").exists()
 
 
 def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, monkeypatch):
