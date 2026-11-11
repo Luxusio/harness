@@ -108,13 +108,14 @@ def _read_config(cwd):
         def compose_node(self, parent, index):
             if self.check_event(yaml.AliasEvent):
                 raise ValueError("configuration aliases are unsupported")
-            self.depth += 1
+            collection = self.check_event(yaml.MappingStartEvent, yaml.SequenceStartEvent)
+            self.depth += int(collection)
             try:
                 if self.depth > 20:
                     raise ValueError("configuration nesting limit")
                 return super().compose_node(parent, index)
             finally:
-                self.depth -= 1
+                self.depth -= int(collection)
 
         def construct_mapping(self, node, deep=False):
             mapping = {}

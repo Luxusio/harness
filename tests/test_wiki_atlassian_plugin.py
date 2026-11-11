@@ -230,6 +230,30 @@ def test_common_manifest_rejects_symlink_path_components(tmp_path, component):
     assert not (tmp_path / ".local/share/wiki-atlassian").exists()
 
 
+@pytest.mark.parametrize("nesting,accepted", [(18, True), (19, True), (20, False)])
+def test_common_manifest_nesting_boundary_matches_harness(tmp_path, nesting, accepted):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("wiki_depth_destination", ROOT / "plugin/scripts/document_destination.py")
+    destination = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(destination)
+    write_connection(tmp_path)
+    path = tmp_path / "doc/harness/manifest.yaml"
+    wiki = json.loads(path.read_text())["wiki"]
+    source = "other: " + "[" * nesting + "x" + "]" * nesting + "\nwiki: " + json.dumps(wiki) + "\n"
+    path.write_text(source)
+    env = enabled_environment(tmp_path / "home")
+    assert destination.select_destination(env, cwd=tmp_path)["mode"] == ("external" if accepted else "unavailable")
+    if accepted:
+        tools = next(row["result"]["tools"] for row in _calls(_jar(), tmp_path, env) if row.get("id") == 2)
+        assert len(tools) == 10
+    else:
+        result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
+            cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
+        assert result.returncode != 0
+        assert not (tmp_path / "home/.local/share/wiki-atlassian").exists()
+    assert path.read_text() == source
+
+
 def test_installer_rejects_writable_storage_and_substituted_publication(tmp_path, monkeypatch):
     jar = _jar()
     import importlib.util
