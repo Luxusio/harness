@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -109,6 +110,25 @@ def load_destination(home=None):
         return {"status": "unavailable", "message": "Invalid private feedback YAML or missing PyYAML; use backend: atlassian and an HTTPS page URL."}
 
 
+def _private_mise(argv, **kwargs):
+    # Private mise may evaluate commands which outlive it. Keep their process
+    # group addressable even after its leader exits and descendants reparent.
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          start_new_session=os.name == "posix", **kwargs) as process:
+        try:
+            output, _ = process.communicate(timeout=20)
+            return subprocess.CompletedProcess(argv, process.returncode, output, "")
+        finally:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif process.poll() is None:
+                process.kill()
+            process.wait()
+
+
 def _credentials(directory, environment):
     home = directory.parent.parent
     before = _read_private("mise.local.toml", home)
@@ -120,9 +140,8 @@ def _credentials(directory, environment):
                  if not k.startswith(("ATLASSIAN_", "MISE_", "__MISE_"))}
     child_env["MISE_YES"] = "0"
     try:
-        result = subprocess.run([mise, "env", "--json-extended"], cwd=directory,
-                                env=child_env, stdin=subprocess.DEVNULL, capture_output=True,
-                                text=True, timeout=20, check=False)
+        result = _private_mise([mise, "env", "--json-extended"], cwd=directory,
+                               env=child_env, stdin=subprocess.DEVNULL, text=True)
         if result.returncode or len(result.stdout.encode("utf-8")) > MAX_RESPONSE:
             raise ValueError("private mise evaluation failed")
         data = json.loads(result.stdout)

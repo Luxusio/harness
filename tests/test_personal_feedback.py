@@ -178,7 +178,7 @@ def test_private_auth_evaluation_scrubs_project_identity_and_uses_exact_provenan
     def process(argv, **kwargs):
         seen.update(argv=argv, **kwargs)
         return mise_result(path)
-    monkeypatch.setattr(feedback.subprocess, "run", process)
+    monkeypatch.setattr(feedback, "_private_mise", process)
     monkeypatch.setattr(feedback.shutil, "which", lambda name, **kwargs: "/usr/local/bin/mise")
     original = {"PATH": "/usr/local/bin:/usr/bin", "HOME": str(tmp_path),
                 "ATLASSIAN_API_TOKEN": "project-token", "ATLASSIAN_EMAIL": "project@example.invalid",
@@ -205,7 +205,7 @@ def test_private_auth_never_falls_back_to_global_or_project_values(tmp_path, mon
         del result[key]
     else:
         result[key]["value"] = ""
-    monkeypatch.setattr(feedback.subprocess, "run", lambda *a, **k:
+    monkeypatch.setattr(feedback, "_private_mise", lambda *a, **k:
                         subprocess.CompletedProcess(a, 0, json.dumps(result), ""))
     monkeypatch.setattr(feedback.shutil, "which", lambda name, **kwargs: "/usr/local/bin/mise")
     monkeypatch.setattr(feedback, "_request", forbidden)
@@ -220,7 +220,7 @@ def test_untrusted_mise_is_not_auto_trusted_and_error_is_redacted(tmp_path, monk
     def process(argv, **kwargs):
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 1, "", "untrusted private-fixture-token")
-    monkeypatch.setattr(feedback.subprocess, "run", process)
+    monkeypatch.setattr(feedback, "_private_mise", process)
     monkeypatch.setattr(feedback.shutil, "which", lambda name, **kwargs: "/usr/local/bin/mise")
     monkeypatch.setattr(feedback, "_request", forbidden)
     output = feedback.perform("check", home=tmp_path, environment={})

@@ -1,6 +1,12 @@
 """Private inbox reads, scoped continuations and native membership boundaries."""
 import copy
 import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
 from urllib.parse import parse_qs, urlsplit
 
 try:
@@ -12,6 +18,45 @@ except ModuleNotFoundError as error:
     raise SkipTest("pytest is required to collect this module") from error
 
 from test_personal_feedback import CREDS, SITE, feedback, forbidden, private_auth, private_settings
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private-mise process-group custody")
+def test_private_auth_terminates_background_work_after_mise_leader_exits(tmp_path):
+    home = tmp_path / "home"; home.mkdir(mode=0o700)
+    private_auth(home)
+    folder = tmp_path / "bin"; folder.mkdir()
+    child_file = tmp_path / "owned-child.pid"
+    mise = folder / "mise"
+    mise.write_text("#!" + sys.executable + " -I\nimport subprocess,sys\nfrom pathlib import Path\n"
+                    "p=subprocess.Popen([sys.executable,'-I','-c','import time; time.sleep(60)'],"
+                    "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                    "Path(" + repr(str(child_file)) + ").write_text(str(p.pid))\nprint('{}')\n")
+    mise.chmod(0o700)
+    child = None
+    try:
+        result = subprocess.run([sys.executable, "-I", "-B", feedback.__file__, "read"],
+            input="{}", text=True, capture_output=True, timeout=15,
+            env=dict(os.environ, HOME=str(home), PATH=str(folder) + os.pathsep + os.environ.get("PATH", "")))
+        assert result.returncode == 1 and json.loads(result.stdout)["status"] == "unavailable"
+        assert result.stderr == ""
+        child = int(child_file.read_text())
+        def running():
+            try:
+                os.kill(child, 0)
+                state = Path(f"/proc/{child}/stat")
+                return not state.exists() or state.read_text().split(") ", 1)[1][0] != "Z"
+            except ProcessLookupError:
+                return False
+        deadline = time.monotonic() + 3
+        while running() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not running(), "owned private-mise background process survived normal ancestor exit"
+    finally:
+        if child is not None:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def native_comment(identifier, body, **extra):

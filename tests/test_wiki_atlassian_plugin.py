@@ -145,6 +145,36 @@ def personal_payload(tmp_path):
     return package, [transport["command"], *transport["args"]]
 
 
+def test_private_payload_accepts_frozen_readonly_sources_without_modifying_them(tmp_path, monkeypatch):
+    import importlib.util
+    import shutil
+    spec = importlib.util.spec_from_file_location("wiki_frozen_install", PLUGIN / "install.py")
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    source = tmp_path / "frozen"; wiki = source / "wiki-atlassian"; wiki.mkdir(parents=True)
+    for name in module.PAYLOAD_DIRS:
+        shutil.copytree(PLUGIN / name, wiki / name)
+    for name in (".mcp.json", "PROVENANCE.md", "README.md"):
+        shutil.copyfile(PLUGIN / name, wiki / name)
+    helpers = source / "plugin/scripts"; helpers.mkdir(parents=True)
+    for name in ("personal_feedback.py", "document_destination.py"):
+        shutil.copyfile(ROOT / "plugin/scripts" / name, helpers / name)
+    paths = [source, *source.rglob("*")]
+    for path in paths:
+        path.chmod(0o500 if path.is_dir() else 0o400)
+    before = {str(path.relative_to(source)): (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
+              for path in paths}
+    try:
+        monkeypatch.setattr(module, "ROOT", wiki)
+        package = module.prepare(tmp_path / "data", _jar()) / "plugin"
+        assert (package / "scripts/personal_feedback.py").read_bytes() == (helpers / "personal_feedback.py").read_bytes()
+        assert before == {str(path.relative_to(source)): (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
+                          for path in paths}
+    finally:
+        for path in paths:
+            if path.is_dir():
+                path.chmod(0o700)
+
+
 def feedback_call(package, command, cwd, env, **arguments):
     replies = _calls(package / "lib/wiki-atlassian.jar", cwd, env, command=command, requests=[
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {

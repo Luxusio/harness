@@ -71,6 +71,13 @@ def _prepare(parent: Path, parent_descriptor: int, jar: Path) -> Path:
         plugin.mkdir()
         for name in PAYLOAD_DIRS:
             shutil.copytree(ROOT / name, plugin / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        # copytree retains source directory modes, including frozen inputs.
+        # Only private staging directories become writable before adding files.
+        for path in plugin.rglob("*"):
+            if path.is_symlink():
+                raise ValueError("Plugin payload cannot contain symbolic links")
+            if path.is_dir():
+                path.chmod(0o700)
         for name in (".mcp.json", "PROVENANCE.md", "README.md"):
             shutil.copyfile(ROOT / name, plugin / name)
         # Reuse the canonical private-auth implementation; never maintain a
