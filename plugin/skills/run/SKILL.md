@@ -1,12 +1,12 @@
 ---
 name: run
-description: Orchestrate the public WBS open → plan → develop → QA → close lifecycle.
+description: Route document, planning and development outcomes through purpose-appropriate WBS checks and completion.
 argument-hint: <wbs-id-or-description>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs
 ---
 
-Orchestrate the full harness development cycle for a WBS.
+Orchestrate purpose-aware work through one WBS and its existing owners.
 
 > `PLAN.md` owns acceptance intent; existing WBS assertions own measured outcome checks.
 
@@ -18,6 +18,8 @@ planning, routing reminders or automatic setup. Explicit setup remains available
 
 ## Substantive review and QA
 
+For development, apply the following review/QA gate. Other purposes await
+their own declared roles and checks without inventing product QA.
 Await actual independent code review and conditional security review PASS before actual QA. Fix actual FAIL findings; publish actual BLOCKED_ENV with a concrete blocker and unblock condition. Direct independent finals are the workflow results; coordinator paraphrases and copied text cannot replace them. After actual QA PASS, run `wbs(action="verify")` and close only when current required WBS checks pass. Machine verdicts measure WBS checks and do not attest review or QA. Receipt files, collectors, naming bindings and recording availability play no role; do not rerun, repair or park work for missing recording.
 
 Explicit user invocation or approval of this harness repo-mutating workflow
@@ -52,7 +54,7 @@ only by explicit `wbs(action="migrate")` preview/apply, never normal execution.
 
 ## Flow
 
-Execute phases in strict order. Each phase must complete before the next begins. On failure, inspect actual state and follow Error Handling; repair authorized failures without repeating approval.
+Execute the stages selected by the effective work policy in their required order. On failure, inspect actual state and follow Error Handling; repair authorized failures without repeating approval.
 
 Plain repo-mutating requests are valid WBS intake. Do not require the user to
 re-issue a clear feature, fix, refactor, behavior change, or durable process/doc
@@ -87,9 +89,10 @@ Resume routing:
   These results take precedence over a green machine runtime_verdict.
 - Required actual results unrun or stale → restore ordered review/QA in Phase 3 or 4.
 - PLAN.md missing → Phase 2 Plan.
-- PLAN.md exists and runtime_verdict is not PASS → Phase 3 Develop/Verify.
+- PLAN.md exists and runtime_verdict is not PASS → Phase 3 Develop/Verify for
+  development; document/plan work follows Phase 2's purpose-specific completion.
 - runtime_verdict is PASS and `missing_for_close` is empty, with current actual
-  independent review and applicable QA/UX PASS → Phase 5 Close.
+  required role/check results satisfied (development: applicable QA/UX PASS) → Phase 5 Close.
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
 
@@ -112,16 +115,49 @@ Store the returned `wbs_dir` and `wbs_id` for all subsequent phases. Report: WBS
 
 ### Phase 2: Plan
 
+The effective work policy returned by WBS is authoritative for phase selection.
+For a new unplanned WBS, identify the requested deliverable first; the default
+development context is not a demand to ignore an explicit document/plan request.
+Publish that purpose through the concise branch before selecting development.
+Publish one `wbs-work` JSON fence in PLAN.md with `kind` set to `document`,
+`plan`, or `development`; omission conservatively selects development.
+Project defaults and path roles come from `workflow` in the existing manifest.
+Do not duplicate the policy classifier in prompts or infer safety from `.md`.
+
+- **document/plan:** publish a concise purpose, user intent, authorized scope,
+  deliverable ACs, relevant content/source/link checks and durable-doc decision
+  through `wbs(action="plan")`. Use no automatic development, runtime QA,
+  installation, temporary worktree or fanout. `document_review: self` uses
+  the writer's actual content checks; `independent` awaits `review-document`
+  using the existing document critic. Honor additional explicitly required lenses.
+  Before independent review, issue a bounded acceptance target for that lens
+  containing the deliverable and needed source references; self checks need no role target.
+  Then run declared checks and `wbs(action="verify")`, and proceed to Phase 5.
+  Close only a document/plan deliverable that is the authorized outcome; planning
+  a product does not complete implementation. An implementation WBS paused at
+  its plan phase retains its unfinished outcomes without inventing a blocker.
+- **development:** execute the planning procedure below, then Phases 3–5.
+  Independent review and affected QA remain required. `verification: full`
+  selects the declared full relevant regression rather than affected checks.
+
+Before any executable, instruction, configuration or unknown-impact edit in a
+light workpack, update the same PLAN/WBS to development and refresh required
+lenses/admission/applicability. Preserve run and history; no old document PASS
+becomes software evidence. Respect an explicit planning-only boundary instead
+of implementing silently. Protected artifact writers and source ownership apply
+in every purpose; malformed policy is an actionable refusal, never a skip.
+
 ```
 Skill("harness:plan", "<wbs_id>")
 ```
 
-The plan skill conservatively selects the compact or full planning procedure
-and writes PLAN.md. Compact planning may skip only plan-time Engineering
-Review; implementation-time independent `review-code` remains mandatory. On
-completion: PLAN.md exists in wbs_dir. If BLOCKED: stop and report.
+For development the plan skill selects compact or full planning and writes
+PLAN.md; both retain development review/QA obligations. Document/planning
+purpose has already used the concise branch above. Report actual blockers.
 
 ### Phase 3: Develop
+
+This phase applies only to effective development work.
 
 ```
 Skill("harness:develop", "<wbs_id>")
@@ -135,6 +171,8 @@ rules directly into PLAN.md or the applicable project documentation; Harness
 does not maintain a separate feedback sidecar.
 
 ### Phase 4: Verify recovery (only when develop returned before close)
+
+Document/planning recovery follows Phase 2; do not introduce runtime QA.
 
 Skip this phase when Phase 3 closed the WBS. Develop Phase 7 owns QA lens
 selection and spawning, and develop Phase 6.6 owns review; this phase is a
@@ -217,8 +255,8 @@ If blocked: report `missing_for_close`, fix the stated gate, retry.
 If success: run self-improvement pipeline (see `self-improvement.md`) before
 emitting the completion report.
 
-For harness-source changes, develop Phase 7.8 installs the verified payload
-before this close attempt. Do not defer installation until after close. The installer checks trusted source/WBS ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
+For harness-source development, apply the effective delivery policy through
+develop Phase 7.8 before close. Document/planning work does not invoke installation. The installer checks trusted source/WBS ownership, current WBS applicability and stable payload bytes. A runtime update may require a new session to load the changed code; recording availability never blocks completion.
 
 Within an open root, use `wbs(action="next")`, development and checks to
 continue pending outcomes. Close only after all required outcomes, integration
@@ -226,12 +264,12 @@ and independent evidence pass. Then run self-improvement and learning promotion
 before a separately authorized follow-up execution. Respect explicit stops,
 budgets and agreed go/no-go boundaries.
 
-For this harness plugin source repo, successful repo-mutating development is
-not complete at WBS close. Phase 7.8 must already have run the verified
-auto-install helper after the last source edit and fresh QA. After
-post-close self-improvement has run, commit the completed diff
-before the final response unless the user explicitly says not to. Include
-the commit hash and pre-close conditional verified-delivery result in the completion report.
+For this harness plugin source repo, commit the completed diff before the
+final response unless the user explicitly says not to. Apply Phase 7.8 only
+when effective changed-payload delivery requires it; manual policy must say
+that deployment was not performed. Report the commit and actual delivery result.
+Include the conditional verified-delivery result; post-close self-improvement
+does not introduce another installation phase.
 
 ## Completion Report
 
@@ -242,8 +280,9 @@ Before writing DONE, assert:
 - post-close self-improvement has run
 - if this WBS belongs to a native Goal, that objective is done/blocked/stopped/budgeted
   or the next slice is already active/queued
-- for this harness plugin source repo, the completed diff has been committed
-  and verified delivery has confirmed synchronized runtime payloads, unless the user explicitly opted out
+- for this harness plugin source repo, the completed diff is committed; when
+  changed-payload delivery requires installation, verified delivery succeeded;
+  manual delivery is labelled uninstalled
 
 ```
 DONE
@@ -252,7 +291,7 @@ WBS:    <wbs_id>
 Status:  closed
 Dir:     <wbs_dir>
 
-Phases completed: WBS open, plan, develop, QA, close
+Phases completed: <actual purpose-selected stages; do not claim skipped development/QA>
 Runtime verdict:  PASS
 Health score:     <score>/10 (only if an applicable measurement was already reported; otherwise omit this line)
 Files changed:    <count>

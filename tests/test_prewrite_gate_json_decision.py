@@ -145,7 +145,7 @@ class TestMultiEdit(unittest.TestCase):
             plan = os.path.join(wbs_dir, "PLAN.md")
             patch = (
                 "*** Begin Patch\n"
-                "*** Update File: README.md\n"
+                "*** Update File: notes.dat\n"
                 "@@\n-old\n+new\n"
                 f"*** Update File: {plan}\n"
                 "@@\n-old\n+new\n"
@@ -161,7 +161,7 @@ class TestMultiEdit(unittest.TestCase):
             plan = os.path.join(wbs_dir, "PLAN.md")
             patch = (
                 "*** Begin Patch\r\n"
-                "*** Update File: README.md\r\n"
+                "*** Update File: notes.dat\r\n"
                 "@@\r\n-old\r\n+new\r\n"
                 f"*** Update File: {plan}\r\n"
                 "@@\r\n-old\r\n+new\r\n"

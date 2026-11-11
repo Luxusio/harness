@@ -828,11 +828,23 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             _deny("wbs-execution-assignment", file_path, "WBS-control-mcp", str(exc), repo_root)
         return 0
 
-    # Source files require an active WBS with PLAN.md.
-    if not _is_source_file(file_path, repo_root=repo_root):
+    active_dir = resolve_session_wbs_binding(repo_root, current_session_id()).get("wbs_dir", "")
+    try:
+        import work_policy
+        work = work_policy.load(active_dir or wbs_root, repo_root, plan=None if active_dir else "")
+        narrative = work_policy.document_path(work, _rel(file_path, repo_root))
+        if active_dir and work['kind'] != 'development':
+            from wbs import require_source_assignment
+            require_source_assignment(repo_root, os.path.basename(active_dir), _rel(file_path, repo_root))
+            return 0
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        _deny("wbs-work-policy", file_path, "WBS-control-mcp", str(exc), repo_root)
         return 0
 
-    active_dir = resolve_session_wbs_binding(repo_root, current_session_id()).get("wbs_dir", "")
+    # Known narrative roles also require the current owner, but do not imply
+    # product development when their PLAN selects document/planning work.
+    if not narrative and not _is_source_file(file_path, repo_root=repo_root):
+        return 0
     if not active_dir:
         # Strict-compliance repositories cannot bypass the WBS/QA close gate
         # merely because this is the first write of a new request.

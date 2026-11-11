@@ -11,6 +11,12 @@ Harness-native planning pipeline. Conservatively eligible low-risk work uses the
 > Current artifact model: acceptance criteria live in `PLAN.md`; `wbs(action="plan")`
 > publishes it with required lens declarations in `WBS.control.json`.
 
+Purpose selection precedes planning depth. For effective `document`/`plan`
+work, the run workflow publishes the concise deliverable contract and checks
+content, sources and links; it does not enter development automatically. Use
+this full planning procedure when development or the requested planning review
+needs it. Keep the same WBS/run if authorized scope later becomes executable.
+
 ## Sub-files
 
 This skill is split across four sub-files. Load on demand:
@@ -29,7 +35,7 @@ Phase 5 (procedure-aware user gate) stays inline below.
 ## Invariants
 
 - **Full-plan single independent reviewer required.** Full-plan Phase 1 spawns exactly one independent reviewer subagent covering both the CEO and Engineering lenses; that phase falls back to coordinator-only on reviewer failure.
-- **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, close, or install verification.
+- **Compact plans stay canonical.** The low-risk branch still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. Planning depth never changes effective development review/QA requirements; document/planning purpose uses its own applicable checks.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
 - **Write via MCP only.** PLAN.md and WBS.control.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.

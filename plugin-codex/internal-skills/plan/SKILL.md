@@ -6,6 +6,12 @@ user-invocable: false
 
 Codex planning pipeline with compact and full procedures. Conservatively eligible low-risk work uses a bounded assessment; all other work uses the full single-reviewer Plan Review (Phase 0 → 1 → 5 → 6). Both publish through the protected-artifact MCP.
 
+Purpose selection precedes planning depth. For effective `document`/`plan`
+work, the run workflow publishes the concise deliverable contract and checks
+content, sources and links; it does not enter development automatically. Use
+this full planning procedure when development or the requested planning review
+needs it. Keep the same WBS/run if authorized scope later becomes executable.
+
 > Current artifact model: acceptance criteria live in `PLAN.md`; `wbs(action="plan")`
 > publishes it with required lens declarations in `WBS.control.json`.
 
@@ -34,7 +40,7 @@ Phase 5 (procedure-aware user gate) stays inline below. Read sub-files from `${H
 ## Invariants (Codex variant)
 
 - **Independent reviewer by capability.** Where the Claude source says "independent reviewer subagent via Agent", use `spawn_agent` when exposed. Otherwise run ONE inline critical-reviewer pass and record the phase as `coordinator-only` in PLAN.md `Review Status`.
-- **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. It never skips develop-time review, QA, close, or install verification.
+- **Compact plans stay canonical.** Low-risk planning still writes PLAN.md with stable ACs, path scope, tests, and a durable-doc decision. Planning depth never changes the effective development review/QA requirements; document/planning purpose uses its own applicable checks.
 - **Premise analysis mandatory.** Phase 1.1 always extracts and source-classifies premises; only unresolved material premises require user input.
 - **One decision interaction.** Unresolved material premises and User Challenges are collected and asked together at Phase 5.3.
 - **Write via MCP only.** PLAN.md and WBS.control.json required-lens declarations go through `wbs(action="plan")`. Never Write/Edit them directly.

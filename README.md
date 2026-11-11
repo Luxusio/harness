@@ -1,6 +1,6 @@
 # harness
 
-Execution harness for AI-assisted repository work. Enforces a **WBS open → plan → develop → QA → close** loop on every repo-mutating WBS. Internal review and verification gates remain mandatory.
+Execution harness for AI-assisted repository work. One WBS tracks the requested outcome; document, planning and development work use the checks appropriate to their impact.
 
 ## Quick start
 
@@ -72,28 +72,29 @@ doc/harness/critics/             # plan.md, runtime.md, document.md playbooks
 
 </details>
 
-## The loop
+## Work to the purpose
 
-Every repo-mutating WBS follows this public sequence:
+| Request | Default flow |
+|---|---|
+| Question, research discussion or explanation | Read and answer; no WBS |
+| Document or planning deliverable | One concise WBS → content/source/link checks → deliverable completion |
+| Code or executable instructions/configuration | One WBS → plan → develop → independent review → applicable QA → close |
 
-```
-WBS open → plan → develop → QA → close
-```
+Project `workflow` policy in `doc/harness/manifest.yaml` selects document review
+(`self`/`independent`), development verification (`affected`/`full`) and delivery
+(`changed`/`manual`). Defaults are `self`, `affected`, `changed`; see the
+[purpose-aware workflow contract](doc/harness/REQ__purpose-aware-workflow.md).
+Known runtime/instruction boundaries cannot be weakened by document path settings.
+A plan's completion does not claim the product is implemented. Newly authorized
+executable scope promotes the same WBS/run before editing; applicable failed or
+stale checks still require remediation. Automatic source delivery only considers
+actual install-payload changes; manual delivery reports that deployment was not performed.
 
-| Step | What happens |
-|------|-------------|
-| **WBS open** | Create or resume one exact WBS generation and bind it to the current runtime session |
-| **plan** | Review the request, write PLAN.md, and declare required lenses in WBS.control.json |
-| **develop** | Implement per-AC; independent review runs as an internal end-of-develop gate |
-| **QA** | Run the declared runtime QA lens and record its observed completion |
-| **close** | Internally run `wbs(action="verify")`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
-
-After the same WBS root closes, the coordinator performs self-improvement
-before any separately authorized follow-up execution: it may append friction signals to `learnings.jsonl`,
-then reports recurring keys from distinct verified WBS runs as Tier 2
-candidates. The candidate-reporting step changes neither the raw ledger nor
-pattern files; durable pattern changes require a separately reviewed Harness
-WBS.
+After a WBS closes, applicable self-improvement may append friction signals to
+`learnings.jsonl`, then report repeated verified candidates. This preserves the
+append-only raw signal ledger; it neither creates a new execution root nor forces
+another installation. Temporary worktrees are only needed for actual isolation
+or concurrent source ownership; owned ones still require safe integration/disposal.
 
 ## WBS.control.json (4 fields)
 

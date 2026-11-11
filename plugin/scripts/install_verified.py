@@ -487,10 +487,55 @@ def install_verified(wbs_dir: Path) -> int:
     return 0
 
 
+def automatic_delivery_required(wbs_dir: Path) -> tuple[bool, str]:
+    """Select automatic delivery for this work, without touching an install tree.
+
+    Explicit install_verified remains the unconditional integrity owner. Git
+    ranges include commits already made by the developer; clean status alone
+    never proves that a payload was unchanged.
+    """
+    import work_policy
+    import wbs
+    wbs_dir = wbs_dir.resolve()
+    repo = Path(find_repo_root(str(wbs_dir)))
+    work = work_policy.load(wbs_dir, repo)
+    if work['install'] == 'manual':
+        return False, 'manual delivery policy; no deployment claimed'
+    if work['kind'] != 'development':
+        return False, 'document/planning deliverable; no deployment claimed'
+    state = wbs.read_state(str(wbs_dir))
+    base = (state or {}).get('source_base')
+    if not base:
+        return True, 'delivery baseline unavailable; conservative payload verification required'
+    from _lib import _trusted_git_env
+    environment = _trusted_git_env()
+    ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=repo,
+                              env=environment, capture_output=True, timeout=5)
+    if ancestry.returncode != 0:
+        return True, 'delivery baseline is not current ancestry; conservative verification required'
+    changed = subprocess.run(['git', 'diff', '--name-only', '-z', base, 'HEAD', '--'], cwd=repo,
+                             env=environment, capture_output=True, timeout=5)
+    if changed.returncode or len(changed.stdout) > 2 * 1024 * 1024:
+        return True, 'delivery change range unavailable; conservative verification required'
+    paths = {os.fsdecode(p) for p in changed.stdout.split(b'\0') if p} | _git_changed_paths(str(repo))
+    return (True, 'this work changes an installed payload') if any(_is_install_payload_path(p) for p in paths) else (
+        False, 'no installed payload changed in this work; unrelated runtime drift is not repaired')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wbs-dir", required=True)
+    parser.add_argument("--if-changed", action="store_true", help="Apply project delivery policy and this work's committed/dirty payload impact")
     args = parser.parse_args()
+    if args.if_changed:
+        try:
+            required, reason = automatic_delivery_required(Path(args.wbs_dir))
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f'ERROR: automatic delivery selection unavailable: {error}', file=sys.stderr)
+            return 2
+        if not required:
+            print('Automatic install: SKIPPED — ' + reason)
+            return 0
     return install_verified(Path(args.wbs_dir))
 
 

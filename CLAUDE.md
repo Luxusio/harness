@@ -10,30 +10,27 @@ updated: 2026-04-15
 ## Harness routing
 <!-- harness:routing-injected -->
 
-**Default = WBS routing.** On Codex, invoke the public `$harness:run`
-entry skill before repository mutation; it loads the canonical workflow and
-opens or resumes one WBS. A native `/goal`, when present, supplies the host
-objective and continuation; it does not create another Harness planning ledger.
-Hooks inject context and enforce existing boundaries; they do not open roots.
-
-- Repo-mutating intent (feature, fix, refactor, behavior change) → `$harness:run`
-  and the same WBS open → plan → develop → QA → close flow.
-- New user requirements or necessary discoveries update the same outcome tree.
-  `wbs(action="next")` selects dependency-ready outcomes. Independent outcomes
-  use `wbs(action="dispatch")` for isolated development, review and verification.
-- Bootstrap or repair → `Skill(harness:setup)`.
-- Read-only question or explanation → answer directly without opening a WBS.
+On Codex, invoke `$harness:run` before repository mutation. One WBS uses the
+effective document/planning/development policy; native `/goal` supplies the
+objective and continuation. Documents/plans use relevant content checks and
+configured document review. Development retains independent code/conditional
+security review before applicable QA. Executable/unknown impact promotes the
+same WBS/run before editing. A plan is not product completion.
+Bootstrap/repair uses `$harness:setup`; read-only questions/discussion need no WBS.
+Protected artifact writers, source ownership and current WBS checks still apply.
 
 # Operating mode
 - `doc/harness/manifest.yaml` is the initialization marker. Outside initialized
   projects, Harness hooks and normal lifecycle calls remain inactive.
-- Canonical public loop: **WBS open → plan when needed → develop → QA → close**.
-  Actual independent code review and conditional security review PASS precede
-  actual QA. Current measured WBS checks must PASS before close. See
+- One WBS selects document, planning or development execution through the
+  shared work policy. Document/planning deliverables use relevant content
+  checks and configured document review; development retains independent code
+  and conditional security review before applicable QA. Current checks must PASS before close. See
   `plugin/CLAUDE.md` for authoritative runtime rules.
 - In this Harness source repository, run `python3 plugin/scripts/install_verified.py
-  --wbs-dir doc/harness/wbs/<wbs_id>` after current review/QA PASS and before
-  `wbs(action="close")`, unless the user explicitly opts out. The helper verifies
+  --if-changed --wbs-dir doc/harness/wbs/<wbs_id>` after applicable current
+  review/QA PASS and before `wbs(action="close")` for development. Project `install: manual` skips
+  automatic delivery without claiming deployment. The helper verifies
   the stable source snapshot. It invokes `python3 install.py`, whose default run skips
   synchronized runtimes and refreshes only stale runtime payloads.
   It creates no install receipt or deduplication state; retries recompute actual
@@ -61,11 +58,13 @@ Hooks inject context and enforce existing boundaries; they do not open roots.
   SessionStart does not inspect Git.
 - PLAN.md, WBS.control.json and WBS.json belong to their public WBS owners.
   Historical receipt/review bytes and migration archives remain protected.
-- Source writes require PLAN.md and the current exact session/run assignment.
+- Source writes require PLAN.md and the current exact session/run ownership;
+  development/concurrent writes retain their execution assignment. A single
+  narrative document writer needs no host dispatch or temporary worktree.
   One WBS holds this session's write focus per checkout; close or park it before
   opening another. Each registered worktree retains its own isolated assignment.
 - Short approvals such as `ㅇㅇ ㄱ` authorize only the last explicit transition,
-  without skipping planning, independent review, QA or measured checks.
+  retaining the stages and checks required by that transition's work policy.
 - When an answer becomes repository mutation, open/resume the WBS before editing.
 
 # Template sync rule (CRITICAL)

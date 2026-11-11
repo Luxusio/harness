@@ -183,7 +183,7 @@ Use the setup finalizer's containment-safe, no-follow project-document helper.
 It rejects symlinks, preserves unrelated content, and atomically replaces only
 the Harness routing block. Marker: `<!-- harness:routing-injected -->`.
 This is the idempotent replace/append path. The emitted block routes
-repo-mutating work to `$harness:run` and contains the
+repo-mutating work to `$harness:run` for the effective purpose-aware policy and contains the
 `Durable Decision Documentation Gate`: a durable decision is not handled until it is documented at the runtime-selected document destination;
 Conversation history is not durable memory, and
 the WBS records a specific PLAN durable-doc decision when no doc applies.

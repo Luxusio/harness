@@ -5,8 +5,8 @@
 ## Harness routing
 <!-- harness:routing-injected -->
 
-- Repository mutation (implementation, fix, refactor, test/config/doc behavior change) → invoke `$harness:run` before editing. If a native Goal is active, the run skill opens/resumes its same WBS root.
-- Harness bootstrap or repair → invoke `$harness:setup`.
+- Repository mutation → invoke `$harness:run` before editing; use one WBS and the effective document/planning/development policy. A native Goal supplies only its objective.
 - Read-only questions, explanations, reviews, and status reports → answer directly without starting a WBS.
-- Hooks provide routing reminders and state only; WBS verify/close enforce current outcome checks. The workflow awaits actual independent code-review and conditional security-review PASS before actual QA; current QA/UX FAIL or BLOCKED_ENV takes precedence over machine PASS.
+- Documents/plans use relevant content checks and configured document review; development retains actual independent code/conditional security review before applicable QA. Executable or unknown impact promotes the same WBS/run before edits; do not treat a suffix as proof of safety.
+- Bootstrap or repair → `$harness:setup`. Protected writers, source ownership and measured WBS checks remain required.
 - Changes to managed contracts, Harness skills, or `contract_lint.py` must keep the real-tree contract and skill-weight tests passing.

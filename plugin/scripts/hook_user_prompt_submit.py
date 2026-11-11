@@ -16,7 +16,7 @@ TOTAL_BUDGET_SECONDS = 7.0
 CHILD_TIMEOUT_SECONDS = 6.0
 DEADLINE_MARGIN_SECONDS = 0.1
 CODEX_ROUTE = (
-    "[harness-route] Repository mutation: invoke $harness:run before edits; "
+    "[harness-route] Repository mutation: invoke $harness:run before edits for purpose-aware checks; "
     "read-only requests: answer directly."
 )
 

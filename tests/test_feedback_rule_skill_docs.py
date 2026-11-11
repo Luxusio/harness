@@ -205,10 +205,12 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
             else "plugin/scripts/install_verified.py"
         )
         assert expected_installer in section
-        assert "`python3 install.py` (the default conditional run)" in section
+        assert "--if-changed" in section
         assert "--if-stale" not in section
-        assert "actual independent review and QA PASS MUST immediately run" in section
-        assert "failed refreshes block completion" in " ".join(section.lower().split())
+        assert "manual" in section and "changed" in section
+        assert "committed and dirty payload" in section
+        assert "Explicit installer" in section
+        assert "unfinished" in section and "never claim deployment" in section
 
 
 def test_continuous_maintenance_doc_maps_former_maintain_work():

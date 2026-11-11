@@ -54,6 +54,11 @@ See `doc/harness/REQ__measurable-wbs-progress.md` for the observable contract.
 
 ## 6.2 Assemble PLAN.md content
 
+Preserve the selected `wbs-work` kind and publish only the effective required
+lenses. A document/plan deliverable needs a concise user-intent/scope/AC/check
+contract, not implementation-only sections or software PASS claims. The full
+sections below apply when this development planning procedure is selected.
+
 Materialise plan content from in-memory review state into `/tmp/plan_content.md`.
 
 **Restore point comment** — if Phase 0.5 captured one, prepend as the very first line:

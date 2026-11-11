@@ -73,7 +73,7 @@ def _manifest_bytes(root):
         os.close(directory)
 
 
-def _proves_no_wiki(source):
+def _proves_no_key(source, key):
     """Recognize ordinary root keys only; ambiguous YAML always needs its parser."""
     seen_key = False
     first = True
@@ -87,7 +87,7 @@ def _proves_no_wiki(source):
             continue
         first = False
         match = re.match(r"([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]|$)", line)
-        if not match or match.group(1) == "wiki":
+        if not match or match.group(1) == key:
             return False
         seen_key = True
     return seen_key
@@ -98,7 +98,7 @@ def _read_config(cwd):
     if raw is None:
         return None
     source = raw.decode("utf-8", errors="strict")
-    if _proves_no_wiki(source):
+    if _proves_no_key(source, "wiki"):
         return None
     manifest = _yaml_mapping(source)
     if "wiki" not in manifest:

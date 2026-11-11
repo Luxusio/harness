@@ -13,8 +13,8 @@ Two pressures govern this harness — in this order:
 
 1. **Protocol compliance is non-negotiable.** Contracts listed below MUST be
    followed exactly. A "lighter" solution that violates a contract is not
-   lighter — it is broken. Skipping the canonical loop, writing a protected
-   artifact without its owner, closing without ordered review/QA PASS, or bypassing the
+   lighter — it is broken. Skipping required purpose-specific stages, writing a protected
+   artifact without its owner, closing without required ordered review/QA PASS, or bypassing the
    prewrite gate are hard failures regardless of WBS scope.
 2. **Within that constraint, pick the lightest path that preserves throughput.**
    Fewer phases, shorter SKILL files, and fewer hooks are preferred when they
@@ -61,14 +61,13 @@ contract — move it to design notes.
 
 ### C-01
 
-**Title:** Canonical public loop — WBS open → plan → develop → QA → close.
-**When:** Any WBS that mutates repo state (non-maintenance).
-**Enforced by:** `plugin/scripts/prewrite_gate.py` (source write blocked
-without PLAN.md), MCP `wbs(action="close")` (rejects pending `runtime_verdict`).
-**On violation:** hard-block.
-**Why:** Skipping stages loses evidence and provenance — unordered verdicts,
-missing regression tests, orphan artifacts. Independent review remains a workflow requirement;
-`wbs(action="verify")` measures WBS checks before close rather than a public lifecycle stage.
+**Title:** Purpose-aware WBS execution and completion.
+**When:** Any WBS that mutates repo state, under its effective work policy.
+**Enforced by:** `plugin/scripts/work_policy.py`, protected WBS plan/check/verify/close owners and `plugin/scripts/prewrite_gate.py`.
+**On violation:** hard-block the incompatible write or completion.
+**Why:** WBS ownership does not require every development stage. Documents/plans
+use relevant content checks; development retains independent review followed by
+applicable QA. Executable/unknown impact promotes the same WBS/run before edits.
 
 ### C-02
 
@@ -221,16 +220,16 @@ extra phase is a new failure point.
 ### C-14
 
 **Title:** Actual independent review PASS precedes actual QA.
-**When:** A repo-mutating WBS advances to QA or completion.
-**Enforced by:** Canonical run/develop workflow: await independent code review and conditional security review PASS, then run applicable QA. Fix substantive failures and report actual environmental blockers. WBS verify/close enforce measured outcome checks, not review attestation.
+**When:** A development WBS, or another WBS with required review/QA lenses, advances to the applicable stage or completion.
+**Enforced by:** Effective work policy and canonical run/develop workflow. Development awaits independent code review and conditional security review PASS before applicable QA; independent document policy awaits its document critic without inventing product QA. Fix substantive failures. WBS verify/close enforce current checks, not review attestation.
 **On violation:** Do not advance or claim completion; remediate the failed or unrun substantive work.
 **Why:** Independent scrutiny and actual execution protect quality. Receipt collection, spawn-name identity, missing-attestation parking and receipt-only reruns are removed without a replacement ledger.
-**Normative detail:** `doc/harness/REQ__receipt-free-execution-and-completion.md`.
+**Normative detail:** `doc/harness/REQ__receipt-free-execution-and-completion.md` and `doc/harness/REQ__purpose-aware-workflow.md`.
 
 ### C-14a
 
 **Title:** Highest available verification is part of the WBS.
-**When:** A WBS creates, unblocks, or documents a local verification path.
+**When:** A development WBS creates or unblocks an applicable local verification path within its authorized scope.
 **Enforced by:** `plugin/skills/develop/SKILL.md` and
 `plugin/skills/develop/verification-gate.md` — Phase 7 must run the highest
 available local tier instead of asking the user whether to verify.

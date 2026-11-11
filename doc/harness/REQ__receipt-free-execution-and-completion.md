@@ -13,7 +13,7 @@ These statements authorize removing mandatory receipt collection and attestation
 ## Derived engineering requirements
 
 - Remove receipt collectors, watcher startup/registration, capability checks, spawn-name binding rules, receipt-only retries and missing-attestation parking. Do not introduce a replacement ledger, toggle or service.
-- Await actual independent code review and conditional security review PASS before actual QA. Fix substantive failures; publish real environmental blockers. Coordinator summaries and copied text do not substitute for independent results. Keep the existing review-depth and bounded hunter protocol.
+- For development, await actual independent code review and conditional security review PASS before actual QA. Other purposes honor their own declared roles and checks without inventing product review/QA. Fix substantive failures; publish real environmental blockers. Coordinator summaries and copied text do not substitute for independent results. Keep the existing review-depth and bounded hunter protocol.
 - Existing WBS assertions remain the machine basis for progress, verify and close. Failed, unrun or stale required checks block completion. Machine verdicts explicitly identify WBS checks as their basis and never claim machine-attested review or QA.
 - Retain read-only protection for the native session metadata still used to authenticate source focus even from a non-Harness editor cwd, and for historical receipt/review bytes. This does not restore transcript-event scanning, collectors or completion attestation.
 - Keep task/run/session/source ownership, declared scope applicability, stable installation snapshots, stopped-writer checks, Git ancestry and safe worktree integration/disposal. A task closes only through its public owner.
@@ -21,6 +21,12 @@ These statements authorize removing mandatory receipt collection and attestation
 - Already-unsupported, unreferenced historical pre-v7 task controls remain byte-preserved and are reported explicitly by migration. Active or pool-referenced controls cannot be silently skipped. Migration does not mint replacement run IDs for unsupported historical artifacts.
 - Historical receipt absence, corruption or changes have no effect on active task authorization. Generic archived-byte integrity still covers every archived byte, including historical receipts; this is archive integrity, not receipt attestation.
 - Preserve historical receipt bytes and historical requirements/ADRs. Their receipt rules are superseded by this requirement. Review findings remain in actual agent responses, without a persisted completion ledger.
+
+Purpose-specific applicability is defined by `REQ__purpose-aware-workflow.md`:
+ordinary document/planning deliverables use their configured content checks and
+optional document critic. Their completion never claims product review/QA.
+Executable instructions, configuration and unknown impact retain development
+requirements. This refines applicability without restoring receipt collection.
 
 ## Managed contract maintenance
 

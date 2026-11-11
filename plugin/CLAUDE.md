@@ -9,14 +9,21 @@ or an MCP client — whenever a repo-mutating WBS runs through the
 canonical loop. There is no separate "harness agent" that owns the
 workflow; skills and MCP tools are the sole runtime surface.
 
-## 1. Canonical Loop
+## 1. Purpose-aware WBS execution
 
-Every repo-mutating WBS exposes this public lifecycle:
-```
-WBS open → plan → minimum-sufficient develop → runtime QA → close
-```
-Independent review and `wbs(action="verify")` are mandatory internal close gates. No
-step is skipped. Smallest coherent diff per step.
+One WBS owns each authorized outcome. The effective policy comes from PLAN's
+`wbs-work` kind plus `workflow` in the existing project manifest. Read-only
+questions/discussion need no WBS. Documents/plans use content/source/link checks
+and the configured optional independent document critic; development retains
+independent code/security review as applicable, followed by affected or full QA.
+Only required stages apply. Executable instructions/configuration and unknown
+impact require development; a Markdown suffix never grants a bypass.
+
+A completed plan proves the plan deliverable, not product implementation.
+Promote newly authorized executable scope in the same WBS/run before editing;
+retain failed history and restore affected evidence rather than promoting old
+content checks into software PASS. Installation follows actual payload impact
+and the configured delivery policy. Protected writers/ownership remain required.
 
 ## 2. MCP tools
 
@@ -146,7 +153,7 @@ apply to read-only answers or ordinary non-harness work.
 | Set up harness | `Skill(setup)` |
 | Pre-planning / scope-sharpening (product framing before a WBS) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
 | Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | On Codex invoke `$harness:run`; it opens/resumes one WBS with `wbs(action="open")` / `wbs(action="context")`; a native Goal supplies only the objective |
-| User explicitly says "plan only" / "just plan" | Open/resume the WBS, run the internal plan phase, then stop after plan |
+| User explicitly says "plan only" / "just plan" | Use the plan-deliverable policy; verify that deliverable, keep product implementation pending, never implement silently |
 | User explicitly says "implement PLAN.md" / "develop only" | Resume the active WBS through the internal develop path |
 | Multi-component or API↔frontend change in one WBS | Same WBS with develop Phase 3.0 auto-fanout |
 | CEO / Architecture / Design / DX review | Same WBS plan phase; review lenses are internal sub-skills |
@@ -160,7 +167,7 @@ Do not claim success from static inspection when runtime verification is require
 
 ## 8. Finish cleanly
 
-The plan declares required review and QA lenses. Required review evidence must
+The effective work policy and plan declare applicable review and QA lenses. Required review evidence must
 PASS before QA starts, and every applicable QA lens must then PASS. Post-QA
 edits and scope drift are developer-owned.
 Use `wbs(action="close")`. If blocked, fix the stated gate.

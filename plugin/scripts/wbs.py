@@ -201,6 +201,8 @@ def validate_state(state):
         validate(state.get("nodes"))
     require(isinstance(state.get("run_id"), str) and isinstance(state.get("checks"), dict), "invalid check evidence")
     input_policy(state.get("inputs"))
+    require(state.get("source_base") is None or isinstance(state["source_base"], str)
+            and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", state["source_base"]), "invalid delivery source base")
     blocks = state.get("blocks", {})
     require(isinstance(blocks, dict) and set(blocks) <= {n["id"] for n in state["nodes"]}, "invalid outcome blocks")
     for block in blocks.values():
@@ -243,13 +245,19 @@ def encode_state(state):
 
 
 def prepare(wbs_dir, plan, run_id, *, now=None):
+    import work_policy
+    from _lib import find_repo_root
+    current_policy = work_policy.load(wbs_dir, plan=plan)
     nodes, old = from_plan(plan), read_state(wbs_dir)
     if nodes is None:
         require(old is None, "cannot remove an existing WBS")
         return None
     stamp = time.time() if now is None else now
     if old:
-        from _lib import find_repo_root
+        previous_policy = work_policy.load(wbs_dir)
+        require(not (previous_policy["kind"] == "development" and current_policy["kind"] != "development"
+                     and (old.get("execution_admission") or old["checks"])),
+                "admitted development cannot be downgraded; retain this WBS's pending development obligations")
         first_baseline = old.get("pack_only") is True
         if old.get("batch") and nodes != old["nodes"]:
             require(batch_route(wbs_dir, find_repo_root(wbs_dir), old, measure=False)["route"] == "integration",
@@ -269,6 +277,12 @@ def prepare(wbs_dir, plan, run_id, *, now=None):
                     checks=old["checks"] if old["run_id"] == run_id else {})
     else:
         state = dict(version=1, nodes=nodes, run_id=run_id, checks={}, started_at=stamp, last_progress_at=stamp)
+    if old is None or old["run_id"] != run_id:
+        state["source_base"] = work_policy.capture_source_base(find_repo_root(wbs_dir))
+    else:
+        # Pre-feature or unavailable history stays unknown, never recaptured
+        # after commits which a later delivery decision must still include.
+        state["source_base"] = old.get("source_base")
     policy = inputs_from_plan(plan)
     if policy is None:
         state.pop("inputs", None)
@@ -556,6 +570,8 @@ def wbs_progress(wbs_dir, repo, run_id, *, now=None, _source=None, measure=True,
         plan = _strict_regular_text_snapshot(os.path.join(wbs_dir, "PLAN.md"), max_size=1024 * 1024)
         require(plan["exists"], "PLAN.md is missing")
         plan_text = plan["text"]
+        import work_policy
+        work = work_policy.load(wbs_dir, repo, plan=plan_text)
         plan_nodes = from_plan(plan_text)
         require(plan_nodes == state["nodes"], "plan/evidence definition mismatch")
         require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
@@ -573,7 +589,7 @@ def wbs_progress(wbs_dir, repo, run_id, *, now=None, _source=None, measure=True,
             proof = state["checks"].get(node["id"], {})
             valid = (state["run_id"] == run_id and proof.get("passed") is True
                      and "last_attempt" not in proof and not proof.get("invalidated")
-                     and proof.get("definition") == digest(node))
+                     and proof.get("definition") == work_policy.proof_definition(node, work))
             valid = valid and source is not None and proof.get("source") == source
             valid = valid and proof.get("inputs") == (digest(policy) if policy is not None else None)
             rows.append(dict(id=node["id"], title=node["title"], weight=node["weight"],
@@ -604,6 +620,8 @@ def wbs_progress(wbs_dir, repo, run_id, *, now=None, _source=None, measure=True,
         total = float(weight_sum(rows))
         earned = float(weight_sum(n for n in rows if n["verified"]))
         complete = all(n["verified"] for n in rows)
+        require(work_policy.load(wbs_dir, repo)["verification_identity"] == work["verification_identity"],
+                "workflow policy changed during measurement")
         validate_history(wbs_dir, repo, state, measure=measure and _measure_custody)
         integration = batch_route(wbs_dir, repo, state, measure=measure and _measure_custody) if state.get("batch") else None
         if not measure:
@@ -650,7 +668,8 @@ def summary(context):
         software = "current" if progress.get("status") == "measured" else "stored"
     else:
         software = "pending"
-    return dict(advisory=True, wbs_id=context.get("wbs_id"), wbs_status=context.get("status"),
+    kind = context.get('routing', {}).get('work_kind', 'development')
+    result = dict(advisory=True, wbs_id=context.get("wbs_id"), wbs_status=context.get("status"),
                 evidence=dict(implemented="unknown",
                               integrated=("current" if integration.get("proof_fresh") else "stored")
                               if integration.get("route") == "integration" else "unknown",
@@ -661,6 +680,12 @@ def summary(context):
                                evidence="current" if row.get("verified") else
                                "stored" if row.get("historical_verified") else "pending")
                           for row in progress.get("outcomes", [])])
+    result['work_kind'] = kind
+    if kind != 'development':
+        result['evidence']['implemented'] = 'not_applicable'
+        result['evidence']['software_verified'] = 'not_applicable'
+        result['evidence']['planning_verified' if kind == 'plan' else 'document_verified'] = software
+    return result
 
 
 def _error_text(reason):
@@ -808,6 +833,8 @@ def verify(wbs_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     plan = _strict_regular_text_snapshot(os.path.join(wbs_dir, "PLAN.md"), max_size=1024 * 1024)
     require(plan["exists"], "PLAN.md is missing")
     plan_text = plan["text"]
+    import work_policy
+    work = work_policy.load(wbs_dir, repo, plan=plan_text)
     require(from_plan(plan_text) == state["nodes"], "plan/evidence mismatch")
     require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
     node = next((n for n in leaves(state["nodes"]) if n["id"] == leaf_id), None)
@@ -894,11 +921,14 @@ def verify(wbs_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         success = after_source == before
         if not success:
             result["error"] = "source changed during verification; rerun against stable inputs"
+    if success and work_policy.load(wbs_dir, repo)["verification_identity"] != work["verification_identity"]:
+        success = False
+        result["error"] = "workflow policy changed during verification; preserve history and recheck"
     previous = state["checks"].pop(leaf_id, None)
     state["checks"][leaf_id] = dict(passed=False, result=result, checked_at=stamp)
     if success:
         state["checks"][leaf_id] = dict(previous, result=result) if leaf_id in verified else dict(
-            passed=True, definition=digest(node), source=before, checked_at=stamp, result=result)
+            passed=True, definition=work_policy.proof_definition(node, work), source=before, checked_at=stamp, result=result)
         policy = verification_inputs(state, node)
         if policy is not None:
             state["checks"][leaf_id]["inputs"] = digest(policy)
@@ -935,9 +965,10 @@ def require_integrated_for_wbs(repo, wbs_id, *, measure=True):
         require(batch_route(td, repo, state, measure=measure)["route"] == "integration", "work pack unfinished; integrate and close the pool before resuming parent")
 
 
-def admission_definition(state, ownership, selected):
+def admission_definition(state, ownership, selected, policy_identity=None):
     # Assignment freshness concerns control/intent, not changing source bytes.
-    return digest([state['run_id'], state['nodes'], state['checks'], state.get('blocks', {}), ownership, selected])
+    value = [state['run_id'], state['nodes'], state['checks'], state.get('blocks', {}), ownership, selected]
+    return digest(value if policy_identity is None else value + [policy_identity])
 
 
 def require_source_assignment(repo, wbs_id, path=None):
@@ -947,6 +978,10 @@ def require_source_assignment(repo, wbs_id, path=None):
     td = canonical_wbs_dir(wbs_id=wbs_id, repo_root=repo)
     control = read_wbs_control(td)
     require(control and wbs_control_status(td, control) == 'open', 'source assignment requires the same open WBS')
+    import work_policy
+    work = work_policy.load(td, repo)
+    if path is not None:
+        work_policy.require_write(work, path)
     # Existing managed ownership is the authority for a lead; never create a
     # nested pool merely because its own WBS has not measured its next check.
     if Path(repo, '.git').is_file():
@@ -970,14 +1005,19 @@ def require_source_assignment(repo, wbs_id, path=None):
                                     'managed lead is not currently bound for development')
                             batch_state.bound(root, item)
                             batch_state.control(item)
+                            if path is not None and data.get('owner_wbs_id'):
+                                parent = canonical_wbs_dir(wbs_id=data['owner_wbs_id'], repo_root=root)
+                                work_policy.require_write(work_policy.load(parent, root), path)
                             scopes = batch_state.effective_scopes(item)
                             require(path is None or any(covers(scope, path) for scope in scopes), 'source path outside managed ownership')
                             return dict(mode='managed-lead', scopes=scopes)
     state = read_state(td)
     require(state and state['run_id'] == control['run_id'], 'baseline WBS and dispatch prepare before source edits')
     assignment = state.get('execution_admission')
+    if work['kind'] != 'development' and not assignment and not state.get('batch'):
+        return dict(mode='document')
     require(isinstance(assignment, dict) and assignment.get('run_id') == control['run_id']
-            and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected')),
+            and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected'), work['admission_identity']),
             'execution assignment missing or stale; refresh dispatch prepare with actual host inventory and ownership')
     require(assignment.get('mode') == 'direct', 'source belongs to managed worktrees or verification only; use dispatch prepare')
     scopes = [scope for key in assignment['selected'] for scope in assignment['ownership'][key]]
@@ -991,6 +1031,8 @@ def work_pack(wbs_dir, repo, run_id, *, bind=False, ownership=None, host=None):
     import batch_state
     from _lib import _atomic_text_write
     state = read_state(wbs_dir)
+    import work_policy
+    work = work_policy.load(wbs_dir, repo)
     require(state is not None and state['run_id'] == run_id, 'baseline WBS before dispatch')
     available = host_slots(host)
     assignment = dict(run_id=run_id, host=host,
@@ -1079,7 +1121,7 @@ def work_pack(wbs_dir, repo, run_id, *, bind=False, ownership=None, host=None):
                 result = dict(route='batch', **spec)
             else:
                 result = dict(route=assignment['mode'], next_action='Develop only the assigned direct scope; refresh prepare after control/ownership or host changes.')
-    assignment['definition'] = admission_definition(state, assignment['ownership'], assignment['selected'])
+    assignment['definition'] = admission_definition(state, assignment['ownership'], assignment['selected'], work['admission_identity'])
     state['execution_admission'] = assignment
     if bind:
         _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
@@ -1097,7 +1139,10 @@ def publish_handoffs(wbs_dir, run_id, expected, slugs):
     require(isinstance(slugs, list) and len(set(slugs)) == len(slugs) and set(slugs) <= ownership.keys(),
             'handoffs must identify exact managed intake')
     assignment.update(ownership=ownership, selected=slugs)
-    assignment['definition'] = admission_definition(state, ownership, slugs)
+    import work_policy
+    from _lib import find_repo_root
+    assignment['definition'] = admission_definition(state, ownership, slugs,
+        work_policy.load(wbs_dir, find_repo_root(wbs_dir))['admission_identity'])
     state['execution_admission'] = assignment
     _atomic_text_write(os.path.join(wbs_dir, STATE), encode_state(state))
     return assignment

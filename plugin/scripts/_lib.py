@@ -57,7 +57,7 @@ WBS_CONTROL_FIELDS = frozenset({
     "run_id", "execution_mode", "required_lenses", "closed",
 })
 LENS_ORDER = (
-    "review-code", "review-security",
+    "review-code", "review-security", "review-document",
     "qa-api", "qa-browser", "qa-cli", "qa-desktop",
 )
 REVIEW_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("review-"))
@@ -841,12 +841,9 @@ def wbs_control_file(wbs_dir):
 def _wbs_control_lenses(value):
     if (
         not isinstance(value, list)
-        or not value
         or any(not isinstance(item, str) or item not in SUPPORTED_LENSES for item in value)
         or len(value) != len(set(value))
         or value != [lens for lens in LENS_ORDER if lens in value]
-        or "review-code" not in value
-        or not any(lens.startswith("qa-") for lens in value)
     ):
         return None
     return list(value)
@@ -2128,14 +2125,18 @@ def compile_routing(wbs_dir, repo_root=None):
     repo_root = repo_root or find_harness_root(wbs_dir) or find_repo_root()
     maintenance = is_maintenance_wbs(wbs_dir, repo_root)
     control = read_wbs_control(wbs_dir)
+    import work_policy
+    work = work_policy.load(wbs_dir, repo_root)
     micro_loop = _is_micro_loop_state(control)
     from wbs import read_state, admission_definition
     try:
         state = read_state(wbs_dir)
         assignment = (state or {}).get('execution_admission', {})
         mode = (assignment.get('mode') if state and assignment.get('run_id') == control.get('run_id')
-                and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected'))
+                and assignment.get('definition') == admission_definition(state, assignment.get('ownership'), assignment.get('selected'), work['admission_identity'])
                 else 'unassigned')
+        if work['kind'] != 'development' and state and not assignment and not state.get('batch'):
+            mode = 'document'
     except (OSError, ValueError, RuntimeError):
         mode = 'unassigned'
     return {
@@ -2145,6 +2146,8 @@ def compile_routing(wbs_dir, repo_root=None):
         "execution_mode": "micro" if micro_loop else "standard",
         "orchestration_mode": mode,
         "planning_mode": "skipped" if micro_loop else "standard",
+        "work_kind": work["kind"],
+        "work_policy": {key: work[key] for key in ("document_review", "verification", "install")},
     }
 
 
@@ -2348,9 +2351,9 @@ def wbs_control_transaction_fd(task_fd):
 
 
 def _declared_lenses(wbs_dir, prefix, *, control=None):
+    import work_policy
     value = (control or read_wbs_control(wbs_dir)).get("required_lenses")
-    if not isinstance(value, list):
-        return []
+    value = work_policy.required_lenses(work_policy.load(wbs_dir), value)
     return [lens for lens in value if lens.startswith(prefix)]
 
 
@@ -2415,7 +2418,7 @@ def emit_compact_context(wbs_dir, *, measure_wbs=False, measured_progress=None, 
     status = wbs_control_status(wbs_dir, st)
     routing = compile_routing(wbs_dir)
     has_plan = artifact_exists(wbs_dir, "PLAN.md")
-    source_allowed = status == "open" and has_plan and routing["orchestration_mode"] == "direct"
+    source_allowed = status == "open" and has_plan and routing["orchestration_mode"] in {"direct", "document"}
     why = "" if source_allowed else "Create PLAN.md before source writes." if not has_plan else "Fresh execution assignment required: dispatch prepare with current host inventory and ownership"
     if status == "open" and has_plan and routing["orchestration_mode"] == "unassigned" and os.path.isfile(os.path.join(repo, ".git")):
         source_allowed = None
@@ -2438,7 +2441,9 @@ def emit_compact_context(wbs_dir, *, measure_wbs=False, measured_progress=None, 
     if status == "invalid":
         missing.append("valid WBS state")
     verdict = "BLOCKED_ENV" if status == "blocked" else "PASS" if not missing else "PENDING"
-    next_action = "Run wbs(action='close') after awaited independent review and actual QA succeed." if not missing else "Run the declared WBS checks against current inputs; resolve the listed blockers."
+    next_action = ("Run wbs(action='close') after awaited independent review and actual QA succeed."
+                   if routing['work_kind'] == 'development' else
+                   "Verify the requested document/planning deliverable and required document review, then close; do not claim product implementation or QA.") if not missing else "Run the declared WBS checks against current inputs; resolve the listed blockers."
     if not has_plan:
         next_action = "Create PLAN.md via wbs(action='plan') before source writes."
     elif status == "blocked":
@@ -2447,7 +2452,9 @@ def emit_compact_context(wbs_dir, *, measure_wbs=False, measured_progress=None, 
         next_action = "Finish integration and disposal of this exact WBS work pack before resuming."
     context = dict(wbs_id=os.path.basename(wbs_dir), wbs_dir=wbs_dir, status=status,
                    routing=routing, runtime_verdict=verdict, verification_basis="current_wbs_checks",
-                   workflow_verification="Independent review and QA results are awaited by the workflow and are not machine-tracked.",
+                   workflow_verification=("Independent review and QA results are awaited by the workflow and are not machine-tracked."
+                                          if routing['work_kind'] == 'development' else
+                                          "Document/planning verification and configured document review are workflow-owned; product QA is not implied."),
                    progress=progress, verification_targets=targets,
                    source_write_allowed=source_allowed, why_source_write_blocked=why,
                    required_review_lenses=required_review_lenses(wbs_dir, st),

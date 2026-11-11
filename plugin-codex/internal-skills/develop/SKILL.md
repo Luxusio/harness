@@ -6,6 +6,8 @@ user-invocable: false
 
 Implement PLAN.md through the public WBS actions. `wbs(action="verify")` measures current required checks; `wbs(action="close")` publishes completion only when those checks pass.
 
+Development-only: the run workflow handles effective document/plan work separately. Promote executable or unknown impact in the same WBS before entering here.
+
 > Current artifact model: acceptance intent lives in `PLAN.md`; independent
 > actual review and QA results are awaited by the workflow; WBS checks measure outcomes.
 
@@ -358,30 +360,22 @@ Visual dogfooder browser screenshots follow the same availability gate: capture 
 
 ### Phase 7.8: Harness source auto-install (post-QA, pre-close)
 
-When the repository being changed is the harness plugin source itself (root
-`install.py` plus `plugin/` and `plugin-codex/` are present), actual independent review and QA PASS MUST immediately run:
+For this Harness source repository, apply `workflow.install` after current
+required review/QA and verification. `manual` performs no automatic install:
+report deployment not performed. `changed` uses the existing helper:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 ${HARNESS_PLUGIN_ROOT}/scripts/install_verified.py \
-  --wbs-dir doc/harness/wbs/<wbs_id>
+  --wbs-dir doc/harness/wbs/<wbs_id> --if-changed
 ```
 
-This is part of completion, not a suggestion. Run it after the last source
-edit and verification, before `wbs(action="close")`, so old installed hooks cannot
-prevent the WBS from reaching the close gate. Capture the installer exit code
-and runtime summaries. The trusted helper may inspect the concrete install
-payload and Git state because installation is an explicit operation; those
-checks are not lifecycle gates. It verifies canonical harness identity and
-current WBS applicability and trusted WBS/source ownership before it invokes the snapshot's
-`python3 install.py` (the default conditional run). The installer builds
-each canonical runtime projection, leaves synchronized runtimes untouched, and
-refreshes only stale runtimes. Comparison errors or failed refreshes block completion; never claim
-the source is deployed. Payload synchronization does not diagnose external
-config/registry-only drift; `python3 install.py --force` remains the explicit
-repair path. Do not rerun installation for docs-only edits after this step. The
-current process may retain already-loaded MCP/hooks, so report when a
-new thread is required to load changed runtime code. The helper writes no deduplication state; retrying after interruption recomputes payload
-equality from a fresh verified snapshot.
+The owner compares its original source base through committed and dirty payload
+changes; a clean index alone is insufficient. No changed payload means no runtime
+comparison/refresh. Unknown baseline fails conservatively. Explicit installer
+invocation retains its full integrity checks. Changed-payload failures remain
+unfinished; never claim deployment from a manual/no-payload result. Batch leads
+leave delivery to the integration coordinator. Capture the actual result and
+required new-session notice; post-close learning does not reinstall.
 
 ### Phase 8: Completion preparation
 

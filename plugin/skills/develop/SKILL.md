@@ -1,6 +1,8 @@
 ---
 name: develop
 description: Implement PLAN.md through scoped development, independent review, QA, verified install when applicable, and WBS close.
+
+Development-only: the run workflow handles effective document/plan work separately. Promote executable or unknown impact in the same WBS before entering here.
 argument-hint: <wbs-id>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__wbs, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
@@ -380,29 +382,22 @@ decision. Lifecycle commands never scan the repository to make this choice.
 
 ### Phase 7.8: Harness source auto-install (post-QA, pre-close)
 
-When the repository being changed is the harness plugin source itself (root
-`install.py` plus `plugin/` and `plugin-codex/` are present), actual independent review and QA PASS MUST immediately run:
+For this Harness source repository, apply `workflow.install` after current
+required review/QA and verification. `manual` performs no automatic install:
+report deployment not performed. `changed` uses the existing helper:
 
 ```bash
 python3 plugin/scripts/install_verified.py \
-  --wbs-dir doc/harness/wbs/<wbs_id>
+  --wbs-dir doc/harness/wbs/<wbs_id> --if-changed
 ```
 
-This is part of completion, not a suggestion. Run it after the last source
-edit and verification, before `wbs(action="close")`, so stale installed hooks cannot
-prevent the WBS from reaching the close gate. A `harness:batch` lead (`plugin/agents/wbs-lead.md`) skips this step; the coordinator's integration WBS installs once after all leads merge. Capture the installer exit code
-and runtime summaries. The trusted helper verifies canonical harness identity,
-current WBS applicability, trusted WBS/source ownership and a byte-stable install-payload snapshot
-before it invokes the snapshot's
-`python3 install.py` (the default conditional run). The installer builds each
-canonical runtime projection, leaves synchronized runtimes untouched, and
-refreshes only stale runtimes. Comparison errors or failed refreshes block
-completion; never claim the source is deployed. Payload synchronization does not
-diagnose external config/registry-only drift; `python3 install.py --force` remains
-the explicit repair path. Do not rerun installation for docs-only edits after
-this step. The current process may retain already-loaded MCP/hooks, so report when a
-new session is required to load changed runtime code. The helper writes no deduplication state; retrying after interruption recomputes payload
-equality from a fresh verified snapshot.
+The owner compares its original source base through committed and dirty payload
+changes; a clean index alone is insufficient. No changed payload means no runtime
+comparison/refresh. Unknown baseline fails conservatively. Explicit installer
+invocation retains its full integrity checks. Changed-payload failures remain
+unfinished; never claim deployment from a manual/no-payload result. Batch leads
+leave delivery to the integration coordinator. Capture the actual result and
+required new-session notice; post-close learning does not reinstall.
 
 ### Phase 8: Close and final response
 

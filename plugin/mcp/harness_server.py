@@ -1401,23 +1401,14 @@ def _prepare_write_plan(args: dict, td: str, control: dict):
     raw_plan = args.get("plan")
     plan = raw_plan if isinstance(raw_plan, str) else ""
     candidate_control = dict(control)
-    if "required_lenses" in args:
-        requested = args["required_lenses"]
-        if (
-            isinstance(requested, list)
-            and requested
-            and all(isinstance(lens, str) and lens in SUPPORTED_LENSES for lens in requested)
-            and len(requested) == len(set(requested))
-            and "review-code" in requested
-            and any(lens in QA_LENSES for lens in requested)
-        ):
-            selected = set(requested)
-            candidate_control["required_lenses"] = [
-                lens for lens in LENS_ORDER if lens in selected
-            ]
-        else:
-            candidate_control["required_lenses"] = requested
     try:
+        import work_policy
+        policy = work_policy.load(td, _wbs_roots(args)[1], plan=plan)
+        previous = work_policy.load(td, _wbs_roots(args)[1])
+        declared = args.get("required_lenses", control["required_lenses"]
+                            if previous["kind"] == policy["kind"] else None)
+        candidate_control["required_lenses"] = work_policy.required_lenses(
+            policy, declared, explicit="required_lenses" in args)
         # Validate the exact lens declarations before changing any artifact.
         if not _validate_wbs_control(candidate_control):
             raise ValueError("invalid or empty lens declaration")
@@ -1425,7 +1416,7 @@ def _prepare_write_plan(args: dict, td: str, control: dict):
         return _err(
             f"write_plan refused invalid required_lenses: {exc}",
             data={"written": [], "allowed_required_lenses": [
-                "review-code", "review-security", "qa-api", "qa-browser",
+                "review-code", "review-security", "review-document", "qa-api", "qa-browser",
                 "qa-cli", "qa-desktop",
             ]},
         )
@@ -1529,7 +1520,7 @@ del _bind_control_writer
 
 TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "wbs", "title": "Work through one WBS outcome tree",
-     "description": "One WBS outcome tree. open/context/next/plan do not hash source; current progress is unmeasured and historical credit is labelled. check and final verify/close measure current inputs. PLAN may include one wbs-inputs JSON fence with source roots, artifact files, exclude and deny lists, chosen at verification time rather than as an edit plan. block/open with node_id park/reopen one outcome while independent work continues. Dispatch owns isolated worktrees; current WBS checks and safe integration proof gate completion; independent review and QA remain workflow-owned.",
+     "description": "One WBS outcome tree with purpose-specific execution. PLAN may declare one wbs-work JSON fence {kind:document|plan|development}; omission defaults to development. Document/planning deliverables use their content checks and configured document review, not automatic product QA. Runtime instructions/configuration/unknown impact require development; promote the same WBS/run before editing. Project workflow policy governs review, verification and conditional delivery. open/context/next/plan do not hash source; check and final verify/close measure current inputs. Optional wbs-inputs selects explicit verification inputs, never an edit plan. Dispatch owns isolated concurrent worktrees. Actual required role results remain workflow-owned.",
      "inputSchema": {"type": "object", "properties": {
          "action": {"type": "string", "enum": ["open", "context", "plan", "check", "next", "dispatch", "verify", "close", "block", "migrate", "target"]},
          "wbs_id": {"type": "string", "description": "Stable WBS root ID: WBS__<id> or a bare safe ID. Retired Goal/Task data is accepted only by explicit migration."},

@@ -37,7 +37,7 @@ available user-input mechanism when a real user decision is needed.
 See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for runtime details.
 
 **What DOES work on Codex:**
-- Public loop: `WBS open → plan → develop → QA → close` (independent review and `wbs(action="verify")` are internal close gates)
+- Purpose-aware WBS routing: [document/planning/development flows and project policy](README.md#work-to-the-purpose); development retains independent review and applicable QA
 - Shared MCP server (same `harness_server.py` as Claude)
 - Shared Python scripts via `HARNESS_PLUGIN_ROOT` env
 - `setup`, plain repo-mutating request routing, native `/goal` continuation through the same WBS, capability-routed `plan` and `develop`, `qa-cli`, and `qa-api`

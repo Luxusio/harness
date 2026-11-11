@@ -231,6 +231,8 @@ def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
     state, control = _state(wbs_dir)
     output_dirs = spec.get("output_dirs", output_dirs) if isinstance(spec, dict) else output_dirs
     spec = _spec(spec)
+    import work_policy
+    work_identity = work_policy.load(wbs_dir, repo)['verification_identity']
     index = state.get(FIELD, {"required": {}, "run_id": control["run_id"]})
     if index.get("run_id", control["run_id"]) != control["run_id"]:
         index = {"required": {}, "run_id": control["run_id"]}
@@ -246,7 +248,8 @@ def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
             existing = load_target(wbs_dir, token)
         except (OSError, ValueError):
             continue  # Unavailable history cannot be reused or prevent recovery.
-        if existing["spec"] == spec and existing["context"] == context and existing["manifest"] == expected:
+        if (existing["spec"] == spec and existing["context"] == context and existing["manifest"] == expected
+                and existing.get('work_policy') == work_identity):
             prepared = ensure_snapshot(wbs_dir, token, repo, output_dirs=output_dirs)
             if spec["purpose"] == "acceptance":
                 reference = next(ref for ref in index["required"].values() if ref["token"] == token)
@@ -272,10 +275,13 @@ def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
         record = dict(token=token, run_id=control["run_id"], spec=spec, context=context,
                       manifest=manifest, input_fingerprint=wbs.digest([spec, manifest]),
                       issued_at=time.time(), source_origin=str(Path(repo).resolve()))
+        record['work_policy'] = work_identity
         observed = _manifest(repo, _paths(Path(repo), spec["inputs"]))
         before, after = {row[0]: row for row in manifest}, {row[0]: row for row in observed}
         changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
         _require(not changed, "source changed during target capture: " + ", ".join(changed[:8]))
+        _require(work_policy.load(wbs_dir, repo)['verification_identity'] == work_identity,
+                 'workflow policy changed during target capture')
         digest = _write_private(_record_path(wbs_dir, token), record)
     except BaseException:
         # This operation owns only this freshly random unissued directory.
@@ -323,6 +329,10 @@ def ensure_snapshot(wbs_dir, token, repo=None, *, output_dirs=()):
     existence. Reconstruction creates a new view, never edits an issued view.
     """
     record = load_target(wbs_dir, token)
+    import work_policy
+    from _lib import find_repo_root
+    _require(record.get('work_policy') == work_policy.load(wbs_dir, repo or find_repo_root(wbs_dir))['verification_identity'],
+             'workflow policy changed; issue a current verification target')
     root = Path(record["snapshot_root"])
     paths = [row[0] for row in record["manifest"]]
     output_dirs = _output_paths(output_dirs, record["manifest"], record["spec"]["inputs"])
@@ -339,20 +349,21 @@ def ensure_snapshot(wbs_dir, token, repo=None, *, output_dirs=()):
     return dict(record, snapshot_root=str(root))
 
 
-def _active_index(state, control):
+def _active_index(state, control, wbs_dir, repo):
     index = state.get(FIELD) if state else None
     if index is None:
         return None
     # Retired references remain in history, but are not current obligations.
-    return dict(index, required={lens: ref for lens, ref in index['required'].items()
-                                 if lens in control['required_lenses']})
+    import work_policy
+    lenses = work_policy.required_lenses(work_policy.load(wbs_dir, repo), control['required_lenses'])
+    return dict(index, required={lens: ref for lens, ref in index['required'].items() if lens in lenses})
 
 
 def measure_inputs(wbs_dir, repo):
     """Measure source outside task publication; retain exact owner authority."""
     from _lib import read_wbs_control
     state, control = wbs.read_state(wbs_dir), read_wbs_control(wbs_dir)
-    index = _active_index(state, control)
+    index = _active_index(state, control, wbs_dir, repo)
     rows = _input_rows(wbs_dir, repo, index, measure=True) if index and index.get("required") else []
     return dict(wbs_dir=os.path.realpath(wbs_dir), repo=os.path.realpath(repo),
                 state=state, control=control, rows=rows)
@@ -378,7 +389,10 @@ def _input_rows(wbs_dir, repo, index, *, measure):
                          "frozen snapshot changed; preserve the view and investigate")
                 wbs.fingerprint(repo, record["spec"]["inputs"])
                 current = _manifest(repo, _paths(Path(repo), record["spec"]["inputs"]))
-                row["status"] = "applicable" if current == record["manifest"] and _context(record["spec"], repo) == record["context"] else "stale"
+                import work_policy
+                identity = work_policy.load(wbs_dir, repo)['verification_identity']
+                row["status"] = "applicable" if (current == record["manifest"] and _context(record["spec"], repo) == record["context"]
+                                                   and record.get('work_policy') == identity) else "stale"
             except (OSError, ValueError, KeyError) as error:
                 row.update(status="unavailable", reason=str(error)[:400])
         rows.append(row)
@@ -397,7 +411,7 @@ def applicability(wbs_dir, repo, *, measure=False, measured_inputs=None):
                  and measured_inputs["state"] == state and measured_inputs["control"] == control,
                  "authority or target index changed during measurement")
         measure = True
-    index = _active_index(state, control)
+    index = _active_index(state, control, wbs_dir, repo)
     if not index or not index.get("required"):
         return dict(status="unbound", enforced=False, source_binding="wbs_inputs", targets=[])
     rows = measured_inputs["rows"] if measured_inputs is not None else _input_rows(wbs_dir, repo, index, measure=False)
