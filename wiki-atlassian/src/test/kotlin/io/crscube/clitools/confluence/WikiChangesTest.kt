@@ -2,6 +2,7 @@ package io.crscube.clitools.confluence
 
 import io.crscube.clitools.jirafetcher.config.JiraConfig
 import io.crscube.clitools.knowledge.KnowledgeSettings
+import io.crscube.clitools.knowledge.KnowledgeProject
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -598,9 +599,15 @@ class WikiChangesTest {
             }
             val manifest = Files.createDirectories(project.resolve("doc/harness")).resolve("manifest.yaml")
             Files.writeString(manifest, buildJsonObject {
-                put("wiki", JsonObject(value + ("backend" to JsonPrimitive("atlassian"))))
+                putJsonObject("wiki") {
+                    put("backend", "atlassian"); put("enabled", true); put("site", origin)
+                    putJsonArray("spaces") { add(buildJsonObject {
+                        put("key", "COMMON"); put("rootPageId", "210"); watch?.let { put("watchCommentPages", it) }
+                    }) }
+                }
             }.toString())
-            return KnowledgeSettings.fromProject(project, env)!!
+            val selected = KnowledgeProject.fromProject(project, env)!!
+            return KnowledgeSettings(value, selected.credentials, root.resolve("settings-data"))
         }
         assertEquals(emptyList(), settings().watchedCommentPages)
         assertEquals(listOf("211", "212"), settings("212,211").watchedCommentPages)

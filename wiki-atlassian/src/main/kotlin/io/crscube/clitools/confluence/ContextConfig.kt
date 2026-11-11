@@ -16,12 +16,15 @@ import java.security.MessageDigest
 
 data class ContextConfig(val site: String, val space: String, val spaceId: String, val homePageId: String, val role: String,
                          val pmProject: String = "PMISSUE", val structurePolicy: String = "strict", val pilotRootPageId: String? = null,
-                         val knowledgeRootPageId: String? = null, val legacyPmAssociation: Boolean = structurePolicy != "knowledge", val jiraSite: String? = null) {
+                         val knowledgeRootPageId: String? = null, val legacyPmAssociation: Boolean = structurePolicy != "knowledge", val jiraSite: String? = null,
+                         val wholeSpace: Boolean = false) {
     init {
         require(jiraSite == null || validOrigin(jiraSite)) { "Jira site must be an HTTPS origin" }
         require(validOrigin(site)) { "Confluence site must be an HTTPS origin" }
         require(space.matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Invalid space key" }
-        require(spaceId.matches(Regex("[1-9][0-9]*")) && homePageId.matches(Regex("[1-9][0-9]*"))) { "Invalid space/home ID" }
+        require(spaceId.matches(Regex("[1-9][0-9]*")) &&
+            (if (wholeSpace) homePageId.isEmpty() else homePageId.matches(Regex("[1-9][0-9]*")))) { "Invalid space/home ID" }
+        require(!wholeSpace || isKnowledge && knowledgeRootPageId == null && pilotRootPageId == null) { "Whole-space selection cannot have a page root" }
         require(role.isEmpty() || role in setOf("개발", "QA", "PM", "관리자")) { "Configure a valid user role" }
         require((isKnowledge && pmProject.isEmpty()) || pmProject.matches(Regex("[A-Z][A-Z0-9_]*"))) { "Invalid PM project key" }
         require(structurePolicy in setOf("strict", "pilot", "knowledge")) { "Invalid structurePolicy" }
@@ -46,15 +49,19 @@ data class ContextConfig(val site: String, val space: String, val spaceId: Strin
         } catch (_: Exception) { false }
 
         fun connections(root: Path, runtimeSettings: KnowledgeSettings? = null): JsonObject =
-            (runtimeSettings ?: KnowledgeSettings.fromProject(root)
-                ?: error("Atlassian project connection is unavailable")).connections()
+            requireNotNull(runtimeSettings) { "Resolved Atlassian connection is required" }.connections()
 
         fun load(root: Path, runtimeSettings: KnowledgeSettings? = null, scope: String = "effective"): ContextConfig? {
             require(scope in setOf("effective", "project", "common")) { "Unknown connection scope" }
             val selected = connections(root, runtimeSettings).getValue(scope).jsonObject
             val value = selected["confluence"]?.jsonObject ?: return null
+            val whole = value["wholeSpace"]?.let {
+                require(it is JsonPrimitive && !it.isString && it.booleanOrNull != null) { "Invalid whole-space selection" }; it.boolean
+            } ?: false
+            if (whole) require(value["homePageId"] == JsonPrimitive("")) { "Whole-space selection has no page home" }
             return ContextConfig(value.text("site"), value.text("space"), value.text("spaceId"),
-                value.text("homePageId"), "", "", "knowledge", knowledgeRootPageId = value.text("knowledgeRootPageId"), legacyPmAssociation = false)
+                if (whole) "" else value.text("homePageId"), "", "", "knowledge",
+                knowledgeRootPageId = value.optional("knowledgeRootPageId"), legacyPmAssociation = false, wholeSpace = whole)
         }
 
         private fun JsonObject.text(name: String): String = optional(name) ?: error("Missing connection $name")

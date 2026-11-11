@@ -95,8 +95,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         })
     }
     private fun environment(): Environment {
-        val settings = runtimeSettings ?: KnowledgeSettings.fromProject(launchRoot)
-            ?: error("Atlassian project connection is unavailable")
+        val settings = runtimeSettings ?: error("Resolved Atlassian runtime settings are required")
         require(settings.corpusRoot == launchRoot.toAbsolutePath().normalize()) { "Connection corpus changed; reconnect MCP" }
         return Environment(settings.corpusRoot, settings.connections(), settings.identity())
     }
@@ -152,6 +151,11 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
     }
     /** Specific registered namespaces govern even when the caller arrived through a broader common root. */
     private suspend fun admitted(env: Environment, pageId: String, graph: ReadGraph? = null): Pair<ContextConfig, RemoteNode> {
+        val leaf = graph?.node(pageId) ?: nativeNode(pageId)
+        configs(env).singleOrNull { it.wholeSpace && it.site.trimEnd('/') == origin && it.spaceId == leaf.spaceId }?.let { selected ->
+            require(leaf.status == "current") { "Current content in the registered space is required" }
+            return selected to leaf
+        }
         val path = chain(pageId, graph)
         fun boundary(config: ContextConfig): String = when {
             config.isKnowledge -> config.knowledgeRootPageId ?: config.homePageId
@@ -1133,6 +1137,28 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                 "create_document", "update_document" -> {
                     val creating = operation == "create_document"
                     val sources = basedOn(data)
+                    if (creating && "parent" !in data) {
+                        val config = ContextConfig.load(env.root, runtimeSettings) ?: error("Resolved knowledge scope required")
+                        require(config.wholeSpace) { "Parentless creation requires a selected whole space" }
+                        val title = data.text("title")
+                        val body = storage(data.text("content"), data.optional("format") ?: "storage")
+                        val account = remote.currentUser()
+                        checkSources(env, sources)
+                        policy.checkKnowledgeCreation(config, title, body)
+                        val message = "wiki create document ${UUID.randomUUID()}"
+                        nativeVersionMessage = message
+                        val callback: suspend () -> Unit = {
+                            policy.checkKnowledgeCreation(config, title, body)
+                            require(remote.currentUser() == account) { "Authenticated account changed" }
+                            unchanged(env); checkSources(env, sources); effect = 1
+                        }
+                        val saved = remote.create(config.spaceId, null, title, body, message, config, callback)
+                        effect = 2; observedReference = numeric(saved.node.id)
+                        val acknowledgement = documentResult(env, config, saved, "created", account = account,
+                            metadata = data.flag("metadata"), includeBody = data.flag("includeBody"))
+                        checkSources(env, sources)
+                        return publishReplica(env, config, saved, acknowledgement)
+                    }
                     val pureAppend = !creating && data.containsKey("append") &&
                         listOf("content", "title", "parent", "old_text", "new_text", "edits", "links", "section").none { data.containsKey(it) } && !data.flag("allowReferenceRemoval")
                     val supplied = if (creating) data.text("parent") else if (data.containsKey("document")) data.text("document") else null
@@ -1434,23 +1460,28 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
 }
 
 /** Eight resource verbs; workspace and policy are inferred from the installed launch project. */
-class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, val service: WikiService) : AutoCloseable {
+class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, private val directService: WikiService?,
+                                    private val operation: (suspend (String, JsonObject) -> JsonObject)? = null) : AutoCloseable {
+    val service: WikiService get() = requireNotNull(directService) { "A multi-space provider dispatches operations rather than owning one space" }
+    constructor(operation: suspend (String, JsonObject) -> JsonObject) : this(null, null, operation)
     constructor(credentials: JiraConfig, client: HttpClient? = null,
                 launchRoot: Path = Paths.get("").toAbsolutePath().toRealPath(), cache: ConfluencePageCache? = null,
                 runtimeSettings: KnowledgeSettings? = null) : this(ConfluenceRemote(credentials, client, cache), credentials.baseUrl.trimEnd('/'), launchRoot, runtimeSettings)
     private constructor(remote: ConfluenceRemote, origin: String, launchRoot: Path, runtimeSettings: KnowledgeSettings?) :
         this(remote, WikiService(remote, origin, launchRoot, runtimeSettings))
     constructor(service: WikiService) : this(null, service)
-    private fun call(operation: String, data: JsonObject): String = runBlocking { service.execute(operation, data).toString() }
+    private fun call(name: String, data: JsonObject): String = runBlocking { (operation?.invoke(name, data) ?: service.execute(name, data)).toString() }
 
     @McpTool(name = "search_documents", description = "Search the shared local corpus by exact native page ID or ranked text. Results include version, real excerpts, heading context when available, and a snapshot-bound read object for get_document.")
     fun searchDocuments(@McpParam(description = "Exact native page ID or text, 1..200 Unicode code points. Each text term must match the title or authored Markdown.") query: String,
-                        @McpParam(description = "One global connection; effective/project/common are equivalent labels retained for native compatibility", required = false) scope: String = "effective",
+                        @McpParam(description = "Native namespace label; select a configured space using the space parameter", required = false) scope: String = "effective",
                         @McpParam(description = "Results per page, 1..25", required = false) limit: Int = 10,
                         @McpParam(description = "Returned continuation", required = false) cursor: String? = null,
                         @McpParam(description = "Include detailed native metadata; normally omitted", required = false) metadata: Boolean = false,
                         @McpParam(description = "Optional native domain root ID or URL within the selected registered namespace", required = false) root: String? = null,
-                        @McpParam(description = "Optional excerpt size, 1..500 code points; local search returns real excerpts with native identity", required = false) snippetLength: Int? = null): String = call("search_documents", buildJsonObject {
+                        @McpParam(description = "Optional excerpt size, 1..500 code points; local search returns real excerpts with native identity", required = false) snippetLength: Int? = null,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("search_documents", buildJsonObject {
+        space?.let { put("space", it) }
         put("query", query); put("scope", scope); put("limit", limit); cursor?.let { put("cursor", it) }; put("metadata", metadata)
         root?.let { put("root", it) }; snippetLength?.let { put("snippetLength", it) }
     })
@@ -1458,7 +1489,9 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
     @McpTool(name = "document_relations", description = "Read explicit authored knowledge relations and affected review candidates. Links are navigation evidence, not automatic truth propagation.")
     fun documentRelations(@McpParam(description = "Native page ID or URL") document: String,
                           @McpParam(description = "Depth 1..3", required = false) depth: Int = 2,
-                          @McpParam(description = "Bounded result limit", required = false) limit: Int = 25): String = call("graph", buildJsonObject {
+                          @McpParam(description = "Bounded result limit", required = false) limit: Int = 25,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("graph", buildJsonObject {
+        space?.let { put("space", it) }
         put("document", document); put("scope", "common"); put("depth", depth); put("limit", limit)
     })
 
@@ -1470,21 +1503,25 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
                     @McpParam(description = "markdown (default), storage for native structure, outline for heading positions; keep format, section and version on continuation", required = false) format: String = "markdown",
                     @McpParam(description = "Include URL, read status, author, time, hashes and detailed range metadata", required = false) metadata: Boolean = false,
                     @McpParam(description = "Exact position from format:outline, e.g. 1.2; requires version. Returns only the body below that heading including subsections", required = false) section: String? = null,
-                    @McpParam(description = "Snapshot from search_documents read object. Keep it with the version and Markdown format for continued reads; a changed snapshot requires a new search", required = false) snapshot: String? = null): String = call("get_document", buildJsonObject {
+                    @McpParam(description = "Snapshot from search_documents read object. Keep it with the version and Markdown format for continued reads; a changed snapshot requires a new search", required = false) snapshot: String? = null,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("get_document", buildJsonObject {
+        space?.let { put("space", it) }
         put("document", document); version?.let { put("version", it) }; put("offset", offset); put("length", length); put("format", format); put("metadata", metadata)
         section?.let { put("section", it) }
         snapshot?.let { put("snapshot", it) }
     })
 
     @McpTool(name = "create_document", description = "Create a document under an explicit knowledge parent. Use format:text for simple writing or native storage for rich content. One write and verified readback; refreshes an existing local replica and returns a short acknowledgement.")
-    fun createDocument(@McpParam(description = "Exact parent page ID or URL") parent: String,
+    fun createDocument(@McpParam(description = "Exact parent page ID or URL; otherwise choose space explicitly", required = false) parent: String? = null,
                        @McpParam(description = "Document title") title: String,
                        @McpParam(description = "New document content") content: String,
                        @McpParam(description = "storage (default) or text for escaped plain paragraphs", required = false) format: String? = null,
                        @McpParam(description = "Include detailed native metadata", required = false) metadata: Boolean = false,
                        @McpParam(description = "Include bounded saved storage content", required = false) includeBody: Boolean = false,
-                       @McpParam(description = "Optional AND version conditions for actual source pages: [{\"document\":\"123\",\"version\":4}], 1..10. Not permission to republish", required = false) basedOn: JsonArray? = null): String = call("create_document", buildJsonObject {
-        put("parent", parent); put("title", title); put("content", content); format?.let { put("format", it) }; put("metadata", metadata); put("includeBody", includeBody)
+                       @McpParam(description = "Optional AND version conditions for actual source pages: [{\"document\":\"123\",\"version\":4}], 1..10. Not permission to republish", required = false) basedOn: JsonArray? = null,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("create_document", buildJsonObject {
+        space?.let { put("space", it) }
+        parent?.let { put("parent", it) }; put("title", title); put("content", content); format?.let { put("format", it) }; put("metadata", metadata); put("includeBody", includeBody)
         basedOn?.let { put("basedOn", it) }
     })
 
@@ -1504,7 +1541,9 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
                        @McpParam(description = "Optional AND version conditions for actual source pages: [{\"document\":\"123\",\"version\":4}], 1..10. Not permission to republish", required = false) basedOn: JsonArray? = null,
                        @McpParam(description = "New parent page or folder ID/URL in the same knowledge namespace; must retain all existing ancestors. Requires explicit document and version; omitted preserves location", required = false) parent: String? = null,
                        @McpParam(description = "1..20 exact existing href to native document ID or same-origin page URL (optional #fragment) mappings. Replaces all matching real links together, preserving labels/code/images; exclusive with other body edits. Requires document and version", required = false) links: JsonObject? = null,
-                       @McpParam(description = "Exact outline position at version, e.g. 1.2. With content replaces only its body; heading/outside bytes and existing native references are preserved", required = false) section: String? = null): String = call("update_document", buildJsonObject {
+                       @McpParam(description = "Exact outline position at version, e.g. 1.2. With content replaces only its body; heading/outside bytes and existing native references are preserved", required = false) section: String? = null,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("update_document", buildJsonObject {
+        space?.let { put("space", it) }
         document?.let { put("document", it) }; version?.let { put("version", it) }; content?.let { put("content", it) }; title?.let { put("title", it) }
         old_text?.let { put("old_text", it) }; new_text?.let { put("new_text", it) }
         append?.let { put("append", it) }; format?.let { put("format", it) }; put("metadata", metadata); put("includeBody", includeBody)
@@ -1520,7 +1559,9 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
                      @McpParam(description = "Confluence only: markdown (default) or storage before editing", required = false) format: String? = null,
                      @McpParam(description = "Include detailed native audit metadata", required = false) metadata: Boolean = false,
                      @McpParam(description = "For Confluence page root lists, include one bounded direct-reply page per comment", required = false) includeReplies: Boolean = false,
-                     @McpParam(description = "Replies per root, 1..10; limit times this must be <=100 when included", required = false) repliesPerComment: Int = 3): String = call("list_comments", buildJsonObject {
+                     @McpParam(description = "Replies per root, 1..10; limit times this must be <=100 when included", required = false) repliesPerComment: Int = 3,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("list_comments", buildJsonObject {
+        space?.let { put("space", it) }
         put("target", target); put("limit", limit); cursor?.let { put("cursor", it) }; format?.let { put("format", it) }
         put("metadata", metadata); put("includeReplies", includeReplies); put("repliesPerComment", repliesPerComment)
     })
@@ -1533,7 +1574,9 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
                       @McpParam(description = "Include detailed native metadata", required = false) metadata: Boolean = false,
                       @McpParam(description = "Include saved native comment content", required = false) includeBody: Boolean = false,
                       @McpParam(description = "Exact visible page text inside one plain text run to anchor a new inline comment, 1..1000 characters; exclusive with replyTo", required = false) selection: String? = null,
-                      @McpParam(description = "Which match of selection to anchor, from 1; required when it occurs more than once", required = false) occurrence: Int? = null): String = call("create_comment", buildJsonObject {
+                      @McpParam(description = "Which match of selection to anchor, from 1; required when it occurs more than once", required = false) occurrence: Int? = null,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("create_comment", buildJsonObject {
+        space?.let { put("space", it) }
         put("target", target); put("text", text); replyTo?.let { put("replyTo", it) }; format?.let { put("format", it) }
         put("metadata", metadata); put("includeBody", includeBody); selection?.let { put("selection", it) }; occurrence?.let { put("occurrence", it) }
     })
@@ -1544,7 +1587,9 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
                       @McpParam(description = "Complete replacement comment content") text: String,
                       @McpParam(description = "storage (default) or text for plain paragraphs", required = false) format: String? = null,
                       @McpParam(description = "Include detailed native metadata", required = false) metadata: Boolean = false,
-                      @McpParam(description = "Include saved native comment content", required = false) includeBody: Boolean = false): String = call("update_comment", buildJsonObject {
+                      @McpParam(description = "Include saved native comment content", required = false) includeBody: Boolean = false,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("update_comment", buildJsonObject {
+        space?.let { put("space", it) }
         put("comment", comment); put("version", version); put("text", text); format?.let { put("format", it) }
         put("metadata", metadata); put("includeBody", includeBody)
     })
@@ -1552,7 +1597,9 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
     @McpTool(name = "list_document_versions", description = "Read one bounded page of actual document versions, native author/time/message and continuation. Current registered access is checked first.")
     fun listDocumentVersions(@McpParam(description = "Exact page ID or URL") document: String,
                              @McpParam(description = "Page size, 1..50", required = false) limit: Int = 20,
-                             @McpParam(description = "Returned continuation", required = false) cursor: String? = null): String = call("list_document_versions", buildJsonObject {
+                             @McpParam(description = "Returned continuation", required = false) cursor: String? = null,
+                       @McpParam(description = "Exact configured space key; validates a native target or selects an otherwise ambiguous destination", required = false) space: String? = null): String = call("list_document_versions", buildJsonObject {
+        space?.let { put("space", it) }
         put("document", document); put("limit", limit); cursor?.let { put("cursor", it) }
     })
     override fun close() { ownedRemote?.close() }

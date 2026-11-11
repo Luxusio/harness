@@ -25,16 +25,16 @@ site/account from the request and visible session. Ask when multiple accounts
 remain plausible. When browser attachment, login, MFA or account policy needs
 user action, identify the exact action, then resume the same setup.
 
-List accessible Confluence spaces with their names and keys. Ask which space
-to use unless the user already specified it. Then ask which existing document
-should be ROOT, accepting a page URL, ID or a selection from browser results.
-A nested document is a valid ROOT even when it has ancestors. Offer the space
-home as one selectable document when useful. Resolve the native page and space
-IDs and verify that ROOT is current and belongs to the selected space.
-Synchronize that document and its descendants. Keep sibling documents and
-ancestors outside the replica. Reuse a previously selected ROOT only when the
-request retains that connection. ROOT choice does not change native account
-permissions or issue a token limited to that subtree.
+Keep exactly one site per connection. List accessible Confluence spaces with
+their names and keys, and ask which to connect unless already specified. For
+each, offer whole-space synchronization or an existing ROOT document, accepting
+a page URL, ID or browser selection. A nested document is a valid ROOT. Omit
+ROOT for the whole accessible space, including separate top-level trees; do not
+silently substitute the homepage. Verify a selected ROOT is current and belongs
+to that space. Runtime resolves native space IDs from the selected keys; never
+ask the user to duplicate them in configuration. Keep up to 32 distinct spaces.
+Reuse selections only when the request retains them. Selection does not change
+native account permissions or issue a token limited to those documents.
 
 ## Install and authenticate
 
@@ -82,7 +82,7 @@ another token. Preserve unrelated credentials and the user's clipboard data.
 
 ## Configure and verify
 
-Write the selected site, space/key, native IDs, ROOT and optional sync settings
+Write the one site, `spaces` entries with `key`, optional `rootPageId` and optional sync settings
 under `wiki` in the consuming project's existing `doc/harness/manifest.yaml`,
 including `backend: atlassian`, using the documented schema. Preserve unrelated
 Harness fields/comments and keep credentials out. This file also marks Harness
@@ -97,8 +97,11 @@ ownership before editing, and make the secret-bearing file owner-private.
 Validate YAML and TOML without printing private values. When migrating the old
 setup, move selected public settings to the common manifest wiki section and remove their obsolete
 `WIKI_ATLASSIAN_*` assignments; they cannot activate or override the connection.
+Move earlier single-space fields into the selected `spaces` entry and remove
+top-level `space`, `spaceId`, ROOT and destination fields. Old schema is rejected;
+old cache data remains intact and the new partitions may synchronize afresh.
 Preserve the actual credential issuer when establishing its binding. Keep optional memory/feedback pages
-and comment watches when they belong to the selected ROOT; otherwise leave
+and comment watches in each entry when they belong to that space's selection; otherwise leave
 them unset until the user chooses existing destinations. Reuse the documented
 poll default unless the user requested another interval.
 
@@ -117,16 +120,23 @@ reload in place, provide the exact restart command and keep host verification
 pending. A separate smoke process establishes only that process's result.
 
 Use the selected product's real connection check. For this plugin, wait for
-`connection_status` to report a readable synchronized replica, then perform a
-bounded `get_document` for the chosen ROOT and a scoped search. Verify native
-identity, selected space/ROOT, scope and actual errors. Keep one synchronization
-worker per smoke process and poll its status while progress is possible.
+`connection_status` to report each selected space. Perform a bounded
+`get_document` for each chosen ROOT or an accessible representative document
+for whole-space selections, then search across spaces and with a space filter.
+Verify native identity, space/ROOT, scope and actual errors. A failed space is
+reported separately even when others work. Keep one synchronization process
+per smoke check and poll its status while progress is possible.
 Authentication failures are reported as failures; service unavailability and
 pending synchronization retain their actual states. Setup verification uses
 read-only operations. Remote document creation or editing needs task scope
 that authorizes those changes.
 
-Report the installed version/host, chosen site/space and ROOT link, configuration
+For later writes, exact document/parent identity determines its space. A new
+document without a parent requires explicit space selection. Multiple possible
+memory/feedback destinations require selection; never choose the first space
+or broadcast a write. MCP scope and mismatch checks still apply.
+
+Report the installed version/host, chosen site/spaces and optional ROOT links, configuration
 location, credential expiry when known, and actual connection/sync/read results.
 Identify any remaining user action and continue after it. Include secrets only
 in their protected destination.

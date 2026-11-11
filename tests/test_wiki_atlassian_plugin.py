@@ -27,7 +27,7 @@ def _jar():
     return jar.resolve()
 
 
-def _calls(jar, cwd, env, command=None):
+def _calls(jar, cwd, env, command=None, requests=None):
     java = env.get("WIKI_ATLASSIAN_JAVA", "java")
     rows = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -36,6 +36,7 @@ def _calls(jar, cwd, env, command=None):
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
+    rows.extend(requests or [])
     command = command if command is not None else [java, "-jar", str(jar)]
     result = subprocess.run(command, cwd=cwd, env=env,
         input="".join(json.dumps(row) + "\n" for row in rows), text=True,
@@ -62,7 +63,7 @@ def enabled_environment(home, **changes):
 
 def write_connection(cwd, **changes):
     # JSON is a strict subset of YAML and keeps native IDs quoted in this fixture.
-    value = dict(enabled=True, site="https://127.0.0.1:9", space="TEAM", spaceId="123", rootPageId="456")
+    value = dict(enabled=True, site="https://127.0.0.1:9", spaces=[dict(key="TEAM", rootPageId="456")])
     value.update(changes)
     value.setdefault("backend", "atlassian")
     manifest = cwd / "doc/harness/manifest.yaml"
@@ -130,7 +131,7 @@ def test_actual_packaged_payload_captures_consuming_project_before_plugin_chdir(
 
 @pytest.mark.parametrize("raw", ["", "[]", "enabled: 'true'", "enabled: false\nenabled: true",
     "enabled: false\napiToken: sensitive-secret", "enabled: false\nsite: https://sensitive-secret@example.invalid",
-    "enabled: false\nspaceId: 123", "enabled: false\npollIntervalSeconds: '300'", "enabled: false\nwatchCommentPages: ''",
+    "enabled: false\nspaceId: 123", "enabled: false\nspaces: [{key: TEAM, rootPageId: 123}]", "enabled: false\nspaces: [{key: TEAM}, {key: TEAM}]", "enabled: false\npollIntervalSeconds: '300'", "enabled: false\nwatchCommentPages: ''",
     "enabled: &flag false", "enabled: false\nsite: *flag", "enabled: !!bool false", "!!java/object:sensitive-secret {}",
     "enabled: false\n---\nenabled: false", "enabled: false\nsite: [a]", "#" + "a" * 65536])
 def test_invalid_yaml_fails_before_creating_corpus_without_leaking_values(tmp_path, raw):
@@ -252,6 +253,40 @@ def test_common_manifest_nesting_boundary_matches_harness(tmp_path, nesting, acc
         assert result.returncode != 0
         assert not (tmp_path / "home/.local/share/wiki-atlassian").exists()
     assert path.read_text() == source
+
+
+def test_multiple_spaces_and_optional_roots_expose_one_toolset_before_native_resolution(tmp_path):
+    write_connection(tmp_path, spaces=[{"key": "TEAM"}, {"key": "DEV", "rootPageId": "456"}])
+    replies = _calls(_jar(), tmp_path, enabled_environment(tmp_path / "home"), requests=[
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "connection_status", "arguments": {}}},
+    ])
+    tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
+    assert len(tools) == 10
+    assert len({tool["name"] for tool in tools}) == 10
+    for name in ("search_documents", "get_document", "create_document", "update_document"):
+        tool = next(tool for tool in tools if tool["name"] == name)
+        assert tool["inputSchema"]["properties"]["space"]["type"] == "string"
+    create = next(tool for tool in tools if tool["name"] == "create_document")
+    assert "parent" not in create["inputSchema"].get("required", [])
+    content = next(row["result"]["content"][0]["text"] for row in replies if row.get("id") == 3)
+    status = json.loads(content)
+    assert status["enabled"] is True and status["ready"] is False
+    assert [(space["key"], space["wholeSpace"]) for space in status["spaces"]] == [("TEAM", True), ("DEV", False)]
+    assert status["spaces"][1]["rootPageId"] == "456"
+    assert not (tmp_path / "home/.local/share/wiki-atlassian").exists()
+
+
+@pytest.mark.parametrize("spaces", [[], [{"key": "TEAM", "spaceId": "123"}], [{"key": "TEAM"}, {"key": "TEAM"}],
+    [{"key": "TEAM", "rootPageId": 456}], [{"key": "TEAM", "site": "https://other.invalid"}],
+    [{"key": "S" + str(index)} for index in range(33)]])
+def test_public_space_selections_reject_native_ids_duplicates_and_unbounded_lists(tmp_path, spaces):
+    write_connection(tmp_path, spaces=spaces)
+    env = enabled_environment(tmp_path / "home")
+    result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
+        cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
+    assert "fixture-only-token" not in result.stdout + result.stderr
+    assert not (tmp_path / "home/.local/share/wiki-atlassian").exists()
 
 
 def test_installer_rejects_writable_storage_and_substituted_publication(tmp_path, monkeypatch):

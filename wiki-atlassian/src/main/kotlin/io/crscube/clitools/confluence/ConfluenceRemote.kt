@@ -697,7 +697,8 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
 
     private inline fun <T> withConnectionScope(config: ContextConfig?, id: String, block: () -> T): T =
         try { block() } catch (failure: ContextRemoteException) {
-            if (failure !is RootScopeDenial && config != null && (id == config.homePageId || id == config.knowledgeRootPageId) && failure.isScopeDenial())
+            if (failure !is RootScopeDenial && config != null && failure.isScopeDenial() &&
+                (id == config.homePageId || id == config.knowledgeRootPageId || config.wholeSpace && failure.code == "http_401"))
                 throw RootScopeDenial(config, failure)
             throw failure
         }
@@ -753,6 +754,29 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
                 throw ContextRemoteException("scope_metadata_changed", "Knowledge metadata changed during authorization")
             observed[id] = node
             return node
+        }
+        if (config.wholeSpace) {
+            suspend fun verify(fetchCurrent: suspend (String, String) -> RemoteNode) {
+                observed.values.forEach { previous ->
+                    var cursor: RemoteNode? = previous
+                    val seen = mutableSetOf<String>()
+                    while (cursor != null) {
+                        require(seen.add(cursor.id) && seen.size <= 100) { "Cyclic or excessive consumed whole-space ancestry" }
+                        cursor = cursor.parentId?.let { observed[it] }
+                    }
+                    if (fetchCurrent(previous.id, previous.type) != previous)
+                        throw ContextRemoteException("scope_metadata_changed", "Knowledge space metadata changed before export")
+                }
+            }
+            bodyFinalizer?.invoke {
+                var finalRequests = 0
+                verify { id, type ->
+                    if (++finalRequests > 256) throw ContextRemoteException("scope_limit", "Knowledge final body verification exceeds the metadata request budget")
+                    connectionScopeNode(config, id, type)
+                }
+            }
+            return ScopeValidation(authorize = { pageId -> content(pageId, fresh = true) },
+                verifyConsumed = { verify { id, type -> fetch(id, type) } })
         }
         val home = content(config.homePageId)
         val boundary = content(boundaryId)
@@ -828,6 +852,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
     }
 
     private suspend fun knowledgeInventory(config: ContextConfig): List<RemoteNode> {
+        if (config.wholeSpace) return wholeSpaceInventory(config)
         val boundary = requireScope(config, config.knowledgeRootPageId ?: config.homePageId)
         fun requireSame(current: RemoteNode, observed: RemoteNode) {
             if (current != observed)
@@ -875,6 +900,33 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         return nodes.values.toList()
     }
 
+    /** Whole-space inventory does not require a readable homepage or any inaccessible parent. */
+    private suspend fun wholeSpaceInventory(config: ContextConfig): List<RemoteNode> {
+        requireSpace(config)
+        val all = linkedMapOf<String, RemoteNode>()
+        val pages = list(endpoint("/wiki/api/v2/spaces/${id(config.spaceId)}/pages", mapOf("limit" to "250", "status" to "current")))
+        val folders = search("space = \"${config.space}\" and type = folder")
+        (pages.map { parseScopeNode(it, id(it.string("id") ?: error("Missing page ID")), "page") } + folders).forEach { node ->
+            require(node.spaceId == config.spaceId && node.status == "current" && node.type in setOf("page", "folder")) { "Whole-space inventory returned another space or non-current content" }
+            require(all.size < 20000 && all.put(node.id, node) == null) { "Duplicate or excessive whole-space inventory" }
+        }
+        fun depth(node: RemoteNode): Int {
+            var cursor: RemoteNode? = node
+            val seen = mutableSetOf<String>()
+            while (cursor != null) {
+                require(seen.add(cursor.id) && seen.size <= 100) { "Cyclic or excessive whole-space ancestry" }
+                cursor = cursor.parentId?.let { all[it] }
+            }
+            return seen.size
+        }
+        all.values.sortedByDescending(::depth).forEach { previous ->
+            if (connectionScopeNode(config, previous.id, previous.type) != previous)
+                throw ContextRemoteException("scope_metadata_changed", "Whole-space metadata changed during inventory")
+        }
+        requireSpace(config)
+        return all.values.toList()
+    }
+
     /** One bounded metadata response. This intentionally does not reuse the complete inventory crawler. */
     suspend fun searchContext(config: ContextConfig, query: String, limit: Int = 10): JsonObject =
         withTimeoutOrNull(30_000) { searchContextBounded(config, query, limit) }
@@ -886,7 +938,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             "Supply a search query of 1..200 characters and a limit of 1..25"
         }
         val authorize = if (config.isKnowledge) scopeValidator(config) else null
-        val scope = if (config.isKnowledge) " and (id = ${config.knowledgeRootPageId ?: config.homePageId} or ancestor = ${config.knowledgeRootPageId ?: config.homePageId})" else ""
+        val scope = if (config.isKnowledge && !config.wholeSpace) " and (id = ${config.knowledgeRootPageId ?: config.homePageId} or ancestor = ${config.knowledgeRootPageId ?: config.homePageId})" else ""
         val escaped = query.replace("\\", "\\\\").replace("\"", "\\\"")
         val target = endpoint("/wiki/rest/api/content/search", mapOf(
             "cql" to "space = \"${config.space}\" and type = page$scope and text ~ \"$escaped\"",
@@ -1058,8 +1110,9 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         }
     }
 
-    suspend fun spaces(): JsonArray = JsonArray(list(endpoint("/wiki/api/v2/spaces", mapOf("limit" to "250"))).map { entry ->
+    suspend fun spaces(): JsonArray = JsonArray(list(endpoint("/wiki/api/v2/spaces", mapOf("limit" to "250", "status" to "current"))).map { entry ->
         val spaceId = id(entry.string("id") ?: error("Missing space ID"))
+        require(!entry.containsKey("status") || entry.string("status") == "current") { "Configured space must be current" }
         val key = entry.string("key")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,100}")) } ?: error("Invalid space key")
         val home = entry.string("homepageId") ?: entry.string("homePageId")
         buildJsonObject {
@@ -1068,13 +1121,26 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         }
     })
 
+    internal suspend fun requireSpace(scope: ContextConfig) {
+        require(scope.site.trimEnd('/') == origin) { "Selected site differs from the credential origin" }
+        try {
+            val selected = spaces().map { it.jsonObject }.filter { it.string("key") == scope.space }
+            if (selected.size != 1 || selected.single().string("id") != scope.spaceId)
+                throw ContextRemoteException("scope_outside_connection", "Configured space identity is no longer accessible")
+        } catch (failure: ContextRemoteException) {
+            if (scope.wholeSpace && failure !is RootScopeDenial && failure.isScopeDenial()) throw RootScopeDenial(scope, failure)
+            throw failure
+        }
+    }
+
     @JvmOverloads
-    suspend fun create(spaceId: String, parentId: String, title: String, body: String, message: String, scope: ContextConfig? = null,
+    suspend fun create(spaceId: String, parentId: String?, title: String, body: String, message: String, scope: ContextConfig? = null,
                        beforeEffect: suspend () -> Unit = {}): RemotePage {
-        id(spaceId); id(parentId)
+        id(spaceId); parentId?.let(::id)
+        require(parentId != null || scope?.wholeSpace == true) { "An explicit parent or whole-space destination is required" }
         if (scope?.isKnowledge == true) {
             require(scope.spaceId == spaceId) { "Creation space differs from the selected knowledge space" }
-            requireScope(scope, parentId)
+            if (parentId != null) requireScope(scope, parentId) else requireSpace(scope)
         }
         require(title.isNotBlank() && body.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024 && message.isNotBlank()) { "Bounded document and change reason required" }
         val space = spaces().map { it.jsonObject }.singleOrNull { it.string("id") == spaceId }
@@ -1083,11 +1149,13 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         val payload = buildJsonObject {
             put("type", "page"); put("status", "current"); put("title", title)
             putJsonObject("space") { put("key", space.string("key")!!) }
-            putJsonArray("ancestors") { add(buildJsonObject { put("id", parentId) }) }
+            putJsonArray("ancestors") { parentId?.let { add(buildJsonObject { put("id", it) }) } }
             putJsonObject("body") { putJsonObject("storage") { put("representation", "storage"); put("value", body) } }
             putJsonObject("version") { put("number", 1); put("message", message) }
         }
-        if (scope?.isKnowledge == true) requireScope(scope, parentId)
+        if (scope?.isKnowledge == true) {
+            if (parentId != null) requireScope(scope, parentId) else requireSpace(scope)
+        }
         beforeEffect()
         val response = request(HttpMethod.Post, endpoint("/wiki/rest/api/content"), payload).second
         val createdId = observedId(response) ?: throw ContextRemoteException("unknown_create", "Creation response has no valid page ID; reconcile before retrying", true)
@@ -1127,7 +1195,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             while (true) {
                 require(result.size < 100 && result.none { it.id == current }) { "Cyclic or excessive move ancestry" }
                 val selected = node(current); result += selected
-                if (selected.id == config.homePageId) return result
+                if (selected.id == config.homePageId || config.wholeSpace && selected.parentId == null) return result
                 current = selected.parentId ?: error("Move ancestry left its registered home")
             }
         }
@@ -1244,10 +1312,11 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         require(scope.site.trimEnd('/') == origin) { "Selected search site differs from the credential origin" }
         require(query.isNotBlank() && query.length <= 200 && query.none(Char::isISOControl) && limit in 1..25)
         val escaped = query.replace("\\", "\\\\").replace("\"", "\\\"")
-        val registeredRoot = id(if (scope.isKnowledge) scope.knowledgeRootPageId ?: scope.homePageId else scope.homePageId)
+        val registeredRoot = if (scope.wholeSpace) "" else id(if (scope.isKnowledge) scope.knowledgeRootPageId ?: scope.homePageId else scope.homePageId)
+        val selection = if (scope.wholeSpace) "" else " and (id = $registeredRoot or ancestor = $registeredRoot)"
         val domain = root?.let { " and (id = ${id(it)} or ancestor = ${id(it)})" } ?: ""
         val batch = wikiBatch("/wiki/rest/api/content/search", mapOf(
-            "cql" to "space = \"${scope.space}\" and type = page and (id = $registeredRoot or ancestor = $registeredRoot)$domain and text ~ \"$escaped\"",
+            "cql" to "space = \"${scope.space}\" and type = page$selection$domain and text ~ \"$escaped\"",
             "cqlcontext" to """{"contentStatuses":["current"]}""", "expand" to "space,version,ancestors", "limit" to limit.toString()), cursor)
         val nodes = batch.getValue("results").jsonArray.map { value ->
             val metadata = value as? JsonObject ?: throw ContextRemoteException("malformed_list", "Native search metadata is incomplete")

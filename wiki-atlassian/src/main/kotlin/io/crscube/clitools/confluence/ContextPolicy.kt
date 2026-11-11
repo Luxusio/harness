@@ -113,6 +113,15 @@ class ContextPolicy(private val remote: ConfluenceRemote) {
         if (before != null) require(before.node == target) { "Document identity changed" }
     }
 
+    /** Top-level creation has a space authority, never an invented parent document. */
+    suspend fun checkKnowledgeCreation(config: ContextConfig, title: String, body: String) {
+        require(config.isKnowledge && config.wholeSpace) { "Top-level creation requires a selected whole space" }
+        require(title.isNotBlank() && title.length <= 1000 && title.none(Char::isISOControl)) { "A bounded document title is required" }
+        require(body.isNotBlank() && body.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024) { "A bounded storage body is required" }
+        rejectSecrets(body)
+        remote.requireSpace(config)
+    }
+
     fun checkCommentText(text: String) {
         require(text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 64 * 1024) { "Comment text must contain 1..65536 UTF-8 bytes" }
         rejectSecrets(text)

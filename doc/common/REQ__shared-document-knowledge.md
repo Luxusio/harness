@@ -154,9 +154,16 @@ the guidance; successful packaging alone cannot establish semantic correctness.
 ## Project connection and private authentication
 
 The project Git root owns common `doc/harness/manifest.yaml`; its optional
-`wiki` mapping selects `backend: atlassian` with activation, site, space/key,
-native space/ROOT IDs and optional document destinations, polling and comment
-watches. Preserve unrelated Harness fields and comments. No separate provider
+`wiki` mapping selects `backend: atlassian` with activation, one site and
+`spaces: [{key: TEAM}, {key: DEV, rootPageId: "456"}]`. The user explicitly
+approved multiple spaces on that one site and optional ROOT on 2026-11-11.
+The runtime resolves native space IDs from keys; `spaceId` is not user input.
+Omitting ROOT selects all accessible content in that space, including separate
+top-level trees outside the homepage ancestry. A selected ROOT confines access
+to that document and its descendants. Each space may select existing memory
+and feedback destinations and comment watches; polling is shared configuration.
+Duplicate space keys, mixed old single-space fields and unknown fields are
+invalid. Preserve unrelated Harness fields and comments. No separate provider
 settings file or fallback remains. Subdirectories use the nearest Git root,
 including gitfile worktrees. Nested repositories cannot borrow outer settings;
 without Git use only the startup directory. Missing common settings, absent wiki or valid disabled wiki is local/inert. Present malformed, unreadable or unauthorized configuration stays
@@ -182,3 +189,28 @@ prerequisite; runtime hooks never install dependencies. Parsing, scope selection
 and errors must agree across native runtime and Harness, without exposing input
 values or secrets. Existing permission, root, native version and uncertain-write
 boundaries remain intact.
+
+One MCP searches the selected spaces together or filters an explicit key.
+Results and readiness/failures identify the space; one unavailable space does
+not suppress usable spaces. Continuations remain bound to query, selected
+spaces and their snapshots. An existing document or comment is routed by its
+native identity; creating under an explicit parent uses that parent's space.
+A parentless creation requires explicit space selection and the supported
+native creation path. Conflicting key/document/parent selections are rejected
+before writes. Multiple possible logical memory/feedback destinations require
+explicit selection, with no arbitrary first-space default or implicit broadcast.
+All operations still enforce current permissions, configured scope and native
+version/readback/uncertain-write rules.
+
+Derived implementation: existing per-space corpus and native services remain
+behind one typed dispatcher. Cache partitioning uses normalized site, exact
+account email, ROOT or the whole-space marker, and space key, independently of
+project path, host runtime and token value. This keeps hooks network-free and
+avoids a separate resolution registry. Native manifests verify the resolved
+space ID, selection kind and current credential admission. Old partitions are
+preserved; changing the public schema may require a fresh synchronization and
+never imports old authorization. Change notices label spaces and retain
+independent cursors and local locking/error boundaries. Derived resource bounds
+limit a connection to 32 distinct spaces and one hook delivery to 32 events
+across those spaces, with an allowance for each; this is an implementation
+bound rather than a user-requested number.

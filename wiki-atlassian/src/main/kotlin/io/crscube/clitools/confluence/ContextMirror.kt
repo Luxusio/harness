@@ -98,7 +98,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 val previous = readManifest(control.resolve("manifest.json"), config)
                 require((previous["structurePolicy"]?.jsonPrimitive?.content ?: "strict") == config.structurePolicy &&
                     previous["pilotRootPageId"]?.jsonPrimitive?.content == config.pilotRootPageId &&
-                    previous["knowledgeRootPageId"]?.jsonPrimitive?.content == config.knowledgeRootPageId) { "Mirror selection changed; sync first" }
+                    previous["knowledgeRootPageId"]?.jsonPrimitive?.content == config.knowledgeRootPageId &&
+                    (previous["wholeSpace"]?.jsonPrimitive?.boolean ?: false) == config.wholeSpace) { "Mirror selection changed; sync first" }
                 val node = page.node
                 require(node.id.matches(Regex("[1-9][0-9]*")) && node.type == "page" && node.status == "current" &&
                     node.spaceId == config.spaceId && node.version > 0 && page.body.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024) {
@@ -134,7 +135,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     put(node.id, JsonObject(encode(node, path, ".sync/storage/${node.id}-${node.version}-$hash.xhtml", hash) +
                         ("relations" to knowledgeRelations(page.body, config.site.trimEnd('/'), config.space))))
                 })
-                val path = if (prior != null && prior["title"]?.jsonPrimitive?.content == node.title &&
+                val path = if (config.wholeSpace) "pages/${segment(node.title)}~${node.id}.md"
+                    else if (prior != null && prior["title"]?.jsonPrimitive?.content == node.title &&
                     prior["parentId"]?.jsonPrimitive?.contentOrNull == node.parentId) oldPath!! else {
                     val parentPath = when {
                         prior != null && prior["parentId"]?.jsonPrimitive?.contentOrNull == node.parentId -> oldPath!!.substringBeforeLast('/')
@@ -224,7 +226,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             require(lock != null) { "Confluence sync busy; retry later" }
             withSyncRootAccess(lock, control, config, scopeRoot) {
                 val priorDenial = if (config.isKnowledge && mode != "pages") noticeDenialToken(control) else null
-                if (config.isKnowledge) remote.requireScope(config, scopeRoot)
+                if (config.isKnowledge) requireRootAccess(control, config, scopeRoot)
                 if (mode == "pages") requireCredentialBinding(readManifest(control.resolve("manifest.json"), config), config)
                 recover(base, control, config, allowCredentialSwitch = mode != "pages")
                 val manifestPath = control.resolve("manifest.json")
@@ -242,7 +244,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 val now = Instant.now()
                 val selectionChanged = (previous["structurePolicy"]?.jsonPrimitive?.content ?: "strict") != config.structurePolicy ||
                     previous["pilotRootPageId"]?.jsonPrimitive?.content != config.pilotRootPageId ||
-                    previous["knowledgeRootPageId"]?.jsonPrimitive?.content != config.knowledgeRootPageId
+                    previous["knowledgeRootPageId"]?.jsonPrimitive?.content != config.knowledgeRootPageId ||
+                    (previous["wholeSpace"]?.jsonPrimitive?.boolean ?: false) != config.wholeSpace
                 val pinned = if (selectionChanged) linkedSetOf<String>() else previous["explicitPages"]?.jsonArray
                     ?.map { it.jsonPrimitive.content }?.toCollection(linkedSetOf()) ?: linkedSetOf()
                 require(pinned.size <= 500 && pinned.all { it.matches(Regex("[1-9][0-9]*")) && it in old }) { "Invalid explicit mirror selection" }
@@ -293,11 +296,13 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     catch (e: RootScopeDenial) { throw e }
                     catch (_: Exception) { unresolved += id }
                 }
-                val home = if (config.isKnowledge) remote.requireScope(config, scopeRoot) else remote.node(config.homePageId)
-                require(home.spaceId == config.spaceId && home.status == "current") { "Configured mirror home is not current in the configured space" }
-                nodes[scopeRoot] = home
+                if (!config.wholeSpace) {
+                    val home = if (config.isKnowledge) remote.requireScope(config, scopeRoot) else remote.node(config.homePageId)
+                    require(home.spaceId == config.spaceId && home.status == "current") { "Configured mirror home is not current in the configured space" }
+                    nodes[scopeRoot] = home
+                }
                 // Resolve native folder parents instead of treating missing parents as orphans.
-                for (node in nodes.values.toList()) {
+                for (node in if (config.wholeSpace) emptyList() else nodes.values.toList()) {
                     if (admittedRefresh && node.id in unresolved) continue
                     var parent = if (node.id == scopeRoot) null else node.parentId
                     val seen = mutableSetOf(node.id)
@@ -331,6 +336,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     }
                 }
                 fun chain(node: RemoteNode): List<RemoteNode>? {
+                    // A whole-space projection must not require access to a hidden parent.
+                    if (config.wholeSpace) return listOf(node)
                     val result = mutableListOf<RemoteNode>()
                     var current: RemoteNode? = node
                     val seen = mutableSetOf<String>()
@@ -377,7 +384,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 nodes.values.groupBy { it.parentId }.values.sortedBy { chain(it.first())?.size ?: Int.MAX_VALUE }.forEach { siblings ->
                     val occupied = mutableSetOf<String>()
                     siblings.sortedBy { it.id }.forEach { node ->
-                        val original = segment(node.title)
+                        val original = segment(node.title) + if (config.wholeSpace) "~${node.id}" else ""
                         var candidate = original
                         var attempt = 0
                         fun names() = listOf(canonical(candidate), canonical("$candidate.md"))
@@ -450,6 +457,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     }
                     val complete = buildJsonObject {
                         put("schemaVersion", 1); put("site", origin(config.site)); put("spaceId", config.spaceId); put("homePageId", config.homePageId)
+                        put("wholeSpace", config.wholeSpace)
                         put("structurePolicy", config.structurePolicy); config.pilotRootPageId?.let { put("pilotRootPageId", it) }
                         config.knowledgeRootPageId?.let { put("knowledgeRootPageId", it) }
                         put("explicitPages", JsonArray(pinned.map(::JsonPrimitive)))
@@ -457,8 +465,9 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         if (config.isKnowledge) put("credentialBinding", remote.credentialFingerprint)
                         put("cursor", if ((mode == "pages" || unresolved.isNotEmpty()) && previous["cursor"] != null) previous.getValue("cursor") else JsonPrimitive(now.toString()))
                         put("pages", JsonObject(next)); put("unavailable", JsonArray(unresolved.map(::JsonPrimitive)))
-                        val folders = selected.asSequence().flatMap { chain(it).orEmpty().asSequence() }
-                            .filter { it.type == "folder" && it.id != scopeRoot }
+                        val folderNodes = if (config.wholeSpace) nodes.values.asSequence()
+                            else selected.asSequence().flatMap { chain(it).orEmpty().asSequence() }
+                        val folders = folderNodes.filter { it.type == "folder" && it.id != scopeRoot && it.parentId != null }
                             .distinctBy { it.id }.associate { it.id to JsonPrimitive(requireNotNull(it.parentId)) }
                         put("folderParents", JsonObject(folders))
                         put("changes", JsonArray(changes))
@@ -500,28 +509,37 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
     private suspend fun noticeDenialToken(control: Path): String? =
         withNoticeAccessLock(control) { readDenialToken(control) }
 
-    private suspend fun recordRootDenial(control: Path) = withNoticeAccessLock(control) {
+    private suspend fun recordRootDenial(control: Path, config: ContextConfig) = withNoticeAccessLock(control) {
         val manifest = ContextFiles.safe(control, "manifest.json")
-        // Retired credentials cannot revoke or overwrite the active credential's observation.
-        if (Files.isRegularFile(manifest) && read(manifest)["credentialBinding"] == JsonPrimitive(remote.credentialFingerprint))
-            ContextFiles.atomic(noticeDenialPath(control), UUID.randomUUID().toString())
+        if (!Files.isRegularFile(manifest)) return@withNoticeAccessLock
+        val current = read(manifest)
+        // A retired credential or previous native identity cannot revoke a newer admission.
+        if (current["credentialBinding"] != JsonPrimitive(remote.credentialFingerprint)) return@withNoticeAccessLock
+        try { validateIdentity(current, config) } catch (_: IllegalArgumentException) { return@withNoticeAccessLock }
+        if ((current["structurePolicy"]?.jsonPrimitive?.content ?: "strict") != config.structurePolicy ||
+            current["pilotRootPageId"]?.jsonPrimitive?.content != config.pilotRootPageId ||
+            current["knowledgeRootPageId"]?.jsonPrimitive?.content != config.knowledgeRootPageId) return@withNoticeAccessLock
+        ContextFiles.atomic(noticeDenialPath(control), UUID.randomUUID().toString())
     }
 
     internal suspend fun recordNoticeRootDenial(config: ContextConfig) {
         try {
             val control = ContextFiles.safe(root, "confluence/${config.space}/.sync")
-            if (Files.isDirectory(control)) recordRootDenial(control)
+            if (Files.isDirectory(control)) recordRootDenial(control, config)
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { /* Preserve the original provider result if the replica is unwritable. */ }
     }
 
     private fun shouldCheckRoot(failure: ContextRemoteException) = failure.isScopeDenial() || failure.code == "scope_metadata_changed"
 
-    private suspend fun requireRootAccess(control: Path, config: ContextConfig, rootId: String): RemoteNode =
-        try { remote.requireScope(config, rootId) } catch (failure: ContextRemoteException) {
-            if (failure.isScopeDenial()) recordRootDenial(control)
+    private suspend fun requireRootAccess(control: Path, config: ContextConfig, rootId: String) {
+        try {
+            if (config.wholeSpace) remote.requireSpace(config) else remote.requireScope(config, rootId)
+        } catch (failure: ContextRemoteException) {
+            if (failure.isScopeDenial()) recordRootDenial(control, config)
             throw failure
         }
+    }
 
     private suspend fun recheckRootAccess(control: Path, config: ContextConfig, rootId: String) {
         try { withTimeoutOrNull(3_000) { requireRootAccess(control, config, rootId) } }
@@ -534,7 +552,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                                                        rootId: String, block: () -> T): T = lock.use {
         try { block() } catch (failure: ContextRemoteException) {
             if (config.isKnowledge) {
-                if (failure is RootScopeDenial) recordRootDenial(control)
+                if (failure is RootScopeDenial) recordRootDenial(control, config)
                 else if (!noticeAccessDenied(control) && shouldCheckRoot(failure)) recheckRootAccess(control, config, rootId)
             }
             throw failure
@@ -601,7 +619,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             }
         }
         if (rootDenialObserved) {
-            recordRootDenial(control)
+            recordRootDenial(control, config)
             return
         }
         if (rootCheckNeeded && !confirmWatchRootAccess(control, config)) return
@@ -672,7 +690,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             "Mirror site is missing or differs from the configured origin; archive the disposable mirror directory and rebuild it for this site"
         }
         require(manifest["spaceId"]?.jsonPrimitive?.content == config.spaceId &&
-            manifest["homePageId"]?.jsonPrimitive?.content == config.homePageId) { "Mirror belongs to another space/home" }
+            manifest["homePageId"]?.jsonPrimitive?.content == config.homePageId &&
+            (manifest["wholeSpace"]?.jsonPrimitive?.boolean ?: false) == config.wholeSpace) { "Mirror belongs to another space/home or selection kind" }
     }
 
     private fun readManifest(path: Path, config: ContextConfig): JsonObject =
@@ -881,6 +900,10 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     }
                 }
                 value["credentialBinding"]?.let { require(it is JsonPrimitive && it.isString && it.content.matches(Regex("[a-f0-9]{64}"))) }
+                value["wholeSpace"]?.let {
+                    require(it is JsonPrimitive && !it.isString && it.booleanOrNull != null)
+                    if (it.boolean) require(value["homePageId"] == JsonPrimitive("") && value["knowledgeRootPageId"] == null)
+                }
                 value["inventoryComplete"]?.jsonPrimitive?.boolean
                 value["cursor"]?.jsonPrimitive?.content?.let(Instant::parse)
                 WikiChanges.validate(value)

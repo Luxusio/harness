@@ -21,6 +21,13 @@ documents rather than creating a page per utterance. A configured memory
 destination permits concise append; unavailable or ambiguous destinations must
 not be guessed or silently replaced.
 
+When multiple spaces are configured, keep the space identity with search
+results and references. Existing document/parent identity determines its space;
+creating without a parent requires an explicit space. Ask when the destination
+remains ambiguous, including multiple logical memory/feedback pages. Never
+choose the first space or broadcast a write. Check per-space readiness and
+partial search coverage before treating missing results as absent knowledge.
+
 For edits, read the actual version and use the smallest supported unambiguous
 native edit. Never roundtrip an entire Markdown projection over rich storage.
 Preserve macros, images, anchors, inline markers and unrelated content. Follow

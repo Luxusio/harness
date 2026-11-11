@@ -23,82 +23,12 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
         }
     }
     val credentialFingerprint: String = credentialFingerprint(credentials)
-    val corpusRoot: Path = dataHome.resolve(ContextFiles.hash(JsonArray(listOf(credentials.baseUrl.trimEnd('/'),
-        credentials.email, initial.getValue("rootPageId").jsonPrimitive.content,
-        initial.getValue("spaceId").jsonPrimitive.content).map(::JsonPrimitive)).toString()))
-    internal val legacyCorpusRoot: Path = dataHome.resolve(ContextFiles.hash(listOf(credentials.baseUrl,
-        credentials.email, credentials.apiToken, initial.getValue("rootPageId").jsonPrimitive.content,
-        initial.getValue("spaceId").jsonPrimitive.content).joinToString("\u0000")))
-    @Volatile private var legacyImportFailed = false
+    val wholeSpace: Boolean get() = "rootPageId" !in initial
+    val corpusRoot: Path = corpusPath(dataHome, credentials, initial.getValue("space").jsonPrimitive.content,
+        initial["rootPageId"]?.jsonPrimitive?.content)
 
-    /** Only the exact current credential's legacy directory is a provable reuse candidate. */
-    fun prepareCorpus() {
-        prepareCorpus(corpusRoot)
-        if (legacyImportFailed) return
-        try { importLegacyCorpus() }
-        catch (_: Exception) {
-            legacyImportFailed = true
-            // Reuse is optional. An unsafe, corrupt or oversized seed must not block fresh authorization.
-            System.err.println("Atlassian legacy cache reuse was unavailable; synchronization will rebuild the replica")
-        }
-    }
+    fun prepareCorpus() = prepareCorpus(corpusRoot)
 
-    private fun importLegacyCorpus() {
-        val space = initial.getValue("space").jsonPrimitive.content
-        val destination = corpusRoot.resolve("confluence/$space/.sync")
-        if (Files.exists(destination.resolve("manifest.json")) || !Files.exists(legacyCorpusRoot)) return
-        safePath(legacyCorpusRoot); owned(legacyCorpusRoot)
-        val sourceBase = ContextFiles.safe(legacyCorpusRoot, "confluence/$space")
-        val sourceControl = ContextFiles.safe(legacyCorpusRoot, "confluence/$space/.sync")
-        if (!Files.isDirectory(sourceControl)) return
-        prepareCorpus(destination)
-        CorpusFileLock.tryAcquire(destination.resolve("sync.lock"))?.use {
-            if (Files.exists(destination.resolve("manifest.json"))) return
-            CorpusFileLock.tryAcquire(ContextFiles.safe(sourceControl, "sync.lock"))?.use {
-                if (Files.exists(ContextFiles.safe(sourceControl, "transaction.json"))) return
-                val manifestPath = ContextFiles.safe(sourceControl, "manifest.json")
-                if (!Files.isRegularFile(manifestPath) || Files.size(manifestPath) > 16L * 1024 * 1024) return
-                val manifest = ContextMirror.readSnapshot(manifestPath)
-                require(manifest["spaceId"] == initial["spaceId"] && manifest["homePageId"] == initial["rootPageId"] &&
-                    manifest["site"]?.jsonPrimitive?.content?.trimEnd('/') == credentials.baseUrl.trimEnd('/')) { "Legacy corpus identity differs" }
-                val pages = manifest["pages"]?.jsonObject ?: return
-                require(pages.size <= 20000) { "Legacy corpus exceeds page budget" }
-                var totalBytes = 0L
-                val seededPages = linkedMapOf<String, JsonElement>()
-                for ((id, value) in pages) {
-                    require(id.matches(Regex("[1-9][0-9]*")))
-                    val row = value.jsonObject
-                    require(row["spaceId"] == initial["spaceId"]) { "Legacy body belongs to another space" }
-                    val markdown = row.getValue("path").jsonPrimitive.content
-                    val storage = row.getValue("storage").jsonPrimitive.content
-                    require(markdown.startsWith("pages/") && markdown.endsWith(".md") &&
-                        storage.startsWith(".sync/storage/") && storage.endsWith(".xhtml")) { "Invalid legacy body path" }
-                    val safeMarkdown = "pages/legacy-$id.md"
-                    val safeStorage = ".sync/storage/$id-${row.getValue("version").jsonPrimitive.int}-${row.getValue("bodyHash").jsonPrimitive.content}.xhtml"
-                    require(row.getValue("bodyHash").jsonPrimitive.content.matches(Regex("[a-f0-9]{64}"))) { "Invalid legacy body hash" }
-                    for ((relative, target) in listOf(markdown to safeMarkdown, storage to safeStorage)) {
-                        val source = ContextFiles.safe(sourceBase, relative)
-                        require(Files.isRegularFile(source) && Files.size(source) <= 8L * 1024 * 1024)
-                        totalBytes += Files.size(source)
-                        require(totalBytes <= 256L * 1024 * 1024) { "Legacy corpus exceeds byte budget" }
-                        val body = Files.readString(source)
-                        if (relative == storage) require(ContextFiles.hash(body) == row["bodyHash"]?.jsonPrimitive?.content)
-                        ContextFiles.atomic(ContextFiles.safe(corpusRoot.resolve("confluence/$space"), target), body)
-                    }
-                    seededPages[id] = JsonObject(row.filterKeys { it in setOf("id", "title", "parentId", "type", "spaceId", "version", "status") } +
-                        mapOf("path" to JsonPrimitive(safeMarkdown), "storage" to JsonPrimitive(safeStorage), "bodyHash" to row.getValue("bodyHash")))
-                }
-                // The seed carries bytes, never old selection, cursor, paths, authorization or operations.
-                // Omitting the old policy forces fresh inventory selection before using any old ancestry.
-                val seed = buildJsonObject {
-                    put("site", credentials.baseUrl.trimEnd('/')); put("spaceId", initial.getValue("spaceId"))
-                    put("homePageId", initial.getValue("rootPageId")); put("inventoryComplete", false)
-                    put("pages", JsonObject(seededPages))
-                }
-                ContextFiles.atomic(destination.resolve("manifest.json"), seed.toString())
-            }
-        }
-    }
     val pollIntervalSeconds: Long get() = initial["pollIntervalSeconds"]?.jsonPrimitive?.long ?: 300L
     val watchedCommentPages: List<String> = WikiChanges.watchPages(initial["watchCommentPages"]?.jsonPrimitive?.content)
     fun identity(): String = ContextFiles.hash(initial.toString())
@@ -107,7 +37,8 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
         val value = read()
         val binding = buildJsonObject {
             put("site", value.getValue("site")); put("space", value.getValue("space")); put("spaceId", value.getValue("spaceId"))
-            put("homePageId", value.getValue("rootPageId")); put("knowledgeRootPageId", value.getValue("rootPageId")); put("structurePolicy", "knowledge")
+            put("homePageId", value["rootPageId"] ?: JsonPrimitive("")); put("wholeSpace", wholeSpace)
+            value["rootPageId"]?.let { put("knowledgeRootPageId", it) }; put("structurePolicy", "knowledge")
             value["memoryPageId"]?.let { put("memoryPageId", it) }
             value["feedbackPageId"]?.let { put("maintenancePageId", it) }
         }
@@ -115,6 +46,9 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
         return buildJsonObject { put("common", connection); put("project", connection); put("effective", connection); put("role", "") }
     }
     companion object {
+        internal fun corpusPath(dataHome: Path, credentials: JiraConfig, key: String, rootPageId: String?): Path =
+            dataHome.resolve(ContextFiles.hash(JsonArray(listOf(credentials.baseUrl.trimEnd('/'), credentials.email,
+                rootPageId ?: "*", key).map(::JsonPrimitive)).toString()))
         fun credentialFingerprint(credentials: JiraConfig): String = ContextFiles.hash(JsonArray(listOf(
             credentials.baseUrl.trimEnd('/'), credentials.email, credentials.apiToken).map(::JsonPrimitive)).toString())
         fun home(): Path = System.getenv("HOME")?.takeIf { it.isNotBlank() }?.let { Paths.get(it).also { p -> require(p.isAbsolute) } }
@@ -185,30 +119,12 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             if (enabled || "site" in value) require(validOrigin(text("site"))) { "HTTPS origin required" }
             if (enabled || "space" in value) require(text("space").matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Invalid space" }
             for (key in listOf("spaceId", "rootPageId", "memoryPageId", "feedbackPageId")) {
-                if (key in value || (enabled && key in setOf("spaceId", "rootPageId")))
+                if (key in value || (enabled && key == "spaceId"))
                     require(text(key).matches(Regex("[1-9][0-9]*"))) { "Positive native ID required" }
             }
             value["pollIntervalSeconds"]?.let { require(it is JsonPrimitive && !it.isString && it.longOrNull in 30L..86400L) { "Polling interval must be 30..86400 seconds" } }
             if ("watchCommentPages" in value) WikiChanges.watchPages(text("watchCommentPages"))
         }
 
-        /** Missing/disabled YAML is inert; invalid YAML/auth never becomes a local fallback. */
-        fun fromProject(startupDirectory: Path = Paths.get("").toAbsolutePath(),
-                        environment: Map<String, String> = System.getenv()): KnowledgeSettings? {
-            try {
-                val value = ProjectConnection.load(startupDirectory) ?: return null
-                if (value["enabled"] == JsonPrimitive(false)) return null
-                val snapshot = environment.toMap()
-                fun credential(key: String): String = snapshot[key]?.takeIf { it.isNotBlank() }
-                    ?: throw IllegalArgumentException("Atlassian authentication is unavailable")
-                val pin = credential("ATLASSIAN_BASE_URL")
-                require(validOrigin(pin) && pin.trimEnd('/') == value.getValue("site").jsonPrimitive.content.trimEnd('/'))
-                val credentials = JiraConfig(pin.trimEnd('/'), credential("ATLASSIAN_EMAIL"), credential("ATLASSIAN_API_TOKEN"))
-                return KnowledgeSettings(value, credentials, defaultDataHome(snapshot))
-            } catch (_: Exception) {
-                // Parser/I/O exception causes can contain the entire input or a secret-bearing path.
-                throw IllegalArgumentException("Atlassian project connection or authentication is unavailable")
-            }
-        }
     }
 }

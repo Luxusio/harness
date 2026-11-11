@@ -28,8 +28,9 @@ UNAVAILABLE_NOTICE = (
 
 CONFIG_PARTS = ("doc", "harness", "manifest.yaml")
 MAX_CONFIG_BYTES = 64 * 1024
-CONFIG_FIELDS = frozenset(("enabled", "site", "space", "spaceId", "rootPageId",
-                           "memoryPageId", "feedbackPageId", "pollIntervalSeconds", "watchCommentPages"))
+CONFIG_FIELDS = frozenset(("enabled", "site", "spaces", "pollIntervalSeconds"))
+SPACE_FIELDS = frozenset(("key", "rootPageId", "memoryPageId", "feedbackPageId", "watchCommentPages"))
+MAX_SPACES = 32
 
 
 def _project_root(cwd):
@@ -179,25 +180,34 @@ def _validate_config(config):
         raise ValueError("invalid activation")
     if "site" in config:
         _origin(config["site"])
-    if "space" in config and (not isinstance(config["space"], str)
-            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", config["space"])):
-        raise ValueError("invalid space")
-    for key in ("spaceId", "rootPageId", "memoryPageId", "feedbackPageId"):
-        if key in config and (not isinstance(config[key], str) or not re.fullmatch(r"[1-9][0-9]*", config[key])):
-            raise ValueError("invalid native ID")
     poll = config.get("pollIntervalSeconds", 300)
     if type(poll) is not int or not 30 <= poll <= 86400:
         raise ValueError("invalid polling interval")
-    if "watchCommentPages" in config:
-        selection = config["watchCommentPages"]
-        if not isinstance(selection, str) or len(selection) > 329:
-            raise ValueError("invalid comment watch pages")
-        pages = selection.split(",")
-        if len(pages) > 10 or len(set(pages)) != len(pages) or any(
-            not re.fullmatch(r"[1-9][0-9]{0,31}", page) for page in pages
-        ):
-            raise ValueError("invalid comment watch pages")
-    if config["enabled"] and any(key not in config for key in ("site", "space", "spaceId", "rootPageId")):
+    if "spaces" in config:
+        spaces = config["spaces"]
+        if not isinstance(spaces, list) or not 1 <= len(spaces) <= MAX_SPACES:
+            raise ValueError("invalid spaces")
+        keys = set()
+        for space in spaces:
+            if not isinstance(space, dict) or set(space) - SPACE_FIELDS:
+                raise ValueError("invalid space setting")
+            key = space.get("key")
+            if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", key) or key in keys:
+                raise ValueError("invalid or duplicate space key")
+            keys.add(key)
+            for field in ("rootPageId", "memoryPageId", "feedbackPageId"):
+                if field in space and (not isinstance(space[field], str) or not re.fullmatch(r"[1-9][0-9]*", space[field])):
+                    raise ValueError("invalid native ID")
+            if "watchCommentPages" in space:
+                selection = space["watchCommentPages"]
+                if not isinstance(selection, str) or len(selection) > 329:
+                    raise ValueError("invalid comment watch pages")
+                pages = selection.split(",")
+                if len(pages) > 10 or len(set(pages)) != len(pages) or any(
+                    not re.fullmatch(r"[1-9][0-9]{0,31}", page) for page in pages
+                ):
+                    raise ValueError("invalid comment watch pages")
+    if config["enabled"] and any(key not in config for key in ("site", "spaces")):
         raise ValueError("missing connection setting")
     return {**config, "pollIntervalSeconds": poll}
 

@@ -76,17 +76,19 @@ internal object ProjectConnection {
         val wiki = parsed["wiki"] as? Map<*, *> ?: throw IllegalArgumentException()
         val backend = wiki["backend"]
         require((!wiki.containsKey("backend") && wiki["enabled"] == false) || backend == "atlassian")
-        val value = JsonObject(wiki.entries.filter { it.key != "backend" }.associate { (key, child) ->
-            require(key is String)
-            key to when (child) {
-                is String -> JsonPrimitive(child)
-                is Boolean -> JsonPrimitive(child)
-                is Byte, is Short, is Int, is Long, is java.math.BigInteger ->
-                    JsonPrimitive(child.toString().toLongOrNull() ?: throw IllegalArgumentException())
-                else -> throw IllegalArgumentException()
-            }
-        })
-        KnowledgeSettings.validate(value, requireEnabled = false)
+        fun convert(child: Any?): JsonElement = when (child) {
+            is String -> JsonPrimitive(child)
+            is Boolean -> JsonPrimitive(child)
+            is Byte, is Short, is Int, is Long, is java.math.BigInteger ->
+                JsonPrimitive(child.toString().toLongOrNull() ?: throw IllegalArgumentException())
+            is Map<*, *> -> JsonObject(child.entries.associate { (key, value) ->
+                require(key is String); key to convert(value)
+            })
+            is List<*> -> JsonArray(child.map(::convert))
+            else -> throw IllegalArgumentException()
+        }
+        val value = convert(wiki.filterKeys { it != "backend" }) as JsonObject
+        KnowledgeProject.validate(value)
         return value
     }
 

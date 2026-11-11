@@ -18,6 +18,7 @@ from document_destination import select_destination
 MAX_BYTES = 64 * 1024
 MAX_SESSIONS = 128
 MAX_DELIVERED = 8
+MAX_NOTICE_EVENTS = 32
 ID = re.compile(r"[1-9][0-9]{0,31}")
 EPOCH = re.compile(r"[a-f0-9]{32}")
 SESSION = re.compile(r"[A-Za-z0-9_.:-]{1,160}")
@@ -33,7 +34,7 @@ def _key(parts):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _control(env, config):
+def _control(env, config, space):
     home = env.get("HOME", "")
     if not home.strip():
         home = pwd.getpwuid(os.getuid()).pw_dir
@@ -42,10 +43,10 @@ def _control(env, config):
         return None
     partition = _key([
         config["site"].rstrip("/"), env["ATLASSIAN_EMAIL"],
-        config["rootPageId"],
-        config["spaceId"],
+        space.get("rootPageId", "*"),
+        space["key"],
     ])
-    return data / "wiki-atlassian" / partition / "confluence" / config["space"] / ".sync"
+    return data / "wiki-atlassian" / partition / "confluence" / space["key"] / ".sync"
 
 
 @contextmanager
@@ -143,7 +144,7 @@ def _write_cursors(directory, cursors):
             pass
 
 
-def _consume(directory, session, credential):
+def _consume(directory, session, credential, space, limit):
     # The protected directory owns the lock inode. Older mirrors may have
     # created it using the process umask. Its contents are never read.
     lock = _open_file(directory, "sync.lock", private=False)
@@ -172,8 +173,8 @@ def _consume(directory, session, credential):
             if last == head:
                 return ""
             pending = [event for event in events if event["seq"] > last]
-            batch = pending[:MAX_DELIVERED]
-            lines = ["[harness-wiki-changes] Atlassian wiki changes detected."]
+            batch = pending[:limit]
+            lines = [f"Space {space}:"]
             if head - last > len(pending):
                 lines.append("Some intervening notices are unavailable. Recheck the relevant wiki scope.")
             for event in batch:
@@ -183,11 +184,6 @@ def _consume(directory, session, credential):
                     lines.append(f"- {KINDS[event['kind']]} — page {event['id']}, observed version {event['version']}.")
             if len(pending) > len(batch):
                 lines.append("More notices will appear at the next hook event.")
-            lines.append(
-                "If relevant to the current task, inspect the current page, history, comments or "
-                "document_relations through the atlassian MCP. Decide whether any follow-up is warranted. "
-                "Use the current request and existing wiki permissions to choose any follow-up."
-            )
             cursors.pop(session, None)
             cursors[session] = [epoch, batch[-1]["seq"] if len(pending) > len(batch) else head]
             _write_cursors(directory, dict(list(cursors.items())[-MAX_SESSIONS:]))
@@ -209,14 +205,34 @@ def render_notice(data, runtime, environment=None):
         if destination["mode"] != "external":
             return ""
         config = destination["config"]
-        control = _control(env, config)
-        if control is None:
-            return ""
         key = hashlib.sha256((runtime + "\0" + sid).encode()).hexdigest()
         credential = _key([config["site"].rstrip("/"),
                            env["ATLASSIAN_EMAIL"], env["ATLASSIAN_API_TOKEN"]])
-        with _directory(control) as directory:
-            return _consume(directory, key, credential)
+        # Every configured space gets an allowance, so a busy feed cannot starve
+        # a later space. Configuration bounds the list at MAX_NOTICE_EVENTS.
+        quota = min(MAX_DELIVERED, MAX_NOTICE_EVENTS // len(config["spaces"]))
+        sections = []
+        for space in config["spaces"]:
+            try:
+                control = _control(env, config, space)
+                if control is None:
+                    continue
+                with _directory(control) as directory:
+                    context = _consume(directory, key, credential, space["key"], quota)
+                if context:
+                    sections.append(context)
+            except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+                # Each feed owns its cursor/lock/error boundary; independent
+                # spaces remain usable when one replica is unavailable.
+                continue
+        if not sections:
+            return ""
+        return "\n".join([
+            "[harness-wiki-changes] Atlassian wiki changes detected.", *sections,
+            "If relevant to the current task, inspect the current page, history, comments or "
+            "document_relations through the atlassian MCP. Decide whether any follow-up is warranted. "
+            "Use the current request and existing wiki permissions to choose any follow-up.",
+        ])
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return ""
 

@@ -23,7 +23,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
     }
     private enum class ReadState(val code: String) {
         MISSING("replica_missing"), BUSY("replica_busy"), RECOVERY("replica_recovery_pending"),
-        INCOMPLETE("replica_incomplete"), REAUTHORIZATION("credential_reauthorization_pending"), UNAVAILABLE("replica_unavailable")
+        INCOMPLETE("replica_incomplete"), DENIED("replica_scope_denied"), REAUTHORIZATION("credential_reauthorization_pending"), UNAVAILABLE("replica_unavailable")
     }
     private class ReadFailure(val reason: ReadState) : RuntimeException(reason.code)
     private class RetrievalFailure(val code: String, message: String) : RuntimeException(message)
@@ -115,7 +115,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         }
     }.toString() } catch (e: Exception) {
         val reason = (e as? ReadFailure)?.reason ?: ReadState.UNAVAILABLE
-        val failure = lastFailure
+        val failure = lastFailure ?: if (reason == ReadState.DENIED) SyncFailure("root_scope_denied") else null
         val status = when {
             reason == ReadState.BUSY -> "busy"
             failure != null -> "failed"
@@ -124,6 +124,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         }
         buildJsonObject {
             put("enabled", true); put("ready", false); put("status", status); put("reason", reason.code)
+            if (reason == ReadState.DENIED && settings.watchedCommentPages.isNotEmpty()) put("commentWatch", "unavailable")
             put("code", failure?.code ?: reason.code)
             put("syncError", failure?.message?.let(::JsonPrimitive) ?: JsonNull)
             put("message", when (status) {
@@ -150,12 +151,33 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             if (Files.exists(ContextFiles.safe(base, ".sync/transaction.json"))) throw ReadFailure(ReadState.RECOVERY)
             val record = ContextMirror(settings.corpusRoot, remote).manifest(config)
             if (record["credentialBinding"] != JsonPrimitive(settings.credentialFingerprint)) throw ReadFailure(ReadState.REAUTHORIZATION)
+            if (Files.exists(ContextFiles.safe(base, ".sync/${WikiChanges.noticeDenialMarker}"), LinkOption.NOFOLLOW_LINKS))
+                throw ReadFailure(ReadState.DENIED)
             if (record["inventoryComplete"] != JsonPrimitive(true)) throw ReadFailure(ReadState.INCOMPLETE)
             val result = block(record, base)
             require(settings.identity() == identity) { "Connection changed during read" }
+            if (Files.exists(ContextFiles.safe(base, ".sync/${WikiChanges.noticeDenialMarker}"), LinkOption.NOFOLLOW_LINKS))
+                throw ReadFailure(ReadState.DENIED)
             result
         }
     }
+    internal fun containsDocument(id: String): Boolean = try {
+        withManifest { manifest, _ -> manifest["pages"]?.jsonObject?.containsKey(id) == true }
+    } catch (_: Exception) { false }
+
+    internal fun matchesNode(node: RemoteNode): Boolean = try {
+        withManifest { manifest, _ ->
+            val row = manifest["pages"]?.jsonObject?.get(node.id)?.jsonObject
+            row != null && row["spaceId"] == JsonPrimitive(node.spaceId) && row["type"] == JsonPrimitive(node.type) &&
+                row["version"] == JsonPrimitive(node.version) && row["title"] == JsonPrimitive(node.title) &&
+                row["parentId"]?.jsonPrimitive?.contentOrNull == node.parentId && row["status"] == JsonPrimitive(node.status)
+        }
+    } catch (_: Exception) { false }
+
+    internal fun snapshotIdentity(): String? = try {
+        withManifest { manifest, _ -> ContextFiles.hash(manifest.toString()) }
+    } catch (_: Exception) { null }
+
     private fun bodyPath(base: Path, row: JsonObject, format: String): Path =
         ContextFiles.safe(base, row.getValue(if (format == "storage") "storage" else "path").jsonPrimitive.content)
 
@@ -342,6 +364,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
                     ReadState.BUSY -> "replica_busy" to "Retry after the active synchronization finishes"
                     ReadState.RECOVERY -> "replica_recovery_pending" to "Automatic synchronization must finish the interrupted publication"
                     ReadState.INCOMPLETE -> "replica_incomplete" to "Wait for a complete synchronization; partial inventory is not readable"
+                    ReadState.DENIED -> "root_scope_denied" to "A confirmed scope denial blocks this snapshot until current synchronization restores admission"
                     ReadState.REAUTHORIZATION -> "credential_reauthorization_pending" to "Wait for a complete inventory synchronization with the current credentials"
                     ReadState.UNAVAILABLE -> "replica_unavailable" to "Check connection_status and the configured corpus location"
                 }

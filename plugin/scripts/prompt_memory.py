@@ -175,12 +175,16 @@ def main() -> int:
 
     destination = select_destination(cwd=data.get("cwd") or repo_root)
     output_parts = [destination["notice"]]
-    if destination["mode"] == "external" and destination["config"].get("memoryPageId"):
-        output_parts.append(
-            "[harness-wiki-memory] Apply the wiki knowledge skill to new source material "
-            "in authorized business work. Check for an existing source reference, then "
-            "record new relevant context once in the configured memory."
-        )
+    if destination["mode"] == "external":
+        memories = [f"{space['key']}: page {space['memoryPageId']}" for space in destination["config"]["spaces"]
+                    if "memoryPageId" in space]
+        if memories:
+            prefix = ("[harness-wiki-memory] Check for an existing source reference; record authorized context once. "
+                      "Specify space if ambiguous; never choose the first space. ")
+            memory_notice = prefix + "Configured: " + "; ".join(memories) + "."
+            if len(destination["notice"]) + 1 + len(memory_notice) > MAX_OUTPUT_CHARS:
+                memory_notice = prefix + f"{len(memories)} destinations; inspect connection_status."
+            output_parts.append(memory_notice)
     # Prompt submission is advisory and deliberately performs no Git queries.
     # Authoritative freshness/fingerprint checks remain in wbs_verify/wbs_close.
     if wbs_dir:

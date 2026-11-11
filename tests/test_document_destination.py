@@ -30,7 +30,7 @@ def connection(**changes):
 
 
 def config(**changes):
-    result = dict(backend="atlassian", enabled=True, site="https://example.invalid", space="TEAM", spaceId="123", rootPageId="456")
+    result = dict(backend="atlassian", enabled=True, site="https://example.invalid", spaces=[{"key": "TEAM", "rootPageId": "456"}])
     result.update(changes)
     return result
 
@@ -97,6 +97,59 @@ def test_absent_old_env_and_shared_credentials_are_local_without_parser(tmp_path
 def test_disabled_can_omit_connection_and_auth(tmp_path):
     write_config(tmp_path, {"enabled": False})
     assert destination.select_destination({}, cwd=tmp_path)["mode"] == "local"
+
+
+def test_multiple_spaces_and_optional_root_are_public_choices_without_native_ids(tmp_path):
+    spaces = [{"key": "TEAM"}, {"key": "DEV", "rootPageId": "456", "memoryPageId": "789",
+                                "feedbackPageId": "790", "watchCommentPages": "456,789"}]
+    project = write_config(tmp_path, config(spaces=spaces))
+    before = manifest_path(project).read_bytes()
+    selected = destination.select_destination(connection(), cwd=project)
+    assert selected["mode"] == "external"
+    assert selected["config"]["spaces"] == spaces
+    assert "spaceId" not in json.dumps(selected) and "fixture-only-token" not in json.dumps(selected)
+    assert manifest_path(project).read_bytes() == before
+
+
+@pytest.mark.parametrize("spaces", [None, {}, "TEAM", [], ["TEAM"], [None], [{}],
+    [{"key": "TEAM"}, {"key": "TEAM", "rootPageId": "456"}],
+    [{"key": True}], [{"key": "../TEAM"}], [{"key": ""}], [{"key": "a" * 101}],
+    [{"key": "TEAM", "spaceId": "123"}], [{"key": "TEAM", "site": "https://other.invalid"}],
+    [{"key": "TEAM", "rootPageId": 456}], [{"key": "TEAM", "rootPageId": "0"}],
+    [{"key": "TEAM", "memoryPageId": ""}], [{"key": "TEAM", "feedbackPageId": "../1"}],
+    [{"key": "TEAM", "watchCommentPages": "101,101"}], [{"key": "TEAM", "watchCommentPages": 101}],
+    [{"key": "TEAM", "watchCommentPages": "0"}],
+    [{"key": "TEAM", "watchCommentPages": ",".join(str(i) for i in range(1, 12))}],
+    [{"key": "TEAM", "apiToken": "private-yaml-secret"}],
+    [{"key": "S" + str(i)} for i in range(33)]])
+def test_invalid_space_selections_never_fall_back_or_echo_values(tmp_path, spaces):
+    for enabled in (True, False):
+        write_config(tmp_path, config(enabled=enabled, spaces=spaces))
+        selected = destination.policy(connection(), cwd=tmp_path)
+        assert selected["mode"] == "unavailable"
+        assert "private-yaml-secret" not in json.dumps(selected)
+
+
+def test_space_list_resource_bound_and_optional_fields_keep_strict_native_types(tmp_path):
+    spaces = [{"key": "S" + str(i)} for i in range(32)]
+    write_config(tmp_path, config(spaces=spaces))
+    assert destination.select_destination(connection(), cwd=tmp_path)["config"]["spaces"] == spaces
+    for key in ("rootPageId", "memoryPageId", "feedbackPageId"):
+        for value in ("1", "123456789012345678901234567890"):
+            write_config(tmp_path, config(spaces=[{"key": "TEAM", key: value}]))
+            assert destination.select_destination(connection(), cwd=tmp_path)["mode"] == "external"
+    write_config(tmp_path, config(enabled=False, spaces=[{"key": "TEAM"}]))
+    assert destination.select_destination({}, cwd=tmp_path)["mode"] == "local"
+
+
+def test_old_single_space_or_mixed_schema_is_rejected(tmp_path):
+    for key, value in (("space", "TEAM"), ("spaceId", "123"), ("rootPageId", "456"),
+                       ("memoryPageId", "789"), ("watchCommentPages", "456")):
+        write_config(tmp_path, config(**{key: value}))
+        assert destination.select_destination(connection(), cwd=tmp_path)["mode"] == "unavailable"
+    write_config(tmp_path, {"backend": "atlassian", "enabled": True, "site": "https://example.invalid",
+                            "space": "TEAM", "spaceId": "123", "rootPageId": "456"})
+    assert destination.select_destination(connection(), cwd=tmp_path)["mode"] == "unavailable"
 
 
 @pytest.mark.parametrize("changes", [dict(enabled="true"), dict(enabled=1), dict(site="http://example.invalid"),
@@ -170,7 +223,7 @@ def test_auth_origin_pin_and_missing_credentials_are_pending(tmp_path, changes):
 
 
 def test_required_fields_and_valid_boundaries(tmp_path):
-    for key in ("backend", "enabled", "site", "space", "spaceId", "rootPageId"):
+    for key in ("backend", "enabled", "site", "spaces"):
         values = config(); values.pop(key)
         write_config(tmp_path, values)
         assert destination.policy(connection(), cwd=tmp_path)["mode"] == "unavailable"

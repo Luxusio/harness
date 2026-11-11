@@ -17,14 +17,22 @@ wiki:
   backend: atlassian
   enabled: true
   site: "https://YOUR-SITE.atlassian.net"
-  space: "YOURSPACE"
-  spaceId: "123"
-  rootPageId: "456"
-  # memoryPageId: "789"
-  # feedbackPageId: "790"
   # pollIntervalSeconds: 300
-  # watchCommentPages: "456,789"
+  spaces:
+    - key: "TEAM"               # All accessible content in this space
+    - key: "DEV"
+      rootPageId: "456"          # Only this document and its descendants
+      # memoryPageId: "789"
+      # feedbackPageId: "790"
+      # watchCommentPages: "456,789"
 ```
+
+One connection has exactly one site and up to 32 distinct space keys. Native
+space IDs are resolved automatically; do not put `spaceId` in the settings.
+Omit `rootPageId` for all accessible documents in that space, including separate
+top-level trees outside the homepage. A restricted homepage does not narrow a
+whole-space selection. Setting ROOT selects that document and its descendants.
+The space count is a bounded runtime resource limit.
 
 Keep authentication in the project's Git-ignored, owner-private `mise.local.toml`:
 
@@ -57,8 +65,8 @@ without replica registration. Different connections remain partitioned. A host
 sharing one MCP process across projects needs separate execution contexts for
 different connections.
 
-Use quoted positive string IDs, actual YAML booleans and integer polling values.
-All required IDs must identify accessible content in the selected scope.
+Use quoted positive string page IDs, actual YAML booleans and integer polling values.
+Selected IDs must identify accessible content in the corresponding space/scope.
 Optional memory/feedback IDs select existing destinations; the plugin does not
 guess or create them. Polling defaults to 300 seconds and accepts 30..86400.
 The file is a bounded mapping; duplicates, aliases, explicit tags and unknown
@@ -88,9 +96,9 @@ Ask the agent to install and configure the backend from its guide using your
 logged-in Chrome, or invoke `wiki-atlassian:setup`. Before installation, the
 agent can read [the setup skill](skills/setup/SKILL.md) from this source checkout.
 The skill handles installation, compatible token issuance, protected local
-settings and read-only connection verification. It asks which Confluence space
-and which existing document to use as ROOT. A page below the space home is a
-valid ROOT; only that page and its descendants are replicated. ROOT selection
+settings and read-only connection verification. It asks which spaces on the
+selected site to connect and, for each, whether to synchronize the whole space
+or an existing ROOT document and its descendants. A nested page is a valid ROOT. ROOT selection
 does not narrow the token's native account permissions.
 
 Browser attachment, login/MFA and account policy can require user action.
@@ -104,7 +112,7 @@ The read projection lives under `~/.local/share/wiki-atlassian/`. The corpus
 and plugin installation use the standard user-home location and ignore
 `XDG_DATA_HOME`. Different projects share the same account/site/space/ROOT
 corpus. Its SHA-256 directory key includes origin, exact account email and
-space/root IDs. A separate credential fingerprint binds a completed inventory
+space key and ROOT ID (or the whole-space marker). A separate credential fingerprint binds a completed inventory
 to the current token. After token rotation, the MCP freshly authorizes the
 selected documents before reusing intact same-version bodies. Cached reads
 and hook notices wait for that authorization. No token text appears in paths.
@@ -114,10 +122,11 @@ edit generated Markdown/storage/manifests. Remote documents
 remain authoritative. Cached reads describe snapshot freshness; offline access
 does not prove that remote access permissions are still current.
 
-An exact legacy directory derived from the currently supplied credentials can
-seed the new account corpus. The old directory is preserved and its prior
-authorization is discarded. If the token changed before upgrading, the old
-opaque directory cannot be assigned to an account safely; it remains intact.
+The earlier single-space settings (`space`, `spaceId` and top-level ROOT or
+destination fields) are rejected. Move the selected key and optional page IDs
+into `spaces` and remove the old fields. The new key-based partitions can need
+a fresh synchronization. Existing cache directories remain untouched; their
+authorization is not imported into a new selection.
 
 The MCP owns automatic startup/periodic synchronization and publication of
 verified writes. Search/read queries use the shared corpus; history, comments
@@ -170,15 +179,17 @@ context when it next runs a hook. Detection of external edits follows the
 MCP's polling interval. A session can catch up from retained notices and sees
 a gap message if older metadata is unavailable. The hook keeps a bounded
 cursor for each session in the connection partition. Each partition keeps
-up to 64 events and 128 session cursors. The hook delivers up to eight events
-per call. Visibility follows the latest committed snapshot. A confirmed
+up to 64 events and 128 session cursors. The hook delivers up to 32 events
+per call across all configured spaces, with space labels and an allowance for
+each space. A busy or unavailable partition does not suppress another space's
+notices; cursors remain independent. Visibility follows the latest committed snapshot. A confirmed
 access denial for the configured root pauses notices until the next successful
 authorized synchronization. Notice text consists of fixed labels, native IDs
 and observed versions. The agent checks relevance
 and reads the evidence through MCP before acting.
 
-Set YAML `wiki.watchCommentPages` to up to ten distinct page IDs from the
-configured root, separated by commas. Comment monitoring starts with a
+Set each `wiki.spaces` entry's `watchCommentPages` to up to ten distinct page
+IDs in that selection, separated by commas. Comment monitoring starts with a
 baseline for each selected page. A later observed change directs the agent to
 `list_comments`. Provider access failures and incomplete inventories keep the
 last complete observation. The watcher uses the wiki poll interval and a shared
@@ -199,6 +210,28 @@ Increase `length` to read more context, or use `nextOffset` with the same
 document, version, format and snapshot. Repeat the search if its snapshot
 has changed. Native outline and section operations remain available for selecting and editing a precise section.
 Limit the domain root when searching a large corpus.
+
+One MCP serves all configured spaces. Search combines the spaces by default;
+use an explicit space key to filter. Results identify their space, and
+`connection_status` reports each space separately. Missing access or a failed
+synchronization in one space leaves other usable spaces available, with partial
+coverage reported. Search continuations are tied to their selected spaces and
+snapshots; restart a search when that evidence changes.
+
+Existing document and comment identities determine their owning space. An
+explicit destination key must agree with the document or parent. For creation,
+an explicit parent determines the space. Without a parent, choose the space
+explicitly: a whole-space selection supports native top-level creation, while
+a rooted selection creates under its configured ROOT. Logical memory/feedback
+records use a unique configured destination or require an explicit space when
+several qualify. Ambiguity makes no remote write. Cross-space edits are separate
+explicit operations; selecting several spaces does not broadcast a mutation.
+Version conditions in `basedOn` and native link-retargeting still enforce the
+destination service's selected scope; cross-space source/link-edit references
+are rejected. Existing authored hyperlinks remain intact. If an existing key
+resolves to a different native space ID, synchronization refuses to reuse its
+previous replica and reports `space_identity_changed`; preserve that data for
+inspection.
 
 The knowledge skill covers attributed source records, topic structure,
 explicit document relationships, correction, and handling notices. Document

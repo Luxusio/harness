@@ -4,6 +4,8 @@ import io.crscube.clitools.jirafetcher.config.JiraConfig
 import io.crscube.clitools.mcp.McpException
 import io.crscube.clitools.mcp.ToolRegistry
 import io.crscube.clitools.knowledge.KnowledgeSettings
+import io.crscube.clitools.knowledge.KnowledgeProject
+import io.crscube.clitools.knowledge.MultiSpaceKnowledge
 import io.crscube.clitools.knowledge.LocalCorpus
 import kotlinx.coroutines.runBlocking
 import io.ktor.client.HttpClient
@@ -127,6 +129,7 @@ class NativeDocumentContractTest {
         )
         val requests = mutableListOf<HttpRequestData>()
         val effects = mutableListOf<Pair<HttpRequestData, JsonObject>>()
+        val selectedSpaces = mutableListOf(buildJsonObject { put("id", "20"); put("key", "COMMON"); put("name", "Common"); put("homepageId", "200") })
         val denied = mutableMapOf<String, HttpStatusCode>()
         val deniedMutations = mutableMapOf<String, HttpStatusCode>()
         var account = "native-account"
@@ -193,6 +196,10 @@ class NativeDocumentContractTest {
 
         private fun get(request: HttpRequestData): JsonObject {
             val path = request.url.encodedPath
+            val spacePages = Regex("/wiki/api/v2/spaces/([1-9][0-9]*)/pages").matchEntire(path)
+            if (spacePages != null) return listing(pages.values.filter {
+                it.space == spacePages.groupValues[1] && it.status == "current" && "/wiki/api/v2/pages/${it.id}" !in denied
+            }.map { it.json() })
             val directChildren = Regex("/wiki/api/v2/(pages|folders)/([1-9][0-9]*)/direct-children").matchEntire(path)
             if (directChildren != null) {
                 val parent = directChildren.groupValues[2]
@@ -216,7 +223,7 @@ class NativeDocumentContractTest {
             if (path == "/wiki/rest/api/user/current" || path == "/rest/api/3/myself") return if (accountAvailable) buildJsonObject {
                 put("type", "known"); put("accountId", if (path.endsWith("myself")) jiraAccount else account); put("displayName", "Native account")
             } else buildJsonObject { put("displayName", "Email is not identity"); put("emailAddress", credentials.email) }
-            if (path == "/wiki/api/v2/spaces") return listing(listOf(buildJsonObject { put("id", "20"); put("key", "COMMON"); put("name", "Common"); put("homepageId", "200") }))
+            if (path == "/wiki/api/v2/spaces") return listing(selectedSpaces)
             val versions = Regex("/wiki/api/v2/pages/([1-9][0-9]*)/versions(?:/([1-9][0-9]*))?").matchEntire(path)
             if (versions != null) {
                 val id = versions.groupValues[1]
@@ -258,6 +265,11 @@ class NativeDocumentContractTest {
             if (path == "/rest/api/3/issue/DEV-1/comment/$jiraId") return jiraComment()
             if (path == "/wiki/rest/api/content/search") {
                 val cql = request.url.parameters["cql"] ?: throw AssertionError("Search requires CQL")
+                if ("type = folder" in cql) {
+                    val selectedKey = Regex("space = \"([^\"]+)\"").find(cql)?.groupValues?.get(1)
+                    val selectedId = selectedSpaces.singleOrNull { it["key"] == JsonPrimitive(selectedKey) }?.get("id")?.jsonPrimitive?.content
+                    return listing(folders.values.filter { it.space == selectedId && it.status == "current" }.map { it.json() })
+                }
                 assertTrue("text" in cql || "title" in cql)
                 val chosen = searchSelection?.map { pages.getValue(it) } ?: listOf(if ("221" in cql || "220" in cql) pages.getValue("221") else pages.getValue("201"))
                 val limit = request.url.parameters["limit"]?.toInt() ?: 10
@@ -288,10 +300,11 @@ class NativeDocumentContractTest {
             val path = request.url.encodedPath
             val result = when {
                 request.method == HttpMethod.Post && path == "/wiki/rest/api/content" -> {
-                    assertEquals("COMMON", payload.getValue("space").jsonObject.getValue("key").jsonPrimitive.content)
-                    val value = Page("250", payload.getValue("ancestors").jsonArray.single().jsonObject.getValue("id").jsonPrimitive.content, payload.getValue("title").jsonPrimitive.content,
+                    val selectedKey = payload.getValue("space").jsonObject.getValue("key").jsonPrimitive.content
+                    val selectedId = selectedSpaces.single { it["key"] == JsonPrimitive(selectedKey) }.getValue("id").jsonPrimitive.content
+                    val value = Page("250", payload["ancestors"]?.jsonArray?.singleOrNull()?.jsonObject?.getValue("id")?.jsonPrimitive?.content, payload.getValue("title").jsonPrimitive.content,
                         serializePageBody(payload.getValue("body").jsonObject.getValue("storage").jsonObject.getValue("value").jsonPrimitive.content),
-                        message = payload["version"]?.jsonObject?.get("message")?.jsonPrimitive?.content ?: "wiki create document", author = account)
+                        space = selectedId, message = payload["version"]?.jsonObject?.get("message")?.jsonPrimitive?.content ?: "wiki create document", author = account)
                     pages[value.id] = value; history[value.id] = mutableListOf(value.copy()); value.json(true)
                 }
                 request.method == HttpMethod.Put && path.matches(Regex("/wiki/api/v2/pages/[1-9][0-9]*")) -> {
@@ -342,8 +355,7 @@ class NativeDocumentContractTest {
             return result
         }
 
-        fun <T> use(launch: Path = root, connection: KnowledgeSettings = settings, cache: ConfluencePageCache? = null, context: Boolean = false, local: Boolean = false, synchronize: Boolean = true, observeCorpus: ((LocalCorpus) -> Unit)? = null, action: (ToolRegistry) -> T): T {
-            HttpClient(MockEngine { request ->
+        private fun client(): HttpClient = HttpClient(MockEngine { request ->
                 assertEquals("example.atlassian.net", request.url.host, "Credentials cannot follow foreign resources/cursors")
                 requests += request; beforeRequest(request)
                 val commentResource = Regex("/wiki/api/v2/(footer|inline)-comments/([1-9][0-9]*)(?:/versions/[1-9][0-9]*)?").matchEntire(request.url.encodedPath)
@@ -359,7 +371,20 @@ class NativeDocumentContractTest {
                 if (failure != null) respond(failureBody, failure, headers)
                 else if (conflictOnUpdate && request.method == HttpMethod.Put) respond("{}", HttpStatusCode.Conflict, headers)
                 else respond(transform(request, if (request.method == HttpMethod.Get) get(request) else mutate(request)).toString(), headers = headers)
-            }).use { client ->
+            })
+
+        fun <T> useMultiple(project: KnowledgeProject, syncKeys: List<String> = project.selections.map { it.getValue("key").jsonPrimitive.content },
+                            action: (ToolRegistry, MultiSpaceKnowledge) -> T): T = client().use { client ->
+            ConfluenceRemote(project.credentials, client).use { remote ->
+                val multi = MultiSpaceKnowledge(project, remote)
+                val registry = ToolRegistry(); registry.register(WikiTools(multi::execute)); registry.register(multi)
+                syncKeys.forEach { key -> runCatching { runBlocking { multi.synchronize(key) } } }
+                action(registry, multi)
+            }
+        }
+
+        fun <T> use(launch: Path = root, connection: KnowledgeSettings = settings, cache: ConfluencePageCache? = null, context: Boolean = false, local: Boolean = false, synchronize: Boolean = true, observeCorpus: ((LocalCorpus) -> Unit)? = null, action: (ToolRegistry) -> T): T {
+            client().use { client ->
                 WikiTools(connection.credentials, client, launch, cache = cache, runtimeSettings = connection).use { tools ->
                     val registry = ToolRegistry(); registry.register(tools)
                     if (local) ConfluenceRemote(connection.credentials, client).use { remote ->
@@ -1613,41 +1638,46 @@ class NativeDocumentContractTest {
         sameVersionInlineRepair(restart = true)
     }
 
-    @Test fun `exact current token legacy seed preserves originals and reauthorizes without unchanged body transfer`() {
+    /** Previous public schema keyed partitions by native ID; production no longer imports them. */
+    private fun priorPartition(connection: KnowledgeSettings = settings): Path = runtimeHome.resolve("data").resolve(ContextFiles.hash(
+        JsonArray(listOf(connection.credentials.baseUrl.trimEnd('/'), connection.credentials.email,
+            connection.read().getValue("rootPageId").jsonPrimitive.content,
+            connection.read().getValue("spaceId").jsonPrimitive.content).map(::JsonPrimitive)).toString()))
+
+    @Test fun `prior native ID partition is preserved and never imports its admission or bodies`() {
         val provider = Provider()
         provider.use(local = true) { }
-        val source = settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
-        Files.move(root, settings.legacyCorpusRoot)
+        val prior = priorPartition()
+        Files.move(root, prior)
+        val source = prior.resolve("confluence/COMMON/.sync/manifest.json")
         val original = Files.readString(source)
+        val state = Files.readString(source.resolveSibling("state.json"))
         checkNotNull(CorpusFileLock.tryAcquire(source.parent.resolve("sync.lock"))).use {
             settings.prepareCorpus()
-            assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")), "Active legacy writer prevents reuse")
+            assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")))
         }
-        // A fresh process may reuse the now-idle source.
         KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data")).prepareCorpus()
-        val copied = root.resolve("confluence/COMMON/.sync/manifest.json")
-        val seed = Json.parseToJsonElement(Files.readString(copied)).jsonObject
-        assertEquals(JsonPrimitive(false), seed["inventoryComplete"])
-        assertNull(seed["credentialBinding"])
-        assertNull(seed[WikiChanges.noticesKey])
-        assertFalse(Files.exists(copied.resolveSibling("state.json")), "Old body-refresh checkpoint is not admission evidence")
+        val current = root.resolve("confluence/COMMON/.sync/manifest.json")
+        assertFalse(Files.exists(current), "An idle old partition must not become a new authorized snapshot")
         provider.requests.clear()
         provider.use(local = true, synchronize = false, observeCorpus = { corpus ->
-            assertEquals(JsonPrimitive("credential_reauthorization_pending"), corpus.execute("get_document", strings("document" to "201"))?.get("code"))
+            assertEquals(JsonPrimitive(false), Json.parseToJsonElement(corpus.status()).jsonObject["ready"])
+            assertFalse(corpus.execute("get_document", strings("document" to "201"))!!.containsKey("content"))
             runBlocking { corpus.synchronize() }
-            assertFalse(provider.requests.any { it.url.parameters["body-format"] == "storage" })
-            assertNull(Json.parseToJsonElement(Files.readString(copied.resolveSibling("state.json"))).jsonObject["bodyRefreshedAt"])
         }) { registry -> assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content")) }
-        assertEquals(original, Files.readString(source), "Migration must preserve the legacy original")
+        assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "New schema requires a normal authorized cold fetch")
+        assertEquals(original, Files.readString(source), "The prior snapshot must remain byte-preserved")
+        assertEquals(state, Files.readString(source.resolveSibling("state.json")))
         provider.assertNoEffects()
     }
 
-    @Test fun `valid JSON legacy seed with invalid cursor or node metadata falls back to fresh authorized sync`() {
+    @Test fun `malformed prior metadata stays unchanged while fresh synchronization remains available`() {
         val provider = Provider()
         provider.use(local = true) { }
-        Files.move(root, settings.legacyCorpusRoot)
-        val legacyManifest = settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
-        val original = Json.parseToJsonElement(Files.readString(legacyManifest)).jsonObject
+        val prior = priorPartition()
+        Files.move(root, prior)
+        val priorManifest = prior.resolve("confluence/COMMON/.sync/manifest.json")
+        val original = Json.parseToJsonElement(Files.readString(priorManifest)).jsonObject
         val malformed = listOf(
             JsonObject(original + ("cursor" to JsonPrimitive("invalid-private-cursor"))),
             JsonObject(original + ("pages" to JsonObject(original.getValue("pages").jsonObject.toMutableMap().apply {
@@ -1655,28 +1685,28 @@ class NativeDocumentContractTest {
                 put("201", JsonObject(row + ("version" to JsonPrimitive(0))))
             }))))
         for (value in malformed) {
-            ContextFiles.atomic(legacyManifest, value.toString())
+            ContextFiles.atomic(priorManifest, value.toString())
             val fresh = KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data"))
             fresh.prepareCorpus()
-            val target = root.resolve("confluence/COMMON/.sync/manifest.json")
-            assertFalse(Files.exists(target), "Malformed metadata must not become a permanent stable snapshot")
-            assertEquals(value.toString(), Files.readString(legacyManifest), "Rejected optional reuse preserves originals")
+            assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")))
             provider.requests.clear()
             provider.use(connection = fresh, local = true) { registry ->
                 assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content"))
             }
-            assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "A rejected seed requires a normal authorized cold fetch")
+            assertEquals(value.toString(), Files.readString(priorManifest), "Ignored malformed metadata is preserved, never repaired or imported")
+            assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" })
             Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.delete(it) } }
         }
         provider.assertNoEffects()
     }
 
-    @Test fun `legacy operational metadata and colliding source paths cannot poison fresh inventory admission`() {
+    @Test fun `prior operational metadata and colliding paths cannot enter fresh inventory admission`() {
         val provider = Provider()
         provider.use(local = true) { }
-        Files.move(root, settings.legacyCorpusRoot)
-        val legacyManifest = settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
-        val original = Json.parseToJsonElement(Files.readString(legacyManifest)).jsonObject
+        val prior = priorPartition()
+        Files.move(root, prior)
+        val priorManifest = prior.resolve("confluence/COMMON/.sync/manifest.json")
+        val original = Json.parseToJsonElement(Files.readString(priorManifest)).jsonObject
         val collidingRows = JsonObject(original.getValue("pages").jsonObject.toMutableMap().apply {
             val rootRow = getValue("210").jsonObject
             val child = getValue("201").jsonObject
@@ -1686,36 +1716,36 @@ class NativeDocumentContractTest {
             val source = JsonObject(original + mapOf("pages" to rows, "explicitPages" to JsonArray(listOf(JsonPrimitive("999"))),
                 "folderParents" to buildJsonObject { put("998", "999"); put("999", "998") },
                 "changes" to JsonPrimitive("obsolete-operational-metadata")))
-            ContextFiles.atomic(legacyManifest, source.toString())
+            ContextFiles.atomic(priorManifest, source.toString())
             val fresh = KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data"))
             fresh.prepareCorpus()
-            val target = root.resolve("confluence/COMMON/.sync/manifest.json")
-            val seed = Json.parseToJsonElement(Files.readString(target)).jsonObject
-            assertEquals(setOf("site", "spaceId", "homePageId", "inventoryComplete", "pages"), seed.keys,
-                "Optional source state must never become the new operational snapshot")
-            val safeRows = seed.getValue("pages").jsonObject
-            assertEquals(safeRows.size, safeRows.values.map { it.jsonObject.getValue("path") }.toSet().size)
-            safeRows.forEach { (id, row) -> assertEquals(JsonPrimitive("pages/legacy-$id.md"), row.jsonObject["path"]) }
+            assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")))
             provider.requests.clear()
             provider.use(connection = fresh, local = true) { registry ->
                 assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content"))
             }
-            assertEquals(source.toString(), Files.readString(legacyManifest))
-            if (rows.isEmpty()) assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" })
-            else assertFalse(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "Safe per-ID seeds still reuse authorized unchanged bodies")
+            val current = Json.parseToJsonElement(Files.readString(root.resolve("confluence/COMMON/.sync/manifest.json"))).jsonObject
+            val admitted = current.getValue("pages").jsonObject
+            assertEquals(JsonPrimitive("210"), admitted.getValue("201").jsonObject["parentId"])
+            assertFalse("999" in admitted)
+            assertTrue(admitted.values.none { it.jsonObject["path"]?.jsonPrimitive?.content?.startsWith("pages/legacy-") == true })
+            assertEquals(source.toString(), Files.readString(priorManifest))
+            assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "Old paths and operational state never supply reusable bodies")
             Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.delete(it) } }
         }
         provider.assertNoEffects()
     }
 
-    @Test fun `already replaced token cannot guess another opaque legacy directory`() {
+    @Test fun `replacement token does not import a prior native ID partition`() {
         val provider = Provider()
         provider.use(local = true) { }
-        Files.move(root, settings.legacyCorpusRoot)
+        val prior = priorPartition()
+        Files.move(root, prior)
+        val original = Files.readString(prior.resolve("confluence/COMMON/.sync/manifest.json"))
         val rotated = KnowledgeSettings(settings.read(), credentials.copy(apiToken = "already-replaced-token"), runtimeHome.resolve("data"))
         rotated.prepareCorpus()
         assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")))
-        assertTrue(Files.isRegularFile(settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")))
+        assertEquals(original, Files.readString(prior.resolve("confluence/COMMON/.sync/manifest.json")))
     }
 
     @Test fun `rotated token waits for inventory then reuses unchanged bodies without advancing sweep freshness`() {
@@ -1876,7 +1906,11 @@ class NativeDocumentContractTest {
             assertEquals(JsonPrimitive("failed"), paused["status"])
             assertEquals(JsonPrimitive("root_scope_denied"), paused["code"])
             assertEquals(JsonPrimitive("unavailable"), paused["commentWatch"])
-            assertEquals(JsonPrimitive(true), paused["ready"], "Last committed replica remains readable")
+            assertEquals(JsonPrimitive(false), paused["ready"], "A confirmed root denial must stop export of the last committed replica")
+            val rejectedRead = call(registry, "get_document", strings("document" to "201"))
+            assertEquals(JsonPrimitive("error"), rejectedRead["status"])
+            assertEquals(JsonPrimitive("root_scope_denied"), rejectedRead["code"])
+            assertFalse(rejectedRead.containsKey("content"))
         }
         assertTrue(provider.requests.isEmpty())
     }
@@ -1916,6 +1950,329 @@ class NativeDocumentContractTest {
             assertEquals(2, rootReads)
             assertTrue(Files.isRegularFile(root.resolve("confluence/COMMON/.sync/${WikiChanges.noticeDenialMarker}")))
         }
+        provider.assertNoEffects()
+    }
+
+
+    private fun fullSpace(): KnowledgeSettings = KnowledgeSettings(JsonObject(settings.read() - "rootPageId"), credentials,
+        runtimeHome.resolve("whole-space-data")).also { it.prepareCorpus() }
+
+    private fun multiProject(rooted: Boolean = true, recording: Boolean = false): KnowledgeProject = KnowledgeProject(buildJsonObject {
+        put("enabled", true); put("site", credentials.baseUrl)
+        putJsonArray("spaces") {
+            add(buildJsonObject {
+                put("key", "COMMON"); if (rooted) put("rootPageId", "210")
+                if (recording) put("memoryPageId", "201")
+            })
+            add(buildJsonObject {
+                put("key", "DEV"); if (rooted) put("rootPageId", "410")
+                if (recording) put("memoryPageId", "411")
+            })
+        }
+    }, credentials, runtimeHome.resolve("multi-data"))
+
+    private fun Provider.secondSpace() {
+        selectedSpaces += buildJsonObject { put("id", "30"); put("key", "DEV"); put("name", "Development"); put("homepageId", "400") }
+        pages["400"] = Page("400", null, "Development home", space = "30")
+        pages["410"] = Page("410", "400", "Development root", space = "30")
+        pages["411"] = Page("411", "410", "Development notes", "<p>Shared marker from development</p>", space = "30")
+        pages.getValue("201").content = "<p>Shared marker from common</p>"
+    }
+
+    private fun assertSpacesReady(registry: ToolRegistry, vararg keys: String) {
+        val status = call(registry, "connection_status", buildJsonObject {})
+        val rows = status.getValue("spaces").jsonArray.map { it.jsonObject }.associateBy { it.getValue("key").jsonPrimitive.content }
+        keys.forEach { key -> assertEquals(JsonPrimitive(true), rows.getValue(key)["ready"], "$key failed synchronization: $status") }
+    }
+
+    @Test fun `whole space reads independent top level trees without touching an inaccessible homepage`() {
+        val full = fullSpace()
+        val provider = Provider()
+        provider.pages["777"] = Page("777", null, "Parentless knowledge", "<p>Rootless native body</p>")
+        provider.pages.getValue("202").parent = "900"
+        provider.denied["/wiki/api/v2/pages/200"] = HttpStatusCode.Forbidden
+        provider.denied["/wiki/api/v2/pages/210"] = HttpStatusCode.Forbidden
+        provider.use(launch = full.corpusRoot, connection = full) { registry ->
+            for (id in listOf("777", "202")) {
+                val read = call(registry, "get_document", strings("document" to id))
+                assertNotEquals(JsonPrimitive("error"), read["status"], read.toString())
+                assertTrue(read.getValue("content").jsonPrimitive.content.isNotBlank())
+                assertTrue(provider.storageRead(id))
+            }
+        }
+        assertTrue(provider.requests.none { it.url.encodedPath in setOf("/wiki/api/v2/pages/200", "/wiki/api/v2/pages/210") },
+            "A whole-space read must not depend on the configured space homepage or the former ROOT")
+        provider.assertNoEffects()
+    }
+
+    @Test fun `whole space mirror retains parentless pages sibling trees and visible children with hidden parents`() {
+        val full = fullSpace()
+        val provider = Provider()
+        provider.pages["777"] = Page("777", null, "Rootless page", "<p>Rootless evidence</p>")
+        provider.pages["778"] = Page("778", "779", "Visible child", "<p>Visible child evidence</p>")
+        provider.pages["779"] = Page("779", null, "Restricted parent")
+        provider.pages.getValue("202").parent = "900"
+        provider.denied["/wiki/api/v2/pages/200"] = HttpStatusCode.Forbidden
+        provider.denied["/wiki/api/v2/pages/779"] = HttpStatusCode.Forbidden
+        provider.use(launch = full.corpusRoot, connection = full, local = true) { registry ->
+            for (id in listOf("777", "778", "202")) {
+                val search = call(registry, "search_documents", strings("query" to id))
+                assertEquals(listOf(id), search.getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+                val read = call(registry, "get_document", strings("document" to id))
+                assertTrue(read.getValue("content").jsonPrimitive.content.isNotBlank())
+            }
+            val hidden = call(registry, "search_documents", strings("query" to "Restricted parent"))
+            assertTrue(hidden.getValue("results").jsonArray.isEmpty())
+        }
+        assertTrue(provider.requests.none { it.url.encodedPath in setOf("/wiki/api/v2/pages/200", "/wiki/api/v2/pages/779") },
+            "Metadata and bodies of restricted home/parents must not be required for accessible whole-space inventory")
+        provider.assertNoEffects()
+    }
+
+    @Test fun `whole space rejects foreign archived and changed native identity before exporting content`() {
+        val full = fullSpace()
+        for (mode in listOf("foreign", "archived", "identity")) {
+            val provider = Provider()
+            provider.pages["777"] = Page("777", null, "Unavailable evidence", "<p>Do not export</p>",
+                space = if (mode == "foreign") "30" else "20", status = if (mode == "archived") "archived" else "current")
+            if (mode == "identity") provider.transform = { request, value ->
+                if (request.url.encodedPath == "/wiki/api/v2/pages/777") JsonObject(value + ("id" to JsonPrimitive("778"))) else value
+            }
+            provider.use(launch = full.corpusRoot, connection = full) { registry ->
+                val rejected = call(registry, "get_document", strings("document" to "777"))
+                assertEquals(JsonPrimitive("error"), rejected["status"], mode)
+                assertFalse(rejected.toString().contains("Do not export"))
+            }
+            assertFalse(provider.storageRead("777"), "$mode must be rejected from metadata before body access")
+            provider.assertNoEffects()
+        }
+    }
+
+    @Test fun `multiple spaces search together with native labels and filter without remote rereads`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject()) { registry, _ ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            provider.requests.clear()
+            val search = call(registry, "search_documents", strings("query" to "Shared marker"))
+            val rows = search.getValue("results").jsonArray.map { it.jsonObject }
+            assertEquals(setOf("201", "411"), rows.map { it.getValue("id").jsonPrimitive.content }.toSet())
+            assertEquals(setOf("COMMON", "DEV"), rows.map { it.getValue("space").jsonPrimitive.content }.toSet())
+            val filtered = call(registry, "search_documents", strings("query" to "Shared marker", "space" to "DEV"))
+            assertEquals(listOf("411"), filtered.getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+            assertEquals(JsonPrimitive("error"), call(registry, "search_documents", strings("query" to "Shared marker", "space" to "UNKNOWN"))["status"])
+            assertTrue(provider.requests.isEmpty(), "Combined and filtered warm search must use the established replicas")
+        }
+        provider.assertNoEffects()
+    }
+
+    @Test fun `multiple space continuations bind query selection and every participating snapshot`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject()) { registry, multi ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            val query = arguments("query" to JsonPrimitive("Shared marker"), "limit" to JsonPrimitive(1))
+            val first = call(registry, "search_documents", query)
+            val cursor = first.getValue("nextCursor")
+            assertTrue(cursor is JsonPrimitive && cursor.isString && cursor.content.isNotBlank())
+            val next = call(registry, "search_documents", JsonObject(query + ("cursor" to cursor)))
+            val ids = (first.getValue("results").jsonArray + next.getValue("results").jsonArray).map { it.jsonObject.getValue("id").jsonPrimitive.content }
+            assertEquals(setOf("201", "411"), ids.toSet()); assertEquals(2, ids.size)
+            for (changed in listOf("query" to JsonPrimitive("marker"), "space" to JsonPrimitive("DEV"))) {
+                val rejected = call(registry, "search_documents", JsonObject(query + mapOf("cursor" to cursor, changed)))
+                assertEquals(JsonPrimitive("error"), rejected["status"], "A changed continuation binding must be rejected")
+            }
+            provider.pages.getValue("411").apply { version++; content = "<p>Shared marker revised snapshot</p>" }
+            runBlocking { multi.synchronize("DEV") }
+            val stale = call(registry, "search_documents", JsonObject(query + ("cursor" to cursor)))
+            assertEquals(JsonPrimitive("error"), stale["status"], "A changed participating scope must invalidate the combined continuation")
+        }
+        provider.assertNoEffects()
+    }
+
+    @Test fun `one inaccessible space keeps other space usable and can recover in the same runtime`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.denied["/wiki/api/v2/pages/410"] = HttpStatusCode.Forbidden
+        provider.useMultiple(multiProject()) { registry, multi ->
+            assertSpacesReady(registry, "COMMON")
+            val state = call(registry, "connection_status", buildJsonObject {})
+            val failed = state.getValue("spaces").jsonArray.map { it.jsonObject }.single { it["key"] == JsonPrimitive("DEV") }
+            assertNotEquals(JsonPrimitive(true), failed["ready"])
+            val available = call(registry, "search_documents", strings("query" to "Shared marker", "space" to "COMMON"))
+            assertEquals(listOf("201"), available.getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+            provider.denied.clear()
+            runBlocking { multi.synchronize("DEV") }
+            assertSpacesReady(registry, "COMMON", "DEV")
+        }
+        provider.assertNoEffects()
+    }
+
+    @Test fun `exact document URL chooses its space while a conflicting explicit space makes zero writes`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject()) { registry, _ ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            val rejected = call(registry, "update_document", arguments("document" to JsonPrimitive("411"), "space" to JsonPrimitive("COMMON"),
+                "version" to JsonPrimitive(1), "content" to JsonPrimitive("<p>Wrong destination</p>")))
+            assertEquals(JsonPrimitive("error"), rejected["status"])
+            assertTrue(provider.effects.isEmpty())
+            val saved = call(registry, "update_document", arguments("document" to JsonPrimitive("${credentials.baseUrl}/wiki/spaces/DEV/pages/411"),
+                "version" to JsonPrimitive(1), "content" to JsonPrimitive("<p>Development-only change</p>")))
+            assertEquals(JsonPrimitive("updated"), saved["status"], saved.toString())
+            assertEquals("<p>Development-only change</p>", provider.pages.getValue("411").content)
+            assertEquals("<p>Shared marker from common</p>", provider.pages.getValue("201").content)
+            assertEquals(listOf("/wiki/api/v2/pages/411"), provider.effects.map { it.first.url.encodedPath })
+        }
+    }
+
+    @Test fun `logical recording destinations require selection when multiple spaces qualify`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject(recording = true)) { registry, _ ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            val ambiguous = call(registry, "update_document", strings("append" to "New user observation"))
+            assertEquals(JsonPrimitive("error"), ambiguous["status"])
+            assertEquals(JsonPrimitive("selection_required"), ambiguous["code"])
+            assertTrue(provider.effects.isEmpty())
+            val saved = call(registry, "update_document", strings("append" to "New user observation", "space" to "DEV"))
+            assertEquals(JsonPrimitive("updated"), saved["status"], saved.toString())
+            assertTrue(provider.pages.getValue("411").content.contains("New user observation"))
+            assertFalse(provider.pages.getValue("201").content.contains("New user observation"))
+            assertEquals(1, provider.effects.size)
+        }
+    }
+
+    @Test fun `parentless creation requires explicit space and leaves all other spaces unchanged`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject(rooted = false)) { registry, _ ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            val ambiguous = call(registry, "create_document", strings("title" to "New document", "content" to "<p>New knowledge</p>"))
+            assertEquals(JsonPrimitive("error"), ambiguous["status"])
+            assertTrue(provider.effects.isEmpty())
+            val saved = call(registry, "create_document", strings("space" to "DEV", "title" to "New document", "content" to "<p>New knowledge</p>"))
+            assertEquals(JsonPrimitive("created"), saved["status"], saved.toString())
+            assertNull(provider.pages.getValue("250").parent)
+            assertEquals("30", provider.pages.getValue("250").space)
+            assertTrue(provider.effects.single().second["ancestors"]?.jsonArray?.isEmpty() != false, "Top-level creation must not send a fabricated parent")
+        }
+    }
+
+
+    @Test fun `explicit parent chooses creation space and a conflicting key cannot redirect it`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject()) { registry, _ ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            val wrong = call(registry, "create_document", strings("parent" to "411", "space" to "COMMON", "title" to "Wrong destination", "content" to "<p>No write</p>"))
+            assertEquals(JsonPrimitive("error"), wrong["status"])
+            assertTrue(provider.effects.isEmpty())
+            val saved = call(registry, "create_document", strings("parent" to "411", "title" to "Development child", "content" to "<p>Correct destination</p>"))
+            assertEquals(JsonPrimitive("created"), saved["status"], saved.toString())
+            assertEquals("411", provider.pages.getValue("250").parent)
+            assertEquals("30", provider.pages.getValue("250").space)
+            assertEquals(1, provider.effects.size)
+        }
+    }
+
+    @Test fun `native comment reference routes to its own space and preserves the other space thread`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.comments["601"] = Comment("601", "411", content = "<p>Development-only comment</p>")
+        val before = provider.comments.getValue("301").copy()
+        provider.useMultiple(multiProject()) { registry, _ ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            val read = call(registry, "list_comments", strings("target" to "footer:601"))
+            assertNotEquals(JsonPrimitive("error"), read["status"], read.toString())
+            assertTrue(read.toString().contains("Development-only comment"))
+            val created = call(registry, "create_comment", strings("target" to "411", "text" to "New development comment"))
+            assertEquals(JsonPrimitive("created"), created["status"], created.toString())
+            assertEquals(JsonPrimitive("footer:350"), created["reference"])
+            assertEquals(JsonPrimitive("DEV"), created["space"])
+            assertFalse(created["url"]?.jsonPrimitive?.content?.contains("/pages/350") == true,
+                "A comment acknowledgement must not turn a comment ID into a document URL")
+            val saved = call(registry, "update_comment", arguments("comment" to JsonPrimitive("footer:601"), "version" to JsonPrimitive(1), "text" to JsonPrimitive("Corrected development comment")))
+            assertEquals(JsonPrimitive("updated"), saved["status"], saved.toString())
+            assertEquals(JsonPrimitive("footer:601"), saved["reference"])
+            assertEquals(JsonPrimitive("DEV"), saved["space"])
+            assertFalse(saved["url"]?.jsonPrimitive?.content?.contains("/pages/601") == true)
+            assertTrue(provider.comments.getValue("601").content.contains("Corrected development comment"))
+            assertEquals(before, provider.comments.getValue("301"))
+            assertEquals(listOf("/wiki/api/v2/footer-comments", "/wiki/api/v2/footer-comments/601"), provider.effects.map { it.first.url.encodedPath })
+        }
+    }
+
+
+    @Test fun `whole space native reads reject a page moved to another space during the read`() {
+        val full = fullSpace()
+        val provider = Provider()
+        provider.pages["777"] = Page("777", null, "Changing page", "<p>Never export a changed admission</p>")
+        var reads = 0
+        provider.beforeRequest = { request ->
+            if (request.url.encodedPath == "/wiki/api/v2/pages/777" && ++reads == 2) provider.pages.getValue("777").space = "30"
+        }
+        provider.use(launch = full.corpusRoot, connection = full) { registry ->
+            val result = call(registry, "get_document", strings("document" to "777"))
+            assertEquals(JsonPrimitive("error"), result["status"], result.toString())
+            assertFalse(result.toString().contains("Never export a changed admission"))
+        }
+        assertTrue(reads >= 2, "A whole-space export still needs fresh native identity verification")
+        provider.assertNoEffects()
+    }
+
+
+    private fun restartProject(directory: String, auth: JiraConfig = credentials): KnowledgeProject = KnowledgeProject(buildJsonObject {
+        put("enabled", true); put("site", credentials.baseUrl)
+        putJsonArray("spaces") { add(buildJsonObject { put("key", "COMMON"); put("rootPageId", "210") }) }
+    }, auth, runtimeHome.resolve(directory))
+
+    @Test fun `restart resolution denial fences an existing admitted notice feed before a running scope exists`() {
+        for (mode in listOf("missing", "401", "403")) {
+            val selected = restartProject("restart-denial-$mode")
+            val provider = Provider()
+            provider.useMultiple(selected) { registry, _ -> assertSpacesReady(registry, "COMMON") }
+            val control = selected.corpusRoot("COMMON").resolve("confluence/COMMON/.sync")
+            val marker = control.resolve(WikiChanges.noticeDenialMarker)
+            val state = Json.parseToJsonElement(Files.readString(control.resolve("state.json"))).jsonObject
+            assertEquals(JsonPrimitive(KnowledgeSettings.credentialFingerprint(credentials)), state["credentialBinding"])
+            assertTrue(Files.isRegularFile(control.resolve("changes.json")))
+            assertFalse(Files.exists(marker))
+            if (mode == "missing") provider.selectedSpaces.clear()
+            else provider.denied["/wiki/api/v2/spaces"] = if (mode == "401") HttpStatusCode.Unauthorized else HttpStatusCode.Forbidden
+            provider.useMultiple(selected, syncKeys = emptyList()) { registry, restarted ->
+                assertFailsWith<ContextRemoteException> { runBlocking { restarted.synchronize("COMMON") } }
+                assertTrue(Files.isRegularFile(marker), "Confirmed $mode denial must prevent the hook from consuming the old feed after restart")
+                val status = call(registry, "connection_status", buildJsonObject {})
+                assertEquals(JsonPrimitive(false), status.getValue("spaces").jsonArray.single().jsonObject["ready"])
+            }
+            provider.assertNoEffects()
+        }
+    }
+
+    @Test fun `restart transient resolution failure preserves the admitted notice feed without revoking it`() {
+        val selected = restartProject("restart-transient")
+        val provider = Provider()
+        provider.useMultiple(selected) { registry, _ -> assertSpacesReady(registry, "COMMON") }
+        val control = selected.corpusRoot("COMMON").resolve("confluence/COMMON/.sync")
+        val feed = Files.readString(control.resolve("changes.json"))
+        val state = Files.readString(control.resolve("state.json"))
+        provider.denied["/wiki/api/v2/spaces"] = HttpStatusCode.ServiceUnavailable
+        provider.useMultiple(selected, syncKeys = emptyList()) { _, restarted ->
+            assertFailsWith<ContextRemoteException> { runBlocking { restarted.synchronize("COMMON") } }
+        }
+        assertFalse(Files.exists(control.resolve(WikiChanges.noticeDenialMarker)))
+        assertEquals(feed, Files.readString(control.resolve("changes.json")))
+        assertEquals(state, Files.readString(control.resolve("state.json")))
+        provider.assertNoEffects()
+    }
+
+    @Test fun `a denied replacement token cannot revoke another credential admitted notice feed on restart`() {
+        val selected = restartProject("restart-replacement")
+        val provider = Provider()
+        provider.useMultiple(selected) { registry, _ -> assertSpacesReady(registry, "COMMON") }
+        val control = selected.corpusRoot("COMMON").resolve("confluence/COMMON/.sync")
+        val state = Files.readString(control.resolve("state.json"))
+        val replacement = restartProject("restart-replacement", credentials.copy(apiToken = "replacement-denied-token"))
+        assertEquals(selected.corpusRoot("COMMON"), replacement.corpusRoot("COMMON"))
+        provider.denied["/wiki/api/v2/spaces"] = HttpStatusCode.Unauthorized
+        provider.useMultiple(replacement, syncKeys = emptyList()) { _, restarted ->
+            assertFailsWith<ContextRemoteException> { runBlocking { restarted.synchronize("COMMON") } }
+        }
+        assertFalse(Files.exists(control.resolve(WikiChanges.noticeDenialMarker)), "A retired or unadmitted token cannot revoke the active observation")
+        assertEquals(state, Files.readString(control.resolve("state.json")))
         provider.assertNoEffects()
     }
 
