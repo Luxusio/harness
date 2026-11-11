@@ -173,9 +173,9 @@ def main() -> int:
 
     wbs_dir = _find_active_wbs_dir(repo_root)
 
-    destination = select_destination()
+    destination = select_destination(cwd=data.get("cwd") or repo_root)
     output_parts = [destination["notice"]]
-    if destination["mode"] == "external" and os.environ.get("WIKI_ATLASSIAN_MEMORY_PAGE_ID"):
+    if destination["mode"] == "external" and destination["config"].get("memoryPageId"):
         output_parts.append(
             "[harness-wiki-memory] Apply the wiki knowledge skill to new source material "
             "in authorized business work. Check for an existing source reference, then "

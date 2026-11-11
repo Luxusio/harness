@@ -24,18 +24,20 @@ def setup_wiki(tmp_path):
     (repo / ".git").mkdir()
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("HARNESS_", "CLAUDE_", "CODEX_", "WIKI_", "ATLASSIAN_"))}
+    # Hooks intentionally execute python3; declare the parser-capable fixture interpreter.
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     env.update(
         PYTHONDONTWRITEBYTECODE="1",
         HOME=str(tmp_path / "home"),
         XDG_DATA_HOME=str(tmp_path / "ignored-override"),
-        WIKI_ATLASSIAN_ENABLED="true",
-        WIKI_ATLASSIAN_SITE="https://example.invalid/",
-        WIKI_ATLASSIAN_SPACE="TEAM",
-        WIKI_ATLASSIAN_SPACE_ID="123",
-        WIKI_ATLASSIAN_ROOT_PAGE_ID="456",
+        ATLASSIAN_BASE_URL="https://example.invalid/",
         ATLASSIAN_EMAIL="fixture@example.invalid",
         ATLASSIAN_API_TOKEN="fixture-token",
     )
+    (repo / "doc/harness/manifest.yaml").write_text(json.dumps({"type": "library", "wiki": {
+        "backend": "atlassian", "enabled": True, "site": "https://example.invalid/", "space": "TEAM",
+        "spaceId": "123", "rootPageId": "456",
+    }}))
     identity = ["https://example.invalid", "fixture@example.invalid", "456", "123"]
     partition = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
     control = tmp_path / "home/.local/share/wiki-atlassian" / partition / "confluence/TEAM/.sync"
@@ -57,7 +59,7 @@ def publish(control, events, head=None, epoch=EPOCH):
     }))
 
 
-def hook(repo, env, session="session-a", runtime="codex", prompt=False):
+def hook(repo, env, session="session-a", runtime="codex", prompt=False, process_cwd=None):
     if prompt and runtime == "codex":
         argv = [str(SCRIPTS / "hook_user_prompt_submit.py")]
     elif prompt:
@@ -65,7 +67,7 @@ def hook(repo, env, session="session-a", runtime="codex", prompt=False):
     else:
         argv = [str(SCRIPTS / "wiki_change_notice.py"), runtime]
     payload = {"session_id": session, "cwd": str(repo), "tool_name": "Read"}
-    result = subprocess.run([sys.executable, "-B", *argv], cwd=repo, env=env,
+    result = subprocess.run([sys.executable, "-B", *argv], cwd=process_cwd or repo, env=env,
                             input=json.dumps(payload), text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     if result.stdout and (runtime == "codex" or not prompt):
@@ -125,7 +127,8 @@ def test_wrong_connection_scope_malformed_and_unsafe_feed_are_inert(setup_wiki, 
     repo, env, control = setup_wiki
     publish(control, [page_event(1, 101)])
     assert not hook(repo, dict(env, ATLASSIAN_API_TOKEN="another-token"))
-    assert not hook(repo, dict(env, WIKI_ATLASSIAN_ENABLED="false"))
+    assert not hook(repo, dict(env, ATLASSIAN_BASE_URL="https://other.invalid"))
+    assert not (control / "harness-cursors.json").exists()
     outside = tmp_path / "other"
     outside.mkdir()
     assert not hook(outside, env)
@@ -180,11 +183,60 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
 
 def test_configured_memory_guides_prompt_and_invalid_watch_stays_pending(setup_wiki):
     repo, env, control = setup_wiki
-    env = dict(env, WIKI_ATLASSIAN_MEMORY_PAGE_ID="456")
+    path = repo / "doc/harness/manifest.yaml"
+    config = json.loads(path.read_text())
+    config["wiki"]["memoryPageId"] = "456"
+    path.write_text(json.dumps(config))
     context = hook(repo, env, prompt=True)
     assert "harness-wiki-memory" in context and "existing source reference" in context
     publish(control, [page_event(1, 101)])
-    invalid = dict(env, WIKI_ATLASSIAN_WATCH_COMMENT_PAGES="101,101")
+    config["wiki"]["watchCommentPages"] = "101,101"
+    path.write_text(json.dumps(config))
+    invalid = env
     assert "remain pending" in hook(repo, invalid, prompt=True)
     assert not hook(repo, invalid)
+    assert not (control / "harness-cursors.json").exists()
+
+
+@pytest.mark.parametrize("runtime", ["codex", "claude"])
+def test_payload_cwd_drives_both_hooks_and_old_environment_is_ignored(setup_wiki, tmp_path, runtime):
+    repo, env, control = setup_wiki
+    process = tmp_path / "process"; process.mkdir()
+    # The process directory's local config must never replace payload selection.
+    (process / "doc/harness").mkdir(parents=True)
+    (process / "doc/harness/manifest.yaml").write_text('{"type":"library","wiki":{"enabled": false}}')
+    stale = dict(env, WIKI_ATLASSIAN_ENABLED="false", WIKI_ATLASSIAN_SITE="https://other.invalid",
+                 WIKI_ATLASSIAN_ROOT_PAGE_ID="999")
+    publish(control, [page_event(1, 101)])
+    assert "page 101" in hook(repo, stale, runtime=runtime, process_cwd=process, prompt=True)
+    assert not hook(repo, stale, runtime=runtime, process_cwd=process)
+
+
+def test_two_projects_share_home_scope_without_replay_and_different_scope_is_inert(setup_wiki, tmp_path):
+    repo, env, control = setup_wiki
+    other = tmp_path / "second-project"
+    (other / "doc/harness").mkdir(parents=True)
+    (other / "doc/harness/manifest.yaml").write_text("type: library\n")
+    (other / ".git").mkdir()
+    path = other / "doc/harness/manifest.yaml"
+    config = json.loads((repo / "doc/harness/manifest.yaml").read_text())
+    path.write_text(json.dumps(config))
+    publish(control, [page_event(1, 101)])
+    assert "page 101" in hook(repo, env)
+    assert not hook(other, env)  # same runtime/session already consumed shared feed
+    assert "page 101" in hook(other, env, session="second-session")
+    config["wiki"]["rootPageId"] = "999"; path.write_text(json.dumps(config))
+    assert not hook(other, env, session="different-root")
+    config["wiki"]["rootPageId"] = "456"; path.write_text(json.dumps(config))
+    assert not hook(other, dict(env, ATLASSIAN_EMAIL="other@example.invalid"), session="different-account")
+
+
+def test_disabled_or_missing_yaml_never_reads_feed(setup_wiki):
+    repo, env, control = setup_wiki
+    publish(control, [page_event(1, 101)])
+    path = repo / "doc/harness/manifest.yaml"
+    path.write_text('{"type":"library","wiki":{"enabled": false}}')
+    assert not hook(repo, env)
+    path.write_text("type: library\n")
+    assert not hook(repo, dict(env, WIKI_ATLASSIAN_ENABLED="true"))
     assert not (control / "harness-cursors.json").exists()

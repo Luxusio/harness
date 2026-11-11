@@ -22,9 +22,13 @@ Confluence, without imposing its interface on future providers.
 ## Implementation decisions
 
 Use the user-requested `wiki-atlassian` package and `atlassian` MCP. The user
-clarified that connection settings come only from injected environment variables;
-`mise.local.toml` is an environment setup example, never a file the plugin reads.
-No JSON connection file or automatic mise invocation remains. The initial
+revised configuration on 2026-11-11: “연결정보는 프로젝트에 커밋되는 파일” and
+“인증정보는 커밋 안되는 mise.local.toml”, specifying YAML and commonly used
+token/email names. These user_explicit instructions supersede earlier env-only
+connection selection. The user further requested the Harness common configuration instead of a
+provider-specific YAML. `doc/harness/manifest.yaml` under `wiki` owns nonsecret
+connection choices; private authentication is injected. The plugin does not read TOML or
+invoke mise. No JSON or old connection-env fallback remains. The initial
 implemented capabilities are Confluence documents, comments and history. Home storage is partitioned
 by remote origin, account identity and registered root. Read
 replicas and manifests are derived; Confluence remains the document authority.
@@ -105,7 +109,7 @@ company installation or token issuance from an example request.
 The user objects to downloading a new corpus after API token replacement and
 requests removal of environment-based cache location overrides. Use the
 standard user-home location and ignore XDG_DATA_HOME for wiki data and plugin
-installation. Preserve the injected environment contract for connection data.
+installation. Preserve injected authentication; public connection settings come from project YAML.
 
 Isolate content by site, exact account email, space ID and ROOT ID. Token
 replacement requires fresh authorization before cached content and notices
@@ -146,3 +150,35 @@ basedOn and readback establish revision/write integrity, not semantic truth or
 approval. No mandatory page template, per-sentence schema, new ledger or runtime
 truth classifier is introduced. Independent source-to-draft scenarios evaluate
 the guidance; successful packaging alone cannot establish semantic correctness.
+
+## Project connection and private authentication
+
+The project Git root owns common `doc/harness/manifest.yaml`; its optional
+`wiki` mapping selects `backend: atlassian` with activation, site, space/key,
+native space/ROOT IDs and optional document destinations, polling and comment
+watches. Preserve unrelated Harness fields and comments. No separate provider
+settings file or fallback remains. Subdirectories use the nearest Git root,
+including gitfile worktrees. Nested repositories cannot borrow outer settings;
+without Git use only the startup directory. Missing common settings, absent wiki or valid disabled wiki is local/inert. Present malformed, unreadable or unauthorized configuration stays
+unavailable. Authentication fields never belong in YAML.
+
+Use private injected `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN`, with
+`ATLASSIAN_BASE_URL` as a credential-origin binding. This last field is a derived
+authentication safeguard: committed `site` otherwise controls the first Basic
+auth request. The private origin must match the YAML site before clients/cache
+activation; it never overrides routing. Setup preserves a credential's original
+issuer and does not silently repin it from changed repository content.
+
+Runtime reads no mise file, does not execute mise and accepts no nonsecret env
+overrides or fallback connection source. MCP settings are immutable startup
+snapshots; reconnect after connection/auth changes. Preserve shared HOME cache
+identity independently of project path or Claude/Codex. Python policy/hooks conservatively detect plain-key manifests without wiki
+before loading PyYAML; ambiguous roots or a configured wiki need the real safe
+parser. A missing parser for those cases stays unavailable. Empty/null or
+malformed wiki is invalid; missing wiki is distinct. Backend setup never creates
+a wiki-only installation-marker stub. Setup
+checks the actual installed hook interpreter and handles that optional
+prerequisite; runtime hooks never install dependencies. Parsing, scope selection
+and errors must agree across native runtime and Harness, without exposing input
+values or secrets. Existing permission, root, native version and uncertain-write
+boundaries remain intact.

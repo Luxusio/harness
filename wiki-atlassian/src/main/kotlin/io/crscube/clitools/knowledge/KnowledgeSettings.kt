@@ -11,7 +11,7 @@ import java.nio.file.*
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 
-/** One immutable connection snapshot from the environment, independent of project cwd. */
+/** One immutable connection snapshot from project YAML and private authentication. */
 class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
                         dataHome: Path = defaultDataHome()) {
     private val initial = JsonObject(value.toMap())
@@ -160,25 +160,10 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             base.resolve("wiki-atlassian")
         } catch (_: Exception) { throw IllegalArgumentException("Invalid corpus data home") }
 
-        private val connectionVariables = mapOf(
-            "WIKI_ATLASSIAN_SITE" to "site", "WIKI_ATLASSIAN_SPACE" to "space",
-            "WIKI_ATLASSIAN_SPACE_ID" to "spaceId", "WIKI_ATLASSIAN_ROOT_PAGE_ID" to "rootPageId",
-            "WIKI_ATLASSIAN_MEMORY_PAGE_ID" to "memoryPageId", "WIKI_ATLASSIAN_FEEDBACK_PAGE_ID" to "feedbackPageId",
-            "WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS" to "pollIntervalSeconds",
-            "WIKI_ATLASSIAN_WATCH_COMMENT_PAGES" to "watchCommentPages")
+        private val connectionFields = setOf("enabled", "site", "space", "spaceId", "rootPageId",
+            "memoryPageId", "feedbackPageId", "pollIntervalSeconds", "watchCommentPages")
 
-        /** Disabled connections require no credentials, data directories or clients. */
-        fun enabled(environment: Map<String, String>): Boolean = when (environment["WIKI_ATLASSIAN_ENABLED"]) {
-            "true" -> true
-            "false" -> false
-            null -> {
-                require(connectionVariables.keys.none { environment.containsKey(it) }) { "Atlassian connection requires WIKI_ATLASSIAN_ENABLED" }
-                false
-            }
-            else -> throw IllegalArgumentException("WIKI_ATLASSIAN_ENABLED must be true or false")
-        }
-
-        private fun validOrigin(site: String): Boolean {
+        internal fun validOrigin(site: String): Boolean {
             if (!ContextConfig.validOrigin(site) || site.any { it.isWhitespace() || it.isISOControl() || it == '\\' }) return false
             val uri = java.net.URI(site)
             if (uri.port == 0 || uri.rawAuthority.endsWith(":")) return false
@@ -190,37 +175,40 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             }
             return true
         }
-        fun validate(value: JsonObject) {
-            require(value.keys.all { it == "enabled" || it in connectionVariables.values }) { "Unknown connection setting" }
-            require(value["enabled"] == JsonPrimitive(true)) { "Atlassian backend is not enabled" }
-            fun text(key: String): String = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("Missing string $key")
-            require(validOrigin(text("site"))) { "HTTPS origin required" }
-            require(text("space").matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Invalid space" }
-            for (key in listOf("spaceId", "rootPageId") + listOf("memoryPageId", "feedbackPageId").filter { value.containsKey(it) })
-                require(text(key).matches(Regex("[1-9][0-9]*"))) { "Positive native ID required: $key" }
+        fun validate(value: JsonObject, requireEnabled: Boolean = true) {
+            require(value.keys.all { it in connectionFields }) { "Unknown connection setting" }
+            require(value["enabled"] == JsonPrimitive(true) || value["enabled"] == JsonPrimitive(false)) { "Boolean enabled required" }
+            val enabled = value["enabled"] == JsonPrimitive(true)
+            require(!requireEnabled || enabled) { "Atlassian backend is not enabled" }
+            fun text(key: String): String = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw IllegalArgumentException("Missing string connection setting")
+            if (enabled || "site" in value) require(validOrigin(text("site"))) { "HTTPS origin required" }
+            if (enabled || "space" in value) require(text("space").matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Invalid space" }
+            for (key in listOf("spaceId", "rootPageId", "memoryPageId", "feedbackPageId")) {
+                if (key in value || (enabled && key in setOf("spaceId", "rootPageId")))
+                    require(text(key).matches(Regex("[1-9][0-9]*"))) { "Positive native ID required" }
+            }
             value["pollIntervalSeconds"]?.let { require(it is JsonPrimitive && !it.isString && it.longOrNull in 30L..86400L) { "Polling interval must be 30..86400 seconds" } }
             if ("watchCommentPages" in value) WikiChanges.watchPages(text("watchCommentPages"))
         }
-        fun fromEnvironment(environment: Map<String, String> = System.getenv()): KnowledgeSettings {
-            val snapshot = environment.toMap()
-            require(enabled(snapshot)) { "Atlassian connection is disabled" }
-            val value = buildJsonObject {
-                put("enabled", true)
-                for ((variable, key) in connectionVariables) snapshot[variable]?.let { raw ->
-                    if (key == "pollIntervalSeconds") {
-                        require(raw.matches(Regex("[0-9]{1,20}"))) { "Polling interval must be 30..86400 seconds" }
-                        val seconds = raw.toLongOrNull()
-                        require(seconds != null && seconds in 30L..86400L) { "Polling interval must be 30..86400 seconds" }
-                        put(key, seconds)
-                    } else put(key, raw)
-                }
+
+        /** Missing/disabled YAML is inert; invalid YAML/auth never becomes a local fallback. */
+        fun fromProject(startupDirectory: Path = Paths.get("").toAbsolutePath(),
+                        environment: Map<String, String> = System.getenv()): KnowledgeSettings? {
+            try {
+                val value = ProjectConnection.load(startupDirectory) ?: return null
+                if (value["enabled"] == JsonPrimitive(false)) return null
+                val snapshot = environment.toMap()
+                fun credential(key: String): String = snapshot[key]?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalArgumentException("Atlassian authentication is unavailable")
+                val pin = credential("ATLASSIAN_BASE_URL")
+                require(validOrigin(pin) && pin.trimEnd('/') == value.getValue("site").jsonPrimitive.content.trimEnd('/'))
+                val credentials = JiraConfig(pin.trimEnd('/'), credential("ATLASSIAN_EMAIL"), credential("ATLASSIAN_API_TOKEN"))
+                return KnowledgeSettings(value, credentials, defaultDataHome(snapshot))
+            } catch (_: Exception) {
+                // Parser/I/O exception causes can contain the entire input or a secret-bearing path.
+                throw IllegalArgumentException("Atlassian project connection or authentication is unavailable")
             }
-            validate(value)
-            fun credential(key: String): String = snapshot[key]?.takeIf { it.isNotBlank() }
-                ?: throw IllegalArgumentException("Atlassian credentials are unavailable")
-            val credentials = JiraConfig(value.getValue("site").jsonPrimitive.content.trimEnd('/'),
-                credential("ATLASSIAN_EMAIL"), credential("ATLASSIAN_API_TOKEN"))
-            return KnowledgeSettings(value, credentials, defaultDataHome(snapshot))
         }
     }
 }

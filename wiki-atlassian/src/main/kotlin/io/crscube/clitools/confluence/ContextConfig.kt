@@ -46,7 +46,8 @@ data class ContextConfig(val site: String, val space: String, val spaceId: Strin
         } catch (_: Exception) { false }
 
         fun connections(root: Path, runtimeSettings: KnowledgeSettings? = null): JsonObject =
-            (runtimeSettings ?: KnowledgeSettings.fromEnvironment()).connections()
+            (runtimeSettings ?: KnowledgeSettings.fromProject(root)
+                ?: error("Atlassian project connection is unavailable")).connections()
 
         fun load(root: Path, runtimeSettings: KnowledgeSettings? = null, scope: String = "effective"): ContextConfig? {
             require(scope in setOf("effective", "project", "common")) { "Unknown connection scope" }

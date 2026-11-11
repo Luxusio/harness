@@ -33,9 +33,7 @@ def _key(parts):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _control(env):
-    if select_destination(env)["mode"] != "external":
-        return None
+def _control(env, config):
     home = env.get("HOME", "")
     if not home.strip():
         home = pwd.getpwuid(os.getuid()).pw_dir
@@ -43,11 +41,11 @@ def _control(env):
     if not data.is_absolute() or ".." in data.parts:
         return None
     partition = _key([
-        env["WIKI_ATLASSIAN_SITE"].rstrip("/"), env["ATLASSIAN_EMAIL"],
-        env["WIKI_ATLASSIAN_ROOT_PAGE_ID"],
-        env["WIKI_ATLASSIAN_SPACE_ID"],
+        config["site"].rstrip("/"), env["ATLASSIAN_EMAIL"],
+        config["rootPageId"],
+        config["spaceId"],
     ])
-    return data / "wiki-atlassian" / partition / "confluence" / env["WIKI_ATLASSIAN_SPACE"] / ".sync"
+    return data / "wiki-atlassian" / partition / "confluence" / config["space"] / ".sync"
 
 
 @contextmanager
@@ -204,14 +202,18 @@ def render_notice(data, runtime, environment=None):
     """Fail open for quiet, unavailable, busy or invalid local metadata."""
     env = os.environ if environment is None else environment
     sid = data.get("session_id")
-    if env.get("WIKI_ATLASSIAN_ENABLED") != "true" or not isinstance(sid, str) or not SESSION.fullmatch(sid) or sid == "default":
+    if not isinstance(sid, str) or not SESSION.fullmatch(sid) or sid == "default":
         return ""
     try:
-        control = _control(env)
+        destination = select_destination(env, cwd=data.get("cwd"))
+        if destination["mode"] != "external":
+            return ""
+        config = destination["config"]
+        control = _control(env, config)
         if control is None:
             return ""
         key = hashlib.sha256((runtime + "\0" + sid).encode()).hexdigest()
-        credential = _key([env["WIKI_ATLASSIAN_SITE"].rstrip("/"),
+        credential = _key([config["site"].rstrip("/"),
                            env["ATLASSIAN_EMAIL"], env["ATLASSIAN_API_TOKEN"]])
         with _directory(control) as directory:
             return _consume(directory, key, credential)
@@ -220,8 +222,6 @@ def render_notice(data, runtime, environment=None):
 
 
 def main():
-    if os.environ.get("WIKI_ATLASSIAN_ENABLED") != "true":
-        return
     try:
         raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:

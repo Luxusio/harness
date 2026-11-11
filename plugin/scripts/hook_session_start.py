@@ -62,7 +62,7 @@ def main() -> int:
             from document_destination import select_destination
             root = find_harness_root(cwd or os.getcwd())
             if root and is_harness_enabled_repo(root):
-                destination = select_destination()
+                destination = select_destination(cwd=cwd or root)
                 reminder = (
                     "REQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes."
                     if destination["mode"] == "local" else destination["notice"]

@@ -95,7 +95,8 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         })
     }
     private fun environment(): Environment {
-        val settings = runtimeSettings ?: KnowledgeSettings.fromEnvironment()
+        val settings = runtimeSettings ?: KnowledgeSettings.fromProject(launchRoot)
+            ?: error("Atlassian project connection is unavailable")
         require(settings.corpusRoot == launchRoot.toAbsolutePath().normalize()) { "Connection corpus changed; reconnect MCP" }
         return Environment(settings.corpusRoot, settings.connections(), settings.identity())
     }

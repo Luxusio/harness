@@ -6,13 +6,18 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 
 fun main(args: Array<String>) {
-    require(args.isEmpty()) { "wiki-atlassian is an MCP stdio server" }
-    val environment = System.getenv().toMap()
-    if (!KnowledgeSettings.enabled(environment)) {
+    val startup = when {
+        args.isEmpty() -> java.nio.file.Paths.get("").toAbsolutePath()
+        args.size == 2 && args[0] == "--project-root" -> try {
+            java.nio.file.Paths.get(args[1]).also { require(it.isAbsolute) }
+        } catch (_: Exception) { throw IllegalArgumentException("Invalid project startup directory") }
+        else -> throw IllegalArgumentException("wiki-atlassian accepts only --project-root with an absolute startup directory")
+    }
+    val settings = KnowledgeSettings.fromProject(startup)
+    if (settings == null) {
         McpServer("atlassian", "0.1.0").start()
         return
     }
-    val settings = KnowledgeSettings.fromEnvironment(environment)
     settings.prepareCorpus()
     val remote = ConfluenceRemote(settings.credentials)
     val corpus = LocalCorpus(settings, remote)

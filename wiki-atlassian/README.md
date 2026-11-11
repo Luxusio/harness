@@ -3,50 +3,81 @@
 Standalone business knowledge and document management extracted from Talos.
 Harness remains the development controller. This plugin registers a service-named
 `atlassian` MCP; no workflow, database, test-publication or Jira controller is
-registered. Ordinary document operations do not require project registration,
-WBS, Jira or repository-local document copies.
+registered. Ordinary document operations do not require WBS, Jira or repository-local
+document copies. Connection selection uses the existing Harness project settings.
 
-## Connection through injected environment
+## Project connection and private authentication
 
-The plugin reads only its process environment. It does not open JSON or TOML
-connection files and does not invoke mise to load connection settings. Set variables in your own ignored
-`mise.local.toml`, for example:
+Add `wiki` to the consuming project's existing `doc/harness/manifest.yaml`,
+preserving all other Harness settings and comments:
+
+```yaml
+# Existing Harness fields stay here.
+wiki:
+  backend: atlassian
+  enabled: true
+  site: "https://YOUR-SITE.atlassian.net"
+  space: "YOURSPACE"
+  spaceId: "123"
+  rootPageId: "456"
+  # memoryPageId: "789"
+  # feedbackPageId: "790"
+  # pollIntervalSeconds: 300
+  # watchCommentPages: "456,789"
+```
+
+Keep authentication in the project's Git-ignored, owner-private `mise.local.toml`:
 
 ```toml
 [env]
-WIKI_ATLASSIAN_ENABLED = "true"
-WIKI_ATLASSIAN_SITE = "https://YOUR-SITE.atlassian.net"
-WIKI_ATLASSIAN_SPACE = "YOURSPACE"
-WIKI_ATLASSIAN_SPACE_ID = "123"
-WIKI_ATLASSIAN_ROOT_PAGE_ID = "456"
+ATLASSIAN_BASE_URL = "https://YOUR-SITE.atlassian.net"
 ATLASSIAN_EMAIL = "YOUR_EMAIL"
 ATLASSIAN_API_TOKEN = "YOUR_TOKEN"
-# WIKI_ATLASSIAN_MEMORY_PAGE_ID = "789"
-# WIKI_ATLASSIAN_FEEDBACK_PAGE_ID = "790"
-# WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS = "300"
-# WIKI_ATLASSIAN_WATCH_COMMENT_PAGES = "456,789"
 ```
 
-Keep real credentials out of Git and documents. A secret manager or any other
-environment injector works too. Start the host with the intended environment,
-for example `mise exec -- codex` or `mise exec -- claude`. Merely creating the
-file does not change an already running host or MCP; reconnect/restart after
-changing the environment. The MCP receives a fixed connection for its lifetime.
-Different projects receiving the same connection share the home corpus without
-project registration. Projects using different sites, accounts, spaces
-or roots receive separate hashed corpus directories. Run each host/MCP with
-that project's environment; changing cwd in an existing MCP does not switch
-its account. A host that shares one MCP process across projects needs separate
-MCP execution contexts for different connections.
+`ATLASSIAN_BASE_URL` binds credentials to their intended HTTPS origin. It must
+match YAML `wiki.site` (a terminal slash is ignored); it cannot override that site.
+Missing or mismatched authentication blocks connection before requests or cache
+activation. Keep the pin associated with the credential's actual issuer; do not
+silently repin existing tokens when committed YAML changes. YAML rejects
+credentials and unknown fields. Secrets never belong in the shared file.
 
-All required IDs must identify accessible native content in your selected scope.
-Optional memory/feedback IDs select existing destinations; the plugin never
-guesses or creates company destinations. Polling defaults to 300 seconds and
-accepts 30..86400. `WIKI_ATLASSIAN_ENABLED` accepts exactly `true` or `false`.
-No connection variables means local mode; shared `ATLASSIAN_*` credentials alone
-do not activate the wiki. Exact `false` explicitly disables it. Partial or
-invalid connection settings, including fields supplied without activation,
-are errors and never authorize fallback repository document writes.
+Start the host from the consuming project, for example `mise exec -- codex` or
+`mise exec -- claude`. The plugin does not read TOML or invoke mise: it receives
+injected authentication. From subdirectories it finds the nearest Git boundary,
+including linked worktrees, and reads only that root's common manifest. Nested repositories
+do not inherit an outer repository's connection. Outside Git, only the startup
+directory's `doc/harness/manifest.yaml` is used. No home, plugin-directory, JSON, old connection env or
+configuration-path override supplies a fallback connection.
+
+The MCP snapshots its startup project and settings. Reconnect/restart after
+changing YAML or authentication; changing cwd cannot retarget a running MCP.
+Different projects with the same site/account/space/ROOT share the home corpus
+without replica registration. Different connections remain partitioned. A host
+sharing one MCP process across projects needs separate execution contexts for
+different connections.
+
+Use quoted positive string IDs, actual YAML booleans and integer polling values.
+All required IDs must identify accessible content in the selected scope.
+Optional memory/feedback IDs select existing destinations; the plugin does not
+guess or create them. Polling defaults to 300 seconds and accepts 30..86400.
+The file is a bounded mapping; duplicates, aliases, explicit tags and unknown
+keys are rejected. Missing common settings, an absent `wiki` section or valid `wiki.enabled: false`
+means local mode without authentication. A present invalid/unreadable wiki
+configuration or missing enabled credentials stays unavailable and never
+authorizes fallback repository writes. Other manifest sections are not wiki
+settings. Backend setup reuses the existing common manifest; it never creates a
+wiki-only stub that would implicitly initialize Harness. Use explicit Harness
+setup when the common project settings have not been initialized.
+
+Harness's Python policy/hooks use PyYAML when the optional wiki section needs
+interpretation. A conservative plain-key absence check keeps ordinary common
+settings without `wiki` usable without that dependency; ambiguous YAML requires
+the safe parser rather than guessing no backend. Backend setup verifies PyYAML
+with the exact interpreter registered for installed Harness hooks and installs
+that prerequisite through the selected package manager when needed. A configured or ambiguous
+wiki selection without its parser remains unavailable; hooks never install packages or
+start Java to parse settings.
 
 The current backend implements Confluence documents, native comments and
 history; the `atlassian` name does not imply Jira issue operations.
@@ -126,8 +157,8 @@ per-sentence record schema. See [knowledge guidance](skills/knowledge/SKILL.md#d
 
 Install the current Harness plugin in the same runtime and enable its hooks.
 Use the Harness installer to update the hooks and reload the host after
-installation. Run the wiki MCP with the same environment as the Harness
-session. Its first completed mirror establishes the document baseline. Later committed changes
+installation. Start the wiki MCP and Harness session for the same project YAML
+and injected authentication. Its first completed mirror establishes the document baseline. Later committed changes
 produce a bounded local notice stream. Verified edits through the MCP use the
 same publication path as changes observed during remote synchronization.
 The stream tracks page additions, changes, and changes to visible scope.
@@ -146,7 +177,7 @@ authorized synchronization. Notice text consists of fixed labels, native IDs
 and observed versions. The agent checks relevance
 and reads the evidence through MCP before acting.
 
-Set `WIKI_ATLASSIAN_WATCH_COMMENT_PAGES` to up to ten distinct page IDs from the
+Set YAML `wiki.watchCommentPages` to up to ten distinct page IDs from the
 configured root, separated by commas. Comment monitoring starts with a
 baseline for each selected page. A later observed change directs the agent to
 `list_comments`. Provider access failures and incomplete inventories keep the

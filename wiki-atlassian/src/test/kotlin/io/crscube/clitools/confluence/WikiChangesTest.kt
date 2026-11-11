@@ -588,14 +588,24 @@ class WikiChangesTest {
         assertFalse(WikiChanges.commentDue(watched, "101", 164, 1000))
         assertEquals("ready", WikiChanges.commentStatus(watched, listOf("164")))
 
-        val env = mapOf("WIKI_ATLASSIAN_ENABLED" to "true", "WIKI_ATLASSIAN_SITE" to origin,
-            "WIKI_ATLASSIAN_SPACE" to "COMMON", "WIKI_ATLASSIAN_SPACE_ID" to "20", "WIKI_ATLASSIAN_ROOT_PAGE_ID" to "210",
-            "ATLASSIAN_EMAIL" to "fixture@example.test", "ATLASSIAN_API_TOKEN" to "fixture-token")
-        val key = "WIKI_ATLASSIAN_WATCH_COMMENT_PAGES"
-        assertEquals(emptyList(), KnowledgeSettings.fromEnvironment(env).watchedCommentPages)
-        assertEquals(listOf("211", "212"), KnowledgeSettings.fromEnvironment(env + (key to "212,211")).watchedCommentPages)
+        val env = mapOf("ATLASSIAN_BASE_URL" to origin,
+            "ATLASSIAN_EMAIL" to "fixture@example.test", "ATLASSIAN_API_TOKEN" to "fixture-token", "HOME" to root.toString())
+        val project = Files.createDirectories(root.resolve("project"))
+        fun settings(watch: String? = null): KnowledgeSettings {
+            val value = buildJsonObject {
+                put("enabled", true); put("site", origin); put("space", "COMMON"); put("spaceId", "20"); put("rootPageId", "210")
+                watch?.let { put("watchCommentPages", it) }
+            }
+            val manifest = Files.createDirectories(project.resolve("doc/harness")).resolve("manifest.yaml")
+            Files.writeString(manifest, buildJsonObject {
+                put("wiki", JsonObject(value + ("backend" to JsonPrimitive("atlassian"))))
+            }.toString())
+            return KnowledgeSettings.fromProject(project, env)!!
+        }
+        assertEquals(emptyList(), settings().watchedCommentPages)
+        assertEquals(listOf("211", "212"), settings("212,211").watchedCommentPages)
         for (invalid in listOf("", "211,211", "211, 212", "0", "211,", "1".repeat(33), (1..11).joinToString(","))) {
-            assertFailsWith<IllegalArgumentException> { KnowledgeSettings.fromEnvironment(env + (key to invalid)) }
+            assertFailsWith<IllegalArgumentException> { settings(invalid) }
         }
     }
 }

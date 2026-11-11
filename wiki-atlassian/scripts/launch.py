@@ -6,6 +6,7 @@ import shutil
 import sys
 
 def main():
+    project_root = Path.cwd()
     root = Path(__file__).resolve().parents[1]
     jar = root / "lib/wiki-atlassian.jar"
     if not jar.is_file():
@@ -33,7 +34,7 @@ def main():
         java = Path(executable)
     # Environment-manager shims must not resolve from the consuming project's cwd.
     os.chdir(root)
-    os.execv(str(java), [str(java), "-jar", str(jar)])
+    os.execv(str(java), [str(java), "-jar", str(jar), "--project-root", str(project_root)])
     return 1
 
 if __name__ == "__main__":

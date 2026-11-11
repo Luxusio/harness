@@ -330,7 +330,10 @@ def _is_source_file(path, repo_root=None):
 def _wbs_has_req_reference(wbs_dir: str, repo_root: str = "") -> bool:
     import re
     from document_destination import select_destination
-    destination = select_destination()
+    if not repo_root:
+        # Canonical location: <repo>/doc/harness/wbs/WBS__<id>.
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(wbs_dir))))
+    destination = select_destination(cwd=repo_root)
     if destination["mode"] == "unavailable":
         return False
     if destination["mode"] == "external":
@@ -358,11 +361,6 @@ def _wbs_has_req_reference(wbs_dir: str, repo_root: str = "") -> bool:
     wbs_id = os.path.basename(os.path.normpath(wbs_dir))
     if not wbs_id.startswith("WBS__"):
         return False
-    if not repo_root:
-        # wbs_dir is always <repo>/doc/harness/wbs/WBS__<id> — walk 4 up.
-        repo_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(wbs_dir)))
-        )
     doc_root = os.path.join(repo_root, "doc")
     if not os.path.isdir(doc_root):
         return False
@@ -881,9 +879,9 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         return 0
 
     rel = _rel(file_path, repo_root)
-    if _observable_req_needed_for_path(rel) and not _wbs_has_req_reference(active_dir):
+    if _observable_req_needed_for_path(rel) and not _wbs_has_req_reference(active_dir, repo_root):
         from document_destination import select_destination
-        destination = select_destination()
+        destination = select_destination(cwd=repo_root)
         if destination["mode"] == "local":
             human = (f"{rel} looks like observable UI/API/native/desktop behavior, but "
                      "the active WBS has no linked doc/<area>/REQ__*.md. Create or "

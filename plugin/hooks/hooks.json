@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ \"${WIKI_ATLASSIAN_ENABLED:-}\" = true ]; then PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/wiki_change_notice.py\" claude; fi || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/wiki_change_notice.py\" claude || true",
             "timeout": 3
           }
         ]

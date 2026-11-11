@@ -54,34 +54,47 @@ def clean_environment(home, **settings):
 
 
 def enabled_environment(home, **changes):
-    env = clean_environment(home, WIKI_ATLASSIAN_ENABLED="true", WIKI_ATLASSIAN_SITE="https://127.0.0.1:9",
-        WIKI_ATLASSIAN_SPACE="TEAM", WIKI_ATLASSIAN_SPACE_ID="123", WIKI_ATLASSIAN_ROOT_PAGE_ID="456",
+    env = clean_environment(home, ATLASSIAN_BASE_URL="https://127.0.0.1:9",
         ATLASSIAN_EMAIL="fixture@example.invalid", ATLASSIAN_API_TOKEN="fixture-only-token")
     env.update(changes)
     return env
 
 
+def write_connection(cwd, **changes):
+    # JSON is a strict subset of YAML and keeps native IDs quoted in this fixture.
+    value = dict(enabled=True, site="https://127.0.0.1:9", space="TEAM", spaceId="123", rootPageId="456")
+    value.update(changes)
+    value.setdefault("backend", "atlassian")
+    manifest = cwd / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"schema_version": 3, "project": {"name": "fixture"}, "wiki": value}))
+
+
 @pytest.mark.parametrize("settings", [{}, {"WIKI_ATLASSIAN_ENABLED": "false", "WIKI_ATLASSIAN_SITE": "bad"},
+    {"WIKI_ATLASSIAN_ENABLED": "true", "WIKI_ATLASSIAN_SITE": "bad"},
     {"ATLASSIAN_EMAIL": "shared", "ATLASSIAN_API_TOKEN": "shared"}])
-def test_absent_or_disabled_connection_is_inert_from_multiple_projects(tmp_path, settings):
+@pytest.mark.parametrize("disabled", [False, True])
+def test_absent_or_disabled_connection_is_inert_from_multiple_projects(tmp_path, settings, disabled):
     jar = _jar()
     home = tmp_path / "home"
-    # Old JSON and mise files must never be read as connection authority.
     old = home / ".config/knowledge-confluence/config.json"; old.parent.mkdir(parents=True)
     old.write_text('{"enabled":true,"secret":"invalid-sentinel"}')
     env = clean_environment(home, **settings)
     for name in ("project-a", "project-b"):
         cwd = tmp_path / name; cwd.mkdir()
         (cwd / "mise.local.toml").write_text("not-valid-TOML-secret-sentinel")
+        if disabled:
+            write_connection(cwd, enabled=False)
+        before = {p.name for p in cwd.iterdir()}
         replies = _calls(jar, cwd, env)
         initialized = next(row["result"] for row in replies if row.get("id") == 1)
         assert initialized["serverInfo"]["name"] == "atlassian"
         assert next(row["result"]["tools"] for row in replies if row.get("id") == 2) == []
-        assert [p.name for p in cwd.iterdir()] == ["mise.local.toml"]
+        assert {p.name for p in cwd.iterdir()} == before
     assert not (home / ".local/share/wiki-atlassian").exists()
 
 
-def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
+def test_actual_packaged_payload_captures_consuming_project_before_plugin_chdir(tmp_path):
     jar = _jar()
     import importlib.util
     spec = importlib.util.spec_from_file_location("wiki_install", PLUGIN / "install.py")
@@ -89,18 +102,14 @@ def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
     market = module.prepare(tmp_path / "data", jar)
     packaged = market / "plugin"
     assert (packaged / "lib/wiki-atlassian.jar").read_bytes() == jar.read_bytes()
-    assert (packaged / "skills/setup/SKILL.md").read_bytes() == (PLUGIN / "skills/setup/SKILL.md").read_bytes()
-    assert (packaged / "skills/knowledge/SKILL.md").read_bytes() == (PLUGIN / "skills/knowledge/SKILL.md").read_bytes()
-    assert (packaged / "skills/migrate-docs/SKILL.md").read_bytes() == (PLUGIN / "skills/migrate-docs/SKILL.md").read_bytes()
-    assert (packaged / "agents/document-reviewer.md").read_bytes() == (PLUGIN / "agents/document-reviewer.md").read_bytes()
+    for relative in ("skills/setup/SKILL.md", "skills/knowledge/SKILL.md", "skills/migrate-docs/SKILL.md", "agents/document-reviewer.md"):
+        assert (packaged / relative).read_bytes() == (PLUGIN / relative).read_bytes()
     for name in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
         assert json.loads((packaged / name).read_text())["name"] == "wiki-atlassian"
     transport = json.loads((packaged / ".mcp.json").read_text())["mcpServers"]
     assert set(transport) == {"atlassian"}
-    assert set(transport["atlassian"]["env_vars"]) >= {
-        "WIKI_ATLASSIAN_ENABLED", "WIKI_ATLASSIAN_SITE", "WIKI_ATLASSIAN_SPACE", "WIKI_ATLASSIAN_SPACE_ID",
-        "WIKI_ATLASSIAN_ROOT_PAGE_ID", "WIKI_ATLASSIAN_MEMORY_PAGE_ID", "WIKI_ATLASSIAN_FEEDBACK_PAGE_ID",
-        "WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"}
+    assert set(transport["atlassian"]["env_vars"]) == {
+        "HOME", "JAVA_HOME", "WIKI_ATLASSIAN_JAVA", "ATLASSIAN_BASE_URL", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"}
     assert module.prepare(tmp_path / "data", jar) == market
     cwd = tmp_path / "unregistered-project"; cwd.mkdir()
     home = tmp_path / "empty-home"; home.mkdir()
@@ -108,27 +117,116 @@ def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
     replies = _calls(packaged / "lib/wiki-atlassian.jar", cwd, clean_environment(home), command=command)
     assert next(row["result"]["tools"] for row in replies if row.get("id") == 2) == []
     assert not list(cwd.iterdir())
-    replies = _calls(packaged / "lib/wiki-atlassian.jar", cwd, enabled_environment(home), command=command)
+    (cwd / ".git").write_text("gitdir: boundary-only")
+    write_connection(cwd)
+    nested = cwd / "nested"; nested.mkdir()
+    replies = _calls(packaged / "lib/wiki-atlassian.jar", nested, enabled_environment(home,
+        WIKI_ATLASSIAN_ENABLED="false", WIKI_ATLASSIAN_SITE="https://ignored.invalid"), command=command)
     tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
     assert {t["name"] for t in tools} == {"connection_status", "search_documents", "get_document", "create_document",
         "update_document", "list_comments", "create_comment", "update_comment", "list_document_versions", "document_relations"}
-    assert not list(cwd.iterdir())
+    assert not list(nested.iterdir())
 
 
-@pytest.mark.parametrize("changes", [{"WIKI_ATLASSIAN_ENABLED":"TRUE"}, {"WIKI_ATLASSIAN_ENABLED":None},
-    {"ATLASSIAN_API_TOKEN":None}, {"WIKI_ATLASSIAN_SITE":"https://sensitive-secret@example.invalid"},
-    {"WIKI_ATLASSIAN_SITE":"https://127.0.0.1:65536"}, {"WIKI_ATLASSIAN_SITE":"https://[::ffff:0127.0.0.1]:9"}, {"WIKI_ATLASSIAN_MEMORY_PAGE_ID":""},
-    {"WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS":"+300"}])
-def test_invalid_environment_fails_before_creating_corpus_without_leaking_values(tmp_path, changes):
+@pytest.mark.parametrize("raw", ["", "[]", "enabled: 'true'", "enabled: false\nenabled: true",
+    "enabled: false\napiToken: sensitive-secret", "enabled: false\nsite: https://sensitive-secret@example.invalid",
+    "enabled: false\nspaceId: 123", "enabled: false\npollIntervalSeconds: '300'", "enabled: false\nwatchCommentPages: ''",
+    "enabled: &flag false", "enabled: false\nsite: *flag", "enabled: !!bool false", "!!java/object:sensitive-secret {}",
+    "enabled: false\n---\nenabled: false", "enabled: false\nsite: [a]", "#" + "a" * 65536])
+def test_invalid_yaml_fails_before_creating_corpus_without_leaking_values(tmp_path, raw):
+    manifest = tmp_path / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("wiki:\n  backend: atlassian\n" + "\n".join("  " + line for line in raw.split("\n")) + "\n")
     env = enabled_environment(tmp_path)
-    for key,value in changes.items():
-        if value is None:env.pop(key)
-        else:env[key]=value
     result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
         cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
     assert result.returncode != 0
-    assert "fixture-only-token" not in result.stdout+result.stderr
-    assert "sensitive-secret" not in result.stdout+result.stderr
+    assert "fixture-only-token" not in result.stdout + result.stderr
+    assert "sensitive-secret" not in result.stdout + result.stderr
+    assert not (tmp_path / ".local/share/wiki-atlassian").exists()
+
+
+@pytest.mark.parametrize("key", ["ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN", "ATLASSIAN_BASE_URL"])
+def test_missing_private_authentication_blocks_startup(tmp_path, key):
+    write_connection(tmp_path)
+    env = enabled_environment(tmp_path); env.pop(key)
+    result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
+        cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
+    assert "fixture-only-token" not in result.stdout + result.stderr
+    assert not (tmp_path / ".local/share/wiki-atlassian").exists()
+
+
+def test_origin_pin_mismatch_performs_zero_connections_or_corpus_activation(tmp_path):
+    import select
+    import socket
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0)); listener.listen()
+        site = "https://127.0.0.1:" + str(listener.getsockname()[1])
+        write_connection(tmp_path, site=site)
+        env = enabled_environment(tmp_path)  # Pin remains the other origin, port9.
+        result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
+            cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
+        assert result.returncode != 0
+        assert select.select([listener], [], [], 0)[0] == []
+    assert not (tmp_path / ".local/share/wiki-atlassian").exists()
+    assert "fixture-only-token" not in result.stdout + result.stderr
+
+
+def test_direct_jar_uses_nearest_git_boundary_and_nogit_startup_only(tmp_path):
+    jar = _jar(); env = enabled_environment(tmp_path / "home")
+    root = tmp_path / "repo"; root.mkdir(); (root / ".git").mkdir(); write_connection(root)
+    nested = root / "nested"; nested.mkdir()
+    tools = next(row["result"]["tools"] for row in _calls(jar, nested, env) if row.get("id") == 2)
+    assert tools
+    (nested / ".git").write_text("gitdir: boundary-only")
+    assert next(row["result"]["tools"] for row in _calls(jar, nested, env) if row.get("id") == 2) == []
+    isolated = tmp_path / "no-git"; isolated.mkdir(); write_connection(isolated)
+    child = isolated / "child"; child.mkdir()
+    assert next(row["result"]["tools"] for row in _calls(jar, child, env) if row.get("id") == 2) == []
+
+
+@pytest.mark.parametrize("manifest_text", [None, "schema_version: 3\nproject:\n  name: fixture\n  arbitrary: [a, b]\n",
+    '{"project": {"name": "fixture"}}'])
+def test_common_manifest_without_wiki_and_legacy_separate_file_are_inert(tmp_path, manifest_text):
+    (tmp_path / "wiki-atlassian.yaml").write_text('{"enabled":true,"site":"https://invalid.invalid"}')
+    if manifest_text is not None:
+        manifest = tmp_path / "doc/harness/manifest.yaml"; manifest.parent.mkdir(parents=True)
+        manifest.write_text(manifest_text)
+    replies = _calls(_jar(), tmp_path, enabled_environment(tmp_path))
+    assert next(row["result"]["tools"] for row in replies if row.get("id") == 2) == []
+    assert not (tmp_path / ".local/share/wiki-atlassian").exists()
+
+
+@pytest.mark.parametrize("manifest_text", ["wiki: null", "wiki: []", "wiki: {enabled: true}",
+    "wiki: {backend: other, enabled: false}", "wiki: {backend: false, enabled: false}",
+    "'wiki': {enabled: true}", "{wiki: {enabled: true}}", "wiki: {enabled: false}\nwiki: {enabled: false}"])
+def test_common_manifest_rejects_invalid_backend_mapping_and_ambiguous_root(tmp_path, manifest_text):
+    manifest = tmp_path / "doc/harness/manifest.yaml"; manifest.parent.mkdir(parents=True)
+    manifest.write_text(manifest_text)
+    env = enabled_environment(tmp_path)
+    result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
+        cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
+    assert not (tmp_path / ".local/share/wiki-atlassian").exists()
+
+
+@pytest.mark.parametrize("component", ["doc", "harness", "manifest"])
+def test_common_manifest_rejects_symlink_path_components(tmp_path, component):
+    project = tmp_path / "project"; project.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir(); write_connection(outside)
+    if component == "doc":
+        (project / "doc").symlink_to(outside / "doc", target_is_directory=True)
+    elif component == "harness":
+        (project / "doc").mkdir()
+        (project / "doc/harness").symlink_to(outside / "doc/harness", target_is_directory=True)
+    else:
+        (project / "doc/harness").mkdir(parents=True)
+        (project / "doc/harness/manifest.yaml").symlink_to(outside / "doc/harness/manifest.yaml")
+    env = enabled_environment(tmp_path)
+    result = subprocess.run([env.get("WIKI_ATLASSIAN_JAVA", "java"), "-jar", str(_jar())],
+        cwd=project, env=env, input="", text=True, capture_output=True, timeout=20)
+    assert result.returncode != 0
     assert not (tmp_path / ".local/share/wiki-atlassian").exists()
 
 

@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Install and connect wiki-atlassian end to end using an installation guide and the user's logged-in browser, including credentials, Confluence space and document ROOT selection, environment configuration, and connection verification.
+description: Install and connect wiki-atlassian using a guide and the user's logged-in browser, including Confluence space/ROOT selection, project YAML, private authentication, and connection verification.
 ---
 
 # Set up Atlassian knowledge
@@ -18,7 +18,7 @@ Discover the actual host CLI, installed plugin, available browser connection,
 environment injector and current project. Reuse a working installation and
 matching credentials. Inspect presence and validation results without printing
 secret values or dumping the environment. Read [the plugin guide](../../README.md)
-for the current installer and environment contract.
+for the current installer, project YAML and private authentication contract.
 
 Use the user's existing authenticated browser profile. Select the intended
 site/account from the request and visible session. Ask when multiple accounts
@@ -45,7 +45,12 @@ installed payload from the host's current registration. An installed payload
 contains this skill; a source checkout can load this file before installation.
 Install needed local prerequisites through the available package manager.
 
-First check whether existing credentials authenticate the intended account/site.
+First compare existing private `ATLASSIAN_BASE_URL` with the intended site
+before using a token. A committed YAML site cannot authorize sending an existing
+token to a new origin. Never silently create/replace that pin from public YAML;
+establish the issuer from the private setup or authenticated issuance flow.
+Missing/mismatched binding leaves authentication pending. When it matches,
+check whether existing credentials authenticate the intended account/site.
 For a new credential, establish the protected browser-to-local transfer before
 clicking Create. The user's setup request authorizes routine issuance for the
 selected integration. Use the provider's actual UI and account policy. Give
@@ -61,7 +66,8 @@ Check the current [Atlassian token instructions](https://support.atlassian.com/a
 when UI or token policy differs. A guide for another product can support a
 different authentication method; follow its documented contract.
 
-Transfer the one-time value directly into private local configuration. Where
+Record the issuer origin with the credential and transfer the one-time value
+directly into private local configuration. Where
 tool orchestration is available, keep the browser result inside that execution
 and send it to a local writer's non-echoing stdin or an available secret-store
 API. Return only redacted success/error metadata to the model. With computer
@@ -76,21 +82,37 @@ another token. Preserve unrelated credentials and the user's clipboard data.
 
 ## Configure and verify
 
-Use the selected project's ignored `mise.local.toml` to inject the documented
-`WIKI_ATLASSIAN_*`, `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN` settings. Read the
-existing TOML structure privately, preserve unrelated settings/comments and
-existing secret references, and update only the selected connection. Confirm
+Write the selected site, space/key, native IDs, ROOT and optional sync settings
+under `wiki` in the consuming project's existing `doc/harness/manifest.yaml`,
+including `backend: atlassian`, using the documented schema. Preserve unrelated
+Harness fields/comments and keep credentials out. This file also marks Harness
+project installation: never create a wiki-only stub or implicitly initialize
+Harness. If absent, use the explicit Harness setup workflow before connection. Use the project's ignored `mise.local.toml`
+to inject `ATLASSIAN_BASE_URL`, `ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN`.
+Read existing TOML privately, preserve unrelated settings/comments and secret
+references, and update only the selected integration. Confirm
 Git exclusion before storing secrets. A tracked file needs a different ignored
 local settings location supported by mise. Resolve symlink targets and file
 ownership before editing, and make the secret-bearing file owner-private.
-Validate TOML without printing values. Keep optional memory/feedback pages
+Validate YAML and TOML without printing private values. When migrating the old
+setup, move selected public settings to the common manifest wiki section and remove their obsolete
+`WIKI_ATLASSIAN_*` assignments; they cannot activate or override the connection.
+Preserve the actual credential issuer when establishing its binding. Keep optional memory/feedback pages
 and comment watches when they belong to the selected ROOT; otherwise leave
 them unset until the user chooses existing destinations. Reuse the documented
 poll default unless the user requested another interval.
 
-Load the environment through mise for the actual host/MCP process. The MCP
-reads injected variables; creating a file alone does not reload an existing
-process. Reconnect through the host's available controls. When the host cannot
+When Harness is used, identify its actual Python interpreter from installed
+hook registration and verify PyYAML with that interpreter. Install the optional
+prerequisite through the available authorized package-manager flow when needed;
+checking an unrelated agent venv is insufficient. Report the exact blocker if
+unavailable; do not claim YAML routing or fall back to local document writes.
+Runtime hooks never install dependencies.
+
+Load authentication through mise and start the actual host in the selected
+project. The MCP snapshots project YAML and injected credentials; creating or
+editing either file does not reload it. Reconnect through the host's available
+controls. When the host cannot
 reload in place, provide the exact restart command and keep host verification
 pending. A separate smoke process establishes only that process's result.
 

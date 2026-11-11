@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Select documentation policy from the wiki plugin's injected environment.
+"""Select document policy from project YAML and private injected authentication.
 
-This is a read-only selection, not authentication or a remote health check.
-No repository paths, credentials or document contents are copied into state.
+Read-only: no mise parsing, network requests, package installation or state.
 """
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import re
+import stat
 from urllib.parse import urlsplit
 
 
@@ -25,78 +26,201 @@ UNAVAILABLE_NOTICE = (
     "configuration; business-document writes remain pending."
 )
 
+CONFIG_PARTS = ("doc", "harness", "manifest.yaml")
+MAX_CONFIG_BYTES = 64 * 1024
+CONFIG_FIELDS = frozenset(("enabled", "site", "space", "spaceId", "rootPageId",
+                           "memoryPageId", "feedbackPageId", "pollIntervalSeconds", "watchCommentPages"))
 
-CONNECTION_FIELDS = ("SITE", "SPACE", "SPACE_ID", "ROOT_PAGE_ID", "MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID", "POLL_INTERVAL_SECONDS", "WATCH_COMMENT_PAGES")
-PREFIX = "WIKI_ATLASSIAN_"
+
+def _project_root(cwd):
+    """Nearest Git directory/gitfile boundary; without Git, use only startup cwd."""
+    start = Path(os.getcwd() if cwd is None else cwd).resolve(strict=True)
+    if not start.is_dir():
+        raise ValueError("invalid project directory")
+    for current in (start, *start.parents):
+        git = current / ".git"
+        try:
+            marker = git.lstat()
+        except FileNotFoundError:
+            continue
+        if not (stat.S_ISDIR(marker.st_mode) or stat.S_ISREG(marker.st_mode)):
+            raise ValueError("invalid Git boundary")
+        return current
+    return start
 
 
-def select_destination(environment=None):
-    """Select without reading configuration files, executing mise, or exposing values."""
-    environment = dict(os.environ if environment is None else environment)
+def _manifest_bytes(root):
+    """Read through directory descriptors so no manifest component follows links."""
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        enabled = environment.get(PREFIX + "ENABLED")
-        if enabled == "false":
+        for part in CONFIG_PARTS[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        fd = os.open(CONFIG_PARTS[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
+                raise ValueError("invalid project configuration")
+            raw = stream.read(MAX_CONFIG_BYTES + 1)
+        if len(raw) > MAX_CONFIG_BYTES:
+            raise ValueError("invalid project configuration")
+        return raw
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(directory)
+
+
+def _proves_no_wiki(source):
+    """Recognize ordinary root keys only; ambiguous YAML always needs its parser."""
+    seen_key = False
+    first = True
+    for line in source.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith((" ", "\t")):
+            continue
+        if first and line == "---":
+            first = False
+            continue
+        first = False
+        match = re.match(r"([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]|$)", line)
+        if not match or match.group(1) == "wiki":
+            return False
+        seen_key = True
+    return seen_key
+
+
+def _read_config(cwd):
+    raw = _manifest_bytes(_project_root(cwd))
+    if raw is None:
+        return None
+    source = raw.decode("utf-8", errors="strict")
+    if _proves_no_wiki(source):
+        return None
+    # Ordinary manifests without wiki remain usable with the standard library.
+    import yaml
+
+    class ProjectLoader(yaml.SafeLoader):
+        depth = 0
+
+        def compose_node(self, parent, index):
+            if self.check_event(yaml.AliasEvent):
+                raise ValueError("configuration aliases are unsupported")
+            self.depth += 1
+            try:
+                if self.depth > 20:
+                    raise ValueError("configuration nesting limit")
+                return super().compose_node(parent, index)
+            finally:
+                self.depth -= 1
+
+        def construct_mapping(self, node, deep=False):
+            mapping = {}
+            for key_node, value_node in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                if not isinstance(key, str) or key in mapping:
+                    raise ValueError("invalid configuration key")
+                mapping[key] = self.construct_object(value_node, deep=deep)
+            return mapping
+
+    try:
+        if any(isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken, yaml.tokens.TagToken))
+               for token in yaml.scan(source)):
+            raise ValueError("configuration tags and anchors are unsupported")
+        manifest = yaml.load(source, Loader=ProjectLoader)
+    except yaml.YAMLError:
+        raise ValueError("invalid project configuration") from None
+    if not isinstance(manifest, dict):
+        raise ValueError("invalid project configuration")
+    if "wiki" not in manifest:
+        return None
+    config = manifest["wiki"]
+    if not isinstance(config, dict) or set(config) - (CONFIG_FIELDS | {"backend"}):
+        raise ValueError("invalid project configuration")
+    if ("backend" in config and config["backend"] != "atlassian") or (config.get("enabled") is True and "backend" not in config):
+        raise ValueError("unsupported wiki backend")
+    return {key: value for key, value in config.items() if key != "backend"}
+
+
+def _origin(site):
+    if not isinstance(site, str):
+        raise ValueError("invalid origin")
+    origin = urlsplit(site)
+    if (origin.scheme != "https" or not site.startswith("https://") or not origin.hostname
+            or origin.username is not None or origin.password is not None
+            or origin.path not in ("", "/") or "?" in site or "#" in site
+            or any(c.isspace() or ord(c) < 32 for c in site) or "\\" in site
+            or origin.netloc.endswith(":") or origin.port is not None and not 1 <= origin.port <= 65535):
+        raise ValueError("invalid origin")
+    # Match Java URI's server-authority rules, including DNS versus IPv4.
+    host = origin.hostname
+    if origin.netloc.startswith("["):
+        if not re.fullmatch(r"[A-Fa-f0-9:.]+(?:%[A-Za-z0-9_.]+)?", host):
+            raise ValueError("invalid host")
+    else:
+        labels = host.removesuffix(".").split(".")
+        if any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", part) for part in labels):
+            raise ValueError("invalid host")
+        if len(labels) > 1 and not re.match(r"[A-Za-z]", labels[-1]):
+            if host.endswith(".") or len(labels) != 4 or any(not re.fullmatch(r"[0-9]+", part) or int(part) > 255 for part in labels):
+                raise ValueError("invalid IPv4 host")
+    return site.rstrip("/")
+
+
+def _validate_config(config):
+    if type(config.get("enabled")) is not bool:
+        raise ValueError("invalid activation")
+    if "site" in config:
+        _origin(config["site"])
+    if "space" in config and (not isinstance(config["space"], str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", config["space"])):
+        raise ValueError("invalid space")
+    for key in ("spaceId", "rootPageId", "memoryPageId", "feedbackPageId"):
+        if key in config and (not isinstance(config[key], str) or not re.fullmatch(r"[1-9][0-9]*", config[key])):
+            raise ValueError("invalid native ID")
+    poll = config.get("pollIntervalSeconds", 300)
+    if type(poll) is not int or not 30 <= poll <= 86400:
+        raise ValueError("invalid polling interval")
+    if "watchCommentPages" in config:
+        selection = config["watchCommentPages"]
+        if not isinstance(selection, str) or len(selection) > 329:
+            raise ValueError("invalid comment watch pages")
+        pages = selection.split(",")
+        if len(pages) > 10 or len(set(pages)) != len(pages) or any(
+            not re.fullmatch(r"[1-9][0-9]{0,31}", page) for page in pages
+        ):
+            raise ValueError("invalid comment watch pages")
+    if config["enabled"] and any(key not in config for key in ("site", "space", "spaceId", "rootPageId")):
+        raise ValueError("missing connection setting")
+    return {**config, "pollIntervalSeconds": poll}
+
+
+def select_destination(environment=None, cwd=None):
+    """Select for the consuming cwd; old WIKI connection variables are ignored."""
+    environment = os.environ if environment is None else environment
+    try:
+        config = _read_config(cwd)
+        if config is None:
             return {"mode": "local", "notice": LOCAL_NOTICE}
-        if enabled is None and not any(PREFIX + key in environment for key in CONNECTION_FIELDS):
+        config = _validate_config(config)
+        if not config["enabled"]:
             return {"mode": "local", "notice": LOCAL_NOTICE}
-        if enabled != "true":
-            raise ValueError("invalid activation")
-        def text(key):
-            value = environment.get(PREFIX + key)
-            if not isinstance(value, str):
-                raise ValueError("missing connection setting")
-            return value
-        site = text("SITE")
-        origin = urlsplit(site)
-        if (origin.scheme != "https" or not site.startswith("https://") or not origin.hostname
-                or origin.username is not None or origin.password is not None
-                or origin.path not in ("", "/") or "?" in site or "#" in site
-                or any(c.isspace() or ord(c) < 32 for c in site) or "\\" in site
-                or origin.netloc.endswith(":") or origin.port is not None and not 1 <= origin.port <= 65535):
-            raise ValueError("invalid origin")
-        # Match Java URI's server-authority rules, including DNS versus IPv4.
-        host = origin.hostname
-        if origin.netloc.startswith("["):
-            # urlsplit validates IPv6; restrict its extra IPvFuture/zone forms
-            # to Java URI's IPv6 address and scope-ID alphabet.
-            if not re.fullmatch(r"[A-Fa-f0-9:.]+(?:%[A-Za-z0-9_.]+)?", host):
-                raise ValueError("invalid host")
-        else:
-            labels = host.removesuffix(".").split(".")
-            if any(not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", part) for part in labels):
-                raise ValueError("invalid host")
-            if len(labels) > 1 and not re.match(r"[A-Za-z]", labels[-1]):
-                if host.endswith(".") or len(labels) != 4 or any(not re.fullmatch(r"[0-9]+", part) or int(part) > 255 for part in labels):
-                    raise ValueError("invalid IPv4 host")
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", text("SPACE")):
-            raise ValueError("invalid space")
-        for key in ("SPACE_ID", "ROOT_PAGE_ID") + tuple(k for k in ("MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID") if PREFIX + k in environment):
-            if not re.fullmatch(r"[1-9][0-9]*", text(key)):
-                raise ValueError("invalid native ID")
-        if PREFIX + "POLL_INTERVAL_SECONDS" in environment:
-            poll = text("POLL_INTERVAL_SECONDS")
-            if not re.fullmatch(r"[0-9]{1,20}", poll) or not 30 <= int(poll) <= 86400:
-                raise ValueError("invalid polling interval")
-        if PREFIX + "WATCH_COMMENT_PAGES" in environment:
-            selection = text("WATCH_COMMENT_PAGES")
-            if len(selection) > 329:
-                raise ValueError("invalid comment watch pages")
-            pages = selection.split(",")
-            if len(pages) > 10 or len(set(pages)) != len(pages) or any(
-                not re.fullmatch(r"[1-9][0-9]{0,31}", page) for page in pages
-            ):
-                raise ValueError("invalid comment watch pages")
         for key in ("ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"):
             value = environment.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("missing credential")
-        return {"mode": "external", "backend": "atlassian", "notice": REMOTE_NOTICE}
-    except (ValueError, TypeError):
+        if _origin(environment.get("ATLASSIAN_BASE_URL")) != _origin(config["site"]):
+            raise ValueError("credential origin mismatch")
+        return {"mode": "external", "backend": "atlassian", "notice": REMOTE_NOTICE, "config": config}
+    except (OSError, ValueError, TypeError, ImportError, RecursionError):
+        # Never render exception text: parser diagnostics can contain YAML values.
         return {"mode": "unavailable", "backend": "atlassian", "notice": UNAVAILABLE_NOTICE}
 
 
-def policy(environment=None):
-    selected = select_destination(environment)
+def policy(environment=None, cwd=None):
+    selected = select_destination(environment, cwd=cwd)
     if selected["mode"] == "local":
         guidance = "Business-document references are repository doc/<area>/<TYPE>__<name>.md paths. Read/write selected requirements before source implementation; local req_scaffold.py may help. Keep source provenance and independent document review."
     elif selected["mode"] == "external":

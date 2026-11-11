@@ -74,7 +74,9 @@ DEFAULT_CLAUDE_INSTALL_ROOT = Path.home() / ".claude" / "harness-dev"
 
 def _python_cmd() -> str:
     """Return a Python executable that bypasses cwd-sensitive shims."""
-    return str(Path(sys.executable).resolve())
+    executable = Path(sys.executable)
+    # Resolving a venv symlink would discard that environment's hook dependencies.
+    return str(executable.absolute() if sys.prefix != sys.base_prefix else executable.resolve())
 
 
 NO_BYTECODE_ENV = "PYTHONDONTWRITEBYTECODE=1"
@@ -1351,9 +1353,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                         {
                             "type": "command",
                             "command": (
-                                'if [ "${WIKI_ATLASSIAN_ENABLED:-}" = true ]; then '
-                                f"{_python_hook_cmd()} {shlex.quote(str(root / 'scripts' / 'wiki_change_notice.py'))} codex; "
-                                "fi || true"
+                                f"{_python_hook_cmd()} {shlex.quote(str(root / 'scripts' / 'wiki_change_notice.py'))} codex || true"
                             ),
                             "timeout": 3,
                         }
