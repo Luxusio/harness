@@ -104,4 +104,14 @@ class MultiSpaceKnowledgeTest {
         assertNotEquals(first.corpusRoot, other.corpusRoot)
         assertNotEquals(first.corpusRoot, subtree.corpusRoot)
     }
+
+    @Test fun `unrelated personal space keys cannot poison resolution of a configured standard space`() {
+        val selected = project(selection("COMMON"))
+        remote({ JsonArray(listOf(nativeSpace("21", "~12345689"), nativeSpace("20", "COMMON"))) }) { api ->
+            val resolved = runBlocking { selected.resolve(api, "COMMON") }
+            assertEquals(JsonPrimitive("COMMON"), resolved.read()["space"])
+            assertEquals(JsonPrimitive("20"), resolved.read()["spaceId"])
+        }
+    }
+
 }

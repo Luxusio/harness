@@ -1110,21 +1110,32 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         }
     }
 
-    suspend fun spaces(): JsonArray = JsonArray(list(endpoint("/wiki/api/v2/spaces", mapOf("limit" to "250", "status" to "current"))).map { entry ->
-        val spaceId = id(entry.string("id") ?: error("Missing space ID"))
-        require(!entry.containsKey("status") || entry.string("status") == "current") { "Configured space must be current" }
-        val key = entry.string("key")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,100}")) } ?: error("Invalid space key")
-        val home = entry.string("homepageId") ?: entry.string("homePageId")
-        buildJsonObject {
-            put("id", spaceId); put("key", key); put("name", entry.string("name") ?: key)
-            home?.let { put("homePageId", id(it)) }
+    suspend fun spaces(key: String? = null): JsonArray {
+        key?.let { require(it.matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Invalid configured space key" } }
+        val parameters = linkedMapOf("limit" to "250", "status" to "current")
+        key?.let { parameters["keys"] = it }
+        val entries = list(endpoint("/wiki/api/v2/spaces", parameters))
+        // Space listings can include personal or other unrelated keys. They carry no
+        // authority for this selection and must not poison a valid configured key.
+        val selected = if (key == null) entries else entries.filter {
+            (it["key"] as? JsonPrimitive)?.let { value -> value.isString && value.content == key } == true
         }
-    })
+        return JsonArray(selected.map { entry ->
+            val spaceId = id(entry.string("id") ?: error("Missing space ID"))
+            require(!entry.containsKey("status") || entry.string("status") == "current") { "Configured space must be current" }
+            val actualKey = entry.string("key")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,100}")) } ?: error("Invalid space key")
+            val home = entry.string("homepageId") ?: entry.string("homePageId")
+            buildJsonObject {
+                put("id", spaceId); put("key", actualKey); put("name", entry.string("name") ?: actualKey)
+                home?.let { put("homePageId", id(it)) }
+            }
+        })
+    }
 
     internal suspend fun requireSpace(scope: ContextConfig) {
         require(scope.site.trimEnd('/') == origin) { "Selected site differs from the credential origin" }
         try {
-            val selected = spaces().map { it.jsonObject }.filter { it.string("key") == scope.space }
+            val selected = spaces(scope.space).map { it.jsonObject }
             if (selected.size != 1 || selected.single().string("id") != scope.spaceId)
                 throw ContextRemoteException("scope_outside_connection", "Configured space identity is no longer accessible")
         } catch (failure: ContextRemoteException) {
@@ -1142,33 +1153,61 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             require(scope.spaceId == spaceId) { "Creation space differs from the selected knowledge space" }
             if (parentId != null) requireScope(scope, parentId) else requireSpace(scope)
         }
-        require(title.isNotBlank() && body.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024 && message.isNotBlank()) { "Bounded document and change reason required" }
-        val space = spaces().map { it.jsonObject }.singleOrNull { it.string("id") == spaceId }
-            ?: throw ContextRemoteException("space_unavailable", "Configured space is not uniquely accessible")
-        // Official Content API examples still document this create endpoint. V2 create lacks version.message.
-        val payload = buildJsonObject {
-            put("type", "page"); put("status", "current"); put("title", title)
-            putJsonObject("space") { put("key", space.string("key")!!) }
-            putJsonArray("ancestors") { parentId?.let { add(buildJsonObject { put("id", it) }) } }
-            putJsonObject("body") { putJsonObject("storage") { put("representation", "storage"); put("value", body) } }
-            putJsonObject("version") { put("number", 1); put("message", message) }
+        require(title.isNotBlank() && body.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024 && (parentId == null || message.isNotBlank())) { "Bounded document and parented change reason required" }
+        val rootless = parentId == null
+        val account = if (rootless) currentUser() else null
+        val payload = if (rootless) buildJsonObject {
+            // Pin the effect to the resolved native ID: a mutable key is not a write boundary.
+            put("spaceId", spaceId); put("status", "current"); put("title", title)
+            putJsonObject("body") { put("representation", "storage"); put("value", body) }
+        } else {
+            val space = spaces(scope?.space).map { it.jsonObject }.singleOrNull { it.string("id") == spaceId }
+                ?: throw ContextRemoteException("space_unavailable", "Configured space is not uniquely accessible")
+            // Keep native version.message support for existing explicitly parented writes.
+            buildJsonObject {
+                put("type", "page"); put("status", "current"); put("title", title)
+                putJsonObject("space") { put("key", space.string("key")!!) }
+                putJsonArray("ancestors") { add(buildJsonObject { put("id", parentId!!) }) }
+                putJsonObject("body") { putJsonObject("storage") { put("representation", "storage"); put("value", body) } }
+                putJsonObject("version") { put("number", 1); put("message", message) }
+            }
         }
         if (scope?.isKnowledge == true) {
             if (parentId != null) requireScope(scope, parentId) else requireSpace(scope)
         }
         beforeEffect()
-        val response = request(HttpMethod.Post, endpoint("/wiki/rest/api/content"), payload).second
-        val createdId = observedId(response) ?: throw ContextRemoteException("unknown_create", "Creation response has no valid page ID; reconcile before retrying", true)
+        val target = if (rootless) endpoint("/wiki/api/v2/pages", mapOf("root-level" to "true")) else endpoint("/wiki/rest/api/content")
+        val response = request(HttpMethod.Post, target, payload).second
+        val createdId = (if (rootless) (response["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let {
+            try { id(it) } catch (_: IllegalArgumentException) { null }
+        } else observedId(response))
+            ?: throw ContextRemoteException("unknown_create", "Creation response has no valid page ID; reconcile before retrying", true)
         val expected = RemoteNode(createdId, title, parentId, spaceId = spaceId, version = 1)
-        val saved = try { mutationPage(createdId, scope, expected) } catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                val details = (e as? ContextRemoteException)?.details?.takeIf { it.isNotEmpty() }
-                    ?: buildJsonObject { put("mismatchFields", JsonArray(listOf(JsonPrimitive("readback")))) }
-                throw ContextRemoteException("unknown_create", "Created page readback could not be verified", true,
-                    JsonObject(details + ("reference" to JsonPrimitive(createdId)))).retainRootDenial(e)
+        val saved = try {
+            mutationPage(createdId, scope, expected).also {
+                if (account != null) {
+                    // V2 creation has no version.message field. Verify native version-one
+                    // authorship and time instead; never fake an audit message or write twice.
+                    val revision = wikiVersion(createdId, 1)
+                    val number = revision["number"] as? JsonPrimitive
+                    val author = revision["authorId"] as? JsonPrimitive
+                    val created = revision["createdAt"] as? JsonPrimitive
+                    require(number != null && !number.isString && number.intOrNull == 1 && author?.isString == true && author == account["accountId"] && created?.isString == true) {
+                        "Created page authorship or time is unavailable"
+                    }
+                    java.time.Instant.parse(created.content)
+                }
             }
-        val mismatches = nodeMismatch(saved.node, expected) +
-            listOfNotNull("content".takeUnless { writeReadbackMatches(scope, saved.body, body) }, "message".takeUnless { saved.versionMessage == message })
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            val details = (e as? ContextRemoteException)?.details?.takeIf { it.isNotEmpty() }
+                ?: buildJsonObject { put("mismatchFields", JsonArray(listOf(JsonPrimitive("readback")))) }
+            throw ContextRemoteException("unknown_create", "Created page readback could not be verified", true,
+                JsonObject(details + ("reference" to JsonPrimitive(createdId)))).retainRootDenial(e)
+        }
+        val mismatches = nodeMismatch(saved.node, expected) + listOfNotNull(
+            "content".takeUnless { writeReadbackMatches(scope, saved.body, body) },
+            "message".takeUnless { rootless || saved.versionMessage == message })
         if (mismatches.isNotEmpty()) throw ContextRemoteException("unknown_create", "Created page readback differs from the requested fields", true,
             buildJsonObject { put("mismatchFields", JsonArray(mismatches.map(::JsonPrimitive))); put("reference", createdId) })
         return saved

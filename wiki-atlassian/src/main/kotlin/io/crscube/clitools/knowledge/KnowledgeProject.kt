@@ -28,7 +28,7 @@ class KnowledgeProject(value: JsonObject, val credentials: JiraConfig,
     suspend fun resolve(remote: ConfluenceRemote, key: String): KnowledgeSettings {
         val selection = selections.singleOrNull { it.getValue("key") == JsonPrimitive(key) }
             ?: throw ContextRemoteException("space_not_configured", "Select a configured space key")
-        val native = remote.spaces().map { it.jsonObject }.singleOrNull { it["key"] == JsonPrimitive(key) }
+        val native = remote.spaces(key).map { it.jsonObject }.singleOrNull { it["key"] == JsonPrimitive(key) }
             ?: throw ContextRemoteException("space_unavailable", "The selected space is not uniquely accessible")
         return KnowledgeSettings(buildJsonObject {
             put("enabled", true); put("site", initial.getValue("site")); put("space", key)

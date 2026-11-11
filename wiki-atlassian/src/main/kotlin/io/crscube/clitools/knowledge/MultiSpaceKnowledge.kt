@@ -228,6 +228,25 @@ class MultiSpaceKnowledge(private val project: KnowledgeProject, private val rem
             value["id"]?.jsonPrimitive?.content?.let { put("url", "${project.credentials.baseUrl.trimEnd('/')}/wiki/spaces/$key/pages/$it") }
     })
 
+    private fun searchCoverage(key: String, context: Running, observedFreshness: JsonElement? = null): JsonObject {
+        val slot = slots.getValue(key)
+        // Ordinary search reuses its response metadata; failures and skipped partitions
+        // consult the existing status path instead of claiming fresh coverage.
+        val current = if (observedFreshness == null || slot.failure != null)
+            Json.parseToJsonElement(context.corpus.status()).jsonObject else null
+        val freshness = current?.get("freshness") ?: observedFreshness
+        val readable = !slot.denied && current?.get("ready") != JsonPrimitive(false)
+        val syncError = freshness?.jsonObject?.get("syncError")?.takeUnless { it is JsonNull }
+        val stale = slot.failure != null || current?.get("status") == JsonPrimitive("failed") || syncError != null
+        return buildJsonObject {
+            put("space", key); put("readable", readable)
+            put("status", when { !readable -> "unavailable"; stale -> "stale"; else -> "ready" })
+            freshness?.let { put("freshness", it) }
+            (slot.failure?.let(::JsonPrimitive) ?: current?.get("code"))?.let { put("code", it) }
+            (syncError ?: current?.get("syncError")?.takeUnless { it is JsonNull })?.let { put("syncError", it) }
+        }
+    }
+
     private suspend fun search(arguments: JsonObject, supplied: String?): JsonObject {
         val keys = if (arguments["root"] != null) listOf(documentSpace(arguments.getValue("root").jsonPrimitive.content, supplied, true))
             else if (supplied != null) listOf(supplied) else slots.keys.toList()
@@ -255,22 +274,26 @@ class MultiSpaceKnowledge(private val project: KnowledgeProject, private val rem
         for (selected in keys) {
             val context = slots.getValue(selected).running
             if (context == null || snapshots[selected] is JsonNull) {
-                coverage += buildJsonObject { put("space", selected); put("status", "unavailable"); put("code", slots.getValue(selected).failure ?: "replica_pending") }
+                coverage += buildJsonObject { put("space", selected); put("status", "unavailable"); put("readable", false); put("code", slots.getValue(selected).failure ?: "replica_pending") }
                 continue
             }
-            coverage += buildJsonObject { put("space", selected); put("status", "ready") }
             val state = states[selected]?.jsonObject ?: buildJsonObject {}
             require(state.keys.all { it in setOf("cursor", "skip", "done") })
-            if (state["done"] == JsonPrimitive(true)) continue
-            if (results.size >= limit) { hasMore = true; continue }
+            if (state["done"] == JsonPrimitive(true)) {
+                coverage += searchCoverage(selected, context); continue
+            }
+            if (results.size >= limit) {
+                coverage += searchCoverage(selected, context); hasMore = true; continue
+            }
             val skip = state["skip"]?.jsonPrimitive?.int ?: 0
             require(skip in 0..limit)
             val request = JsonObject(arguments - "cursor" + buildJsonObject { put("limit", limit); state["cursor"]?.let { put("cursor", it) } })
             val response = context.service.execute("search_documents", request)
             if (response["status"] == JsonPrimitive("error")) {
-                coverage[coverage.lastIndex] = buildJsonObject { put("space", selected); put("status", "unavailable"); put("code", response["code"] ?: JsonPrimitive("replica_unavailable")) }
+                coverage += buildJsonObject { put("space", selected); put("status", "unavailable"); put("readable", false); put("code", response["code"] ?: JsonPrimitive("replica_unavailable")) }
                 continue
             }
+            coverage += searchCoverage(selected, context, response["freshness"])
             val hits = response.getValue("results").jsonArray
             require(skip <= hits.size)
             val take = minOf(limit - results.size, hits.size - skip)
@@ -298,7 +321,7 @@ class MultiSpaceKnowledge(private val project: KnowledgeProject, private val rem
         val partial = coverage.any { it["status"] != JsonPrimitive("ready") }
         return buildJsonObject {
             put("results", JsonArray(results)); put("spaces", JsonArray(coverage)); put("partial", partial)
-            put("truncated", hasMore)
+            put("complete", !partial && !hasMore); put("truncated", hasMore)
             if (hasMore) {
                 val cursor = Base64.getUrlEncoder().withoutPadding().encodeToString(buildJsonObject {
                     put("binding", binding); put("snapshots", snapshots); put("states", JsonObject(states))
@@ -306,7 +329,7 @@ class MultiSpaceKnowledge(private val project: KnowledgeProject, private val rem
                 require(cursor.length <= 32768)
                 put("nextCursor", cursor)
             }
-            if (coverage.none { it["status"] == JsonPrimitive("ready") }) {
+            if (coverage.none { it["readable"] == JsonPrimitive(true) }) {
                 put("status", "error"); put("code", "replica_unavailable"); put("message", "No selected space has a readable replica; inspect connection_status")
             }
         }

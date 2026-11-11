@@ -299,6 +299,18 @@ class NativeDocumentContractTest {
             if (loseWriteResponse && !commitLostWrite) throw IOException("Lost before observing a result")
             val path = request.url.encodedPath
             val result = when {
+                request.method == HttpMethod.Post && path == "/wiki/api/v2/pages" -> {
+                    assertEquals("true", request.url.parameters["root-level"])
+                    assertFalse(payload.containsKey("parentId"), "Top-level creation must not invent a parent")
+                    assertFalse(payload.containsKey("version"), "V2 creation does not accept a fabricated version message")
+                    val selectedId = payload.getValue("spaceId").jsonPrimitive.also { assertTrue(it.isString) }.content
+                    val body = payload.getValue("body").jsonObject
+                    assertEquals(JsonPrimitive("storage"), body["representation"])
+                    // Model the provider's routing effect: native ID pins V2; mutable keys only route V1 below.
+                    val value = Page("250", null, payload.getValue("title").jsonPrimitive.content,
+                        serializePageBody(body.getValue("value").jsonPrimitive.content), space = selectedId, message = "", author = account)
+                    pages[value.id] = value; history[value.id] = mutableListOf(value.copy()); value.json(true)
+                }
                 request.method == HttpMethod.Post && path == "/wiki/rest/api/content" -> {
                     val selectedKey = payload.getValue("space").jsonObject.getValue("key").jsonPrimitive.content
                     val selectedId = selectedSpaces.single { it["key"] == JsonPrimitive(selectedKey) }.getValue("id").jsonPrimitive.content
@@ -2274,6 +2286,156 @@ class NativeDocumentContractTest {
         assertFalse(Files.exists(control.resolve(WikiChanges.noticeDenialMarker)), "A retired or unadmitted token cannot revoke the active observation")
         assertEquals(state, Files.readString(control.resolve("state.json")))
         provider.assertNoEffects()
+    }
+
+
+    @Test fun `unrelated personal space does not poison selected whole space synchronization or creation`() {
+        val selected = KnowledgeProject(buildJsonObject {
+            put("enabled", true); put("site", credentials.baseUrl)
+            putJsonArray("spaces") { add(buildJsonObject { put("key", "COMMON") }) }
+        }, credentials, runtimeHome.resolve("personal-space-data"))
+        val provider = Provider()
+        provider.selectedSpaces += buildJsonObject { put("id", "21"); put("key", "~12345689"); put("name", "Personal space") }
+        provider.useMultiple(selected) { registry, _ ->
+            assertSpacesReady(registry, "COMMON")
+            val readable = call(registry, "search_documents", strings("query" to "201"))
+            assertEquals(listOf("201"), readable.getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+            val created = call(registry, "create_document", strings("space" to "COMMON", "title" to "Selected space document", "content" to "<p>Selected space evidence</p>"))
+            assertEquals(JsonPrimitive("created"), created["status"], created.toString())
+            assertEquals("20", provider.pages.getValue("250").space)
+            assertEquals(1, provider.effects.size)
+        }
+    }
+
+    @Test fun `cached combined search retains failed synchronization freshness and partial coverage`() {
+        val provider = Provider().also { it.secondSpace() }
+        provider.useMultiple(multiProject()) { registry, multi ->
+            assertSpacesReady(registry, "COMMON", "DEV")
+            fun coverage(result: JsonObject, key: String): JsonObject = result.getValue("spaces").jsonArray
+                .map { it.jsonObject }.single { it["space"] == JsonPrimitive(key) }
+            val before = call(registry, "search_documents", strings("query" to "Shared marker"))
+            val lastSuccess = coverage(before, "COMMON").getValue("freshness").jsonObject.getValue("lastSuccessfulSync")
+            provider.denied["/wiki/api/v2/spaces"] = HttpStatusCode.ServiceUnavailable
+            assertFailsWith<ContextRemoteException> { runBlocking { multi.synchronize("COMMON") } }
+            provider.requests.clear()
+            val after = call(registry, "search_documents", strings("query" to "Shared marker"))
+            assertNotEquals(JsonPrimitive("error"), after["status"], "Readable stale coverage must not discard useful cached hits")
+            assertEquals(setOf("201", "411"), after.getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content }.toSet())
+            assertEquals(JsonPrimitive(true), after["partial"])
+            assertEquals(JsonPrimitive(false), after["complete"])
+            val stale = coverage(after, "COMMON")
+            assertEquals(JsonPrimitive("stale"), stale["status"])
+            assertEquals(JsonPrimitive(true), stale["readable"])
+            assertEquals(JsonPrimitive("http_503"), stale["code"])
+            val freshness = stale.getValue("freshness").jsonObject
+            assertEquals(lastSuccess, freshness["lastSuccessfulSync"])
+            assertTrue(freshness.getValue("syncError").jsonPrimitive.content.contains("http_503"))
+            val healthy = coverage(after, "DEV")
+            assertEquals(JsonPrimitive("ready"), healthy["status"])
+            assertEquals(JsonPrimitive(true), healthy["readable"])
+            assertEquals(JsonNull, healthy.getValue("freshness").jsonObject["syncError"])
+            assertTrue(provider.requests.isEmpty(), "A stale-warning search must still read the established local replicas")
+            assertFailsWith<ContextRemoteException> { runBlocking { multi.synchronize("DEV") } }
+            provider.requests.clear()
+            val allStale = call(registry, "search_documents", strings("query" to "Shared marker"))
+            assertNotEquals(JsonPrimitive("error"), allStale["status"], "No currently fresh replica must not mean no readable cached replica")
+            assertEquals(setOf("201", "411"), allStale.getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content }.toSet())
+            assertEquals(JsonPrimitive(true), allStale["partial"])
+            assertEquals(JsonPrimitive(false), allStale["complete"])
+            for (key in listOf("COMMON", "DEV")) {
+                val staleScope = coverage(allStale, key)
+                assertEquals(JsonPrimitive("stale"), staleScope["status"])
+                assertEquals(JsonPrimitive(true), staleScope["readable"])
+                assertEquals(JsonPrimitive("http_503"), staleScope["code"])
+                assertTrue(staleScope.getValue("freshness").jsonObject.getValue("syncError").jsonPrimitive.content.contains("http_503"))
+            }
+            assertTrue(provider.requests.isEmpty())
+        }
+        provider.assertNoEffects()
+    }
+
+    @Test fun `rootless creation pins native space ID if the selected key rebinds at the POST boundary`() {
+        val provider = Provider()
+        val selected = KnowledgeProject(buildJsonObject {
+            put("enabled", true); put("site", credentials.baseUrl)
+            putJsonArray("spaces") { add(buildJsonObject { put("key", "COMMON") }) }
+        }, credentials, runtimeHome.resolve("key-rebind-data"))
+        provider.useMultiple(selected) { registry, _ ->
+            assertSpacesReady(registry, "COMMON")
+            provider.beforeRequest = { request ->
+                if (request.method == HttpMethod.Post) {
+                    provider.selectedSpaces[0] = buildJsonObject { put("id", "99"); put("key", "COMMON"); put("name", "New same-key space") }
+                }
+            }
+            val result = call(registry, "create_document", strings("space" to "COMMON", "title" to "Private creation", "content" to "<p>Private creation body</p>"))
+            assertTrue(provider.pages.values.none { it.space == "99" && it.content.contains("Private creation body") },
+                "The actual provider effect must never route private content by a newly rebound key")
+            assertEquals("20", provider.pages.getValue("250").space)
+            assertTrue(result["status"] == JsonPrimitive("created") || result["status"] == JsonPrimitive("unknown"),
+                "The fixed native-ID write may verify successfully; failed post-write validation must remain unknown")
+            if (result["status"] == JsonPrimitive("created")) assertEquals(JsonPrimitive("250"), result["id"])
+            val effect = provider.effects.single()
+            assertEquals("/wiki/api/v2/pages", effect.first.url.encodedPath)
+            assertEquals("true", effect.first.url.parameters["root-level"])
+            assertEquals(JsonPrimitive("20"), effect.second["spaceId"])
+            assertFalse(effect.second.containsKey("parentId"))
+            assertFalse(effect.second.containsKey("version"))
+            assertEquals(1, provider.requests.count { it.method == HttpMethod.Post }, "Uncertain results must not replay a write")
+            assertFalse(result.toString().contains("nativeVersionMessage"), "V2 cannot offer an unsupported UUID audit marker")
+        }
+    }
+
+    @Test fun `rootless create verifies native identity body version and available creation audit without publishing unknown results`() {
+        for (mode in listOf("response-id", "node-id", "body", "version", "author", "created-time")) {
+            val provider = Provider()
+            val selected = KnowledgeProject(buildJsonObject {
+                put("enabled", true); put("site", credentials.baseUrl)
+                putJsonArray("spaces") { add(buildJsonObject { put("key", "COMMON") }) }
+            }, credentials, runtimeHome.resolve("rootless-readback-$mode"))
+            provider.useMultiple(selected) { registry, _ ->
+                assertSpacesReady(registry, "COMMON")
+                if (mode == "body") provider.serializePageBody = { "<p>Different human body</p>" }
+                provider.transform = { request, value ->
+                    when {
+                        mode == "response-id" && request.method == HttpMethod.Post && request.url.encodedPath == "/wiki/api/v2/pages" -> JsonObject(value + ("id" to JsonPrimitive("invalid-native-id")))
+                        mode == "node-id" && request.method == HttpMethod.Get && request.url.encodedPath == "/wiki/api/v2/pages/250" -> JsonObject(value + ("id" to JsonPrimitive("251")))
+                        mode == "version" && request.method == HttpMethod.Get && request.url.encodedPath == "/wiki/api/v2/pages/250" -> JsonObject(value + ("version" to JsonObject(value.getValue("version").jsonObject + ("number" to JsonPrimitive(2)))))
+                        mode == "author" && request.url.encodedPath == "/wiki/api/v2/pages/250/versions/1" -> JsonObject(value + ("authorId" to JsonPrimitive("different-native-author")))
+                        mode == "created-time" && request.url.encodedPath == "/wiki/api/v2/pages/250/versions/1" -> JsonObject(value + ("createdAt" to JsonPrimitive("not-a-native-timestamp")))
+                        else -> value
+                    }
+                }
+                val result = call(registry, "create_document", strings("space" to "COMMON", "title" to "Verify actual native creation", "content" to "<p>Requested body</p>"))
+                assertEquals(JsonPrimitive("unknown"), result["status"], "$mode did not retain its unverified write outcome: $result")
+                assertEquals(1, provider.requests.count { it.method == HttpMethod.Post }, "$mode must not replay the creation")
+                assertEquals(1, provider.effects.size)
+                val manifest = Json.parseToJsonElement(Files.readString(selected.corpusRoot("COMMON").resolve("confluence/COMMON/.sync/manifest.json"))).jsonObject
+                assertFalse("250" in manifest.getValue("pages").jsonObject, "$mode must not publish an unverified page as cache success")
+                assertFalse(result.toString().contains("nativeVersionMessage"))
+            }
+        }
+    }
+
+    @Test fun `lost rootless creation response remains unknown and never retries or claims cache success`() {
+        for (committed in listOf(false, true)) {
+            val provider = Provider()
+            val selected = KnowledgeProject(buildJsonObject {
+                put("enabled", true); put("site", credentials.baseUrl)
+                putJsonArray("spaces") { add(buildJsonObject { put("key", "COMMON") }) }
+            }, credentials, runtimeHome.resolve("rootless-lost-$committed"))
+            provider.useMultiple(selected) { registry, _ ->
+                assertSpacesReady(registry, "COMMON")
+                provider.loseWriteResponse = true; provider.commitLostWrite = committed
+                val result = call(registry, "create_document", strings("space" to "COMMON", "title" to "Uncertain rootless create", "content" to "<p>Evidence</p>"))
+                assertEquals(JsonPrimitive("unknown"), result["status"], result.toString())
+                assertEquals(1, provider.requests.count { it.method == HttpMethod.Post })
+                assertEquals(1, provider.effects.size)
+                assertEquals(committed, provider.pages.containsKey("250"))
+                val manifest = Json.parseToJsonElement(Files.readString(selected.corpusRoot("COMMON").resolve("confluence/COMMON/.sync/manifest.json"))).jsonObject
+                assertFalse("250" in manifest.getValue("pages").jsonObject)
+                assertFalse(result.toString().contains("nativeVersionMessage"))
+            }
+        }
     }
 
 }

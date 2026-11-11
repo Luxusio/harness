@@ -1145,14 +1145,13 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                         val account = remote.currentUser()
                         checkSources(env, sources)
                         policy.checkKnowledgeCreation(config, title, body)
-                        val message = "wiki create document ${UUID.randomUUID()}"
-                        nativeVersionMessage = message
+                        // V2 root-level creation has no persisted version.message field.
                         val callback: suspend () -> Unit = {
                             policy.checkKnowledgeCreation(config, title, body)
                             require(remote.currentUser() == account) { "Authenticated account changed" }
                             unchanged(env); checkSources(env, sources); effect = 1
                         }
-                        val saved = remote.create(config.spaceId, null, title, body, message, config, callback)
+                        val saved = remote.create(config.spaceId, null, title, body, "", config, callback)
                         effect = 2; observedReference = numeric(saved.node.id)
                         val acknowledgement = documentResult(env, config, saved, "created", account = account,
                             metadata = data.flag("metadata"), includeBody = data.flag("includeBody"))
