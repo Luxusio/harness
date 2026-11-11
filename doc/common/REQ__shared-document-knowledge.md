@@ -56,3 +56,28 @@ No new vector/graph DB, central server, retry queue, generic invocation gateway,
 company document changes or automatic migration/deletion. Preserve the provided
 archive and unrelated workspace changes. Existing Talos test results establish
 only its historical baseline and do not approve this extraction.
+
+## Knowledge retrieval and change context
+
+The user requested the remaining knowledge features from the Talos handoff,
+excluding vector DB, and asked for hook notifications when documents change
+so that the AI can decide how to respond. Deliver detected changes during
+normal agent work. The agent consults the current document, its history or
+comments, and relevant authored relationships before acting.
+
+The wiki publishes bounded notification metadata from committed snapshots.
+An enabled Harness session checks for notices on prompts and after tools.
+The first mirror establishes a baseline. Subsequent page changes and
+configured Confluence comment observations use the same connection partition
+as the read replica. Notices report available evidence locations and gaps
+without including authored content. The hook uses local metadata and keeps
+its own per-session delivery position. A session receives context at its
+next hook event. Change detection depends on a running wiki process and its
+poll interval.
+
+Search returns ranked excerpts and locations tied to the read snapshot.
+Native IDs, short Korean terms, and scope filters are supported by the
+local search. Tests use representative local questions and exact evidence.
+The knowledge skill defines source capture, synthesis, correction, and
+impact review using existing native tools. Live company retrieval quality
+and operation against a real Atlassian account require separate evaluation.

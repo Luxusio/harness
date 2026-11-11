@@ -175,6 +175,12 @@ def main() -> int:
 
     destination = select_destination()
     output_parts = [destination["notice"]]
+    if destination["mode"] == "external" and os.environ.get("WIKI_ATLASSIAN_MEMORY_PAGE_ID"):
+        output_parts.append(
+            "[harness-wiki-memory] Apply the wiki knowledge skill to new source material "
+            "in authorized business work. Check for an existing source reference, then "
+            "record new relevant context once in the configured memory."
+        )
     # Prompt submission is advisory and deliberately performs no Git queries.
     # Authoritative freshness/fingerprint checks remain in wbs_verify/wbs_close.
     if wbs_dir:
@@ -202,9 +208,13 @@ def main() -> int:
         recovery = render_prompt_block(repo_root)
     except Exception:
         recovery = "[harness-worktree-recovery] discovery unavailable; inspect MCP context."
-    if output_parts or recovery:
+    changes = ""
+    if destination["mode"] == "external":
+        from wiki_change_notice import render_notice
+        changes = render_notice(data, "codex" if os.environ.get("HARNESS_RUNTIME") == "codex" else "claude")
+    if output_parts or recovery or changes:
         compact = _truncate_output("\n".join(output_parts))
-        sys.stdout.write("\n".join(part for part in (compact, recovery) if part))
+        sys.stdout.write("\n".join(part for part in (compact, recovery, changes) if part))
         sys.stdout.flush()
 
     return 0

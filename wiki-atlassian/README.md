@@ -24,6 +24,7 @@ ATLASSIAN_API_TOKEN = "YOUR_TOKEN"
 # WIKI_ATLASSIAN_MEMORY_PAGE_ID = "789"
 # WIKI_ATLASSIAN_FEEDBACK_PAGE_ID = "790"
 # WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS = "300"
+# WIKI_ATLASSIAN_WATCH_COMMENT_PAGES = "456,789"
 ```
 
 Keep real credentials out of Git and documents. A secret manager or any other
@@ -84,6 +85,43 @@ Use the `knowledge` skill for source attribution, targeted retrieval and native
 editing. The `migrate-docs` skill and independent `document-reviewer` cover
 authorized knowledge consolidation and migration. They do not replace actual
 product code review/QA or authorize deleting repository originals.
+
+## Change context in Harness
+
+Run the wiki MCP with the same environment as the Harness session. Its first
+completed mirror establishes the document baseline. Later committed changes
+produce a bounded local notice stream. Verified edits through the MCP use the
+same publication path as changes observed during remote synchronization.
+The stream tracks page additions, changes, and changes to visible scope.
+It includes same-version storage changes that a refresh can observe.
+
+In a Harness-enabled checkout, the next prompt or supported post-tool event
+supplies relevant notice metadata to the model. An idle session receives
+context when it next runs a hook. Detection of external edits follows the
+MCP's polling interval. A session can catch up from retained notices and sees
+a gap message if older metadata is unavailable. The hook keeps a bounded
+cursor for each session in the connection partition. Notice text consists of
+fixed labels, native IDs and observed versions. The agent checks relevance
+and reads the evidence through MCP before acting.
+
+Set `WIKI_ATLASSIAN_WATCH_COMMENT_PAGES` to up to ten distinct page IDs from the
+configured root, separated by commas. Comment monitoring starts with a
+baseline for each selected page. A later observed change directs the agent to
+`list_comments`. Provider access failures and incomplete inventories keep the
+last complete observation. The watcher is scoped to Confluence documents.
+
+## Search and knowledge maintenance
+
+Local search ranks exact native IDs and textual matches and returns short
+source excerpts. For a result that includes a `read` argument object, use it
+with `get_document` to read the same projection at its evidence location.
+Repeat the search if its snapshot has changed. Native outline and section
+operations remain available for selecting and editing a precise section.
+Limit the domain root when searching a large corpus.
+
+The knowledge skill covers attributed source records, topic structure,
+explicit document relationships, correction, and handling notices. Document
+publication still uses the selected Confluence scope and native permissions.
 
 ## Build and install
 

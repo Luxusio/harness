@@ -26,7 +26,7 @@ UNAVAILABLE_NOTICE = (
 )
 
 
-CONNECTION_FIELDS = ("SITE", "SPACE", "SPACE_ID", "ROOT_PAGE_ID", "MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID", "POLL_INTERVAL_SECONDS")
+CONNECTION_FIELDS = ("SITE", "SPACE", "SPACE_ID", "ROOT_PAGE_ID", "MEMORY_PAGE_ID", "FEEDBACK_PAGE_ID", "POLL_INTERVAL_SECONDS", "WATCH_COMMENT_PAGES")
 PREFIX = "WIKI_ATLASSIAN_"
 
 
@@ -77,6 +77,15 @@ def select_destination(environment=None):
             poll = text("POLL_INTERVAL_SECONDS")
             if not re.fullmatch(r"[0-9]{1,20}", poll) or not 30 <= int(poll) <= 86400:
                 raise ValueError("invalid polling interval")
+        if PREFIX + "WATCH_COMMENT_PAGES" in environment:
+            selection = text("WATCH_COMMENT_PAGES")
+            if len(selection) > 329:
+                raise ValueError("invalid comment watch pages")
+            pages = selection.split(",")
+            if len(pages) > 10 or len(set(pages)) != len(pages) or any(
+                not re.fullmatch(r"[1-9][0-9]{0,31}", page) for page in pages
+            ):
+                raise ValueError("invalid comment watch pages")
         for key in ("ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"):
             value = environment.get(key)
             if not isinstance(value, str) or not value.strip():

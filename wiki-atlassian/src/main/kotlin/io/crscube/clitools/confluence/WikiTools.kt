@@ -1005,7 +1005,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                 "search_documents" -> setOf("query", "scope", "limit", "cursor", "metadata", "root", "snippetLength")
                 "review" -> setOf("documents")
                 "graph" -> setOf("document", "scope", "depth", "limit")
-                "get_document" -> setOf("document", "version", "offset", "length", "format", "metadata", "section")
+                "get_document" -> setOf("document", "version", "offset", "length", "format", "metadata", "section", "snapshot")
                 "create_document" -> setOf("parent", "title", "content", "format", "metadata", "includeBody", "basedOn")
                 "update_document" -> setOf("document", "version", "parent", "content", "title", "old_text", "new_text", "append", "edits", "links", "allowReferenceRemoval", "format", "metadata", "includeBody", "basedOn", "section")
                 "list_comments" -> setOf("target", "limit", "cursor", "format", "metadata", "includeReplies", "repliesPerComment")
@@ -1018,6 +1018,9 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
             listOf("metadata", "includeBody", "includeReplies", "allowReferenceRemoval").filter { it in data }.forEach { data.flag(it) }
             environment()
             localReads?.invoke(operation, data)?.let { return it }
+            if (operation == "get_document" && "snapshot" in data) {
+                throw ContextRemoteException("snapshot_unavailable", "A search range requires its local Markdown snapshot. Search again against a readable corpus.")
+            }
             val env = environment()
             val graph = if (operation in setOf("search_documents", "get_document", "list_document_versions", "review", "graph")) ReadGraph() else null
             val result = when (operation) {
@@ -1415,8 +1418,8 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
     constructor(service: WikiService) : this(null, service)
     private fun call(operation: String, data: JsonObject): String = runBlocking { service.execute(operation, data).toString() }
 
-    @McpTool(name = "search_documents", description = "Search the automatically synchronized shared local corpus. Returns native IDs, versions, real excerpts and freshness; no per-project registration or remote search is needed.")
-    fun searchDocuments(@McpParam(description = "Search text, 1..200 characters") query: String,
+    @McpTool(name = "search_documents", description = "Search the shared local corpus by exact native page ID or ranked text. Results include version, real excerpts, heading context when available, and a snapshot-bound read object for get_document.")
+    fun searchDocuments(@McpParam(description = "Exact native page ID or text, 1..200 Unicode code points. Each text term must match the title or authored Markdown.") query: String,
                         @McpParam(description = "One global connection; effective/project/common are equivalent labels retained for native compatibility", required = false) scope: String = "effective",
                         @McpParam(description = "Results per page, 1..25", required = false) limit: Int = 10,
                         @McpParam(description = "Returned continuation", required = false) cursor: String? = null,
@@ -1434,16 +1437,18 @@ class WikiTools private constructor(private val ownedRemote: ConfluenceRemote?, 
         put("document", document); put("scope", "common"); put("depth", depth); put("limit", limit)
     })
 
-    @McpTool(name = "get_document", description = "Read Markdown content, or format:outline for version-local section positions. Read a section using its returned position and version; edit it with update_document section/content without repeating old text. storage retains rich structure. metadata:true adds audit data. Optional version reads actual history under current access.")
+    @McpTool(name = "get_document", description = "Read Markdown content or pass the read object from search_documents to read its exact local range. format:outline gives version-local positions for native section reads and edits. storage retains rich structure. metadata:true adds audit data. Optional version reads actual history under current access.")
     fun getDocument(@McpParam(description = "Exact page ID or Confluence URL") document: String,
                     @McpParam(description = "Native version; required for a continued read", required = false) version: Int? = null,
                     @McpParam(description = "Unicode code point offset", required = false) offset: Int = 0,
                     @McpParam(description = "Maximum code points, 1..12000", required = false) length: Int = 4000,
                     @McpParam(description = "markdown (default), storage for native structure, outline for heading positions; keep format, section and version on continuation", required = false) format: String = "markdown",
                     @McpParam(description = "Include URL, read status, author, time, hashes and detailed range metadata", required = false) metadata: Boolean = false,
-                    @McpParam(description = "Exact position from format:outline, e.g. 1.2; requires version. Returns only the body below that heading including subsections", required = false) section: String? = null): String = call("get_document", buildJsonObject {
+                    @McpParam(description = "Exact position from format:outline, e.g. 1.2; requires version. Returns only the body below that heading including subsections", required = false) section: String? = null,
+                    @McpParam(description = "Snapshot from search_documents read object. Keep it with the version and Markdown format for continued reads; a changed snapshot requires a new search", required = false) snapshot: String? = null): String = call("get_document", buildJsonObject {
         put("document", document); version?.let { put("version", it) }; put("offset", offset); put("length", length); put("format", format); put("metadata", metadata)
         section?.let { put("section", it) }
+        snapshot?.let { put("snapshot", it) }
     })
 
     @McpTool(name = "create_document", description = "Create a document under an explicit knowledge parent. Use format:text for simple writing or native storage for rich content. One write and verified readback; refreshes an existing local replica and returns a short acknowledgement.")

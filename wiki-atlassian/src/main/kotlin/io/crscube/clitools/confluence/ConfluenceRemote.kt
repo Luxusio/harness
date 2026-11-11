@@ -72,22 +72,24 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
     private val originUri = URI(origin)
     private val http = if (client == null) HttpClient(CIO) { transport() } else client.config { transport() }
 
-    private class WikiBudget : AbstractCoroutineContextElement(Key) {
+    private class WikiBudget(private val maxRequests: Int, private val maxResponseBytes: Long) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<WikiBudget>
         private val started = System.nanoTime()
         private var requests = 0
         private var bytes = 0L
         fun request() {
-            if (++requests > 256 || System.nanoTime() - started > 45_000_000_000L)
+            if (++requests > maxRequests || System.nanoTime() - started > 45_000_000_000L)
                 throw ContextRemoteException("wiki_request_limit", "Operation exceeded its request/time budget; narrow the target or retry a read")
         }
         fun accept(size: Int, mutating: Boolean) {
             bytes += size
-            if (bytes > 32L * 1024 * 1024)
+            if (bytes > maxResponseBytes)
                 throw ContextRemoteException("wiki_body_limit", "Operation exceeded its response body budget", mutating)
         }
     }
-    internal suspend fun <T> wikiOperation(block: suspend () -> T): T = withContext(WikiBudget()) { block() }
+    internal suspend fun <T> wikiOperation(maxRequests: Int = 256, maxResponseBytes: Long = 32L * 1024 * 1024,
+                                          block: suspend () -> T): T =
+        withContext(WikiBudget(maxRequests, maxResponseBytes)) { block() }
 
     private fun io.ktor.client.HttpClientConfig<*>.transport() {
         followRedirects = false

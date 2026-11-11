@@ -77,6 +77,16 @@
             "statusMessage": "Binding exact task focus"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"${WIKI_ATLASSIAN_ENABLED:-}\" = true ]; then PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/wiki_change_notice.py\" claude; fi || true",
+            "timeout": 3,
+            "statusMessage": "Checking wiki changes"
+          }
+        ]
       }
     ]
   }

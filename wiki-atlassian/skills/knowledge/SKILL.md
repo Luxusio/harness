@@ -36,3 +36,53 @@ The agent that learned the facts writes the knowledge. For substantive knowledge
 consolidation, correction or migration, use the independent document reviewer at
 `../../agents/document-reviewer.md`; a short source append does not require a
 new development workflow. No WBS/Jira issue is required for ordinary wiki work.
+
+## Record and reuse source material
+
+For work covered by the configured wiki, search the relevant topic before
+planning or changing a conclusion. Use aliases, exact IDs and short terms.
+Start with a small result limit and short excerpts, then expand the useful
+evidence when needed.
+Read the returned snapshot-bound range or the native section when a snippet
+omits conditions, exceptions, or conflicting evidence.
+
+When the user supplies a relevant statement, question, correction, or hypothesis,
+record it once in the authorized source destination. Use the existing memory
+append with a stable conversation or work reference when one exists. Keep
+subsequent observations and decisions linked to that source. Search the topic
+and reference before repeating an append, especially after an uncertain write.
+The native append attributes the entry to the authenticated recording account.
+Identify a quoted speaker separately when their identity is known. Keep
+personal details and secrets out of the record.
+
+## Maintain knowledge by topic
+
+Use the configured domain's existing organization. Where a domain is being
+established, organize it around source material (원본), maintained knowledge
+(지식), and AI operating guidance (AI 운영 규칙). Give the domain an entry page
+with aliases and links to recurring questions. Keep a rule, its conditions,
+exceptions and procedure together on the relevant topic page. Use precise
+section headings and place source versions close to the claims they support.
+
+Author explicit relations under a regular native heading named 지식 연결.
+Use 근거, 의존, 반박, 대체, or 관련, one native page link per entry, and
+explain the reason. Keep live relations in ordinary visible document content.
+For substantive changes have the independent document reviewer compare the
+recorded sources, derived claims and affected pages.
+
+## Act on change context
+
+A wiki notice identifies a page and an observed version. Judge its relevance
+to current work before fetching more. Check current content, history or
+comments as appropriate. Use document_relations to find dependent or conflicting
+claims. An earlier version can remain valid for its original environment and
+time. Record a correction or superseding decision with the new evidence,
+scope and effective date. Inspect other supporting sources before changing
+related conclusions. For production claims, obtain deployment or rollback
+evidence for the relevant service, environment and version.
+
+For relevant, authorized changes, apply the smallest native edit and verify
+its readback. If a change invalidates a current requirement or decision,
+surface the effect in the current work and update the existing plan when
+appropriate. Leave unrelated notices alone and keep unresolved disagreements
+explicit. A metadata notice is a cue to inspect the authoritative evidence.

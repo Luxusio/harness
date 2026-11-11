@@ -1344,7 +1344,21 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                             "statusMessage": "Checking Harness WBS routing",
                         }
                     ],
-                }
+                },
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": (
+                                'if [ "${WIKI_ATLASSIAN_ENABLED:-}" = true ]; then '
+                                f"{_python_hook_cmd()} {shlex.quote(str(root / 'scripts' / 'wiki_change_notice.py'))} codex; "
+                                "fi || true"
+                            ),
+                            "timeout": 3,
+                            "statusMessage": "Checking wiki changes",
+                        }
+                    ]
+                },
             ],
         }
     }

@@ -2,6 +2,7 @@ package io.crscube.clitools.knowledge
 
 import io.crscube.clitools.confluence.ContextConfig
 import io.crscube.clitools.confluence.ContextFiles
+import io.crscube.clitools.confluence.WikiChanges
 import io.crscube.clitools.jirafetcher.config.JiraConfig
 import kotlinx.serialization.json.*
 import java.nio.file.*
@@ -23,6 +24,7 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
         credentials.email, credentials.apiToken, initial.getValue("rootPageId").jsonPrimitive.content,
         initial.getValue("spaceId").jsonPrimitive.content).joinToString("\u0000")))
     val pollIntervalSeconds: Long get() = initial["pollIntervalSeconds"]?.jsonPrimitive?.long ?: 300L
+    val watchedCommentPages: List<String> = WikiChanges.watchPages(initial["watchCommentPages"]?.jsonPrimitive?.content)
     fun identity(): String = ContextFiles.hash(initial.toString())
     fun read(): JsonObject = initial
     fun connections(): JsonObject {
@@ -85,7 +87,8 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             "WIKI_ATLASSIAN_SITE" to "site", "WIKI_ATLASSIAN_SPACE" to "space",
             "WIKI_ATLASSIAN_SPACE_ID" to "spaceId", "WIKI_ATLASSIAN_ROOT_PAGE_ID" to "rootPageId",
             "WIKI_ATLASSIAN_MEMORY_PAGE_ID" to "memoryPageId", "WIKI_ATLASSIAN_FEEDBACK_PAGE_ID" to "feedbackPageId",
-            "WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS" to "pollIntervalSeconds")
+            "WIKI_ATLASSIAN_POLL_INTERVAL_SECONDS" to "pollIntervalSeconds",
+            "WIKI_ATLASSIAN_WATCH_COMMENT_PAGES" to "watchCommentPages")
 
         /** Disabled connections require no credentials, data directories or clients. */
         fun enabled(environment: Map<String, String>): Boolean = when (environment["WIKI_ATLASSIAN_ENABLED"]) {
@@ -111,7 +114,7 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             return true
         }
         fun validate(value: JsonObject) {
-            require(value.keys.all { it in setOf("enabled", "site", "space", "spaceId", "rootPageId", "memoryPageId", "feedbackPageId", "pollIntervalSeconds") }) { "Unknown connection setting" }
+            require(value.keys.all { it == "enabled" || it in connectionVariables.values }) { "Unknown connection setting" }
             require(value["enabled"] == JsonPrimitive(true)) { "Atlassian backend is not enabled" }
             fun text(key: String): String = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("Missing string $key")
             require(validOrigin(text("site"))) { "HTTPS origin required" }
@@ -119,6 +122,7 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
             for (key in listOf("spaceId", "rootPageId") + listOf("memoryPageId", "feedbackPageId").filter { value.containsKey(it) })
                 require(text(key).matches(Regex("[1-9][0-9]*"))) { "Positive native ID required: $key" }
             value["pollIntervalSeconds"]?.let { require(it is JsonPrimitive && !it.isString && it.longOrNull in 30L..86400L) { "Polling interval must be 30..86400 seconds" } }
+            if ("watchCommentPages" in value) WikiChanges.watchPages(text("watchCommentPages"))
         }
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): KnowledgeSettings {
             val snapshot = environment.toMap()

@@ -15,6 +15,7 @@ import java.util.UUID
 import java.net.URI
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
 
@@ -90,8 +91,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             val lock = try { channel.tryLock() } catch (_: OverlappingFileLockException) { null }
             require(lock != null) { "Confluence sync busy; retry later" }
             lock.use {
-                recheck()
                 recover(base, control, config)
+                recheck()
                 val previous = readManifest(control.resolve("manifest.json"), config)
                 require((previous["structurePolicy"]?.jsonPrimitive?.content ?: "strict") == config.structurePolicy &&
                     previous["pilotRootPageId"]?.jsonPrimitive?.content == config.pilotRootPageId &&
@@ -162,7 +163,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 val pinned = previous["explicitPages"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty().toMutableSet()
                 if (prior == null) pinned += node.id
                 require(pinned.size <= 500) { "Explicit mirror selection exceeds the bounded page limit" }
-                val next = JsonObject(previous + buildJsonObject {
+                val next = WikiChanges.documents(previous, JsonObject(previous + buildJsonObject {
                     put("pages", nextPages); put("explicitPages", JsonArray(pinned.map(::JsonPrimitive)))
                     put("unavailable", JsonArray(unavailable.map(::JsonPrimitive)))
                     put("changes", JsonArray(changed.map { id -> buildJsonObject {
@@ -171,7 +172,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         put("version", row.getValue("version")); put("title", row.getValue("title")); put("path", row.getValue("path"))
                         put("structural", old[id]?.jsonObject?.get("path") != row["path"])
                     } }))
-                })
+                }))
                 val stage = ContextFiles.safe(control, "stage-${UUID.randomUUID()}")
                 Files.createDirectories(stage)
                 try {
@@ -207,7 +208,6 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             pageIds.all { it.matches(Regex("[1-9][0-9]*")) }) { "Declare 1..100 unique positive page IDs" }
         val requested = if (mode == "pages") pageIds.toSet() else emptySet()
         val scopeRoot = if (config.isKnowledge) config.knowledgeRootPageId ?: config.homePageId else config.homePageId
-        if (config.isKnowledge) remote.requireScope(config, scopeRoot)
         val base = ContextFiles.safe(root, "confluence/${config.space}")
         val control = ContextFiles.safe(root, "confluence/${config.space}/.sync")
         Files.createDirectories(control)
@@ -216,6 +216,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             require(lock != null) { "Confluence sync busy; retry later" }
             lock.use {
                 recover(base, control, config)
+                if (config.isKnowledge) remote.requireScope(config, scopeRoot)
                 val manifestPath = control.resolve("manifest.json")
                 val previous = readManifest(manifestPath, config)
                 val old = previous["pages"]?.jsonObject ?: buildJsonObject {}
@@ -428,7 +429,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         put("pages", JsonObject(next)); put("unavailable", JsonArray(unresolved.map(::JsonPrimitive)))
                         put("changes", JsonArray(changes))
                     }
-                    ContextFiles.atomic(staged.resolve("manifest.json"), complete.toString())
+                    ContextFiles.atomic(staged.resolve("manifest.json"), WikiChanges.documents(previous, complete).toString())
                     // Once this pointer exists, recovery only finishes local projection; never repeats remote writes.
                     ContextFiles.atomic(control.resolve("transaction.json"), buildJsonObject { put("stage", staged.fileName.toString()) }.toString())
                     recover(base, control, config)
@@ -441,6 +442,82 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     if (!Files.exists(control.resolve("transaction.json"))) deleteTree(staged)
                 }
             }
+        }
+    }
+
+    internal suspend fun pollComments(config: ContextConfig, pageIds: List<String>, intervalSeconds: Long) {
+        if (pageIds.isEmpty()) return
+        val base = ContextFiles.safe(root, "confluence/${config.space}")
+        val control = ContextFiles.safe(base, ".sync")
+        if (!Files.isDirectory(control)) return
+        FileChannel.open(ContextFiles.safe(control, "comments.lock"), CREATE, WRITE, LinkOption.NOFOLLOW_LINKS).use { channel ->
+            val lease = try { channel.tryLock() } catch (_: OverlappingFileLockException) { null }
+            lease?.use { pollAdmittedComments(base, control, config, pageIds, intervalSeconds) }
+        }
+    }
+
+    private suspend fun pollAdmittedComments(base: Path, control: Path, config: ContextConfig,
+                                             pageIds: List<String>, intervalSeconds: Long) {
+        val manifest = ContextFiles.safe(control, "manifest.json")
+        val selection = ContextFiles.hash(pageIds.joinToString(","))
+        val started = System.currentTimeMillis()
+        val before = withSyncLock(control) {
+            if (Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock null
+            val current = readManifest(manifest, config)
+            if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock null
+            val watch = current[WikiChanges.watchKey]?.jsonObject
+            val last = watch?.get("attemptedAt")?.jsonPrimitive?.long
+            if (watch?.get("selection") == JsonPrimitive(selection) && last != null && last <= started &&
+                started - last < intervalSeconds * 1000) null else current
+        } ?: return
+        val pages = WikiChanges.admitted(before)
+        val watchedRows = pageIds.associateWith { pages[it] }
+        val admittedCount = watchedRows.values.count { it != null }.coerceAtLeast(1)
+        val observed = linkedMapOf<String, String>()
+        // Give each admitted page its own share of the total budget so one large
+        // or slow inventory cannot consume all other pages' observations.
+        withTimeoutOrNull(30_000) {
+            for ((id, row) in watchedRows) {
+                val expected = row?.let(::decode) ?: continue
+                val fingerprint = try {
+                    withTimeoutOrNull(30_000L / admittedCount) {
+                        remote.wikiOperation(256 / admittedCount, 32L * 1024 * 1024 / admittedCount) {
+                            require(remote.requireScope(config, id) == expected)
+                            val inventory = remote.commentInventory("confluence", id, expected)
+                            require(remote.requireScope(config, id) == expected)
+                            WikiChanges.commentFingerprint(inventory)
+                        }
+                    }
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+                if (fingerprint != null) observed[id] = fingerprint
+            }
+        }
+        withSyncLock(control) {
+            if (Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock
+            val current = readManifest(manifest, config)
+            if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock
+            val currentPages = WikiChanges.admitted(current)
+            val confirmed = observed.filterKeys { currentPages[it] == watchedRows[it] }
+            val next = WikiChanges.comments(current, selection, started, pageIds.toSet(), confirmed)
+            val stage = ContextFiles.safe(control, "stage-${UUID.randomUUID()}")
+            val journal = ContextFiles.safe(control, "transaction.json")
+            Files.createDirectories(stage)
+            try {
+                ContextFiles.atomic(ContextFiles.safe(stage, "manifest.json"), next.toString())
+                ContextFiles.atomic(journal, buildJsonObject {
+                    put("stage", stage.fileName.toString()); put("files", JsonArray(emptyList()))
+                }.toString())
+                recover(base, control, config)
+            } finally {
+                if (!Files.exists(journal)) deleteTree(stage)
+            }
+        }
+    }
+
+    private fun <T> withSyncLock(control: Path, block: () -> T): T? {
+        FileChannel.open(ContextFiles.safe(control, "sync.lock"), CREATE, WRITE, LinkOption.NOFOLLOW_LINKS).use { channel ->
+            val lock = try { channel.tryLock() } catch (_: OverlappingFileLockException) { null }
+            return lock?.use { block() }
         }
     }
 
@@ -585,6 +662,12 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             // Inventory and write-through do not establish authoritative body freshness.
             priorState?.get("bodyRefreshedAt")?.let { put("bodyRefreshedAt", it) }
         }.toString())
+        // A recovery replays the staged sequence, including when the manifest already reached disk.
+        next[WikiChanges.noticesKey]?.let { feed ->
+            val text = feed.toString()
+            require(text.toByteArray(Charsets.UTF_8).size <= 64 * 1024) { "Wiki notification feed exceeds its byte budget" }
+            ContextFiles.atomic(ContextFiles.safe(control, "changes.json"), text)
+        }
         Files.delete(journal)
         deleteTree(stage)
     }
@@ -640,6 +723,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             } }
             value["inventoryComplete"]?.jsonPrimitive?.boolean
             value["cursor"]?.jsonPrimitive?.content?.let(Instant::parse)
+            WikiChanges.validate(value)
             value
         } catch (_: RuntimeException) {
             throw ContextRemoteException("invalid_mirror_snapshot", "Synchronized mirror data is malformed; archive the disposable mirror and run sync")

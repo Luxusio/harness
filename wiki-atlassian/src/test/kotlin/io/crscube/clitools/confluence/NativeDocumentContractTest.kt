@@ -1393,6 +1393,88 @@ class NativeDocumentContractTest {
         assertFalse(Files.exists(runtimeHome.resolve(".claude")))
     }
 
+    @Test fun `ranked corpus search distinguishes native IDs and returns original multilingual evidence`() {
+        val provider = Provider()
+        provider.pages.getValue("201").apply {
+            title = "운영 기록"
+            content = "<h2>업무</h2><h3>승인</h3><p>Cafe\u0301 😀 한 운영 절차와 승인 기록. ${"후속 내용 ".repeat(10)}</p>"
+        }
+        provider.pages["203"] = Page("203", "210", "한 운영", "<p>Related document mentioning 201 and 733.</p>")
+        provider.pages["204"] = Page("204", "210", "한 보고서", "<p>운영 기준과 연결합니다.</p>")
+        provider.use(local = true) { registry ->
+            provider.requests.clear()
+            fun search(query: String, vararg options: Pair<String, JsonElement>) =
+                call(registry, "search_documents", arguments("query" to JsonPrimitive(query), *options))
+            fun JsonObject.hits() = getValue("results").jsonArray.map { it.jsonObject }
+            val ranked = search("한 운영", "limit" to JsonPrimitive(1), "snippetLength" to JsonPrimitive(14))
+            assertEquals("203", ranked.hits().single().getValue("id").jsonPrimitive.content)
+            val page2 = search("한 운영", "limit" to JsonPrimitive(1), "snippetLength" to JsonPrimitive(14), "cursor" to ranked.getValue("nextCursor"))
+            val hit = page2.hits().single()
+            assertEquals("201", hit.getValue("id").jsonPrimitive.content)
+            assertEquals("body", hit.getValue("match").jsonPrimitive.content)
+            assertEquals(listOf("업무", "승인"), hit.getValue("headingPath").jsonArray.map { it.jsonPrimitive.content })
+            val excerpt = hit.getValue("excerpt").jsonPrimitive.content
+            assertTrue("😀 한 운영" in excerpt, excerpt)
+            assertTrue(excerpt.codePointCount(0, excerpt.length) <= 14)
+            val locator = hit.getValue("read").jsonObject
+            val read = call(registry, "get_document", locator)
+            assertEquals(excerpt, read.getValue("content").jsonPrimitive.content)
+            assertEquals(locator.getValue("snapshot"), read.getValue("snapshot"))
+            val continuation = call(registry, "get_document", JsonObject(locator + ("offset" to read.getValue("nextOffset"))))
+            assertEquals(read.getValue("nextOffset"), continuation.getValue("offset"))
+            assertTrue(continuation.getValue("content").jsonPrimitive.content.isNotBlank())
+            val page3 = search("한 운영", "limit" to JsonPrimitive(1), "snippetLength" to JsonPrimitive(14), "cursor" to page2.getValue("nextCursor"))
+            assertEquals("title_and_body", page3.hits().single().getValue("match").jsonPrimitive.content)
+            assertFalse(page3.getValue("truncated").jsonPrimitive.boolean)
+            assertEquals(listOf("201"), search("한 운영", "root" to JsonPrimitive("201")).hits().map { it.getValue("id").jsonPrimitive.content })
+
+            val direct = search("201").hits().single()
+            assertEquals("201", direct.getValue("id").jsonPrimitive.content)
+            assertEquals("native_id", direct.getValue("match").jsonPrimitive.content)
+            assertEquals("body", search("733").hits().single().getValue("match").jsonPrimitive.content)
+            assertEquals("203", search("201", "root" to JsonPrimitive("203")).hits().single().getValue("id").jsonPrimitive.content)
+            assertEquals(3, search("한").hits().size)
+            assertEquals("201", search("CAFÉ").hits().single().getValue("id").jsonPrimitive.content)
+            for (absent in listOf("page_id:", "example.atlassian.net", "2015", "한 미존재")) assertTrue(search(absent).hits().isEmpty(), absent)
+            assertTrue(provider.requests.isEmpty())
+        }
+    }
+
+    @Test fun `search ranges reject same-version native and Markdown projection changes without native fallback`() {
+        val provider = Provider()
+        provider.pages.getValue("201").content = "<h2>Evidence</h2><p>Original local range text</p>"
+        var corpus: LocalCorpus? = null
+        provider.use(local = true, observeCorpus = { corpus = it }) { registry ->
+            fun locator() = call(registry, "search_documents", strings("query" to "201"))
+                .getValue("results").jsonArray.single().jsonObject.getValue("read").jsonObject
+            fun assertStale(read: JsonObject) {
+                assertEquals("snapshot_changed", rejected(registry, "get_document", read)!!.getValue("code").jsonPrimitive.content)
+                assertTrue(provider.requests.isEmpty(), "A stale search range must not fall through to a native read")
+            }
+            val old = locator()
+            provider.pages.getValue("201").content = "<h2>Evidence</h2><p>Replacement local range text</p>"
+            corpus!!.requestRepair("201")
+            runBlocking { corpus!!.synchronize(authoritativeBodies = false) }
+            provider.requests.clear()
+            assertStale(old)
+            val current = locator()
+            assertEquals(old["version"], current["version"])
+            assertNotEquals(old["snapshot"], current["snapshot"])
+
+            val base = root.resolve("confluence/COMMON")
+            val manifest = Json.parseToJsonElement(Files.readString(base.resolve(".sync/manifest.json"))).jsonObject
+            val page = manifest.getValue("pages").jsonObject.getValue("201").jsonObject
+            val projection = base.resolve(page.getValue("path").jsonPrimitive.content)
+            Files.writeString(projection, Files.readString(projection).replace("Replacement", "Reprojected"))
+            assertStale(current)
+            val reprojected = locator()
+            assertStale(JsonObject(reprojected + ("version" to JsonPrimitive(2))))
+            assertEquals("invalid_snapshot", rejected(registry, "get_document", JsonObject(reprojected +
+                ("section" to JsonPrimitive("1"))))!!.getValue("code").jsonPrimitive.content)
+            assertTrue(provider.requests.isEmpty())
+        }
+    }
+
     @Test fun `another MCP instance reuses persisted corpus without resynchronizing each project`() {
         val provider = Provider()
         provider.use(local = true) { registry ->

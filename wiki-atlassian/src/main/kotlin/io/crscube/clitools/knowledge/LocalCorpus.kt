@@ -8,7 +8,10 @@ import java.nio.channels.FileChannel
 import java.nio.channels.OverlappingFileLockException
 import java.nio.file.*
 import java.nio.file.StandardOpenOption.*
+import java.security.MessageDigest
 import java.time.Instant
+import java.util.HexFormat
+import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 
 /** Reads one locked manifest generation; never a second mutable document authority. */
@@ -25,6 +28,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         INCOMPLETE("replica_incomplete"), UNAVAILABLE("replica_unavailable")
     }
     private class ReadFailure(val reason: ReadState) : RuntimeException(reason.code)
+    private class RetrievalFailure(val code: String, message: String) : RuntimeException(message)
     private data class SyncFailure(val code: String) {
         val message: String get() = "Automatic synchronization failed ($code); this replica may be stale"
     }
@@ -102,6 +106,9 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             put("status", if (failure == null) "ready" else "failed")
             put("documents", manifest["pages"]?.jsonObject?.size ?: 0)
             put("freshness", freshness(manifest))
+            (manifest["wikiCommentWatch"] as? JsonObject)?.get("status")?.let { status ->
+                if (status in setOf(JsonPrimitive("ready"), JsonPrimitive("unavailable"))) put("commentWatch", status)
+            }
             failure?.let { put("code", it.code); put("syncError", it.message) }
         }
     }.toString() } catch (e: Exception) {
@@ -149,8 +156,11 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             }
         }
     }
+    private fun bodyPath(base: Path, row: JsonObject, format: String): Path =
+        ContextFiles.safe(base, row.getValue(if (format == "storage") "storage" else "path").jsonPrimitive.content)
+
     private fun body(base: Path, row: JsonObject, format: String): String {
-        val path = ContextFiles.safe(base, row.getValue(if (format == "storage") "storage" else "path").jsonPrimitive.content)
+        val path = bodyPath(base, row, format)
         require(Files.isRegularFile(path) && Files.size(path) <= 8L * 1024 * 1024) { "Replica body missing or oversized; wait for synchronization" }
         val text = Files.readString(path)
         if (format == "storage") require(ContextFiles.hash(text) == row.getValue("bodyHash").jsonPrimitive.content) { "Native replica hash mismatch" }
@@ -164,66 +174,144 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         return Regex("^/wiki/(?:spaces/[^/]+/)?pages/([1-9][0-9]*)(?:/[^/]*)?$").matchEntire(uri.rawPath)?.groupValues?.get(1)
             ?: error("Unsupported document URL")
     }
+
+    private data class SearchKey(val rank: Int, val id: String)
+    private data class SearchHit(val key: SearchKey, val result: JsonObject)
+    private val searchOrder = compareByDescending<SearchKey> { it.rank }.thenBy { it.id }
+    private val nativeId = Regex("[1-9][0-9]*")
+    private val sha256 = Regex("[a-f0-9]{64}")
+
+    private fun snapshot(connection: String, id: String, row: JsonObject, markdown: String): String =
+        ContextFiles.hash(listOf(connection, id, row.getValue("version").toString(),
+            row.getValue("bodyHash").jsonPrimitive.content, ContextFiles.hash(markdown)).joinToString(":"))
+
+    private fun searchResult(id: String, row: JsonObject, match: LocalSearchQuery.Match, markdown: String,
+                             prefix: Int, snippetLength: Int, snapshot: String): JsonObject = buildJsonObject {
+        put("id", id); put("title", row.getValue("title")); put("version", row.getValue("version")); put("match", match.field)
+        val at = if (match.bodyOffset >= 0) prefix + match.bodyOffset
+            else markdown.indexOfFirstFrom(prefix) { !it.isWhitespace() }
+        if (at >= 0) {
+            val before = minOf(markdown.codePointCount(prefix, at), minOf(100, snippetLength / 4))
+            val start = markdown.offsetByCodePoints(at, -before)
+            val length = minOf(snippetLength, markdown.codePointCount(start, markdown.length))
+            put("excerpt", markdown.substring(start, markdown.offsetByCodePoints(start, length)))
+            put("excerptOnly", true)
+            val headings = headingPath(markdown, prefix, at)
+            if (headings.isNotEmpty()) put("headingPath", JsonArray(headings.map(::JsonPrimitive)))
+            putJsonObject("read") {
+                put("document", id); put("version", row.getValue("version")); put("format", "markdown")
+                put("offset", markdown.codePointCount(0, start)); put("length", length); put("snapshot", snapshot)
+            }
+        }
+    }
+
+    private inline fun String.indexOfFirstFrom(start: Int, predicate: (Char) -> Boolean): Int {
+        for (index in start until length) if (predicate(this[index])) return index
+        return -1
+    }
+
+    private fun search(data: JsonObject, manifest: JsonObject, base: Path, pages: JsonObject, denied: Set<String>): JsonObject {
+        val query = data.getValue("query").jsonPrimitive.content.trim()
+        require(query.isNotEmpty() && query.codePointCount(0, query.length) <= 200) { "Query must contain 1..200 characters" }
+        val limit = data["limit"]?.jsonPrimitive?.int ?: 10
+        val snippetLength = data["snippetLength"]?.jsonPrimitive?.int ?: 400
+        require(limit in 1..25 && snippetLength in 1..500) { "Query limits must be within 1..25 results and 1..500 excerpt code points" }
+        require((data["scope"]?.jsonPrimitive?.content ?: "effective") in setOf("effective", "common", "project")) { "Query uses one configured global scope" }
+        val requestedRoot = data["root"]?.jsonPrimitive?.content?.let(::pageId)
+        val binding = ContextFiles.hash(listOf(query, requestedRoot.orEmpty(), limit, snippetLength).joinToString("\u0000"))
+        val cursor = data["cursor"]?.jsonPrimitive?.content?.split(':', limit = 4)
+        val after = cursor?.let {
+            require(it.size == 4 && it[0].matches(sha256) && it[1] == binding && it[3].matches(nativeId)) { "Search snapshot changed; start a new search" }
+            val rank = it[2].toIntOrNull()?.takeIf { rank -> rank in 1..6 } ?: error("Search snapshot changed; start a new search")
+            SearchKey(rank, it[3])
+        }
+        fun inside(id: String): Boolean {
+            if (id in denied) return false
+            if (requestedRoot == null) return true
+            var next: String? = id
+            val seen = mutableSetOf<String>()
+            while (next != null && next !in denied && seen.add(next)) {
+                if (next == requestedRoot) return true
+                next = pages[next]?.jsonObject?.get("parentId")?.jsonPrimitive?.contentOrNull
+            }
+            return false
+        }
+        val connection = settings.identity()
+        fun response(results: List<JsonObject>, next: String? = null) = buildJsonObject {
+            put("results", JsonArray(results)); put("freshness", freshness(manifest)); put("truncated", next != null)
+            next?.let { put("nextCursor", it) }
+        }
+        val exact = pages[query]?.jsonObject?.takeIf { query.matches(nativeId) && inside(query) && it["type"] == JsonPrimitive("page") }
+        if (exact != null) {
+            require(after == null) { "Search snapshot changed; start a new search" }
+            val markdown = body(base, exact, "markdown")
+            return response(listOf(searchResult(query, exact, LocalSearchQuery.Match(0, "native_id"), markdown,
+                authoredStart(markdown), snippetLength, snapshot(connection, query, exact, markdown))))
+        }
+
+        val lexical = LocalSearchQuery(query)
+        val generation = MessageDigest.getInstance("SHA-256")
+        // Hold at most one response page plus one continuation witness while visiting each body once.
+        val hits = PriorityQueue<SearchHit>(limit + 1) { a, b -> searchOrder.compare(b.key, a.key) }
+        var scannedBytes = 0L
+        var scannedPages = 0
+        for (id in pages.keys.sorted()) {
+            if (!inside(id)) continue
+            val row = pages.getValue(id).jsonObject
+            if (row["type"] != JsonPrimitive("page")) continue
+            val path = bodyPath(base, row, "markdown")
+            val size = Files.size(path)
+            require(Files.isRegularFile(path) && size <= 8L * 1024 * 1024) { "Replica body missing or oversized; wait for synchronization" }
+            scannedBytes += size
+            scannedPages++
+            if (scannedBytes > 64L * 1024 * 1024 || scannedPages > 5_000) {
+                throw RetrievalFailure("search_scope_too_large", "Search exceeded the local scan limit. Retry with a narrower root or an exact page ID.")
+            }
+            val markdown = Files.readString(path)
+            val projection = snapshot(connection, id, row, markdown)
+            val title = row.getValue("title").jsonPrimitive.content
+            generation.update(projection.toByteArray(Charsets.UTF_8))
+            generation.update(row.getValue("title").toString().toByteArray(Charsets.UTF_8))
+            generation.update(0)
+            val prefix = authoredStart(markdown)
+            val match = lexical.match(title, markdown.substring(prefix)) ?: continue
+            val key = SearchKey(match.rank, id)
+            if (after != null && searchOrder.compare(key, after) <= 0) continue
+            if (hits.size > limit && searchOrder.compare(key, hits.peek().key) >= 0) continue
+            if (hits.size > limit) hits.remove()
+            hits.add(SearchHit(key, searchResult(id, row, match, markdown, prefix, snippetLength, projection)))
+        }
+        val digest = HexFormat.of().formatHex(generation.digest())
+        require(cursor == null || cursor[0] == digest) { "Search snapshot changed; start a new search" }
+        val ordered = hits.sortedWith(compareBy(searchOrder) { it.key })
+        val next = if (ordered.size > limit) ordered[limit - 1].key.let { "$digest:$binding:${it.rank}:${it.id}" } else null
+        return response(ordered.take(limit).map { it.result }, next)
+    }
+
     fun execute(operation: String, data: JsonObject): JsonObject? {
         if (operation !in setOf("search_documents", "get_document")) return null
+        val snapshotArgument = data["snapshot"]
         // Native historical/outline/section reads retain exact version and rich-range validation.
-        if (operation == "get_document" && (data["section"] != null || data["format"] == JsonPrimitive("outline"))) return null
-        return try { withManifest { manifest, base ->
-            val pages = manifest.getValue("pages").jsonObject
-            val denied = manifest["unavailable"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty()
-            if (operation == "search_documents") {
-                val query = data.getValue("query").jsonPrimitive.content
-                require(query.isNotBlank() && query.length <= 200) { "Query must contain 1..200 characters" }
-                val limit = data["limit"]?.jsonPrimitive?.int ?: 10; require(limit in 1..25)
-                val snippetLength = data["snippetLength"]?.jsonPrimitive?.int ?: 400
-                require(snippetLength in 1..500) { "Query excerpt size must be 1..500" }
-                require((data["scope"]?.jsonPrimitive?.content ?: "effective") in setOf("effective", "common", "project")) { "Query uses one configured global scope" }
-                val generation = ContextFiles.hash(manifest.toString())
-                val binding = ContextFiles.hash(query + "\u0000" + limit + "\u0000" + data["root"].toString())
-                val offset = data["cursor"]?.jsonPrimitive?.content?.let {
-                    val parts = it.split(':'); require(parts.size == 3 && parts[0] == generation && parts[1] == binding) { "Search snapshot changed; start a new search" }; parts[2].toInt().also { n -> require(n >= 0) }
-                } ?: 0
-                val requestedRoot = data["root"]?.jsonPrimitive?.content?.let(::pageId)
-                fun inside(id: String): Boolean {
-                    if (requestedRoot == null) return true
-                    var next: String? = id; val seen = mutableSetOf<String>()
-                    while (next != null && seen.add(next)) { if (next == requestedRoot) return true; next = pages[next]?.jsonObject?.get("parentId")?.jsonPrimitive?.contentOrNull }
-                    return false
+        if (operation == "get_document" && snapshotArgument == null && (data["section"] != null || data["format"] == JsonPrimitive("outline"))) return null
+        return try {
+            val locator = (snapshotArgument as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if (snapshotArgument != null) {
+                val expected = (data["version"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+                if (locator == null || !locator.matches(sha256) || data["section"] != null ||
+                    (data["format"] != null && data["format"] != JsonPrimitive("markdown")) || expected == null || expected <= 0) {
+                    throw RetrievalFailure("invalid_snapshot", "Use the search result's Markdown read arguments with its snapshot and native version.")
                 }
-                val rows = pages.entries.sortedBy { it.key }.filter { (id, raw) -> id !in denied && inside(id) && raw.jsonObject["type"] == JsonPrimitive("page") }
-                    .mapNotNull { (id, raw) ->
-                        val row = raw.jsonObject; val content = body(base, row, "markdown")
-                        val match = content.indexOf(query, ignoreCase = true)
-                        if (match < 0 && !row.getValue("title").jsonPrimitive.content.contains(query, ignoreCase = true)) null else buildJsonObject {
-                            put("id", id); put("title", row.getValue("title")); put("version", row.getValue("version"))
-                            val matchCodePoint = content.codePointCount(0, maxOf(0, match))
-                            val startCodePoint = maxOf(0, matchCodePoint - minOf(100, snippetLength / 4))
-                            val endCodePoint = minOf(content.codePointCount(0, content.length), startCodePoint + snippetLength)
-                            val from = content.offsetByCodePoints(0, startCodePoint); val to = content.offsetByCodePoints(0, endCodePoint)
-                            put("excerpt", content.substring(from, to)); put("excerptOnly", true)
-                        }
-                    }
-                buildJsonObject { put("results", JsonArray(rows.drop(offset).take(limit))); put("freshness", freshness(manifest));
-                    put("truncated", offset + limit < rows.size); if (offset + limit < rows.size) put("nextCursor", "$generation:$binding:${offset + limit}") }
-            } else {
-                val id = pageId(data.getValue("document").jsonPrimitive.content)
-                require(id !in denied) { "Document unavailable at last synchronization" }
-                val row = pages[id]?.jsonObject ?: error("Document absent from configured corpus")
-                val expected = data["version"]?.jsonPrimitive?.int
-                if (expected != null && expected != row.getValue("version").jsonPrimitive.int) return@withManifest null
-                val format = data["format"]?.jsonPrimitive?.content ?: "markdown"; require(format in setOf("markdown", "storage"))
-                val text = body(base, row, format); val total = text.codePointCount(0, text.length)
-                val offset = data["offset"]?.jsonPrimitive?.int ?: 0; val length = data["length"]?.jsonPrimitive?.int ?: 4000
-                require(offset in 0..total && length in 1..12000 && (offset == 0 || expected != null)) { "Continued reads require a version and bounded offset" }
-                val end = minOf(total, offset + length)
-                buildJsonObject { put("id", id); put("title", row.getValue("title")); put("version", row.getValue("version")); put("format", format)
-                    put("content", text.substring(text.offsetByCodePoints(0, offset), text.offsetByCodePoints(0, end)))
-                    put("offset", offset); put("offsetUnit", "unicode_code_points"); put("truncated", end < total); if (end < total) put("nextOffset", end)
-                    put("freshness", freshness(manifest)) }
             }
-        }} catch (e: Exception) {
+            withManifest { manifest, base ->
+                val pages = manifest.getValue("pages").jsonObject
+                val denied = manifest["unavailable"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty()
+                if (operation == "search_documents") search(data, manifest, base, pages, denied)
+                else read(data, manifest, base, pages, denied, locator)
+            }
+        } catch (e: Exception) {
             val message = e.message.orEmpty()
             val (code, next) = when {
+                e is RetrievalFailure -> e.code to message
                 e is ReadFailure -> when (e.reason) {
                     ReadState.MISSING -> "replica_missing" to "No snapshot exists yet; check connection_status for synchronization errors"
                     ReadState.BUSY -> "replica_busy" to "Retry after the active synchronization finishes"
@@ -239,6 +327,35 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
                 else -> "replica_unavailable" to "Check connection_status; automatic synchronization has not established a readable replica"
             }
             buildJsonObject { put("status", "error"); put("code", code); put("message", next) }
+        }
+    }
+
+    private fun read(data: JsonObject, manifest: JsonObject, base: Path, pages: JsonObject, denied: Set<String>, locator: String?): JsonObject? {
+        val id = pageId(data.getValue("document").jsonPrimitive.content)
+        require(id !in denied) { "Document unavailable at last synchronization" }
+        val row = pages[id]?.jsonObject ?: error("Document absent from configured corpus")
+        val expected = data["version"]?.jsonPrimitive?.int
+        fun stale(): Nothing = throw RetrievalFailure("snapshot_changed", "The document projection changed. Search again to obtain a current read range.")
+        if (expected != null && expected != row.getValue("version").jsonPrimitive.int) {
+            if (locator != null) stale()
+            return null
+        }
+        val format = data["format"]?.jsonPrimitive?.content ?: "markdown"
+        require(format in setOf("markdown", "storage"))
+        val text = body(base, row, format)
+        if (locator != null && locator != snapshot(settings.identity(), id, row, text)) stale()
+        val total = text.codePointCount(0, text.length)
+        val offset = data["offset"]?.jsonPrimitive?.int ?: 0
+        val length = data["length"]?.jsonPrimitive?.int ?: 4000
+        require(offset in 0..total && length in 1..12000 && (offset == 0 || expected != null)) { "Continued reads require a version and bounded offset" }
+        val end = minOf(total, offset + length)
+        return buildJsonObject {
+            put("id", id); put("title", row.getValue("title")); put("version", row.getValue("version")); put("format", format)
+            put("content", text.substring(text.offsetByCodePoints(0, offset), text.offsetByCodePoints(0, end)))
+            put("offset", offset); put("offsetUnit", "unicode_code_points"); put("truncated", end < total)
+            if (end < total) put("nextOffset", end)
+            locator?.let { put("snapshot", it) }
+            put("freshness", freshness(manifest))
         }
     }
 }

@@ -1,0 +1,218 @@
+package io.crscube.clitools.confluence
+
+import io.crscube.clitools.jirafetcher.config.JiraConfig
+import io.crscube.clitools.knowledge.KnowledgeSettings
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.*
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.*
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.WRITE
+import kotlin.test.*
+
+class WikiChangesTest {
+    @TempDir lateinit var root: Path
+    private val origin = "https://example.atlassian.net"
+    private val config = ContextConfig(origin, "COMMON", "20", "210", "", "", "knowledge", knowledgeRootPageId = "210")
+    private val control get() = root.resolve("confluence/COMMON/.sync")
+    private val feedPath get() = control.resolve("changes.json")
+    private fun json(path: Path) = Json.parseToJsonElement(Files.readString(path)).jsonObject
+    private fun events(feed: JsonObject) = feed.getValue("events").jsonArray.map { it.jsonObject }
+    private fun notice(seq: Long, kind: String, id: String? = null, version: Int = 1) = buildJsonObject {
+        put("seq", seq); put("kind", kind)
+        if (id != null) { put("id", id); put("version", version) }
+    }
+
+    private class Page(val id: String, val parentId: String? = "210", var title: String = "Private title $id",
+                       var body: String = "<p>Private body $id</p>", var version: Int = 1) {
+        fun native() = RemotePage(RemoteNode(id, title, parentId, "page", "20", version, "current"), body)
+        fun json(storage: Boolean) = buildJsonObject {
+            put("id", id); put("title", title); put("type", "page"); put("spaceId", "20"); put("status", "current")
+            parentId?.let { put("parentId", it) }
+            putJsonObject("version") { put("number", version) }
+            if (storage) putJsonObject("body") { putJsonObject("storage") { put("value", body) } }
+        }
+    }
+
+    private class Comment(val id: String, val page: String, val kind: String, val parent: String? = null,
+                          var version: Int = 1, var resolution: String = "open") {
+        fun json() = buildJsonObject {
+            put("id", id); put("pageId", page); put("status", "current")
+            parent?.let { put("parentCommentId", it) }
+            putJsonObject("version") { put("number", version); put("createdAt", "2026-11-06T12:00:00Z") }
+            putJsonObject("body") { putJsonObject("storage") { put("value", "<p>Private comment $id</p>") } }
+            if (kind == "inline") put("resolutionStatus", resolution)
+        }
+    }
+
+    private inner class Provider : AutoCloseable {
+        val pages = linkedMapOf("210" to Page("210", null), "211" to Page("211"))
+        val comments = mutableListOf(Comment("310", "211", "footer"), Comment("320", "211", "inline"))
+        val denied = mutableSetOf<String>()
+        var unavailablePath: String? = null
+        var commentReads = 0
+        private fun listing(items: List<JsonObject>) = buildJsonObject {
+            put("results", JsonArray(items)); putJsonObject("_links") {}
+        }
+        private val client = HttpClient(MockEngine { request ->
+            val path = request.url.encodedPath.removePrefix("/wiki/api/v2/")
+            val parts = path.split('/')
+            val id = parts[1]
+            if ("-comments" in path) commentReads++
+            val responseHeaders = headersOf(HttpHeaders.ContentType, "application/json")
+            if (path == unavailablePath) return@MockEngine respond("{}", HttpStatusCode.ServiceUnavailable, responseHeaders)
+            if (parts[0] == "folders" || parts[0] == "pages" && id !in pages)
+                return@MockEngine respond("{}", HttpStatusCode.NotFound, responseHeaders)
+            if (parts[0] == "pages" && id in denied) return@MockEngine respond("{}", HttpStatusCode.Forbidden, responseHeaders)
+            val result = when {
+                parts[0] == "pages" && parts.size == 2 -> pages.getValue(id).json(request.url.parameters["body-format"] == "storage")
+                parts[0] == "pages" && parts[2] == "direct-children" -> listing(pages.values.filter {
+                    it.parentId == id && it.id !in denied
+                }.map { it.json(false) })
+                parts[0] == "pages" && parts[2] in setOf("inline-comments", "footer-comments") -> listing(comments.filter {
+                    it.page == id && it.parent == null && parts[2] == "${it.kind}-comments"
+                }.map { it.json() })
+                parts[0] in setOf("inline-comments", "footer-comments") && parts[2] == "children" -> listing(comments.filter {
+                    it.parent == id && parts[0] == "${it.kind}-comments"
+                }.map { it.json() })
+                else -> error("Unexpected fixture endpoint $path")
+            }
+            respond(result.toString(), HttpStatusCode.OK, responseHeaders)
+        })
+        private val remote = ConfluenceRemote(JiraConfig(origin, "fixture@example.test", "fixture-token"), client)
+        val mirror = ContextMirror(root, remote)
+        override fun close() { remote.close(); client.close() }
+    }
+
+    @Test fun `initial complete snapshot is quiet and admitted row changes are sequenced`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config, "pages", listOf("211"))
+            assertEquals(0L, json(feedPath).getValue("head").jsonPrimitive.long)
+            mirror.sync(config)
+            val baseline = json(feedPath)
+            assertEquals(setOf("epoch", "head", "events"), baseline.keys)
+            assertTrue(baseline.getValue("epoch").jsonPrimitive.content.matches(Regex("[0-9a-f]{32}")))
+            assertEquals(emptyList(), events(baseline))
+
+            provider.pages.getValue("211").body = "<p>Same-version native storage update</p>"
+            mirror.sync(config, "pages", listOf("211"))
+            provider.pages.getValue("211").title = "Renamed private title"
+            provider.pages["212"] = Page("212")
+            mirror.sync(config)
+            val updated = json(feedPath)
+            assertEquals(baseline["epoch"], updated["epoch"])
+            assertEquals(listOf(notice(1, "updated", "211"), notice(2, "updated", "211"), notice(3, "created", "212")), events(updated))
+            assertFalse(updated.toString().contains("private", ignoreCase = true))
+
+            provider.denied += "211"
+            mirror.sync(config)
+            assertEquals(listOf(notice(3, "created", "212"), notice(4, "scope")), events(json(feedPath)))
+            mirror.sync(config)
+            assertEquals(4L, json(feedPath).getValue("head").jsonPrimitive.long)
+            provider.denied.clear()
+            mirror.sync(config)
+            assertEquals(notice(5, "updated", "211"), events(json(feedPath)).last())
+        }
+    }
+
+    @Test fun `verified write recovers its original event after interrupted feed publication`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config)
+            val baseline = json(feedPath)
+            val page = provider.pages.getValue("211")
+            val before = page.native()
+            page.body = "<p>Same-version verified write</p>"
+            Files.delete(feedPath)
+            Files.createDirectory(feedPath)
+            assertFailsWith<IOException> { mirror.publishVerified(config, page.native(), before) }
+            val committed = json(control.resolve("manifest.json")).getValue(WikiChanges.noticesKey).jsonObject
+            assertEquals(baseline["epoch"], committed["epoch"])
+            assertEquals(listOf(notice(1, "updated", "211")), events(committed))
+            assertTrue(Files.exists(control.resolve("transaction.json")))
+            Files.delete(feedPath)
+            provider.unavailablePath = "pages/210"
+            assertFailsWith<ContextRemoteException> { mirror.sync(config) }
+            assertEquals(committed, json(feedPath))
+            assertFalse(Files.exists(control.resolve("transaction.json")))
+            provider.unavailablePath = null
+            mirror.publishVerified(config, page.native(), before)
+            mirror.sync(config)
+            assertEquals(committed, json(feedPath))
+        }
+    }
+
+    @Test fun `comment observations track replies and resolution and preserve baseline after failure`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            provider.pages["212"] = Page("212")
+            mirror.sync(config)
+            mirror.pollComments(config, listOf("211", "212"), 0)
+            val baseline = json(control.resolve("manifest.json")).getValue(WikiChanges.watchKey).jsonObject
+            assertEquals(JsonPrimitive("ready"), baseline["status"])
+            assertEquals(emptyList(), events(json(feedPath)))
+            assertFalse(baseline.toString().contains("Private comment"))
+
+            provider.comments += Comment("311", "211", "footer", "310")
+            provider.comments += Comment("330", "212", "footer")
+            val previousReads = provider.commentReads
+            mirror.pollComments(config, listOf("211", "212"), 300)
+            FileChannel.open(control.resolve("comments.lock"), WRITE).use { channel ->
+                channel.lock().use { mirror.pollComments(config, listOf("211", "212"), 0) }
+            }
+            assertEquals(previousReads, provider.commentReads)
+            provider.unavailablePath = "pages/212/inline-comments"
+            mirror.pollComments(config, listOf("211", "212"), 0)
+            val failed = json(control.resolve("manifest.json")).getValue(WikiChanges.watchKey).jsonObject
+            assertEquals(JsonPrimitive("unavailable"), failed["status"])
+            assertEquals(baseline["observations"]?.jsonObject?.get("212"), failed["observations"]?.jsonObject?.get("212"))
+            assertEquals(listOf(notice(1, "comments", "211")), events(json(feedPath)))
+
+            provider.unavailablePath = null
+            mirror.pollComments(config, listOf("211", "212"), 0)
+            assertEquals(listOf(notice(1, "comments", "211"), notice(2, "comments", "212")), events(json(feedPath)))
+            provider.comments.single { it.id == "320" }.resolution = "resolved"
+            mirror.pollComments(config, listOf("211", "212"), 0)
+            mirror.pollComments(config, listOf("211", "212"), 0)
+            assertEquals(listOf(notice(1, "comments", "211"), notice(2, "comments", "212"), notice(3, "comments", "211")), events(json(feedPath)))
+            provider.denied += "211"
+            mirror.sync(config)
+            mirror.pollComments(config, listOf("211", "212"), 0)
+            assertEquals(listOf(notice(2, "comments", "212"), notice(4, "scope")), events(json(feedPath)))
+        }
+    }
+
+    @Test fun `one publication retains only the newest 64 notices and validates configuration`() {
+        fun manifest(pages: Map<String, JsonObject>) = buildJsonObject {
+            put("inventoryComplete", true); put("pages", JsonObject(pages))
+        }
+        val initial = manifest(emptyMap())
+        val populated = manifest((100..199).associate { id -> id.toString() to buildJsonObject {
+            put("type", "page"); put("status", "current"); put("version", 1)
+        } })
+        val result = WikiChanges.documents(initial, populated)
+        WikiChanges.validate(result)
+        val feed = result.getValue(WikiChanges.noticesKey).jsonObject
+        assertEquals(100L, feed.getValue("head").jsonPrimitive.long)
+        assertEquals(64, events(feed).size)
+        assertEquals(notice(37, "created", "136"), events(feed).first())
+
+        val env = mapOf("WIKI_ATLASSIAN_ENABLED" to "true", "WIKI_ATLASSIAN_SITE" to origin,
+            "WIKI_ATLASSIAN_SPACE" to "COMMON", "WIKI_ATLASSIAN_SPACE_ID" to "20", "WIKI_ATLASSIAN_ROOT_PAGE_ID" to "210",
+            "ATLASSIAN_EMAIL" to "fixture@example.test", "ATLASSIAN_API_TOKEN" to "fixture-token")
+        val key = "WIKI_ATLASSIAN_WATCH_COMMENT_PAGES"
+        assertEquals(emptyList(), KnowledgeSettings.fromEnvironment(env).watchedCommentPages)
+        assertEquals(listOf("211", "212"), KnowledgeSettings.fromEnvironment(env + (key to "212,211")).watchedCommentPages)
+        for (invalid in listOf("", "211,211", "211, 212", "0", "211,", "1".repeat(33), (1..11).joinToString(","))) {
+            assertFailsWith<IllegalArgumentException> { KnowledgeSettings.fromEnvironment(env + (key to invalid)) }
+        }
+    }
+}
