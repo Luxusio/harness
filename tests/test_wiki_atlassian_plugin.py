@@ -89,6 +89,7 @@ def test_actual_packaged_payload_starts_without_project_registration(tmp_path):
     market = module.prepare(tmp_path / "data", jar)
     packaged = market / "plugin"
     assert (packaged / "lib/wiki-atlassian.jar").read_bytes() == jar.read_bytes()
+    assert (packaged / "skills/setup/SKILL.md").read_bytes() == (PLUGIN / "skills/setup/SKILL.md").read_bytes()
     for name in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
         assert json.loads((packaged / name).read_text())["name"] == "wiki-atlassian"
     transport = json.loads((packaged / ".mcp.json").read_text())["mcpServers"]

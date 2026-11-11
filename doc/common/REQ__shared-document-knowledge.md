@@ -81,3 +81,21 @@ local search. Tests use representative local questions and exact evidence.
 The knowledge skill defines source capture, synthesis, correction, and
 impact review using existing native tools. Live company retrieval quality
 and operation against a real Atlassian account require separate evaluation.
+
+## Guided installation and connection
+
+The user requests backend-owned setup that can follow a supplied installation
+guide in logged-in Chrome, install the selected product/plugin, issue compatible
+credentials, configure synchronization and verify the result. Ask the user
+which Confluence space and which existing page to use as ROOT when unspecified.
+ROOT can be a nested page; replicate that page and its descendants. Account
+permissions and token scope remain distinct from replica ROOT selection.
+
+The wiki-atlassian setup skill owns its provider-specific onboarding. Reuse
+working installations and credentials, preserve unrelated local settings, and
+store secrets through a protected handoff in ignored private configuration.
+Retain the named guide's product and settings contract. Report actual login,
+account-policy, secret-transfer and host-reload blockers without claiming a
+saved configuration proves a working connection. Verify the chosen ROOT with
+read-only native/MCP operations. Authoring this skill does not authorize live
+company installation or token issuance from an example request.

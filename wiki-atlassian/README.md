@@ -51,6 +51,22 @@ are errors and never authorize fallback repository document writes.
 The current backend implements Confluence documents, native comments and
 history; the `atlassian` name does not imply Jira issue operations.
 
+## Guided setup
+
+Ask the agent to install and configure the backend from its guide using your
+logged-in Chrome, or invoke `wiki-atlassian:setup`. Before installation, the
+agent can read [the setup skill](skills/setup/SKILL.md) from this source checkout.
+The skill handles installation, compatible token issuance, protected local
+settings and read-only connection verification. It asks which Confluence space
+and which existing document to use as ROOT. A page below the space home is a
+valid ROOT; only that page and its descendants are replicated. ROOT selection
+does not narrow the token's native account permissions.
+
+Browser attachment, login/MFA and account policy can require user action.
+The agent establishes a protected token transfer before issuance and reports
+actual host reload and synchronization results. A guide for another product,
+including Talos, retains that product's installer and settings.
+
 ## Shared corpus and operations
 
 The read projection lives under `~/.local/share/wiki-atlassian/` (or
