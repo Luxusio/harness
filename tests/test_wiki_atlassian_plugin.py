@@ -5,6 +5,12 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import base64
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ssl
+import sys
+import threading
 
 try:
     import pytest
@@ -17,6 +23,62 @@ except ModuleNotFoundError as error:
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "wiki-atlassian"
+
+
+@contextmanager
+def private_inbox(tmp_path):
+    home = tmp_path / "private-home"; home.mkdir(mode=0o700)
+    folder = home / ".config/harness"; folder.mkdir(parents=True, mode=0o700)
+    folder.parent.chmod(0o700)
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+        "-keyout", str(key), "-out", str(cert), "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+        check=True, capture_output=True)
+    calls = []
+    expected = "Basic " + base64.b64encode(b"private@example.invalid:private-mcp-fixture").decode()
+    class Native(BaseHTTPRequestHandler):
+        def do_GET(self):
+            calls.append((self.command, self.path, self.headers.get("Authorization")))
+            if self.headers.get("Authorization") != expected:
+                self.send_error(401); return
+            if self.path == "/wiki/rest/api/user/current":
+                body = {"accountId": "private-account"}
+            elif self.path.startswith("/wiki/api/v2/pages/790/footer-comments?"):
+                subsequent = "cursor=" in self.path
+                body = {"results": [{"id": "901" if subsequent else "900", "status": "current", "pageId": "790",
+                    "version": {"number": 1}, "body": {"storage": {"representation": "storage",
+                    "value": "<p>Second opinion</p>" if subsequent else "<p>Reuse compatible tokens</p>"}}}]}
+            elif self.path.startswith("/wiki/api/v2/pages/790"):
+                body = {"id": "790", "title": "Harness feedback", "status": "current", "version": {"number": 2},
+                    "body": {"storage": {"representation": "storage", "value": "<h2>Improvement inbox</h2>"}}}
+            else:
+                self.send_error(404); return
+            self.send_response(200)
+            if "/footer-comments?" in self.path and "cursor=" not in self.path:
+                self.send_header("Link", '</wiki/api/v2/pages/790/footer-comments?cursor=next%2Bcursor&limit=1>; rel="next"')
+            self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+        def do_POST(self):
+            calls.append((self.command, self.path, self.headers.get("Authorization")))
+            self.send_error(405)
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Native)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    site = "https://127.0.0.1:" + str(server.server_port)
+    settings = folder / "feedback.yaml"
+    settings.write_text(json.dumps({"backend": "atlassian", "page": site + "/wiki/pages/viewpage.action?pageId=790"})); settings.chmod(0o600)
+    auth = folder / "mise.local.toml"
+    auth.write_text('[env]\nATLASSIAN_BASE_URL=' + json.dumps(site) + '\nATLASSIAN_EMAIL="private@example.invalid"\nATLASSIAN_API_TOKEN="private-mcp-fixture"\n'); auth.chmod(0o600)
+    binary = tmp_path / "fixture-bin"; binary.mkdir()
+    mise = binary / "mise"
+    mise.write_text("#!" + sys.executable + ' -I\nimport json,tomllib\nfrom pathlib import Path\np=Path.cwd()/"mise.local.toml"\nd=tomllib.loads(p.read_text())["env"]\nprint(json.dumps({k:{"value":v,"source":str(p)} for k,v in d.items()}))\n'); mise.chmod(0o700)
+    try:
+        yield home, auth, dict(SSL_CERT_FILE=str(cert), PATH=str(binary) + os.pathsep + os.environ["PATH"]), calls
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=5)
 
 
 def _jar():
@@ -69,6 +131,86 @@ def write_connection(cwd, **changes):
     manifest = cwd / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps({"schema_version": 3, "project": {"name": "fixture"}, "wiki": value}))
+
+
+def personal_payload(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("wiki_personal_install", PLUGIN / "install.py")
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    package = module.prepare(tmp_path / "payload-data", _jar()) / "plugin"
+    transport = json.loads((package / ".mcp.json").read_text())["mcpServers"]["atlassian"]
+    assert transport["command"] == str(Path(sys.executable).absolute())
+    for name in ("personal_feedback.py", "document_destination.py"):
+        assert (package / "scripts" / name).read_bytes() == (ROOT / "plugin/scripts" / name).read_bytes()
+    return package, [transport["command"], *transport["args"]]
+
+
+def feedback_call(package, command, cwd, env, **arguments):
+    replies = _calls(package / "lib/wiki-atlassian.jar", cwd, env, command=command, requests=[
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "read_personal_feedback", "arguments": arguments}}])
+    tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
+    reply = next(row["result"] for row in replies if row.get("id") == 3)
+    assert not reply.get("isError"), reply
+    return tools, json.loads(reply["content"][0]["text"])
+
+
+def test_personal_feedback_uses_packaged_mcp_and_private_identity_without_project_wiki(tmp_path):
+    package, command = personal_payload(tmp_path)
+    project = tmp_path / "consumer"; project.mkdir()
+    with private_inbox(tmp_path) as (home, _, settings, calls):
+        env = clean_environment(home, **settings, ATLASSIAN_BASE_URL="https://project.invalid",
+            ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token-sentinel",
+            HTTP_PROXY="http://127.0.0.1:9", HTTPS_PROXY="http://127.0.0.1:9",
+            PYTHONPATH=str(project), PYTHONHOME=str(project))
+        (project / "personal_feedback.py").write_text("raise RuntimeError('project-import-poison')")
+        tools, first = feedback_call(package, command, project, env, limit=1)
+        assert [t["name"] for t in tools] == ["read_personal_feedback"]
+        assert tools[0]["annotations"]["readOnlyHint"] is True
+        assert tools[0]["annotations"]["destructiveHint"] is False
+        assert set(tools[0]["inputSchema"]["properties"]) == {"limit", "cursor"}
+        assert first["status"] == "read" and first["page"]["id"] == "790"
+        assert "Reuse compatible tokens" in first["comments"][0]["body"]["value"]
+        assert not first["complete"]
+        other = tmp_path / "other-consumer"; other.mkdir()
+        _, second = feedback_call(package, command, other, env, limit=1, **first["next"])
+        assert second["status"] == "read" and second["comments"][0]["id"] == "901" and second["complete"]
+        assert all(method == "GET" for method, _, _ in calls)
+        assert all(authorization == calls[0][2] for _, _, authorization in calls)
+        assert not (project / "doc").exists() and not list(other.iterdir())
+        assert all(secret not in json.dumps(first) + json.dumps(second) for secret in (
+            "private-mcp-fixture", "project-token-sentinel", "project@example.invalid", "project-import-poison"))
+
+
+@pytest.mark.parametrize("fault", ["missing-auth", "unsafe-settings", "mismatched-origin"])
+def test_packaged_personal_mcp_never_borrows_project_authentication(tmp_path, fault):
+    package, command = personal_payload(tmp_path)
+    project = tmp_path / "consumer"; project.mkdir()
+    with private_inbox(tmp_path) as (home, auth, settings, calls):
+        if fault == "missing-auth":
+            auth.unlink()
+        elif fault == "unsafe-settings":
+            (auth.parent / "feedback.yaml").chmod(0o644)
+        else:
+            auth.write_text(auth.read_text().replace("127.0.0.1", "other.invalid"))
+        env = clean_environment(home, **settings, ATLASSIAN_BASE_URL="https://project.invalid",
+            ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token-sentinel")
+        tools, result = feedback_call(package, command, project, env)
+        assert tools and result["status"] == "unavailable" and calls == []
+        assert "project-token-sentinel" not in json.dumps(result)
+
+
+def test_private_inbox_remains_readable_when_unrelated_project_wiki_is_invalid(tmp_path):
+    package, command = personal_payload(tmp_path)
+    project = tmp_path / "consumer"; project.mkdir()
+    write_connection(project)
+    with private_inbox(tmp_path) as (home, _, settings, calls):
+        env = clean_environment(home, **settings, ATLASSIAN_BASE_URL="https://different-project.invalid",
+            ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token-sentinel")
+        tools, result = feedback_call(package, command, project, env, limit=1)
+        assert {t["name"] for t in tools} == {"read_personal_feedback", "connection_status"}
+        assert result["status"] == "read" and result["page"]["id"] == "790"
+        assert all(method == "GET" for method, _, _ in calls)
 
 
 @pytest.mark.parametrize("settings", [{}, {"WIKI_ATLASSIAN_ENABLED": "false", "WIKI_ATLASSIAN_SITE": "bad"},

@@ -26,7 +26,8 @@ class ToolRegistry {
         val parameters: List<ToolParameter>,
         val instance: Any?,
         val function: KFunction<*>,
-        val unavailableReason: String?
+        val unavailableReason: String?,
+        val readOnly: Boolean
     )
 
     private val tools = mutableMapOf<String, RegisteredTool>()
@@ -65,7 +66,8 @@ class ToolRegistry {
                 parameters = params,
                 instance = instance,
                 function = func,
-                unavailableReason = unavailableReason
+                unavailableReason = unavailableReason,
+                readOnly = annotation.readOnly
             )
         }
     }
@@ -75,6 +77,9 @@ class ToolRegistry {
             put("name", tool.name)
             put("description", tool.description)
             put("inputSchema", buildInputSchema(tool))
+            if (tool.readOnly) put("annotations", buildJsonObject {
+                put("readOnlyHint", true); put("destructiveHint", false); put("idempotentHint", true)
+            })
         }
     }
 

@@ -14,9 +14,19 @@ fun main(args: Array<String>) {
         } catch (_: Exception) { throw IllegalArgumentException("Invalid project startup directory") }
         else -> throw IllegalArgumentException("wiki-atlassian accepts only --project-root with an absolute startup directory")
     }
-    val project = KnowledgeProject.fromProject(startup)
+    val personal = if (PersonalFeedbackTools.configured()) PersonalFeedbackTools.installed() else null
+    val project = try { KnowledgeProject.fromProject(startup) } catch (error: Exception) {
+        if (personal == null) throw error
+        McpServer("atlassian", "0.1.0", instructions = "The project wiki connection is unavailable. The separate private Harness inbox can still be read with read_personal_feedback; no project credential fallback is used.")
+            .addTools(personal).addUnavailableTools(MultiSpaceKnowledge::class, "The project wiki connection is unavailable; correct its configuration or authentication separately from the private inbox.")
+            .start()
+        return
+    }
     if (project == null) {
-        McpServer("atlassian", "0.1.0").start()
+        val server = McpServer("atlassian", "0.1.0",
+            instructions = if (personal != null) "Use read_personal_feedback for the privately configured Harness improvement inbox; do not use project credentials or another connector." else null)
+        personal?.let(server::addTools)
+        server.start()
         return
     }
     val remote = ConfluenceRemote(project.credentials)
@@ -38,8 +48,10 @@ fun main(args: Array<String>) {
         }
     }
     try {
-        McpServer("atlassian", "0.1.0", instructions = "Use atlassian MCP for the configured site's selected spaces. Search results and connection_status identify spaces. Choose an explicit space or native parent for new documents; never guess an ambiguous destination. Shared read replicas synchronize automatically; do not edit replica files.")
-            .addTools(WikiTools(documents::execute)).addTools(documents).start()
+        val server = McpServer("atlassian", "0.1.0", instructions = "Use atlassian MCP for the configured site's selected spaces. Search results and connection_status identify spaces. Choose an explicit space or native parent for new documents; never guess an ambiguous destination. Shared read replicas synchronize automatically; do not edit replica files. Use read_personal_feedback for the separate private Harness inbox when that tool is available.")
+            .addTools(WikiTools(documents::execute)).addTools(documents)
+        personal?.let(server::addTools)
+        server.start()
     } finally {
         runBlocking { jobs.forEach { it.cancel() }; jobs.joinAll() }
         worker.cancel(); documents.close(); remote.close()

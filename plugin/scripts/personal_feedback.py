@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import html
 from http.client import HTTPException
 import json
@@ -18,9 +19,10 @@ import shutil
 import stat
 import subprocess
 import sys
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from document_destination import _origin, _yaml_mapping
 
 
@@ -29,6 +31,8 @@ MAX_REPORT = 131072
 MAX_RESPONSE = 1048576
 CREDENTIALS = ("ATLASSIAN_BASE_URL", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN")
 ID = re.compile(r"[1-9][0-9]{0,31}")
+READ_CHARS = 12000
+MAX_CURSOR = 8192
 
 
 class FeedbackError(Exception):
@@ -142,6 +146,12 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+class _Response(dict):
+    def __init__(self, value, links):
+        super().__init__(value)
+        self.links = links
+
+
 def _request(site, credentials, method, path, body=None):
     token = base64.b64encode((credentials["ATLASSIAN_EMAIL"] + ":" + credentials["ATLASSIAN_API_TOKEN"]).encode()).decode("ascii")
     raw = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -151,24 +161,221 @@ def _request(site, credentials, method, path, body=None):
     with opener.open(request, timeout=20) as response:
         if response.status != (201 if method == "POST" else 200):
             raise ValueError("unexpected response status")
+        links = response.headers.get_all("Link", [])
         raw = response.read(MAX_RESPONSE + 1)
     if len(raw) > MAX_RESPONSE:
         raise ValueError("response too large")
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("invalid response")
-    return value
+    return _Response(value, links)
 
 
-def perform(action, report=None, home=None, environment=None):
+def _read_options(value):
+    value = {} if value is None else value
+    if not isinstance(value, dict) or set(value) - {"limit", "cursor"}:
+        raise FeedbackError("Read accepts only limit and the returned cursor.")
+    limit = value.get("limit", 10)
+    cursor = value.get("cursor")
+    if type(limit) is not int or not 1 <= limit <= 25:
+        raise FeedbackError("Read limit must be an integer from 1 to 25.")
+    if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CURSOR):
+        raise FeedbackError("Use the unchanged cursor returned by this inbox.")
+    return limit, cursor
+
+
+def _cursor_key(selected, credentials):
+    scope = json.dumps(["harness-feedback-read-v1", selected["site"], selected["page_id"],
+                        credentials["ATLASSIAN_EMAIL"]], separators=(",", ":")).encode()
+    return hmac.new(credentials["ATLASSIAN_API_TOKEN"].encode(), scope, hashlib.sha256).digest()
+
+
+def _cursor(key, account, kind, **fields):
+    raw = json.dumps(dict(v=1, account=account, kind=kind, **fields), separators=(",", ":"), sort_keys=True).encode()
+    result = base64.urlsafe_b64encode(raw).decode().rstrip("=") + "." + hmac.new(key, raw, hashlib.sha256).hexdigest()
+    if len(result) > MAX_CURSOR:
+        raise FeedbackError("Native continuation exceeds the supported read budget.")
+    return result
+
+
+def _decode_cursor(value, key):
+    if value is None:
+        return None
+    try:
+        encoded, signature = value.split(".")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", encoded) or not re.fullmatch(r"[0-9a-f]{64}", signature):
+            raise ValueError()
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        if not hmac.compare_digest(signature, hmac.new(key, raw, hashlib.sha256).hexdigest()):
+            raise ValueError()
+        data = json.loads(raw)
+        fields = {"page": {"offset", "version", "hash"}, "comment": {"id", "offset", "version", "hash"},
+                  "comments": {"native"}, "replies": {"id", "native"}}
+        if (not isinstance(data, dict) or data.get("v") != 1 or data.get("kind") not in fields
+                or set(data) != {"v", "account", "kind"} | fields[data["kind"]]
+                or not isinstance(data["account"], str) or not 1 <= len(data["account"]) <= 256):
+            raise ValueError()
+        if "id" in data and (not isinstance(data["id"], str) or not ID.fullmatch(data["id"])):
+            raise ValueError()
+        if "offset" in data and (type(data["offset"]) is not int or data["offset"] < 0
+                or type(data["version"]) is not int or data["version"] <= 0
+                or not isinstance(data["hash"], str) or not re.fullmatch(r"[0-9a-f]{64}", data["hash"])):
+            raise ValueError()
+        if "native" in data and (data["native"] is not None and (not isinstance(data["native"], str)
+                or not 1 <= len(data["native"]) <= 4096 or any(ord(c) < 32 for c in data["native"]))):
+            raise ValueError()
+        return data
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        raise FeedbackError("Cursor is invalid or no longer matches the private connection; read the inbox again without it.") from None
+
+
+def _version(value):
+    number = value.get("version", {}).get("number")
+    if type(number) is not int or number <= 0:
+        raise ValueError("native version unavailable")
+    return number
+
+
+def _body(value, state, key, account, kind, **identity):
+    storage = value.get("body", {}).get("storage", {})
+    text = storage.get("value")
+    if not isinstance(text, str) or storage.get("representation", "storage") != "storage":
+        raise ValueError("native storage unavailable")
+    version = _version(value)
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    offset = state["offset"] if state else 0
+    if state and (state["version"] != version or state["hash"] != digest or offset > len(text)):
+        raise FeedbackError("The selected content changed; read the inbox again without the old cursor.")
+    end = min(len(text), offset + READ_CHARS)
+    result = dict(format="storage", value=text[offset:end], offset=offset, offsetUnit="unicode_codepoint", truncated=end < len(text))
+    if end < len(text):
+        result["read"] = dict(cursor=_cursor(key, account, kind, offset=end, version=version, hash=digest, **identity))
+    return result
+
+
+def _next_cursor(response, site, path):
+    links = []
+    body = response.get("_links", {})
+    if not isinstance(body, dict):
+        raise ValueError("invalid native links")
+    if body.get("next") is not None:
+        links.append(body["next"])
+    for header in getattr(response, "links", []):
+        if not isinstance(header, str) or len(header) > MAX_CURSOR:
+            raise ValueError("invalid native Link header")
+        for segment in re.split(r",\s*(?=<)", header):
+            match = re.fullmatch(r'\s*<([^<>]+)>((?:\s*;\s*[A-Za-z][A-Za-z0-9_-]*=(?:"[^"\r\n]*"|[^;,\s]+))*)\s*', segment)
+            if not match:
+                raise ValueError("invalid native Link header")
+            relations = re.findall(r';\s*rel=("[^"\r\n]*"|[^;,\s]+)', match[2], flags=re.I)
+            if len(relations) > 1:
+                raise ValueError("ambiguous native Link header")
+            if relations and "next" in relations[0].strip('"').lower().split():
+                links.append(match[1])
+    cursors = set()
+    for link in links:
+        if not isinstance(link, str) or not 1 <= len(link) <= MAX_CURSOR:
+            raise ValueError("invalid native continuation")
+        url = urlsplit(urljoin(site + path, link))
+        if _origin(url.scheme + "://" + url.netloc) != site or url.path != path or url.fragment:
+            raise ValueError("native continuation changed scope")
+        query = parse_qs(url.query, keep_blank_values=True, strict_parsing=True)
+        if set(query) - {"cursor", "limit", "body-format", "sort"} or any(len(v) != 1 for v in query.values()):
+            raise ValueError("invalid native continuation query")
+        if (query.get("body-format", ["storage"]) != ["storage"] or query.get("sort", ["-created-date"]) != ["-created-date"]
+                or "limit" in query and (not query["limit"][0].isdigit() or not 1 <= int(query["limit"][0]) <= 25)):
+            raise ValueError("native continuation changed read parameters")
+        value = query.get("cursor", [None])[0]
+        if not isinstance(value, str) or not 1 <= len(value) <= 4096 or any(ord(c) < 32 for c in value):
+            raise ValueError("native continuation cursor unavailable")
+        cursors.add(value)
+    if len(cursors) > 1:
+        raise ValueError("conflicting native continuations")
+    return next(iter(cursors), None)
+
+
+def _comment_location(site, credentials, comment, page_id):
+    seen = set()
+    while comment is not None:
+        if comment in seen or len(seen) >= 16:
+            raise ValueError("comment ancestry exceeds read budget")
+        seen.add(comment)
+        raw = _request(site, credentials, "GET", "/wiki/api/v2/footer-comments/" + comment)
+        if (raw.get("id") != comment or raw.get("status") != "current"
+                or any(raw.get(k) is not None for k in ("blogPostId", "attachmentId", "customContentId"))):
+            raise ValueError("comment identity unavailable")
+        if raw.get("pageId") is not None and raw["pageId"] != page_id:
+            raise ValueError("comment belongs to another page")
+        parent = raw.get("parentCommentId")
+        if parent is not None and (not isinstance(parent, str) or not ID.fullmatch(parent)):
+            raise ValueError("invalid native parent")
+        if parent is None:
+            if raw.get("pageId") != page_id:
+                raise ValueError("comment page unavailable")
+            return
+        comment = parent
+
+
+def _read_feedback(selected, credentials, account, key, state, page, limit):
+    site, page_id = selected["site"], selected["page_id"]
+    if not isinstance(page.get("title"), str) or not 1 <= len(page["title"]) <= 4096:
+        raise ValueError("native page title unavailable")
+    result = dict(status="read", page=dict(id=page_id, url=selected["page"], title=page["title"], version=_version(page)))
+    kind = state["kind"] if state else "overview"
+    result["kind"] = kind
+    if kind in {"overview", "page"}:
+        result["document"] = _body(page, state, key, account, "page")
+        if kind == "page":
+            return result
+    if kind == "comment":
+        _comment_location(site, credentials, state["id"], page_id)
+        raw = _request(site, credentials, "GET", "/wiki/api/v2/footer-comments/" + state["id"] + "?body-format=storage")
+        if raw.get("id") != state["id"] or raw.get("status") != "current" or raw.get("pageId", page_id) != page_id:
+            raise ValueError("comment identity changed")
+        result["comment"] = dict(id=state["id"], version=_version(raw), body=_body(raw, state, key, account, "comment", id=state["id"]))
+        _comment_location(site, credentials, state["id"], page_id)
+        return result
+    parent = state["id"] if kind == "replies" else None
+    if parent:
+        _comment_location(site, credentials, parent, page_id)
+    path = "/wiki/api/v2/footer-comments/" + parent + "/children" if parent else f"/wiki/api/v2/pages/{page_id}/footer-comments"
+    query = f"?body-format=storage&limit={limit}&sort=-created-date"
+    if state and state.get("native"):
+        query += "&cursor=" + quote(state["native"], safe="")
+    response = _request(site, credentials, "GET", path + query)
+    rows = response.get("results")
+    if not isinstance(rows, list) or len(rows) > limit:
+        raise ValueError("invalid native comment page")
+    comments = []
+    for raw in rows:
+        if (not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not ID.fullmatch(raw["id"])
+                or raw.get("status") != "current" or raw.get("pageId", page_id) != page_id
+                or any(raw.get(k) is not None for k in ("blogPostId", "attachmentId", "customContentId"))
+                or raw.get("parentCommentId", parent) != parent):
+            raise ValueError("native comment scope changed")
+        item = dict(id=raw["id"], version=_version(raw), body=_body(raw, None, key, account, "comment", id=raw["id"]))
+        item["replies"] = dict(cursor=_cursor(key, account, "replies", id=raw["id"], native=None))
+        comments.append(item)
+    if len({c["id"] for c in comments}) != len(comments):
+        raise ValueError("duplicate native comments")
+    result["comments"] = comments
+    native = _next_cursor(response, site, path)
+    result["complete"] = native is None
+    if native is not None:
+        result["next"] = dict(cursor=_cursor(key, account, "replies" if parent else "comments", native=native, **({"id": parent} if parent else {})))
+    return result
+
+
+def perform(action, report=None, home=None, environment=None, request=None):
     selected = load_destination(home)
     if action == "status" or selected["status"] != "configured":
         return selected
-    if action not in ("check", "send"):
+    if action not in ("check", "send", "read"):
         return {"status": "unavailable", "message": "Unknown feedback action."}
     started = False
     comment_id = None
     try:
+        limit, cursor = _read_options(request) if action == "read" else (None, None)
         if action == "send" and (not isinstance(report, str) or not report.strip()
                 or len(report.encode("utf-8")) > MAX_REPORT or any(ord(c) < 32 and c not in "\n\t\r" for c in report)):
             raise FeedbackError("Send requires nonempty UTF-8 report text on stdin, at most 128 KiB.")
@@ -177,18 +384,28 @@ def perform(action, report=None, home=None, environment=None):
             raise FeedbackError("Private credential origin does not match the feedback page; no request was sent.")
         if ":" in credentials["ATLASSIAN_EMAIL"]:
             raise FeedbackError("Invalid private account email.")
+        key = _cursor_key(selected, credentials) if action == "read" else None
+        state = _decode_cursor(cursor, key) if action == "read" else None
         if action == "send" and credentials["ATLASSIAN_API_TOKEN"] in report:
             raise FeedbackError("Report contains the private token; redact it before sending.")
         site, page_id = selected["site"], selected["page_id"]
         user = _request(site, credentials, "GET", "/wiki/rest/api/user/current")
         account = user.get("accountId")
-        if not isinstance(account, str) or not account.strip():
+        if not isinstance(account, str) or not account.strip() or len(account) > 256:
             raise FeedbackError("Authenticated account identity is unavailable; no write was sent.")
-        page = _request(site, credentials, "GET", f"/wiki/api/v2/pages/{page_id}")
+        if state and state["account"] != account:
+            raise FeedbackError("The authenticated private account changed; read the inbox again without the old cursor.")
+        include_body = action == "read" and (state is None or state["kind"] == "page")
+        page = _request(site, credentials, "GET", f"/wiki/api/v2/pages/{page_id}" + ("?body-format=storage" if include_body else ""))
         if page.get("id") != page_id or page.get("status") != "current":
             raise FeedbackError("Feedback page is not the selected current page; no write was sent.")
         if action == "check":
             return {"status": "checked", "page": selected["page"], "publication": "not_attempted"}
+        if action == "read":
+            result = _read_feedback(selected, credentials, account, key, state, page, limit)
+            if credentials["ATLASSIAN_API_TOKEN"] in json.dumps(result, ensure_ascii=False):
+                raise FeedbackError("Native content contains private authentication material; no content was returned.")
+            return result
         # Plain text only: never interpret report Markdown or embedded HTML as storage.
         body = "<p>" + html.escape(report.replace("\r\n", "\n").replace("\r", "\n"), quote=False).replace("\n", "<br />") + "</p>"
         started = True
@@ -242,14 +459,33 @@ Page links: /wiki/spaces/KEY/pages/ID[/title] (including ~personal keys),
 short links need the full page URL. No destination environment override.
 
 status: local settings only, no credentials/network. check: read-only access.
+read: internal wiki MCP read bridge; optional JSON limit/cursor on stdin.
 send: redacted UTF-8 report on stdin, <=128 KiB; appends one footer comment.
 Configuration does not authorize sending. No automatic publication or retry.
 Exit 0: success/status; 1: unavailable; 2: invalid CLI; 3: uncertain write.
 If unknown, inspect the page/known comment ID before another submission.
 """)
-    parser.add_argument("action", nargs="?", default="status", choices=("status", "check", "send"))
+    parser.add_argument("action", nargs="?", default="status", choices=("status", "check", "send", "read"))
     args = parser.parse_args()
     report = None
+    request = None
+    if args.action == "read":
+        try:
+            raw = sys.stdin.buffer.read(16385)
+            if len(raw) > 16384:
+                raise ValueError()
+            def unique(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError()
+                    value[key] = item
+                return value
+            request = json.loads(raw.decode("utf-8"), object_pairs_hook=unique) if raw.strip() else {}
+            _read_options(request)
+        except (ValueError, OSError):
+            print(json.dumps({"status": "unavailable", "message": "Read requires a bounded JSON object with only limit and the returned cursor."}))
+            return 1
     if args.action == "send":
         try:
             raw = sys.stdin.buffer.read(MAX_REPORT + 1)
@@ -259,7 +495,7 @@ If unknown, inspect the page/known comment ID before another submission.
         except (ValueError, OSError):
             print(json.dumps({"status": "unavailable", "message": "Report must be UTF-8 and at most 128 KiB."}))
             return 1
-    result = perform(args.action, report)
+    result = perform(args.action, report, request=request)
     print(json.dumps(result, ensure_ascii=False))
     return 3 if result["status"] == "unknown" else 1 if result["status"] == "unavailable" or args.action != "status" and result["status"] == "unconfigured" else 0
 

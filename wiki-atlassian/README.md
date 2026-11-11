@@ -264,6 +264,27 @@ executable, otherwise `JAVA_HOME/bin/java`, otherwise Java from PATH. Source
 launches require `build/libs/wiki-atlassian.jar`; packaged launches use
 `lib/wiki-atlassian.jar`.
 
+## Personal Harness improvement inbox
+
+When `~/.config/harness/feedback.yaml` exists, the same `atlassian` MCP also
+offers `read_personal_feedback(limit, cursor)`. It works without enabling a
+project wiki and reads only the page selected by that private setting, using
+the separate `~/.config/harness/mise.local.toml` authentication. Project
+credentials and Rovo are never fallbacks. No new token or project connection is
+needed when that existing private connection already works.
+
+The first read returns native storage content and a comment page. Follow returned
+`read`, `next` or `replies` cursors to expand bounded content. Cursors bind the
+private connection and observed scope; changed content or credentials may require
+starting without the old cursor. HTTP and body continuations are checked, not
+followed to arbitrary destinations. No background reading, acknowledgement,
+publication or local report storage occurs.
+
+The installed launcher pins its own Python invocation and the packaged canonical
+private helper. That Python needs PyYAML for configured private YAML; missing
+dependencies return unavailable and are not installed automatically. Start via
+the launcher, then reconnect the host after installation to expose the new tool.
+
 ## Replacing the early knowledge-confluence installation
 
 The new name has no legacy config reader or duplicate service alias. If the

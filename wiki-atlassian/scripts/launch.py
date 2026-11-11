@@ -34,7 +34,16 @@ def main():
         java = Path(executable)
     # Environment-manager shims must not resolve from the consuming project's cwd.
     os.chdir(root)
-    os.execv(str(java), [str(java), "-jar", str(jar), "--project-root", str(project_root)])
+    helper = root / "scripts/personal_feedback.py"
+    if not helper.is_file() and (root / "build.gradle.kts").is_file():
+        helper = root.parent / "plugin/scripts/personal_feedback.py"
+    feedback = []
+    if helper.is_file() and not helper.is_symlink():
+        # Keep a virtualenv invocation intact: resolving its Python symlink can
+        # discard the packages used for private configuration parsing.
+        feedback = [f"-Dwiki.atlassian.feedbackPython={Path(sys.executable).absolute()}",
+                    f"-Dwiki.atlassian.feedbackHelper={helper.resolve()}"]
+    os.execv(str(java), [str(java), *feedback, "-jar", str(jar), "--project-root", str(project_root)])
     return 1
 
 if __name__ == "__main__":

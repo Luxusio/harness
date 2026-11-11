@@ -4,7 +4,8 @@ package io.crscube.clitools.mcp
 @Retention(AnnotationRetention.RUNTIME)
 annotation class McpTool(
     val name: String = "",
-    val description: String
+    val description: String,
+    val readOnly: Boolean = false
 )
 
 @Target(AnnotationTarget.VALUE_PARAMETER)

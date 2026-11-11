@@ -73,6 +73,10 @@ def _prepare(parent: Path, parent_descriptor: int, jar: Path) -> Path:
             shutil.copytree(ROOT / name, plugin / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in (".mcp.json", "PROVENANCE.md", "README.md"):
             shutil.copyfile(ROOT / name, plugin / name)
+        # Reuse the canonical private-auth implementation; never maintain a
+        # second credential reader inside the backend plugin.
+        for name in ("personal_feedback.py", "document_destination.py"):
+            shutil.copyfile(ROOT.parent / "plugin/scripts" / name, plugin / "scripts" / name)
         (plugin / "lib").mkdir()
         shutil.copyfile(jar, plugin / "lib/wiki-atlassian.jar")
         # Frozen verification inputs are read-only; only our private copies change.
@@ -81,7 +85,7 @@ def _prepare(parent: Path, parent_descriptor: int, jar: Path) -> Path:
                 raise ValueError("Plugin payload cannot contain symbolic links")
             path.chmod(0o700 if path.is_dir() else 0o600)
         digest = hashlib.sha256()
-        interpreter = str(Path(sys.executable).resolve())
+        interpreter = str(Path(sys.executable).absolute())
         digest.update((interpreter + "\0" + str(parent) + "\0").encode())
         for path in sorted(plugin.rglob("*")):
             if path.is_symlink():
