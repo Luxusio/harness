@@ -74,7 +74,7 @@ def test_multiple_work_fences_are_rejected():
 
 @pytest.mark.parametrize("settings", [
     {"document_review": True}, {"verification": "skip"}, {"install": "always"},
-    {"unknown": True}, {"document_paths": ["."]}, {"document_paths": ["../docs"]},
+    {"unknown": True}, {"document_paths": ["docs/"]}, {"document_paths": ["../docs"]},
     {"document_paths": ["/docs"]}, {"document_paths": ["docs", "docs"]},
     {"executable_paths": "docs/runtime.md"},
 ])
@@ -115,6 +115,23 @@ def test_broad_document_roles_do_not_admit_runtime_or_config_paths(tmp_path, pat
     assert not work_policy.document_path(policy, path)
     with pytest.raises(ValueError, match="promote"):
         work_policy.require_write(policy, path)
+
+
+def test_document_only_repository_can_select_root_without_weakening_instruction_boundaries(tmp_path):
+    repo = tmp_path / 'repo'
+    (repo / 'doc/harness').mkdir(parents=True)
+    set_workflow(repo, {'document_paths': ['.']})
+    policy = work_policy.load(repo / 'unused', repo, plan='```wbs-work\n{"kind":"document"}\n```\n')
+    assert work_policy.document_path(policy, 'topic.md')
+    for path in ('agents.md', 'CLAUDE.MD', '.git/config.md', '.ClAuDe/rules.md', 'topic.py', 'settings.yaml'):
+        assert not work_policy.document_path(policy, path)
+
+
+def test_executable_markdown_cannot_be_edited_as_ordinary_prose(tmp_path):
+    repo, td, _, _ = document_fixture(tmp_path)
+    (repo / 'doc/common/note.md').chmod(0o755)
+    with pytest.raises(ValueError, match='executable.*development'):
+        wbs.require_source_assignment(str(repo), 'sample', 'doc/common/note.md')
 
 
 @pytest.mark.parametrize("kind,field", [("document", "document_verified"), ("plan", "planning_verified")])

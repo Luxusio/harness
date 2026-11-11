@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 
 
 KINDS = frozenset({"development", "document", "plan"})
@@ -46,7 +47,7 @@ def _paths(value):
         _require(isinstance(path, str) and 0 < len(path) <= 2048 and "\0" not in path
                  and "\\" not in path and not path.startswith("/")
                  and not re.match(r"^[A-Za-z]:", path)
-                 and all(p not in {"", ".", ".."} for p in path.split("/")),
+                 and (path == "." or all(p not in {"", ".", ".."} for p in path.split("/"))),
                  "paths must be canonical checkout-relative literals")
     _require(len(set(value)) == len(value), "duplicate policy path")
     return sorted(value)
@@ -108,7 +109,7 @@ def required_lenses(policy, declared=None, *, explicit=False):
 
 
 def _covers(root, path):
-    return path == root or path.startswith(root + "/")
+    return root == "." or path == root or path.startswith(root + "/")
 
 
 def document_path(policy, path):
@@ -126,10 +127,17 @@ def document_path(policy, path):
             and any(_covers(root, path) for root in policy["document_paths"]))
 
 
-def require_write(policy, path):
+def require_write(policy, path, repo=None):
     if policy["kind"] != "development":
         _require(document_path(policy, path),
                  "non-narrative or unknown source impact; retain this WBS/run and promote its plan to development before editing")
+        if repo is not None:
+            try:
+                mode = (Path(repo) / path).lstat().st_mode
+            except FileNotFoundError:
+                return  # A new narrative file has no prior executable mode.
+            _require(stat.S_ISREG(mode) and not mode & 0o111,
+                     'executable or nonregular document target; promote the same WBS to development')
 
 
 def proof_definition(node, policy):

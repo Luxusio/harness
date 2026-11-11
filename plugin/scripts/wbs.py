@@ -981,7 +981,7 @@ def require_source_assignment(repo, wbs_id, path=None):
     import work_policy
     work = work_policy.load(td, repo)
     if path is not None:
-        work_policy.require_write(work, path)
+        work_policy.require_write(work, path, repo)
     # Existing managed ownership is the authority for a lead; never create a
     # nested pool merely because its own WBS has not measured its next check.
     if Path(repo, '.git').is_file():
@@ -1007,7 +1007,7 @@ def require_source_assignment(repo, wbs_id, path=None):
                             batch_state.control(item)
                             if path is not None and data.get('owner_wbs_id'):
                                 parent = canonical_wbs_dir(wbs_id=data['owner_wbs_id'], repo_root=root)
-                                work_policy.require_write(work_policy.load(parent, root), path)
+                                work_policy.require_write(work_policy.load(parent, root), path, root)
                             scopes = batch_state.effective_scopes(item)
                             require(path is None or any(covers(scope, path) for scope in scopes), 'source path outside managed ownership')
                             return dict(mode='managed-lead', scopes=scopes)
