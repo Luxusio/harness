@@ -7,7 +7,13 @@ from pathlib import Path
 import subprocess
 import sys
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugin/scripts"
@@ -353,3 +359,22 @@ def test_symlink_and_nonregular_git_markers_are_unavailable(tmp_path):
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
     marker.unlink(); os.mkfifo(marker)
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
+
+
+
+def test_unrelated_manifest_mapping_accepts_numeric_keys_without_mutation(tmp_path):
+    path = manifest_path(tmp_path); path.parent.mkdir(parents=True)
+    source = "type: library\nstatus_codes: {200: ok, 404: missing}\nwiki: " + json.dumps(config()) + "\n"
+    path.write_text(source)
+    assert destination.select_destination(connection(), cwd=tmp_path)["mode"] == "external"
+    assert path.read_text() == source
+
+
+@pytest.mark.parametrize("source", [
+    "type: library\nstatus_codes: {200: ok, 200: duplicate}\nwiki: {enabled: false}\n",
+    "type: library\nwiki: {enabled: false, 200: invalid}\n",
+])
+def test_nonstring_mapping_keys_still_require_unique_keys_and_strict_wiki_fields(tmp_path, source):
+    path = manifest_path(tmp_path); path.parent.mkdir(parents=True)
+    path.write_text(source)
+    assert destination.select_destination(connection(), cwd=tmp_path)["mode"] == "unavailable"

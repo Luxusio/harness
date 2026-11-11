@@ -170,8 +170,11 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
 
     Since 2026-09-26 PyYAML is a dev dependency, so a stray `import yaml` in the
     runtime would import cleanly in every synced venv and only fail for users.
-    This scans every import, not just top-level ones, since a lazy import in a
-    hook fails the same way. `importlib.import_module("x")` and
+    The project wiki reader has one explicit optional PyYAML dependency. Its
+    actual no-parser behavior is covered by test_document_destination.py using
+    Python -S; local projects must still work and configured wiki must remain
+    unavailable. No other runtime module gets a third-party allowance.
+    This scans every import, not just top-level ones. `importlib.import_module("x")` and
     `__import__("x")` count too when the name is a positional string literal; a computed
     name cannot be resolved statically and is not checked.
     """
@@ -186,6 +189,7 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
         violations = []
         for path in runtime_files:
             tree = ast.parse(path.read_text(encoding="utf-8"))
+            parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     names = [alias.name for alias in node.names]
@@ -196,6 +200,12 @@ class ShippedRuntimeIsStdlibOnlyTests(unittest.TestCase):
                 else:
                     continue
                 for name in names:
+                    if path == SCRIPT_DIR / "document_destination.py" and name == "yaml":
+                        enclosing = parents.get(node)
+                        while enclosing is not None and not isinstance(enclosing, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            enclosing = parents.get(enclosing)
+                        if enclosing is not None and enclosing.name == "_read_config":
+                            continue
                     if name.split(".")[0] not in allowed:
                         violations.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {name}")
         self.assertEqual(violations, [], "runtime imports a non-stdlib module")

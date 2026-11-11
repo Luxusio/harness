@@ -120,8 +120,12 @@ def _read_config(cwd):
             mapping = {}
             for key_node, value_node in node.value:
                 key = self.construct_object(key_node, deep=deep)
-                if not isinstance(key, str) or key in mapping:
-                    raise ValueError("invalid configuration key")
+                try:
+                    duplicate = key in mapping
+                except TypeError:
+                    raise ValueError("unhashable configuration key") from None
+                if duplicate:
+                    raise ValueError("duplicate configuration key")
                 mapping[key] = self.construct_object(value_node, deep=deep)
             return mapping
 
