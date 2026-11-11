@@ -836,6 +836,13 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         if active_dir and work['kind'] != 'development':
             from wbs import require_source_assignment
             require_source_assignment(repo_root, os.path.basename(active_dir), _rel(file_path, repo_root))
+            should_block, reason_text = _handle_scope_lock(
+                file_path, active_dir, repo_root, os.path.basename(active_dir),
+            )
+            if should_block:
+                command, owner, docs = _RULE_NEXT_ACTION.get('C-09-scope-lock', ('', '', ''))
+                emit_permission_decision('deny', reason_text,
+                    next_action_command=command, owner_skill=owner, docs=docs)
             return 0
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         _deny("wbs-work-policy", file_path, "WBS-control-mcp", str(exc), repo_root)

@@ -320,6 +320,26 @@ def test_actual_prewrite_requires_development_for_known_text_configuration(tmp_p
     assert 'promote' in result.stdout
 
 
+@pytest.mark.parametrize('kind', ['document', 'plan'])
+def test_narrative_prewrite_preserves_forbidden_scope_without_host_dispatch(tmp_path, kind):
+    from conftest import invoke_hook, parse_decision
+    from test_harness_mcp_server import _write_marker_fixture
+    repo, td, call, _ = document_fixture(tmp_path)
+    if kind == 'plan':
+        assert not call('plan', plan=work_plan(kind)).get('isError')
+    (td / 'PROGRESS.md').write_text('wbs_id: WBS__sample\nallowed_paths:\n  - doc/common/allowed.md\nforbidden_paths:\n  - doc/common/note.md\n')
+    _write_marker_fixture(str(repo), str(td), 'work-policy-native')
+    gate = str(Path(work_policy.__file__).with_name('prewrite_gate.py'))
+    for name, denied in [('note.md', True), ('allowed.md', False)]:
+        result = invoke_hook(gate, 'Write', {'file_path': str(repo / 'doc/common' / name)}, cwd=str(repo),
+            env_extra={'HARNESS_SESSION_ID': 'work-policy-native', 'HARNESS_SKIP_PREWRITE': '0', 'HARNESS_DISABLE_SCOPE_LOCK': '0'})
+        assert result.returncode == 0
+        assert (parse_decision(result.stdout)[0] == 'deny') is denied, (result.stdout, result.stderr)
+        if denied:
+            assert 'scope-lock-forbidden' in result.stdout
+    assert not wbs.read_state(str(td)).get('execution_admission')
+
+
 @pytest.mark.parametrize("binding", ["missing", "stale", "foreign"])
 def test_document_write_does_not_borrow_missing_stale_or_foreign_focus(tmp_path, binding):
     from conftest import invoke_hook, parse_decision
