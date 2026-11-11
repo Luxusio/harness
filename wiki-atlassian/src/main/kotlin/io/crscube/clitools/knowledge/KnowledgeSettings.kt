@@ -64,26 +64,37 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
                 val pages = manifest["pages"]?.jsonObject ?: return
                 require(pages.size <= 20000) { "Legacy corpus exceeds page budget" }
                 var totalBytes = 0L
+                val seededPages = linkedMapOf<String, JsonElement>()
                 for ((id, value) in pages) {
                     require(id.matches(Regex("[1-9][0-9]*")))
                     val row = value.jsonObject
+                    require(row["spaceId"] == initial["spaceId"]) { "Legacy body belongs to another space" }
                     val markdown = row.getValue("path").jsonPrimitive.content
                     val storage = row.getValue("storage").jsonPrimitive.content
                     require(markdown.startsWith("pages/") && markdown.endsWith(".md") &&
                         storage.startsWith(".sync/storage/") && storage.endsWith(".xhtml")) { "Invalid legacy body path" }
-                    for (relative in listOf(markdown, storage)) {
+                    val safeMarkdown = "pages/legacy-$id.md"
+                    val safeStorage = ".sync/storage/$id-${row.getValue("version").jsonPrimitive.int}-${row.getValue("bodyHash").jsonPrimitive.content}.xhtml"
+                    require(row.getValue("bodyHash").jsonPrimitive.content.matches(Regex("[a-f0-9]{64}"))) { "Invalid legacy body hash" }
+                    for ((relative, target) in listOf(markdown to safeMarkdown, storage to safeStorage)) {
                         val source = ContextFiles.safe(sourceBase, relative)
                         require(Files.isRegularFile(source) && Files.size(source) <= 8L * 1024 * 1024)
                         totalBytes += Files.size(source)
                         require(totalBytes <= 256L * 1024 * 1024) { "Legacy corpus exceeds byte budget" }
                         val body = Files.readString(source)
                         if (relative == storage) require(ContextFiles.hash(body) == row["bodyHash"]?.jsonPrimitive?.content)
-                        ContextFiles.atomic(ContextFiles.safe(corpusRoot.resolve("confluence/$space"), relative), body)
+                        ContextFiles.atomic(ContextFiles.safe(corpusRoot.resolve("confluence/$space"), target), body)
                     }
+                    seededPages[id] = JsonObject(row.filterKeys { it in setOf("id", "title", "parentId", "type", "spaceId", "version", "status") } +
+                        mapOf("path" to JsonPrimitive(safeMarkdown), "storage" to JsonPrimitive(safeStorage), "bodyHash" to row.getValue("bodyHash")))
                 }
-                // Never import old authorization, notifications, denial markers or writer journals.
-                val seed = JsonObject(manifest - "credentialBinding" - WikiChanges.noticesKey - "wikiCommentWatch" +
-                    ("inventoryComplete" to JsonPrimitive(false)))
+                // The seed carries bytes, never old selection, cursor, paths, authorization or operations.
+                // Omitting the old policy forces fresh inventory selection before using any old ancestry.
+                val seed = buildJsonObject {
+                    put("site", credentials.baseUrl.trimEnd('/')); put("spaceId", initial.getValue("spaceId"))
+                    put("homePageId", initial.getValue("rootPageId")); put("inventoryComplete", false)
+                    put("pages", JsonObject(seededPages))
+                }
                 ContextFiles.atomic(destination.resolve("manifest.json"), seed.toString())
             }
         }

@@ -1671,6 +1671,43 @@ class NativeDocumentContractTest {
         provider.assertNoEffects()
     }
 
+    @Test fun `legacy operational metadata and colliding source paths cannot poison fresh inventory admission`() {
+        val provider = Provider()
+        provider.use(local = true) { }
+        Files.move(root, settings.legacyCorpusRoot)
+        val legacyManifest = settings.legacyCorpusRoot.resolve("confluence/COMMON/.sync/manifest.json")
+        val original = Json.parseToJsonElement(Files.readString(legacyManifest)).jsonObject
+        val collidingRows = JsonObject(original.getValue("pages").jsonObject.toMutableMap().apply {
+            val rootRow = getValue("210").jsonObject
+            val child = getValue("201").jsonObject
+            put("201", JsonObject(child + ("path" to rootRow.getValue("path")) + ("parentId" to JsonPrimitive("201"))))
+        })
+        for (rows in listOf(buildJsonObject {}, collidingRows)) {
+            val source = JsonObject(original + mapOf("pages" to rows, "explicitPages" to JsonArray(listOf(JsonPrimitive("999"))),
+                "folderParents" to buildJsonObject { put("998", "999"); put("999", "998") },
+                "changes" to JsonPrimitive("obsolete-operational-metadata")))
+            ContextFiles.atomic(legacyManifest, source.toString())
+            val fresh = KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data"))
+            fresh.prepareCorpus()
+            val target = root.resolve("confluence/COMMON/.sync/manifest.json")
+            val seed = Json.parseToJsonElement(Files.readString(target)).jsonObject
+            assertEquals(setOf("site", "spaceId", "homePageId", "inventoryComplete", "pages"), seed.keys,
+                "Optional source state must never become the new operational snapshot")
+            val safeRows = seed.getValue("pages").jsonObject
+            assertEquals(safeRows.size, safeRows.values.map { it.jsonObject.getValue("path") }.toSet().size)
+            safeRows.forEach { (id, row) -> assertEquals(JsonPrimitive("pages/legacy-$id.md"), row.jsonObject["path"]) }
+            provider.requests.clear()
+            provider.use(connection = fresh, local = true) { registry ->
+                assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content"))
+            }
+            assertEquals(source.toString(), Files.readString(legacyManifest))
+            if (rows.isEmpty()) assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" })
+            else assertFalse(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "Safe per-ID seeds still reuse authorized unchanged bodies")
+            Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.delete(it) } }
+        }
+        provider.assertNoEffects()
+    }
+
     @Test fun `already replaced token cannot guess another opaque legacy directory`() {
         val provider = Provider()
         provider.use(local = true) { }
