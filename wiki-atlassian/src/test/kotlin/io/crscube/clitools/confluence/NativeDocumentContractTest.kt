@@ -1716,4 +1716,29 @@ class NativeDocumentContractTest {
         provider.assertNoEffects()
     }
 
+    @Test fun `new corpus reports paused comment coverage after confirmed root denial`() {
+        settings = KnowledgeSettings(JsonObject(settings.read() + ("watchCommentPages" to JsonPrimitive("201"))),
+            credentials, runtimeHome.resolve("data"))
+        val provider = Provider()
+        val control = root.resolve("confluence/COMMON/.sync")
+        val manifest = control.resolve("manifest.json")
+        provider.use(local = true, observeCorpus = { corpus ->
+            val ready = WikiChanges.comments(Json.parseToJsonElement(Files.readString(manifest)).jsonObject,
+                1, setOf("201"), mapOf("201" to "a".repeat(64)))
+            ContextFiles.atomic(manifest, ready.toString())
+            assertEquals(JsonPrimitive("ready"), Json.parseToJsonElement(corpus.status()).jsonObject["commentWatch"])
+            provider.denied["/wiki/api/v2/pages/210"] = HttpStatusCode.Forbidden
+            assertFailsWith<ContextRemoteException> { runBlocking { corpus.synchronize() } }
+        }) { }
+        provider.requests.clear()
+        provider.use(local = true, synchronize = false) { registry ->
+            val paused = call(registry, "connection_status", buildJsonObject {})
+            assertEquals(JsonPrimitive("failed"), paused["status"])
+            assertEquals(JsonPrimitive("root_scope_denied"), paused["code"])
+            assertEquals(JsonPrimitive("unavailable"), paused["commentWatch"])
+            assertEquals(JsonPrimitive(true), paused["ready"], "Last committed replica remains readable")
+        }
+        assertTrue(provider.requests.isEmpty())
+    }
+
 }

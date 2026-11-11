@@ -117,8 +117,9 @@ baseline for each selected page. A later observed change directs the agent to
 last complete observation. The watcher uses the wiki poll interval and a shared
 lock. It checks the least recently attempted pages first, with a shared budget
 of 512 requests, 32 MiB and 30 seconds per scan, and up to eight seconds per
-page. The connection retains up to 64 page observations. Use `connection_status`
-to check Confluence comment coverage.
+page. A page interrupted by the shared scan budget keeps its priority for the
+next scan. The connection retains up to 64 page observations. Use
+`connection_status` to check coverage and whether root access has paused it.
 
 ## Search and knowledge maintenance
 

@@ -79,7 +79,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         return "<p><ac:link><ri:user ri:account-id=\"$id\" /></ac:link></p>"
     }
     private data class Environment(val root: Path, val connections: JsonObject, val installation: String)
-    private fun publishReplica(env: Environment, config: ContextConfig, page: RemotePage, acknowledgement: JsonObject,
+    private suspend fun publishReplica(env: Environment, config: ContextConfig, page: RemotePage, acknowledgement: JsonObject,
                                observedBefore: RemotePage? = null): JsonObject = try {
         unchanged(env)
         ContextMirror(env.root, remote).publishVerified(config, page, observedBefore) { unchanged(env) }

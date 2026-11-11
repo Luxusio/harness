@@ -6,6 +6,7 @@ import java.util.UUID
 /** The manifest owns the sequence. The hook feed is a projection of a committed manifest. */
 internal object WikiChanges {
     const val noticesKey = "wikiNotices"
+    const val noticeDenialMarker = "notice-access-denied"
     private const val watchKey = "wikiCommentWatch"
     private const val maxEvents = 64
     private const val maxWatchedPages = 64

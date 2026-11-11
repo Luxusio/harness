@@ -6,7 +6,10 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -16,6 +19,7 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 
 class WikiChangesTest {
@@ -24,6 +28,7 @@ class WikiChangesTest {
     private val config = ContextConfig(origin, "COMMON", "20", "210", "", "", "knowledge", knowledgeRootPageId = "210")
     private val control get() = root.resolve("confluence/COMMON/.sync")
     private val feedPath get() = control.resolve("changes.json")
+    private val denialPath get() = control.resolve(WikiChanges.noticeDenialMarker)
     private fun manifest() = json(control.resolve("manifest.json"))
     private fun json(path: Path) = Json.parseToJsonElement(Files.readString(path)).jsonObject
     private fun events(feed: JsonObject) = feed.getValue("events").jsonArray.map { it.jsonObject }
@@ -32,11 +37,12 @@ class WikiChangesTest {
         if (id != null) { put("id", id); put("version", version) }
     }
 
-    private class Page(val id: String, val parentId: String? = "210", var title: String = "Private title $id",
-                       var body: String = "<p>Private body $id</p>", var version: Int = 1) {
-        fun native() = RemotePage(RemoteNode(id, title, parentId, "page", "20", version, "current"), body)
+    private class Page(val id: String, var parentId: String? = "210", var title: String = "Private title $id",
+                       var body: String = "<p>Private body $id</p>", var version: Int = 1,
+                       var spaceId: String = "20", var status: String = "current") {
+        fun native() = RemotePage(RemoteNode(id, title, parentId, "page", spaceId, version, status), body)
         fun json(storage: Boolean) = buildJsonObject {
-            put("id", id); put("title", title); put("type", "page"); put("spaceId", "20"); put("status", "current")
+            put("id", id); put("title", title); put("type", "page"); put("spaceId", spaceId); put("status", status)
             parentId?.let { put("parentId", it) }
             putJsonObject("version") { put("number", version) }
             if (storage) putJsonObject("body") { putJsonObject("storage") { put("value", body) } }
@@ -59,6 +65,8 @@ class WikiChangesTest {
         val comments = mutableListOf(Comment("310", "211", "footer"), Comment("320", "211", "inline"))
         val denied = mutableSetOf<String>()
         var unavailablePath: String? = null
+        var overrideStatus: suspend (String) -> HttpStatusCode? = { null }
+        var afterStorage: (String) -> Unit = {}
         var commentReads = 0
         val pageCommentReads = mutableMapOf<String, Int>()
         private fun listing(items: List<JsonObject>) = buildJsonObject {
@@ -71,6 +79,7 @@ class WikiChangesTest {
             if ("-comments" in path) commentReads++
             if (parts[0] == "pages" && "-comments" in path) pageCommentReads.merge(id, 1, Int::plus)
             val responseHeaders = headersOf(HttpHeaders.ContentType, "application/json")
+            overrideStatus(path)?.let { return@MockEngine respond("{}", it, responseHeaders) }
             if (path == unavailablePath) return@MockEngine respond("{}", HttpStatusCode.ServiceUnavailable, responseHeaders)
             if (parts[0] == "folders" || parts[0] == "pages" && id !in pages)
                 return@MockEngine respond("{}", HttpStatusCode.NotFound, responseHeaders)
@@ -88,6 +97,7 @@ class WikiChangesTest {
                 }.map { it.json() })
                 else -> error("Unexpected fixture endpoint $path")
             }
+            if (request.url.parameters["body-format"] == "storage" && parts[0] == "pages" && parts.size == 2) afterStorage(id)
             respond(result.toString(), HttpStatusCode.OK, responseHeaders)
         })
         private val remote = ConfluenceRemote(JiraConfig(origin, "fixture@example.test", "fixture-token"), client)
@@ -157,17 +167,16 @@ class WikiChangesTest {
             }
             assertEquals(baseline, json(feedPath))
             assertTrue(Files.exists(control.resolve("transaction.json")))
-            val denial = control.resolve("notice-access-denied")
-            assertTrue(Files.isRegularFile(denial))
+            assertTrue(Files.isRegularFile(denialPath))
             provider.denied.clear()
             provider.unavailablePath = "pages/210"
             assertFailsWith<ContextRemoteException> { mirror.sync(config) }
-            assertTrue(Files.isRegularFile(denial))
+            assertTrue(Files.isRegularFile(denialPath))
             assertTrue(Files.exists(control.resolve("transaction.json")))
             provider.unavailablePath = null
             mirror.sync(config)
             assertFalse(Files.exists(control.resolve("transaction.json")))
-            assertFalse(Files.exists(denial))
+            assertFalse(Files.exists(denialPath))
             mirror.publishVerified(config, page.native(), before)
             mirror.sync(config)
             assertEquals(committed, json(feedPath))
@@ -251,6 +260,131 @@ class WikiChangesTest {
             provider.mirror.pollComments(config, watched, 300)
             assertEquals("ready", WikiChanges.commentStatus(manifest(), watched))
             assertEquals(2, provider.pageCommentReads["232"])
+        }
+    }
+
+    @Test fun `shared request budget rotates interrupted pages ahead of completed pages`() = runBlocking {
+        Provider().use { provider ->
+            val watched = (212..215).map(Int::toString)
+            watched.forEachIndexed { index, page ->
+                provider.pages[page] = Page(page)
+                repeat(130) { provider.comments += Comment((1000 + index * 200 + it).toString(), page, "footer") }
+            }
+            provider.mirror.sync(config)
+            provider.mirror.pollComments(config, watched, 0)
+            assertEquals("ready", WikiChanges.commentStatus(manifest(), listOf("212", "213", "214")))
+            assertNull(WikiChanges.commentAttemptedAt(manifest(), "215"))
+            provider.mirror.pollComments(config, watched, 0)
+            assertEquals("ready", WikiChanges.commentStatus(manifest(), watched))
+            assertTrue(events(json(feedPath)).isEmpty())
+        }
+    }
+
+    @Test fun `watcher persists confirmed root denial and distinguishes child or transient failure`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config)
+            provider.pages.getValue("211").version++
+            mirror.sync(config)
+            val feed = json(feedPath)
+            assertEquals(listOf(notice(1, "updated", "211", 2)), events(feed))
+
+            provider.denied += "211"
+            mirror.pollComments(config, listOf("211"), 0)
+            assertFalse(Files.exists(denialPath))
+            assertEquals("unavailable", WikiChanges.commentStatus(manifest(), listOf("211")))
+
+            provider.denied.clear()
+            provider.unavailablePath = "pages/210"
+            mirror.pollComments(config, listOf("211"), 0)
+            assertFalse(Files.exists(denialPath))
+
+            var rootReads = 0
+            provider.overrideStatus = { path ->
+                if (path != "pages/210") null else if (++rootReads == 1) HttpStatusCode.Forbidden
+                else HttpStatusCode.ServiceUnavailable
+            }
+            mirror.pollComments(config, listOf("211"), 0)
+            assertTrue(Files.isRegularFile(denialPath))
+            assertEquals(feed, json(feedPath))
+        }
+    }
+
+    @Test fun `an old watcher denial cannot override a concurrently authorized inventory`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config)
+            val sent = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val first = AtomicBoolean(true)
+            provider.overrideStatus = { path ->
+                if (path == "pages/210" && first.compareAndSet(true, false)) {
+                    sent.complete(Unit)
+                    release.await()
+                    HttpStatusCode.Forbidden
+                } else null
+            }
+            val watch = async { mirror.pollComments(config, listOf("211"), 0) }
+            try {
+                withTimeout(5_000) { sent.await() }
+                mirror.sync(config)
+            } finally { release.complete(Unit) }
+            watch.await()
+            assertFalse(Files.exists(denialPath))
+        }
+    }
+
+    @Test fun `root denial during body verification pauses the previous feed`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config)
+            provider.pages.getValue("211").version++
+            mirror.sync(config)
+            val feed = json(feedPath)
+            provider.pages.getValue("211").version++
+            provider.afterStorage = { if (it == "211") provider.denied += "210" }
+            assertEquals("http_403", assertFailsWith<ContextRemoteException> { mirror.sync(config) }.code)
+            assertTrue(Files.isRegularFile(denialPath))
+            assertEquals(feed, json(feedPath))
+        }
+    }
+
+    @Test fun `root space and status changes pause the feed on explicit metadata evidence`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config)
+            val home = provider.pages.getValue("210")
+            home.spaceId = "99"
+            assertEquals("scope_outside_connection", assertFailsWith<ContextRemoteException> { mirror.sync(config) }.code)
+            assertTrue(Files.isRegularFile(denialPath))
+            home.spaceId = "20"
+            mirror.sync(config)
+            assertFalse(Files.exists(denialPath))
+            home.status = "archived"
+            mirror.pollComments(config, listOf("211"), 0)
+            assertTrue(Files.isRegularFile(denialPath))
+        }
+    }
+
+    @Test fun `fresh root check distinguishes a move within home from a move outside home`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            val nested = config.copy(knowledgeRootPageId = "211")
+            val boundary = provider.pages.getValue("211")
+            provider.pages["212"] = Page("212", "211")
+            provider.pages["218"] = Page("218")
+            provider.pages["299"] = Page("299", null)
+            mirror.sync(nested)
+            provider.pages.getValue("212").version++
+            provider.afterStorage = { if (it == "212") boundary.parentId = "218" }
+            assertEquals("scope_metadata_changed", assertFailsWith<ContextRemoteException> { mirror.sync(nested) }.code)
+            assertFalse(Files.exists(denialPath))
+            provider.afterStorage = {}
+            mirror.sync(nested)
+            provider.pages.getValue("212").version++
+            provider.afterStorage = { if (it == "212") boundary.parentId = "299" }
+            assertEquals("scope_metadata_changed", assertFailsWith<ContextRemoteException> { mirror.sync(nested) }.code)
+            assertTrue(Files.isRegularFile(denialPath))
         }
     }
 

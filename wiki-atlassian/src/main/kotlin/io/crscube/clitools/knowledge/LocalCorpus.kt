@@ -86,22 +86,25 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             lastSuccess = Instant.now().toString(); lastFailure = null
         }
     }
-    private fun freshness(manifest: JsonObject): JsonObject = buildJsonObject {
+    private fun freshness(manifest: JsonObject, failure: SyncFailure? = lastFailure): JsonObject = buildJsonObject {
         put("source", "local_replica"); put("lastSuccessfulSync", lastSuccess ?: manifest["cursor"]?.jsonPrimitive?.contentOrNull ?: "unknown")
         put("permissionScope", "as_of_last_sync"); put("bodyRefresh", "shared_authoritative_sweep_per_interval")
         val config = ContextConfig.load(settings.corpusRoot, settings)!!
         val refreshed = bodyTimestamp(checkpoint(ContextFiles.safe(settings.corpusRoot, "confluence/${config.space}/.sync")))
-        put("lastAuthoritativeBodySync", refreshed?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull); put("syncError", lastFailure?.message?.let(::JsonPrimitive) ?: JsonNull)
+        put("lastAuthoritativeBodySync", refreshed?.let { JsonPrimitive(Instant.ofEpochMilli(it).toString()) } ?: JsonNull); put("syncError", failure?.message?.let(::JsonPrimitive) ?: JsonNull)
     }
     @McpTool(name = "connection_status", description = "Show local corpus readiness, freshness and synchronization errors without reading credentials.")
-    fun status(): String = try { withManifest { manifest, _ ->
-        val failure = lastFailure
+    fun status(): String = try { withManifest { manifest, base ->
+        val rootDenied = Files.exists(ContextFiles.safe(base, ".sync/${WikiChanges.noticeDenialMarker}"), LinkOption.NOFOLLOW_LINKS)
+        val failure = lastFailure ?: if (rootDenied) SyncFailure("root_scope_denied") else null
         buildJsonObject {
             put("enabled", true); put("ready", true)
             put("status", if (failure == null) "ready" else "failed")
             put("documents", manifest["pages"]?.jsonObject?.size ?: 0)
-            put("freshness", freshness(manifest))
-            WikiChanges.commentStatus(manifest, settings.watchedCommentPages)?.let { put("commentWatch", it) }
+            put("freshness", freshness(manifest, failure))
+            val watched = settings.watchedCommentPages
+            if (rootDenied && watched.isNotEmpty()) put("commentWatch", "unavailable")
+            else WikiChanges.commentStatus(manifest, watched)?.let { put("commentWatch", it) }
             failure?.let { put("code", it.code); put("syncError", it.message) }
         }
     }.toString() } catch (e: Exception) {

@@ -2,7 +2,9 @@ package io.crscube.clitools.confluence
 
 import io.crscube.clitools.jirafetcher.util.ConfluenceMarkdownConverter
 import kotlinx.serialization.json.*
+import java.nio.channels.SeekableByteChannel
 import java.nio.file.*
+import java.nio.file.attribute.BasicFileAttributes
 import java.text.Normalizer
 import java.time.Instant
 import java.time.LocalDate
@@ -12,6 +14,7 @@ import java.util.UUID
 import java.net.URI
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
@@ -79,7 +82,7 @@ internal fun knowledgeRelations(body: String, origin: String, space: String): Js
 /** Storage is authoritative. Markdown is a disposable search projection, never a write input. */
 class ContextMirror(private val root: Path, private val remote: ConfluenceRemote) {
     /** Publish an already verified write without re-reading the remote inventory or bodies. */
-    fun publishVerified(config: ContextConfig, page: RemotePage, observedBefore: RemotePage? = null, recheck: () -> Unit = {}) {
+    suspend fun publishVerified(config: ContextConfig, page: RemotePage, observedBefore: RemotePage? = null, recheck: () -> Unit = {}) {
         val manifestPath = ContextFiles.safe(root, "confluence/${config.space}/.sync/manifest.json")
         if (!Files.exists(manifestPath)) return
         val control = ContextFiles.safe(root, "confluence/${config.space}/.sync")
@@ -88,8 +91,9 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
             require(lock != null) { "Confluence sync busy; retry later" }
             lock.use {
                 recheck()
-                require(!noticeAccessDenied(control) || !Files.exists(ContextFiles.safe(control, "transaction.json"))) {
-                    "A current inventory is required before mirror recovery"
+                if (Files.exists(ContextFiles.safe(control, "transaction.json"))) {
+                    require(!noticeAccessDenied(control)) { "A current inventory is required before mirror recovery" }
+                    if (config.isKnowledge) requireRootAccess(control, config, knowledgeRoot(config))
                 }
                 recover(base, control, config)
                 val previous = readManifest(control.resolve("manifest.json"), config)
@@ -213,13 +217,13 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         if (mode == "pages") require(pageIds.isNotEmpty() && pageIds.size <= 100 && pageIds.size == pageIds.toSet().size &&
             pageIds.all { it.matches(Regex("[1-9][0-9]*")) }) { "Declare 1..100 unique positive page IDs" }
         val requested = if (mode == "pages") pageIds.toSet() else emptySet()
-        val scopeRoot = if (config.isKnowledge) config.knowledgeRootPageId ?: config.homePageId else config.homePageId
+        val scopeRoot = knowledgeRoot(config)
         val base = ContextFiles.safe(root, "confluence/${config.space}")
         val control = ContextFiles.safe(root, "confluence/${config.space}/.sync")
         Files.createDirectories(control)
         CorpusFileLock.tryAcquire(ContextFiles.safe(control, "sync.lock")).let { lock ->
             require(lock != null) { "Confluence sync busy; retry later" }
-            lock.use {
+            withSyncRootAccess(lock, control, config, scopeRoot) {
                 if (config.isKnowledge) requireRootAccess(control, config, scopeRoot)
                 recover(base, control, config)
                 val manifestPath = control.resolve("manifest.json")
@@ -247,12 +251,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 // A write-through of one page must not wait for every default-scope body in a new workspace.
                 val full = (config.isKnowledge && mode != "pages") || mode == "full" || (mode != "pages" && (old.isEmpty() || selectionChanged || !inventoryComplete))
                 val changed = when {
-                    full -> try { remote.inventory(config) } catch (failure: ContextRemoteException) {
-                        // Inventory can fail on a descendant after the preflight. Attribute a
-                        // denial to the root only if a fresh root check confirms it.
-                        if (config.isKnowledge && deniesRootAccess(failure)) requireRootAccess(control, config, scopeRoot)
-                        throw failure
-                    }
+                    full -> remote.inventory(config)
                     mode == "pages" -> {
                         pageIds.map { if (config.isKnowledge) remote.requireScope(config, it) else remote.node(it) }
                     }
@@ -270,6 +269,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     // An absent inventory entry can be a permission change. Only positive metadata proves removal.
                     old.keys.filter { it !in ids && !selectionChanged }.forEach { id ->
                         try { nodes[id] = if (config.isKnowledge) remote.requireScope(config, id) else remote.node(id, old.getValue(id).jsonObject["type"]?.jsonPrimitive?.content ?: "page") }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: RootScopeDenial) { throw e }
                         catch (_: Exception) { unresolved += id }
                     }
                 }
@@ -287,7 +288,9 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         if (latest.spaceId != config.spaceId || latest.status != "current") {
                             pinned.remove(id); nodes.remove(id)
                         } else nodes[id] = latest
-                    } catch (e: CancellationException) { throw e } catch (_: Exception) { unresolved += id }
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: RootScopeDenial) { throw e }
+                    catch (_: Exception) { unresolved += id }
                 }
                 val home = if (config.isKnowledge) requireRootAccess(control, config, scopeRoot) else remote.node(config.homePageId)
                 require(home.spaceId == config.spaceId && home.status == "current") { "Configured mirror home is not current in the configured space" }
@@ -469,18 +472,40 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         }
     }
 
-    private fun noticeDenialPath(control: Path) = ContextFiles.safe(control, "notice-access-denied")
+    private fun noticeDenialPath(control: Path) = ContextFiles.safe(control, WikiChanges.noticeDenialMarker)
     private fun noticeAccessDenied(control: Path) = Files.exists(noticeDenialPath(control))
-    private fun deniesRootAccess(failure: ContextRemoteException) =
-        failure.code in setOf("http_401", "http_403", "http_404", "scope_not_current")
+    private fun knowledgeRoot(config: ContextConfig) =
+        if (config.isKnowledge) config.knowledgeRootPageId ?: config.homePageId else config.homePageId
+
+    private fun recordRootDenial(control: Path) {
+        if (!noticeAccessDenied(control)) ContextFiles.atomic(noticeDenialPath(control), "")
+    }
+
+    private fun shouldCheckRoot(failure: ContextRemoteException) = failure.isScopeDenial() || failure.code == "scope_metadata_changed"
 
     private suspend fun requireRootAccess(control: Path, config: ContextConfig, rootId: String): RemoteNode =
         try { remote.requireScope(config, rootId) } catch (failure: ContextRemoteException) {
-            if (deniesRootAccess(failure)) {
-                ContextFiles.atomic(noticeDenialPath(control), "")
+            if (failure.isScopeDenial()) recordRootDenial(control)
+            throw failure
+        }
+
+    private suspend fun recheckRootAccess(control: Path, config: ContextConfig, rootId: String) {
+        try { withTimeoutOrNull(3_000) { requireRootAccess(control, config, rootId) } }
+        catch (e: CancellationException) { throw e }
+        catch (_: ContextRemoteException) { /* A confirmed denial has already been recorded. */ }
+        catch (_: IllegalArgumentException) { /* Ambiguous metadata leaves the existing marker unchanged. */ }
+    }
+
+    private suspend inline fun <T> withSyncRootAccess(lock: CorpusFileLock, control: Path, config: ContextConfig,
+                                                       rootId: String, block: () -> T): T = lock.use {
+        try { block() } catch (failure: ContextRemoteException) {
+            if (config.isKnowledge && !noticeAccessDenied(control)) {
+                if (failure is RootScopeDenial) recordRootDenial(control)
+                else if (shouldCheckRoot(failure)) recheckRootAccess(control, config, rootId)
             }
             throw failure
         }
+    }
 
     internal suspend fun pollComments(config: ContextConfig, pageIds: List<String>, intervalSeconds: Long) {
         if (pageIds.isEmpty()) return
@@ -496,25 +521,43 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                                              pageIds: List<String>, intervalSeconds: Long) {
         val manifest = ContextFiles.safe(control, "manifest.json")
         val started = System.currentTimeMillis()
-        val watchedRows = withSyncLock(control) {
-            if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock null
-            val current = readManifest(manifest, config)
-            if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock null
-            val admitted = WikiChanges.admitted(current)
-            pageIds.sortedBy { WikiChanges.commentAttemptedAt(current, it) ?: Long.MIN_VALUE }.mapNotNull { id ->
-                admitted[id]?.takeIf { WikiChanges.commentDue(current, id, started, intervalSeconds * 1000) }?.let { id to it }
-            }.toMap()
-        } ?: return
-        if (watchedRows.isEmpty()) return
+        var manifestPin: SeekableByteChannel? = null
+        try {
+            val (fileKey, watchedRows) = withSyncLock(control) {
+                if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock null
+                val current = readManifest(manifest, config)
+                if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock null
+                val admitted = WikiChanges.admitted(current)
+                val rows = pageIds.sortedBy { WikiChanges.commentAttemptedAt(current, it) ?: Long.MIN_VALUE }.mapNotNull { id ->
+                    admitted[id]?.takeIf { WikiChanges.commentDue(current, id, started, intervalSeconds * 1000) }?.let { id to it }
+                }.toMap()
+                if (rows.isEmpty()) return@withSyncLock null
+                val key = manifestFileKey(manifest)
+                // Keep the old inode from being reused after an atomic manifest replacement.
+                if (key != null) manifestPin = Files.newByteChannel(manifest, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+                key to rows
+            } ?: return
+            pollCommentRows(base, control, manifest, config, started, fileKey, watchedRows)
+        } finally {
+            manifestPin?.close()
+        }
+    }
+
+    private fun manifestFileKey(manifest: Path): Any? =
+        Files.readAttributes(manifest, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
+
+    private suspend fun pollCommentRows(base: Path, control: Path, manifest: Path, config: ContextConfig, started: Long,
+                                        fileKey: Any?, watchedRows: Map<String, JsonObject>) {
         val attempted = linkedSetOf<String>()
         val observed = linkedMapOf<String, String>()
-        // Keep a shared budget for deep pages and leave unattempted pages at the front of the next poll.
+        var rootCheckNeeded = false
+        var rootDenialObserved = false
+        // An interrupted page keeps its earlier attempt time when the prior targets consumed the budget.
         withTimeoutOrNull(30_000) {
             remote.wikiOperation(maxRequests = 512) {
                 for ((id, row) in watchedRows) {
                     if (!remote.wikiBudgetRemaining()) break
                     val expected = decode(row)
-                    attempted += id
                     val fingerprint = try {
                         withTimeoutOrNull(8_000) {
                             require(remote.requireScope(config, id) == expected)
@@ -522,11 +565,25 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                             require(remote.requireScope(config, id) == expected)
                             WikiChanges.commentFingerprint(inventory)
                         }
-                    } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+                    } catch (e: CancellationException) { throw e } catch (failure: ContextRemoteException) {
+                        if (failure.code in setOf("wiki_request_limit", "wiki_body_limit")) {
+                            // A page exhausting a full scan alone must still yield to its peers next time.
+                            if (attempted.isEmpty()) attempted += id
+                            break
+                        }
+                        if (shouldCheckRoot(failure)) rootCheckNeeded = true
+                        if (failure is RootScopeDenial) {
+                            rootDenialObserved = true
+                            break
+                        }
+                        null
+                    } catch (_: Exception) { null }
+                    attempted += id
                     if (fingerprint != null) observed[id] = fingerprint
                 }
             }
         }
+        if (rootCheckNeeded && !confirmWatchRootAccess(control, manifest, config, fileKey, rootDenialObserved)) return
         if (attempted.isEmpty()) return
         withSyncLock(control) {
             if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock
@@ -548,6 +605,32 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 if (!Files.exists(journal)) deleteTree(stage)
             }
         }
+    }
+
+    private suspend fun confirmWatchRootAccess(control: Path, manifest: Path, config: ContextConfig,
+                                                fileKey: Any?, rootDenialObserved: Boolean): Boolean {
+        suspend fun confirm(): Boolean {
+            val lockPath = ContextFiles.safe(control, "sync.lock")
+            var lock = CorpusFileLock.tryAcquire(lockPath)
+            while (lock == null) {
+                delay(25)
+                lock = CorpusFileLock.tryAcquire(lockPath)
+            }
+            return lock.use {
+                if (!noticeAccessDenied(control)) {
+                    if (rootDenialObserved && fileKey != null && fileKey == manifestFileKey(manifest)) {
+                        recordRootDenial(control)
+                    } else {
+                        // An older observation cannot override a newer authorized inventory.
+                        recheckRootAccess(control, config, knowledgeRoot(config))
+                    }
+                }
+                !noticeAccessDenied(control)
+            }
+        }
+        // A confirmed denial waits cancellably for the current writer. A speculative
+        // recheck can yield after a short wait, leaving its targets due next poll.
+        return if (rootDenialObserved) confirm() else withTimeoutOrNull(5_000) { confirm() } ?: false
     }
 
     private fun <T> withSyncLock(control: Path, block: () -> T): T? =
