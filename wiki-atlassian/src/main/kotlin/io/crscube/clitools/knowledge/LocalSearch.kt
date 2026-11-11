@@ -1,5 +1,6 @@
 package io.crscube.clitools.knowledge
 
+import io.crscube.clitools.confluence.nativeDocumentHeadings
 import java.text.Normalizer
 import java.text.Normalizer.Form.NFC
 import java.util.regex.Pattern
@@ -77,11 +78,25 @@ private val replicaHeader = Regex("\\A---\\npage_id: \"[1-9][0-9]*\"\\nversion: 
 
 internal fun authoredStart(markdown: String): Int = replicaHeader.find(markdown)?.range?.last?.plus(1) ?: 0
 
-internal fun headingPath(content: String, start: Int, at: Int): List<String> {
-    val headings = mutableListOf<Pair<Int, String>>()
+internal class ProjectedHeadingContext(private val outline: List<Pair<Int, String>>, val path: List<String>) {
+    fun verifiedBy(storage: String): Boolean {
+        val headings = nativeDocumentHeadings(storage)
+        return headings.size == outline.size && headings.zip(outline).all { (heading, projected) ->
+            heading.parents().all { it.normalName() in transparentHeadingContainers } &&
+                projected == (heading.normalName().drop(1).toInt() to heading.text())
+        }
+    }
+}
+
+private val transparentHeadingContainers = setOf("#root", "div", "section", "article", "ac:rich-text-body")
+
+internal fun projectedHeadingContext(content: String, start: Int, at: Int): ProjectedHeadingContext? {
+    val outline = mutableListOf<Pair<Int, String>>()
+    val path = mutableListOf<Pair<Int, String>>()
     var fenced = false
     var line = start
-    while (line <= at && line < content.length) {
+    while (line < content.length) {
+        if (line > at && path.isEmpty()) return null
         val end = content.indexOf('\n', line).takeIf { it >= 0 } ?: content.length
         if (content.startsWith("```", line)) fenced = !fenced
         if (!fenced && content[line] == '#') {
@@ -90,15 +105,18 @@ internal fun headingPath(content: String, start: Int, at: Int): List<String> {
             if (marker < end && content[marker] == ' ') {
                 val level = marker - line
                 val titleStart = marker + 1
-                val last = content.offsetByCodePoints(titleStart, minOf(120, content.codePointCount(titleStart, end)))
-                val title = content.substring(titleStart, last).trim()
-                if (title.isNotEmpty()) {
-                    while (headings.lastOrNull()?.first?.let { it >= level } == true) headings.removeLast()
-                    headings.add(level to title)
+                if (outline.size >= 128 || end - titleStart > 240 || content.codePointCount(titleStart, end) > 120) return null
+                val title = content.substring(titleStart, end).trim()
+                val heading = level to title
+                outline.add(heading)
+                if (line <= at) {
+                    while (path.lastOrNull()?.first?.let { it >= level } == true) path.removeLast()
+                    path.add(heading)
                 }
             }
         }
         line = end + 1
     }
-    return headings.map { it.second }
+    if (fenced || path.isEmpty() || path.any { it.second.isEmpty() }) return null
+    return ProjectedHeadingContext(outline, path.map { it.second })
 }

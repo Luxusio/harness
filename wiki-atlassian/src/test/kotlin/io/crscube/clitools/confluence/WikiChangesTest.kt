@@ -11,10 +11,11 @@ import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.IOException
-import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption.WRITE
+import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class WikiChangesTest {
@@ -23,6 +24,7 @@ class WikiChangesTest {
     private val config = ContextConfig(origin, "COMMON", "20", "210", "", "", "knowledge", knowledgeRootPageId = "210")
     private val control get() = root.resolve("confluence/COMMON/.sync")
     private val feedPath get() = control.resolve("changes.json")
+    private fun manifest() = json(control.resolve("manifest.json"))
     private fun json(path: Path) = Json.parseToJsonElement(Files.readString(path)).jsonObject
     private fun events(feed: JsonObject) = feed.getValue("events").jsonArray.map { it.jsonObject }
     private fun notice(seq: Long, kind: String, id: String? = null, version: Int = 1) = buildJsonObject {
@@ -58,6 +60,7 @@ class WikiChangesTest {
         val denied = mutableSetOf<String>()
         var unavailablePath: String? = null
         var commentReads = 0
+        val pageCommentReads = mutableMapOf<String, Int>()
         private fun listing(items: List<JsonObject>) = buildJsonObject {
             put("results", JsonArray(items)); putJsonObject("_links") {}
         }
@@ -66,6 +69,7 @@ class WikiChangesTest {
             val parts = path.split('/')
             val id = parts[1]
             if ("-comments" in path) commentReads++
+            if (parts[0] == "pages" && "-comments" in path) pageCommentReads.merge(id, 1, Int::plus)
             val responseHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             if (path == unavailablePath) return@MockEngine respond("{}", HttpStatusCode.ServiceUnavailable, responseHeaders)
             if (parts[0] == "folders" || parts[0] == "pages" && id !in pages)
@@ -117,9 +121,13 @@ class WikiChangesTest {
             assertEquals(listOf(notice(3, "created", "212"), notice(4, "scope")), events(json(feedPath)))
             mirror.sync(config)
             assertEquals(4L, json(feedPath).getValue("head").jsonPrimitive.long)
+            provider.pages.getValue("212").body = "<p>Updated while sibling access is denied</p>"
+            mirror.refreshAdmittedBodies(config, listOf("212"))
+            assertEquals(notice(5, "updated", "212"), events(json(feedPath)).last())
+            assertEquals(JsonArray(listOf(JsonPrimitive("211"))), manifest().getValue("unavailable"))
             provider.denied.clear()
             mirror.sync(config)
-            assertEquals(notice(5, "updated", "211"), events(json(feedPath)).last())
+            assertEquals(notice(6, "updated", "211"), events(json(feedPath)).last())
         }
     }
 
@@ -134,16 +142,32 @@ class WikiChangesTest {
             Files.delete(feedPath)
             Files.createDirectory(feedPath)
             assertFailsWith<IOException> { mirror.publishVerified(config, page.native(), before) }
-            val committed = json(control.resolve("manifest.json")).getValue(WikiChanges.noticesKey).jsonObject
+            val committed = manifest().getValue(WikiChanges.noticesKey).jsonObject
             assertEquals(baseline["epoch"], committed["epoch"])
             assertEquals(listOf(notice(1, "updated", "211")), events(committed))
             assertTrue(Files.exists(control.resolve("transaction.json")))
             Files.delete(feedPath)
+            ContextFiles.atomic(feedPath, baseline.toString())
+            provider.denied += "210"
+            assertFailsWith<ContextRemoteException> { mirror.sync(config) }
+            assertFailsWith<ContextRemoteException> {
+                mirror.publishVerified(config, page.native(), before) {
+                    throw ContextRemoteException("http_403", "Fixture denial")
+                }
+            }
+            assertEquals(baseline, json(feedPath))
+            assertTrue(Files.exists(control.resolve("transaction.json")))
+            val denial = control.resolve("notice-access-denied")
+            assertTrue(Files.isRegularFile(denial))
+            provider.denied.clear()
             provider.unavailablePath = "pages/210"
             assertFailsWith<ContextRemoteException> { mirror.sync(config) }
-            assertEquals(committed, json(feedPath))
-            assertFalse(Files.exists(control.resolve("transaction.json")))
+            assertTrue(Files.isRegularFile(denial))
+            assertTrue(Files.exists(control.resolve("transaction.json")))
             provider.unavailablePath = null
+            mirror.sync(config)
+            assertFalse(Files.exists(control.resolve("transaction.json")))
+            assertFalse(Files.exists(denial))
             mirror.publishVerified(config, page.native(), before)
             mirror.sync(config)
             assertEquals(committed, json(feedPath))
@@ -156,8 +180,8 @@ class WikiChangesTest {
             provider.pages["212"] = Page("212")
             mirror.sync(config)
             mirror.pollComments(config, listOf("211", "212"), 0)
-            val baseline = json(control.resolve("manifest.json")).getValue(WikiChanges.watchKey).jsonObject
-            assertEquals(JsonPrimitive("ready"), baseline["status"])
+            val baseline = manifest()
+            assertEquals("ready", WikiChanges.commentStatus(baseline, listOf("211", "212")))
             assertEquals(emptyList(), events(json(feedPath)))
             assertFalse(baseline.toString().contains("Private comment"))
 
@@ -165,15 +189,17 @@ class WikiChangesTest {
             provider.comments += Comment("330", "212", "footer")
             val previousReads = provider.commentReads
             mirror.pollComments(config, listOf("211", "212"), 300)
-            FileChannel.open(control.resolve("comments.lock"), WRITE).use { channel ->
-                channel.lock().use { mirror.pollComments(config, listOf("211", "212"), 0) }
+            assertNotNull(CorpusFileLock.tryAcquire(control.resolve("comments.lock"))).use {
+                mirror.pollComments(config, listOf("211", "212"), 0)
             }
             assertEquals(previousReads, provider.commentReads)
             provider.unavailablePath = "pages/212/inline-comments"
             mirror.pollComments(config, listOf("211", "212"), 0)
-            val failed = json(control.resolve("manifest.json")).getValue(WikiChanges.watchKey).jsonObject
-            assertEquals(JsonPrimitive("unavailable"), failed["status"])
-            assertEquals(baseline["observations"]?.jsonObject?.get("212"), failed["observations"]?.jsonObject?.get("212"))
+            val failed = manifest()
+            assertEquals("unavailable", WikiChanges.commentStatus(failed, listOf("211", "212")))
+            fun fingerprint(manifest: JsonObject) = manifest["wikiCommentWatch"]?.jsonObject?.get("212")?.jsonObject?.get("fingerprint")
+            assertNotNull(fingerprint(baseline))
+            assertEquals(fingerprint(baseline), fingerprint(failed))
             assertEquals(listOf(notice(1, "comments", "211")), events(json(feedPath)))
 
             provider.unavailablePath = null
@@ -190,6 +216,88 @@ class WikiChangesTest {
         }
     }
 
+    @Test fun `projects preserve each other's comment baselines and share cadence on overlapping pages`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            provider.pages["212"] = Page("212")
+            provider.pages["213"] = Page("213")
+            mirror.sync(config)
+            mirror.pollComments(config, listOf("211", "213"), 300)
+            val commonReads = provider.pageCommentReads.getValue("213")
+            mirror.pollComments(config, listOf("212", "213"), 300)
+            assertEquals(commonReads, provider.pageCommentReads.getValue("213"))
+            assertEquals("ready", WikiChanges.commentStatus(manifest(), listOf("211", "213")))
+            assertEquals("ready", WikiChanges.commentStatus(manifest(), listOf("212", "213")))
+            assertTrue(events(json(feedPath)).isEmpty())
+
+            provider.comments += Comment("331", "211", "footer")
+            provider.comments += Comment("332", "212", "footer")
+            provider.comments += Comment("333", "213", "footer")
+            mirror.pollComments(config, listOf("211", "213"), 0)
+            mirror.pollComments(config, listOf("212", "213"), 0)
+            assertEquals(listOf(notice(1, "comments", "211"), notice(2, "comments", "213"), notice(3, "comments", "212")),
+                events(json(feedPath)))
+        }
+    }
+
+    @Test fun `deep authorized page can establish a comment baseline among ten watched pages`() = runBlocking {
+        Provider().use { provider ->
+            for (id in 212..219) provider.pages[id.toString()] = Page(id.toString())
+            for (id in 220..232) {
+                provider.pages[id.toString()] = Page(id.toString(), if (id == 220) "210" else (id - 1).toString())
+            }
+            val watched = (211..219).map(Int::toString) + "232"
+            provider.mirror.sync(config)
+            provider.mirror.pollComments(config, watched, 300)
+            assertEquals("ready", WikiChanges.commentStatus(manifest(), watched))
+            assertEquals(2, provider.pageCommentReads["232"])
+        }
+    }
+
+    @Test fun `same JVM contention cannot release a lock held against another process`() {
+        val lock = root.resolve("corpus.lock")
+        val source = root.resolve("ProbeLock.java")
+        Files.writeString(source, """
+            import java.nio.channels.FileChannel;
+            import java.nio.file.Path;
+            import static java.nio.file.StandardOpenOption.WRITE;
+            class ProbeLock {
+                public static void main(String[] args) throws Exception {
+                    try (var channel = FileChannel.open(Path.of(args[0]), WRITE);
+                         var lease = channel.tryLock()) {
+                        System.out.println(lease == null ? "busy" : "acquired");
+                    }
+                }
+            }
+        """.trimIndent())
+        fun otherProcess(): String {
+            val java = Path.of(System.getProperty("java.home"), "bin", "java").toString()
+            val process = ProcessBuilder(java, source.toString(), lock.toString()).redirectErrorStream(true).start()
+            try {
+                assertTrue(process.waitFor(15, TimeUnit.SECONDS), "External record-lock probe timed out")
+                val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+                assertEquals(0, process.exitValue(), output)
+                return output
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
+        assertNotNull(CorpusFileLock.tryAcquire(lock)).use {
+            if ("posix" in lock.fileSystem.supportedFileAttributeViews()) {
+                assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(lock))
+            }
+            assertEquals("busy", otherProcess())
+            assertNull(CorpusFileLock.tryAcquire(root.resolve("./corpus.lock"), shared = true))
+            assertEquals("busy", otherProcess())
+        }
+        assertEquals("acquired", otherProcess())
+
+        val missing = root.resolve("missing/corpus.lock")
+        assertFailsWith<NoSuchFileException> { CorpusFileLock.tryAcquire(missing) }
+        Files.createDirectory(missing.parent)
+        assertNotNull(CorpusFileLock.tryAcquire(missing)).close()
+    }
+
     @Test fun `one publication retains only the newest 64 notices and validates configuration`() {
         fun manifest(pages: Map<String, JsonObject>) = buildJsonObject {
             put("inventoryComplete", true); put("pages", JsonObject(pages))
@@ -204,6 +312,14 @@ class WikiChangesTest {
         assertEquals(100L, feed.getValue("head").jsonPrimitive.long)
         assertEquals(64, events(feed).size)
         assertEquals(notice(37, "created", "136"), events(feed).first())
+        var watched = result
+        for (id in 100..164) {
+            watched = WikiChanges.comments(watched, id.toLong(), setOf(id.toString()), mapOf(id.toString() to "a".repeat(64)))
+        }
+        WikiChanges.validate(watched)
+        assertTrue(WikiChanges.commentDue(watched, "100", 164, 1000))
+        assertFalse(WikiChanges.commentDue(watched, "101", 164, 1000))
+        assertEquals("ready", WikiChanges.commentStatus(watched, listOf("164")))
 
         val env = mapOf("WIKI_ATLASSIAN_ENABLED" to "true", "WIKI_ATLASSIAN_SITE" to origin,
             "WIKI_ATLASSIAN_SPACE" to "COMMON", "WIKI_ATLASSIAN_SPACE_ID" to "20", "WIKI_ATLASSIAN_ROOT_PAGE_ID" to "210",

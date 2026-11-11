@@ -88,8 +88,10 @@ product code review/QA or authorize deleting repository originals.
 
 ## Change context in Harness
 
-Run the wiki MCP with the same environment as the Harness session. Its first
-completed mirror establishes the document baseline. Later committed changes
+Install the current Harness plugin in the same runtime and enable its hooks.
+Use the Harness installer to update the hooks and reload the host after
+installation. Run the wiki MCP with the same environment as the Harness
+session. Its first completed mirror establishes the document baseline. Later committed changes
 produce a bounded local notice stream. Verified edits through the MCP use the
 same publication path as changes observed during remote synchronization.
 The stream tracks page additions, changes, and changes to visible scope.
@@ -100,23 +102,32 @@ supplies relevant notice metadata to the model. An idle session receives
 context when it next runs a hook. Detection of external edits follows the
 MCP's polling interval. A session can catch up from retained notices and sees
 a gap message if older metadata is unavailable. The hook keeps a bounded
-cursor for each session in the connection partition. Notice text consists of
-fixed labels, native IDs and observed versions. The agent checks relevance
+cursor for each session in the connection partition. Each partition keeps
+up to 64 events and 128 session cursors. The hook delivers up to eight events
+per call. Visibility follows the latest committed snapshot. A confirmed
+access denial for the configured root pauses notices until the next successful
+authorized synchronization. Notice text consists of fixed labels, native IDs
+and observed versions. The agent checks relevance
 and reads the evidence through MCP before acting.
 
 Set `WIKI_ATLASSIAN_WATCH_COMMENT_PAGES` to up to ten distinct page IDs from the
 configured root, separated by commas. Comment monitoring starts with a
 baseline for each selected page. A later observed change directs the agent to
 `list_comments`. Provider access failures and incomplete inventories keep the
-last complete observation. The watcher is scoped to Confluence documents.
+last complete observation. The watcher uses the wiki poll interval and a shared
+lock. It checks the least recently attempted pages first, with a shared budget
+of 512 requests, 32 MiB and 30 seconds per scan, and up to eight seconds per
+page. The connection retains up to 64 page observations. Use `connection_status`
+to check Confluence comment coverage.
 
 ## Search and knowledge maintenance
 
 Local search ranks exact native IDs and textual matches and returns short
 source excerpts. For a result that includes a `read` argument object, use it
 with `get_document` to read the same projection at its evidence location.
-Repeat the search if its snapshot has changed. Native outline and section
-operations remain available for selecting and editing a precise section.
+Increase `length` to read more context, or use `nextOffset` with the same
+document, version, format and snapshot. Repeat the search if its snapshot
+has changed. Native outline and section operations remain available for selecting and editing a precise section.
 Limit the domain root when searching a large corpus.
 
 The knowledge skill covers attributed source records, topic structure,

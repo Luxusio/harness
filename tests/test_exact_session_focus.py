@@ -103,9 +103,12 @@ def test_claude_hook_configuration_binds_successful_content_result(tmp_path, mon
     tool = 'mcp__plugin_harness_harness__wbs'
     config = json.loads((ROOT / 'plugin/hooks/hooks.json').read_text())
     import re
-    entries = [entry for entry in config['hooks']['PostToolUse'] if re.search(entry['matcher'], tool)]
-    assert len(entries) == 1
-    hook = entries[0]['hooks'][0]
+    binding_hooks = [hook for entry in config['hooks']['PostToolUse']
+                     if re.search(entry['matcher'], tool)
+                     for hook in entry['hooks']
+                     if 'scripts/hook_post_tool_use.py' in hook['command']]
+    assert len(binding_hooks) == 1
+    hook = binding_hooks[0]
     assert hook['timeout'] <= 10 and hook['command'].endswith('|| true')
     env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(ROOT / 'plugin'), HARNESS_RUNTIME='claude')
     for key in ('CODEX_THREAD_ID', 'HARNESS_SESSION_ID', 'CLAUDE_SESSION_ID'):

@@ -31,6 +31,25 @@ import java.util.UUID
 // Includes the bounded native continuation plus its public search/comment envelope.
 private const val WIKI_CURSOR_LIMIT = 32768
 
+/** Storage elements whose text is not ordinary visible page text, or duplicates it. */
+private val unselectable = setOf("ac:structured-macro", "ac:macro", "ac:inline-comment-marker", "ac:plain-text-body", "ac:parameter", "ac:adf-extension",
+    "ac:task-list", "ac:task", "ac:task-body", "ac:task-id", "ac:task-uuid", "ac:task-status", "ac:decision-list", "ac:decision", "ac:placeholder",
+    "pre", "code", "script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext")
+
+internal fun nativeDocumentHeadings(body: String): List<Element> {
+    val parser = Parser.xmlParser().setTrackPosition(true).setTrackErrors(20)
+    val parsed = Jsoup.parse(body, "", parser)
+    if (parser.errors.isNotEmpty()) throw ContextRemoteException("section_context_required", "Malformed storage cannot provide a reliable outline")
+    return parsed.select("h1,h2,h3,h4,h5,h6").filter { heading ->
+        heading.parents().none { it.normalName() in unselectable }
+    }.onEach { heading ->
+        val opening = heading.sourceRange()
+        val closing = heading.endSourceRange()
+        if (!opening.isTracked || opening.isImplicit || !closing.isTracked || closing.isImplicit)
+            throw ContextRemoteException("section_context_required", "A heading has no exact native source range")
+    }
+}
+
 /** Typed MCP methods share this application boundary and its policies. */
 class WikiService(private val remote: ConfluenceRemote, private val origin: String,
                   private val launchRoot: Path, private val runtimeSettings: KnowledgeSettings? = null) {
@@ -341,17 +360,9 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
     }
     /** Positions belong to this native body only; no persistent IDs or Markdown-derived boundaries. */
     private fun documentSections(body: String): List<Pair<String, Element>> {
-        val parser = Parser.xmlParser().setTrackPosition(true).setTrackErrors(20)
-        val parsed = Jsoup.parse(body, "", parser)
-        if (parser.errors.isNotEmpty()) throw ContextRemoteException("section_context_required", "Malformed storage cannot provide a reliable outline")
         val ancestors = mutableListOf<Pair<Int, String>>()
         val counts = mutableMapOf<String, Int>()
-        return parsed.select("h1,h2,h3,h4,h5,h6").filter { heading ->
-            heading.parents().none { it.normalName() in unselectable }
-        }.map { heading ->
-            val opening = heading.sourceRange(); val closing = heading.endSourceRange()
-            if (!opening.isTracked || opening.isImplicit || !closing.isTracked || closing.isImplicit)
-                throw ContextRemoteException("section_context_required", "A heading has no exact native source range")
+        return nativeDocumentHeadings(body).map { heading ->
             val level = heading.normalName().drop(1).toInt()
             while (ancestors.lastOrNull()?.first?.let { it >= level } == true) ancestors.removeAt(ancestors.lastIndex)
             val parent = ancestors.lastOrNull()?.second.orEmpty()
@@ -469,10 +480,6 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         while (from >= 0) { count++; from = text.indexOf(selection, from + if (overlapping) 1 else selection.length) }
         return count
     }
-    /** Storage elements whose text is not ordinary visible page text, or duplicates it. */
-    private val unselectable = setOf("ac:structured-macro", "ac:macro", "ac:inline-comment-marker", "ac:plain-text-body", "ac:parameter", "ac:adf-extension",
-        "ac:task-list", "ac:task", "ac:task-body", "ac:task-id", "ac:task-uuid", "ac:task-status", "ac:decision-list", "ac:decision", "ac:placeholder",
-        "pre", "code", "script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext")
     /** Matches wholly inside one ordinary text node, in document order, optionally only those before [stopAt]. */
     private fun selectableMatches(root: Node, selection: String, stopAt: Node? = null): Int {
         var excluded = 0

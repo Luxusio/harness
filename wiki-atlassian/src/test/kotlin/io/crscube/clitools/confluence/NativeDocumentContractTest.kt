@@ -17,10 +17,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.IOException
-import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import kotlin.test.*
 
 /** Native edit/comment/history regressions adapted from the Talos handoff snapshot. */
@@ -1475,6 +1473,43 @@ class NativeDocumentContractTest {
         }
     }
 
+    @Test fun `scoped local search follows nested folders and stops at the configured root`() {
+        val provider = Provider()
+        provider.folders["231"] = Page("231", "210", "Operations", kind = "folder")
+        provider.folders["232"] = Page("232", "231", "Records", kind = "folder")
+        provider.pages["205"] = Page("205", "232", "Field notes", "<p>Local scope marker</p>")
+        provider.pages.getValue("201").content = "<p>Local scope marker elsewhere</p>"
+        provider.use(local = true) { registry ->
+            provider.requests.clear()
+            fun matches(root: String, query: String = "Local scope marker") =
+                call(registry, "search_documents", strings("query" to query, "root" to root))
+                    .getValue("results").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content }
+            assertEquals(listOf("205"), matches("231"))
+            assertEquals(listOf("205"), matches("232"))
+            assertEquals(listOf("205"), matches("231", "205"))
+            assertEquals(listOf("201", "205"), matches("210"))
+            assertTrue(matches("200").isEmpty())
+            assertTrue(matches("200", "205").isEmpty())
+            assertTrue(provider.requests.isEmpty())
+        }
+    }
+
+    @Test fun `local search omits heading context when Markdown promotes a native paragraph`() {
+        val provider = Provider()
+        provider.pages.getValue("201").content = "<h2>True header</h2><p>## Literal paragraph</p><p>topic-probe-evidence</p>"
+        provider.use(local = true) { registry ->
+            provider.requests.clear()
+            val hit = call(registry, "search_documents", strings("query" to "topic-probe-evidence"))
+                .getValue("results").jsonArray.single().jsonObject
+            assertFalse("headingPath" in hit, "A literal Markdown heading line makes native section context ambiguous")
+            val excerpt = hit.getValue("excerpt")
+            assertTrue(excerpt.jsonPrimitive.content.contains("topic-probe-evidence"))
+            val read = call(registry, "get_document", hit.getValue("read").jsonObject)
+            assertEquals(excerpt, read.getValue("content"))
+            assertTrue(provider.requests.isEmpty())
+        }
+    }
+
     @Test fun `another MCP instance reuses persisted corpus without resynchronizing each project`() {
         val provider = Provider()
         provider.use(local = true) { registry ->
@@ -1519,12 +1554,10 @@ class NativeDocumentContractTest {
         val provider = Provider()
         provider.use(local = true) { registry ->
             val lockFile = root.resolve("confluence/COMMON/.sync/sync.lock")
-            FileChannel.open(lockFile, StandardOpenOption.WRITE).use { channel ->
-                channel.lock().use {
-                    val read = call(registry, "get_document", strings("document" to "201"))
-                    assertEquals("error", read.getValue("status").jsonPrimitive.content)
-                    assertFalse(read.containsKey("content"))
-                }
+            checkNotNull(CorpusFileLock.tryAcquire(lockFile)).use {
+                val read = call(registry, "get_document", strings("document" to "201"))
+                assertEquals("error", read.getValue("status").jsonPrimitive.content)
+                assertFalse(read.containsKey("content"))
             }
         }
         provider.assertNoEffects()
@@ -1539,12 +1572,10 @@ class NativeDocumentContractTest {
             assertEquals(1, before.getValue("version").jsonPrimitive.int)
             assertFalse(before.getValue("content").jsonPrimitive.content.contains("inline-comment-marker"))
             val lockFile = root.resolve("confluence/COMMON/.sync/sync.lock")
-            FileChannel.open(lockFile, StandardOpenOption.WRITE).use { channel ->
-                channel.lock().use {
-                    val created = call(registry, "create_comment", strings("target" to "201", "text" to "Keep this observation", "selection" to "Knowledge 201"))
-                    assertEquals("created", created.getValue("status").jsonPrimitive.content)
-                    assertEquals(JsonPrimitive(true), created["syncRequired"], "Native write succeeded while local publication was locked")
-                }
+            checkNotNull(CorpusFileLock.tryAcquire(lockFile)).use {
+                val created = call(registry, "create_comment", strings("target" to "201", "text" to "Keep this observation", "selection" to "Knowledge 201"))
+                assertEquals("created", created.getValue("status").jsonPrimitive.content)
+                assertEquals(JsonPrimitive(true), created["syncRequired"], "Native write succeeded while local publication was locked")
             }
             assertEquals(1, repairSignals, "Confirmed publication failure must wake the existing synchronizer")
             assertEquals(1, provider.pages.getValue("201").version, "Inline provider did not create a new page version")
@@ -1583,7 +1614,7 @@ class NativeDocumentContractTest {
     }
 
     @Test fun `another corpus instance skips recent authoritative body sweep but expires it at the shared checkpoint`() {
-        val provider = Provider()
+        val provider = Provider().apply { pages.getValue("201").title = "OLD Archive reference" }
         provider.use(local = true) { registry ->
             assertTrue(call(registry, "get_document", strings("document" to "201")).containsKey("content"))
         }
@@ -1602,6 +1633,8 @@ class NativeDocumentContractTest {
             assertTrue(call(registry, "get_document", strings("document" to "201")).getValue("content").jsonPrimitive.content.contains("Changed without native page revision"))
         }
         assertTrue(provider.requests.any { it.url.parameters["body-format"] == "storage" }, "Expired shared checkpoint revalidates body even when native version is unchanged")
+        val manifest = Json.parseToJsonElement(Files.readString(checkpoint.resolveSibling("manifest.json"))).jsonObject
+        assertTrue(manifest.getValue("explicitPages").jsonArray.isEmpty(), "An automatic refresh must preserve the explicit page selection")
         provider.assertNoEffects()
     }
 
@@ -1670,15 +1703,14 @@ class NativeDocumentContractTest {
     @Test fun `status reports active writer as busy without hiding a previous synchronization error`() {
         val provider = Provider()
         provider.use(local = true, observeCorpus = { it.syncFailed("http_403") }) { registry ->
-            FileChannel.open(root.resolve("confluence/COMMON/.sync/sync.lock"), StandardOpenOption.WRITE).use { channel ->
-                channel.lock().use {
-                    val busy = call(registry, "connection_status", buildJsonObject {})
-                    assertEquals("busy", busy.getValue("status").jsonPrimitive.content)
-                    assertEquals("replica_busy", busy.getValue("reason").jsonPrimitive.content)
-                    assertEquals(JsonPrimitive(false), busy.getValue("ready"))
-                    assertEquals("http_403", busy.getValue("code").jsonPrimitive.content)
-                    assertTrue(busy.getValue("syncError").jsonPrimitive.content.contains("http_403"))
-                }
+            val lockFile = root.resolve("confluence/COMMON/.sync/sync.lock")
+            checkNotNull(CorpusFileLock.tryAcquire(lockFile)).use {
+                val busy = call(registry, "connection_status", buildJsonObject {})
+                assertEquals("busy", busy.getValue("status").jsonPrimitive.content)
+                assertEquals("replica_busy", busy.getValue("reason").jsonPrimitive.content)
+                assertEquals(JsonPrimitive(false), busy.getValue("ready"))
+                assertEquals("http_403", busy.getValue("code").jsonPrimitive.content)
+                assertTrue(busy.getValue("syncError").jsonPrimitive.content.contains("http_403"))
             }
         }
         provider.assertNoEffects()

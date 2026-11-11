@@ -65,15 +65,18 @@ exceptions and procedure together on the relevant topic page. Use precise
 section headings and place source versions close to the claims they support.
 
 Author explicit relations under a regular native heading named 지식 연결.
-Use 근거, 의존, 반박, 대체, or 관련, one native page link per entry, and
-explain the reason. Keep live relations in ordinary visible document content.
+Use 근거, 의존, 반박, 대체, or 관련 with a colon, one native page link,
+and a dash followed by the reason. For example, render
+`의존: [정기이관 기준] — 적용 날짜의 근거` with the bracketed text as a
+single actual link to the native page. Keep live relations in ordinary visible document content.
 For substantive changes have the independent document reviewer compare the
 recorded sources, derived claims and affected pages.
 
 ## Act on change context
 
-A wiki notice identifies a page and an observed version. Judge its relevance
-to current work before fetching more. Check current content, history or
+A page notice identifies a page and an observed version. A scope or history
+notice calls for checking the part of the wiki that matters to the current task.
+Judge relevance before fetching more. Check current content, history or
 comments as appropriate. Use document_relations to find dependent or conflicting
 claims. An earlier version can remain valid for its original environment and
 time. Record a correction or superseding decision with the new evidence,

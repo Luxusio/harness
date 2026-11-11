@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -106,6 +107,11 @@ def test_pending_publication_and_contended_lock_do_not_consume(setup_wiki):
     transaction.touch()
     assert not hook(repo, env)
     transaction.unlink()
+    denied = control / "notice-access-denied"
+    denied.touch()
+    assert not hook(repo, env)
+    denied.unlink()
+    (control / "sync.lock").chmod(0o664)
     with (control / "sync.lock").open("r+b") as lock:
         fcntl.lockf(lock, fcntl.LOCK_EX)
         assert not hook(repo, env)
@@ -142,7 +148,7 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
     claude = json.loads((ROOT / "plugin/hooks/hooks.json").read_text())
     for runtime, config in (("codex", codex), ("claude", claude)):
         entry = config["hooks"]["PostToolUse"][-1]
-        assert "matcher" not in entry
+        assert re.fullmatch(entry["matcher"], "Read")
         command = entry["hooks"][0]["command"]
         result = subprocess.run(
             ["sh", "-c", command], cwd=repo,

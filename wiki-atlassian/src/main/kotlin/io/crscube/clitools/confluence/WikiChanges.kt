@@ -6,8 +6,11 @@ import java.util.UUID
 /** The manifest owns the sequence. The hook feed is a projection of a committed manifest. */
 internal object WikiChanges {
     const val noticesKey = "wikiNotices"
-    const val watchKey = "wikiCommentWatch"
+    private const val watchKey = "wikiCommentWatch"
     private const val maxEvents = 64
+    private const val maxWatchedPages = 64
+    private val ready = JsonPrimitive("ready")
+    private val unavailable = JsonPrimitive("unavailable")
     private val pageId = Regex("[1-9][0-9]{0,31}")
     private val epochPattern = Regex("[0-9a-f]{32}")
     private val fingerprintPattern = Regex("[0-9a-f]{64}")
@@ -60,11 +63,8 @@ internal object WikiChanges {
         if (oldPages.keys.any { it !in newPages }) notices += buildJsonObject { put("kind", "scope") }
         val result = next.toMutableMap()
         result[noticesKey] = append(previous, newPages, notices)
-        previous[watchKey]?.jsonObject?.let { watch ->
-            val observations = watch.getValue("observations").jsonObject
-            val retained = JsonObject(observations.filterKeys { it in newPages })
-            result[watchKey] = if (observations == retained) watch else JsonObject(watch + mapOf(
-                "observations" to retained, "status" to JsonPrimitive("unavailable")))
+        if (watchKey in previous) {
+            result[watchKey] = JsonObject(checkpoints(previous).filterKeys { it in newPages })
         }
         return JsonObject(result)
     }
@@ -80,20 +80,45 @@ internal object WikiChanges {
         return ContextFiles.hash(JsonArray(metadata).toString())
     }
 
-    fun comments(previous: JsonObject, selection: String, attemptedAt: Long,
+    private fun checkpoints(manifest: JsonObject): Map<String, JsonElement> = manifest[watchKey]?.jsonObject.orEmpty()
+
+    fun commentStatus(manifest: JsonObject, watchedPages: List<String>): String? {
+        if (watchedPages.isEmpty()) return null
+        val current = checkpoints(manifest)
+        val pages = admitted(manifest)
+        if (watchedPages.any { it !in pages }) return unavailable.content
+        if (watchedPages.none { it in current }) return null
+        return if (watchedPages.all { current[it]?.jsonObject?.get("status") == ready }) ready.content else unavailable.content
+    }
+
+    fun commentAttemptedAt(manifest: JsonObject, id: String): Long? =
+        checkpoints(manifest)[id]?.jsonObject?.get("attemptedAt")?.let(::number)
+
+    fun commentDue(manifest: JsonObject, id: String, now: Long, intervalMillis: Long): Boolean =
+        commentAttemptedAt(manifest, id)?.let { it > now || now - it >= intervalMillis } ?: true
+
+    fun comments(previous: JsonObject, attemptedAt: Long,
                  targets: Set<String>, observed: Map<String, String>): JsonObject {
-        val old = previous[watchKey]?.jsonObject?.get("observations")?.jsonObject.orEmpty()
+        val old = checkpoints(previous)
         val pages = admitted(previous)
         val notices = observed.toSortedMap().mapNotNull { (id, hash) ->
-            if (old[id] == null || old[id] == JsonPrimitive(hash)) null else pageNotice("comments", id, pages.getValue(id))
+            val before = old[id]?.jsonObject?.get("fingerprint")
+            if (before == null || before == JsonPrimitive(hash)) null else pageNotice("comments", id, pages.getValue(id))
         }
-        val watch = buildJsonObject {
-            put("selection", selection)
-            put("attemptedAt", attemptedAt)
-            put("status", if (observed.keys == targets) "ready" else "unavailable")
-            put("observations", JsonObject(old.filterKeys { it in targets } + observed.mapValues { JsonPrimitive(it.value) }))
-        }
-        return JsonObject(previous + mapOf(noticesKey to append(previous, pages, notices), watchKey to watch))
+        val watch = targets.filter { it in pages }.associateWith { id ->
+            val fingerprint = observed[id]?.let(::JsonPrimitive)
+            buildJsonObject {
+                put("attemptedAt", attemptedAt)
+                put("status", if (fingerprint == null) unavailable else ready)
+                (fingerprint ?: old[id]?.jsonObject?.get("fingerprint"))?.let { put("fingerprint", it) }
+            }
+        }.toMutableMap<String, JsonElement>()
+        // Retain current attempts first even when the system clock has moved backwards.
+        old.entries.asSequence().filter { (id, _) -> id in pages && id !in watch }
+            .sortedWith(compareByDescending<Map.Entry<String, JsonElement>> { (_, row) -> number(row.jsonObject.getValue("attemptedAt")) }
+                .thenBy { it.key })
+            .take(maxWatchedPages - watch.size).forEach { (id, row) -> watch[id] = row }
+        return JsonObject(previous + mapOf(noticesKey to append(previous, pages, notices), watchKey to JsonObject(watch)))
     }
 
     private fun append(previous: JsonObject, pages: Map<String, JsonObject>, changes: List<JsonObject>): JsonObject {
@@ -120,6 +145,7 @@ internal object WikiChanges {
     }
 
     fun validate(manifest: JsonObject) {
+        val pages by lazy { admitted(manifest) }
         manifest[noticesKey]?.jsonObject?.let { state ->
             require(state.keys == setOf("epoch", "head", "events"))
             val epoch = state.getValue("epoch").jsonPrimitive
@@ -129,7 +155,6 @@ internal object WikiChanges {
             val events = state.getValue("events").jsonArray
             require(events.size <= maxEvents)
             var last = 0L
-            val pages = admitted(manifest)
             for (value in events) {
                 val event = value.jsonObject
                 val seq = number(event.getValue("seq"))
@@ -145,16 +170,15 @@ internal object WikiChanges {
             }
         }
         manifest[watchKey]?.jsonObject?.let { watch ->
-            require(watch.keys == setOf("selection", "attemptedAt", "status", "observations"))
-            val selection = watch.getValue("selection").jsonPrimitive
-            require(selection.isString && fingerprintPattern.matches(selection.content) && number(watch.getValue("attemptedAt")) >= 0)
-            require(watch.getValue("status") in setOf(JsonPrimitive("ready"), JsonPrimitive("unavailable")))
-            val observations = watch.getValue("observations").jsonObject
-            val pages = admitted(manifest)
-            require(observations.size <= 10 && observations.all { (id, value) ->
-                val hash = value.jsonPrimitive
-                id in pages && hash.isString && fingerprintPattern.matches(hash.content)
-            })
+            require(watch.size <= maxWatchedPages)
+            watch.forEach { (id, value) ->
+                val row = value.jsonObject
+                val status = row.getValue("status")
+                val hash = row["fingerprint"]?.jsonPrimitive
+                require(id in pages && row.keys.all { it in setOf("attemptedAt", "status", "fingerprint") } &&
+                    number(row.getValue("attemptedAt")) >= 0 && status in setOf(ready, unavailable) &&
+                    (hash != null || status == unavailable) && (hash == null || hash.isString && fingerprintPattern.matches(hash.content)))
+            }
         }
     }
 

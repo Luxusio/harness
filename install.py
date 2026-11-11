@@ -1346,6 +1346,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                     ],
                 },
                 {
+                    "matcher": ".*",
                     "hooks": [
                         {
                             "type": "command",
@@ -1355,7 +1356,6 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                                 "fi || true"
                             ),
                             "timeout": 3,
-                            "statusMessage": "Checking wiki changes",
                         }
                     ]
                 },

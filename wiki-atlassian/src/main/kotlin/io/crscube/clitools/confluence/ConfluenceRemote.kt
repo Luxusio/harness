@@ -86,10 +86,12 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             if (bytes > maxResponseBytes)
                 throw ContextRemoteException("wiki_body_limit", "Operation exceeded its response body budget", mutating)
         }
+        fun hasRemaining(): Boolean = requests < maxRequests && bytes < maxResponseBytes
     }
     internal suspend fun <T> wikiOperation(maxRequests: Int = 256, maxResponseBytes: Long = 32L * 1024 * 1024,
                                           block: suspend () -> T): T =
         withContext(WikiBudget(maxRequests, maxResponseBytes)) { block() }
+    internal suspend fun wikiBudgetRemaining(): Boolean = coroutineContext[WikiBudget]?.hasRemaining() != false
 
     private fun io.ktor.client.HttpClientConfig<*>.transport() {
         followRedirects = false
@@ -641,7 +643,8 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
 
     internal suspend fun scopeNode(contentId: String, type: String = "page"): RemoteNode {
         val value = request(HttpMethod.Get, endpoint("/wiki/api/v2/${if (type == "folder") "folders" else "pages"}/${id(contentId)}")).second
-        require(value.string("status") == "current") { "Knowledge content status must be explicitly current" }
+        if (value.string("status") != "current")
+            throw ContextRemoteException("scope_not_current", "Knowledge content status must be explicitly current")
         val result = parseNode(value, type)
         require(result.id == contentId) { "Knowledge content identity changed" }
         return result

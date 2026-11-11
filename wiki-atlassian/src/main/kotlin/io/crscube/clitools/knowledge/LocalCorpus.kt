@@ -4,10 +4,7 @@ import io.crscube.clitools.confluence.*
 import io.crscube.clitools.mcp.McpTool
 import kotlinx.serialization.json.*
 import java.net.URI
-import java.nio.channels.FileChannel
-import java.nio.channels.OverlappingFileLockException
 import java.nio.file.*
-import java.nio.file.StandardOpenOption.*
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.HexFormat
@@ -17,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
 /** Reads one locked manifest generation; never a second mutable document authority. */
 class LocalCorpus(private val settings: KnowledgeSettings, private val remote: ConfluenceRemote) {
     private val pendingRepair = ConcurrentHashMap.newKeySet<String>()
+    private val searchIdentity = ContextFiles.hash("${settings.corpusRoot}\u0000${settings.read().getValue("space").jsonPrimitive.content}")
     @Volatile var onRepair: (() -> Unit)? = null
     fun requestRepair(pageId: String) {
         require(pageId.matches(Regex("[1-9][0-9]*"))) { "Native page ID required" }
@@ -51,44 +49,41 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         val control = ContextFiles.safe(settings.corpusRoot, "confluence/${config.space}/.sync")
         KnowledgeSettings.prepareCorpus(control)
         val sweepPath = ContextFiles.safe(control, "sweep.lock")
-        FileChannel.open(sweepPath, CREATE, WRITE, LinkOption.NOFOLLOW_LINKS).use { channel ->
-            val lease = try { channel.tryLock() } catch (_: OverlappingFileLockException) { null }
-            if (lease == null) return // Another project owns this connection's current pass.
-            lease.use {
-                val mirror = ContextMirror(settings.corpusRoot, remote)
-                val existing = mirror.manifest(config)["pages"]?.jsonObject?.keys.orEmpty()
-                val started = System.currentTimeMillis()
-                val previous = bodyTimestamp(checkpoint(control))
-                val due = previous == null || previous < 0 || previous > started || started - previous >= settings.pollIntervalSeconds * 1000
-                mirror.sync(config)
-                val requested = pendingRepair.toSet()
-                val pages = mirror.manifest(config)["pages"]?.jsonObject.orEmpty()
-                // Native inline markers may change without a page revision. One leased pass
-                // authoritatively refreshes existing bodies per interval across all projects.
-                // A known publish failure bypasses the timestamp only for its exact pages.
-                val fullPass = authoritativeBodies && due
-                val authoritative = ((if (fullPass) existing else emptySet()) + requested).filter { it in pages }
-                for (batch in authoritative.filter { pages[it]?.jsonObject?.get("type") == JsonPrimitive("page") }.chunked(100)) {
-                    require(settings.identity() == before) { "Connection changed during synchronization" }
-                    mirror.sync(config, mode = "pages", pageIds = batch, refreshRequestedBodies = true)
-                    pendingRepair.removeAll(batch.toSet())
-                }
-                pendingRepair.removeAll(requested.filter { it !in pages }.toSet())
+        val lease = CorpusFileLock.tryAcquire(sweepPath) ?: return
+        lease.use {
+            val mirror = ContextMirror(settings.corpusRoot, remote)
+            val existing = mirror.manifest(config)["pages"]?.jsonObject?.keys.orEmpty()
+            val started = System.currentTimeMillis()
+            val previous = bodyTimestamp(checkpoint(control))
+            val due = previous == null || previous < 0 || previous > started || started - previous >= settings.pollIntervalSeconds * 1000
+            mirror.sync(config)
+            val requested = pendingRepair.toSet()
+            val manifest = mirror.manifest(config)
+            val pages = manifest["pages"]?.jsonObject.orEmpty()
+            val unavailable = unavailablePages(manifest)
+            // Native inline markers may change without a page revision. One leased pass
+            // authoritatively refreshes existing bodies per interval across all projects.
+            // A known publish failure bypasses the timestamp only for its exact pages.
+            val fullPass = authoritativeBodies && due
+            val authoritative = ((if (fullPass) existing else emptySet()) + requested).filter { it in pages && it !in unavailable }
+            for (batch in authoritative.filter { pages[it]?.jsonObject?.get("type") == JsonPrimitive("page") }.chunked(100)) {
                 require(settings.identity() == before) { "Connection changed during synchronization" }
-                if (fullPass) {
-                    val lockPath = ContextFiles.safe(control, "sync.lock")
-                    FileChannel.open(lockPath, CREATE, WRITE, LinkOption.NOFOLLOW_LINKS).use { bodyLock ->
-                        val lock = try { bodyLock.tryLock() } catch (_: OverlappingFileLockException) { null }
-                        require(lock != null) { "Corpus busy before authoritative checkpoint" }
-                        lock.use {
-                            require(!Files.exists(ContextFiles.safe(control, "transaction.json"))) { "Corpus recovery pending" }
-                            val state = checkpoint(control)
-                            ContextFiles.atomic(ContextFiles.safe(control, "state.json"), JsonObject(state + ("bodyRefreshedAt" to JsonPrimitive(started))).toString())
-                        }
-                    }
-                }
-                lastSuccess = Instant.now().toString(); lastFailure = null
+                mirror.refreshAdmittedBodies(config, batch)
+                pendingRepair.removeAll(batch.toSet())
             }
+            pendingRepair.removeAll(requested.filter { it !in pages }.toSet())
+            require(settings.identity() == before) { "Connection changed during synchronization" }
+            if (fullPass) {
+                val lockPath = ContextFiles.safe(control, "sync.lock")
+                val lock = CorpusFileLock.tryAcquire(lockPath)
+                require(lock != null) { "Corpus busy before authoritative checkpoint" }
+                lock.use {
+                    require(!Files.exists(ContextFiles.safe(control, "transaction.json"))) { "Corpus recovery pending" }
+                    val state = checkpoint(control)
+                    ContextFiles.atomic(ContextFiles.safe(control, "state.json"), JsonObject(state + ("bodyRefreshedAt" to JsonPrimitive(started))).toString())
+                }
+            }
+            lastSuccess = Instant.now().toString(); lastFailure = null
         }
     }
     private fun freshness(manifest: JsonObject): JsonObject = buildJsonObject {
@@ -106,9 +101,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             put("status", if (failure == null) "ready" else "failed")
             put("documents", manifest["pages"]?.jsonObject?.size ?: 0)
             put("freshness", freshness(manifest))
-            (manifest["wikiCommentWatch"] as? JsonObject)?.get("status")?.let { status ->
-                if (status in setOf(JsonPrimitive("ready"), JsonPrimitive("unavailable"))) put("commentWatch", status)
-            }
+            WikiChanges.commentStatus(manifest, settings.watchedCommentPages)?.let { put("commentWatch", it) }
             failure?.let { put("code", it.code); put("syncError", it.message) }
         }
     }.toString() } catch (e: Exception) {
@@ -143,21 +136,21 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         if (!Files.exists(manifest, LinkOption.NOFOLLOW_LINKS)) throw ReadFailure(ReadState.MISSING)
         if (!Files.isRegularFile(manifest) || Files.size(manifest) > 16L * 1024 * 1024) throw ReadFailure(ReadState.UNAVAILABLE)
         val lockPath = ContextFiles.safe(base, ".sync/sync.lock")
-        FileChannel.open(lockPath, CREATE, READ, WRITE).use { channel ->
-            val lock = try { channel.tryLock(0, Long.MAX_VALUE, true) } catch (_: OverlappingFileLockException) { null }
-            if (lock == null) throw ReadFailure(ReadState.BUSY)
-            lock.use {
-                if (Files.exists(ContextFiles.safe(base, ".sync/transaction.json"))) throw ReadFailure(ReadState.RECOVERY)
-                val record = ContextMirror(settings.corpusRoot, remote).manifest(config)
-                if (record["inventoryComplete"] != JsonPrimitive(true)) throw ReadFailure(ReadState.INCOMPLETE)
-                val result = block(record, base)
-                require(settings.identity() == identity) { "Connection changed during read" }
-                return result
-            }
+        val lock = CorpusFileLock.tryAcquire(lockPath, shared = true) ?: throw ReadFailure(ReadState.BUSY)
+        return lock.use {
+            if (Files.exists(ContextFiles.safe(base, ".sync/transaction.json"))) throw ReadFailure(ReadState.RECOVERY)
+            val record = ContextMirror(settings.corpusRoot, remote).manifest(config)
+            if (record["inventoryComplete"] != JsonPrimitive(true)) throw ReadFailure(ReadState.INCOMPLETE)
+            val result = block(record, base)
+            require(settings.identity() == identity) { "Connection changed during read" }
+            result
         }
     }
     private fun bodyPath(base: Path, row: JsonObject, format: String): Path =
         ContextFiles.safe(base, row.getValue(if (format == "storage") "storage" else "path").jsonPrimitive.content)
+
+    private fun unavailablePages(manifest: JsonObject): Set<String> =
+        manifest["unavailable"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty()
 
     private fun body(base: Path, row: JsonObject, format: String): String {
         val path = bodyPath(base, row, format)
@@ -176,33 +169,35 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
     }
 
     private data class SearchKey(val rank: Int, val id: String)
-    private data class SearchHit(val key: SearchKey, val result: JsonObject)
+    private data class SearchHit(val key: SearchKey, val result: JsonObject, val headings: ProjectedHeadingContext?)
     private val searchOrder = compareByDescending<SearchKey> { it.rank }.thenBy { it.id }
     private val nativeId = Regex("[1-9][0-9]*")
     private val sha256 = Regex("[a-f0-9]{64}")
 
-    private fun snapshot(connection: String, id: String, row: JsonObject, markdown: String): String =
-        ContextFiles.hash(listOf(connection, id, row.getValue("version").toString(),
+    private fun snapshot(id: String, row: JsonObject, markdown: String): String =
+        ContextFiles.hash(listOf(searchIdentity, id, row.getValue("version").toString(),
             row.getValue("bodyHash").jsonPrimitive.content, ContextFiles.hash(markdown)).joinToString(":"))
 
-    private fun searchResult(id: String, row: JsonObject, match: LocalSearchQuery.Match, markdown: String,
-                             prefix: Int, snippetLength: Int, snapshot: String): JsonObject = buildJsonObject {
-        put("id", id); put("title", row.getValue("title")); put("version", row.getValue("version")); put("match", match.field)
+    private fun searchHit(id: String, row: JsonObject, match: LocalSearchQuery.Match, markdown: String,
+                          prefix: Int, snippetLength: Int, snapshot: String): SearchHit {
         val at = if (match.bodyOffset >= 0) prefix + match.bodyOffset
             else markdown.indexOfFirstFrom(prefix) { !it.isWhitespace() }
-        if (at >= 0) {
-            val before = minOf(markdown.codePointCount(prefix, at), minOf(100, snippetLength / 4))
-            val start = markdown.offsetByCodePoints(at, -before)
-            val length = minOf(snippetLength, markdown.codePointCount(start, markdown.length))
-            put("excerpt", markdown.substring(start, markdown.offsetByCodePoints(start, length)))
-            put("excerptOnly", true)
-            val headings = headingPath(markdown, prefix, at)
-            if (headings.isNotEmpty()) put("headingPath", JsonArray(headings.map(::JsonPrimitive)))
-            putJsonObject("read") {
-                put("document", id); put("version", row.getValue("version")); put("format", "markdown")
-                put("offset", markdown.codePointCount(0, start)); put("length", length); put("snapshot", snapshot)
+        val result = buildJsonObject {
+            put("id", id); put("title", row.getValue("title")); put("version", row.getValue("version")); put("match", match.field)
+            if (at >= 0) {
+                val before = minOf(markdown.codePointCount(prefix, at), minOf(100, snippetLength / 4))
+                val start = markdown.offsetByCodePoints(at, -before)
+                val length = minOf(snippetLength, markdown.codePointCount(start, markdown.length))
+                put("excerpt", markdown.substring(start, markdown.offsetByCodePoints(start, length)))
+                put("excerptOnly", true)
+                putJsonObject("read") {
+                    put("document", id); put("version", row.getValue("version")); put("format", "markdown")
+                    put("offset", markdown.codePointCount(0, start)); put("length", length); put("snapshot", snapshot)
+                }
             }
         }
+        val headings = if (at >= 0) projectedHeadingContext(markdown, prefix, at) else null
+        return SearchHit(SearchKey(match.rank, id), result, headings)
     }
 
     private inline fun String.indexOfFirstFrom(start: Int, predicate: (Char) -> Boolean): Int {
@@ -225,6 +220,8 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             val rank = it[2].toIntOrNull()?.takeIf { rank -> rank in 1..6 } ?: error("Search snapshot changed; start a new search")
             SearchKey(rank, it[3])
         }
+        val corpusRoot = (manifest["knowledgeRootPageId"] ?: manifest["homePageId"])?.jsonPrimitive?.contentOrNull
+        val folderParents = manifest["folderParents"]?.jsonObject.orEmpty()
         fun inside(id: String): Boolean {
             if (id in denied) return false
             if (requestedRoot == null) return true
@@ -232,21 +229,39 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             val seen = mutableSetOf<String>()
             while (next != null && next !in denied && seen.add(next)) {
                 if (next == requestedRoot) return true
+                if (next == corpusRoot) return false
                 next = pages[next]?.jsonObject?.get("parentId")?.jsonPrimitive?.contentOrNull
+                    ?: folderParents[next]?.jsonPrimitive?.contentOrNull
             }
             return false
         }
-        val connection = settings.identity()
-        fun response(results: List<JsonObject>, next: String? = null) = buildJsonObject {
-            put("results", JsonArray(results)); put("freshness", freshness(manifest)); put("truncated", next != null)
-            next?.let { put("nextCursor", it) }
+        fun response(hits: List<SearchHit>, next: String? = null): JsonObject {
+            // Verify only returned headings against the native bodies, under a separate aggregate bound.
+            var remainingStorageBytes = 4L * 1024 * 1024
+            val results = hits.map { hit ->
+                val headings = hit.headings ?: return@map hit.result
+                val row = pages.getValue(hit.key.id).jsonObject
+                val verified = try {
+                    val path = bodyPath(base, row, "storage")
+                    val size = Files.size(path)
+                    if (size > remainingStorageBytes || !Files.isRegularFile(path)) false else {
+                        remainingStorageBytes -= size
+                        headings.verifiedBy(body(base, row, "storage"))
+                    }
+                } catch (_: Exception) { false }
+                if (verified) JsonObject(hit.result + ("headingPath" to JsonArray(headings.path.map(::JsonPrimitive)))) else hit.result
+            }
+            return buildJsonObject {
+                put("results", JsonArray(results)); put("freshness", freshness(manifest)); put("truncated", next != null)
+                next?.let { put("nextCursor", it) }
+            }
         }
         val exact = pages[query]?.jsonObject?.takeIf { query.matches(nativeId) && inside(query) && it["type"] == JsonPrimitive("page") }
         if (exact != null) {
             require(after == null) { "Search snapshot changed; start a new search" }
             val markdown = body(base, exact, "markdown")
-            return response(listOf(searchResult(query, exact, LocalSearchQuery.Match(0, "native_id"), markdown,
-                authoredStart(markdown), snippetLength, snapshot(connection, query, exact, markdown))))
+            return response(listOf(searchHit(query, exact, LocalSearchQuery.Match(0, "native_id"), markdown,
+                authoredStart(markdown), snippetLength, snapshot(query, exact, markdown))))
         }
 
         val lexical = LocalSearchQuery(query)
@@ -268,7 +283,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
                 throw RetrievalFailure("search_scope_too_large", "Search exceeded the local scan limit. Retry with a narrower root or an exact page ID.")
             }
             val markdown = Files.readString(path)
-            val projection = snapshot(connection, id, row, markdown)
+            val projection = snapshot(id, row, markdown)
             val title = row.getValue("title").jsonPrimitive.content
             generation.update(projection.toByteArray(Charsets.UTF_8))
             generation.update(row.getValue("title").toString().toByteArray(Charsets.UTF_8))
@@ -279,13 +294,13 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             if (after != null && searchOrder.compare(key, after) <= 0) continue
             if (hits.size > limit && searchOrder.compare(key, hits.peek().key) >= 0) continue
             if (hits.size > limit) hits.remove()
-            hits.add(SearchHit(key, searchResult(id, row, match, markdown, prefix, snippetLength, projection)))
+            hits.add(searchHit(id, row, match, markdown, prefix, snippetLength, projection))
         }
         val digest = HexFormat.of().formatHex(generation.digest())
         require(cursor == null || cursor[0] == digest) { "Search snapshot changed; start a new search" }
         val ordered = hits.sortedWith(compareBy(searchOrder) { it.key })
         val next = if (ordered.size > limit) ordered[limit - 1].key.let { "$digest:$binding:${it.rank}:${it.id}" } else null
-        return response(ordered.take(limit).map { it.result }, next)
+        return response(ordered.take(limit), next)
     }
 
     fun execute(operation: String, data: JsonObject): JsonObject? {
@@ -304,7 +319,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
             }
             withManifest { manifest, base ->
                 val pages = manifest.getValue("pages").jsonObject
-                val denied = manifest["unavailable"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty()
+                val denied = unavailablePages(manifest)
                 if (operation == "search_documents") search(data, manifest, base, pages, denied)
                 else read(data, manifest, base, pages, denied, locator)
             }
@@ -343,7 +358,7 @@ class LocalCorpus(private val settings: KnowledgeSettings, private val remote: C
         val format = data["format"]?.jsonPrimitive?.content ?: "markdown"
         require(format in setOf("markdown", "storage"))
         val text = body(base, row, format)
-        if (locator != null && locator != snapshot(settings.identity(), id, row, text)) stale()
+        if (locator != null && locator != snapshot(id, row, text)) stale()
         val total = text.codePointCount(0, text.length)
         val offset = data["offset"]?.jsonPrimitive?.int ?: 0
         val length = data["length"]?.jsonPrimitive?.int ?: 4000
