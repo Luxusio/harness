@@ -117,9 +117,11 @@ baseline for each selected page. A later observed change directs the agent to
 last complete observation. The watcher uses the wiki poll interval and a shared
 lock. It checks the least recently attempted pages first, with a shared budget
 of 512 requests, 32 MiB and 30 seconds per scan, and up to eight seconds per
-page. A page interrupted by the shared scan budget keeps its priority for the
-next scan. The connection retains up to 64 page observations. Use
-`connection_status` to check coverage and whether root access has paused it.
+page. When earlier pages consume the shared budget, the interrupted page keeps
+its priority for the next scan. A page that exhausts the shared request or
+response budget on its own yields to its peers. The connection retains up to 64
+page observations. Use `connection_status` to check comment coverage. Confirmed
+root denial reports coverage as unavailable.
 
 ## Search and knowledge maintenance
 
