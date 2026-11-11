@@ -111,6 +111,17 @@ editing. The `migrate-docs` skill and independent `document-reviewer` cover
 authorized knowledge consolidation and migration. They do not replace actual
 product code review/QA or authorize deleting repository originals.
 
+Knowledge guidance keeps source statements, observations, hypotheses, proposals
+and authorized decisions distinguishable within topic documents. Source
+attribution, evidence strength and decision authority are separate: user
+hypotheses remain hypotheses, and an approved decision does not prove deployment.
+Search answers, reused summaries, corrections and migrations retain those
+distinctions and link important conclusions to their applicable evidence.
+The skill and independent document reviewer assess meaning; native versions,
+CAS and readback establish revision/write integrity, not factual truth. These
+are authoring/review conventions, not a runtime semantic classifier or a required
+per-sentence record schema. See [knowledge guidance](skills/knowledge/SKILL.md#distinguish-evidence-and-authority).
+
 ## Change context in Harness
 
 Install the current Harness plugin in the same runtime and enable its hooks.

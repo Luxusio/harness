@@ -116,3 +116,33 @@ Retired credential failures must not invalidate the replacement's admission.
 Preserve normal body-refresh detection and existing cache bytes during any
 one-time migration. Unknown opaque legacy directories cannot establish
 account ownership by proximity or matching space alone.
+
+## Attribution, evidence and decision authority
+
+Status: user_confirmed. Source: conversation on 2026-11-11, user asked how to
+apply “사실이랑 추측 뭐 그런 내용 분리하라고”, then replied “ㅇㅇ ㄱㄱ”
+to the proposal to distinguish source statements,
+observed facts, interpretations/hypotheses, proposals and authorized decisions
+in the existing authoring, retrieval and correction workflow. This approval
+covers that proposal, including preserving the distinction in migration/reuse;
+it does not authorize company publication or turn unrelated research ideas
+into requirements.
+
+Preserve who said a claim, its actual evidence and the authority for a decision
+as separate concerns. A user's hypothesis and an AI proposal retain their
+status when summarized, searched, answered, migrated or reingested. A source
+assertion establishes what its author said, not independent verification.
+Acceptance of a decision does not prove implementation, QA or deployment.
+Changes in evidence or authorization may justify a scoped change in status;
+retain applicable conditions, sources and unresolved uncertainty. Missing
+provenance stays unknown, and changed source versions require reassessment
+rather than automatically proving prior claims false.
+
+Implementation decisions (derived from that approved outcome): use visible
+prose/sections in existing topic documents and keep one behavior reference in
+the knowledge skill. The document reviewer checks source fidelity and status
+changes; migration guidance preserves them. Existing native versions, CAS,
+basedOn and readback establish revision/write integrity, not semantic truth or
+approval. No mandatory page template, per-sentence schema, new ledger or runtime
+truth classifier is introduced. Independent source-to-draft scenarios evaluate
+the guidance; successful packaging alone cannot establish semantic correctness.
