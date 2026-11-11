@@ -72,6 +72,11 @@ the same declaration can promote authorized executable work to `development`.
 `review-document` selects the existing `critic-document` method. No independent
 role target is needed for self-checked prose; any declared independent role still
 uses its applicable source view. WBS checks remain measured and owner-published.
+Choose explicit verification inputs for the actual deliverable and necessary
+references when they become known. Document/planning verification does not fall
+back to hashing the whole checkout. A pure document repository can explicitly
+select `document_paths: [.]`; known instructions, configuration and executable
+files still require development scrutiny.
 
 Configured document paths identify narrative roles, with additive executable
 paths and immutable known instruction/config/runtime exclusions. This mechanism

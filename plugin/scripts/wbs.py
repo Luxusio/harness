@@ -114,7 +114,8 @@ def leaves(nodes):
 
 
 def from_plan(text):
-    blocks = re.findall(r"^```wbs\s*\n(.*?)^```\s*$", text, re.M | re.S)
+    from work_policy import fenced_blocks
+    blocks = fenced_blocks(text, 'wbs')
     require(len(blocks) <= 1, "use one WBS fence")
     return validate(json.loads(blocks[0])) if blocks else None
 
@@ -144,7 +145,8 @@ def input_policy(value):
 
 
 def inputs_from_plan(text):
-    blocks = re.findall(r"^```wbs-inputs\s*\n(.*?)^```\s*$", text, re.M | re.S)
+    from work_policy import fenced_blocks
+    blocks = fenced_blocks(text, 'wbs-inputs')
     require(len(blocks) <= 1, "use one wbs-inputs fence")
     return input_policy(json.loads(blocks[0])) if blocks else None
 
@@ -556,7 +558,7 @@ def scoped_source(sources, policy):
 
 
 def wbs_progress(wbs_dir, repo, run_id, *, now=None, _source=None, measure=True, _state=None,
-                  _measure_custody=True):
+                  _measure_custody=True, _measurement_only=None):
     stamp = time.time() if now is None else now
     try:
         state = read_state(wbs_dir) if _state is None else _state
@@ -577,6 +579,7 @@ def wbs_progress(wbs_dir, repo, run_id, *, now=None, _source=None, measure=True,
         require(inputs_from_plan(plan_text) == state.get("inputs"), "plan/evidence input policy mismatch")
         rows = []
         if measure:
+            work_policy.require_verification_inputs(state, work, only=_measurement_only)
             sources = measurement_sources(repo, state) if _source is None else _source
         else:
             sources = {}
@@ -843,9 +846,11 @@ def verify(wbs_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     require(node.get("check"), "choose the outcome assertion through wbs(action='plan') when ready; no implementation layout required")
     observation_errors = (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError)
     needed = check_outcomes(state, leaf_id)
+    work_policy.require_verification_inputs(state, work, only=needed)
 
     def aggregate(sources, current_state):
         try:
+            work_policy.require_verification_inputs(current_state, work)
             complete_sources = measurement_sources(repo, current_state, observed=sources)
             return wbs_progress(wbs_dir, repo, run_id, now=now, _source=complete_sources,
                                  _state=current_state, _measure_custody=False)
@@ -879,7 +884,7 @@ def verify(wbs_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
     except observation_errors as exc:
         return unavailable(exc, "before")
     before_progress = wbs_progress(wbs_dir, repo, run_id, now=now, _source=before_sources,
-                                    _measure_custody=False)
+                                    _measure_custody=False, _measurement_only=needed)
     if before_progress["status"] != "measured":
         return unavailable(before_progress.get("reason", "current measurement unavailable"), "before")
     verified = {row["id"] for row in before_progress["outcomes"] if row["verified"]}
@@ -906,7 +911,7 @@ def verify(wbs_dir, repo, run_id, leaf_id, *, timeout=60, now=None):
         after_sources = measurement_sources(repo, state, only=needed)
         after_source = scoped_source(after_sources, verification_inputs(state, node))
         after_progress = wbs_progress(wbs_dir, repo, run_id, now=now, _source=after_sources,
-                                       _measure_custody=False)
+                                       _measure_custody=False, _measurement_only=needed)
         require(after_progress["status"] == "measured", after_progress.get("reason", "current measurement unavailable"))
     except observation_errors as exc:
         # Preserve the prior proof's fields, but prevent it from resurrecting

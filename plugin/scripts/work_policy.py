@@ -29,8 +29,28 @@ def _unique(pairs):
     return result
 
 
+def fenced_blocks(text, tag):
+    """Read declaration fences without interpreting examples inside other fences."""
+    blocks, current, lines = [], None, []
+    for line in text.splitlines():
+        if current is None:
+            opened = re.fullmatch(r" {0,3}(`{3,}|~{3,})[ \t]*(.*?)[ \t]*", line)
+            if opened:
+                marker, info = opened.groups()
+                current = (marker[0], len(marker), info == tag)
+                lines = []
+        elif re.fullmatch(r" {0,3}" + re.escape(current[0]) + "{" + str(current[1]) + r",}[ \t]*", line):
+            if current[2]:
+                blocks.append('\n'.join(lines))
+            current = None
+        elif current[2]:
+            lines.append(line)
+    _require(current is None or not current[2], 'unterminated ' + tag + ' fence')
+    return blocks
+
+
 def kind_from_plan(text):
-    blocks = re.findall(r"^```wbs-work\s*\n(.*?)^```\s*$", text, re.M | re.S)
+    blocks = fenced_blocks(text, 'wbs-work')
     _require(len(blocks) <= 1, "use one wbs-work fence")
     if not blocks:
         return "development"
@@ -144,6 +164,14 @@ def proof_definition(node, policy):
     from wbs import digest
     identity = policy["verification_identity"]
     return digest(node if identity is None else [node, identity])
+
+
+def require_verification_inputs(state, policy, *, only=None):
+    if policy['kind'] != 'development':
+        from wbs import leaves, verification_inputs
+        _require(all('source' in (verification_inputs(state, node) or {})
+                     for node in leaves(state['nodes']) if only is None or node['id'] in only),
+                 'choose explicit wbs-inputs source roots or leaf inputs when ready to verify the document/plan; do not scan the whole checkout')
 
 
 def capture_source_base(repo):

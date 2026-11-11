@@ -18,7 +18,7 @@ except ModuleNotFoundError as error:
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'plugin/scripts'))
 import work_policy
 import wbs
-from test_wbs import node
+from test_wbs import node, plan
 from test_wbs_input_policy import public, policy_plan
 
 
@@ -70,6 +70,41 @@ def test_multiple_work_fences_are_rejected():
     text = '```wbs-work\n{"kind":"document"}\n```\n'
     with pytest.raises(ValueError, match="one wbs-work"):
         work_policy.kind_from_plan(text + text)
+
+
+def test_quoted_declaration_examples_do_not_change_purpose_outcomes_or_inputs():
+    quoted = ('````markdown\n```wbs-work\n{"kind":"document"}\n```\n'
+              '```wbs\n[{"id":"injected","title":"Example only","weight":1}]\n```\n'
+              '```wbs-inputs\n{"source":["example.md"]}\n```\n````\n')
+    assert work_policy.kind_from_plan(quoted) == 'development'
+    assert wbs.from_plan(quoted) is None
+    assert wbs.inputs_from_plan(quoted) is None
+    assert work_policy.kind_from_plan(quoted + '```wbs-work\n{"kind":"plan"}\n```\n') == 'plan'
+
+
+def test_unterminated_work_declaration_is_refused():
+    with pytest.raises(ValueError, match='unterminated'):
+        work_policy.kind_from_plan('```wbs-work\n{"kind":"document"}\n')
+
+
+def test_document_check_does_not_wait_for_independent_unselected_inputs(tmp_path, monkeypatch):
+    repo, td, call, _ = document_fixture(tmp_path)
+    a, b = node('A'), node('B')
+    a['inputs'] = {'source': ['doc/common/note.md']}
+    text = policy_plan([a, b], None) + '\n```wbs-work\n{"kind":"document"}\n```\n'
+    # Leave B's eventual input scope undecided; A can still be checked now.
+    text = text.replace('\n```wbs-inputs\nnull\n```\n', '')
+    assert not call('plan', plan=text).get('isError')
+    original = wbs.fingerprint
+    def scoped_fingerprint(repo, policy=None, **kwargs):
+        assert policy is not None and 'source' in policy, 'unselected checkout was scanned'
+        return original(repo, policy, **kwargs)
+    monkeypatch.setattr(wbs, 'fingerprint', scoped_fingerprint)
+    result = call('check', node_id='A')['structuredContent']
+    assert result['passed'] is True, result
+    assert result['progress']['percentage'] is None
+    assert 'explicit wbs-inputs' in result['progress']['reason']
+    assert wbs.read_state(str(td))['checks']['A']['passed']
 
 
 @pytest.mark.parametrize("settings", [
@@ -160,6 +195,19 @@ def test_document_assertion_is_bound_to_actual_document_bytes(tmp_path):
     (repo / "doc/common/note.md").write_text("changed after the check\n")
     assert call("close").get("isError")
     assert not json.loads((td / "WBS.control.json").read_text())["closed"]
+
+
+def test_document_measurement_requires_explicit_inputs_before_any_checkout_hash(tmp_path, monkeypatch):
+    repo, td, call, opened = document_fixture(tmp_path)
+    text = plan([node()]) + '\n```wbs-work\n{"kind":"document"}\n```\n'
+    assert not call('plan', plan=text).get('isError')
+    def forbidden(*args, **kwargs):
+        pytest.fail('document checks must not implicitly hash the checkout')
+    monkeypatch.setattr(wbs, 'fingerprint', forbidden)
+    result = call('check', node_id='A')
+    assert result.get('isError')
+    progress = wbs.wbs_progress(str(td), str(repo), opened['run_id'], measure=True)
+    assert progress['percentage'] is None and 'explicit wbs-inputs' in progress['reason']
 
 
 def test_development_cannot_explicitly_remove_its_review_and_qa(tmp_path):

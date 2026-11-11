@@ -132,6 +132,8 @@ Do not duplicate the policy classifier in prompts or infer safety from `.md`.
   using the existing document critic. Honor additional explicitly required lenses.
   Before independent review, issue a bounded acceptance target for that lens
   containing the deliverable and needed source references; self checks need no role target.
+  When ready to verify, publish explicit `wbs-inputs` for the actual deliverable
+  and necessary references; document/plan checks never default to a whole-checkout scan.
   Then run declared checks and `wbs(action="verify")`, and proceed to Phase 5.
   Close only a document/plan deliverable that is the authorized outcome; planning
   a product does not complete implementation. An implementation WBS paused at
