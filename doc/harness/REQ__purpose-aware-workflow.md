@@ -1,6 +1,6 @@
 # Purpose-aware Harness execution
 
-Status: accepted user outcome; implementation in progress
+Status: accepted user outcome. Current completion evidence belongs to the owning WBS.
 
 ## Requirement provenance
 
