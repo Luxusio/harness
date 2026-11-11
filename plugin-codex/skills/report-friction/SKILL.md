@@ -97,6 +97,7 @@ Report `sent` only from a verified helper result and retain its page/comment ID.
 An `unknown` result may already have created the comment: inspect the page or
 known comment before any new submission; never automatically retry. Otherwise
 show the actual blocker and still return the copyable report. No automatic
-retrieval, notification or developer response is promised. Setup and accepted
-URL forms are documented in the repository README's Personal improvement inbox
-section; keep real destinations and authentication outside project Git.
+retrieval, notification or developer response is promised. For setup and accepted
+URL forms, run the packaged helper with `--help`: it includes the private YAML,
+independent mise authentication, prerequisites, permissions and trust instructions.
+Keep real destinations and authentication outside project Git.

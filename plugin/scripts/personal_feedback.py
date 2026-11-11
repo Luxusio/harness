@@ -9,6 +9,7 @@ import argparse
 import base64
 import hashlib
 import html
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path
@@ -77,7 +78,7 @@ def _destination(raw):
     site = _origin(f"{url.scheme}://{url.netloc}")
     if url.fragment:
         raise ValueError("use the page URL without a fragment")
-    modern = re.fullmatch(r"/(?:wiki/)?spaces/[A-Za-z0-9_-]{1,100}/pages/([1-9][0-9]{0,31})(?:/[^?#]*)?", url.path)
+    modern = re.fullmatch(r"/(?:wiki/)?spaces/~?[A-Za-z0-9_:-]{1,200}/pages/([1-9][0-9]{0,31})(?:/[^?#]*)?", url.path)
     if modern and not url.query:
         page_id = modern.group(1)
     elif url.path in ("/wiki/pages/viewpage.action", "/pages/viewpage.action"):
@@ -206,7 +207,7 @@ def perform(action, report=None, home=None, environment=None):
                 or version.get("authorId") != account or storage.get("representation") != "storage" or storage.get("value") != body):
             raise ValueError("created comment readback mismatch")
         return {"status": "sent", "page": selected["page"], "comment_id": comment_id}
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, FeedbackError, RecursionError) as error:
+    except (OSError, HTTPException, ValueError, TypeError, KeyError, AttributeError, FeedbackError, RecursionError) as error:
         if started:
             return {"status": "unknown", "page": selected["page"], "comment_id": comment_id,
                     "message": "The comment may exist. Inspect the page and known comment ID before another submission; do not automatically resend."}
@@ -214,7 +215,38 @@ def perform(action, report=None, home=None, environment=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog="""Setup (personal files only; never commit these):
+  ~/.config/harness/feedback.yaml:
+    backend: atlassian
+    page: "https://YOUR-SITE.atlassian.net/wiki/spaces/TEAM/pages/123456"
+
+  ~/.config/harness/mise.local.toml:
+    [env]
+    ATLASSIAN_BASE_URL = "https://YOUR-SITE.atlassian.net"
+    ATLASSIAN_EMAIL = "YOUR_EMAIL"
+    ATLASSIAN_API_TOKEN = "YOUR_TOKEN"
+
+Use mode 0600 for both files; own their directories and prevent other users
+from writing them (0700 for ~/.config/harness). Review the mise file, then run:
+  mise trust ~/.config/harness/mise.local.toml
+Requires a POSIX host, PyYAML in this Python and mise for check/send.
+A compatible Confluence Cloud personal API token is required. Scoped gateway
+tokens and Data Center are not supported. The private BASE_URL must match
+the page origin. Project/global credentials never fill missing private values.
+
+Page links: /wiki/spaces/KEY/pages/ID[/title] (including ~personal keys),
+/spaces/KEY/pages/ID[/title], or /wiki/pages/viewpage.action?pageId=ID
+(and /pages/viewpage.action?pageId=ID). Remove tracking queries/fragments;
+short links need the full page URL. No destination environment override.
+
+status: local settings only, no credentials/network. check: read-only access.
+send: redacted UTF-8 report on stdin, <=128 KiB; appends one footer comment.
+Configuration does not authorize sending. No automatic publication or retry.
+Exit 0: success/status; 1: unavailable; 2: invalid CLI; 3: uncertain write.
+If unknown, inspect the page/known comment ID before another submission.
+""")
     parser.add_argument("action", nargs="?", default="status", choices=("status", "check", "send"))
     args = parser.parse_args()
     report = None

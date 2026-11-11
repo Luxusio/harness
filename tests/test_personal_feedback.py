@@ -4,9 +4,9 @@ import copy
 import importlib.util
 import json
 import os
-import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import threading
@@ -88,7 +88,9 @@ def test_missing_personal_settings_are_readonly_even_with_project_auth(tmp_path,
 
 
 @pytest.mark.parametrize("page", [PAGE, SITE + "/spaces/TOOLS/pages/790",
-    SITE + "/wiki/pages/viewpage.action?pageId=790"])
+    SITE + "/wiki/pages/viewpage.action?pageId=790",
+    SITE + "/wiki/spaces/~AAID/pages/790/Personal+inbox",
+    SITE + "/wiki/spaces/~712020:123e4567-e89b-12d3-a456-426614174000/pages/790"])
 def test_private_destination_accepts_documented_native_page_urls(tmp_path, monkeypatch, page):
     private_settings(tmp_path, page=page)
     monkeypatch.setattr(feedback, "_credentials", forbidden)
@@ -443,6 +445,112 @@ def test_http_transport_refuses_redirect_instead_of_forwarding_credentials(monke
             server.server_close()
         for thread in threads:
             thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("fault", ["status-line", "chunked-truncation"])
+@pytest.mark.parametrize("stage", ["preflight", "post", "readback"])
+def test_actual_http_protocol_failure_retains_effect_uncertainty(tmp_path, monkeypatch, capsys, fault, stage):
+    """Exercise http.client's real exceptions through urllib, not a mocked raise."""
+    private_auth(tmp_path)
+    monkeypatch.setattr(feedback, "_credentials", lambda *a, **k: CREDS.copy())
+    requests = []
+    class NativeServer(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def broken(self):
+            if fault == "status-line":
+                # A server/proxy error may contain sensitive text. It must not
+                # reach an exception traceback or user-visible result.
+                self.connection.sendall(b"private-fixture-token\r\n\r\n")
+            else:
+                status = b"201 Created" if self.command == "POST" else b"200 OK"
+                self.connection.sendall(b"HTTP/1.1 " + status + b"\r\nTransfer-Encoding: chunked\r\n\r\n20\r\nshort")
+            self.close_connection = True
+
+        def respond(self, status, payload):
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            requests.append(("GET", self.path))
+            if self.path == "/wiki/rest/api/user/current":
+                if stage == "preflight":
+                    self.broken()
+                else:
+                    self.respond(200, {"accountId": "private-user"})
+            elif self.path == "/wiki/api/v2/pages/790":
+                self.respond(200, {"id": "790", "status": "current"})
+            else:
+                assert self.path.startswith("/wiki/api/v2/footer-comments/900?")
+                assert stage == "readback"
+                self.broken()
+
+        def do_POST(self):
+            requests.append(("POST", self.path))
+            size = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(size))
+            assert payload["pageId"] == "790"
+            assert self.path == "/wiki/api/v2/footer-comments"
+            # Reaching this handler represents an accepted native mutation;
+            # a broken acknowledgement cannot safely be treated as no write.
+            if stage == "post":
+                self.broken()
+            else:
+                self.respond(201, {"id": "900"})
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), NativeServer)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    real_request = feedback._request
+    def loopback(site, credentials, method, path, body=None):
+        assert site == SITE
+        return real_request(f"http://127.0.0.1:{server.server_port}", credentials, method, path, body)
+    monkeypatch.setattr(feedback, "_request", loopback)
+    try:
+        result = feedback.perform("send", report="Private feedback body", home=tmp_path)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert result["status"] == ("unavailable" if stage == "preflight" else "unknown")
+    assert sum(method == "POST" for method, _ in requests) == (0 if stage == "preflight" else 1)
+    if stage == "readback":
+        assert "900" in json.dumps(result)
+    captured = capsys.readouterr()
+    rendered = json.dumps(result) + captured.out + captured.err
+    assert "private-fixture-token" not in rendered and "Traceback" not in rendered
+    assert "Private feedback body" not in rendered
+
+
+def test_packaged_help_explains_private_setup_without_source_readme(tmp_path):
+    package = tmp_path / "installed/scripts"
+    package.mkdir(parents=True)
+    for name in ("personal_feedback.py", "document_destination.py"):
+        shutil.copyfile(SCRIPTS / name, package / name)
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    cwd = tmp_path / "consumer"
+    cwd.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("MISE_", "__MISE_", "ATLASSIAN_", "HARNESS_"))}
+    env.update(HOME=str(home), PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([sys.executable, "-S", "-B", str(package / "personal_feedback.py"), "--help"],
+                            cwd=cwd, env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and not result.stderr
+    assert "~/.config/harness/feedback.yaml" in result.stdout
+    assert "~/.config/harness/mise.local.toml" in result.stdout
+    for name in CREDS:
+        assert name in result.stdout
+    assert "backend:" in result.stdout and "page:" in result.stdout
+    assert "0600" in result.stdout and "mise trust" in result.stdout
+    assert not list(home.iterdir()) and not list(cwd.iterdir())
 
 
 def test_public_cli_default_help_and_invalid_action_from_unrelated_project(tmp_path):
