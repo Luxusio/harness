@@ -1741,4 +1741,21 @@ class NativeDocumentContractTest {
         assertTrue(provider.requests.isEmpty())
     }
 
+    @Test fun `native comment read records denied root before returning to the host hook`() {
+        val provider = Provider()
+        val marker = root.resolve("confluence/COMMON/.sync/${WikiChanges.noticeDenialMarker}")
+        provider.use(local = true) { registry ->
+            provider.denied["/wiki/api/v2/pages/201"] = HttpStatusCode.Forbidden
+            val childDenied = call(registry, "list_comments", strings("target" to "201"))
+            assertEquals(JsonPrimitive("http_403"), childDenied["code"])
+            assertFalse(Files.exists(marker))
+            provider.denied.clear()
+            provider.denied["/wiki/api/v2/pages/210"] = HttpStatusCode.Forbidden
+            val rootDenied = call(registry, "list_comments", strings("target" to "201"))
+            assertEquals(JsonPrimitive("http_403"), rootDenied["code"])
+            assertTrue(Files.isRegularFile(marker))
+        }
+        provider.assertNoEffects()
+    }
+
 }

@@ -305,11 +305,16 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                         var ancestor = nodes[parent]
                         if (ancestor == null || node.id in pinned) {
                             ancestor = try {
-                                try { remote.node(parent, "folder") } catch (e: ContextRemoteException) {
+                                try {
+                                    if (config.isKnowledge) remote.connectionScopeNode(config, parent, "folder")
+                                    else remote.node(parent, "folder")
+                                } catch (e: ContextRemoteException) {
                                     if (e.code != "http_404") throw e
-                                    remote.node(parent, "page")
+                                    if (config.isKnowledge) remote.connectionScopeNode(config, parent) else remote.node(parent, "page")
                                 }
-                            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                            } catch (e: CancellationException) { throw e }
+                            catch (e: RootScopeDenial) { throw e }
+                            catch (e: Exception) {
                                 if (node.id in pinned && node.id !in requested && node.id in old) {
                                     unresolved += node.id; break
                                 }
@@ -402,7 +407,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 val changes = mutableListOf<JsonElement>()
                 try {
                     selected.forEach { node ->
-                        if (config.isKnowledge) require(remote.requireScope(config, node.id) == node) { "Mirror page left its admitted knowledge hierarchy" }
+                        if (config.isKnowledge && remote.requireScope(config, node.id) != node)
+                            throw ContextRemoteException("scope_metadata_changed", "Mirror page left its admitted knowledge hierarchy")
                         val prior = old[node.id]?.jsonObject
                         val oldStorage = prior?.get("storage")?.jsonPrimitive?.content?.let { ContextFiles.safe(base, it) }
                         val refreshBody = refreshRequestedBodies && mode == "pages" && node.id in requested
@@ -479,6 +485,25 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
 
     private fun recordRootDenial(control: Path) {
         if (!noticeAccessDenied(control)) ContextFiles.atomic(noticeDenialPath(control), "")
+    }
+
+    internal suspend fun recordNoticeRootDenial(config: ContextConfig) {
+        try {
+            val control = ContextFiles.safe(root, "confluence/${config.space}/.sync")
+            if (!Files.isDirectory(control)) return
+            val lockPath = ContextFiles.safe(control, "sync.lock")
+            CorpusFileLock.tryAcquire(lockPath)?.use {
+                recordRootDenial(control)
+                return
+            }
+            withTimeoutOrNull(5_000) {
+                awaitSyncLock(lockPath).use {
+                    // A concurrent inventory may have re-admitted the root while the tool returned.
+                    if (!noticeAccessDenied(control)) recheckRootAccess(control, config, knowledgeRoot(config))
+                }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { /* Preserve the original provider result if the replica is unwritable. */ }
     }
 
     private fun shouldCheckRoot(failure: ContextRemoteException) = failure.isScopeDenial() || failure.code == "scope_metadata_changed"
@@ -611,12 +636,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                                                 fileKey: Any?, rootDenialObserved: Boolean): Boolean {
         suspend fun confirm(): Boolean {
             val lockPath = ContextFiles.safe(control, "sync.lock")
-            var lock = CorpusFileLock.tryAcquire(lockPath)
-            while (lock == null) {
-                delay(25)
-                lock = CorpusFileLock.tryAcquire(lockPath)
-            }
-            return lock.use {
+            return awaitSyncLock(lockPath).use {
                 if (!noticeAccessDenied(control)) {
                     if (rootDenialObserved && fileKey != null && fileKey == manifestFileKey(manifest)) {
                         recordRootDenial(control)
@@ -631,6 +651,13 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         // A confirmed denial waits cancellably for the current writer. A speculative
         // recheck can yield after a short wait, leaving its targets due next poll.
         return if (rootDenialObserved) confirm() else withTimeoutOrNull(5_000) { confirm() } ?: false
+    }
+
+    private suspend fun awaitSyncLock(path: Path): CorpusFileLock {
+        while (true) {
+            CorpusFileLock.tryAcquire(path)?.let { return it }
+            delay(25)
+        }
     }
 
     private fun <T> withSyncLock(control: Path, block: () -> T): T? =

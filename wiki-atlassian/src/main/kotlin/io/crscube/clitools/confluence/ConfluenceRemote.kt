@@ -46,7 +46,7 @@ internal fun nativePageUrlId(value: String, origin: String, space: String? = nul
 open class ContextRemoteException(val code: String, message: String, val outcomeUnknown: Boolean = false,
                                   val details: JsonObject = buildJsonObject {}, val next: String? = null) : RuntimeException(message)
 
-internal class RootScopeDenial(failure: ContextRemoteException) :
+internal class RootScopeDenial(val config: ContextConfig, failure: ContextRemoteException) :
     ContextRemoteException(failure.code, failure.message.orEmpty(), failure.outcomeUnknown, failure.details, failure.next)
 
 internal fun ContextRemoteException.isScopeDenial(): Boolean =
@@ -249,25 +249,32 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
     }
 
     /** WikiService owns fresh namespace admission before and after this permission/version-bound read. */
-    internal suspend fun wikiPage(expectedNode: RemoteNode): RemotePage {
+    internal suspend fun wikiPage(expectedNode: RemoteNode, scope: ContextConfig? = null): RemotePage {
         require(expectedNode.type == "page" && expectedNode.status == "current")
-        return pageStorage(expectedNode.id, expectedNode, null, false)
+        return pageStorage(expectedNode.id, expectedNode, null, false, connection = scope)
     }
 
     private suspend fun pageStorage(id: String, expectedNode: RemoteNode?, scope: ContextConfig?, freshStorage: Boolean,
-                                    admission: Pair<BodyScope, RemoteNode>? = null): RemotePage {
+                                    admission: Pair<BodyScope, RemoteNode>? = null, connection: ContextConfig? = scope): RemotePage {
         val path = "/wiki/api/v2/pages/${id(id)}"
         // Bind the fresh permission check to the exact metadata admitted by the selected root.
-        val metadata = request(HttpMethod.Get, endpoint(path)).second
-        val node = parseNode(metadata, "page")
+        val (metadata, node) = withConnectionScope(connection, id) {
+            val value = request(HttpMethod.Get, endpoint(path)).second
+            val current = if (connection == null) parseNode(value, "page")
+                else checkConnectionSpace(connection, parseScopeNode(value, id, "page"))
+            value to current
+        }
         require(node.id == id && metadata.string("status") == "current") { "Current page metadata required" }
+        if (connection != null && expectedNode != null && node != expectedNode)
+            throw ContextRemoteException("scope_metadata_changed", "Page left its authorized identity or hierarchy; retry scope admission")
         require(expectedNode == null || node == expectedNode) { "Page left its authorized identity or hierarchy; retry scope admission" }
         // A body read owns one authorization generation. Its final pass remains fresh,
         // including on a cache hit; no observation is shared with a later write phase.
         val authorization = if (scope?.isKnowledge == true) admission?.first ?: bodyScope(scope) else null
         val validation = authorization?.admission
         if (validation != null) {
-            require((admission?.second ?: validation(id)) == node) { "Page left the selected root before its storage read" }
+            if ((admission?.second ?: validation(id)) != node)
+                throw ContextRemoteException("scope_metadata_changed", "Page left the selected root before its storage read")
             if (admission == null) validation.validateConsumed()
         }
         val message = (metadata["version"] as? JsonObject)?.string("message") ?: ""
@@ -275,9 +282,17 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             authorization?.finish?.invoke()
             return it
         }
-        val storage = request(HttpMethod.Get, endpoint(path, mapOf("body-format" to "storage"))).second
-        require(storage.string("status") == "current") { "Current page storage required" }
-        val page = parsePage(storage, id)
+        val page = withConnectionScope(connection, id) {
+            val storage = request(HttpMethod.Get, endpoint(path, mapOf("body-format" to "storage"))).second
+            if (connection == null) require(storage.string("status") == "current") { "Current page storage required" }
+            else {
+                requireScopeIdentity(storage, id)
+                requireCurrentScopeStatus(storage)
+            }
+            parsePage(storage, id).also { page -> connection?.let { checkConnectionSpace(it, page.node) } }
+        }
+        if (connection != null && (page.node != node || page.versionMessage != message))
+            throw ContextRemoteException("scope_metadata_changed", "Page changed during read; retry")
         require(page.node == node && page.versionMessage == message) { "Page changed during read; retry" }
         authorization?.finish?.invoke()
         cache?.write(page)
@@ -649,14 +664,42 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
 
     internal suspend fun scopeNode(contentId: String, type: String = "page"): RemoteNode {
         val value = request(HttpMethod.Get, endpoint("/wiki/api/v2/${if (type == "folder") "folders" else "pages"}/${id(contentId)}")).second
+        return parseScopeNode(value, contentId, type)
+    }
+
+    private fun requireCurrentScopeStatus(value: JsonObject) {
         val status = (value["status"] as? JsonPrimitive)?.takeIf { it.isString && it.content.isNotBlank() }
             ?: throw ContextRemoteException("malformed_node", "Knowledge content status is unavailable")
         if (status.content != "current")
             throw ContextRemoteException("scope_not_current", "Knowledge content status must be explicitly current")
-        val result = parseNode(value, type)
-        require(result.id == contentId) { "Knowledge content identity changed" }
-        return result
     }
+
+    private fun requireScopeIdentity(value: JsonObject, contentId: String) {
+        if (value.string("id") != contentId)
+            throw ContextRemoteException("identity_mismatch", "Knowledge content identity changed")
+    }
+
+    private fun parseScopeNode(value: JsonObject, contentId: String, type: String): RemoteNode {
+        requireScopeIdentity(value, contentId)
+        requireCurrentScopeStatus(value)
+        return parseNode(value, type)
+    }
+
+    private inline fun <T> withConnectionScope(config: ContextConfig?, id: String, block: () -> T): T =
+        try { block() } catch (failure: ContextRemoteException) {
+            if (failure !is RootScopeDenial && config != null && (id == config.homePageId || id == config.knowledgeRootPageId) && failure.isScopeDenial())
+                throw RootScopeDenial(config, failure)
+            throw failure
+        }
+
+    private fun checkConnectionSpace(config: ContextConfig, node: RemoteNode): RemoteNode {
+        if (node.spaceId != config.spaceId)
+            throw ContextRemoteException("scope_outside_connection", "Knowledge scope requires current content in the registered space")
+        return node
+    }
+
+    internal suspend fun connectionScopeNode(config: ContextConfig, id: String, type: String = "page"): RemoteNode =
+        withConnectionScope(config, id) { checkConnectionSpace(config, scopeNode(id, type)) }
 
     internal class ScopeValidation(private val authorize: suspend (String) -> RemoteNode,
                                    private val verifyConsumed: suspend () -> Unit) {
@@ -682,17 +725,9 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         val observed = linkedMapOf<String, RemoteNode>()
         var requests = 0
         fun outsideScope(message: String): Nothing = throw ContextRemoteException("scope_outside_connection", message)
-        suspend fun readScope(id: String, type: String): RemoteNode = try {
-            val node = scopeNode(id, type)
-            if (node.spaceId != config.spaceId) outsideScope("Knowledge scope requires current content in the registered space")
-            node
-        } catch (failure: ContextRemoteException) {
-            if ((id == config.homePageId || id == boundaryId) && failure.isScopeDenial()) throw RootScopeDenial(failure)
-            throw failure
-        }
         suspend fun fetch(id: String, type: String): RemoteNode {
             if (++requests > 256) throw ContextRemoteException("scope_limit", "Knowledge authorization exceeds the metadata request budget; reduce the selected watch or search scope")
-            return readScope(id, type)
+            return connectionScopeNode(config, id, type)
         }
         suspend fun content(id: String, fresh: Boolean = false): RemoteNode {
             if (!fresh) observed[id]?.let { return it }
@@ -722,7 +757,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         if (config.isKnowledge) try {
             reaches(boundary, home.id)
         } catch (failure: ContextRemoteException) {
-            if (failure !is RootScopeDenial && failure.isScopeDenial()) throw RootScopeDenial(failure)
+            if (failure !is RootScopeDenial && failure.isScopeDenial()) throw RootScopeDenial(config, failure)
             throw failure
         }
         val consumed = linkedSetOf(boundary.id)
@@ -759,7 +794,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             var finalRequests = 0
             verifyConsumed { id, type ->
                 if (++finalRequests > 256) throw ContextRemoteException("scope_limit", "Knowledge final body verification exceeds the metadata request budget")
-                readScope(id, type)
+                connectionScopeNode(config, id, type)
             }
         }
         return ScopeValidation(authorize = { pageId ->
@@ -780,6 +815,10 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
 
     private suspend fun knowledgeInventory(config: ContextConfig): List<RemoteNode> {
         val boundary = requireScope(config, config.knowledgeRootPageId ?: config.homePageId)
+        fun requireSame(current: RemoteNode, observed: RemoteNode) {
+            if (current != observed)
+                throw ContextRemoteException("scope_metadata_changed", "Knowledge hierarchy changed during inventory; retry the complete generation")
+        }
         val nodes = linkedMapOf(boundary.id to boundary)
         val pending = java.util.ArrayDeque<Pair<RemoteNode, Int>>()
         pending.add(boundary to 0)
@@ -787,10 +826,9 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             val (parent, depth) = pending.removeFirst()
             require(depth <= 100) { "Knowledge inventory exceeds the hierarchy depth limit" }
             // Re-admit the complete current ancestry even if this parent's own metadata is unchanged.
-            require(requireScope(config, parent.id) == parent) { "Knowledge parent left its admitted ancestry before descendant traversal" }
-            for (child in children(parent.id, parent.type)) {
-                require(scopeNode(child.id, child.type) == child) { "Knowledge child metadata changed during inventory" }
-                require(child.spaceId == config.spaceId && child.status == "current" && child.parentId == parent.id) { "Knowledge inventory left its registered scope" }
+            requireSame(requireScope(config, parent.id), parent)
+            for (child in children(parent.id, parent.type, config)) {
+                requireSame(connectionScopeNode(config, child.id, child.type), child)
                 require(child.id !in nodes && nodes.size < 20000) { "Cyclic or excessive knowledge inventory" }
                 nodes[child.id] = child
                 pending.add(child to depth + 1)
@@ -802,8 +840,8 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         // There is no shared search/watch request budget across this 20,000-node inventory.
         val verified = linkedMapOf<String, RemoteNode>()
         nodes.values.toList().asReversed().forEach { observed ->
-            val current = scopeNode(observed.id, observed.type)
-            require(current == observed) { "Knowledge hierarchy changed during inventory; retry the complete generation" }
+            val current = connectionScopeNode(config, observed.id, observed.type)
+            requireSame(current, observed)
             verified[current.id] = current
         }
         verified.values.forEach { node ->
@@ -819,7 +857,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
                 depth++
             }
         }
-        require(requireScope(config, boundary.id) == boundary) { "Registered knowledge root changed during inventory" }
+        requireSame(requireScope(config, boundary.id), boundary)
         return nodes.values.toList()
     }
 
@@ -899,14 +937,18 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         }.distinctBy { it.id }
     }
 
-    suspend fun children(id: String, type: String = "page"): List<RemoteNode> {
+    suspend fun children(id: String, type: String = "page"): List<RemoteNode> = children(id, type, null)
+
+    private suspend fun children(id: String, type: String, config: ContextConfig?): List<RemoteNode> {
         require(type in setOf("page", "folder")) { "Only page/folder children are supported" }
         val children = list(endpoint("/wiki/api/v2/${if (type == "folder") "folders" else "pages"}/${id(id)}/direct-children", mapOf("limit" to "250")))
         return children.mapNotNull { child ->
             val childType = child.string("type") ?: throw ContextRemoteException("malformed_child", "Confluence child has no content type")
             if (childType !in setOf("page", "folder")) return@mapNotNull null
-            val result = node(child.string("id") ?: error("Missing child ID"), childType)
-            if (result.parentId != id) throw ContextRemoteException("hierarchy_changed", "Confluence hierarchy changed during listing")
+            val childId = child.string("id") ?: error("Missing child ID")
+            val result = if (config == null) node(childId, childType) else connectionScopeNode(config, childId, childType)
+            if (result.parentId != id) throw ContextRemoteException(
+                if (config == null) "hierarchy_changed" else "scope_metadata_changed", "Confluence hierarchy changed during listing")
             result
         }.distinctBy { it.id }
     }

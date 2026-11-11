@@ -349,6 +349,34 @@ class WikiChangesTest {
         }
     }
 
+    @Test fun `one denied root read during final inventory verification pauses the previous feed`() = runBlocking {
+        Provider().use { provider ->
+            val mirror = provider.mirror
+            mirror.sync(config)
+            provider.pages.getValue("211").version++
+            mirror.sync(config)
+            val feed = json(feedPath)
+            assertEquals(listOf(notice(1, "updated", "211", 2)), events(feed))
+
+            var leafEnumerated = false
+            var deniedOnce = false
+            provider.overrideStatus = { path ->
+                if (path == "pages/211/direct-children") leafEnumerated = true
+                if (path == "pages/210" && leafEnumerated && !deniedOnce) {
+                    deniedOnce = true
+                    HttpStatusCode.Forbidden
+                } else null
+            }
+            assertEquals("http_403", assertFailsWith<RootScopeDenial> { mirror.sync(config) }.code)
+            assertTrue(deniedOnce)
+            assertTrue(Files.isRegularFile(denialPath))
+            assertEquals(feed, json(feedPath))
+            mirror.sync(config)
+            assertFalse(Files.exists(denialPath))
+            assertEquals(feed, json(feedPath))
+        }
+    }
+
     @Test fun `root space and status changes pause the feed on explicit metadata evidence`() = runBlocking {
         Provider().use { provider ->
             val mirror = provider.mirror

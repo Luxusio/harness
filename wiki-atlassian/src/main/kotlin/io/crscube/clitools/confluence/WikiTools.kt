@@ -102,10 +102,20 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
     private fun unchanged(before: Environment) { require(environment() == before) { "Installation or connection policy changed; read the target again" } }
     private fun configs(env: Environment): List<ContextConfig> = listOf("project", "common").mapNotNull { ContextConfig.load(env.root, runtimeSettings, it) }
         .distinct().also { require(it.isNotEmpty()) { "Configure a registered Confluence connection" } }
-    private suspend fun nativeNode(id: String): RemoteNode = try { remote.scopeNode(id) } catch (e: ContextRemoteException) {
-        if (e.code != "http_404") throw e
-        remote.scopeNode(id, "folder")
+    private val activeConfig by lazy { ContextConfig.load(launchRoot, runtimeSettings) }
+    private fun rootConfig(id: String): ContextConfig? = activeConfig?.takeIf {
+        it.isKnowledge && (id == it.homePageId || id == it.knowledgeRootPageId)
     }
+    private suspend fun nativeNode(id: String): RemoteNode {
+        val root = rootConfig(id)
+        suspend fun read(type: String): RemoteNode = if (root == null) remote.scopeNode(id, type)
+            else remote.connectionScopeNode(root, id, type)
+        return try { read("page") } catch (e: ContextRemoteException) {
+            if (e.code != "http_404") throw e
+            read("folder")
+        }
+    }
+    private suspend fun nativePage(node: RemoteNode): RemotePage = remote.wikiPage(node, rootConfig(node.id))
     /** Observations live for one read only; final authorization never uses cached observations. */
     private inner class ReadGraph {
         val nodes = linkedMapOf<String, RemoteNode>()
@@ -203,7 +213,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         val root = common.knowledgeRootPageId ?: common.homePageId
         suspend fun child(parent: String, titles: Set<String>): JsonObject {
             val batch = try { withTimeoutOrNull(30_000) { remote.feedbackCandidates(common, parent, titles) } ?: selection() }
-                catch (e: ContextRemoteException) { if (e.code == "http_404") selection() else throw e }
+                catch (e: ContextRemoteException) { if (e !is RootScopeDenial && e.code == "http_404") selection() else throw e }
                 catch (_: IllegalArgumentException) { selection() }
             val results = batch.getValue("results").jsonArray
             if (batch["complete"] != JsonPrimitive(true) || results.size != 1) selection()
@@ -793,6 +803,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                 titleTargets[key] = id
                 return id
             } catch (e: CancellationException) { throw e }
+            catch (e: RootScopeDenial) { throw e }
             catch (_: Exception) { truncated = true; return null }
         }
         var bytes = 0L
@@ -802,7 +813,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
             checkDocumentReference(reference, governing)
             require(observed == null || observed <= node.version) { "Observed version exceeds the current native version" }
             if (observed != null && observed != node.version) changed += id
-            val page = remote.wikiPage(node)
+            val page = nativePage(node)
             bytes += page.body.toByteArray(Charsets.UTF_8).size
             require(bytes <= 16L * 1024 * 1024) { "Selected bodies exceed the bounded read budget" }
             val parsed = Jsoup.parse(page.body, "", Parser.xmlParser())
@@ -923,7 +934,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                 val (owner, node) = admitted(env, id, graph)
                 require(owner == config && node.type == "page")
                 val record = pages.getValue(id).jsonObject
-                val page = remote.wikiPage(node)
+                val page = nativePage(node)
                 bytes += page.body.toByteArray(Charsets.UTF_8).size
                 require(bytes <= 16L * 1024 * 1024) { "Graph source bodies exceed the read budget" }
                 if (record["id"] != JsonPrimitive(node.id) || record["title"] != JsonPrimitive(node.title) ||
@@ -938,7 +949,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                 return true
             } catch (e: CancellationException) { throw e }
             catch (e: ContextRemoteException) {
-                if (e.code !in setOf("http_403", "http_404")) throw e
+                if (e is RootScopeDenial || e.code !in setOf("http_403", "http_404")) throw e
                 truncated = true
             } catch (_: IllegalArgumentException) { truncated = true }
             // A denied candidate is never a bridge or an exported observation.
@@ -995,13 +1006,18 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         require(value.length <= WIKI_CURSOR_LIMIT) { "Cursor is oversized" }
         return Json.parseToJsonElement(String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8)).jsonObject
     }
-    suspend fun execute(operation: String, data: JsonObject): JsonObject = remote.wikiOperation {
-        if (operation in setOf("search_documents", "get_document", "list_document_versions", "list_comments", "review", "graph"))
-            return@wikiOperation withTimeoutOrNull(30_000) { executeBounded(operation, data) }
-                ?: buildJsonObject { put("status", "error"); put("code", "read_timeout"); put("message", "Read exceeded its time budget; reduce the scope or retry the read") }
-        executeBounded(operation, data)
+    suspend fun execute(operation: String, data: JsonObject): JsonObject {
+        var rootDenied: ContextConfig? = null
+        val result = remote.wikiOperation {
+            if (operation in setOf("search_documents", "get_document", "list_document_versions", "list_comments", "review", "graph"))
+                return@wikiOperation withTimeoutOrNull(30_000) { executeBounded(operation, data) { rootDenied = it } }
+                    ?: buildJsonObject { put("status", "error"); put("code", "read_timeout"); put("message", "Read exceeded its time budget; reduce the scope or retry the read") }
+            executeBounded(operation, data) { rootDenied = it }
+        }
+        rootDenied?.let { ContextMirror(launchRoot, remote).recordNoticeRootDenial(it) }
+        return result
     }
-    private suspend fun executeBounded(operation: String, data: JsonObject): JsonObject {
+    private suspend fun executeBounded(operation: String, data: JsonObject, rootDenied: (ContextConfig) -> Unit): JsonObject {
         var effect = 0
         var nativeVersionMessage: String? = null
         var resolvedDocument: String? = null
@@ -1065,7 +1081,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                         if (root != null) require(chain(node.id, graph).any { it.id == root }) { "Search result is outside selected root" }
                         val visible = row.filterKeys { data.flag("metadata") || it in setOf("id", "title", "version") }.toMutableMap()
                         if (snippetLength != null) {
-                            val page = remote.wikiPage(node)
+                            val page = nativePage(node)
                             bytes += page.body.toByteArray(Charsets.UTF_8).size
                             require(bytes <= 16L * 1024 * 1024) { "Selected bodies exceed the bounded read budget" }
                             val markdown = ConfluenceMarkdownConverter.htmlToMarkdown(page.body,
@@ -1108,7 +1124,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
                         require(section == null || selected != null) { "Bind section positions to the native version returned by format:outline" }
                         val offset = data.number("offset", 0)
                         require(offset == 0 || selected != null) { "Bind continuation to a native document version" }
-                        val page = if (selected == null || selected == node.version) remote.wikiPage(node) else remote.wikiHistoricalPage(id, selected)
+                        val page = if (selected == null || selected == node.version) nativePage(node) else remote.wikiHistoricalPage(id, selected)
                         require(page.node.spaceId == node.spaceId) { "Historical document identity changed" }
                         documentResult(env, config, page, "read", offset, data.number("length", 4000), node, format = format, metadata = data.flag("metadata"), graph = graph, section = section)
                     }
@@ -1235,6 +1251,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
             return result
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
+            if (e is RootScopeDenial) rootDenied(e.config)
             val unknown = (e as? ContextRemoteException)?.outcomeUnknown == true || (effect == 2 || effect == 1 && e !is ContextRemoteException)
             return buildJsonObject {
                 put("status", if (unknown) "unknown" else "error")
