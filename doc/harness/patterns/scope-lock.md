@@ -1,15 +1,14 @@
 ---
 freshness: current
-freshness_updated: 2026-10-30T00:00:00Z
+freshness_updated: 2026-11-12T00:00:00Z
 invalidated_by_paths:
   - plugin/scripts/prewrite_gate.py
 ---
 
 # Scope Lock Pattern
 
-Scope lock turns a WBS's declared scope into a prewrite-gate deny. It runs
-before the final execution-assignment check in `plugin/scripts/prewrite_gate.py`
-for a direct write
+Scope lock turns a WBS's forbidden paths into a prewrite-gate deny for gated
+source and narrative writes in `plugin/scripts/prewrite_gate.py`
 (`Write` / `Edit` / `MultiEdit` / `apply_patch`). Bash and shell writes are not
 gated.
 
@@ -50,16 +49,16 @@ and timestamps belong in checkpoints, durable docs, or the final report.
 The gate signals a deny with a JSON `permissionDecision: "deny"` on stdout and
 exits 0 in every case; see `prewrite-gate.md` for the envelope.
 
-1. **Reach.** Scope lock runs only for a source-extension file (`SOURCE_EXTENSIONS`)
-   that passed every earlier rule: an exact-session current-open-run WBS
-   binding exists and has PLAN.md (or a
-   MAINTENANCE marker, or `execution_mode: micro`), and the REQ rule did not
-   deny. Other paths inside `doc/harness/wbs/`, `EXEMPT_PREFIXES`, workflow-control
-   files, and non-source files (Markdown, JSON, YAML, config) were already
-   decided, so `forbidden_paths` cannot block them. The entire retired
-   `doc/harness/tasks/` tree is protected earlier, without a scope exemption.
-   Integration custody and REQ checks precede scope lock; current execution
-   assignment is checked afterward.
+1. **Reach and order.** After protected, operational-exempt and workflow-control
+   paths have been decided, admitted document/plan narrative writes pass the
+   exact-session planned source-assignment and purpose-policy checks first,
+   then scope lock. They need no host dispatch merely to edit ordinary prose.
+   Development checks source-extension files (`SOURCE_EXTENSIONS`) and configured
+   narrative paths after binding, PLAN, integration-custody and REQ checks;
+   execution assignment follows scope lock on that path. Markdown in a narrative
+   role is therefore covered. Other non-source paths outside those roles that
+   return earlier remain outside scope lock. The retired `doc/harness/tasks/`
+   tree stays protected earlier, without a scope exemption.
 2. **Forbidden write.** A path that matches a `forbidden_paths` entry is denied
    with rule `scope-lock-forbidden` (owner `developer`). The message names the
    WBS id, the matching entry, the first three `allowed_paths`, and three
@@ -68,12 +67,14 @@ exits 0 in every case; see `prewrite-gate.md` for the envelope.
 3. **Every other path passes scope lock.** `allowed_paths` only appears in the
    deny message and `test_paths` is parsed but unused; neither changes the
    scope decision. An unlisted path passes without a warning or a log row;
-   the final execution-assignment check still applies.
+   execution-assignment restrictions still apply; document/plan assignment
+   has already passed before reaching scope lock.
 4. **No PROGRESS.md.** Scope lock is not active.
 5. **Malformed entries.** An absolute, `..`, or out-of-tree entry is skipped and
    logged as `gate-parse-fail` in `doc/harness/learnings.jsonl`. A parse or
-   enforcement exception is logged the same way and scope lock allows the write
-   (C-12).
+   enforcement exception on the development path is logged the same way and
+   does not deny through scope lock (C-12). Purpose-policy and assignment errors
+   still deny independently; malformed scope data grants no extra authority.
 
 A validated same-repository worktree target uses that checkout's bound WBS
 and relative paths even when the native cwd remains main; see the target-root
@@ -84,8 +85,8 @@ for entries ending in `/` and a `<entry>/**` match.
 
 ## Env var bypass
 
-`HARNESS_DISABLE_SCOPE_LOCK=1` skips scope lock only; earlier rules and the
-final execution-assignment check still apply. The gate reads the variable on every call and never clears it, so it
+`HARNESS_DISABLE_SCOPE_LOCK=1` skips scope lock only; other rules and execution
+assignment still apply in their purpose-specific order. The gate reads the variable on every call and never clears it, so it
 applies to every write while set in the runtime's environment (the environment
 the runtime gives hook processes).
 
