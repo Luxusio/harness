@@ -1623,7 +1623,7 @@ class NativeDocumentContractTest {
             settings.prepareCorpus()
             assertFalse(Files.exists(root.resolve("confluence/COMMON/.sync/manifest.json")), "Active legacy writer prevents reuse")
         }
-        // A fresh process may reuse the now-idle source; one settings instance never retries migration.
+        // A fresh process may reuse the now-idle source.
         KnowledgeSettings(settings.read(), credentials, runtimeHome.resolve("data")).prepareCorpus()
         val copied = root.resolve("confluence/COMMON/.sync/manifest.json")
         val seed = Json.parseToJsonElement(Files.readString(copied)).jsonObject

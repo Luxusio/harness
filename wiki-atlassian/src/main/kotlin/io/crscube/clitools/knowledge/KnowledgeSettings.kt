@@ -9,7 +9,6 @@ import kotlinx.serialization.json.*
 import java.nio.file.*
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** One immutable connection snapshot from the environment, independent of project cwd. */
 class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
@@ -30,8 +29,6 @@ class KnowledgeSettings(value: JsonObject, val credentials: JiraConfig,
         credentials.email, credentials.apiToken, initial.getValue("rootPageId").jsonPrimitive.content,
         initial.getValue("spaceId").jsonPrimitive.content).joinToString("\u0000")))
     @Volatile private var legacyImportFailed = false
-
-    private val legacySeedAttempted = AtomicBoolean(false)
 
     /** Only the exact current credential's legacy directory is a provable reuse candidate. */
     fun prepareCorpus() {
