@@ -310,10 +310,12 @@ class WikiChangesTest {
         }
     }
 
-    @Test fun `an old watcher denial cannot override a concurrently authorized inventory`() = runBlocking {
+    @Test fun `authorized inventory clears only the denial recorded before it began`() = runBlocking {
         Provider().use { provider ->
             val mirror = provider.mirror
             mirror.sync(config)
+            mirror.recordNoticeRootDenial(config)
+            val earlier = Files.readString(denialPath)
             val sent = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             val first = AtomicBoolean(true)
@@ -321,15 +323,19 @@ class WikiChangesTest {
                 if (path == "pages/210" && first.compareAndSet(true, false)) {
                     sent.complete(Unit)
                     release.await()
-                    HttpStatusCode.Forbidden
-                } else null
+                }
+                null
             }
-            val watch = async { mirror.pollComments(config, listOf("211"), 0) }
-            try {
+            val inventory = async { mirror.sync(config) }
+            val newer = try {
                 withTimeout(5_000) { sent.await() }
-                mirror.sync(config)
+                mirror.recordNoticeRootDenial(config)
+                Files.readString(denialPath)
             } finally { release.complete(Unit) }
-            watch.await()
+            assertNotEquals(earlier, newer)
+            inventory.await()
+            assertEquals(newer, Files.readString(denialPath))
+            mirror.sync(config)
             assertFalse(Files.exists(denialPath))
         }
     }
@@ -373,6 +379,12 @@ class WikiChangesTest {
             assertEquals(feed, json(feedPath))
             mirror.sync(config)
             assertFalse(Files.exists(denialPath))
+            assertEquals(feed, json(feedPath))
+            provider.overrideStatus = { path ->
+                if (path == "pages/210/direct-children") HttpStatusCode.Forbidden else null
+            }
+            assertEquals("http_403", assertFailsWith<RootScopeDenial> { mirror.sync(config) }.code)
+            assertTrue(Files.isRegularFile(denialPath))
             assertEquals(feed, json(feedPath))
         }
     }

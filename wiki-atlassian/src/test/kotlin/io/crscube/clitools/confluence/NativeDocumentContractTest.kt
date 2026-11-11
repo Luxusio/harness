@@ -1751,9 +1751,30 @@ class NativeDocumentContractTest {
             assertFalse(Files.exists(marker))
             provider.denied.clear()
             provider.denied["/wiki/api/v2/pages/210"] = HttpStatusCode.Forbidden
-            val rootDenied = call(registry, "list_comments", strings("target" to "201"))
-            assertEquals(JsonPrimitive("http_403"), rootDenied["code"])
-            assertTrue(Files.isRegularFile(marker))
+            checkNotNull(CorpusFileLock.tryAcquire(marker.parent.resolve("sync.lock"), shared = true)).use {
+                val rootDenied = call(registry, "list_comments", strings("target" to "201"))
+                assertEquals(JsonPrimitive("http_403"), rootDenied["code"])
+                assertTrue(Files.isRegularFile(marker))
+            }
+        }
+        provider.assertNoEffects()
+    }
+
+    @Test fun `root comment detail records denial after the initial ancestry read succeeds`() {
+        val provider = Provider()
+        provider.comments["399"] = Comment("399", "210")
+        provider.use(local = true) { registry ->
+            var rootReads = 0
+            provider.beforeRequest = { request ->
+                val rootPath = "/wiki/api/v2/pages/210"
+                if (request.url.encodedPath == rootPath && ++rootReads == 2) {
+                    provider.denied[rootPath] = HttpStatusCode.Forbidden
+                }
+            }
+            val failed = call(registry, "list_comments", strings("target" to "footer:399"))
+            assertEquals(JsonPrimitive("http_403"), failed["code"])
+            assertEquals(2, rootReads)
+            assertTrue(Files.isRegularFile(root.resolve("confluence/COMMON/.sync/${WikiChanges.noticeDenialMarker}")))
         }
         provider.assertNoEffects()
     }

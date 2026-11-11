@@ -478,7 +478,8 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
     }
 
     /** Parent access is a separate read; a successful comment list never substitutes for it. */
-    private suspend fun commentParent(provider: String, target: String, budget: CommentBudget, expectedNode: RemoteNode? = null): Pair<JsonObject, String?> {
+    private suspend fun commentParent(provider: String, target: String, budget: CommentBudget, expectedNode: RemoteNode? = null,
+                                      scope: ContextConfig? = null): Pair<JsonObject, String?> {
         require(provider in setOf("jira", "confluence")) { "Unsupported comment provider" }
         if (provider == "jira") {
             require(target.matches(Regex("[A-Z][A-Z0-9_]*-[1-9][0-9]*"))) { "Invalid watched Jira issue" }
@@ -496,10 +497,16 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             } to issueId
         }
         id(target)
-        val metadata = commentRequest(budget, "/wiki/api/v2/pages/$target")
-        val node = parseNode(metadata, "page")
-        require(node.id == target) { "Comment parent page identity mismatch" }
-        require(expectedNode == null || metadata.string("status") == "current" && node == expectedNode) { "Comment parent left its authorized identity or hierarchy" }
+        val node = withConnectionScope(scope, target) {
+            val metadata = commentRequest(budget, "/wiki/api/v2/pages/$target")
+            val current = if (scope == null) parseNode(metadata, "page")
+                else checkConnectionSpace(scope, parseScopeNode(metadata, target, "page"))
+            require(current.id == target) { "Comment parent page identity mismatch" }
+            require(expectedNode == null || metadata.string("status") == "current" && current == expectedNode) {
+                "Comment parent left its authorized identity or hierarchy"
+            }
+            current
+        }
         return buildJsonObject {
             put("id", target); put("title", node.title); put("status", node.status); put("closed", node.status != "current")
         } to null
@@ -567,8 +574,9 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
     }
 
     /** Complete current observations only. Failure/absence never becomes an authenticated deletion. */
-    suspend fun commentInventory(provider: String, target: String, expectedNode: RemoteNode? = null): JsonObject = boundedComments { budget ->
-        val (parent, issueId) = commentParent(provider, target, budget, expectedNode)
+    suspend fun commentInventory(provider: String, target: String, expectedNode: RemoteNode? = null,
+                                 scope: ContextConfig? = null): JsonObject = boundedComments { budget ->
+        val (parent, issueId) = commentParent(provider, target, budget, expectedNode, scope)
         val comments = linkedMapOf<String, JsonObject>()
         fun accept(comment: JsonObject) {
             val key = comment.getValue("id").jsonPrimitive.content
@@ -610,21 +618,22 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
                 }
             }
         }
-        require(commentParent(provider, target, budget, expectedNode).first == parent) { "Comment parent changed during inventory; retry" }
+        require(commentParent(provider, target, budget, expectedNode, scope).first == parent) { "Comment parent changed during inventory; retry" }
         buildJsonObject { put("provider", provider); put("target", target); put("parent", parent); put("comments", JsonArray(comments.values.toList())) }
     }
 
     /** Reread only a caller-bound watched comment; no self/next URL from content is followed. */
     suspend fun commentDetail(provider: String, target: String, commentId: String, kind: String,
-                              expectedParentId: String? = null, expectedNode: RemoteNode? = null): JsonObject = boundedComments { budget ->
+                              expectedParentId: String? = null, expectedNode: RemoteNode? = null,
+                              scope: ContextConfig? = null): JsonObject = boundedComments { budget ->
         id(commentId); expectedParentId?.let(::id)
-        val (parent, issueId) = commentParent(provider, target, budget, expectedNode)
+        val (parent, issueId) = commentParent(provider, target, budget, expectedNode, scope)
         if (provider == "jira") {
             require(kind == "jira" && expectedParentId == null) { "Invalid watched Jira comment kind or parent" }
             val comment = jiraComment(commentRequest(budget, "/rest/api/3/issue/$target/comment/$commentId"), target, issueId)
             require(comment.string("id") == commentId) { "Comment identity mismatch" }
             budget.accept(comment)
-            require(commentParent(provider, target, budget, expectedNode).first == parent) { "Comment parent changed during reread" }
+            require(commentParent(provider, target, budget, expectedNode, scope).first == parent) { "Comment parent changed during reread" }
             comment
         } else {
             require(kind in setOf("footer", "inline")) { "Invalid watched Confluence comment kind" }
@@ -657,7 +666,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             }
             val normalized = JsonObject(comment)
             budget.accept(normalized)
-            require(commentParent(provider, target, budget, expectedNode).first == parent) { "Comment parent changed during reread" }
+            require(commentParent(provider, target, budget, expectedNode, scope).first == parent) { "Comment parent changed during reread" }
             normalized
         }
     }
@@ -696,6 +705,10 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         if (node.spaceId != config.spaceId)
             throw ContextRemoteException("scope_outside_connection", "Knowledge scope requires current content in the registered space")
         return node
+    }
+
+    private fun ContextRemoteException.retainRootDenial(cause: Exception): ContextRemoteException = apply {
+        if (cause is RootScopeDenial) initCause(cause)
     }
 
     internal suspend fun connectionScopeNode(config: ContextConfig, id: String, type: String = "page"): RemoteNode =
@@ -941,7 +954,9 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
 
     private suspend fun children(id: String, type: String, config: ContextConfig?): List<RemoteNode> {
         require(type in setOf("page", "folder")) { "Only page/folder children are supported" }
-        val children = list(endpoint("/wiki/api/v2/${if (type == "folder") "folders" else "pages"}/${id(id)}/direct-children", mapOf("limit" to "250")))
+        val children = withConnectionScope(config, id) {
+            list(endpoint("/wiki/api/v2/${if (type == "folder") "folders" else "pages"}/${id(id)}/direct-children", mapOf("limit" to "250")))
+        }
         return children.mapNotNull { child ->
             val childType = child.string("type") ?: throw ContextRemoteException("malformed_child", "Confluence child has no content type")
             if (childType !in setOf("page", "folder")) return@mapNotNull null
@@ -1081,7 +1096,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
                 val details = (e as? ContextRemoteException)?.details?.takeIf { it.isNotEmpty() }
                     ?: buildJsonObject { put("mismatchFields", JsonArray(listOf(JsonPrimitive("readback")))) }
                 throw ContextRemoteException("unknown_create", "Created page readback could not be verified", true,
-                    JsonObject(details + ("reference" to JsonPrimitive(createdId))))
+                    JsonObject(details + ("reference" to JsonPrimitive(createdId)))).retainRootDenial(e)
             }
         val mismatches = nodeMismatch(saved.node, expected) +
             listOfNotNull("content".takeUnless { writeReadbackMatches(scope, saved.body, body) }, "message".takeUnless { saved.versionMessage == message })
@@ -1098,9 +1113,9 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
     /** Moving deeper may add restrictions, but must never discard an inherited audience boundary. */
     private suspend fun relocationAncestry(config: ContextConfig, sourceId: String, parentId: String): Pair<List<RemoteNode>, List<RemoteNode>> {
         val observed = linkedMapOf<String, RemoteNode>()
-        suspend fun node(id: String): RemoteNode = observed[id] ?: (try { scopeNode(id) } catch (e: ContextRemoteException) {
+        suspend fun node(id: String): RemoteNode = observed[id] ?: (try { connectionScopeNode(config, id) } catch (e: ContextRemoteException) {
             if (e.code != "http_404") throw e
-            scopeNode(id, "folder")
+            connectionScopeNode(config, id, "folder")
         }).also { current ->
             require(current.spaceId == config.spaceId && current.status == "current") { "Move ancestry must remain current in the registered space" }
             observed[id] = current
@@ -1127,7 +1142,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
             var parent = current.parentId
             while (parent != null && parent in observed) { depth++; parent = observed[parent]?.parentId }
             depth
-        }.forEach { require(scopeNode(it.id, it.type) == it) { "Move ancestry changed during authorization" } }
+        }.forEach { require(connectionScopeNode(config, it.id, it.type) == it) { "Move ancestry changed during authorization" } }
         return source to destination
     }
 
@@ -1162,7 +1177,8 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         catch (e: ContextRemoteException) { if (!e.outcomeUnknown || !allowUnknownReadback) throw e }
         val saved = try { mutationPage(before.node.id, scope, before.node.copy(title = title, parentId = parentId ?: before.node.parentId, version = before.node.version + 1)) } catch (e: CancellationException) { throw e }
             catch (e: Exception) { throw ContextRemoteException("unknown_update", "Updated page readback could not be verified", true,
-                (e as? ContextRemoteException)?.details?.takeIf { it.isNotEmpty() } ?: buildJsonObject { put("mismatchFields", JsonArray(listOf(JsonPrimitive("readback")))) }) }
+                (e as? ContextRemoteException)?.details?.takeIf { it.isNotEmpty() } ?: buildJsonObject { put("mismatchFields", JsonArray(listOf(JsonPrimitive("readback")))) })
+                .retainRootDenial(e) }
         val mismatches = nodeMismatch(saved.node, before.node.copy(title = title, parentId = parentId ?: before.node.parentId, version = before.node.version + 1)) +
             listOfNotNull("content".takeUnless { writeReadbackMatches(scope, saved.body, body) }, "message".takeUnless { saved.versionMessage == message })
         if (mismatches.isNotEmpty()) throw ContextRemoteException("unknown_update", "Updated page readback differs from the requested fields", true,
@@ -1368,11 +1384,11 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         val commentId = observedId(raw) ?: throw ContextRemoteException("unknown_create_comment", "Created comment ID unavailable; inspect comments before any new write", true)
         val reference = if (provider == "jira") "$origin/rest/api/3/issue/$target/comment/$commentId" else "$kind:$commentId"
         val saved = try { commentDetail(provider, target, commentId, if (provider == "jira") "jira" else kind, replyTo,
-            scope?.let { requireScope(it, target) }) } catch (e: CancellationException) { throw e }
+            scope?.let { requireScope(it, target) }, scope) } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             val details = (e as? ContextRemoteException)?.details ?: buildJsonObject {}
             throw ContextRemoteException("unknown_create_comment", "Created comment readback unavailable; inspect comments before any new write", true,
-                JsonObject(details + ("reference" to JsonPrimitive(reference))))
+                JsonObject(details + ("reference" to JsonPrimitive(reference)))).retainRootDenial(e)
         }
         val bodyMatches = if (provider == "jira") saved["body"] == jiraText(body) else
             (saved["body"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { StorageIdentity.equivalent(it, body) } == true
@@ -1395,7 +1411,7 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         val kind = before.getValue("kind").jsonPrimitive.content
         require(kind in setOf("footer", "inline")) { "Jira has no documented atomic native comment version; versioned edits are unsupported" }
         val parent = before["parentId"]?.jsonPrimitive?.contentOrNull
-        require(commentDetail("confluence", target, commentId, kind, parent, requireScope(scope, target)) == before) { "Comment changed before update" }
+        require(commentDetail("confluence", target, commentId, kind, parent, requireScope(scope, target), scope) == before) { "Comment changed before update" }
         val version = before.getValue("version").jsonPrimitive.int
         require(version in 1 until Int.MAX_VALUE)
         val payload = buildJsonObject {
@@ -1404,9 +1420,12 @@ class ConfluenceRemote(private val config: JiraConfig, client: HttpClient? = nul
         }
         beforeEffect()
         request(HttpMethod.Put, endpoint("/wiki/api/v2/$kind-comments/$commentId"), payload)
-        val saved = try { commentDetail("confluence", target, commentId, kind, parent, requireScope(scope, target)) }
+        val saved = try { commentDetail("confluence", target, commentId, kind, parent, requireScope(scope, target), scope) }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { throw ContextRemoteException("unknown_update_comment", "Updated comment readback unavailable; inspect comments before any new write", true) }
+        catch (e: Exception) {
+            throw ContextRemoteException("unknown_update_comment", "Updated comment readback unavailable; inspect comments before any new write", true)
+                .retainRootDenial(e)
+        }
         val bodyMatches = (saved["body"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { StorageIdentity.equivalent(it, body) } == true
         val mismatches = listOfNotNull("version".takeUnless { saved["version"]?.jsonPrimitive?.intOrNull == version + 1 },
             "authorId".takeUnless { saved["authorId"] == before["authorId"] }, "parentId".takeUnless { saved["parentId"] == before["parentId"] },

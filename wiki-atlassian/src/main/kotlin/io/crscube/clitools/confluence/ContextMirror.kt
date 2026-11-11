@@ -2,9 +2,7 @@ package io.crscube.clitools.confluence
 
 import io.crscube.clitools.jirafetcher.util.ConfluenceMarkdownConverter
 import kotlinx.serialization.json.*
-import java.nio.channels.SeekableByteChannel
 import java.nio.file.*
-import java.nio.file.attribute.BasicFileAttributes
 import java.text.Normalizer
 import java.time.Instant
 import java.time.LocalDate
@@ -224,7 +222,8 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         CorpusFileLock.tryAcquire(ContextFiles.safe(control, "sync.lock")).let { lock ->
             require(lock != null) { "Confluence sync busy; retry later" }
             withSyncRootAccess(lock, control, config, scopeRoot) {
-                if (config.isKnowledge) requireRootAccess(control, config, scopeRoot)
+                val priorDenial = if (config.isKnowledge && mode != "pages") noticeDenialToken(control) else null
+                if (config.isKnowledge) remote.requireScope(config, scopeRoot)
                 recover(base, control, config)
                 val manifestPath = control.resolve("manifest.json")
                 val previous = readManifest(manifestPath, config)
@@ -292,7 +291,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     catch (e: RootScopeDenial) { throw e }
                     catch (_: Exception) { unresolved += id }
                 }
-                val home = if (config.isKnowledge) requireRootAccess(control, config, scopeRoot) else remote.node(config.homePageId)
+                val home = if (config.isKnowledge) remote.requireScope(config, scopeRoot) else remote.node(config.homePageId)
                 require(home.spaceId == config.spaceId && home.status == "current") { "Configured mirror home is not current in the configured space" }
                 nodes[scopeRoot] = home
                 // Resolve native folder parents instead of treating missing parents as orphans.
@@ -465,7 +464,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     // Once this pointer exists, recovery only finishes local projection; never repeats remote writes.
                     ContextFiles.atomic(control.resolve("transaction.json"), buildJsonObject { put("stage", staged.fileName.toString()) }.toString())
                     recover(base, control, config)
-                    if (config.isKnowledge && full) Files.deleteIfExists(noticeDenialPath(control))
+                    if (full && priorDenial != null) clearRootDenial(control, priorDenial)
                     return buildJsonObject {
                         put("status", if (unresolved.isEmpty()) "synced" else "synced_with_unavailable")
                         put("pages", next.size); put("changes", JsonArray(changes)); put("unavailable", JsonArray(unresolved.map(::JsonPrimitive)))
@@ -483,25 +482,30 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
     private fun knowledgeRoot(config: ContextConfig) =
         if (config.isKnowledge) config.knowledgeRootPageId ?: config.homePageId else config.homePageId
 
-    private fun recordRootDenial(control: Path) {
-        if (!noticeAccessDenied(control)) ContextFiles.atomic(noticeDenialPath(control), "")
+    private fun readDenialToken(control: Path): String? {
+        val path = noticeDenialPath(control)
+        return if (Files.isRegularFile(path) && Files.size(path) <= 64) Files.readString(path) else null
+    }
+
+    private suspend inline fun <T> withNoticeAccessLock(control: Path, block: () -> T): T =
+        awaitCorpusLock(ContextFiles.safe(control, "notice-access.lock")).use { block() }
+
+    private suspend fun noticeDenialToken(control: Path): String? =
+        withNoticeAccessLock(control) { readDenialToken(control) }
+
+    private suspend fun recordRootDenial(control: Path) = withNoticeAccessLock(control) {
+        ContextFiles.atomic(noticeDenialPath(control), UUID.randomUUID().toString())
+    }
+
+    private suspend fun clearRootDenial(control: Path, observed: String): Unit = withNoticeAccessLock(control) {
+        // Authorization that began before a new denial may not clear that newer observation.
+        if (readDenialToken(control) == observed) Files.deleteIfExists(noticeDenialPath(control))
     }
 
     internal suspend fun recordNoticeRootDenial(config: ContextConfig) {
         try {
             val control = ContextFiles.safe(root, "confluence/${config.space}/.sync")
-            if (!Files.isDirectory(control)) return
-            val lockPath = ContextFiles.safe(control, "sync.lock")
-            CorpusFileLock.tryAcquire(lockPath)?.use {
-                recordRootDenial(control)
-                return
-            }
-            withTimeoutOrNull(5_000) {
-                awaitSyncLock(lockPath).use {
-                    // A concurrent inventory may have re-admitted the root while the tool returned.
-                    if (!noticeAccessDenied(control)) recheckRootAccess(control, config, knowledgeRoot(config))
-                }
-            }
+            if (Files.isDirectory(control)) recordRootDenial(control)
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { /* Preserve the original provider result if the replica is unwritable. */ }
     }
@@ -524,9 +528,9 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
     private suspend inline fun <T> withSyncRootAccess(lock: CorpusFileLock, control: Path, config: ContextConfig,
                                                        rootId: String, block: () -> T): T = lock.use {
         try { block() } catch (failure: ContextRemoteException) {
-            if (config.isKnowledge && !noticeAccessDenied(control)) {
+            if (config.isKnowledge) {
                 if (failure is RootScopeDenial) recordRootDenial(control)
-                else if (shouldCheckRoot(failure)) recheckRootAccess(control, config, rootId)
+                else if (!noticeAccessDenied(control) && shouldCheckRoot(failure)) recheckRootAccess(control, config, rootId)
             }
             throw failure
         }
@@ -546,33 +550,16 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                                              pageIds: List<String>, intervalSeconds: Long) {
         val manifest = ContextFiles.safe(control, "manifest.json")
         val started = System.currentTimeMillis()
-        var manifestPin: SeekableByteChannel? = null
-        try {
-            val (fileKey, watchedRows) = withSyncLock(control) {
-                if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock null
-                val current = readManifest(manifest, config)
-                if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock null
-                val admitted = WikiChanges.admitted(current)
-                val rows = pageIds.sortedBy { WikiChanges.commentAttemptedAt(current, it) ?: Long.MIN_VALUE }.mapNotNull { id ->
-                    admitted[id]?.takeIf { WikiChanges.commentDue(current, id, started, intervalSeconds * 1000) }?.let { id to it }
-                }.toMap()
-                if (rows.isEmpty()) return@withSyncLock null
-                val key = manifestFileKey(manifest)
-                // Keep the old inode from being reused after an atomic manifest replacement.
-                if (key != null) manifestPin = Files.newByteChannel(manifest, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
-                key to rows
-            } ?: return
-            pollCommentRows(base, control, manifest, config, started, fileKey, watchedRows)
-        } finally {
-            manifestPin?.close()
-        }
-    }
-
-    private fun manifestFileKey(manifest: Path): Any? =
-        Files.readAttributes(manifest, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
-
-    private suspend fun pollCommentRows(base: Path, control: Path, manifest: Path, config: ContextConfig, started: Long,
-                                        fileKey: Any?, watchedRows: Map<String, JsonObject>) {
+        val watchedRows = withSyncLock(control) {
+            if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock null
+            val current = readManifest(manifest, config)
+            if (current["inventoryComplete"] != JsonPrimitive(true)) return@withSyncLock null
+            val admitted = WikiChanges.admitted(current)
+            pageIds.sortedBy { WikiChanges.commentAttemptedAt(current, it) ?: Long.MIN_VALUE }.mapNotNull { id ->
+                admitted[id]?.takeIf { WikiChanges.commentDue(current, id, started, intervalSeconds * 1000) }?.let { id to it }
+            }.toMap()
+        } ?: return
+        if (watchedRows.isEmpty()) return
         val attempted = linkedSetOf<String>()
         val observed = linkedMapOf<String, String>()
         var rootCheckNeeded = false
@@ -586,7 +573,7 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                     val fingerprint = try {
                         withTimeoutOrNull(8_000) {
                             require(remote.requireScope(config, id) == expected)
-                            val inventory = remote.commentInventory("confluence", id, expected)
+                            val inventory = remote.commentInventory("confluence", id, expected, config)
                             require(remote.requireScope(config, id) == expected)
                             WikiChanges.commentFingerprint(inventory)
                         }
@@ -608,7 +595,11 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
                 }
             }
         }
-        if (rootCheckNeeded && !confirmWatchRootAccess(control, manifest, config, fileKey, rootDenialObserved)) return
+        if (rootDenialObserved) {
+            recordRootDenial(control)
+            return
+        }
+        if (rootCheckNeeded && !confirmWatchRootAccess(control, config)) return
         if (attempted.isEmpty()) return
         withSyncLock(control) {
             if (noticeAccessDenied(control) || Files.exists(ContextFiles.safe(control, "transaction.json"))) return@withSyncLock
@@ -632,28 +623,16 @@ class ContextMirror(private val root: Path, private val remote: ConfluenceRemote
         }
     }
 
-    private suspend fun confirmWatchRootAccess(control: Path, manifest: Path, config: ContextConfig,
-                                                fileKey: Any?, rootDenialObserved: Boolean): Boolean {
-        suspend fun confirm(): Boolean {
+    private suspend fun confirmWatchRootAccess(control: Path, config: ContextConfig): Boolean =
+        withTimeoutOrNull(5_000) {
             val lockPath = ContextFiles.safe(control, "sync.lock")
-            return awaitSyncLock(lockPath).use {
-                if (!noticeAccessDenied(control)) {
-                    if (rootDenialObserved && fileKey != null && fileKey == manifestFileKey(manifest)) {
-                        recordRootDenial(control)
-                    } else {
-                        // An older observation cannot override a newer authorized inventory.
-                        recheckRootAccess(control, config, knowledgeRoot(config))
-                    }
-                }
+            awaitCorpusLock(lockPath).use {
+                if (!noticeAccessDenied(control)) recheckRootAccess(control, config, knowledgeRoot(config))
                 !noticeAccessDenied(control)
             }
-        }
-        // A confirmed denial waits cancellably for the current writer. A speculative
-        // recheck can yield after a short wait, leaving its targets due next poll.
-        return if (rootDenialObserved) confirm() else withTimeoutOrNull(5_000) { confirm() } ?: false
-    }
+        } ?: false
 
-    private suspend fun awaitSyncLock(path: Path): CorpusFileLock {
+    private suspend fun awaitCorpusLock(path: Path): CorpusFileLock {
         while (true) {
             CorpusFileLock.tryAcquire(path)?.let { return it }
             delay(25)

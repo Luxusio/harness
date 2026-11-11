@@ -1251,7 +1251,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
             return result
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            if (e is RootScopeDenial) rootDenied(e.config)
+            (e as? RootScopeDenial ?: e.cause as? RootScopeDenial)?.let { rootDenied(it.config) }
             val unknown = (e as? ContextRemoteException)?.outcomeUnknown == true || (effect == 2 || effect == 1 && e !is ContextRemoteException)
             return buildJsonObject {
                 put("status", if (unknown) "unknown" else "error")
@@ -1347,7 +1347,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
             require(continuation == null || continuation.optional("binding") == binding) { "Cursor belongs to a different target or configuration" }
             val kind = targetRef?.kind ?: continuation?.optional("kind") ?: "footer"
             require(kind in setOf("footer", "inline"))
-            val selectedComment = targetRef?.let { remote.commentDetail("confluence", pageId, it.id, it.kind, location!!.second, node) }
+            val selectedComment = targetRef?.let { remote.commentDetail("confluence", pageId, it.id, it.kind, location!!.second, node, config) }
             val batch = remote.wikiComments(pageId, kind, targetRef?.id, limit, continuation?.optional("next"))
             val items = batch.getValue("results").jsonArray.map { raw ->
                 val item = raw.jsonObject
@@ -1379,7 +1379,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         val page = remote.page(pageId, node, config, freshStorage = true)
         val text = storage(data.text("text"), data.optional("format") ?: "storage"); policy.checkCommentText(text)
         val account = remote.currentUser()
-        val before = if (updating) remote.commentDetail("confluence", pageId, ref!!.id, ref.kind, location!!.second, node) else null
+        val before = if (updating) remote.commentDetail("confluence", pageId, ref!!.id, ref.kind, location!!.second, node, config) else null
         if (before != null) {
             require(before["status"] == JsonPrimitive("current")) { "Only a current comment may be edited" }
             require(before["version"]?.jsonPrimitive?.intOrNull == data.number("version", 0)) { "Native comment version conflict; read the thread again" }
@@ -1387,7 +1387,7 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         val reply = if (updating) null else (data.optional("replyTo")?.let { resolveComment(it) } ?: targetRef)
         val replyLocation = reply?.let { remote.wikiCommentLocation(it.id, it.kind) }
         require(replyLocation == null || replyLocation.first == pageId) { "Reply belongs to another document" }
-        val replySnapshot = reply?.let { remote.commentDetail("confluence", pageId, it.id, it.kind, replyLocation!!.second, node) }
+        val replySnapshot = reply?.let { remote.commentDetail("confluence", pageId, it.id, it.kind, replyLocation!!.second, node, config) }
         require(replySnapshot == null || replySnapshot["status"] == JsonPrimitive("current")) { "Reply target is not current" }
         if (before != null) policy.checkKnowledge(config, node, node.title, text, RemotePage(node, before.getValue("body").jsonPrimitive.content))
         guard(env, config, node, node.title, page.body, page, account)
@@ -1395,9 +1395,9 @@ class WikiService(private val remote: ConfluenceRemote, private val origin: Stri
         val callback: suspend () -> Unit = {
             if (reply != null) {
                 require(remote.wikiCommentLocation(reply.id, reply.kind) == replyLocation) { "Reply thread changed" }
-                require(remote.commentDetail("confluence", pageId, reply.id, reply.kind, replyLocation!!.second, node) == replySnapshot) { "Reply target changed" }
+                require(remote.commentDetail("confluence", pageId, reply.id, reply.kind, replyLocation!!.second, node, config) == replySnapshot) { "Reply target changed" }
             }
-            if (before != null) require(remote.commentDetail("confluence", pageId, ref!!.id, ref.kind, location!!.second, node) == before) { "Comment changed" }
+            if (before != null) require(remote.commentDetail("confluence", pageId, ref!!.id, ref.kind, location!!.second, node, config) == before) { "Comment changed" }
             guard(env, config, node, node.title, page.body, page, account)
             effect(false, null)
         }
