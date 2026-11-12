@@ -563,11 +563,11 @@ class Replica:
         digest = generation.hexdigest()
         if cursor is not None and parts[0] != digest:
             raise RemoteError('snapshot_changed', 'Search snapshot changed; start a new search')
-        next = None
+        continuation = None
         if len(hits) > limit:
             key = hits[limit-1][0]
-            next = f'{digest}:{binding}:{-key[0]}:{key[1]}'
-        return response(hits[:limit], next)
+            continuation = f'{digest}:{binding}:{-key[0]}:{key[1]}'
+        return response(hits[:limit], continuation)
 
     def _root_access(self):
         if self.settings.whole_space:

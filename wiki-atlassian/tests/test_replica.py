@@ -19,6 +19,7 @@ from wiki_atlassian.models import Credentials, Node, Page, RemoteError, compact_
 from wiki_atlassian.remote import RootScopeDenial
 from wiki_atlassian.replica import Replica, knowledge_relations
 from wiki_platform import atomic_write, file_lock
+import wiki_platform
 
 
 class Native:
@@ -463,7 +464,7 @@ class ReplicaTests(unittest.TestCase):
                   'except BlockingIOError: print("busy")\n')
         with file_lock(lock):
             self.assertEqual('replica_busy', self.replica.get_document(dict(document='211'))['code'])
-            result = subprocess.run([sys.executable, '-c', script, str(ROOT / 'plugin/scripts'), str(lock)], capture_output=True, text=True, timeout=10)
+            result = subprocess.run([sys.executable, '-c', script, str(Path(wiki_platform.__file__).parent), str(lock)], capture_output=True, text=True, timeout=10)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual('busy', result.stdout.strip())
         self.assertIn('content', self.replica.get_document(dict(document='211')))
