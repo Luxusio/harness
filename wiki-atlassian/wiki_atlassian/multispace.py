@@ -191,17 +191,17 @@ class MultiSpaceKnowledge:
                 result = slot.service.execute(operation, arguments)
                 if result.get('code') == 'http_401':
                     self._deny_all()
-                return self._label(result, key)
+                return self._label(result, key, operation in ('get_document', 'create_document', 'update_document'))
         except Exception as exc:
             if isinstance(exc, RemoteError) and exc.code == 'http_401':
                 self._deny_all()
             return dict(status='error', code=exc.code if isinstance(exc, RemoteError) else 'invalid_request',
                         message=str(exc) if isinstance(exc, RemoteError) else 'The request could not be admitted in the selected spaces')
 
-    def _label(self, value, key):
+    def _label(self, value, key, page_response=False):
         slot = self._running(key)
         result = {**value, 'space': key, 'spaceId': slot.settings.space_id}
-        if 'id' in value and 'url' not in result:
+        if page_response and 'id' in value and 'url' not in result:
             result['url'] = f"{self.project.credentials.base_url}/wiki/spaces/{key}/pages/{value['id']}"
         if isinstance(result.get('read'), dict):
             result['read'] = {**result['read'], 'space': key}
@@ -246,7 +246,7 @@ class MultiSpaceKnowledge:
             skip = state.get('skip', 0)
             require(type(skip) is int and 0 <= skip <= len(hits), 'invalid_cursor')
             count = min(limit - len(result), len(hits) - skip)
-            result.extend(self._label(row, key) for row in hits[skip:skip + count])
+            result.extend(self._label(row, key, True) for row in hits[skip:skip + count])
             next = response.get('nextCursor') or response.get('cursor')
             if skip + count < len(hits):
                 states[key] = {**state, 'skip': skip + count}

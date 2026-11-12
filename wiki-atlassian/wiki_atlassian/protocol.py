@@ -18,7 +18,7 @@ class Server:
     def __init__(self, documents=None, personal=None, project_unavailable=False):
         self.documents, self.personal = documents, personal
         self.project_unavailable = project_unavailable
-        self.tools = ([*WIKI_TOOLS] if documents is not None or project_unavailable else []) + ([PERSONAL_TOOL] if personal is not None else [])
+        self.tools = ([*WIKI_TOOLS] if documents is not None else [WIKI_TOOLS[0]] if project_unavailable else []) + ([PERSONAL_TOOL] if personal is not None else [])
 
     @staticmethod
     def error(id, code, message):

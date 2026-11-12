@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import base64
@@ -73,8 +74,13 @@ def private_inbox(tmp_path):
     auth = folder / "mise.local.toml"
     auth.write_text('[env]\nATLASSIAN_BASE_URL=' + json.dumps(site) + '\nATLASSIAN_EMAIL="private@example.invalid"\nATLASSIAN_API_TOKEN="private-mcp-fixture"\n'); auth.chmod(0o600)
     binary = tmp_path / "fixture-bin"; binary.mkdir()
-    mise = binary / "mise"
-    mise.write_text("#!" + sys.executable + ' -I\nimport json,tomllib\nfrom pathlib import Path\np=Path.cwd()/"mise.local.toml"\nd=tomllib.loads(p.read_text())["env"]\nprint(json.dumps({k:{"value":v,"source":str(p)} for k,v in d.items()}))\n'); mise.chmod(0o700)
+    if os.name == 'nt':
+        if not shutil.which('mise.exe'):
+            server.shutdown(); server.server_close(); thread.join(timeout=5)
+            pytest.skip('Native mise.exe is required for actual private authentication; no POSIX fixture substitutes for it')
+    else:
+        mise = binary / "mise"
+        mise.write_text("#!" + sys.executable + ' -I\nimport json,tomllib\nfrom pathlib import Path\np=Path.cwd()/"mise.local.toml"\nd=tomllib.loads(p.read_text())["env"]\nprint(json.dumps({k:{"value":v,"source":str(p)} for k,v in d.items()}))\n'); mise.chmod(0o700)
     try:
         yield home, auth, dict(SSL_CERT_FILE=str(cert), PATH=str(binary) + os.pathsep + os.environ["PATH"]), calls
     finally:
@@ -99,7 +105,7 @@ def _calls(runtime, cwd, env, command=None, requests=None):
     command = command if command is not None else [sys.executable, "-I", "-B", str(runtime)]
     result = subprocess.run(command, cwd=cwd, env=env,
         input="".join(json.dumps(row) + "\n" for row in rows), text=True,
-        capture_output=True, timeout=30)
+        capture_output=True, encoding='utf-8', timeout=30)
     assert result.returncode == 0, result.stderr
     replies = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     return replies
@@ -107,7 +113,8 @@ def _calls(runtime, cwd, env, command=None, requests=None):
 
 def clean_environment(home, **settings):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("JIRA_", "KNOWLEDGE_", "WIKI_", "ATLASSIAN_", "XDG_"))}
-    env.update(HOME=str(home), **settings)
+    env.update(HOME=str(home), USERPROFILE=str(home), APPDATA=str(home / 'AppData/Roaming'),
+               LOCALAPPDATA=str(home / 'AppData/Local'), **settings)
     return env
 
 
@@ -210,6 +217,8 @@ def test_personal_feedback_uses_packaged_mcp_and_private_identity_without_projec
 
 @pytest.mark.parametrize("fault", ["missing-auth", "unsafe-settings", "mismatched-origin"])
 def test_packaged_personal_mcp_never_borrows_project_authentication(tmp_path, fault):
+    if os.name == 'nt' and fault == 'unsafe-settings':
+        pytest.skip('POSIX mode-bit case; native ACL denial is covered by test_wiki_windows_native.py')
     package, command = personal_payload(tmp_path)
     project = tmp_path / "consumer"; project.mkdir()
     with private_inbox(tmp_path) as (home, auth, settings, calls):

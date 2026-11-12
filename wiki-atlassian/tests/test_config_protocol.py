@@ -97,8 +97,8 @@ def test_inert_private_and_invalid_project_expose_truthful_surfaces():
     private = Server(personal=lambda args: {'status': 'unconfigured'})
     assert tools(private) == [PERSONAL_TOOL]
     combined = Server(personal=lambda args: {'status': 'read'}, project_unavailable=True)
-    assert len(tools(combined)) == len(WIKI_TOOLS) + 1
-    unavailable = combined.handle({'id': 2, 'method': 'tools/call', 'params': {'name': 'get_document', 'arguments': {'document': '42'}}})
+    assert [tool['name'] for tool in tools(combined)] == ['connection_status', 'read_personal_feedback']
+    unavailable = combined.handle({'id': 2, 'method': 'tools/call', 'params': {'name': 'connection_status'}})
     assert json.loads(unavailable['result']['content'][0]['text'])['code'] == 'connection_unavailable'
     assert combined.handle({'id': 3, 'method': 'tools/call', 'params': {'name': 'read_personal_feedback', 'arguments': {'limit': True}}})['error']['code'] == -32602
 
