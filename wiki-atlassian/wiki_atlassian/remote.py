@@ -8,13 +8,16 @@ from __future__ import annotations
 import base64
 from contextlib import contextmanager
 from contextvars import ContextVar
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import datetime
 import hashlib
 import http.client
 import json
 import re
+import socket
 import ssl
+import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
@@ -79,7 +82,7 @@ class _Budget:
         if self.parent is not None:
             self.parent.request()
         self.requests += 1
-        _need(self.requests <= self.maximum and time.monotonic() < self.deadline,
+        _need(self.requests <= self.maximum and self.bytes < self.size and time.monotonic() < self.deadline,
               'wiki_request_limit', 'Operation exceeded its request/time budget; narrow the target')
 
     def accept(self, size, mutating):
@@ -99,6 +102,8 @@ class Remote:
         self.origin = _origin(credentials.base_url)
         self._transport = transport
         self._ssl_context = ssl_context or ssl.create_default_context()
+        self._resolver_lock = threading.Lock()
+        self._resolver_future = None
 
     @contextmanager
     def operation(self, max_requests=512, max_response_bytes=32 * 1024 * 1024, timeout=45):
@@ -116,8 +121,15 @@ class Remote:
         return budget is None or budget.requests < budget.maximum and budget.bytes < budget.size and time.monotonic() < budget.deadline
 
     def _url(self, value, base=None):
-        _need(isinstance(value, str) and len(value) <= 16384 and not any(ord(c) < 32 or c == '\\' for c in value),
+        _need(isinstance(value, str) and len(value) <= 16384 and '#' not in value and
+              not any(c.isspace() or ord(c) < 32 or c == '\\' for c in value),
               'invalid_next', 'Invalid native API URL')
+        try:
+            supplied = urlsplit(value)
+            _need(not any(p in ('.', '..') for p in supplied.path.split('/')),
+                  'invalid_next', 'Native API paths must already be normalized')
+        except ValueError:
+            raise RemoteError('invalid_next', 'Invalid native API URL') from None
         if value.startswith('/api/v2/') or value.startswith('/rest/api/'):
             value = '/wiki' + value
         candidate = urljoin(base or self.origin, value)
@@ -158,12 +170,22 @@ class Remote:
             raise RemoteError('transport_failed', 'Native request failed; inspect uncertain mutations before retrying', mutating) from None
         if type(status) is not int or not isinstance(response_headers, dict) or not isinstance(raw, bytes):
             raise RemoteError('malformed_response', 'Invalid transport response', mutating)
+        if not 200 <= status < 300:
+            within_budget = True
+            if budget:
+                try:
+                    budget.accept(len(raw), mutating and status >= 500)
+                except RemoteError:
+                    # The received native status is authoritative even when its
+                    # optional diagnostics consume the final budget bytes.
+                    within_budget = False
+            raise RemoteError('http_' + str(status), 'Confluence request failed (HTTP ' + str(status) + ')',
+                              mutating and status >= 500, self._error_details(raw) if within_budget else {},
+                              'Inspect native content and history using read-only tools; do not automatically repeat the write.' if mutating and status >= 500 else None)
         if budget:
             budget.accept(len(raw), mutating)
-        if not 200 <= status < 300:
-            raise RemoteError('http_' + str(status), 'Confluence request failed (HTTP ' + str(status) + ')',
-                              mutating and status >= 500, self._error_details(raw),
-                              'Inspect native content and history using read-only tools; do not automatically repeat the write.' if mutating and status >= 500 else None)
+            if time.monotonic() >= budget.deadline:
+                raise RemoteError('wiki_request_limit', 'Operation exceeded its time budget', mutating)
         if len(raw) > MAX_BODY:
             raise RemoteError('response_limit', 'Confluence response exceeds the size limit', mutating)
         def unique(pairs):
@@ -184,6 +206,42 @@ class Remote:
             raise RemoteError('malformed_response', 'Confluence returned invalid JSON', mutating) from None
         return {str(k).lower(): v for k, v in response_headers.items()}, result
 
+    def _resolve(self, host, port, deadline):
+        """Bound a native resolver wait without accumulating stuck resolvers.
+
+        Native getaddrinfo has no timeout argument. One pending daemon per
+        Remote is shared by callers; timed-out calls do not spawn replacements.
+        No addresses or native authorization are persisted or cached afterward.
+        """
+        with self._resolver_lock:
+            future = self._resolver_future
+            if future is None:
+                future = Future()
+                self._resolver_future = future
+                def resolve():
+                    try:
+                        future.set_result(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+                    except Exception as error:
+                        future.set_exception(error)
+                try:
+                    threading.Thread(target=resolve, name='wiki-native-resolver', daemon=True).start()
+                except RuntimeError:
+                    self._resolver_future = None
+                    raise
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('native operation deadline')
+            addresses = future.result(timeout=remaining)
+            if not addresses or len(addresses) > 64:
+                raise OSError('invalid native resolver result')
+            return addresses
+        finally:
+            if future.done():
+                with self._resolver_lock:
+                    if self._resolver_future is future:
+                        self._resolver_future = None
+
     def _https(self, method, target, headers, data, timeout):
         """Public http.client sockets allow a real deadline during slow bodies.
 
@@ -194,14 +252,46 @@ class Remote:
         uri = urlsplit(target)
         deadline = time.monotonic() + timeout
         connection = http.client.HTTPSConnection(uri.hostname, uri.port, context=self._ssl_context, timeout=min(15, timeout))
+        watchdog = None
+        expired = threading.Event()
         try:
-            connection.connect()
+            addresses = self._resolve(uri.hostname, uri.port or 443, deadline)
+            last_error = None
+            for family, kind, protocol, _, address in addresses:
+                if family not in (socket.AF_INET, socket.AF_INET6) or kind != socket.SOCK_STREAM:
+                    continue
+                raw = socket.socket(family, kind, protocol)
+                try:
+                    remaining_time = deadline - time.monotonic()
+                    if remaining_time <= 0:
+                        raise TimeoutError('native operation deadline')
+                    raw.settimeout(min(15, remaining_time))
+                    raw.connect(address)
+                    raw.settimeout(max(.001, deadline - time.monotonic()))
+                    connection.sock = self._ssl_context.wrap_socket(raw, server_hostname=uri.hostname)
+                    break
+                except (OSError, TimeoutError) as error:
+                    raw.close()
+                    last_error = error
+            if connection.sock is None:
+                raise last_error or OSError('native connection unavailable')
             sock = connection.sock
             def remaining():
                 value = deadline - time.monotonic()
-                if value <= 0:
+                if value <= 0 or expired.is_set():
                     raise TimeoutError('native operation deadline')
                 sock.settimeout(value)
+            def expire():
+                expired.set()
+                try:
+                    # Interrupt framing reads hidden inside http.client too.
+                    # Call the base socket primitive without changing SSL state.
+                    socket.socket.shutdown(sock, socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            watchdog = threading.Timer(max(0, deadline - time.monotonic()), expire)
+            watchdog.daemon = True
+            watchdog.start()
             remaining()
             connection.request(method, uri.path + ('?' + uri.query if uri.query else ''), data, headers)
             remaining()
@@ -230,9 +320,17 @@ class Remote:
             for key, value in response.getheaders():
                 key = key.lower()
                 response_headers[key] = response_headers[key] + ',' + value if key in response_headers else value
+            if 200 <= response.status < 300 and (expired.is_set() or time.monotonic() >= deadline):
+                raise TimeoutError('native operation deadline')
             return response.status, response_headers, b''.join(chunks)
         finally:
-            connection.close()
+            try:
+                if watchdog is not None:
+                    watchdog.cancel()
+                    if watchdog.ident is not None:
+                        watchdog.join(timeout=.1)
+            finally:
+                connection.close()
 
     def _error_details(self, raw):
         if len(raw) > 65536:
@@ -381,7 +479,8 @@ class Remote:
 
     def _verify(self, scope, observed):
         for prior in observed:
-            _need(self._connection_node(scope, prior.id, prior.type) == prior,
+            current = self._connection_node(scope, prior.id, prior.type) if scope is not None else self.scope_node(prior.id, prior.type)
+            _need(current == prior,
                   'scope_metadata_changed', 'Native ancestry changed before its observations could be returned')
 
     def require_scope(self, settings, id):
@@ -410,6 +509,9 @@ class Remote:
             raise
 
     def page(self, id, expected_node=None, scope=None, fresh_storage=False):
+        return self._page_read(id, expected_node, scope, fresh_storage)[0]
+
+    def _page_read(self, id, expected_node=None, scope=None, fresh_storage=False):
         native_id(id)
         observed = self.ancestry(scope, id) if scope is not None else [self.scope_node(id)]
         node = observed[0]
@@ -435,7 +537,7 @@ class Remote:
             self._verify(scope, observed)
         else:
             _need(self.scope_node(id) == node, 'scope_metadata_changed', 'Page changed during storage read')
-        return result
+        return result, observed
 
     def _parse_page(self, raw, id, current=True):
         node = self._parse_node(raw, 'page', id, current)
@@ -458,7 +560,10 @@ class Remote:
         checked = self._url(path + value if value.startswith('?') else value, self._endpoint(path, params))
         parsed = urlsplit(checked)
         _need(parsed.path == path, 'invalid_next', 'Continuation changed its endpoint')
-        pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError:
+            raise RemoteError('invalid_next', 'Invalid native continuation query') from None
         values = {}
         for key, item in pairs:
             _need(key not in values and key in set(params) | {'cursor', 'start', 'startAt'} and bool(item) and len(item) <= 4096,
@@ -586,23 +691,25 @@ class Remote:
                 _need(self.require_scope(settings, settings.root_page_id) == nodes[0], 'scope_metadata_changed', 'Native root changed during inventory')
             return nodes
 
-    def version(self, page_id, number):
+    def version(self, page_id, number, scope=None):
         native_id(page_id)
         _positive(number)
-        raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + page_id + '/versions/' + str(number)))[1]
+        with self._scope_errors(scope, page_id):
+            raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + page_id + '/versions/' + str(number)))[1]
         _need(type(raw.get('number')) is int and raw['number'] == number, 'readback_mismatch', 'Exact native version metadata is unavailable')
         _text(raw.get('authorId'), 500)
         _text(raw.get('createdAt'), 100)
         _need('message' not in raw or isinstance(raw['message'], str))
         return raw
 
-    def require_page_version(self, page):
-        return self.version(page.node.id, page.node.version)
+    def require_page_version(self, page, scope=None):
+        return self.version(page.node.id, page.node.version, scope)
 
     def list_versions(self, page_id, limit=20, cursor=None, scope=None):
         _need(type(limit) is int and 1 <= limit <= 50, 'invalid_request', 'Version limit must be 1..50')
         observed = self.ancestry(scope, page_id) if scope else [self.scope_node(page_id)]
-        result = self.batch('/wiki/api/v2/pages/' + native_id(page_id) + '/versions', {'limit': limit}, cursor)
+        with self._scope_errors(scope, page_id):
+            result = self.batch('/wiki/api/v2/pages/' + native_id(page_id) + '/versions', {'limit': limit}, cursor)
         numbers = []
         for item in result['results']:
             number = _positive(item.get('number'))
@@ -618,7 +725,8 @@ class Remote:
     def historical_page(self, page_id, version, scope):
         observed = self.ancestry(scope, page_id)
         _need(type(version) is int and 1 <= version <= observed[0].version, 'invalid_request', 'Invalid native historical version')
-        raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + page_id, {'body-format': 'storage', 'version': version}))[1]
+        with self._scope_errors(scope, page_id):
+            raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + page_id, {'body-format': 'storage', 'version': version}))[1]
         result = self._parse_page(raw, page_id, current=False)
         _need(result.node.version == version and result.node.space_id == observed[0].space_id and result.node.status in ('current', 'historical'), 'identity_mismatch', 'Historical page identity differs')
         self._verify(scope, observed)
@@ -629,14 +737,16 @@ class Remote:
         before = self.page(id, expected_node, scope, True)
         path = '/wiki/api/v2/pages/' + native_id(id)
         try:
-            metadata = self._request('GET', self._endpoint(path, {'get-draft': 'true'}))[1]
+            with self._scope_errors(scope, id):
+                metadata = self._request('GET', self._endpoint(path, {'get-draft': 'true'}))[1]
             node = self._parse_node(metadata, 'page', id, current=False)
             _need(node.status in ('current', 'draft') and 1 <= node.version <= before.node.version and
                   replace(node, status='current', version=before.node.version) == before.node,
                   'draft_unverified', 'Draft identity differs from the published page')
             if scope:
                 _need(self.require_scope(scope, id) == before.node, 'scope_metadata_changed', 'Scope changed while checking draft')
-            draft = self._parse_page(self._request('GET', self._endpoint(path, {'body-format': 'storage', 'get-draft': 'true'}))[1], id, current=False)
+            with self._scope_errors(scope, id):
+                draft = self._parse_page(self._request('GET', self._endpoint(path, {'body-format': 'storage', 'get-draft': 'true'}))[1], id, current=False)
             _need(draft.node == node and draft.version_message == metadata.get('version', {}).get('message', ''), 'draft_unverified', 'Draft changed during its storage read')
         except RemoteError as error:
             if error.code == 'http_404':
@@ -701,8 +811,8 @@ class Remote:
             raise self._unknown('unknown_create', 'Creation response has no valid page ID; reconcile before retrying', error) from error
         expected = Node(created, title, parent_id, 'page', space_id, 1)
         try:
-            saved = self.page(created, expected, scope, True)
-            revision = self.version(created, 1)
+            saved, observed = self._page_read(created, expected, scope, True)
+            revision = self.version(created, 1, scope)
             _need(revision['authorId'] == account['accountId'] and self.current_user() == account,
                   'readback_mismatch', 'Created page account readback differs')
             timestamp = datetime.fromisoformat(revision['createdAt'].replace('Z', '+00:00'))
@@ -717,6 +827,7 @@ class Remote:
                 mismatch.append('message')
             if mismatch:
                 raise RemoteError('readback_mismatch', 'Created page readback differs', details={'mismatchFields': mismatch})
+            self._verify(scope, observed)
             return saved
         except Exception as error:
             raise self._unknown('unknown_create', 'Created page readback could not be verified', error, created) from error
@@ -756,7 +867,7 @@ class Remote:
                 raise
         expected = replace(before.node, title=title, parent_id=parent_id if parent_id is not None else before.node.parent_id, version=before.node.version + 1)
         try:
-            saved = self.page(before.node.id, expected, scope, True)
+            saved, observed = self._page_read(before.node.id, expected, scope, True)
             mismatch = self._node_mismatch(saved.node, expected)
             if saved.version_message != message:
                 mismatch.append('message')
@@ -764,9 +875,10 @@ class Remote:
                 mismatch.append('content')
             if mismatch:
                 raise RemoteError('readback_mismatch', 'Updated page readback differs', details={'mismatchFields': mismatch})
-            audit = self.version(saved.node.id, saved.node.version)
+            audit = self.version(saved.node.id, saved.node.version, scope)
             _need(audit['authorId'] == account['accountId'] and audit.get('message', '') == message and self.current_user() == account,
                   'readback_mismatch', 'Updated page native audit differs')
+            self._verify(scope, observed)
             return saved
         except Exception as error:
             raise self._unknown('unknown_update', 'Updated page readback could not be verified', error) from error
@@ -863,6 +975,9 @@ class Remote:
         return dict(batch, results=items)
 
     def comment_detail(self, target, comment_id, kind='footer', expected_parent_id=None, expected_node=None, scope=None):
+        return self._comment_detail_read(target, comment_id, kind, expected_parent_id, expected_node, scope)[0]
+
+    def _comment_detail_read(self, target, comment_id, kind='footer', expected_parent_id=None, expected_node=None, scope=None):
         location = self.comment_location(comment_id, kind)
         _need(location == (target, expected_parent_id), 'scope_outside_connection', 'Native comment page or thread differs')
         observed = self.ancestry(scope, target) if scope else [self.scope_node(target)]
@@ -875,7 +990,7 @@ class Remote:
             self._verify(scope, observed)
         else:
             _need(self.scope_node(target) == observed[0], 'scope_metadata_changed', 'Comment parent page changed')
-        return item
+        return item, observed
 
     def comment_inventory(self, target, expected_node=None, scope=None):
         with self.operation(max_requests=256, max_response_bytes=8 * 1024 * 1024, timeout=30):
@@ -944,7 +1059,7 @@ class Remote:
             raise self._unknown('unknown_create_comment', 'Created native comment ID is unavailable', error) from error
         reference = kind + ':' + selected
         try:
-            saved = self.comment_detail(target, selected, kind, reply_to, scope=scope)
+            saved, observed = self._comment_detail_read(target, selected, kind, reply_to, scope=scope)
             mismatch = [field for field, expected in (('authorId', account['accountId']), ('editorId', account['accountId']), ('version', 1), ('status', 'current')) if saved[field] != expected]
             if not equivalent(saved['body'], body):
                 mismatch.append('content')
@@ -952,14 +1067,21 @@ class Remote:
                 raise RemoteError('readback_mismatch', 'Created native comment readback differs', details={'mismatchFields': mismatch})
             if selection:
                 context = saved.get('inlineContext', {})
-                marked = self.page(target, scope=scope, fresh_storage=True)
+                marked, marked_observed = self._page_read(target, scope=scope, fresh_storage=True)
                 _need(replace(marked.node, version=page.node.version) == page.node and marked.node.version - page.node.version in (0, 1) and
                       context.get('inlineOriginalSelection') == selection[0] and context.get('resolutionStatus') == 'open' and
                       selection_anchored(marked.body, selection[0], selection[1], context.get('inlineMarkerRef')),
                       'readback_mismatch', 'Created inline position could not be verified')
+                if scope:
+                    self._verify(scope, observed[1:])
+                observed = marked_observed
             else:
                 _need(self.page(target, page.node, scope, True) == page, 'scope_metadata_changed', 'Comment parent changed after creation')
             _need(self.current_user() == account, 'account_unavailable', 'Authenticated account changed after comment')
+            if scope:
+                self._verify(scope, observed)
+            else:
+                _need(self.scope_node(target) == observed[0], 'scope_metadata_changed', 'Comment parent page changed')
             return saved
         except Exception as error:
             raise self._unknown('unknown_create_comment', 'Created native comment readback could not be verified', error, reference) from error
@@ -976,7 +1098,7 @@ class Remote:
             before_effect()
         self._request('PUT', self._endpoint('/wiki/api/v2/' + kind + '-comments/' + selected), {'version': {'number': number + 1}, 'body': {'representation': 'storage', 'value': body}})
         try:
-            saved = self.comment_detail(target, selected, kind, parent, scope=scope)
+            saved, observed = self._comment_detail_read(target, selected, kind, parent, scope=scope)
             mismatch = [name for name in ('authorId', 'parentId', 'inlineContext') if saved.get(name) != before.get(name)]
             mismatch.extend(field for field, expected in (('version', number + 1), ('editorId', account['accountId']), ('status', 'current')) if saved[field] != expected)
             if not equivalent(saved['body'], body):
@@ -984,6 +1106,7 @@ class Remote:
             if mismatch:
                 raise RemoteError('readback_mismatch', 'Updated native comment readback differs', details={'mismatchFields': mismatch})
             _need(self.current_user() == account, 'account_unavailable', 'Authenticated account changed after comment')
+            self._verify(scope, observed)
             return saved
         except Exception as error:
             raise self._unknown('unknown_update_comment', 'Updated native comment readback could not be verified', error) from error

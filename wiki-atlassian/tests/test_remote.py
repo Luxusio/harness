@@ -49,6 +49,7 @@ class NativeState:
         self.version_time = '2026-11-12T00:00:00Z'
         self.slow_body = False
         self.truncated_body = False
+        self.slow_framing = None
 
     def response(self, method, target, payload=None):
         parsed = urlsplit(target)
@@ -169,6 +170,22 @@ def native(tmp_path):
             except ConnectionError:
                 self.connection.shutdown(socket.SHUT_RDWR)
                 self.connection.close()
+                return
+            if state.slow_framing is not None:
+                prefixes = {
+                    'status': b'HTTP/1.1 200 ',
+                    'headers': b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Slow: ',
+                    'trailers': b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\nX-Slow: ',
+                }
+                suffix = b'\r\nContent-Length: 2\r\n\r\n{}' if state.slow_framing == 'status' else b'\r\n\r\n' + (b'{}' if state.slow_framing == 'headers' else b'')
+                try:
+                    self.connection.sendall(prefixes[state.slow_framing])
+                    for _ in range(16):
+                        self.connection.sendall(b'x')
+                        time.sleep(.04)
+                    self.connection.sendall(suffix)
+                except (OSError, ssl.SSLError):
+                    pass
                 return
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
@@ -431,6 +448,71 @@ def test_real_tls_slow_drip_body_cannot_extend_operation_deadline(native):
     assert failure.value.code == 'transport_failed'
 
 
+@pytest.mark.parametrize('framing', ['status', 'headers', 'trailers'])
+def test_absolute_deadline_covers_http_framing_reads(native, framing):
+    state, remote, settings = native
+    state.slow_framing = framing
+    started = time.monotonic()
+    with pytest.raises(RemoteError) as failure:
+        with remote.operation(timeout=.15):
+            remote._request('GET', settings.site + '/wiki/rest/api/user/current')
+    assert failure.value.code == 'transport_failed'
+    assert time.monotonic() - started < .45
+
+
+def test_native_dns_wait_is_bounded_and_pending_resolution_is_shared(native, monkeypatch):
+    state, remote, _ = native
+    original = socket.getaddrinfo
+    calls = []
+    def slow_resolver(*args, **kwargs):
+        calls.append(args)
+        time.sleep(.4)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(socket, 'getaddrinfo', slow_resolver)
+    started = time.monotonic()
+    for _ in range(2):
+        with pytest.raises(RemoteError):
+            with remote.operation(timeout=.06):
+                remote.current_user()
+    assert time.monotonic() - started < .3
+    assert len(calls) == 1 and not state.calls
+
+
+def test_transient_resolver_thread_start_failure_does_not_poison_later_reads(native, monkeypatch):
+    state, remote, _ = native
+    original = threading.Thread.start
+    failed = False
+    def start(thread):
+        nonlocal failed
+        if thread.name == 'wiki-native-resolver' and not failed:
+            failed = True
+            raise RuntimeError('Synthetic thread resource exhaustion')
+        return original(thread)
+    monkeypatch.setattr(threading.Thread, 'start', start)
+    with pytest.raises(RemoteError):
+        remote.current_user()
+    with remote.operation(timeout=1):
+        assert remote.current_user()['accountId'] == 'account'
+    assert len(state.calls) == 1
+
+
+def test_watchdog_start_failure_closes_the_actual_owned_tls_socket(native, monkeypatch):
+    state, remote, _ = native
+    sockets = []
+    original = remote._ssl_context.wrap_socket
+    def wrap(*args, **kwargs):
+        result = original(*args, **kwargs)
+        sockets.append(result)
+        return result
+    def fail_start(timer):
+        raise RuntimeError('Synthetic thread resource exhaustion')
+    monkeypatch.setattr(remote._ssl_context, 'wrap_socket', wrap)
+    monkeypatch.setattr(threading.Timer, 'start', fail_start)
+    with pytest.raises(RemoteError):
+        remote.current_user()
+    assert len(sockets) == 1 and sockets[0].fileno() == -1 and not state.calls
+
+
 def test_native_conflict_stays_definite_when_its_optional_error_body_times_out(native):
     state, remote, settings = native
     state.slow_body = True
@@ -440,6 +522,96 @@ def test_native_conflict_stays_definite_when_its_optional_error_body_times_out(n
             remote._request('PUT', settings.site + '/wiki/api/v2/pages/11', {})
     assert failure.value.code == 'http_409' and not failure.value.outcome_unknown
     assert len(state.calls) == 1
+
+
+def test_native_conflict_stays_definite_when_error_body_exhausts_byte_budget(native):
+    state, _, settings = native
+    remote = injected(state, settings)
+    state.hook = lambda m, p, q, d: (409, {}, {'code': 'VERSION_CONFLICT'})
+    with pytest.raises(RemoteError) as failure:
+        with remote.operation(max_response_bytes=1):
+            remote._request('PUT', settings.site + '/wiki/api/v2/pages/11', {})
+    assert failure.value.code == 'http_409' and not failure.value.outcome_unknown
+    assert len(state.calls) == 1
+
+
+@pytest.mark.parametrize('entry', ['body', 'header'])
+def test_malformed_native_query_remains_a_typed_continuation_error(native, entry):
+    state, _, settings = native
+    remote = injected(state, settings)
+    response = (200, {}, {'results': [], '_links': {'next': '?cursor=x&broken'}}) if entry == 'body' else (200, {'Link': '<?cursor=x&broken>; rel="next"'}, {'results': []})
+    state.hook = lambda m, p, q, d: response
+    with pytest.raises(RemoteError) as failure:
+        remote.spaces()
+    assert failure.value.code == 'invalid_next' and len(state.calls) == 1
+
+
+@pytest.mark.parametrize('continuation', ['?cursor=x#', '/wiki/api/v2/unused/../spaces?cursor=x', '/wiki/api/v2/./spaces?cursor=x'])
+def test_native_continuations_are_not_repaired_before_validation(native, continuation):
+    state, _, settings = native
+    remote = injected(state, settings)
+    state.hook = lambda m, p, q, d: (200, {}, {'results': [], '_links': {'next': continuation}})
+    with pytest.raises(RemoteError) as failure:
+        remote.spaces()
+    assert failure.value.code == 'invalid_next' and len(state.calls) == 1
+
+
+@pytest.mark.parametrize('identifier', ['10', '11'])
+@pytest.mark.parametrize('operation', ['history', 'versions', 'audit', 'draft'])
+def test_scoped_history_audit_and_draft_denials_retain_only_root_provenance(native, identifier, operation):
+    state, _, settings = native
+    remote = injected(state, settings)
+    def deny(method, path, query, data):
+        matches = (operation == 'history' and 'version' in query or operation == 'versions' and path.endswith('/versions') or
+                   operation == 'audit' and path.endswith('/versions/1') or operation == 'draft' and 'get-draft' in query)
+        if '/pages/' + identifier in path and matches:
+            return 403, {}, {}
+    state.hook = deny
+    operations = {'history': lambda: remote.historical_page(identifier, 1, settings),
+                  'versions': lambda: remote.list_versions(identifier, scope=settings),
+                  'audit': lambda: remote.version(identifier, 1, settings),
+                  'draft': lambda: remote.ensure_no_draft(identifier, scope=settings)}
+    with pytest.raises(RemoteError) as failure:
+        operations[operation]()
+    assert isinstance(failure.value, RootScopeDenial) is (identifier == '10')
+
+
+def test_root_audit_denial_survives_unknown_update_wrapper(native):
+    state, _, settings = native
+    remote = injected(state, settings)
+    before = remote.scoped_page(settings, '10')
+    state.hook = lambda m, p, q, d: (403, {}, {}) if p.endswith('/pages/10/versions/2') else None
+    with pytest.raises(RemoteError) as failure:
+        remote.update(before, '<p>Saved</p>', 'unique-update-message', settings)
+    assert failure.value.code == 'unknown_update' and isinstance(failure.value.__cause__, RootScopeDenial)
+    assert sum(method == 'PUT' for method, _, _, _ in state.calls) == 1
+
+
+@pytest.mark.parametrize('operation', ['page-create', 'page-update', 'comment-create', 'comment-update'])
+@pytest.mark.parametrize('destination', [None, '13'])
+def test_all_write_acknowledgements_revalidate_consumed_ancestry_after_account_reads(native, operation, destination):
+    state, _, settings = native
+    remote = injected(state, settings)
+    state.pages['13'] = page_raw('13', '10')
+    state.comments[('footer', '50')] = comment_raw(version=2)
+    before = remote.scoped_page(settings, '11')
+    comment = remote.comment_detail('11', '50', scope=settings)
+    wrote = False
+    def relocate(method, path, query, payload):
+        nonlocal wrote
+        if method in ('POST', 'PUT'):
+            wrote = True
+        elif wrote and path == '/wiki/rest/api/user/current':
+            state.pages['12' if operation == 'page-create' else '11']['parentId'] = destination
+    state.hook = relocate
+    operations = {'page-create': lambda: remote.create('9', '10', 'New', '<p>Saved</p>', 'unique-create-message', settings),
+                  'page-update': lambda: remote.update(before, '<p>Saved</p>', 'unique-update-message', settings),
+                  'comment-create': lambda: remote.create_comment('11', '<p>Saved</p>', scope=settings),
+                  'comment-update': lambda: remote.update_comment('11', comment, '<p>Saved</p>', settings)}
+    with pytest.raises(RemoteError) as failure:
+        operations[operation]()
+    assert failure.value.outcome_unknown and failure.value.__cause__.code == 'scope_metadata_changed'
+    assert sum(method in ('POST', 'PUT') for method, _, _, _ in state.calls) == 1
 
 
 def test_truncated_http_body_with_valid_json_is_not_mistaken_for_complete_response(native):
