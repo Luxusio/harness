@@ -253,3 +253,16 @@ def test_structured_relation_denial_wakes_without_replacing_primary_error(servic
     replica.on_repair = lambda: calls.append('wake')
     assert api.execute('document_relations', dict(document='2')) == result
     assert calls == ['wake']
+
+
+@pytest.mark.parametrize('code', ['http_401', 'http_403'])
+def test_wrapped_postcommit_root_denial_still_fences_without_replay(service, code):
+    from wiki_atlassian.remote import RootScopeDenial
+    api, remote, replica = service
+    def version(*args, **kwargs):
+        raise RemoteError('unknown_update', outcome_unknown=True) from RootScopeDenial(api.settings, RemoteError(code))
+    remote.version = version
+    result = api.execute('update_document', dict(document='2', version=1, append='<p>Mine</p>'))
+    assert result['status'] == 'unknown' and result['code'] == 'unknown_update'
+    assert replica.failures == [code] and len(remote.writes) == 1
+    assert result.get('authorizationDenied', False) is (code == 'http_401')

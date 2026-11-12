@@ -199,10 +199,18 @@ class WikiService:
                     return self._comments(operation, data, effect)
                 raise RemoteError('invalid_request', 'Unknown wiki operation')
         except Exception as exc:
+            causes, seen = [], set()
+            cause = exc
+            while cause is not None and id(cause) not in seen:
+                seen.add(id(cause))
+                causes.append(cause)
+                cause = cause.__cause__
+            denial = next((cause for cause in causes if is_scope_denial(cause)), None)
+            authorization_denied = any(isinstance(cause, RemoteError) and cause.code == 'http_401' for cause in causes)
             fence_pending = False
-            if is_scope_denial(exc):
+            if denial is not None:
                 try:
-                    self.replica.handle_denial(exc)
+                    self.replica.handle_denial(denial)
                 except Exception:
                     fence_pending = True
                     self._wake_repair()
@@ -218,6 +226,8 @@ class WikiService:
                     result.setdefault('details', {})['reference'] = effect['reference']
             elif getattr(exc, 'next', None):
                 result['next'] = exc.next
+            if authorization_denied:
+                result['authorizationDenied'] = True
             if fence_pending:
                 result.setdefault('details', {}).update(scopeFence='pending', scopeFenceCode='replica_denial_pending',
                     scopeFenceNext='This process has refused access; shared revocation publication is pending. Automatic synchronization will retry.')

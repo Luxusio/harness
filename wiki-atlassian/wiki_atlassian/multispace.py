@@ -198,7 +198,7 @@ class MultiSpaceKnowledge:
                     raise RemoteError('invalid_request', 'Unknown wiki operation')
                 slot = self._running(key)
                 result = slot.service.execute(operation, arguments)
-                if result.get('code') == 'http_401':
+                if result.get('code') == 'http_401' or result.get('authorizationDenied') is True:
                     pending = self._deny_all()
                     if pending:
                         result.setdefault('details', {}).update(scopeFence='pending', scopeFenceCode='replica_denial_pending', scopeFenceSpaces=pending)

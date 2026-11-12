@@ -154,3 +154,12 @@ def test_pending_revocation_keeps_sibling_fences_and_original_unauthorized_error
     manager.slots['TEAM'].wake.clear()
     manager._deny_all(wake=False)
     assert not manager.slots['TEAM'].wake.is_set()
+
+
+def test_wrapped_unauthorized_mutation_keeps_unknown_and_fences_all_spaces(manager):
+    for key in manager.slots:
+        manager.synchronize(key)
+    manager.slots['TEAM'].service.execute = lambda *args: dict(status='unknown', code='unknown_update', authorizationDenied=True)
+    result = manager.execute('update_document', dict(document='11', version=1, append='<p>Mine</p>'))
+    assert result['status'] == 'unknown' and result['code'] == 'unknown_update'
+    assert all(slot.denied and slot.replica.denied for slot in manager.slots.values())
