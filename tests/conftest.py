@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import collections
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -431,6 +430,9 @@ def isolate_claude_install_root(tmp_path_factory):
 @contextlib.contextmanager
 def active_marker_lock(repo_root: str | None = None):
     """Serialize the isolated exact test-session marker across pytest workers."""
+    if os.name != "posix" or not hasattr(os, "getuid") or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("exact session marker locking requires POSIX primitives")
+    fcntl = pytest.importorskip("fcntl", reason="exact session marker locking requires POSIX flock")
     root = repo_root or REPO_ROOT
     wbs_root = os.path.join(root, "doc", "harness", "wbs")
     os.makedirs(wbs_root, exist_ok=True)

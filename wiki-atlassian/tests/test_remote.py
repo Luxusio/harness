@@ -528,14 +528,13 @@ def test_completed_timed_out_dns_result_is_not_a_new_requests_cached_authority(n
     state, existing, _ = native
     credentials = Credentials(existing.origin.replace('127.0.0.1', 'localhost'), 'user@example.invalid', 'synthetic-token')
     remote = Remote(credentials, ssl_context=existing._ssl_context)
-    original = socket.getaddrinfo
     calls = []
     def changing_resolver(host, port, **kwargs):
         calls.append(host)
         if len(calls) == 1:
             time.sleep(.15)
             return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.2', port))]
-        return original(host, port, **kwargs)
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port))]
     monkeypatch.setattr(socket, 'getaddrinfo', changing_resolver)
     with pytest.raises(RemoteError):
         with remote.operation(timeout=.03):
@@ -544,6 +543,59 @@ def test_completed_timed_out_dns_result_is_not_a_new_requests_cached_authority(n
     with remote.operation(timeout=1):
         assert remote.current_user()['accountId'] == 'account'
     assert len(calls) == 2 and len(state.calls) == 1
+
+
+def test_failed_first_address_closes_before_second_actual_tls_success(native, monkeypatch):
+    state, remote, _ = native
+    port = urlsplit(remote.origin).port
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (host, port))
+        for host in ('127.0.0.2', '127.0.0.1')])
+    attempts = []
+    original = socket.socket
+    class CandidateSocket(original):
+        def connect(self, address):
+            if attempts:
+                assert attempts[0].fileno() == -1
+            attempts.append(self)
+            if address[0] == '127.0.0.2':
+                raise ConnectionRefusedError('synthetic first candidate refusal')
+            return super().connect(address)
+    monkeypatch.setattr(socket, 'socket', CandidateSocket)
+    with remote.operation(timeout=1):
+        assert remote.current_user()['accountId'] == 'account'
+    assert len(attempts) == 2 and len(state.calls) == 1
+    assert all(candidate.fileno() == -1 for candidate in attempts)
+
+
+def test_address_attempts_consume_one_aggregate_budget_with_decreasing_timeouts(native, monkeypatch):
+    state, remote, _ = native
+    port = urlsplit(remote.origin).port
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.2', port))
+        for _ in range(8)])
+    sockets, timeouts = [], []
+    original = socket.socket
+    class CandidateSocket(original):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            sockets.append(self)
+        def connect(self, address):
+            timeouts.append(self.gettimeout())
+            time.sleep(min(.04, self.gettimeout()))
+            raise TimeoutError('synthetic candidate timeout')
+    monkeypatch.setattr(socket, 'socket', CandidateSocket)
+    started = time.monotonic()
+    with pytest.raises(RemoteError) as failure:
+        with remote.operation(timeout=.12):
+            remote.current_user()
+    assert failure.value.code == 'wiki_timeout'
+    assert 2 <= len(timeouts) < 8
+    assert all(earlier > later for earlier, later in zip(timeouts, timeouts[1:]))
+    assert timeouts[0] <= .12 and timeouts[-1] < timeouts[0] - .02
+    assert time.monotonic() - started < .5
+    assert sockets and all(candidate.fileno() == -1 for candidate in sockets)
+    assert not state.calls
 
 
 def test_watchdog_start_failure_closes_the_actual_owned_tls_socket(native, monkeypatch):

@@ -96,6 +96,37 @@ def _runtime():
     return path
 
 
+def test_selected_native_collection_without_posix_marker_primitives(tmp_path):
+    # Absence/collection proof only; this subprocess does not emulate Windows.
+    script = """
+import os, runpy, sys
+from pathlib import Path
+import pytest
+sys.modules['fcntl'] = None
+scope = runpy.run_path('tests/conftest.py')
+scratch = Path(sys.argv[1]) / 'unused-marker-root'
+with pytest.MonkeyPatch.context() as patch:
+    def unexpected(*args, **kwargs):
+        raise AssertionError('unsupported marker helper performed a POSIX action')
+    patch.setattr(os, 'getuid', unexpected, raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        with scope['active_marker_lock'](str(scratch)):
+            raise AssertionError('unsupported marker lock yielded')
+    patch.delattr(os, 'O_NOFOLLOW', raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        with scope['active_marker_lock'](str(scratch)):
+            raise AssertionError('unsupported marker lock yielded')
+assert not scratch.exists()
+raise SystemExit(pytest.main(['--collect-only', '-q', '-o', 'addopts=', '-p', 'no:cacheprovider',
+    'tests/test_wiki_windows_native.py']))
+"""
+    result = subprocess.run([sys.executable, "-B", "-c", script, str(tmp_path)], cwd=ROOT,
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True, capture_output=True, encoding='utf-8', timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'tests/test_wiki_windows_native.py::' in result.stdout
+
+
 def _calls(runtime, cwd, env, command=None, requests=None):
     rows = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
