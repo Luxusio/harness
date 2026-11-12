@@ -91,6 +91,9 @@ class Replica:
         if self.fail_publish:
             raise OSError('publication failed')
 
+    def contains_document(self, id):
+        return True
+
     def request_repair(self, id):
         self.repairs.append(id)
 

@@ -143,6 +143,8 @@ class WikiService:
     def _publish(self, page, result, before=None):
         try:
             self.replica.publish_verified(page, before)
+            if not self.replica.contains_document(page.node.id):
+                raise RemoteError('replica_missing', 'The saved document is not in a readable local snapshot yet')
         except Exception:
             try:
                 self.replica.request_repair(page.node.id)

@@ -391,6 +391,7 @@ def test_common_manifest_rejects_invalid_backend_mapping_and_ambiguous_root(tmp_
 
 
 @pytest.mark.parametrize("component", ["doc", "harness", "manifest"])
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX symlink fixture; native junction/reparse rejection is exercised in test_wiki_windows_native.py')
 def test_common_manifest_rejects_symlink_path_components(tmp_path, component):
     project = tmp_path / "project"; project.mkdir()
     outside = tmp_path / "outside"; outside.mkdir(); write_connection(outside)
@@ -467,6 +468,7 @@ def test_public_space_selections_reject_native_ids_duplicates_and_unbounded_list
     assert not (tmp_path / "home/.local/share/wiki-atlassian").exists()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX mode and symlink fixture; native DACL/reparse publication checks have separate coverage')
 def test_installer_rejects_writable_storage_and_substituted_publication(tmp_path, monkeypatch):
     runtime = _runtime()
     import importlib.util

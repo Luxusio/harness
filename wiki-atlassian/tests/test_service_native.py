@@ -60,3 +60,15 @@ def test_native_stale_version_and_private_material_perform_no_mutation(native):
     secret = api.execute('create_comment', dict(target='11', text='<table><tr><th>token</th><td>private-value</td></tr></table>'))
     assert secret['code'] == 'secret_detected' and 'private-value' not in str(secret)
     assert all(row[0] == 'GET' for row in state.calls)
+
+
+def test_native_save_before_first_local_snapshot_is_pending_not_replayed(native):
+    state, remote, settings = native
+    replica = Replica(settings, remote)
+    calls = []
+    replica.on_repair = lambda: calls.append('repair')
+    api = WikiService(settings, remote, replica)
+    result = api.execute('update_document', dict(document='11', version=1, append='<p>Saved</p>'))
+    assert result['status'] == 'updated' and result['syncRequired'] and calls == ['repair']
+    assert not (replica.control / 'manifest.json').exists()
+    assert len([row for row in state.calls if row[0] == 'PUT']) == 1
