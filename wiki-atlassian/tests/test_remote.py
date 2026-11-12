@@ -1365,6 +1365,66 @@ def test_tls_post_publication_failure_retains_document_publication_certainty(nat
         replica.close()
 
 
+def test_tls_transient_comment_manifest_lock_keeps_result_and_progress_incomplete(native, monkeypatch):
+    from wiki_atlassian.replica import Replica
+    from wiki_platform import file_lock
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9', watchCommentPages='11'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    poll_comments = replica.poll_comments
+    def contended_poll(*args, **kwargs):
+        with file_lock(replica.control/'sync.lock'):
+            return poll_comments(*args, **kwargs)
+    monkeypatch.setattr(replica, 'poll_comments', contended_poll)
+    try:
+        result = replica.synchronize()
+        status = replica.status()
+        assert result['documentsPublished'] and result['observation'] == 'comments_pending'
+        assert status['ready'] and status['status'] == 'partial' and status['commentWatch'] == 'unavailable'
+        assert status['syncProgress']['stage'] == 'documents_published'
+        assert status['syncProgress']['terminalReason'] == 'comments_pending'
+        assert not json.loads((replica.control/'manifest.json').read_text()).get('wikiCommentWatch')
+        assert not any(path.endswith('/footer-comments') for _, path, _, _ in state.calls)
+        monkeypatch.setattr(replica, 'poll_comments', poll_comments)
+        replica.synchronize()
+        assert replica.status()['status'] == 'ready' and replica.status()['syncProgress']['stage'] == 'complete'
+    finally:
+        replica.close()
+
+
+def test_tls_initial_journal_recovery_keeps_publication_certainty_after_inventory_failure(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        state.pages['11']['body']['storage']['value'] = '<p>Recovered committed evidence</p>'
+        feed = replica.control/'changes.json'
+        feed.unlink()
+        feed.mkdir()
+        with pytest.raises((OSError, ValueError)):
+            replica.synchronize()
+        assert (replica.control/'transaction.json').exists()
+        assert replica.get_document(dict(document='11'))['code'] == 'replica_recovery_pending'
+        feed.rmdir()
+        state.hook = lambda method, path, query, data: (503, {}, {}) if path == '/wiki/api/v2/spaces/9/pages' else None
+        with pytest.raises(RemoteError) as failure:
+            replica.synchronize()
+        assert failure.value.code == 'http_503'
+        assert not (replica.control/'transaction.json').exists()
+        assert 'Recovered committed evidence' in replica.get_document(dict(document='11'))['content']
+        status = replica.status()
+        assert status['ready'] and status['code'] == 'http_503'
+        assert status['syncProgress']['stage'] == 'documents_published'
+        assert status['syncProgress']['terminalReason'] == 'http_503'
+        state.hook = None
+        replica.synchronize()
+        assert replica.status()['status'] == 'ready' and replica.status()['syncProgress']['stage'] == 'complete'
+    finally:
+        replica.close()
+
+
 # Public synthetic localhost fixture material; never used outside these tests.
 CERT = '-----BEGIN CERTIFICATE-----\nMIIDJTCCAg2gAwIBAgIUeKKFNjV4PJOEwIfBw1V2zjDlfSkwDQYJKoZIhvcNAQEL\nBQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MTExMjAxMjYwMloXDTM2MTEw\nOTAxMjYwMlowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\nAAOCAQ8AMIIBCgKCAQEAzAsSj/NOwmVNyOhbM0O+U5z6Z2uj4TaRNoH9RLQtThRt\nMqHbzWgWB4EL2ZZu4u8nkuwpFvWxJ+uKCyC+lFmIaXRTSn2SjA0GESz2S6AywUGx\nIG4Uu28tcy3chYKsgDXDNU5Lfx2ec5MLWt71GzAg/1rjqQ8WKOnSVt6VCGRQF2zF\n960BI4N0d/wpOANkptiZ+H+pZR6XxCYSj10Bde1YlF6Ql6O6Cv0mxWy0qZrsUT5g\nOiA/vKwR0NOoBP8YcA/XAIUf9SsL3mT1u1BeSG6MsuYepQN8SD2ogPlfoNlkC8w0\nU0pE58d6ehogaqx8pzkVjJ9SFqNK7VFFCmz8bovaBwIDAQABo28wbTAdBgNVHQ4E\nFgQU6DGM5/6XY7fvitpDPJtuPjrzSH8wHwYDVR0jBBgwFoAU6DGM5/6XY7fvitpD\nPJtuPjrzSH8wDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgglsb2NhbGhvc3SH\nBH8AAAEwDQYJKoZIhvcNAQELBQADggEBALuf8oT/YW/n27ULDYklkm6vu/GTcBxk\nLmjnDao1K2FyUThpPZsfgiybmkK4g3zcdWGZ6u3IVnHJLjBKxFSxp/3JSDVpTJal\nyNYtYT/jXU6jBvS34Et3ykOrR0ki3v9Lx5Pi3pAvSKE3ZK2ET8CZcI65qIltblnW\ntsjj2FDwHfL/p6QEmCxfdp+imuRE2ByhQrq47sxVojHHBi0TE5kw09GJVvIZn/DK\nQ/V+fugBS7gMtaL97Gbb0XgIPj8sgZiCkZJeRTJ00rGXKZymixVr75waOOOyPJv2\nm9SA3qy6WbWe+uukyS7gw18LNCsZOjopgvtKGkblPop+QvjqrjBtyoc=\n-----END CERTIFICATE-----\n'
 KEY = '-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDMCxKP807CZU3I\n6FszQ75TnPpna6PhNpE2gf1EtC1OFG0yodvNaBYHgQvZlm7i7yeS7CkW9bEn64oL\nIL6UWYhpdFNKfZKMDQYRLPZLoDLBQbEgbhS7by1zLdyFgqyANcM1Tkt/HZ5zkwta\n3vUbMCD/WuOpDxYo6dJW3pUIZFAXbMX3rQEjg3R3/Ck4A2Sm2Jn4f6llHpfEJhKP\nXQF17ViUXpCXo7oK/SbFbLSpmuxRPmA6ID+8rBHQ06gE/xhwD9cAhR/1KwveZPW7\nUF5Iboyy5h6lA3xIPaiA+V+g2WQLzDRTSkTnx3p6GiBqrHynORWMn1IWo0rtUUUK\nbPxui9oHAgMBAAECggEACi99UDlFk7ep398VemQl0pex+kqpxhrKue1YPr89ybmE\nT/Q7fC/3dY1wEX8MbwCgOZnXXUGLg+IipHaQfOhRQm5foAbPs3UM+fuEGfdXwUTt\nuiA0obyliKvf57xDryy/31/WrfRFDiDnfrRFiQNoika3uZ86rHUrnlGDIAWd5+Vb\nuLSIKD+BHbM4GzFGALffqbxeV1JSkneXeIkBA3bKLR2vYzIpcYYG+2cAQDsCGXcF\nuMoYy0Eg1cMM2PcajEgtV3vFKSTUj6huveFCUrxdJHn2yvZ6E38bzWDUBxzPVSQP\n1inCWFe7FOYgSb7nFAoUmmreWHsavbVWJPmwmmFsqQKBgQD8On11AzY10szBdNHY\ntb/oeOaU56wnPtLq8HqkU4HqCthOWJO9gCXiliffRozfvUV3KeUBOn60Ski1Smg/\nZKOQv+2N5Oz9EXR/6vY/ou5NuSJNgTEoAGBXbXW8RLg2iTlcFcQsyLi1lrr1WOz2\neXnwXlPOwiuumrd0IIXB0NGCbwKBgQDPGCIjU08iJUu/XzyQmTDD1wCj1P9rBUDZ\nR+ja2R0DQv3Tr6mfXo2DiOhKALYllNzXtM8EBu/kSImR+DdXO/XewIZOB8q880h2\nQklHnJDOREqLindv3dG2S7BJujNgJIYDYOLSWiG2PrbVoO7/WxS9xYSxvrKYTq6k\ne0S7w8uN6QKBgQCs7lk30cToMChMdxCtGSeDduj4rMJegfdQNyKO6eZHlbnqNVbN\n9T+EU9jwf0l02Sr4YZPuPLHEYK3rBiHlXNW8F6sCvzMw6zfJwEmnJclnJoh7RRlz\nyJZFOvoe46q9UWYvWYkP/2qMrdRvBNIqxuywvauONZiHdPJUvzuVv9r1JwKBgQCz\nwrgHP85Fzmfk0s8omMCajesxSrb295VlxaSbKrCjXygi8qzi+FkQHuu7KMjy8DeO\nSZUUYs0is9AuU23+G779PtKVsu/JecehV0JylbWgRekLHQM1qC7b9PEt3iGwR6PI\nFPZuLuxqXB+qacpq/22OmH/pJaWyzUGM5q8v6PGs2QKBgQDItcOZfrY7VV0w89as\nTUAGofZzlQJzTs9XNRlOkQURRLt36Zj8/C0jQJyDzNnnDwDtdfbUnxlsRfRXRxUG\nxlgtzelNae7lcXR1e1MTJiYg+R6O8N8YPi+gTyNKbuOW9j0ZQOujDudjuZwiL+PV\nGCM0hhJfC+T0kl12OH4xKWIUHw==\n-----END PRIVATE KEY-----\n'

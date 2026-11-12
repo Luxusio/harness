@@ -775,7 +775,8 @@ class Replica:
                 terminal = 'comments_pending' if observation == 'pending' else None
                 try:
                     with self._locked_manifest() as manifest:
-                        if changes.comment_status(manifest, self.settings.watched_comment_pages) == 'unavailable':
+                        watch = changes.comment_status(manifest, self.settings.watched_comment_pages)
+                        if watch == 'unavailable' or (self.settings.watched_comment_pages and watch is None and terminal is None):
                             terminal = 'comments_unavailable'
                 except RemoteError as error:
                     terminal = error.code
@@ -812,7 +813,7 @@ class Replica:
                 prior_denial = self._denial_token()
             self._root_access()
             with file_lock(self.control / 'notice-access.lock'):
-                self._recover(allow_credential_switch=True)
+                self._recover(allow_credential_switch=True, on_published=on_published)
             previous = self._manifest(missing=True)
             old = previous.get('pages', {})
             reauthorizing = bool(old) and previous.get('credentialBinding') != self.settings.credential_fingerprint
@@ -1344,7 +1345,7 @@ class Replica:
                 watched = {i: admitted[i] for i in sorted(targets, key=lambda id: (changes.comment_attempted_at(manifest, id) or -1, id))
                            if i in admitted and changes.comment_due(manifest, i, started, interval*1000)}
         except RemoteError:
-            return
+            return 'pending'
         attempted, observed, budget_blocked = [], {}, None
         with self._operation(timeout=max(.001, deadline-time.monotonic())):
             for id, row in watched.items():
