@@ -18,7 +18,8 @@ import sys
 ROOT = Path(__file__).resolve().parent
 HELPERS = ROOT.parent / 'plugin/scripts'
 sys.path.insert(0, str(HELPERS))
-from wiki_platform import atomic_write, ensure_private_directory, file_lock, run_bounded, safe_read
+from wiki_platform import (atomic_write, ensure_private_directory, file_lock, run_bounded,
+                           safe_read, safe_metadata_read, trusted_metadata_directory)
 
 PAYLOAD_DIRS = ('.claude-plugin', '.codex-plugin', 'skills', 'agents', 'scripts', 'wiki_atlassian')
 SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py')
@@ -63,15 +64,24 @@ def _source_files():
     return result
 
 
-def _inventory(root):
+def _inventory(root, private=True):
     result = {}
     for base, dirs, files in os.walk(root, followlinks=False):
-        ensure_private_directory(Path(base))
+        if private:
+            ensure_private_directory(Path(base))
+        else:
+            with trusted_metadata_directory(Path(base)):
+                pass
         for part in dirs:
-            ensure_private_directory(Path(base) / part)
+            if private:
+                ensure_private_directory(Path(base) / part)
+            else:
+                with trusted_metadata_directory(Path(base) / part):
+                    pass
         for part in files:
             path = Path(base) / part
-            result[path.relative_to(root).as_posix()] = safe_read(path, 16 * 1024 * 1024, private=True)
+            result[path.relative_to(root).as_posix()] = (safe_read(path, 16 * 1024 * 1024, private=True)
+                if private else safe_metadata_read(path, 16 * 1024 * 1024))
     return result
 
 
@@ -203,6 +213,46 @@ def _host_command(runtime):
     return [str(path)]
 
 
+def _verify_selected(runtime, payload, command):
+    """Check the host's selection and actual cache, not just CLI exit status."""
+    selector = 'wiki-atlassian@knowledge-documents'
+    argv = [*command, 'plugin', 'list', '--json']
+    if runtime == 'codex':
+        argv += ['--marketplace', 'knowledge-documents']
+    result = run_bounded(argv, cwd=ROOT, env=dict(os.environ), timeout=60, limit=2 * 1024 * 1024)
+    try:
+        if result.returncode:
+            raise ValueError()
+        data = json.loads(result.stdout.decode('utf-8'))
+        pending, rows = [data], []
+        while pending:
+            value = pending.pop()
+            if isinstance(value, list):
+                pending.extend(value)
+            elif isinstance(value, dict):
+                if value.get('pluginId' if runtime == 'codex' else 'id') == selector:
+                    if runtime == 'codex' or value.get('scope') == 'user':
+                        rows.append(value)
+                pending.extend(v for v in value.values() if isinstance(v, (dict, list)))
+        if len(rows) != 1 or rows[0].get('version') != payload.name or rows[0].get('enabled') is not True:
+            raise ValueError()
+        home = Path(os.environ.get('CODEX_HOME' if runtime == 'codex' else 'CLAUDE_CONFIG_DIR')
+                    or Path.home() / ('.codex' if runtime == 'codex' else '.claude')).expanduser().absolute()
+        parent = home / 'plugins/cache/knowledge-documents/wiki-atlassian'
+        if runtime == 'codex':
+            if rows[0].get('installed') is not True:
+                raise ValueError()
+            cache = parent / payload.name
+        else:
+            cache = Path(rows[0]['installPath'])
+            if not cache.is_absolute() or cache.parent != parent or cache.name not in (payload.name, payload.name.replace('+', '-')):
+                raise ValueError()
+        if _inventory(cache, private=False) != _inventory(payload / 'plugin'):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, UnicodeError):
+        raise ValueError('Host selection or cached Python payload differs from the prepared plugin; preserve existing versions and retry the update') from None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', choices=('codex', 'claude'), action='append')
@@ -221,11 +271,15 @@ def main():
             for runtime in runtimes:
                 try:
                     command = _host_command(runtime)
-                    for argv in (['plugin', 'marketplace', 'add', str(source)],
-                                 ['plugin', 'add' if runtime == 'codex' else 'install', 'wiki-atlassian@knowledge-documents']):
+                    operations = [['plugin', 'marketplace', 'add', str(source)],
+                                  ['plugin', 'add' if runtime == 'codex' else 'install', 'wiki-atlassian@knowledge-documents']]
+                    if runtime == 'claude':
+                        operations.append(['plugin', 'update', 'wiki-atlassian@knowledge-documents', '--scope', 'user'])
+                    for argv in operations:
                         result = run_bounded([*command, *argv], cwd=ROOT, env=dict(os.environ), timeout=60, limit=2 * 1024 * 1024)
                         if result.returncode:
                             raise ValueError('Host CLI registration failed; existing payloads are preserved')
+                    _verify_selected(runtime, payload, command)
                     print(runtime.title() + ': SUCCESS')
                 except (OSError, ValueError, subprocess.SubprocessError) as exc:
                     failed = True

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import threading
+import time
 
 from .cursors import decode_cursor, encode_cursor
 from .models import RemoteError, digest, native_id
@@ -42,10 +43,11 @@ class MultiSpaceKnowledge:
         for slot in self.slots.values():
             slot.denied = True
         pending = {}
+        deadline = time.monotonic() + 3
         for key, slot in self.slots.items():
             if slot.replica:
                 try:
-                    slot.replica.deny()
+                    slot.replica.deny(timeout=max(0, deadline - time.monotonic()))
                 except Exception:
                     pending[key] = 'replica_denial_pending'
                     slot.failure = 'replica_denial_pending'
@@ -94,7 +96,6 @@ class MultiSpaceKnowledge:
             slot.wake.clear()
 
     def close(self):
-        import time
         self.stop.set()
         for slot in self.slots.values():
             slot.wake.set()

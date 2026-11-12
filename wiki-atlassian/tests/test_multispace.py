@@ -47,7 +47,7 @@ class Replica:
     def sync_failed(self, code):
         pass
 
-    def deny(self):
+    def deny(self, timeout=3):
         self.denied = True
 
     def close(self):
@@ -143,7 +143,7 @@ def test_comment_ids_do_not_become_page_urls(manager):
 def test_pending_revocation_keeps_sibling_fences_and_original_unauthorized_error(manager):
     for key in manager.slots:
         manager.synchronize(key)
-    def pending():
+    def pending(timeout=3):
         raise RemoteError('replica_denial_pending')
     manager.slots['TEAM'].replica.deny = pending
     manager.slots['TEAM'].service.execute = lambda *args: dict(status='error', code='http_401')

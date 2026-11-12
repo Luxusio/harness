@@ -240,3 +240,13 @@ def test_pending_revocation_preserves_unknown_write_and_primary_native_error(ser
     assert result['status'] == 'unknown' and result['code'] == 'http_403'
     assert result['details']['scopeFence'] == 'pending' and len(remote.writes) == 1
     assert 'never automatically repeat' in result['next'] and calls == ['wake']
+
+
+def test_structured_relation_denial_wakes_without_replacing_primary_error(service):
+    api, remote, replica = service
+    result = dict(status='error', code='http_403', details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending'))
+    calls = []
+    replica.relations = lambda data: result
+    replica.on_repair = lambda: calls.append('wake')
+    assert api.execute('document_relations', dict(document='2')) == result
+    assert calls == ['wake']

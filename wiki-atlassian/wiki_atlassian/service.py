@@ -151,6 +151,14 @@ class WikiService:
             result.update(syncRequired=True, next='Saved remotely; automatic synchronization will repair the replica. Do not repeat the write.')
         return result
 
+    def _wake_repair(self):
+        try:
+            wake = getattr(self.replica, 'on_repair', None)
+            if wake is not None:
+                wake()
+        except Exception:
+            pass  # A secondary wake failure cannot replace a native effect/error.
+
     def execute(self, operation, data):
         effect = {'started': False, 'saved': False, 'reference': None}
         try:
@@ -159,7 +167,10 @@ class WikiService:
                 if operation == 'search_documents':
                     return self.replica.search(data)
                 if operation in ('document_relations', 'graph'):
-                    return self.replica.relations(data)
+                    result = self.replica.relations(data)
+                    if result.get('details', {}).get('scopeFence') == 'pending':
+                        self._wake_repair()
+                    return result
                 if operation == 'get_document':
                     local = self.replica.get_document(data)
                     if local is not None:
@@ -192,12 +203,7 @@ class WikiService:
                     self.replica.handle_denial(exc)
                 except Exception:
                     fence_pending = True
-                    wake = getattr(self.replica, 'on_repair', None)
-                    if wake is not None:
-                        try:
-                            wake()
-                        except Exception:
-                            pass  # Preserve the original effect/error and pending fence.
+                    self._wake_repair()
             unknown = effect['saved'] or (effect['started'] and not isinstance(exc, RemoteError)) or getattr(exc, 'outcome_unknown', False)
             result = dict(status='unknown' if unknown else 'error', code=getattr(exc, 'code', 'unknown_outcome' if unknown else 'invalid_request'),
                           message=str(exc) if isinstance(exc, RemoteError) else 'Wiki operation could not be completed')
