@@ -699,7 +699,7 @@ class Replica:
             with self._operation():
                 with file_lock(self.control / 'sweep.lock'):
                     result = self._synchronize(authoritative_bodies)
-                self.poll_comments()
+                self.poll_comments(_deadline=deadline)
                 self.last_success, self.last_failure = _now(), None
         except BlockingIOError:
             return
@@ -1147,7 +1147,7 @@ class Replica:
                 if not (self.control / 'transaction.json').exists():
                     self._discard_stage(stage, [rows[i]['path'] for i in changed])
 
-    def poll_comments(self, page_ids=None, interval_seconds=None):
+    def poll_comments(self, page_ids=None, interval_seconds=None, *, _deadline=None):
         targets = self.settings.watched_comment_pages if page_ids is None else page_ids
         if not targets or self.closed:
             return
@@ -1156,13 +1156,13 @@ class Replica:
         interval = self.settings.poll_interval_seconds if interval_seconds is None else interval_seconds
         try:
             with file_lock(self.control / 'comments.lock'):
-                self._poll_comments(targets, interval)
+                self._poll_comments(targets, interval, _deadline)
         except (BlockingIOError, FileNotFoundError):
             return
 
-    def _poll_comments(self, targets, interval):
+    def _poll_comments(self, targets, interval, deadline=None):
         started = int(time.time()*1000)
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 30 if deadline is None else deadline
         try:
             with self._locked_manifest() as manifest:
                 admitted = changes.admitted(manifest)
@@ -1171,7 +1171,7 @@ class Replica:
         except RemoteError:
             return
         attempted, observed = [], {}
-        with self._operation():
+        with self._operation(timeout=max(.001, deadline-time.monotonic())):
             for id, row in watched.items():
                 try:
                     expected = _node(row)
