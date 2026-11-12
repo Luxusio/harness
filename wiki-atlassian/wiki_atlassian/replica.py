@@ -343,8 +343,8 @@ class Replica:
     def sync_failed(self, code='sync_failed'):
         self.last_failure = code if isinstance(code, str) and re.fullmatch('[a-z][a-z0-9_]{0,63}', code) else 'sync_failed'
 
-    def _failure_message(self):
-        return f'Automatic synchronization failed ({self.last_failure}); this replica may be stale'
+    def _failure_message(self, code=None):
+        return f'Automatic synchronization failed ({self.last_failure if code is None else code}); this replica may be stale'
 
     @staticmethod
     def _error(error):
@@ -369,7 +369,7 @@ class Replica:
             status = 'busy' if reason == 'replica_busy' else 'failed' if failure else 'pending' if reason in (
                 'replica_missing', 'replica_recovery_pending', 'replica_incomplete', 'credential_reauthorization_pending') else 'unavailable'
             result = dict(enabled=True, ready=False, status=status, reason='replica_scope_denied' if reason == 'root_scope_denied' else reason,
-                          code=failure or reason, syncError=self._failure_message() if self.last_failure else None,
+                          code=failure or reason, syncError=self._failure_message(failure) if failure else None,
                           message='No complete readable snapshot is available; check synchronization and connection configuration')
             if reason == 'root_scope_denied' and self.settings.watched_comment_pages:
                 result['commentWatch'] = 'unavailable'
