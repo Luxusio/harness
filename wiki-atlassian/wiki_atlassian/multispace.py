@@ -165,7 +165,8 @@ class MultiSpaceKnowledge:
             require(supplied is None or supplied in self.slots, 'invalid_request', 'Select a configured space key')
             arguments = {k: v for k, v in data.items() if k != 'space'}
             if operation == 'search_documents':
-                return self._search(arguments, supplied)
+                with self.remote.operation(timeout=45):
+                    return self._search(arguments, supplied)
             with self.remote.operation(timeout=45):
                 if operation == 'create_document':
                     key = self._document_space(arguments['parent'], supplied) if 'parent' in arguments else supplied
@@ -227,6 +228,8 @@ class MultiSpaceKnowledge:
                                  readable=readable, freshness=status.get('freshness')))
             state = states.get(key, {})
             require(type(state) is dict and not set(state) - {'cursor', 'skip', 'done'}, 'invalid_cursor')
+            require('done' not in state or type(state['done']) is bool, 'invalid_cursor')
+            require('cursor' not in state or type(state['cursor']) is str and bool(state['cursor']), 'invalid_cursor')
             if state.get('done'):
                 continue
             if len(result) >= limit:
