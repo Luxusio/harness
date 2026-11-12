@@ -72,3 +72,23 @@ def test_native_save_before_first_local_snapshot_is_pending_not_replayed(native)
     assert result['status'] == 'updated' and result['syncRequired'] and calls == ['repair']
     assert not (replica.control / 'manifest.json').exists()
     assert len([row for row in state.calls if row[0] == 'PUT']) == 1
+
+
+def test_whole_space_move_retains_ancestors_and_publishes_once(native, tmp_path):
+    from test_remote import page_raw
+    from wiki_atlassian.config import SpaceSettings
+    state, remote, selected = native
+    state.pages['13'] = page_raw('13', '10')
+    settings = SpaceSettings(dict(site=selected.site, space='DOC', spaceId='9'),
+                             selected.credentials, tmp_path / 'whole-space')
+    replica = Replica(settings, remote)
+    replica.synchronize()
+    api = WikiService(settings, remote, replica)
+    result = api.execute('update_document', dict(document='11', version=1, parent='13'))
+    assert result['status'] == 'updated' and result['version'] == 2
+    assert state.pages['11']['parentId'] == '13'
+    assert replica.get_document(dict(document='11'))['version'] == 2
+    assert len([row for row in state.calls if row[0] == 'PUT']) == 1
+    refused = api.execute('update_document', dict(document='11', version=2, parent='10'))
+    assert refused['status'] == 'error' and refused['code'] == 'invalid_move'
+    assert len([row for row in state.calls if row[0] == 'PUT']) == 1

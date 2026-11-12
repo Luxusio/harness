@@ -140,3 +140,29 @@ def test_overflowing_numeric_rpc_id_is_refused_before_dispatch_and_stream_surviv
     rows = [json.loads(line) for line in writer.getvalue().splitlines()]
     assert documents.calls == 0 and rows[0]['error']['code'] == -32600 and rows[0]['id'] is None
     assert rows[1]['id'] == 2 and rows[1]['result'] == {}
+
+
+@pytest.mark.parametrize('slow', [False, True])
+def test_private_read_has_an_owned_process_deadline_and_keeps_stdio_usable(tmp_path, monkeypatch, slow):
+    import personal_feedback
+    import time
+    from wiki_atlassian.main import read_personal
+    helper = tmp_path / 'personal_feedback.py'
+    helper.write_text("import os,sys,time\ndef perform(action,request):\n"
+                      " if request['limit']==2: time.sleep(10)\n"
+                      " assert '_HARNESS_PRIVATE_READ_REQUEST' not in os.environ\n"
+                      " assert request['cursor'] not in repr(sys.argv)\n"
+                      " return dict(status='read',request=request)\n")
+    monkeypatch.setattr(personal_feedback, '__file__', str(helper))
+    values = dict(limit=2 if slow else 1, cursor='private-continuation-😀')
+    started = time.monotonic()
+    server = Server(personal=lambda data: read_personal(data, timeout=.5 if slow else 5))
+    response = server.handle(dict(id=1, method='tools/call',
+        params=dict(name='read_personal_feedback', arguments=values)))
+    result = json.loads(response['result']['content'][0]['text'])
+    assert result['status'] == ('unavailable' if slow else 'read')
+    if slow:
+        assert time.monotonic() - started < 2
+    else:
+        assert result['request'] == values
+    assert server.handle(dict(id=2, method='ping'))['result'] == {}

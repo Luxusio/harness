@@ -827,8 +827,6 @@ class Replica:
             next_pages, changed, bytes_written = {}, [], 0
             try:
                 for id, node in sorted(selected.items()):
-                    if self.remote.require_scope(self.settings, id) != node:
-                        raise RemoteError('scope_metadata_changed', 'Native metadata changed during synchronization')
                     prior = old.get(id)
                     refresh = id in requested or (full_pass and id in old)
                     cached = None
@@ -837,7 +835,12 @@ class Replica:
                             cached = self._body(prior, 'storage')
                         except (OSError, ValueError, RemoteError):
                             pass
-                    page = Page(node, cached) if cached is not None else self.remote.page(id, expected_node=node, scope=self.settings, fresh_storage=refresh)
+                    if cached is not None:
+                        if self.remote.require_scope(self.settings, id) != node:
+                            raise RemoteError('scope_metadata_changed', 'Native metadata changed during synchronization')
+                        page = Page(node, cached)
+                    else:
+                        page = self.remote.inventory_page(self.settings, node, fresh_storage=refresh)
                     if page.node != node:
                         raise RemoteError('scope_metadata_changed', 'Native page changed during synchronization')
                     bytes_written += len(page.body.encode('utf-8'))
@@ -867,6 +870,7 @@ class Replica:
                 self._validate(manifest)
                 if self.settings.identity() != identity:
                     raise RemoteError('connection_changed', 'Connection changed during synchronization')
+                self.remote.verify_inventory(self.settings, list(nodes.values()))
                 self._root_access()
                 self._metadata(stage / 'manifest.json', manifest)
                 self._check_projection_budget(stage, manifest['pages'])

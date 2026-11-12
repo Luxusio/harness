@@ -2,12 +2,36 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 from .config import Project
 from .protocol import Server
+
+
+def read_personal(values, timeout=20):
+    """Bound the entire private read, including mise, DNS and slow HTTP bodies."""
+    import personal_feedback
+    from wiki_platform import run_bounded
+    environment = dict(os.environ)
+    # Private continuation data stays out of process listings and persistent files.
+    environment['_HARNESS_PRIVATE_READ_REQUEST'] = json.dumps(values)
+    code = ("import json,os,sys;sys.path.insert(0,sys.argv[1]);import personal_feedback;"
+            "request=json.loads(os.environ.pop('_HARNESS_PRIVATE_READ_REQUEST'));"
+            "print(json.dumps(personal_feedback.perform('read',request=request),ensure_ascii=True))")
+    try:
+        result = run_bounded([sys.executable, '-I', '-B', '-c', code,
+                              str(Path(personal_feedback.__file__).resolve().parent)],
+                             cwd=Path.cwd(), env=environment, timeout=timeout, limit=1024*1024)
+        value = json.loads(result.stdout.decode('utf-8'))
+        if result.returncode != 0 or not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'status': 'unavailable', 'message': 'Private inbox read could not finish within its supported execution bounds; check private access and service availability.'}
 
 
 def main(argv=None):
@@ -21,7 +45,7 @@ def main(argv=None):
     from .config import home_directory
     home = home_directory()
     private_path = home / '.config/harness/feedback.yaml'
-    personal = (lambda values: personal_feedback.perform('read', home=home, request=values)) if os.path.lexists(private_path) else None
+    personal = read_personal if os.path.lexists(private_path) else None
     documents = None
     unavailable = False
     try:

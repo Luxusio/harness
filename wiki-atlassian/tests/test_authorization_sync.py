@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from test_remote import NativeState, page_raw
+from test_remote import native
 from wiki_atlassian.config import Credentials, Project
 from wiki_atlassian.models import RemoteError
 from wiki_atlassian.multispace import MultiSpaceKnowledge
@@ -139,3 +140,75 @@ def test_known_401_revokes_prior_cache_without_initializing_that_space(tmp_path)
     assert manager.slots['OTHER'].settings is None and manager.slots['OTHER'].service is None
     assert sum(row[0] == 'PUT' for row in native.calls) == 1
     manager.close(); prior.close()
+
+
+@pytest.mark.parametrize('lost', [False, True])
+def test_background_revocation_keeps_the_actual_write_outcome(native, tmp_path, lost):
+    state, remote, settings = native
+    project = Project(dict(enabled=True, site=settings.site,
+                           spaces=[dict(key='DOC', rootPageId='10')]),
+                      settings.credentials, tmp_path / 'concurrent-cache')
+    manager = MultiSpaceKnowledge(project, remote, start_workers=False)
+    manager.synchronize('DOC')
+    original = manager.slots['DOC'].service.execute
+    captured = []
+    state.lost = 'create' if lost else None
+    def execute(operation, values):
+        result = original(operation, values)
+        captured.append(result.copy())
+        state.hook = lambda method, path, query, payload: (401, {}, {}) if (
+            method == 'GET' and path == '/wiki/api/v2/pages/10') else None
+        failures = []
+        def revoke():
+            try:
+                manager.synchronize('DOC')
+            except RemoteError as error:
+                failures.append(error.code)
+        worker = threading.Thread(target=revoke)
+        worker.start(); worker.join(5)
+        assert not worker.is_alive() and failures == ['http_401']
+        return result
+    manager.slots['DOC'].service.execute = execute
+    try:
+        result = manager.execute('create_document', dict(space='DOC', parent='10', title='Created',
+                                 content='<p>Private body</p>', includeBody=True, metadata=True))
+        assert result['status'] == captured[0]['status'] == ('unknown' if lost else 'created')
+        assert result['authorizationDenied'] and 'content' not in result and 'title' not in result
+        assert '12' in state.pages and sum(row[0] == 'POST' for row in state.calls) == 1
+        if lost:
+            assert result['code'] == captured[0]['code'] and 'never automatically repeat' in result['next']
+        else:
+            assert result['id'] == '12' and 'Do not repeat' in result['next']
+    finally:
+        manager.close()
+
+
+def test_hook_notice_read_and_denial_publication_share_the_same_lease(tmp_path, monkeypatch):
+    import wiki_change_notice as notice
+    state, _, _, _, manager = connected(tmp_path)
+    replica = manager.slots['DOC'].replica
+    state.pages['11']['version']['number'] = 2
+    manager.synchronize('DOC')
+    original = notice._read
+    observed = []
+    def read(directory, name, *args):
+        result = original(directory, name, *args)
+        if name == 'changes.json' and not observed:
+            with pytest.raises(RemoteError) as error:
+                replica.deny(timeout=0)
+            assert error.value.code == 'replica_denial_pending'
+            observed.append(error.value.code)
+        return result
+    monkeypatch.setattr(notice, '_read', read)
+    try:
+        with notice._directory(replica.control) as directory:
+            result = notice._consume(directory, 'lease-test', replica.settings.credential_fingerprint, 'DOC', 8)
+        assert observed and 'page 11, observed version 2' in result
+        assert not (replica.control / 'notice-access-denied').exists()
+        replica.deny()
+        cursor = (replica.control / 'harness-cursors.json').read_bytes()
+        with notice._directory(replica.control) as directory:
+            assert notice._consume(directory, 'new-session', replica.settings.credential_fingerprint, 'DOC', 8) == ''
+        assert (replica.control / 'harness-cursors.json').read_bytes() == cursor
+    finally:
+        manager.close()

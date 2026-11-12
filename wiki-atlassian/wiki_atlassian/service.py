@@ -320,8 +320,8 @@ class WikiService:
         if not creating and 'parent' in data:
             require(not logical and 'version' in data and id != self.settings.root_page_id, 'invalid_move')
             destination = document_id(data['parent'], self.settings)
-            original_ancestry = self.remote.ancestry(self.settings, id)
-            destination_ancestry = self.remote.ancestry(self.settings, destination)
+            original_ancestry = self.remote.move_ancestry(self.settings, id)
+            destination_ancestry = self.remote.move_ancestry(self.settings, destination)
             require(id not in [n.id for n in destination_ancestry] and
                     {n.id for n in original_ancestry[1:]}.issubset({n.id for n in destination_ancestry}), 'invalid_move',
                     'A move must retain every existing ancestor and its inherited access restrictions')
@@ -335,8 +335,8 @@ class WikiService:
             else:
                 self._guard(node, before, account, sources)
             if destination is not None:
-                require(self.remote.ancestry(self.settings, id) == original_ancestry and
-                        self.remote.ancestry(self.settings, destination) == destination_ancestry, 'scope_metadata_changed')
+                require(self.remote.move_ancestry(self.settings, id) == original_ancestry and
+                        self.remote.move_ancestry(self.settings, destination) == destination_ancestry, 'scope_metadata_changed')
             for linked_id in link_targets:
                 require(self.remote.require_scope(self.settings, linked_id).type == 'page', 'scope_metadata_changed')
             self._content_policy(title, body, before)
@@ -349,7 +349,7 @@ class WikiService:
         for linked_id in link_targets:
             require(self.remote.require_scope(self.settings, linked_id).type == 'page', 'scope_metadata_changed')
         if destination is not None:
-            require(self.remote.ancestry(self.settings, saved.node.id) == [saved.node, *destination_ancestry], 'scope_metadata_changed')
+            require(self.remote.move_ancestry(self.settings, saved.node.id) == [saved.node, *destination_ancestry], 'scope_metadata_changed')
         return self._publish(saved, self._result(saved, 'created' if creating else 'updated', data, account), before)
 
     def _resolve_comment(self, value):

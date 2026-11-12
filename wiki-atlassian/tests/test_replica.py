@@ -112,11 +112,61 @@ class Native:
             raise RemoteError('scope_metadata_changed', 'Synthetic changed')
         return page
 
+    def inventory_page(self, settings, node, fresh_storage=False):
+        return self.page(node.id, expected_node=node, scope=settings, fresh_storage=fresh_storage)
+
+    def verify_inventory(self, settings, nodes):
+        for node in nodes:
+            if self.scope_node(node.id, node.type) != node:
+                raise RemoteError('scope_metadata_changed', 'Synthetic inventory changed')
+
     def comment_inventory(self, target, expected_node=None, scope=None):
         self.comment_reads.append(target)
         if target in self.comment_error:
             raise self.comment_error[target]
         return dict(provider='confluence', target=target, comments=self.comments.get(target, []), complete=True)
+
+
+def test_cold_native_root_reuses_observations_within_the_existing_budget(tmp_path):
+    from test_remote import NativeState, page_raw
+    for count in (30, 50):
+        state = NativeState()
+        state.pages = {str(10+i): page_raw(str(10+i), '10' if i else None) for i in range(count)}
+        settings = SpaceSettings(dict(site='https://fixture.invalid', space='DOC', spaceId='9', rootPageId='10'),
+            Credentials('https://fixture.invalid', 'fixture@example.invalid', 'synthetic'), tmp_path / str(count))
+        remote = Remote(settings.credentials, state.transport)
+        replica = Replica(settings, remote)
+        try:
+            result = replica.synchronize()
+            assert result['pages'] == count and len(state.calls) <= 512
+            assert replica.get_document(dict(document=str(9+count)))['content'].endswith('\n\nOriginal')
+            manifest = json.loads((replica.control / 'manifest.json').read_text())
+            assert manifest['inventoryComplete'] and len(manifest['pages']) == count
+        finally:
+            replica.close()
+
+
+def test_native_sweep_reverifies_earlier_nodes_before_publishing_any_body(tmp_path):
+    from test_remote import NativeState, page_raw
+    state = NativeState()
+    state.pages['12'] = page_raw('12', '10')
+    def hook(method, path, query, payload):
+        if method == 'GET' and path == '/wiki/api/v2/pages/12' and query.get('body-format') == ['storage']:
+            state.pages['11']['parentId'] = '99'
+    state.hook = hook
+    settings = SpaceSettings(dict(site='https://fixture.invalid', space='DOC', spaceId='9', rootPageId='10'),
+        Credentials('https://fixture.invalid', 'fixture@example.invalid', 'synthetic'), tmp_path / 'cache')
+    replica = Replica(settings, Remote(settings.credentials, state.transport))
+    try:
+        try:
+            replica.synchronize()
+        except RemoteError as error:
+            assert error.code == 'scope_metadata_changed'
+        else:
+            raise AssertionError('A moved earlier node was published from an old observation')
+        assert not (replica.control / 'manifest.json').exists()
+    finally:
+        replica.close()
 
 
 class ReplicaTests(unittest.TestCase):

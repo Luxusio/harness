@@ -488,7 +488,7 @@ class Remote:
     def require_scope(self, settings, id):
         return self.ancestry(settings, id)[0]
 
-    def _move_chain(self, settings, id):
+    def move_ancestry(self, settings, id):
         if not settings.whole_space:
             return self.ancestry(settings, id)
         result, current = [], id
@@ -556,6 +556,27 @@ class Remote:
 
     def scoped_page(self, settings, id, fresh_storage=False):
         return self.page(id, scope=settings, fresh_storage=fresh_storage)
+
+    def inventory_page(self, settings, expected_node, fresh_storage=False):
+        """Read within an admitted inventory; its owner must reverify before publish.
+
+        A sweep already has the complete checked ancestor graph. Rewalking the
+        same graph around every body exhausts the operation's request budget.
+        Read the current leaf and compare its body identity here; the sweep
+        verifies every consumed graph node again before making any body visible.
+        """
+        _need(expected_node.type == 'page' and expected_node.status == 'current'
+              and expected_node.space_id == settings.space_id, 'scope_outside_connection')
+        _need(self._connection_node(settings, expected_node.id) == expected_node, 'scope_metadata_changed')
+        with self._scope_errors(settings, expected_node.id):
+            raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + expected_node.id,
+                                                    {'body-format': 'storage'}))[1]
+            page = self._parse_page(raw, expected_node.id)
+        _need(page.node == expected_node, 'scope_metadata_changed')
+        return page
+
+    def verify_inventory(self, settings, nodes):
+        self._verify(settings, nodes)
 
     def _continuation(self, value, path, params):
         _need(isinstance(value, str) and 0 < len(value) <= 8192, 'invalid_next', 'Invalid native continuation')
@@ -847,7 +868,7 @@ class Remote:
         if parent_id is not None:
             native_id(parent_id)
             _need(before.node.id != scope.root_page_id and parent_id != before.node.id, 'scope_outside_connection', 'Registered root cannot move')
-            source, destination = self._move_chain(scope, before.node.id), self._move_chain(scope, parent_id)
+            source, destination = self.move_ancestry(scope, before.node.id), self.move_ancestry(scope, parent_id)
             _need(before.node.id not in {n.id for n in destination} and {n.id for n in source[1:]} <= {n.id for n in destination},
                   'scope_outside_connection', 'Move must preserve every inherited ancestor')
             move = source, destination
@@ -856,7 +877,7 @@ class Remote:
         # Knowledge edits use the original published body, not an unpublished draft.
         # The separate ensure_no_draft method preserves draft proof for callers that require it.
         if move:
-            _need(self._move_chain(scope, before.node.id) == move[0] and self._move_chain(scope, parent_id) == move[1], 'scope_metadata_changed', 'Move ancestry changed')
+            _need(self.move_ancestry(scope, before.node.id) == move[0] and self.move_ancestry(scope, parent_id) == move[1], 'scope_metadata_changed', 'Move ancestry changed')
         account = self.current_user()
         payload = {'id': before.node.id, 'title': title, 'status': 'current', 'body': {'representation': 'storage', 'value': body},
                    'version': {'number': before.node.version + 1, 'message': message}}

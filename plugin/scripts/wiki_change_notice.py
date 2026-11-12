@@ -182,7 +182,8 @@ def _consume(directory, session, credential, space, limit):
     # created it using the process umask. Its contents are never read.
     control = directory if os.name == "nt" else None
     lock = file_lock(control / "sync.lock", shared=True) if os.name == "nt" else file_lock_at(directory, "sync.lock", shared=True)
-    with lock:
+    notice = file_lock(control / "notice-access.lock", shared=True) if os.name == "nt" else file_lock_at(directory, "notice-access.lock", shared=True)
+    with lock, notice:
         if _present(directory, "transaction.json") or _present(directory, "notice-access-denied"):
             return ""
         state = _read(directory, "state.json")

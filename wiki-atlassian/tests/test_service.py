@@ -41,7 +41,7 @@ class Native:
     def require_space(self, settings):
         return None
 
-    def ancestry(self, settings, id):
+    def move_ancestry(self, settings, id):
         result = []
         while id:
             node = self.require_scope(settings, id)

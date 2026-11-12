@@ -264,7 +264,8 @@ class MultiSpaceKnowledge:
                     if pending:
                         result.setdefault('details', {}).update(scopeFence='pending', scopeFenceCode='replica_denial_pending', scopeFenceSpaces=pending)
                     return {**result, 'space': key, 'spaceId': slot.settings.space_id}
-                return self._label(result, key, operation in ('get_document', 'create_document', 'update_document'))
+                return self._label(result, key, operation in ('get_document', 'create_document', 'update_document'),
+                                   mutation=operation in ('create_document', 'update_document', 'create_comment', 'update_comment'))
         except Exception as exc:
             pending = {}
             if isinstance(exc, RemoteError) and (exc.code == 'http_401' or exc.details.get('authorizationDenied') is True):
@@ -275,8 +276,17 @@ class MultiSpaceKnowledge:
                 result['details'] = dict(scopeFence='pending', scopeFenceCode='replica_denial_pending', scopeFenceSpaces=pending)
             return result
 
-    def _label(self, value, key, page_response=False):
-        slot = self._running(key)
+    def _label(self, value, key, page_response=False, mutation=False):
+        # Admission precedes the service call. Revocation must not erase a write
+        # that committed (or may have committed) while background sync ran.
+        slot = self.slots[key] if mutation else self._running(key)
+        if mutation and slot.denied:
+            value = {k: v for k, v in value.items() if k in
+                     ('status', 'code', 'message', 'id', 'version', 'reference', 'details',
+                      'operation', 'request', 'requestHash', 'next', 'syncRequired', 'authorizationDenied')}
+            value['authorizationDenied'] = True
+            if value.get('status') in ('created', 'updated', 'unknown'):
+                value.setdefault('next', 'The native write completed or may have completed before access was revoked. Do not repeat it; restore access before reading content.')
         result = {**value, 'space': key, 'spaceId': slot.settings.space_id}
         if page_response and 'id' in value and 'url' not in result:
             result['url'] = f"{self.project.credentials.base_url}/wiki/spaces/{key}/pages/{value['id']}"
