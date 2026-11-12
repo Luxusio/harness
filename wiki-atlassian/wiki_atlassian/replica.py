@@ -378,6 +378,8 @@ class Replica:
             result = dict(status='error', code=error.code, message=str(error))
             if error.details:
                 result['details'] = error.details
+                if error.details.get('authorizationDenied') is True:
+                    result['authorizationDenied'] = True
             return result
         return dict(status='error', code='replica_unavailable', message='Check connection_status; no verified local projection is available')
 
@@ -675,6 +677,8 @@ class Replica:
             causes.append(cause)
             cause = cause.__cause__
         if any(isinstance(cause, RemoteError) and cause.code == 'http_401' for cause in causes):
+            if isinstance(error, RemoteError):
+                error.details = dict(error.details, authorizationDenied=True)
             if self.on_authorization_denied is None:
                 self.deny(timeout=max(0, deadline-time.monotonic()))
                 return
@@ -702,8 +706,14 @@ class Replica:
             try:
                 with self._operation(timeout=max(.001, deadline-time.monotonic())):
                     self._root_access()
-            except RootScopeDenial:
-                self.deny(timeout=max(0, deadline-time.monotonic()))
+            except RootScopeDenial as denial:
+                if denial.code == 'http_401':
+                    # Keep the provider's original child error while exposing
+                    # the newly observed shared authentication loss to callers.
+                    error.details = dict(error.details, authorizationDenied=True)
+                    self.handle_denial(denial, timeout=max(0, deadline-time.monotonic()))
+                else:
+                    self.deny(timeout=max(0, deadline-time.monotonic()))
             except RemoteError:
                 pass
 

@@ -447,6 +447,42 @@ class ReplicaTests(unittest.TestCase):
         self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
         self.assertEqual('replica_denial_pending', self.replica.status()['code'])
 
+    def test_child_denial_root_recheck_routes_new_401_to_global_hook(self):
+        self.replica.synchronize()
+        calls = []
+        original_root = self.replica._root_access
+        def expired_root():
+            raise RootScopeDenial(self.settings, RemoteError('http_401', 'Synthetic expired credential'))
+        def global_fence():
+            calls.append(True)
+            self.replica.deny(timeout=0)
+            return {}
+        self.replica._root_access = expired_root
+        self.replica.on_authorization_denied = global_fence
+        error = RemoteError('http_403', 'Synthetic child restriction')
+        self.replica.handle_denial(error)
+        self.assertEqual([True], calls)
+        self.assertEqual('http_403', error.code)
+        self.assertTrue(error.details['authorizationDenied'])
+        self.assertTrue(self.replica._error(error)['authorizationDenied'])
+        self.assertTrue((self.replica.control / 'notice-access-denied').exists())
+        self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
+        self.replica._root_access = original_root
+
+    def test_child_denial_root_recheck_retains_401_provenance_when_fence_pending(self):
+        self.replica.synchronize()
+        def expired_root():
+            raise RootScopeDenial(self.settings, RemoteError('http_401', 'Synthetic expired credential'))
+        self.replica._root_access = expired_root
+        self.replica.on_authorization_denied = lambda: {'DOC': 'replica_denial_pending'}
+        error = RemoteError('http_404', 'Synthetic child absence')
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.handle_denial(error, timeout=.01)
+        self.assertEqual('replica_denial_pending', caught.exception.code)
+        self.assertEqual('http_404', error.code)
+        self.assertTrue(error.details['authorizationDenied'])
+        self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
+
     def test_late_old_credential_comment_observation_cannot_commit_after_rotation(self):
         self.replica.synchronize()
         rotated = Replica(self.setting('rotated'), self.remote)
