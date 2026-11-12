@@ -122,6 +122,14 @@ edit generated Markdown/storage/manifests. Remote documents
 remain authoritative. Cached reads describe snapshot freshness; offline access
 does not prove that remote access permissions are still current.
 
+Confirmed revocation immediately blocks cached reads in the observing process.
+Publishing the shared revocation marker has a three-second aggregate lease
+budget. If publication remains blocked, error details report
+`scopeFence: pending` and `scopeFenceCode: replica_denial_pending`, preserving
+the original provider error or unknown-write outcome. Existing synchronization
+retries; other processes observe revocation after the shared marker is
+published. Immediate cross-process revocation is not claimed while pending.
+
 The earlier single-space settings (`space`, `spaceId` and top-level ROOT or
 destination fields) are rejected. Move the selected key and optional page IDs
 into `spaces` and remove the old fields. The new key-based partitions can need
@@ -253,6 +261,8 @@ The installer prepares a versioned standalone payload and registers its local
 marketplace through the selected host CLI. It preserves existing plugin trees;
 the installed MCP configuration resolves the Python interpreter and private
 launcher path explicitly, without relying on host plugin-variable expansion.
+It refreshes Claude's cache and verifies the host's enabled selection and
+actual cached payload bytes before reporting success.
 The registered marketplace path stays stable across upgrades. A private,
 installer-locked selection points to an immutable payload; existing processes
 retain their original runtime path while the next installation selects a new

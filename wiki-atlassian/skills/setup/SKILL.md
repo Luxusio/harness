@@ -39,7 +39,7 @@ native account permissions or issue a token limited to those documents.
 ## Install and authenticate
 
 Follow the selected product's actual installation guide and reuse its source
-or marketplace. For this plugin, use the build/install commands in the plugin
+or marketplace. For this plugin, use the install commands in the plugin
 guide and the detected host's supported registration commands. Resolve the
 installed payload from the host's current registration. An installed payload
 contains this skill; a source checkout can load this file before installation.
