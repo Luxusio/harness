@@ -165,7 +165,7 @@ class MultiSpaceKnowledge:
         entries = []
         for key, slot in self.slots.items():
             current = slot.replica.status() if slot.replica else {'status': 'pending', 'ready': False}
-            row = {**slot.selection, **current, 'key': key}
+            row = {**slot.selection, **current, 'key': key, 'wholeSpace': 'rootPageId' not in slot.selection}
             if slot.settings:
                 row['spaceId'] = slot.settings.space_id
             if slot.failure:

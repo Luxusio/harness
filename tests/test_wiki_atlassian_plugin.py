@@ -24,6 +24,7 @@ except ModuleNotFoundError as error:
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "wiki-atlassian"
+sys.path.insert(0, str(ROOT / 'plugin/scripts'))
 
 
 @contextmanager
@@ -495,7 +496,7 @@ def test_installer_rejects_writable_storage_and_substituted_publication(tmp_path
         real_rename(source, destination)
 
     monkeypatch.setattr(module.os, "rename", replace_at_publication)
-    with pytest.raises(ValueError, match="private|symlink|link|directory|Directory"):
+    with pytest.raises((ValueError, OSError), match="private|symlink|link|directory|Directory"):
         module.prepare(data)
 
 

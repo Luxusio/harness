@@ -99,11 +99,14 @@ class Project:
 
     @classmethod
     def from_project(cls, startup, environment=None):
-        from document_destination import _read_config, _origin
+        from document_destination import _read_config, _origin, _validate_config
         environment = dict(os.environ if environment is None else environment)
         try:
             value = _read_config(str(startup))
-            if value is None or value.get('enabled') is False:
+            if value is None:
+                return None
+            _validate_config(value)
+            if value.get('enabled') is False:
                 return None
             values = [environment.get(name) for name in ('ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN')]
             if any(not isinstance(v, str) or not v.strip() for v in values):
