@@ -181,6 +181,10 @@ def knowledge_relations(body, origin, space):
             else:
                 href = link.attrs['href']
                 href = origin + href if href.startswith('/wiki/') else href
+                if (href.count('#') > 1 or re.search(r'%(?![0-9a-fA-F]{2})', href)
+                    or any(c.isspace() or ord(c) < 32 or 127 <= ord(c) <= 159 for c in href)
+                    or any(c in href for c in '[]<>"{}|^`')):
+                    raise ValueError('Invalid native relation URI')
                 uri = urlsplit(href)
                 item['to'] = native_page_url_id(href.partition('#')[0], origin, space=space)
                 fragment = uri.fragment
@@ -217,7 +221,9 @@ class Replica:
         raw = safe_read(path, limit, private=True)
         if isinstance(raw, str):
             raw = raw.encode('utf-8')
-        value = json.loads(raw.decode('utf-8'))
+        def invalid_constant(value):
+            raise ValueError('Invalid replica JSON constant')
+        value = json.loads(raw.decode('utf-8'), parse_constant=invalid_constant)
         if not isinstance(value, dict):
             raise ValueError('Invalid replica metadata')
         return value
@@ -259,7 +265,7 @@ class Replica:
                 if node.parent_id is not None:
                     native_id(node.parent_id)
                 if (node.id != id or node.type != 'page' or node.status != 'current'
-                    or type(node.version) is not int or node.version <= 0
+                    or type(node.version) is not int or not 1 <= node.version <= 2147483647
                     or not isinstance(node.title, str) or len(node.title) > 1000
                     or not isinstance(row['bodyHash'], str) or not changes.HASH.fullmatch(row['bodyHash'])):
                     raise ValueError('Invalid replica node')
@@ -599,7 +605,7 @@ class Replica:
                and cause.settings.identity() == self.settings.identity()
                and cause.settings.credential_fingerprint == self.settings.credential_fingerprint for cause in causes):
             self.deny()
-        elif is_scope_denial(error) or getattr(error, 'code', '') == 'scope_metadata_changed':
+        elif isinstance(error, RemoteError) and (is_scope_denial(error) or error.code == 'scope_metadata_changed'):
             try:
                 with self._operation(timeout=3):
                     self._root_access()
@@ -769,7 +775,7 @@ class Replica:
         native_id(node.id)
         if (node.space_id != self.settings.space_id or node.type not in ('page', 'folder')
             or not isinstance(node.title, str) or len(node.title) > 1000
-            or type(node.version) is not int or node.version < 0):
+            or type(node.version) is not int or not 0 <= node.version <= 2147483647):
             raise RemoteError('invalid_inventory', 'Cross-space or unsupported native inventory entry')
 
     def _paths(self, nodes, selected, chain, retained):

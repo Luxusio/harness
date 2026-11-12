@@ -44,10 +44,6 @@ class SearchTests(unittest.TestCase):
         self.assertIsNone(projected_headings('## Work\n```\ntext', 0, 16))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class ReplicaSearchTests(unittest.TestCase):
     def setUp(self):
         import test_replica as fixtures
@@ -160,3 +156,7 @@ class ReplicaSearchTests(unittest.TestCase):
         self.assertEqual('invalid_query', self.replica.get_document(dict(document='211', offset=1))['code'])
         self.assertEqual('invalid_query', self.replica.search(dict(query='Shared', limit=26))['code'])
         self.assertEqual('invalid_query', self.replica.search(dict(query=' '*3))['code'])
+
+
+if __name__ == '__main__':
+    unittest.main()
