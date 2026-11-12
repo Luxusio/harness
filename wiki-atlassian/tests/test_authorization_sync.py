@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from test_remote import NativeState, page_raw
 from wiki_atlassian.config import Credentials, Project
 from wiki_atlassian.multispace import MultiSpaceKnowledge
@@ -35,9 +37,25 @@ def connected(tmp_path):
     return native, confirmed, project, remote, manager
 
 
-def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path):
+@pytest.mark.parametrize('child_recheck', [False, True])
+def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, child_recheck):
     native, confirmed, project, remote, manager = connected(tmp_path)
     selected, sibling = manager.slots['DOC'].replica, manager.slots['OTHER'].replica
+    operation, data = 'update_document', dict(space='DOC', document='10', version=1, append='<p>Saved once</p>')
+    if child_recheck:
+        original = native.hook
+        denied_child = False
+        def hook(method, path, query, payload):
+            nonlocal denied_child
+            if method == 'GET' and path == '/wiki/api/v2/pages/11' and query.get('body-format') == ['storage']:
+                denied_child = True
+                return 403, {}, {}
+            if denied_child and method == 'GET' and path == '/wiki/api/v2/pages/10':
+                confirmed.set()
+                return 401, {}, {}
+            return original(method, path, query, payload)
+        native.hook = hook
+        operation, data = 'get_document', dict(space='DOC', document='11', format='outline')
     scripts = Path(__file__).resolve().parents[2] / 'plugin/scripts'
     code = ('import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
             'from wiki_platform import file_lock; '
@@ -47,8 +65,7 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path):
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding='utf-8')
     result = []
     started = time.monotonic()
-    worker = threading.Thread(target=lambda: result.append(manager.execute('update_document',
-        dict(space='DOC', document='10', version=1, append='<p>Saved once</p>'))), daemon=True)
+    worker = threading.Thread(target=lambda: result.append(manager.execute(operation, data)), daemon=True)
     try:
         assert holder.stdout.readline().strip() == 'locked'
         started = time.monotonic()
@@ -64,9 +81,11 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path):
         assert independent.get_document(dict(document='21'))['code'] == 'root_scope_denied'
         worker.join(4)
         assert not worker.is_alive() and time.monotonic() - started < 4.5
-        assert result[0]['status'] == 'unknown' and result[0]['code'] == 'unknown_update'
+        assert result[0]['status'] == ('error' if child_recheck else 'unknown')
+        assert result[0]['code'] == ('http_403' if child_recheck else 'unknown_update')
+        assert result[0]['authorizationDenied']
         assert result[0]['details']['scopeFence'] == 'pending'
-        assert sum(row[0] == 'PUT' for row in native.calls) == 1
+        assert sum(row[0] == 'PUT' for row in native.calls) == (0 if child_recheck else 1)
     finally:
         holder.stdin.write('\n'); holder.stdin.flush(); holder.wait(timeout=3)
         if worker.ident is not None:

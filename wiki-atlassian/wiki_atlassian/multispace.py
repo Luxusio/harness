@@ -130,7 +130,7 @@ class MultiSpaceKnowledge:
                 slot.failure = exc.code if isinstance(exc, RemoteError) else 'sync_failed'
                 if slot.replica is not None:
                     slot.replica.sync_failed(slot.failure)
-                if slot.failure == 'http_401':
+                if slot.failure == 'http_401' or isinstance(exc, RemoteError) and exc.details.get('authorizationDenied') is True:
                     self._deny_all(wake=False)
                 raise
 
@@ -267,7 +267,7 @@ class MultiSpaceKnowledge:
                 return self._label(result, key, operation in ('get_document', 'create_document', 'update_document'))
         except Exception as exc:
             pending = {}
-            if isinstance(exc, RemoteError) and exc.code == 'http_401':
+            if isinstance(exc, RemoteError) and (exc.code == 'http_401' or exc.details.get('authorizationDenied') is True):
                 pending = self._deny_all()
             result = dict(status='error', code=exc.code if isinstance(exc, RemoteError) else 'invalid_request',
                           message=str(exc) if isinstance(exc, RemoteError) else 'The request could not be admitted in the selected spaces')

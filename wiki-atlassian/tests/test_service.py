@@ -266,3 +266,17 @@ def test_wrapped_postcommit_root_denial_still_fences_without_replay(service, cod
     assert result['status'] == 'unknown' and result['code'] == 'unknown_update'
     assert replica.failures == [code] and len(remote.writes) == 1
     assert result.get('authorizationDenied', False) is (code == 'http_401')
+
+
+def test_root_recheck_unauthorized_preserves_original_child_denial(service):
+    api, remote, replica = service
+    def version(*args, **kwargs):
+        raise RemoteError('http_403')
+    def confirmed(error):
+        error.details['authorizationDenied'] = True
+        raise RemoteError('replica_denial_pending')
+    remote.version, replica.handle_denial = version, confirmed
+    result = api.execute('update_document', dict(document='2', version=1, append='<p>Mine</p>'))
+    assert result['status'] == 'unknown' and result['code'] == 'http_403'
+    assert result['authorizationDenied'] and result['details']['scopeFence'] == 'pending'
+    assert len(remote.writes) == 1

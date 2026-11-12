@@ -214,6 +214,8 @@ class WikiService:
                 except Exception:
                     fence_pending = True
                     self._wake_repair()
+            authorization_denied = authorization_denied or any(
+                isinstance(cause, RemoteError) and cause.details.get('authorizationDenied') is True for cause in causes)
             unknown = effect['saved'] or (effect['started'] and not isinstance(exc, RemoteError)) or getattr(exc, 'outcome_unknown', False)
             result = dict(status='unknown' if unknown else 'error', code=getattr(exc, 'code', 'unknown_outcome' if unknown else 'invalid_request'),
                           message=str(exc) if isinstance(exc, RemoteError) else 'Wiki operation could not be completed')
