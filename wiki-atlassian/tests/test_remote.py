@@ -397,7 +397,8 @@ def test_recognized_provider_code_cannot_reflect_a_secret(native):
     assert failure.value.details == {}
 
 
-@pytest.mark.parametrize('raw', [b'{"accountId":"one","accountId":"two"}', b'{"a":NaN}', b'{"a":"\\ud800"}', b'\xff', b'[]', b'{}' + b' ' * (8 * 1024 * 1024)])
+@pytest.mark.parametrize('raw', [b'{"accountId":"one","accountId":"two"}', b'{"a":NaN}', b'{"a":"\\ud800"}', b'\xff', b'[]', b'{}' + b' ' * (8 * 1024 * 1024)],
+                         ids=['duplicate-key', 'nonfinite-number', 'isolated-surrogate', 'invalid-utf8', 'nonobject', 'overflow'])
 def test_bounded_json_response_rejects_duplicates_nonnative_or_overflow(native, raw):
     state, _, settings = native
     state.hook = lambda m, p, q, d: (200, {}, raw)
