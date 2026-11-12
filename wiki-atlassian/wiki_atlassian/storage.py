@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 from html import escape
 from html.entities import html5
 import re
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, urlsplit
 
-from .models import RemoteError
+from .models import RemoteError, native_id
+from .references import native_page_url_id
 
 _NAME = re.compile(r'[A-Za-z_:][A-Za-z0-9_.:-]*')
 _ENTITY = re.compile(r'&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);')
@@ -378,29 +379,16 @@ def retarget_links(body, links, origin, space=None):
                 raise ValueError()
             selected_space = space
             if re.fullmatch(r'[1-9][0-9]*', target):
-                page_id = target
+                page_id = native_id(target)
             else:
+                page_id = native_page_url_id(target, origin, space=space, allow_api=True)
                 parsed = urlsplit(target)
-                if not target.startswith('https://') or parsed.hostname != base.hostname or parsed.port != base.port or parsed.username or parsed.password or parsed.query:
-                    raise ValueError()
-                match = re.fullmatch(r'/wiki/spaces/([A-Za-z0-9_-]+)/pages/([1-9][0-9]*)(?:/([^/]*))?', parsed.path)
-                api = re.fullmatch(r'/wiki/api/v2/pages/([1-9][0-9]*)(?:/([^/]*))?', parsed.path)
-                if match:
-                    if space is not None and match[1] != space:
-                        raise ValueError()
-                    selected_space, page_id = match[1], match[2]
-                    slug = match[3] or ''
-                elif api:
-                    page_id, slug = api[1], api[2] or ''
-                else:
-                    raise ValueError()
-                decoded = unquote(slug)
-                if decoded in ('.', '..') or any(c in '/\\' or ord(c) < 32 or 127 <= ord(c) <= 159 for c in decoded) or re.search(r'%2e|%2f|%5c', decoded, re.IGNORECASE):
-                    raise ValueError()
+                if selected_space is None and parsed.path.startswith('/wiki/spaces/'):
+                    selected_space = parsed.path.split('/')[3]
             href = origin.rstrip('/') + (f'/wiki/spaces/{quote(selected_space, safe="%")}/pages/{page_id}' if selected_space else f'/wiki/pages/viewpage.action?pageId={page_id}') + ('#' + fragment if separator else '')
             replacement = escape(href, quote=True).replace('&#x27;', '&apos;')
             patches.extend((start, end, replacement) for start, end in found[old])
-        except (ValueError, TypeError):
+        except (RemoteError, ValueError, TypeError):
             _error('invalid_link_target', 'Use an exact native document ID or same-origin page URL with an optional fragment')
     return _patches(body, patches, 'link_context_required')
 
