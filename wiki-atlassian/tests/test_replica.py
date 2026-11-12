@@ -115,7 +115,19 @@ class Native:
     def inventory_page(self, settings, node, fresh_storage=False):
         return self.page(node.id, expected_node=node, scope=settings, fresh_storage=fresh_storage)
 
-    def verify_inventory(self, settings, nodes):
+    def whole_space_inventory(self, settings, storage=False, on_inventory=None):
+        nodes = self.inventory(settings)
+        if on_inventory is not None:
+            on_inventory(tuple(n for n in nodes if n.type == 'page'), False)
+            on_inventory(tuple(nodes), True)
+        return nodes, {n.id: self.page(n.id, expected_node=n, scope=settings) for n in nodes
+                       if storage and n.type == 'page'}
+
+    def verify_inventory(self, settings, nodes, on_inventory=None):
+        if settings.whole_space:
+            current = self.whole_space_inventory(settings, on_inventory=on_inventory)[0]
+            if {n.id: n for n in current} != {n.id: n for n in nodes}:
+                raise RemoteError('scope_metadata_changed', 'Synthetic inventory changed')
         for node in nodes:
             if self.scope_node(node.id, node.type) != node:
                 raise RemoteError('scope_metadata_changed', 'Synthetic inventory changed')
@@ -903,6 +915,43 @@ class ReplicaTests(unittest.TestCase):
         self.remote.comment_reads.clear()
         self.replica.poll_comments(['211', '212', '213'], 0)
         self.assertEqual('212', self.remote.comment_reads[0])
+
+    def test_whole_space_documents_published_does_not_claim_healthy_comments(self):
+        self.replica.settings = self.setting(root=None, watch='211')
+        self.replica.synchronize()
+        before = self.metadata('manifest.json')['wikiCommentWatch']['211']['fingerprint']
+        self.write_metadata('manifest.json', {**self.metadata('manifest.json'), 'wikiCommentWatch': {
+            '211': {**self.metadata('manifest.json')['wikiCommentWatch']['211'], 'attemptedAt': 0}}})
+        self.remote.comment_error['211'] = RemoteError('wiki_request_limit', 'Bounded comment budget')
+        result = self.replica.synchronize()
+        status = self.replica.status()
+        self.assertTrue(result['documentsPublished'])
+        self.assertEqual('comments_unavailable', result['observation'])
+        self.assertEqual('partial', status['status'])
+        self.assertTrue(status['ready'])
+        self.assertEqual('documents_published', status['syncProgress']['stage'])
+        self.assertEqual('comments_unavailable', status['syncProgress']['terminalReason'])
+        self.assertEqual(before, self.metadata('manifest.json')['wikiCommentWatch']['211']['fingerprint'])
+
+    def test_comment_budget_after_successful_peer_retains_fingerprint_and_reports_partial(self):
+        self.replica.settings = self.setting(root=None, watch='210,211')
+        self.replica.synchronize()
+        before = self.metadata('manifest.json')['wikiCommentWatch']['211']['fingerprint']
+        manifest = self.metadata('manifest.json')
+        for row in manifest['wikiCommentWatch'].values():
+            row['attemptedAt'] = 0
+        self.write_metadata('manifest.json', manifest)
+        self.remote.comment_reads.clear()
+        self.remote.comment_error['211'] = RemoteError('wiki_request_limit', 'Shared comment budget exhausted')
+        result = self.replica.synchronize()
+        self.assertEqual(['210', '211'], self.remote.comment_reads)
+        self.assertEqual('comments_unavailable', result['observation'])
+        self.assertEqual('partial', self.replica.status()['status'])
+        watch = self.metadata('manifest.json')['wikiCommentWatch']
+        self.assertEqual('ready', watch['210']['status'])
+        self.assertEqual('unavailable', watch['211']['status'])
+        self.assertEqual(0, watch['211']['attemptedAt'])
+        self.assertEqual(before, watch['211']['fingerprint'])
 
     def test_actual_remote_watch_page_timeout_keeps_fingerprint_and_advances_healthy_peer(self):
         from unittest.mock import patch

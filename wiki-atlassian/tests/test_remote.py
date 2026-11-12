@@ -64,7 +64,15 @@ class NativeState:
         if method == 'GET' and path == '/wiki/api/v2/spaces':
             return 200, {}, {'results': [{'id': self.space_id, 'key': 'DOC', 'name': 'Documentation', 'status': 'current'}]}
         if method == 'GET' and path == '/wiki/api/v2/spaces/9/pages':
-            return 200, {}, {'results': list(self.pages.values())}
+            limit, start = int(query.get('limit', ['250'])[0]), int(query.get('cursor', ['0'])[0])
+            rows = copy.deepcopy(list(self.pages.values())[start:start+limit])
+            if 'body-format' not in query:
+                for row in rows:
+                    row.pop('body', None)
+            result = {'results': rows}
+            if start+limit < len(self.pages):
+                result['_links'] = {'next': '?cursor=' + str(start+limit)}
+            return 200, {}, result
         if method == 'GET' and path == '/wiki/rest/api/content/search':
             return 200, {}, {'results': []}
         if path.startswith('/wiki/api/v2/pages/'):
@@ -77,7 +85,12 @@ class NativeState:
                 return 200, {}, {'results': [dict(id=x['id'], type=x['type']) for x in self.pages.values() if x.get('parentId') == identifier]}
             if method == 'GET' and len(tail) == 2 and tail[1] in ('footer-comments', 'inline-comments'):
                 kind = tail[1].removesuffix('-comments')
-                return 200, {}, {'results': [v for (k, _), v in self.comments.items() if k == kind and v.get('pageId') == identifier and v.get('parentCommentId') is None]}
+                rows = [v for (k, _), v in self.comments.items() if k == kind and v.get('pageId') == identifier and v.get('parentCommentId') is None]
+                limit, start = int(query.get('limit', ['250'])[0]), int(query.get('cursor', ['0'])[0])
+                result = {'results': rows[start:start+limit]}
+                if start+limit < len(rows):
+                    result['_links'] = {'next': '?cursor='+str(start+limit)}
+                return 200, {}, result
             if method == 'GET' and len(tail) >= 2 and tail[1] == 'versions':
                 if len(tail) == 2:
                     return 200, {}, {'results': [dict(number=raw['version']['number'], authorId=self.version_author, createdAt=self.version_time, message=raw['version'].get('message', ''))]}
@@ -460,7 +473,7 @@ def test_real_tls_slow_drip_body_cannot_extend_operation_deadline(native):
         with remote.operation(timeout=.15):
             remote.current_user()
     assert time.monotonic() - started < .8
-    assert failure.value.code == 'transport_failed'
+    assert failure.value.code == 'wiki_timeout'
 
 
 @pytest.mark.parametrize('framing', ['status', 'headers', 'trailers'])
@@ -471,7 +484,7 @@ def test_absolute_deadline_covers_http_framing_reads(native, framing):
     with pytest.raises(RemoteError) as failure:
         with remote.operation(timeout=.15):
             remote._request('GET', settings.site + '/wiki/rest/api/user/current')
-    assert failure.value.code == 'transport_failed'
+    assert failure.value.code == 'wiki_timeout'
     assert time.monotonic() - started < .45
 
 
@@ -845,6 +858,374 @@ def test_inline_readback_wrong_marker_is_unknown_and_never_replayed(native):
         remote.create_comment('11', '<p>Inline</p>', scope=settings, kind='inline', selection=('Original', 0, 1))
     assert failure.value.outcome_unknown and failure.value.details['reference'] == 'inline:60'
     assert sum(method == 'POST' for method, _, _, _ in state.calls) == 1
+
+
+def test_real_tls_427_page_whole_space_cold_and_repeated_warm_bulk_sweeps(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    state.pages = {str(1000+i): page_raw(str(1000+i), '99999' if i % 2 else None,
+                                      body='<h2>Evidence</h2><p>' + ('representative text ' * 120) + str(i) + '</p>')
+                   for i in range(427)}
+    state.hook = lambda method, path, query, data: time.sleep(.01)
+    replica = Replica(settings, remote)
+    try:
+        for sweep in range(3):
+            state.pages['1000']['body']['storage']['value'] = '<p>Same version fresh ' + str(sweep) + '</p>'
+            state.pages['1426']['title'] = 'Renamed ' + str(sweep)
+            state.pages['1426']['version']['number'] = sweep+1
+            start, calls = time.monotonic(), len(state.calls)
+            result = replica.synchronize()
+            elapsed = time.monotonic()-start
+            observed = state.calls[calls:]
+            manifest = json.loads((replica.control / 'manifest.json').read_text())
+            assert result['pages'] == 427 and manifest['inventoryComplete']
+            assert set(manifest['pages']) == set(state.pages)
+            assert 'Same version fresh ' + str(sweep) in replica.get_document(dict(document='1000'))['content']
+            assert replica.status()['status'] == 'ready' and elapsed < 30
+            assert len(observed) < 45 and len(observed) == replica.status()['syncProgress']['requests']
+            assert all('/pages/' not in path for _, path, _, _ in observed)
+            body_lists = [query for _, path, query, _ in observed if path.endswith('/pages') and 'body-format' in query]
+            assert len(body_lists) == 27 and all(query['limit'] == ['16'] for query in body_lists)
+    finally:
+        replica.close()
+
+
+@pytest.mark.parametrize('drift', ['early', 'late', 'added', 'removed', 'folder', 'archived', 'foreign', 'cycle', 'invalid_parent'])
+def test_whole_space_final_bulk_graph_drift_fences_prior_snapshot(native, drift):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    state.pages.update({str(12+i): page_raw(str(12+i), '10') for i in range(20)})
+    folder = dict(id='90', title='Folder', type='folder', spaceId='9', status='current', parentId='10')
+    changed = False
+    def hook(method, path, query, payload):
+        nonlocal changed
+        if path.endswith('/pages') and 'body-format' not in query and armed[0] and not changed:
+            changed = True
+            if drift == 'early':
+                state.pages['10']['title'] = 'Changed'
+            elif drift == 'late':
+                state.pages['31']['parentId'] = '999'
+            elif drift == 'added':
+                state.pages['40'] = page_raw('40')
+            elif drift == 'removed':
+                del state.pages['11']
+            elif drift == 'archived':
+                state.pages['11']['status'] = 'archived'
+            elif drift == 'foreign':
+                state.pages['11']['spaceId'] = '19'
+            elif drift == 'cycle':
+                state.pages['10']['parentId'], state.pages['11']['parentId'] = '11', '10'
+            elif drift == 'invalid_parent':
+                state.pages['11']['parentId'] = 'unresolvable'
+            else:
+                folder['parentId'] = '999'
+        if path == '/wiki/rest/api/content/search':
+            return 200, {}, {'results': [folder]}
+    armed = [False]
+    state.hook = hook
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        prior = (replica.control / 'manifest.json').read_bytes()
+        armed[0] = True
+        with pytest.raises(RemoteError) as failure:
+            replica.synchronize()
+        assert failure.value.code in ('scope_metadata_changed', 'scope_not_current', 'malformed_list', 'scope_limit', 'invalid_request')
+        assert (replica.control / 'manifest.json').read_bytes() == prior
+        assert (replica.control / 'notice-access-denied').exists()
+        assert not Replica(settings, remote).status()['ready']
+        if drift == 'archived':
+            del state.pages['11']
+        elif drift == 'foreign':
+            del state.pages['11']
+        elif drift == 'cycle':
+            state.pages['10']['parentId'] = None
+        elif drift == 'invalid_parent':
+            state.pages['11']['parentId'] = '10'
+        replica.synchronize()
+        assert replica.status()['ready']
+        assert set(json.loads((replica.control / 'manifest.json').read_text())['pages']) == set(state.pages)
+    finally:
+        replica.close()
+
+
+@pytest.mark.parametrize('fault', ['stage', 'storage', 'folders', 'final_folders', 'final_space'])
+def test_whole_space_omission_and_failed_stage_fence_local_and_other_process(native, monkeypatch, fault):
+    import subprocess
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        original = replica._stage_page
+        if not fault.startswith('final_'):
+            del state.pages['11']
+        def failed_stage(*args):
+            raise OSError('Synthetic staging failure')
+        if fault == 'stage':
+            monkeypatch.setattr(replica, '_stage_page', failed_stage)
+        elif fault == 'storage':
+            state.pages['10']['body']['storage']['value'] = '<p>'+'x'*(4*1024*1024)+'</p>'
+        elif fault == 'folders':
+            state.hook = lambda method, path, query, data: (503, {}, {}) if path == '/wiki/rest/api/content/search' else None
+        else:
+            observed = False
+            def final_failure(method, path, query, data):
+                nonlocal observed
+                if path == '/wiki/api/v2/spaces/9/pages' and 'body-format' not in query:
+                    del state.pages['11']
+                    observed = True
+                if observed and path == ('/wiki/rest/api/content/search' if fault == 'final_folders' else '/wiki/api/v2/spaces'):
+                    return 503, {}, {}
+            state.hook = final_failure
+        with pytest.raises((OSError, RemoteError)):
+            replica.synchronize()
+        assert not replica.status()['ready'] and (replica.control / 'notice-access-denied').exists()
+        code = ('import sys;sys.path[:0]=[sys.argv[1],sys.argv[2]];'
+                'from wiki_atlassian.config import SpaceSettings;from wiki_atlassian.models import Credentials;'
+                'from wiki_atlassian.replica import Replica;from pathlib import Path;'
+                's=SpaceSettings(dict(space="DOC",spaceId="9"),Credentials(sys.argv[3],"user@example.invalid","synthetic-token"),Path(sys.argv[4]));'
+                'assert Replica(s,None).get_document(dict(document="11"))["code"]=="root_scope_denied"')
+        root = Path(__file__).resolve().parents[2]
+        result = subprocess.run([sys.executable, '-B', '-c', code, str(root/'wiki-atlassian'), str(root/'plugin/scripts'),
+                                 settings.site, str(settings.corpus_root)], capture_output=True, timeout=10)
+        assert result.returncode == 0, result.stderr.decode()
+        monkeypatch.setattr(replica, '_stage_page', original)
+        state.hook = None
+        state.pages['10']['body']['storage']['value'] = '<p>Repaired</p>'
+        replica.synchronize()
+        assert replica.status()['ready'] and replica.get_document(dict(document='11'))['code'] == 'document_not_found'
+        assert not any(path.endswith('/11') for _, path, _, _ in state.calls)
+    finally:
+        replica.close()
+
+
+def test_root_synchronization_never_fetches_other_branch_or_bulk_bodies(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, settings = native
+    state.pages['99'] = page_raw('99')
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        assert not any(path.startswith('/wiki/api/v2/spaces/') or path.endswith('/99') for _, path, _, _ in state.calls)
+    finally:
+        replica.close()
+
+
+@pytest.mark.parametrize('failure_point', ['late_denial', 'journal'])
+def test_whole_space_drift_cannot_clear_late_denial_or_interrupted_publication(native, monkeypatch, failure_point):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        state.pages['10']['title'] = 'Observed new title'
+        original_stage, original_recover = replica._stage_page, replica._recover
+        if failure_point == 'late_denial':
+            sibling = Replica(settings, remote)
+            def stage(*args):
+                sibling.deny()
+                return original_stage(*args)
+            monkeypatch.setattr(replica, '_stage_page', stage)
+            replica.synchronize()
+        else:
+            def recover(*args, **kwargs):
+                if (replica.control/'transaction.json').exists():
+                    raise OSError('Synthetic interruption after journal publication')
+                return original_recover(*args, **kwargs)
+            monkeypatch.setattr(replica, '_recover', recover)
+            with pytest.raises(OSError):
+                replica.synchronize()
+            assert (replica.control/'transaction.json').exists()
+        assert (replica.control/'notice-access-denied').exists()
+        assert not Replica(settings, remote).status()['ready']
+        monkeypatch.setattr(replica, '_stage_page', original_stage)
+        monkeypatch.setattr(replica, '_recover', original_recover)
+        replica.synchronize()
+        assert Replica(settings, remote).status()['ready']
+        assert 'Observed new title' in json.loads((replica.control/'manifest.json').read_text())['pages']['10']['title']
+    finally:
+        replica.close()
+
+
+def test_tls_oversized_body_batches_shrink_within_same_wire_budget(native):
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    state.pages = {str(10+i): page_raw(str(10+i), body='<p>' + 'x'*(3*1024*1024) + '</p>') for i in range(3)}
+    with remote.operation(timeout=30) as budget:
+        nodes, pages = remote.whole_space_inventory(settings, storage=True)
+    assert len(nodes) == len(pages) == 3 and 25*1024*1024 < budget.bytes < 32*1024*1024
+    sizes = [query['limit'][0] for _, path, query, _ in state.calls if path.endswith('/pages')]
+    assert sizes == ['16', '4', '1', '1', '1']
+
+
+def test_tls_body_batch_retries_cannot_reset_aggregate_byte_budget(native):
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    state.pages = {str(10+i): page_raw(str(10+i), body='<p>' + 'x'*(3*1024*1024) + '</p>') for i in range(6)}
+    with remote.operation(timeout=30) as budget:
+        with pytest.raises(RemoteError) as failure:
+            remote.whole_space_inventory(settings, storage=True)
+    assert failure.value.code == 'wiki_body_limit' and budget.bytes == 32*1024*1024+1
+    assert budget.requests < 12
+
+
+@pytest.mark.parametrize('fault', ['missing', 'representation', 'duplicate', 'foreign', 'cycle', 'filter', 'origin'])
+def test_bulk_storage_rejects_untrusted_rows_and_continuations(native, fault):
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    def hook(method, path, query, data):
+        if path != '/wiki/api/v2/spaces/9/pages':
+            return
+        row = page_raw()
+        value = {'results': [row]}
+        if fault == 'missing':
+            row.pop('body')
+        elif fault == 'representation':
+            row['body']['storage']['representation'] = 'view'
+        elif fault == 'duplicate':
+            value['results'].append(row)
+        elif fault == 'foreign':
+            row['spaceId'] = '99'
+        else:
+            value['_links'] = {'next': {'cycle': '?cursor=same', 'filter': '?status=archived',
+                                       'origin': 'https://foreign.invalid/wiki/api/v2/spaces/9/pages?cursor=x'}[fault]}
+        return 200, {}, value
+    state.hook = hook
+    with pytest.raises(RemoteError):
+        remote.whole_space_inventory(settings, storage=True)
+    assert len(state.calls) <= 3
+
+
+def test_timeout_count_bytes_and_unknown_write_have_distinct_causes(native):
+    state, _, settings = native
+    def timeout(*args):
+        raise TimeoutError('Sensitive endpoint/token must never be exposed')
+    remote = Remote(settings.credentials, timeout)
+    with remote.operation(timeout=30):
+        with pytest.raises(RemoteError) as failure:
+            remote._request('PUT', settings.site+'/wiki/api/v2/pages/11', {})
+    assert failure.value.code == 'network_timeout' and failure.value.outcome_unknown
+    assert 'Sensitive' not in str(failure.value)
+    remote = injected(state, settings)
+    with pytest.raises(RemoteError) as failure:
+        with remote.operation(max_requests=1):
+            remote.current_user()
+            remote.current_user()
+    assert failure.value.code == 'wiki_request_limit'
+    with pytest.raises(RemoteError) as failure:
+        with remote.operation(max_response_bytes=1):
+            remote.current_user()
+    assert failure.value.code == 'wiki_body_limit'
+
+
+def test_truncated_http_error_diagnostics_still_consume_aggregate_bytes(native):
+    state, remote, _ = native
+    reply = {'message': 'x'*499}
+    size = len(state._encode((503, {}, reply))[2])
+    state.truncated_body = True
+    state.hook = lambda *args: (503, {}, reply)
+    with remote.operation(max_response_bytes=2*size, timeout=3) as budget:
+        for _ in range(2):
+            with pytest.raises(RemoteError) as failure:
+                remote.current_user()
+            assert failure.value.code == 'http_503'
+        assert budget.bytes == 2*size
+        with pytest.raises(RemoteError) as failure:
+            remote.current_user()
+        assert failure.value.code == 'wiki_body_limit'
+    assert len(state.calls) == 2
+
+
+def test_cold_comment_lock_contention_reports_published_documents_and_pending_observation(native):
+    from wiki_atlassian.replica import Replica
+    from wiki_platform import ensure_private_directory, file_lock
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9', watchCommentPages='11'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        ensure_private_directory(replica.control)
+        with file_lock(replica.control/'comments.lock'):
+            result = replica.synchronize()
+        status = replica.status()
+        assert result['documentsPublished'] and result['observation'] == 'comments_pending'
+        assert status['ready'] and status['status'] == 'partial' and status['commentWatch'] == 'unavailable'
+        assert status['syncProgress']['stage'] == 'documents_published'
+        assert status['syncProgress']['terminalReason'] == 'comments_pending'
+        assert not any(path.endswith(('-comments',)) for _, path, _, _ in state.calls)
+        other = Replica(settings, remote)
+        other.synchronize()
+        assert replica.status()['status'] == other.status()['status'] == 'ready'
+    finally:
+        replica.close()
+
+
+def test_tls_shared_comment_budget_after_healthy_peers_is_partial_and_fair(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    state.pages = {str(id): page_raw(str(id)) for id in range(10, 14)}
+    settings = SpaceSettings(dict(space='DOC', spaceId='9', watchCommentPages='10,11,12,13'),
+                             rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        manifest = json.loads((replica.control/'manifest.json').read_text())
+        prior = manifest['wikiCommentWatch']['13']['fingerprint']
+        for row in manifest['wikiCommentWatch'].values():
+            row['attemptedAt'] = 0
+        replica._metadata(replica.control/'manifest.json', manifest)
+        state.comments = {('footer', str(page*1000+i)): comment_raw(str(page*1000+i), page=str(page))
+                          for page, count in [(10, 140), (11, 140), (12, 140), (13, 100)] for i in range(count)}
+        calls = len(state.calls)
+        result = replica.synchronize()
+        assert len(state.calls)-calls == 512
+        assert result['documentsPublished'] and result['observation'] == 'comments_unavailable'
+        assert replica.status()['status'] == 'partial' and replica.status()['commentWatch'] == 'unavailable'
+        watch = json.loads((replica.control/'manifest.json').read_text())['wikiCommentWatch']
+        assert all(watch[str(id)]['status'] == 'ready' for id in range(10, 13))
+        assert watch['13']['status'] == 'unavailable' and watch['13']['attemptedAt'] == 0
+        assert watch['13']['fingerprint'] == prior
+        calls = len(state.calls)
+        replica.synchronize()
+        next_comments = [path for _, path, _, _ in state.calls[calls:] if path.endswith('/footer-comments')]
+        assert next_comments == ['/wiki/api/v2/pages/13/footer-comments']
+        assert replica.status()['status'] == 'ready'
+    finally:
+        replica.close()
+
+
+def test_tls_comment_denial_followed_by_unavailable_scope_recheck_records_failed_observation(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9', watchCommentPages='11'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        manifest = json.loads((replica.control/'manifest.json').read_text())
+        before = manifest['wikiCommentWatch']['11']['fingerprint']
+        manifest['wikiCommentWatch']['11']['attemptedAt'] = 0
+        replica._metadata(replica.control/'manifest.json', manifest)
+        denied = False
+        def hook(method, path, query, data):
+            nonlocal denied
+            if path == '/wiki/api/v2/pages/11/footer-comments':
+                denied = True
+                return 403, {}, {}
+            if denied and path == '/wiki/api/v2/spaces':
+                return 503, {}, {}
+        state.hook = hook
+        result = replica.synchronize()
+        assert result['documentsPublished'] and result['observation'] == 'comments_unavailable'
+        assert replica.status()['status'] == 'partial'
+        watch = json.loads((replica.control/'manifest.json').read_text())['wikiCommentWatch']['11']
+        assert watch['status'] == 'unavailable' and watch['fingerprint'] == before
+        assert not (replica.control/'notice-access-denied').exists()
+    finally:
+        replica.close()
 
 
 # Public synthetic localhost fixture material; never used outside these tests.

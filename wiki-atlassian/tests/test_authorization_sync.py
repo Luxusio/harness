@@ -39,6 +39,99 @@ def connected(tmp_path):
     return native, confirmed, project, remote, manager
 
 
+def test_concurrent_whole_spaces_have_isolated_immutable_sanitized_progress(tmp_path):
+    import json
+    state = NativeState()
+    rows = {'9': [page_raw(str(100+i)) for i in range(33)],
+            '19': [page_raw(str(200+i), spaceId='19') for i in range(2)]}
+    waiting = {id: threading.Event() for id in rows}
+    release = threading.Event()
+    def hook(method, path, query, payload):
+        if path == '/wiki/api/v2/spaces':
+            key = query['keys'][0]
+            return 200, {}, dict(results=[dict(id='9' if key == 'DOC' else '19', key=key, status='current')])
+        for id, pages in rows.items():
+            if path == '/wiki/api/v2/spaces/'+id+'/pages':
+                if 'body-format' in query and 'cursor' not in query:
+                    waiting[id].set()
+                    assert release.wait(5)
+                start, limit = int(query.get('cursor', ['0'])[0]), int(query['limit'][0])
+                result = dict(results=pages[start:start+limit])
+                if start+limit < len(pages):
+                    result['_links'] = {'next': '?cursor='+str(start+limit)}
+                return 200, {}, result
+    state.hook = hook
+    credentials = Credentials('https://fixture.invalid', 'fixture@example.invalid', 'secret-sentinel-progress')
+    project = Project(dict(enabled=True, site=credentials.base_url, spaces=[dict(key='DOC'), dict(key='OTHER')]),
+                      credentials, tmp_path/'cache')
+    manager = MultiSpaceKnowledge(project, Remote(credentials, state.transport), start_workers=False)
+    failures = []
+    def run(key):
+        try:
+            manager.synchronize(key)
+        except Exception as error:
+            failures.append(error)
+    threads = [threading.Thread(target=run, args=(key,)) for key in manager.slots]
+    try:
+        for thread in threads:
+            thread.start()
+        assert all(event.wait(5) for event in waiting.values())
+        status = manager.status()
+        snapshots = [row['syncProgress'] for row in status['spaces']]
+        assert all(snapshot['stage'] == 'inventory' and snapshot['requests'] == 3 for snapshot in snapshots)
+        snapshots[0]['requests'] = 999
+        assert manager.status()['spaces'][0]['syncProgress']['requests'] == 3
+        time.sleep(.02)
+        assert manager.status()['spaces'][0]['syncProgress']['elapsedSeconds'] > snapshots[0]['elapsedSeconds']
+        release.set()
+        for thread in threads:
+            thread.join(10)
+        assert not any(thread.is_alive() for thread in threads) and not failures
+        status = manager.status()
+        assert status['complete']
+        progress = {row['key']: row['syncProgress'] for row in status['spaces']}
+        assert progress['DOC']['requests'] == progress['OTHER']['requests']+2
+        assert all(row['stage'] == 'complete' and row['elapsedSeconds'] >= 0 and row['terminalReason'] is None
+                   for row in progress.values())
+        assert 'secret-sentinel' not in json.dumps(status)
+        assert all(set(row) == {'stage', 'elapsedSeconds', 'requests', 'terminalReason'} for row in progress.values())
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(10)
+        manager.close()
+
+
+def test_whole_space_final_bulk_401_fences_all_configured_spaces(tmp_path):
+    state = NativeState()
+    armed = False
+    def hook(method, path, query, payload):
+        if path == '/wiki/api/v2/spaces':
+            key = query['keys'][0]
+            return 200, {}, dict(results=[dict(id='9' if key == 'DOC' else '19', key=key, status='current')])
+        if path in ('/wiki/api/v2/spaces/9/pages', '/wiki/api/v2/spaces/19/pages'):
+            if armed and path.endswith('/9/pages') and 'body-format' not in query:
+                return 401, {}, {}
+            id = '10' if '/9/' in path else '20'
+            return 200, {}, dict(results=[page_raw(id, spaceId='9' if id == '10' else '19')])
+    state.hook = hook
+    credentials = Credentials('https://fixture.invalid', 'fixture@example.invalid', 'synthetic-token')
+    project = Project(dict(enabled=True, site=credentials.base_url, spaces=[dict(key='DOC'), dict(key='OTHER')]),
+                      credentials, tmp_path/'cache')
+    manager = MultiSpaceKnowledge(project, Remote(credentials, state.transport), start_workers=False)
+    try:
+        manager.synchronize('DOC')
+        manager.synchronize('OTHER')
+        armed = True
+        with pytest.raises(RemoteError) as failure:
+            manager.synchronize('DOC')
+        assert failure.value.code == 'http_401' and failure.value.details['authorizationDenied']
+        assert not manager.status()['ready']
+        assert all((slot.replica.control/'notice-access-denied').exists() for slot in manager.slots.values())
+    finally:
+        manager.close()
+
+
 @pytest.mark.parametrize('scenario', ['write', 'child_recheck', 'removed_page'])
 def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario):
     native, confirmed, project, remote, manager = connected(tmp_path)

@@ -71,24 +71,37 @@ def _origin(value):
 
 
 class _Budget:
-    def __init__(self, requests, size, timeout, parent=None):
-        self.maximum, self.size, self.deadline = requests, size, time.monotonic() + timeout
+    def __init__(self, requests, size, timeout, parent=None, progress=None):
+        self.started = time.monotonic()
+        self.maximum, self.size, self.deadline = requests, size, self.started + timeout
         self.requests = self.bytes = 0
         self.parent = parent
+        self.progress = progress
         if parent is not None:
             self.deadline = min(self.deadline, parent.deadline)
 
+    def notify(self):
+        if self.progress is not None:
+            self.progress(round(max(0, time.monotonic()-self.started), 3), self.requests)
+
+    def remaining_bytes(self):
+        remaining = max(0, self.size-self.bytes)
+        return min(remaining, self.parent.remaining_bytes()) if self.parent is not None else remaining
+
     def request(self):
+        _need(time.monotonic() < self.deadline, 'wiki_timeout', 'Operation exceeded its aggregate deadline')
+        _need(self.requests < self.maximum, 'wiki_request_limit', 'Operation exceeded its request/time budget; narrow the target')
+        _need(self.bytes < self.size, 'wiki_body_limit', 'Operation exceeded its response body budget')
         if self.parent is not None:
             self.parent.request()
         self.requests += 1
-        _need(self.requests <= self.maximum and self.bytes < self.size and time.monotonic() < self.deadline,
-              'wiki_request_limit', 'Operation exceeded its request/time budget; narrow the target')
+        self.notify()
 
     def accept(self, size, mutating):
         if self.parent is not None:
             self.parent.accept(size, mutating)
         self.bytes += size
+        self.notify()
         if self.bytes > self.size:
             raise RemoteError('wiki_body_limit', 'Operation exceeded its response body budget', mutating)
 
@@ -106,13 +119,14 @@ class Remote:
         self._resolver_future = None
 
     @contextmanager
-    def operation(self, max_requests=512, max_response_bytes=32 * 1024 * 1024, timeout=45):
+    def operation(self, max_requests=512, max_response_bytes=32 * 1024 * 1024, timeout=45, progress=None):
         _need(type(max_requests) is int and max_requests > 0 and type(max_response_bytes) is int and max_response_bytes > 0 and timeout > 0,
               'invalid_request', 'Positive operation budget required')
         prior = _budget.get()
-        token = _budget.set(_Budget(max_requests, max_response_bytes, timeout, prior))
+        budget = _Budget(max_requests, max_response_bytes, timeout, prior, progress)
+        token = _budget.set(budget)
         try:
-            yield
+            yield budget
         finally:
             _budget.reset(token)
 
@@ -165,8 +179,14 @@ class Remote:
             else:
                 status, response_headers, raw = self._https(method, target, headers, data, timeout)
         except Exception as error:
+            if budget and getattr(error, '_wiki_response_bytes', 0):
+                budget.accept(error._wiki_response_bytes, mutating)
             if isinstance(error, RemoteError):
                 raise
+            if budget and time.monotonic() >= budget.deadline:
+                raise RemoteError('wiki_timeout', 'Operation exceeded its aggregate deadline', mutating) from None
+            if isinstance(error, TimeoutError):
+                raise RemoteError('network_timeout', 'Native network request timed out', mutating) from None
             raise RemoteError('transport_failed', 'Native request failed; inspect uncertain mutations before retrying', mutating) from None
         if type(status) is not int or not isinstance(response_headers, dict) or not isinstance(raw, bytes):
             raise RemoteError('malformed_response', 'Invalid transport response', mutating)
@@ -185,7 +205,7 @@ class Remote:
         if budget:
             budget.accept(len(raw), mutating)
             if time.monotonic() >= budget.deadline:
-                raise RemoteError('wiki_request_limit', 'Operation exceeded its time budget', mutating)
+                raise RemoteError('wiki_timeout', 'Operation exceeded its aggregate deadline', mutating)
         if len(raw) > MAX_BODY:
             raise RemoteError('response_limit', 'Confluence response exceeds the size limit', mutating)
         def unique(pairs):
@@ -254,6 +274,7 @@ class Remote:
         connection = http.client.HTTPSConnection(uri.hostname, uri.port, context=self._ssl_context, timeout=min(15, timeout))
         watchdog = None
         expired = threading.Event()
+        size = 0
         try:
             addresses = self._resolve(uri.hostname, uri.port or 443, deadline)
             last_error = None
@@ -297,11 +318,14 @@ class Remote:
             remaining()
             response = connection.getresponse()
             limit = MAX_BODY if 200 <= response.status < 300 else 65536
+            budget = _budget.get()
+            aggregate_remaining = budget.remaining_bytes() if budget else limit
+            read_limit = min(limit, aggregate_remaining)
             chunks, size = [], 0
             try:
-                while size <= limit:
+                while size <= read_limit:
                     remaining()
-                    chunk = response.read1(min(65536, limit + 1 - size))
+                    chunk = response.read1(min(65536, read_limit + 1 - size))
                     if not chunk:
                         if response.length not in (None, 0):
                             raise http.client.IncompleteRead(b''.join(chunks), response.length)
@@ -310,12 +334,14 @@ class Remote:
                     size += len(chunk)
                     if response.isclosed():
                         break
+                if size > aggregate_remaining and 200 <= response.status < 300:
+                    raise RemoteError('wiki_body_limit', 'Operation exceeded its response body budget', method != 'GET')
             except (OSError, http.client.HTTPException):
                 if 200 <= response.status < 300:
                     raise
                 # A native rejection is already definite even if its optional
                 # diagnostic body is unreadable. Never turn a 409 into unknown.
-                chunks = []
+                pass  # Retain received bytes for accounting; partial JSON is optional.
             response_headers = {}
             for key, value in response.getheaders():
                 key = key.lower()
@@ -323,6 +349,11 @@ class Remote:
             if 200 <= response.status < 300 and (expired.is_set() or time.monotonic() >= deadline):
                 raise TimeoutError('native operation deadline')
             return response.status, response_headers, b''.join(chunks)
+        except Exception as error:
+            # Even an interrupted framing/body read consumed aggregate bytes.
+            # The caller charges these once, just as for a completed response.
+            error._wiki_response_bytes = size
+            raise
         finally:
             try:
                 if watchdog is not None:
@@ -575,8 +606,13 @@ class Remote:
         _need(page.node == expected_node, 'scope_metadata_changed')
         return page
 
-    def verify_inventory(self, settings, nodes):
-        self._verify(settings, nodes)
+    def verify_inventory(self, settings, nodes, on_inventory=None):
+        if settings.whole_space:
+            current = self.whole_space_inventory(settings, on_inventory=on_inventory)[0]
+            _need({n.id: n for n in current} == {n.id: n for n in nodes},
+                  'scope_metadata_changed', 'Authorized native inventory changed before publication')
+        else:
+            self._verify(settings, nodes)
 
     def _continuation(self, value, path, params):
         _need(isinstance(value, str) and 0 < len(value) <= 8192, 'invalid_next', 'Invalid native continuation')
@@ -611,16 +647,16 @@ class Remote:
         _need(len(found) <= 1 and (body is None or not found or body == found[0]), 'invalid_next', 'Native continuations disagree')
         return body or (found[0] if found else None)
 
-    def batch(self, path, parameters, cursor=None):
+    def batch(self, path, parameters, cursor=None, *, _maximum_batches=32):
         params = {k: str(v) for k, v in parameters.items()}
         target, seen = self._endpoint(path, params), []
         if cursor is not None:
             try:
-                _need(isinstance(cursor, str) and len(cursor) <= 16000, 'invalid_next', 'Invalid native continuation')
+                _need(isinstance(cursor, str) and len(cursor) <= max(16000, _maximum_batches*100), 'invalid_next', 'Invalid native continuation')
                 state = json.loads(base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4)))
                 _need(isinstance(state, dict) and set(state) == {'next', 'seen'} and isinstance(state['seen'], list), 'invalid_next', 'Invalid native continuation')
                 seen = state['seen']
-                _need(len(seen) <= 32 and all(isinstance(x, str) and re.fullmatch('[a-f0-9]{64}', x) for x in seen) and len(set(seen)) == len(seen), 'invalid_next', 'Invalid continuation history')
+                _need(len(seen) <= _maximum_batches and all(isinstance(x, str) and re.fullmatch('[a-f0-9]{64}', x) for x in seen) and len(set(seen)) == len(seen), 'invalid_next', 'Invalid continuation history')
                 target = self._continuation(state['next'], path, params)
             except (ValueError, TypeError, UnicodeError):
                 raise RemoteError('invalid_next', 'Invalid native continuation') from None
@@ -631,16 +667,16 @@ class Remote:
         rows = raw.get('results')
         _need(isinstance(rows, list) and all(isinstance(x, dict) for x in rows) and len(rows) <= int(params.get('limit', 250)), 'malformed_list', 'Native list is incomplete or exceeds its bound')
         next_url = self._next(headers, raw, path, params)
-        _need(next_url is None or len(seen) < 32 and hashlib.sha256(next_url.encode()).hexdigest() not in seen, 'pagination_loop', 'Native continuation is cyclic or excessive')
+        _need(next_url is None or len(seen) < _maximum_batches and hashlib.sha256(next_url.encode()).hexdigest() not in seen, 'pagination_loop', 'Native continuation is cyclic or excessive')
         result = {'results': rows, 'hasMore': next_url is not None, 'complete': next_url is None}
         if next_url:
             result['cursor'] = base64.urlsafe_b64encode(compact_json({'next': next_url, 'seen': seen}).encode()).decode().rstrip('=')
         return result
 
-    def _list(self, path, params):
+    def _list(self, path, params, *, _maximum_batches=32):
         result, cursor = [], None
         while True:
-            batch = self.batch(path, params, cursor)
+            batch = self.batch(path, params, cursor, _maximum_batches=_maximum_batches)
             result.extend(batch['results'])
             _need(len(result) <= 20000, 'inventory_limit', 'Native inventory exceeds its node budget')
             cursor = batch.get('cursor')
@@ -672,14 +708,62 @@ class Remote:
         _need(raw.get('type', 'known') == 'known', 'account_unavailable', 'Authenticated Confluence account is unavailable')
         return {'accountId': _text(raw.get('accountId'), 500), 'displayName': _text(raw.get('displayName'), 500)}
 
+    def whole_space_inventory(self, settings, storage=False, on_inventory=None):
+        """Complete authorized native lists; no per-node requests or grants.
+
+        Body batches start small and shrink only after a bounded oversized
+        response. Every attempt shares the enclosing request/byte/deadline
+        budget. ROOT connections must never enter this route.
+        """
+        _need(settings.whole_space, 'scope_outside_connection')
+        with self.operation():
+            self.require_space(settings)
+            path = '/wiki/api/v2/spaces/' + native_id(settings.space_id) + '/pages'
+            sizes = (16, 4, 1) if storage else (250,)
+            for size in sizes:
+                params = {'limit': size, 'status': 'current'}
+                if storage:
+                    params['body-format'] = 'storage'
+                try:
+                    rows = self._list(path, params, _maximum_batches=512)
+                    break
+                except RemoteError as error:
+                    if error.code != 'response_limit' or size == sizes[-1]:
+                        raise
+            nodes = [self._parse_node(raw, 'page') for raw in rows]
+            self._validate_inventory(settings, nodes)
+            if on_inventory is not None:
+                # The complete authorized page set is already known. A later
+                # folder/body failure must not discard evidence of revocation.
+                on_inventory(tuple(nodes), False)
+            folders = self._list('/wiki/rest/api/content/search', {
+                'cql': 'space = "' + settings.space + '" and type = folder',
+                'expand': 'space,version,ancestors', 'limit': 250})
+            nodes.extend(self._parse_node(raw, 'folder') for raw in folders)
+            self._validate_inventory(settings, nodes)
+            if on_inventory is not None:
+                on_inventory(tuple(nodes), True)
+            pages = {raw['id']: self._parse_page(raw, raw['id']) for raw in rows} if storage else {}
+            self.require_space(settings)
+            return nodes, pages
+
+    def _validate_inventory(self, settings, nodes):
+        _need(len(nodes) <= 20000 and len({n.id for n in nodes}) == len(nodes) and all(n.space_id == settings.space_id for n in nodes), 'malformed_list', 'Native inventory identities are invalid')
+        mapping = {n.id: n for n in nodes}
+        for node in nodes:
+            current, seen = node, set()
+            while current is not None:
+                _need(current.id not in seen and len(seen) < 100, 'scope_limit', 'Cyclic or excessive inventory ancestry')
+                seen.add(current.id)
+                if not settings.whole_space and current.id == settings.root_page_id:
+                    break
+                current = mapping.get(current.parent_id)
+            _need(settings.whole_space or settings.root_page_id in seen, 'scope_outside_connection', 'Inventory left its configured root')
+
     def inventory(self, settings):
         with self.operation():
             if settings.whole_space:
-                self.require_space(settings)
-                rows = self._list('/wiki/api/v2/spaces/' + native_id(settings.space_id) + '/pages', {'limit': 250, 'status': 'current'})
-                pages = [self._parse_node(raw, 'page') for raw in rows]
-                folders = self._list('/wiki/rest/api/content/search', {'cql': 'space = "' + settings.space + '" and type = folder', 'expand': 'space,version,ancestors', 'limit': 250})
-                nodes = pages + [self._parse_node(raw, 'folder') for raw in folders]
+                return self.whole_space_inventory(settings)[0]
             else:
                 root = self.require_scope(settings, settings.root_page_id)
                 nodes, pending = [root], [(root, 0)]
@@ -698,22 +782,9 @@ class Remote:
                               'scope_metadata_changed', 'Duplicate, excessive or changed child hierarchy')
                         nodes.append(child)
                         pending.append((child, depth + 1))
-            _need(len(nodes) <= 20000 and len({n.id for n in nodes}) == len(nodes) and all(n.space_id == settings.space_id for n in nodes), 'malformed_list', 'Native inventory identities are invalid')
-            mapping = {n.id: n for n in nodes}
-            for node in nodes:
-                current, seen = node, set()
-                while current is not None:
-                    _need(current.id not in seen and len(seen) < 100, 'scope_limit', 'Cyclic or excessive inventory ancestry')
-                    seen.add(current.id)
-                    if not settings.whole_space and current.id == settings.root_page_id:
-                        break
-                    current = mapping.get(current.parent_id)
-                _need(settings.whole_space or settings.root_page_id in seen, 'scope_outside_connection', 'Inventory left its configured root')
+            self._validate_inventory(settings, nodes)
             self._verify(settings, reversed(nodes))
-            if settings.whole_space:
-                self.require_space(settings)
-            else:
-                _need(self.require_scope(settings, settings.root_page_id) == nodes[0], 'scope_metadata_changed', 'Native root changed during inventory')
+            _need(self.require_scope(settings, settings.root_page_id) == nodes[0], 'scope_metadata_changed', 'Native root changed during inventory')
             return nodes
 
     def version(self, page_id, number, scope=None):

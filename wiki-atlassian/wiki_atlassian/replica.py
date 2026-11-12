@@ -226,6 +226,8 @@ class Replica:
         self._denial_pending = False
         self._denial_generation = 0
         self._state_lock = threading.Lock()
+        self._sync_progress = ('idle', 0.0, 0, None)
+        self._sync_started = None
         self.search_identity = _hash(str(settings.corpus_root) + '\0' + settings.space)
         self.closed = False
 
@@ -369,6 +371,24 @@ class Replica:
     def sync_failed(self, code='sync_failed'):
         self.last_failure = code if isinstance(code, str) and re.fullmatch('[a-z][a-z0-9_]{0,63}', code) else 'sync_failed'
 
+    def _progress(self, stage=None, elapsed=None, requests=None, reason=None):
+        with self._state_lock:
+            if stage == 'inventory':
+                self._sync_started = time.monotonic()
+            previous = self._sync_progress
+            self._sync_progress = (stage or previous[0], previous[1] if elapsed is None else elapsed,
+                                   previous[2] if requests is None else requests, reason)
+
+    def _budget_progress(self, elapsed, requests):
+        self._progress(elapsed=elapsed, requests=requests)
+
+    def _progress_status(self):
+        with self._state_lock:
+            stage, elapsed, requests, reason = self._sync_progress
+            if stage in ('inventory', 'staging', 'verifying', 'publishing', 'comments') and self._sync_started is not None:
+                elapsed = round(max(0, time.monotonic()-self._sync_started), 3)
+        return dict(stage=stage, elapsedSeconds=elapsed, requests=requests, terminalReason=reason)
+
     def _failure_message(self, code=None):
         return f'Automatic synchronization failed ({self.last_failure if code is None else code}); this replica may be stale'
 
@@ -393,6 +413,14 @@ class Replica:
                     result['commentWatch'] = watch
                 if self.last_failure:
                     result.update(code=self.last_failure, syncError=self._failure_message())
+                progress = self._progress_status()
+                if progress['terminalReason'] == 'comments_pending' and any(
+                    changes.comment_due(manifest, id, int(time.time()*1000), self.settings.poll_interval_seconds*1000)
+                    for id in self.settings.watched_comment_pages):
+                    result['commentWatch'] = watch = 'unavailable'
+                if watch == 'unavailable':
+                    result['status'] = 'partial'
+                result['syncProgress'] = progress
                 return result
         except Exception as error:
             reason = error.code if isinstance(error, RemoteError) else 'replica_unavailable'
@@ -405,6 +433,7 @@ class Replica:
                           message='No complete readable snapshot is available; check synchronization and connection configuration')
             if reason == 'root_scope_denied' and self.settings.watched_comment_pages:
                 result['commentWatch'] = 'unavailable'
+            result['syncProgress'] = self._progress_status()
             return result
 
     def snapshot_identity(self):
@@ -614,8 +643,8 @@ class Replica:
         else:
             self.remote.require_scope(self.settings, self.settings.root_page_id)
 
-    def _operation(self, timeout=30):
-        return self.remote.operation(max_requests=512, max_response_bytes=32*1024*1024, timeout=timeout)
+    def _operation(self, timeout=30, progress=None):
+        return self.remote.operation(max_requests=512, max_response_bytes=32*1024*1024, timeout=timeout, progress=progress)
 
     def deny(self, timeout=3):
         """Fence this credential now; bounded durable contention is explicit.
@@ -632,12 +661,15 @@ class Replica:
             try:
                 with file_lock(self.control / 'notice-access.lock'):
                     current = self._manifest(missing=True)
+                    replaced = self._denial_token()
+                    token = replaced
                     if current.get('credentialBinding') == self.settings.credential_fingerprint:
-                        self._write(self.control / changes.DENIAL, str(uuid.uuid4()))
+                        token = str(uuid.uuid4())
+                        self._write(self.control / changes.DENIAL, token)
                     with self._state_lock:
                         if generation == self._denial_generation:
                             self._denial_pending = False
-                    return
+                    return token, generation, replaced
             except BlockingIOError as error:
                 remaining = deadline-time.monotonic()
                 if remaining <= 0:
@@ -650,7 +682,7 @@ class Replica:
                     with self._state_lock:
                         if generation == self._denial_generation:
                             self._denial_pending = False
-                    return
+                    return None, generation, None
                 raise RemoteError('replica_denial_pending', 'Current reads are fenced; shared denial persistence is pending',
                                   details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending')) from None
             except (OSError, ValueError, RemoteError) as error:
@@ -726,16 +758,37 @@ class Replica:
         with trusted_metadata_directory(self.control):
             pass
         deadline = time.monotonic() + 30
+        published = False
         try:
-            with self._operation():
+            with self._operation(progress=self._budget_progress):
                 with file_lock(self.control / 'sweep.lock'):
-                    result = self._synchronize(authoritative_bodies)
-                self.poll_comments(_deadline=deadline)
+                    self._progress('inventory', elapsed=0.0, requests=0)
+                    result = self._synchronize(authoritative_bodies, deadline)
+                    published = True
+                self._progress('comments')
+                observation = self.poll_comments(_deadline=deadline)
                 self.last_success, self.last_failure = _now(), None
+                terminal = 'comments_pending' if observation == 'pending' else None
+                try:
+                    with self._locked_manifest() as manifest:
+                        if changes.comment_status(manifest, self.settings.watched_comment_pages) == 'unavailable':
+                            terminal = 'comments_unavailable'
+                except RemoteError as error:
+                    terminal = error.code
+                self._progress('documents_published' if terminal else 'complete',
+                               elapsed=round(max(0, 30-(deadline-time.monotonic())), 3),
+                               reason=terminal)
+                if terminal:
+                    result.update(documentsPublished=True, observation=terminal)
         except BlockingIOError:
             return
         except Exception as error:
             self.sync_failed(getattr(error, 'code', 'sync_failed'))
+            self._progress('documents_published' if published else 'failed',
+                           elapsed=round(max(0, 30-(deadline-time.monotonic())), 3),
+                           reason={'wiki_timeout': 'aggregate_deadline', 'wiki_request_limit': 'request_count',
+                                   'wiki_body_limit': 'aggregate_bytes', 'response_limit': 'per_response_bytes'}.get(
+                                       self.last_failure, self.last_failure))
             if isinstance(error, RemoteError):
                 try:
                     self.handle_denial(error, timeout=max(0, min(3, deadline-time.monotonic())))
@@ -746,7 +799,7 @@ class Replica:
             raise
         return result
 
-    def _synchronize(self, authoritative_bodies):
+    def _synchronize(self, authoritative_bodies, deadline):
         identity, started = self.settings.identity(), int(time.time() * 1000)
         with self._state_lock:
             denial_generation = self._denial_generation
@@ -761,17 +814,45 @@ class Replica:
             reauthorizing = bool(old) and previous.get('credentialBinding') != self.settings.credential_fingerprint
             timestamp = self._checkpoint().get('bodyRefreshedAt')
             due = type(timestamp) is not int or timestamp < 0 or timestamp > started or started-timestamp >= self.settings.poll_interval_seconds*1000
-            full_pass = bool(authoritative_bodies and due and not reauthorizing)
+            full_pass = bool(self.settings.whole_space or authoritative_bodies and due and not reauthorizing)
             requested = set(self.pending_repair)
             nodes, unavailable = {}, set()
-            inventory = self.remote.inventory(self.settings)
+            bulk_pages = {}
+            fence_errors = {'http_403', 'http_404', 'scope_metadata_changed', 'scope_outside_connection',
+                            'scope_not_current', 'malformed_list', 'malformed_node', 'scope_limit', 'invalid_request'}
+
+            def observe_inventory(observed, folders_complete):
+                nonlocal prior_denial, denial_generation
+                current = {n.id: n for n in observed}
+                if folders_complete:
+                    drift = previous.get('folderParents', {}) != {n.id: n.parent_id for n in observed
+                        if n.type == 'folder' and n.parent_id is not None}
+                else:
+                    drift = set(old) != set(current) or any(current.get(id) != _node(row) for id, row in old.items())
+                if old and drift:
+                    token, generation, replaced = self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
+                    # Only our own fence can be repaired by this sweep. Never
+                    # absorb a newer in-process denial or another process token.
+                    if generation == denial_generation+1 and replaced == prior_denial:
+                        prior_denial, denial_generation = token, generation
+
+            if self.settings.whole_space:
+                try:
+                    inventory, bulk_pages = self.remote.whole_space_inventory(
+                        self.settings, storage=True, on_inventory=observe_inventory)
+                except RemoteError as error:
+                    if error.code in fence_errors:
+                        self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
+                    raise
+            else:
+                inventory = self.remote.inventory(self.settings)
             if len(inventory) > PAGE_LIMIT or len({n.id for n in inventory}) != len(inventory):
                 raise RemoteError('invalid_inventory', 'Native inventory is duplicate or oversized')
             for node in inventory:
                 self._validate_native(node)
                 nodes[node.id] = node
             for id, row in old.items():
-                if id in nodes:
+                if id in nodes or self.settings.whole_space:
                     continue
                 try:
                     node = self.remote.require_scope(self.settings, id)
@@ -824,18 +905,21 @@ class Replica:
             paths = self._paths(nodes, selected, chain, {i: old[i] for i in unavailable})
             stage = self.control / ('stage-' + str(uuid.uuid4()))
             ensure_private_directory(stage)
+            self._progress('staging')
             next_pages, changed, bytes_written = {}, [], 0
             try:
                 for id, node in sorted(selected.items()):
                     prior = old.get(id)
                     refresh = id in requested or (full_pass and id in old)
                     cached = None
-                    if not refresh and prior is not None and prior['version'] == node.version:
+                    if not self.settings.whole_space and not refresh and prior is not None and prior['version'] == node.version:
                         try:
                             cached = self._body(prior, 'storage')
                         except (OSError, ValueError, RemoteError):
                             pass
-                    if cached is not None:
+                    if self.settings.whole_space:
+                        page = bulk_pages[id]
+                    elif cached is not None:
                         page = Page(node, cached)
                     else:
                         page = self.remote.inventory_page(self.settings, node, fresh_storage=refresh)
@@ -868,17 +952,24 @@ class Replica:
                 self._validate(manifest)
                 if self.settings.identity() != identity:
                     raise RemoteError('connection_changed', 'Connection changed during synchronization')
-                self.remote.verify_inventory(self.settings, list(nodes.values()))
+                self._progress('verifying')
+                try:
+                    self.remote.verify_inventory(self.settings, list(nodes.values()),
+                                                 on_inventory=observe_inventory if self.settings.whole_space else None)
+                except RemoteError as error:
+                    if self.settings.whole_space and error.code in fence_errors:
+                        self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
+                    raise
                 self._root_access()
+                self._progress('publishing')
                 self._metadata(stage / 'manifest.json', manifest)
                 self._check_projection_budget(stage, manifest['pages'])
                 self._metadata(self.control / 'transaction.json', dict(stage=stage.name))
                 with file_lock(self.control / 'notice-access.lock'):
                     self._recover(allow_credential_switch=True)
-                    if (previous.get('credentialBinding') != self.settings.credential_fingerprint
-                        or (prior_denial is not None and self._denial_token() == prior_denial)):
-                        (self.control / changes.DENIAL).unlink(missing_ok=True)
                     with self._state_lock:
+                        if denial_generation == self._denial_generation and self._denial_token() == prior_denial:
+                            (self.control / changes.DENIAL).unlink(missing_ok=True)
                         if denial_generation == self._denial_generation and not (self.control / changes.DENIAL).exists():
                             self._denied, self._denial_pending = False, False
                 if full_pass:
@@ -1234,9 +1325,9 @@ class Replica:
         interval = self.settings.poll_interval_seconds if interval_seconds is None else interval_seconds
         try:
             with file_lock(self.control / 'comments.lock'):
-                self._poll_comments(targets, interval, _deadline)
+                return self._poll_comments(targets, interval, _deadline)
         except (BlockingIOError, FileNotFoundError):
-            return
+            return 'pending'
 
     def _poll_comments(self, targets, interval, deadline=None):
         started = int(time.time()*1000)
@@ -1248,7 +1339,7 @@ class Replica:
                            if i in admitted and changes.comment_due(manifest, i, started, interval*1000)}
         except RemoteError:
             return
-        attempted, observed = [], {}
+        attempted, observed, budget_blocked = [], {}, None
         with self._operation(timeout=max(.001, deadline-time.monotonic())):
             for id, row in watched.items():
                 page_deadline = min(deadline, time.monotonic()+8)
@@ -1275,8 +1366,7 @@ class Replica:
                             # not exhaustion of the shared request/scan budget.
                             attempted.append(id)
                             continue
-                        if not attempted:
-                            attempted.append(id)
+                        budget_blocked = id
                         break
                     if isinstance(error, RootScopeDenial):
                         try:
@@ -1298,11 +1388,12 @@ class Replica:
                                 raise denial
                             return
                         except RemoteError:
-                            return
+                            attempted.append(id)
+                            break
                 except (ValueError, KeyError, TypeError):
                     pass
                 attempted.append(id)
-        if not attempted:
+        if not attempted and budget_blocked is None:
             return
         try:
             with file_lock(self.control / 'sync.lock'):
@@ -1311,7 +1402,11 @@ class Replica:
                     return
                 pages = changes.admitted(current)
                 confirmed = {i: h for i, h in observed.items() if pages.get(i) == watched[i]}
-                next = changes.comments(current, started, attempted, confirmed)
+                next = changes.comments(current, started, attempted + ([budget_blocked] if budget_blocked else []), confirmed)
+                if budget_blocked in next.get(changes.WATCH, {}):
+                    # Mark incomplete observation without moving an unfinished
+                    # page behind completed peers in the bounded watch rotation.
+                    next[changes.WATCH][budget_blocked]['attemptedAt'] = changes.comment_attempted_at(current, budget_blocked) or 0
                 stage = self.control / ('stage-'+str(uuid.uuid4()))
                 ensure_private_directory(stage)
                 try:
@@ -1326,7 +1421,7 @@ class Replica:
                     if not (self.control / 'transaction.json').exists():
                         self._discard_stage(stage)
         except BlockingIOError:
-            return
+            return 'pending'
 
     def relations(self, data):
         try:
