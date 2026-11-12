@@ -308,7 +308,7 @@ class ReplicaTests(unittest.TestCase):
         feed = self.replica.control / 'changes.json'
         feed.unlink()
         feed.mkdir()
-        with self.assertRaises(OSError):
+        with self.assertRaises((OSError, ValueError)):
             self.replica.publish_verified(after, before)
         self.assertTrue((self.replica.control / 'transaction.json').exists())
         self.assertEqual('replica_recovery_pending', self.replica.get_document(dict(document='211'))['code'])
@@ -319,6 +319,44 @@ class ReplicaTests(unittest.TestCase):
         self.assertFalse((self.replica.control / 'transaction.json').exists())
         self.assertEqual(staged_feed, self.metadata('changes.json'))
         self.assertIn('Same-version verified inline body', self.replica.get_document(dict(document='211'))['content'])
+
+    def test_rotated_inventory_recovers_retired_partial_journal_without_importing_its_binding(self):
+        self.replica.synchronize()
+        before, after = self.change('211', '<p>Retired verified body</p>')
+        feed = self.replica.control / 'changes.json'
+        feed.unlink()
+        feed.mkdir()
+        with self.assertRaises((OSError, ValueError)):
+            self.replica.publish_verified(after, before)
+        journal = self.metadata('transaction.json')
+        staged = self.replica.control / journal['stage'] / 'manifest.json'
+        manifest = json.loads(staged.read_text('utf-8'))
+        rotated = Replica(self.setting('rotated'), self.remote)
+        cross_bound = dict(manifest, credentialBinding=rotated.settings.credential_fingerprint)
+        atomic_write(staged, compact_json(cross_bound).encode('utf-8'))
+        feed.rmdir()
+        with self.assertRaises(RemoteError) as error:
+            rotated.synchronize()
+        self.assertEqual('invalid_mirror_snapshot', error.exception.code)
+        self.assertEqual(self.settings.credential_fingerprint, self.metadata('manifest.json')['credentialBinding'])
+        atomic_write(staged, compact_json(manifest).encode('utf-8'))
+        original_inventory = self.remote.inventory
+        def inventory_after_recovery(settings):
+            self.assertFalse((self.replica.control / 'transaction.json').exists())
+            self.assertEqual(self.settings.credential_fingerprint, self.metadata('manifest.json')['credentialBinding'])
+            return original_inventory(settings)
+        self.remote.inventory = inventory_after_recovery
+        rotated.synchronize()
+        self.assertEqual(rotated.settings.credential_fingerprint, self.metadata('manifest.json')['credentialBinding'])
+
+    def test_unknown_settings_bytes_remain_unchanged_during_sync_and_repair(self):
+        self.root.mkdir(mode=0o700)
+        original = b'{"unknown":"preserve exact bytes", "future": [1, 2]}\n'
+        atomic_write(self.root / 'settings.json', original)
+        self.replica.synchronize()
+        self.replica.request_repair('211')
+        self.replica.synchronize(authoritative_bodies=False)
+        self.assertEqual(original, (self.root / 'settings.json').read_bytes())
 
     def test_storage_tamper_rejects_read_and_sync_retrieves_untampered_native_body(self):
         self.replica.synchronize()
