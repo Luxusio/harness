@@ -838,6 +838,7 @@ class Replica:
                     raise RemoteError('connection_changed', 'Connection changed during synchronization')
                 self._root_access()
                 self._metadata(stage / 'manifest.json', manifest)
+                self._check_projection_budget(stage, manifest['pages'])
                 self._metadata(self.control / 'transaction.json', dict(stage=stage.name))
                 with file_lock(self.control / 'notice-access.lock'):
                     self._recover(allow_credential_switch=True)
@@ -966,6 +967,19 @@ class Replica:
         except OSError:
             pass
 
+    def _check_projection_budget(self, stage, pages, files=None):
+        """Reject a deterministically unreadable generation before journaling."""
+        workset = None if files is None else set(files)
+        remaining = 64*1024*1024
+        for row in pages.values():
+            relative = row['path']
+            source = self._path(relative, stage) if workset is None or relative in workset else self._path(relative)
+            size = source.stat(follow_symlinks=False).st_size
+            if size > BODY_LIMIT or size > remaining:
+                raise RemoteError('replica_body_limit', 'Candidate projections exceed the readable generation byte budget')
+            raw = safe_metadata_read(source, min(BODY_LIMIT, remaining))
+            remaining -= len(raw)
+
     def _recover(self, allow_credential_switch=False):
         journal_path = self.control / 'transaction.json'
         if not journal_path.exists():
@@ -995,6 +1009,10 @@ class Replica:
         # Preflight the complete workset before touching the readable generation.
         owned = {r['path'] for r in prior.values()}
         owned_canonical = {_canonical(p) for p in owned}
+        desired_canonical = {_canonical(p) for p in desired}
+        _, prior_directories = _owners(prior)
+        _, desired_directories = _owners(pages)
+        obsolete_files = owned_canonical-desired_canonical
         total, entry_count, directory_entries = 0, 0, {}
         for relative in desired:
             _relative(relative)
@@ -1004,9 +1022,28 @@ class Replica:
             if total > 64*1024*1024:
                 raise RemoteError('replica_body_limit', 'Staged projections exceed the publication budget')
             destination = self._path(relative)
+            permitted_existing = False
             if _canonical(relative) not in owned_canonical and destination.exists():
-                raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
+                if (_canonical(relative) in prior_directories and _canonical(relative) not in desired_directories
+                    and destination.is_dir()):
+                    # A proven former subtree becomes a file after its obsolete
+                    # owned children are removed. Unknown contents are never removed.
+                    with trusted_metadata_directory(destination):
+                        pass
+                    permitted_existing = True
+                elif relative in files and safe_metadata_read(destination, BODY_LIMIT) == raw:
+                    # Recovery can resume after Markdown reached disk but before
+                    # the manifest did. Only byte-identical staged content is replayable.
+                    permitted_existing = True
+                else:
+                    raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
             if destination.parent.exists():
+                parent_relative = _canonical(str(PurePosixPath(relative).parent))
+                if parent_relative in obsolete_files and destination.parent.is_file():
+                    # A proven obsolete Markdown file will become this subtree.
+                    # Verify it through the platform reader before deferring creation.
+                    safe_metadata_read(destination.parent, BODY_LIMIT)
+                    continue
                 # Detect the same obstruction on case-sensitive hosts before exporting
                 # a cache that would collide on native Windows.
                 with trusted_metadata_directory(destination.parent):
@@ -1020,11 +1057,17 @@ class Replica:
                         names.add(_canonical(sibling.name))
                     directory_entries[destination.parent] = names
                 if (_canonical(destination.name) in directory_entries[destination.parent]
-                    and _canonical(relative) not in owned_canonical):
+                    and _canonical(relative) not in owned_canonical and not permitted_existing):
                     raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
         for row in prior.values():
             if row['path'] not in desired:
                 obsolete = self._path(row['path'])
+                if _canonical(row['path']) in desired_directories and obsolete.is_dir():
+                    # An interrupted replay may already have replaced this old
+                    # file with its desired directory. Keep that new subtree.
+                    with trusted_metadata_directory(obsolete):
+                        pass
+                    continue
                 if obsolete.exists():
                     safe_metadata_read(obsolete, BODY_LIMIT)
                     obsolete.unlink()
@@ -1138,7 +1181,9 @@ class Replica:
                 if self.settings.identity() != identity:
                     raise RemoteError('connection_changed', 'Connection changed during publication')
                 self._metadata(stage / 'manifest.json', next)
-                self._metadata(self.control / 'transaction.json', dict(stage=stage.name, files=[rows[i]['path'] for i in sorted(changed)]))
+                files = [rows[i]['path'] for i in sorted(changed)]
+                self._check_projection_budget(stage, next['pages'], files)
+                self._metadata(self.control / 'transaction.json', dict(stage=stage.name, files=files))
                 with file_lock(self.control / 'notice-access.lock'):
                     if (self.control / changes.DENIAL).exists():
                         raise RemoteError('root_scope_denied', 'A current inventory is required before publication')
@@ -1223,6 +1268,7 @@ class Replica:
                 ensure_private_directory(stage)
                 try:
                     self._metadata(stage / 'manifest.json', next)
+                    self._check_projection_budget(stage, next['pages'], [])
                     self._metadata(self.control / 'transaction.json', dict(stage=stage.name, files=[]))
                     with file_lock(self.control / 'notice-access.lock'):
                         if (self.control / changes.DENIAL).exists():

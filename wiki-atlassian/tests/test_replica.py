@@ -582,6 +582,72 @@ class ReplicaTests(unittest.TestCase):
         self.assertTrue((self.replica.base / new).is_file())
         self.assertIn('Scoped leaf', self.replica.get_document(dict(document='221'))['content'])
 
+    def exercise_file_directory_title_transition(self, publish):
+        self.remote.pages['212'] = Page(Node('212', 'Child', '211', 'page', '20', 1), '<p>Retained descendant</p>')
+        self.replica.synchronize()
+        for version, title in enumerate(['Operations.md', 'Operations', 'Operations.md'], 2):
+            before, after = self.change('211', title=title, version=version)
+            if publish:
+                self.replica.publish_verified(after, before)
+            else:
+                self.replica.synchronize()
+            rows = self.metadata('manifest.json')['pages']
+            self.assertTrue(rows['212']['path'].startswith(rows['211']['path'][:-3]+'/'))
+            self.assertIn('Retained descendant', self.replica.get_document(dict(document='212'))['content'])
+            self.assertFalse((self.replica.control / 'transaction.json').exists())
+
+    def test_synchronization_replaces_obsolete_owned_files_and_directories_for_title_transitions(self):
+        self.exercise_file_directory_title_transition(False)
+
+    def test_verified_publication_replaces_obsolete_owned_files_and_directories_for_title_transitions(self):
+        self.exercise_file_directory_title_transition(True)
+
+    def test_topology_transaction_replays_after_new_markdown_precedes_manifest(self):
+        from unittest.mock import patch
+        import wiki_atlassian.replica as implementation
+        self.remote.pages['212'] = Page(Node('212', 'Child', '211', 'page', '20', 1), '<p>Retained descendant</p>')
+        self.replica.synchronize()
+        before, after = self.change('211', title='Operations.md', version=2)
+        original = implementation.atomic_write
+        def interrupt_manifest(path, data):
+            if Path(path) == self.replica.control / 'manifest.json':
+                raise OSError('Synthetic interruption after Markdown publication')
+            return original(path, data)
+        with patch.object(implementation, 'atomic_write', side_effect=interrupt_manifest), self.assertRaises(OSError):
+            self.replica.publish_verified(after, before)
+        self.assertTrue((self.replica.control / 'transaction.json').exists())
+        self.assertTrue((self.replica.base / 'pages/Knowledge/Operations.md').is_dir())
+        self.assertEqual('replica_recovery_pending', self.replica.get_document(dict(document='212'))['code'])
+        self.replica.synchronize()
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+        self.assertIn('Retained descendant', self.replica.get_document(dict(document='212'))['content'])
+
+    def test_expanded_markdown_generation_is_refused_before_any_journal(self):
+        body = ''.join('<ac:image><ri:attachment ri:filename="'+('a'*4000)+str(i)+'" /></ac:image>' for i in range(980))
+        self.assertLess(len(body.encode('utf-8')), 4*1024*1024)
+        for number in range(211, 219):
+            id = str(number)
+            self.remote.pages[id] = Page(Node(id, 'Expanded '+id, '210', 'page', '20', 1), body)
+        self.replica.synchronize()
+        baseline = (self.replica.control / 'manifest.json').read_bytes()
+        rows = self.metadata('manifest.json')['pages']
+        projected = sum((self.replica.base / row['path']).stat().st_size for row in rows.values())
+        self.assertLess(projected, 64*1024*1024)
+        self.assertGreater(projected, 56*1024*1024)
+        page = Page(Node('999', 'Ninth expanded page', '210', 'page', '20', 1), body)
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.publish_verified(page)
+        self.assertEqual('replica_body_limit', caught.exception.code)
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+        self.assertEqual(baseline, (self.replica.control / 'manifest.json').read_bytes())
+        self.assertIn('content', self.replica.get_document(dict(document='211')))
+        self.remote.pages['999'] = page
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.synchronize(authoritative_bodies=False)
+        self.assertEqual('replica_body_limit', caught.exception.code)
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+        self.assertEqual(baseline, (self.replica.control / 'manifest.json').read_bytes())
+
     def test_unowned_projection_obstruction_is_preserved_and_cannot_be_admitted(self):
         self.replica.synchronize()
         self.remote.pages['212'] = Page(Node('212', 'New', '210', 'page', '20', 1), '<p>new</p>')
