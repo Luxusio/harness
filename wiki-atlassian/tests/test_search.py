@@ -132,6 +132,14 @@ class ReplicaSearchTests(unittest.TestCase):
         self.assertNotIn('headingPath', hit)
         self.assertIn('topic-probe', hit['excerpt'])
 
+    def test_inert_heading_example_does_not_hide_valid_native_heading_context(self):
+        from wiki_atlassian.models import Page
+        node = self.remote.pages['211'].node
+        self.remote.pages['211'] = Page(node, '<h2>True header</h2><pre><h3>Code example</h3></pre><p>topic-probe</p>')
+        self.replica.synchronize()
+        hit = self.replica.search(dict(query='topic-probe'))['results'][0]
+        self.assertEqual(['True header'], hit['headingPath'])
+
     def test_exact_id_dominates_mentions_but_respects_scoped_subtree(self):
         from wiki_atlassian.models import Node, Page
         self.remote.pages['212'] = Page(Node('212', 'Another', '210', 'page', '20', 1), '<p>Mentions 211 and 733</p>')

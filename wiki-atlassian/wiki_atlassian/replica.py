@@ -520,9 +520,10 @@ class Replica:
                         remaining -= size
                         native = native_headings(storage)
                         outline = [(row['level'], row['text']) for row in native]
+                        native_starts = {row['start'] for row in native}
                         containers = {'#document', '#root', 'div', 'section', 'article', 'ac:rich-text-body'}
                         transparent = all(all(a.tag in containers for a in e.ancestors())
-                                          for e in parse_storage(storage).descendants() if re.fullmatch('h[1-6]', e.tag))
+                                          for e in parse_storage(storage).descendants() if e.start in native_starts)
                         if outline == projected[0] and transparent:
                             result['headingPath'] = projected[1]
                     except (OSError, ValueError, RemoteError):
