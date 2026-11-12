@@ -397,8 +397,8 @@ class Replica:
         if self.on_repair is not None:
             self.on_repair()
 
-    def _body(self, row, format):
-        raw = safe_metadata_read(self._path(row['storage' if format == 'storage' else 'path']), BODY_LIMIT)
+    def _body(self, row, format, limit=BODY_LIMIT):
+        raw = safe_metadata_read(self._path(row['storage' if format == 'storage' else 'path']), limit)
         text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
         if format == 'storage' and _hash(text) != row['bodyHash']:
             raise RemoteError('replica_unavailable', 'Native replica hash mismatch; wait for synchronization')
@@ -513,7 +513,9 @@ class Replica:
             for _, result, projected in hits:
                 if projected:
                     try:
-                        storage = self._body(pages[result['id']], 'storage')
+                        if remaining <= 0:
+                            raise ValueError('Heading verification budget')
+                        storage = self._body(pages[result['id']], 'storage', limit=min(BODY_LIMIT, remaining))
                         size = len(storage.encode('utf-8'))
                         if size > remaining:
                             raise ValueError('Heading verification budget')

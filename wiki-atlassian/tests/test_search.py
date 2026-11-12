@@ -165,6 +165,44 @@ class ReplicaSearchTests(unittest.TestCase):
         self.assertEqual('invalid_query', self.replica.search(dict(query='Shared', limit=26))['code'])
         self.assertEqual('invalid_query', self.replica.search(dict(query=' '*3))['code'])
 
+    def test_scan_budget_refuses_broad_projection_but_exact_id_and_narrow_root_remain_available(self):
+        from wiki_atlassian.models import Node, Page
+        from wiki_platform import atomic_write
+        for number in range(212, 220):
+            id = str(number)
+            self.remote.pages[id] = Page(Node(id, 'Page '+id, '210', 'page', '20', 1), '<p>small native body</p>')
+        self.replica.synchronize()
+        large = b'x' * (8*1024*1024)
+        for id, row in self.metadata('manifest.json')['pages'].items():
+            if id != '210':
+                atomic_write(self.replica.base / row['path'], large)
+        self.assertEqual('search_scope_too_large', self.replica.search(dict(query='needle'))['code'])
+        self.assertEqual([], self.replica.search(dict(query='needle', root='211'))['results'])
+        self.assertEqual('native_id', self.replica.search(dict(query='211'))['results'][0]['match'])
+
+    def test_heading_verification_reads_source_only_within_aggregate_budget(self):
+        from unittest.mock import patch
+        from wiki_atlassian.models import Node, Page
+        import wiki_atlassian.replica as implementation
+        body = '<h2>Section</h2><p>aggregate-probe '+('x'*(3*1024*1024))+'</p>'
+        self.remote.pages['211'] = Page(self.remote.pages['211'].node, body)
+        self.remote.pages['212'] = Page(Node('212', 'Second', '210', 'page', '20', 1), body)
+        self.replica.synchronize()
+        read_bytes = 0
+        original = implementation.safe_metadata_read
+        def count_actual_source(path, limit):
+            nonlocal read_bytes
+            result = original(path, limit)
+            if Path(path).suffix == '.xhtml':
+                read_bytes += len(result)
+            return result
+        with patch.object(implementation, 'safe_metadata_read', side_effect=count_actual_source):
+            hits = self.replica.search(dict(query='aggregate-probe'))['results']
+        self.assertEqual(2, len(hits))
+        self.assertEqual(['Section'], hits[0]['headingPath'])
+        self.assertNotIn('headingPath', hits[1])
+        self.assertLessEqual(read_bytes, 4*1024*1024)
+
 
 if __name__ == '__main__':
     unittest.main()
