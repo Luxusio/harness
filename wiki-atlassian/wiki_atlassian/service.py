@@ -186,16 +186,23 @@ class WikiService:
                     return self._comments(operation, data, effect)
                 raise RemoteError('invalid_request', 'Unknown wiki operation')
         except Exception as exc:
+            fence_pending = False
             if is_scope_denial(exc):
                 try:
                     self.replica.handle_denial(exc)
                 except Exception:
-                    pass
+                    fence_pending = True
+                    wake = getattr(self.replica, 'on_repair', None)
+                    if wake is not None:
+                        try:
+                            wake()
+                        except Exception:
+                            pass  # Preserve the original effect/error and pending fence.
             unknown = effect['saved'] or (effect['started'] and not isinstance(exc, RemoteError)) or getattr(exc, 'outcome_unknown', False)
             result = dict(status='unknown' if unknown else 'error', code=getattr(exc, 'code', 'unknown_outcome' if unknown else 'invalid_request'),
                           message=str(exc) if isinstance(exc, RemoteError) else 'Wiki operation could not be completed')
             if isinstance(exc, RemoteError) and exc.details:
-                result['details'] = exc.details
+                result['details'] = dict(exc.details)
             if unknown:
                 result.update(operation=operation, request={k: v for k, v in data.items() if k in ('document', 'target', 'comment', 'parent', 'version')},
                               requestHash=digest(data), next='Inspect native content/history using read-only tools. Retain the original request; never automatically repeat this write.')
@@ -203,6 +210,9 @@ class WikiService:
                     result.setdefault('details', {})['reference'] = effect['reference']
             elif getattr(exc, 'next', None):
                 result['next'] = exc.next
+            if fence_pending:
+                result.setdefault('details', {}).update(scopeFence='pending', scopeFenceCode='replica_denial_pending',
+                    scopeFenceNext='This process has refused access; shared revocation publication is pending. Automatic synchronization will retry.')
             return result
 
     def _write_document(self, operation, data, effect):

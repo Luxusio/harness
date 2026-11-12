@@ -221,3 +221,22 @@ def test_comment_markdown_keeps_native_page_anchor_context(service):
         body='<ac:link ac:anchor="part"><ac:plain-text-link-body><![CDATA[Jump]]></ac:plain-text-link-body></ac:link>',
         format='storage'), dict(format='markdown'), '2')
     assert api._url('2') + '#part' in result['body']
+
+
+@pytest.mark.parametrize('wake_fails', [False, True])
+def test_pending_revocation_preserves_unknown_write_and_primary_native_error(service, wake_fails):
+    api, remote, replica = service
+    calls = []
+    def unavailable(*args, **kwargs):
+        raise RemoteError('http_403')
+    def pending(error):
+        raise RemoteError('replica_denial_pending')
+    def wake():
+        calls.append('wake')
+        if wake_fails:
+            raise RuntimeError('callback failed')
+    remote.version, replica.handle_denial, replica.on_repair = unavailable, pending, wake
+    result = api.execute('update_document', dict(document='2', version=1, append='<p>Mine</p>'))
+    assert result['status'] == 'unknown' and result['code'] == 'http_403'
+    assert result['details']['scopeFence'] == 'pending' and len(remote.writes) == 1
+    assert 'never automatically repeat' in result['next'] and calls == ['wake']

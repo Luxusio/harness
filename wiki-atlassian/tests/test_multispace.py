@@ -138,3 +138,19 @@ def test_comment_ids_do_not_become_page_urls(manager):
     manager.synchronize('TEAM')
     assert 'url' not in manager._label(dict(id='901', reference='footer:901'), 'TEAM')
     assert manager._label(dict(id='11'), 'TEAM', True)['url'].endswith('/pages/11')
+
+
+def test_pending_revocation_keeps_sibling_fences_and_original_unauthorized_error(manager):
+    for key in manager.slots:
+        manager.synchronize(key)
+    def pending():
+        raise RemoteError('replica_denial_pending')
+    manager.slots['TEAM'].replica.deny = pending
+    manager.slots['TEAM'].service.execute = lambda *args: dict(status='error', code='http_401')
+    result = manager.execute('get_document', dict(document='11'))
+    assert result['code'] == 'http_401' and result['details']['scopeFence'] == 'pending'
+    assert all(slot.denied for slot in manager.slots.values())
+    assert manager.slots['DEV'].replica.denied and manager.slots['TEAM'].wake.is_set()
+    manager.slots['TEAM'].wake.clear()
+    manager._deny_all(wake=False)
+    assert not manager.slots['TEAM'].wake.is_set()

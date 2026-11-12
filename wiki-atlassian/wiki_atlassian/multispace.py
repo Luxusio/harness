@@ -36,14 +36,22 @@ class MultiSpaceKnowledge:
                 thread.start()
                 self.threads.append(thread)
 
-    def _deny_all(self):
+    def _deny_all(self, wake=True):
         # A sync may call this while holding its own slot lock. Never acquire
         # sibling slot locks in opposite order during simultaneous 401s.
         for slot in self.slots.values():
             slot.denied = True
-        for slot in self.slots.values():
+        pending = {}
+        for key, slot in self.slots.items():
             if slot.replica:
-                slot.replica.deny()
+                try:
+                    slot.replica.deny()
+                except Exception:
+                    pending[key] = 'replica_denial_pending'
+                    slot.failure = 'replica_denial_pending'
+                    if wake:
+                        slot.wake.set()
+        return pending
 
     def synchronize(self, key):
         slot = self.slots[key]
@@ -66,7 +74,7 @@ class MultiSpaceKnowledge:
                 if slot.replica is not None:
                     slot.replica.sync_failed(slot.failure)
                 if slot.failure == 'http_401':
-                    self._deny_all()
+                    self._deny_all(wake=False)
                 raise
 
     def _worker(self, key):
@@ -190,13 +198,20 @@ class MultiSpaceKnowledge:
                 slot = self._running(key)
                 result = slot.service.execute(operation, arguments)
                 if result.get('code') == 'http_401':
-                    self._deny_all()
+                    pending = self._deny_all()
+                    if pending:
+                        result.setdefault('details', {}).update(scopeFence='pending', scopeFenceCode='replica_denial_pending', scopeFenceSpaces=pending)
+                    return {**result, 'space': key, 'spaceId': slot.settings.space_id}
                 return self._label(result, key, operation in ('get_document', 'create_document', 'update_document'))
         except Exception as exc:
+            pending = {}
             if isinstance(exc, RemoteError) and exc.code == 'http_401':
-                self._deny_all()
-            return dict(status='error', code=exc.code if isinstance(exc, RemoteError) else 'invalid_request',
-                        message=str(exc) if isinstance(exc, RemoteError) else 'The request could not be admitted in the selected spaces')
+                pending = self._deny_all()
+            result = dict(status='error', code=exc.code if isinstance(exc, RemoteError) else 'invalid_request',
+                          message=str(exc) if isinstance(exc, RemoteError) else 'The request could not be admitted in the selected spaces')
+            if pending:
+                result['details'] = dict(scopeFence='pending', scopeFenceCode='replica_denial_pending', scopeFenceSpaces=pending)
+            return result
 
     def _label(self, value, key, page_response=False):
         slot = self._running(key)

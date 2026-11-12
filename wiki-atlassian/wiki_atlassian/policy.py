@@ -12,13 +12,24 @@ PATTERNS = tuple(map(re.compile, (
     r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----',
     r'(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])',
     r'(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|ATATT[A-Za-z0-9_=-]{20,}|sk-[A-Za-z0-9_-]{20,})',
-    r'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}',
     r'''(?i)(?:password|passwd|api[_ -]?key|(?:access[_ -]?)?token|secret|비밀번호)\s*[:=]\s*["']?(?!<|\$\{|환경|없음|REDACTED|redacted|placeholder|example|\*{3})[^\s"'<>]{4,}''',
 )))
 FIELDS = {'password': 'password', 'passwd': 'password', '비밀번호': 'password',
           'api key': 'api_key', 'token': 'token', 'access token': 'token',
           'secret': 'secret', 'private key': 'private_key'}
 BLOCKS = set('p div h1 h2 h3 h4 h5 h6 table tr td th li ul ol pre blockquote br'.split())
+
+
+def _jwt_secret(value):
+    # Lex each candidate once. Retrying a greedy JWT regex at every repeated
+    # eyJ prefix takes quadratic time even when no dot exists.
+    for match in re.finditer(r'[A-Za-z0-9_.-]+', value):
+        parts = match[0].split('.')
+        for i in range(len(parts) - 2):
+            prefix = parts[i].find('eyJ')
+            if prefix >= 0 and len(parts[i]) - prefix >= 11 and len(parts[i + 1]) >= 8 and len(parts[i + 2]) >= 8:
+                return True
+    return False
 
 
 def _visible(element):
@@ -72,7 +83,7 @@ def reject_secrets(body, token=''):
     document = parse_storage(body)
     elements = list(document.descendants())
     visible = _visible(document)
-    found = (bool(token) and (token in body or token in visible)) or any(
+    found = (bool(token) and (token in body or token in visible)) or _jwt_secret(body) or _jwt_secret(visible) or any(
         pattern.search(body) or pattern.search(visible) for pattern in PATTERNS)
     def reject(locations):
         raise RemoteError('secret_detected', 'Content resembles private authentication material; redact it before writing',
