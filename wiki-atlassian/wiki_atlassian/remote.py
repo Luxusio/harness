@@ -16,9 +16,10 @@ import json
 import re
 import ssl
 import time
-from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 from .models import Credentials, Node, Page, RemoteError, compact_json, native_id
+from .references import native_page_url_id
 
 MAX_BODY = 8 * 1024 * 1024
 SCOPE_CODES = {'http_401', 'http_403', 'http_404', 'scope_not_current', 'scope_outside_connection'}
@@ -64,31 +65,6 @@ def _origin(value):
         return value.rstrip('/')
     except (ValueError, TypeError):
         raise RemoteError('invalid_origin', 'Configured Atlassian URL must be an HTTPS origin') from None
-
-
-def native_page_url_id(value, origin, space=None, allow_api=False):
-    _need(isinstance(value, str) and len(value) <= 4096, 'invalid_request', 'Bounded native page URL required')
-    try:
-        uri, expected = urlsplit(value), urlsplit(_origin(origin))
-        _need((uri.scheme, uri.hostname, uri.port) == (expected.scheme, expected.hostname, expected.port) and
-              uri.username is None and uri.password is None and not uri.query and not uri.fragment and
-              '\\' not in uri.path and not any(p in ('.', '..') for p in uri.path.split('/')),
-              'invalid_request', 'Use an exact page URL on the configured origin')
-        page = re.fullmatch(r'/wiki/spaces/([A-Za-z0-9_-]+)/pages/([1-9][0-9]*)(?:/([^/]*))?', uri.path)
-        api = re.fullmatch(r'/wiki/api/v2/pages/([1-9][0-9]*)(?:/([^/]*))?', uri.path) if allow_api else None
-        _need(page is not None or api is not None, 'invalid_request', 'Use a literal native page ID or exact page URL')
-        if page:
-            _need(space is None or page[1] == space, 'space_mismatch', 'Page URL space differs from its admitted namespace')
-            selected, slug = page[2], page[3] or ''
-        else:
-            selected, slug = api[1], api[2] or ''
-        decoded = unquote(slug, errors='strict')
-        _need(decoded not in ('.', '..') and not any(c in '/\\' or ord(c) < 32 or ord(c) == 127 for c in decoded) and
-              re.search(r'%2e|%2f|%5c', decoded, re.I) is None,
-              'invalid_request', 'Page title slug contains traversal or path separators')
-        return native_id(selected)
-    except (ValueError, UnicodeError):
-        raise RemoteError('invalid_request', 'Use an exact page URL on the configured origin') from None
 
 
 class _Budget:
