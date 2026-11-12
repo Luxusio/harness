@@ -320,6 +320,17 @@ def _verify_selected(runtime, payload, command):
         raise ValueError('Host selection or cached Python payload differs from the prepared plugin; preserve existing versions and retry the update') from None
 
 
+def _failure_reason(exc, generic):
+    if isinstance(exc, ValueError):
+        return str(exc)
+    if isinstance(exc, OSError):
+        operation = getattr(exc, '_wiki_operation', None)
+        code = getattr(exc, '_wiki_native_code', None)
+        if type(operation) is str and operation == 'FileRenameInfoEx' and type(code) is int and 0 <= code <= 0xFFFFFFFF:
+            return f'FileRenameInfoEx publication failed; native Windows code {code}'
+    return generic
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', choices=('codex', 'claude'), action='append')
@@ -350,14 +361,14 @@ def main():
                     print(runtime.title() + ': SUCCESS')
                 except (OSError, ValueError, subprocess.SubprocessError) as exc:
                     failed = True
-                    print(runtime.title() + ': FAILED\n  Error: ' + (str(exc) if isinstance(exc, ValueError) else 'Host CLI could not complete registration'))
+                    print(runtime.title() + ': FAILED\n  Error: ' + _failure_reason(exc, 'Host CLI could not complete registration'))
             if failed:
                 raise RegistrationFailure()
         return int(failed)
     except RegistrationFailure:
         return 1
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        reason = str(exc) if isinstance(exc, ValueError) else 'Private payload operation failed; check file permissions and the selected interpreter'
+        reason = _failure_reason(exc, 'Private payload operation failed; check file permissions and the selected interpreter')
         print('Wiki: FAILED\n  Error: ' + reason, file=sys.stderr)
         return 1
 

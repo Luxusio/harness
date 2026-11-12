@@ -77,6 +77,7 @@ def test_native_private_acl_unicode_atomic_snapshot_and_bound(private):
         buffer, count = C.create_string_buffer(128), W.DWORD()
         win._check(win._ReadFile(old, buffer, 128, C.byref(count), None))
         assert buffer.raw[:count.value] == "first 한글".encode("utf-8")
+        assert win.safe_read(path, 6, private=True) == b"second"
     finally:
         win._close(old)
     assert win.safe_read(path, 6, private=True) == b"second"
@@ -94,14 +95,16 @@ def test_native_rename_abi_absolute_destination_and_held_ancestors(private, monk
     observed = []
 
     def inspect(handle, kind, buffer, size):
-        if kind == 3:
+        assert kind != 3, "basic rename cannot provide the required snapshot semantics"
+        if kind == win.FileRenameInfoEx:
+            assert kind == 22
             rename = C.cast(buffer, C.POINTER(win.RENAME_INFO)).contents
-            assert not rename.directory and rename.replace == 1
+            assert not rename.directory and rename.flags == 3
             raw = C.string_at(C.addressof(buffer) + win.RENAME_INFO.name.offset, rename.length)
             assert raw.decode("utf-16-le") == str(target)
             assert size >= win.RENAME_INFO.name.offset + rename.length
             # Parent components remain held without DELETE sharing through
-            # publication even though FileRenameInfo uses a NULL root.
+            # publication even though FileRenameInfoEx uses a NULL root.
             with pytest.raises(OSError):
                 os.rename(private, private.with_name("moved ancestor"))
             observed.append(handle)
@@ -114,7 +117,10 @@ def test_native_rename_abi_absolute_destination_and_held_ancestors(private, monk
 
 
 @pytest.mark.parametrize('existing', [False, True])
-def test_native_failed_rename_preserves_target_and_deletes_exact_temporary(private, monkeypatch, existing):
+@pytest.mark.parametrize('code', [1, 50, 87, 5, 32])
+@pytest.mark.parametrize('cleanup_fails', [False, True])
+def test_native_failed_rename_preserves_target_and_disposes_exact_temporary(
+        private, monkeypatch, existing, code, cleanup_fails):
     target = private / "prior file 한글.txt"
     if existing:
         win.atomic_write(target, b"prior bytes")
@@ -122,24 +128,141 @@ def test_native_failed_rename_preserves_target_and_deletes_exact_temporary(priva
     failed, deleted = [], []
 
     def refuse(handle, kind, buffer, size):
-        if kind == 3:
+        assert kind != 3, "failed extended rename must not retry basic rename"
+        if kind == win.FileRenameInfoEx:
             failed.append(handle)
-            C.set_last_error(87)
+            C.set_last_error(code)
             return False
         if kind == 4:
             deleted.append(handle)
+            if cleanup_fails:
+                C.set_last_error(1234)
+                return False
         return real_set(handle, kind, buffer, size)
 
     monkeypatch.setattr(win, "_SetFileInformation", refuse)
     with pytest.raises(OSError) as error:
         win.atomic_write(target, b"candidate")
-    assert error.value.errno == 87
+    assert error.value.errno == code
+    assert type(error.value) is {1: PermissionError, 5: PermissionError, 32: BlockingIOError}.get(code, OSError)
+    assert error.value._wiki_operation == 'FileRenameInfoEx'
+    assert error.value._wiki_native_code == code
     assert failed == deleted and len(deleted) == 1
     if existing:
         assert win.safe_read(target, 100, private=True) == b"prior bytes"
     else:
         assert not target.exists()
-    assert not list(private.glob(".wiki-*"))
+    temporaries = list(private.glob(".wiki-*"))
+    if cleanup_fails:
+        # Best-effort disposition can leave our private, unpublished file.
+        assert len(temporaries) == 1
+        assert win.safe_read(temporaries[0], 100, private=True) == b"candidate"
+    else:
+        assert not temporaries
+
+
+def test_native_reader_without_delete_sharing_preserves_target(private, monkeypatch):
+    target = private / "blocked replacement 한글.txt"
+    win.atomic_write(target, b"old bytes")
+    old = win._open(target, win.GENERIC_READ, share=win.FILE_SHARE_READ)
+    real_set = win._SetFileInformation
+    renamed, disposed = [], []
+
+    def observe(handle, kind, buffer, size):
+        assert kind != 3
+        if kind == win.FileRenameInfoEx:
+            renamed.append(handle)
+        elif kind == 4:
+            disposed.append(handle)
+        return real_set(handle, kind, buffer, size)
+
+    monkeypatch.setattr(win, '_SetFileInformation', observe)
+    try:
+        with pytest.raises(BlockingIOError) as error:
+            win.atomic_write(target, b"replacement")
+        assert error.value.errno == error.value._wiki_native_code == 32
+        assert error.value._wiki_operation == 'FileRenameInfoEx'
+        assert renamed == disposed and len(renamed) == 1
+        buffer, count = C.create_string_buffer(100), W.DWORD()
+        win._check(win._ReadFile(old, buffer, 100, C.byref(count), None))
+        assert buffer.raw[:count.value] == b"old bytes"
+        assert win.safe_read(target, 100, private=True) == b"old bytes"
+        assert not list(private.glob('.wiki-*'))
+    finally:
+        win._close(old)
+
+
+def test_native_cpython_0700_owner_rights_and_inherited_child(tmp_path, monkeypatch):
+    parent = tmp_path / 'CPython private 0700 한글'
+    parent.mkdir(mode=0o700)
+    child = parent / 'inherited child'
+    child.mkdir()
+    real_sid_text, observed = win._sid_text, []
+
+    def observe_sid(pointer):
+        sid = real_sid_text(pointer)
+        observed.append(sid)
+        return sid
+
+    monkeypatch.setattr(win, '_sid_text', observe_sid)
+    for path in (parent, child):
+        assert win.ensure_private_directory(path) == path
+        for policy in ('private', 'metadata', 'lock', 'ancestor'):
+            observed.clear()
+            handle = win._open(path, 0, directory=True)
+            try:
+                win._security(handle, policy)
+                assert 'S-1-3-4' in observed, 'fixture must exercise actual OWNER_RIGHTS ACEs'
+            finally:
+                win._close(handle)
+    target = child / 'snapshot'
+    win.atomic_write(target, b'CPython private snapshot')
+    assert win.safe_read(target, 100, private=True) == b'CPython private snapshot'
+    try:
+        _acl(child, '(A;;FA;;;OW)(A;;GW;;;WD)')
+        with pytest.raises(ValueError, match='unsafe access'):
+            win.ensure_private_directory(child)
+        with pytest.raises(ValueError, match='unsafe access'):
+            win.atomic_write(target, b'unsafe publication')
+    finally:
+        _acl(child, '(A;;FA;;;OW)')
+    assert win.safe_read(target, 100, private=True) == b'CPython private snapshot'
+
+
+@pytest.mark.parametrize('policy', ['private', 'metadata', 'lock', 'ancestor'])
+@pytest.mark.parametrize('scenario', ['owner-rights', 'foreign-owner', 'foreign-read',
+                                     'foreign-mutation', 'creator-owner', 'system-owner'])
+def test_native_modeled_descriptor_owner_rights_preserve_existing_policy(monkeypatch, policy, scenario):
+    """Native-built descriptor metadata; no physical foreign-owned file is claimed."""
+    owner = ('S-1-5-21-111-222-333-444' if scenario == 'foreign-owner' else
+             'SY' if scenario == 'system-owner' else win.USER_SID)
+    grants = '(A;;FA;;;OW)(A;;FA;;;' + win.USER_SID + ')'
+    grants += {'foreign-read': '(A;;GR;;;WD)', 'foreign-mutation': '(A;;GA;;;WD)',
+               'creator-owner': '(A;;FA;;;CO)'}.get(scenario, '')
+    sddl = 'O:' + owner + 'D:P' + grants
+    get_owner = win._bind(win.A, 'GetSecurityDescriptorOwner', [win.P, C.POINTER(win.P), C.POINTER(W.BOOL)])
+    get_dacl = win._bind(win.A, 'GetSecurityDescriptorDacl',
+                        [win.P, C.POINTER(W.BOOL), C.POINTER(win.P), C.POINTER(W.BOOL)])
+
+    def modeled_info(handle, kind, requested, owner_out, group, dacl_out, sacl, descriptor_out):
+        win._check(win._ConvertStringSecurityDescriptor(sddl, 1, descriptor_out, None))
+        descriptor = C.cast(descriptor_out, C.POINTER(win.P)).contents
+        present, defaulted = W.BOOL(), W.BOOL()
+        win._check(get_owner(descriptor, owner_out, C.byref(defaulted)))
+        win._check(get_dacl(descriptor, C.byref(present), dacl_out, C.byref(defaulted)))
+        assert present.value
+        return 0
+
+    monkeypatch.setattr(win, '_GetSecurityInfo', modeled_info)
+    assert 'S-1-3-4' not in win.TRUSTED_SIDS and 'S-1-3-4' not in win.ANCESTOR_TRUSTED_SIDS
+    if scenario == 'foreign-owner' or scenario == 'system-owner' and policy != 'ancestor':
+        with pytest.raises(ValueError, match='untrusted owner'):
+            win._security(None, policy)
+    elif scenario in ('foreign-mutation', 'creator-owner') or scenario == 'foreign-read' and policy == 'private':
+        with pytest.raises(ValueError, match='unsafe access'):
+            win._security(None, policy)
+    else:
+        win._security(None, policy)
 
 
 def test_native_permissive_acl_is_not_mistaken_for_private_mode(private):
@@ -261,7 +384,8 @@ def test_native_atomic_failure_preserves_old_bytes_and_removes_only_owned_temp(p
     win.atomic_write(path, b"old snapshot")
     original = win._SetFileInformation
     def fail_rename(handle, kind, *args):
-        if kind == 3:
+        assert kind != 3
+        if kind == win.FileRenameInfoEx:
             C.set_last_error(5)
             return False
         return original(handle, kind, *args)
@@ -276,6 +400,9 @@ def test_native_abi_layouts_match_documented_win32_structures():
     assert C.sizeof(W.DWORD) == 4 and C.sizeof(W.WCHAR) == 2
     pointer = C.sizeof(C.c_void_p)
     assert C.sizeof(win.SECURITY_ATTRIBUTES) == (24 if pointer == 8 else 12)
+    assert win.RENAME_INFO.flags.offset == 0
+    assert win.RENAME_INFO.directory.offset == (8 if pointer == 8 else 4)
+    assert win.RENAME_INFO.length.offset == (16 if pointer == 8 else 8)
     assert win.RENAME_INFO.name.offset == (20 if pointer == 8 else 12)
     assert C.sizeof(win.OVERLAPPED) == (32 if pointer == 8 else 20)
     assert C.sizeof(win.STARTUPINFO) == (104 if pointer == 8 else 68)

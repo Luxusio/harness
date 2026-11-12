@@ -35,6 +35,8 @@ FILE_READ_ATTRIBUTES = 0x80
 FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE = 1, 2, 4
 OPEN_EXISTING, OPEN_ALWAYS, CREATE_NEW = 3, 4, 1
 MAX_LOCK_LOW, MAX_LOCK_HIGH = 0xFFFFFFFF, 0x7FFFFFFF
+FileRenameInfoEx = 22
+FILE_RENAME_FLAG_REPLACE_IF_EXISTS, FILE_RENAME_FLAG_POSIX_SEMANTICS = 1, 2
 
 
 class SECURITY_ATTRIBUTES(C.Structure):
@@ -63,7 +65,7 @@ class OVERLAPPED(C.Structure):
 
 class RENAME_INFO(C.Structure):
     # The first union is DWORD-sized; FileName starts at offset 20 on Win64.
-    _fields_ = [("replace", DWORD), ("directory", HANDLE), ("length", DWORD), ("name", W.WCHAR * 1)]
+    _fields_ = [("flags", DWORD), ("directory", HANDLE), ("length", DWORD), ("name", W.WCHAR * 1)]
 
 
 def _bind(dll, name, args, result=W.BOOL):
@@ -192,6 +194,8 @@ def _security(handle, policy):
             if sid_offset + 8 > ace.size:
                 raise ValueError("Invalid Windows account grant")
             trustee = _sid_text(pointer.value + sid_offset)
+            if trustee == "S-1-3-4":  # OWNER_RIGHTS denotes this verified object's owner.
+                trustee = owner_sid
             if trustee in (ANCESTOR_TRUSTED_SIDS if policy == "ancestor" else TRUSTED_SIDS):
                 continue
             # Conservative evaluation: a foreign allow is refused even if an
@@ -376,9 +380,14 @@ def atomic_write(path, data):
             encoded = str(path).encode("utf-16-le")
             buffer = C.create_string_buffer(max(C.sizeof(RENAME_INFO), RENAME_INFO.name.offset + len(encoded) + 2))
             rename = C.cast(buffer, C.POINTER(RENAME_INFO)).contents
-            rename.replace, rename.directory, rename.length = 1, None, len(encoded)
+            rename.flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+            rename.directory, rename.length = None, len(encoded)
             C.memmove(C.addressof(buffer) + RENAME_INFO.name.offset, encoded, len(encoded))
-            _check(_SetFileInformation(handle, 3, buffer, len(buffer)))
+            if not _SetFileInformation(handle, FileRenameInfoEx, buffer, len(buffer)):
+                code = C.get_last_error()  # Cleanup may overwrite last-error.
+                error = _error(code)
+                error._wiki_operation, error._wiki_native_code = "FileRenameInfoEx", code
+                raise error
             published = True
         finally:
             if not published:

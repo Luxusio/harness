@@ -209,6 +209,52 @@ def test_host_cli_failure_restores_legacy_selection(installer, monkeypatch, caps
     assert module._inventory(package, private=False) == before
 
 
+@pytest.mark.parametrize('handler', ['prepare', 'registration'])
+@pytest.mark.parametrize('operation,code,visible', [
+    ('FileRenameInfoEx', 1, True), ('FileRenameInfoEx', 50, True),
+    ('FileRenameInfoEx', 87, True), ('FileRenameInfoEx', 5, True),
+    ('FileRenameInfoEx', 32, True), ('FileRenameInfoEx', 0xFFFFFFFF, True),
+    (None, None, False), ('private-token-sentinel', 87, False),
+    (['FileRenameInfoEx'], 87, False), ('FileRenameInfoEx', True, False),
+    ('FileRenameInfoEx', None, False), ('FileRenameInfoEx', 87.0, False),
+    ('FileRenameInfoEx', 'private-token-sentinel', False),
+    ('FileRenameInfoEx', -1, False), ('FileRenameInfoEx', 0x100000000, False),
+])
+def test_modeled_native_error_diagnostics_are_bounded_and_preserve_selection(
+        installer, monkeypatch, capsys, handler, operation, code, visible):
+    """Modeled OSError metadata tests redaction, not native Windows execution."""
+    module, payload, _ = installer
+    package, metadata, old = _legacy(installer)
+    before = module._inventory(package, private=False)
+    private_path = r'C:\private-path-sentinel\private-token-sentinel'
+    failure = OSError(87, 'private-token-sentinel', private_path)
+    if operation is not None:
+        failure._wiki_operation = operation
+        failure._wiki_native_code = code
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(module, 'prepare', fail if handler == 'prepare' else lambda data: payload)
+    monkeypatch.setattr(module.sys, 'argv', ['install.py', '--runtime', 'codex'])
+    monkeypatch.setattr(module, '_host_command', lambda runtime: ['synthetic-codex'])
+    monkeypatch.setattr(module, 'run_bounded', fail)
+    assert module.main() == 1
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    if visible:
+        assert f'FileRenameInfoEx publication failed; native Windows code {code}' in output
+    else:
+        generic = ('Private payload operation failed; check file permissions and the selected interpreter'
+                   if handler == 'prepare' else 'Host CLI could not complete registration')
+        assert generic in output
+        assert 'FileRenameInfoEx' not in output
+    assert 'private-path-sentinel' not in output and 'private-token-sentinel' not in output
+    assert metadata.read_bytes() == old
+    assert module._inventory(package, private=False) == before
+    assert (payload / 'plugin/.mcp.json').read_bytes() == b'{"command":"python"}'
+
+
 @pytest.mark.parametrize('budget', ['entries', 'bytes'])
 def test_legacy_inventory_limits_refuse_before_selection_change(installer, monkeypatch, budget):
     module, payload, _ = installer
