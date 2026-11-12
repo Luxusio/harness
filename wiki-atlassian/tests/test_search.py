@@ -168,6 +168,8 @@ class ReplicaSearchTests(unittest.TestCase):
     def test_scan_budget_refuses_broad_projection_but_exact_id_and_narrow_root_remain_available(self):
         from wiki_atlassian.models import Node, Page
         from wiki_platform import atomic_write
+        from unittest.mock import patch
+        import wiki_atlassian.replica as implementation
         for number in range(212, 220):
             id = str(number)
             self.remote.pages[id] = Page(Node(id, 'Page '+id, '210', 'page', '20', 1), '<p>small native body</p>')
@@ -176,7 +178,17 @@ class ReplicaSearchTests(unittest.TestCase):
         for id, row in self.metadata('manifest.json')['pages'].items():
             if id != '210':
                 atomic_write(self.replica.base / row['path'], large)
-        self.assertEqual('search_scope_too_large', self.replica.search(dict(query='needle'))['code'])
+        actual_bytes = 0
+        original = implementation.safe_metadata_read
+        def count_markdown(path, limit):
+            nonlocal actual_bytes
+            result = original(path, limit)
+            if Path(path).suffix == '.md':
+                actual_bytes += len(result)
+            return result
+        with patch.object(implementation, 'safe_metadata_read', side_effect=count_markdown):
+            self.assertEqual('search_scope_too_large', self.replica.search(dict(query='needle'))['code'])
+        self.assertLessEqual(actual_bytes, 64*1024*1024)
         self.assertEqual([], self.replica.search(dict(query='needle', root='211'))['results'])
         self.assertEqual('native_id', self.replica.search(dict(query='211'))['results'][0]['match'])
 

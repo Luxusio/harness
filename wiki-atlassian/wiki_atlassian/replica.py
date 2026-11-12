@@ -544,11 +544,16 @@ class Replica:
         for id, row in sorted(pages.items()):
             if not inside(id):
                 continue
-            markdown = self._body(row, 'markdown')
-            scanned_bytes += len(markdown.encode('utf-8'))
             scanned_pages += 1
-            if scanned_bytes > 64 * 1024 * 1024 or scanned_pages > 5000:
+            # Size is only a refusal hint. The platform reader still verifies
+            # the actual file and enforces the remaining aggregate byte limit.
+            size = self._path(row['path']).stat(follow_symlinks=False).st_size
+            if size > BODY_LIMIT:
+                raise RemoteError('replica_unavailable', 'Replica projection is oversized; wait for synchronization')
+            if scanned_bytes + size > 64 * 1024 * 1024 or scanned_pages > 5000:
                 raise RemoteError('search_scope_too_large', 'Narrow the root or search an exact native page ID')
+            markdown = self._body(row, 'markdown', limit=min(BODY_LIMIT, 64*1024*1024-scanned_bytes))
+            scanned_bytes += len(markdown.encode('utf-8'))
             projection = self._snapshot(id, row, markdown)
             generation.update(projection.encode('utf-8'))
             generation.update(compact_json(row['title']).encode('utf-8'))
