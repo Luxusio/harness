@@ -63,6 +63,9 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario
             if method == 'GET' and path == '/wiki/api/v2/pages/10/direct-children':
                 return 200, {}, dict(results=[])
             if method == 'GET' and path == '/wiki/api/v2/pages/11':
+                if not confirmed.is_set():
+                    holder.stdin.write('acquire\n'); holder.stdin.flush()
+                    assert holder.stdout.readline().strip() == 'locked'
                 confirmed.set()
                 return 401, {}, {}
             return original(method, path, query, payload)
@@ -70,6 +73,7 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario
     scripts = Path(__file__).resolve().parents[2] / 'plugin/scripts'
     code = ('import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
             'from wiki_platform import file_lock; '
+            + ('sys.stdin.readline(); ' if scenario == 'removed_page' else '') +
             'lock=file_lock(Path(sys.argv[2])); lock.__enter__(); '
             'print("locked",flush=True); sys.stdin.readline(); lock.__exit__(None,None,None)')
     holder = subprocess.Popen([sys.executable, '-B', '-c', code, str(scripts), str(selected.control / 'notice-access.lock')],
@@ -89,7 +93,8 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario
             result.append(dict(status='unexpected_success'))
     worker = threading.Thread(target=run, daemon=True)
     try:
-        assert holder.stdout.readline().strip() == 'locked'
+        if scenario != 'removed_page':
+            assert holder.stdout.readline().strip() == 'locked'
         started = time.monotonic()
         worker.start()
         assert confirmed.wait(2)
@@ -109,7 +114,11 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario
         assert result[0]['details']['scopeFence'] == 'pending'
         assert sum(row[0] == 'PUT' for row in native.calls) == (1 if scenario == 'write' else 0)
     finally:
-        holder.stdin.write('\n'); holder.stdin.flush(); holder.wait(timeout=3)
+        holder.stdin.write('\n'); holder.stdin.flush()
+        try:
+            holder.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            holder.terminate(); holder.wait(timeout=3)
         if worker.ident is not None:
             worker.join(5)
     # A later call retries publication; the prior pending result is not durable state.
