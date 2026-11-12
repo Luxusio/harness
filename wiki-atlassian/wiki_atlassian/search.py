@@ -28,7 +28,12 @@ def original_offset(content, normalized, offset):
     for end in range(1, len(content) + 1):
         if end < len(content):
             previous, following = ord(content[end - 1]), ord(content[end])
-            hangul = (0x1100 <= previous <= 0x11FF and 0x1100 <= following <= 0x11FF)
+            # A trailing consonant and the next syllable's initial consonant
+            # are separate clusters, even though both are Hangul Jamo.
+            hangul = ((0x1100 <= previous <= 0x1112 and 0x1161 <= following <= 0x1175)
+                      or ((0x1161 <= previous <= 0x1175
+                           or (0xAC00 <= previous <= 0xD7A3 and (previous-0xAC00) % 28 == 0))
+                          and 0x11A8 <= following <= 0x11C2))
             if unicodedata.combining(content[end]) or hangul:
                 continue
         position += len(unicodedata.normalize('NFC', content[start:end]))

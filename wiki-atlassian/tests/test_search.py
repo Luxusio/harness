@@ -24,6 +24,8 @@ class SearchTests(unittest.TestCase):
         korean = Query('한 운영').match('기록', content)
         self.assertEqual(content.index('ᄒ'), korean.body_offset)
         self.assertTrue(content[korean.body_offset:].startswith('한 운영'))
+        adjacent = '😀 한글'
+        self.assertEqual(adjacent.index('ᄀ'), Query('글').match('기록', adjacent).body_offset)
 
     def test_numbers_do_not_match_digits_inside_other_numbers(self):
         self.assertIsNone(Query('201').match('2015 results', '12010 2015'))
