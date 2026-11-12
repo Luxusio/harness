@@ -7,7 +7,7 @@ access and cross-host locks use the shared native platform implementation.
 from __future__ import annotations
 
 from collections import deque
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -583,8 +583,7 @@ class Replica:
             self.remote.require_scope(self.settings, self.settings.root_page_id)
 
     def _operation(self, timeout=30):
-        method = getattr(self.remote, 'operation', None)
-        return method(max_requests=512, max_response_bytes=32*1024*1024, timeout=timeout) if method else nullcontext()
+        return self.remote.operation(max_requests=512, max_response_bytes=32*1024*1024, timeout=timeout)
 
     def deny(self):
         """Fence only this currently admitted credential, including in-flight old hosts."""
