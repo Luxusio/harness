@@ -567,7 +567,7 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
                 raise subprocess.TimeoutExpired(argv, timeout)
             if not available.value:
                 time.sleep(0.005)
-        remaining = max(0, min(5000, int((deadline - time.monotonic()) * 1000)))
+        remaining = max(0, min(0xFFFFFFFE, int((deadline - time.monotonic()) * 1000)))
         if _WaitForSingleObject(process.process, remaining) != 0:
             raise subprocess.TimeoutExpired(argv, timeout)
         code = DWORD()

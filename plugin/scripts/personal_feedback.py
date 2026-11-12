@@ -510,7 +510,9 @@ If unknown, inspect the page/known comment ID before another submission.
             print(json.dumps({"status": "unavailable", "message": "Report must be UTF-8 and at most 128 KiB."}))
             return 1
     result = perform(args.action, report, request=request)
-    print(json.dumps(result, ensure_ascii=False))
+    # ASCII JSON escapes preserve native Unicode content through redirected
+    # Windows streams using a legacy locale encoding.
+    print(json.dumps(result, ensure_ascii=True))
     return 3 if result["status"] == "unknown" else 1 if result["status"] == "unavailable" or args.action != "status" and result["status"] == "unconfigured" else 0
 
 

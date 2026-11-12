@@ -15,7 +15,7 @@ if os.name != "nt":
     import fcntl
 
 from document_destination import select_destination
-from wiki_platform import atomic_write, file_lock, safe_metadata_read, trusted_metadata_directory
+from wiki_platform import atomic_write, file_lock, file_lock_at, safe_metadata_read, trusted_metadata_directory
 
 MAX_BYTES = 64 * 1024
 MAX_SESSIONS = 128
@@ -51,13 +51,6 @@ def _control(env, config, space):
     return data / "wiki-atlassian" / partition / "confluence" / space["key"] / ".sync"
 
 
-class _DirectoryFD(int):
-    def __new__(cls, descriptor, path):
-        value = int.__new__(cls, descriptor)
-        value.path = path
-        return value
-
-
 @contextmanager
 def _directory(path):
     if os.name == "nt":
@@ -79,7 +72,7 @@ def _directory(path):
         info = os.fstat(fd)
         if info.st_uid != os.getuid() or info.st_mode & 0o022:
             raise ValueError("unsafe wiki control directory")
-        yield _DirectoryFD(fd, path)
+        yield fd
     finally:
         os.close(fd)
 
@@ -187,8 +180,9 @@ def _cursor_lock(directory, control):
 def _consume(directory, session, credential, space, limit):
     # The protected directory owns the lock inode. Older mirrors may have
     # created it using the process umask. Its contents are never read.
-    control = directory if os.name == "nt" else directory.path
-    with file_lock(control / "sync.lock", shared=True):
+    control = directory if os.name == "nt" else None
+    lock = file_lock(control / "sync.lock", shared=True) if os.name == "nt" else file_lock_at(directory, "sync.lock", shared=True)
+    with lock:
         if _present(directory, "transaction.json") or _present(directory, "notice-access-denied"):
             return ""
         state = _read(directory, "state.json")

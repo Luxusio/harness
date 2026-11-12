@@ -181,63 +181,75 @@ def atomic_write(path, data):
 
 
 @contextmanager
+def file_lock_at(directory, name, shared=False, blocking=False):
+    """Lock a child of an already retained POSIX directory, without reopening it."""
+    if os.name == "nt":
+        raise ValueError("Windows locks use retained native handles through file_lock")
+    if not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise ValueError("One lock filename required")
+    _directory_info(os.fstat(directory), private=True)
+    inode_key = None
+    inode_registered = False
+    fd = None
+    try:
+        # Checking the inode before opening is essential: closing a second FD
+        # would release another lockf owner in this process, even on rejection.
+        with _guard:
+            try:
+                before = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                before = None
+            if before is not None:
+                _regular(before)
+                inode_key = ("inode", before.st_dev, before.st_ino)
+                if inode_key in _active_locks:
+                    raise BlockingIOError("Lock already owned by this process")
+            fd = os.open(name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         0o600, dir_fd=directory)
+            info = os.fstat(fd)
+            _regular(info)
+            if info.st_uid != os.getuid():
+                raise ValueError("Lock is owned by another user")
+            if before is not None and (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino):
+                raise ValueError("Lock changed while opening")
+            inode_key = ("inode", info.st_dev, info.st_ino)
+            _active_locks.add(inode_key)
+            inode_registered = True
+        flags = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        if not blocking:
+            flags |= fcntl.LOCK_NB
+        try:
+            fcntl.lockf(fd, flags, _LOCK_LENGTH, 0, os.SEEK_SET)
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EAGAIN):
+                raise BlockingIOError("File lock is busy") from None
+            raise
+        yield
+    finally:
+        with _guard:
+            if fd is not None:
+                os.close(fd)
+            if inode_registered:
+                _active_locks.discard(inode_key)
+
+
+@contextmanager
 def file_lock(path, shared=False, blocking=False):
     """One record-lock owner per inode/process, interoperable with FileChannel."""
     path = _absolute(path)
-    # Reserve a path before opening: closing a second descriptor can discard an
-    # existing POSIX process-owned record lock. Alias inode checks are below.
+    if os.name != "nt":
+        with _parent(path, private=True) as (directory, name):
+            with file_lock_at(directory, name, shared=shared, blocking=blocking):
+                yield
+        return
     path_key = ("path", os.path.normcase(str(path)))
     with _guard:
         if path_key in _active_locks:
             raise BlockingIOError("Lock already owned by this process")
         _active_locks.add(path_key)
     try:
-        if os.name == "nt":
-            with _native.file_lock(path, shared=shared, blocking=blocking):
-                yield
-            return
-        with _parent(path, private=True) as (directory, name):
-            inode_key = None
-            inode_registered = False
-            fd = None
-            try:
-                with _guard:
-                    try:
-                        before = os.stat(name, dir_fd=directory, follow_symlinks=False)
-                    except FileNotFoundError:
-                        before = None
-                    if before is not None:
-                        _regular(before)
-                        inode_key = ("inode", before.st_dev, before.st_ino)
-                        if inode_key in _active_locks:
-                            raise BlockingIOError("Lock already owned by this process")
-                    fd = os.open(name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
-                                 0o600, dir_fd=directory)
-                    info = os.fstat(fd)
-                    _regular(info)
-                    if info.st_uid != os.getuid():
-                        raise ValueError("Lock is owned by another user")
-                    if before is not None and (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino):
-                        raise ValueError("Lock changed while opening")
-                    inode_key = ("inode", info.st_dev, info.st_ino)
-                    _active_locks.add(inode_key)
-                    inode_registered = True
-                flags = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
-                if not blocking:
-                    flags |= fcntl.LOCK_NB
-                try:
-                    fcntl.lockf(fd, flags, _LOCK_LENGTH, 0, os.SEEK_SET)
-                except OSError as error:
-                    if error.errno in (errno.EACCES, errno.EAGAIN):
-                        raise BlockingIOError("File lock is busy") from None
-                    raise
-                yield
-            finally:
-                with _guard:
-                    if fd is not None:
-                        os.close(fd)
-                    if inode_registered:
-                        _active_locks.discard(inode_key)
+        with _native.file_lock(path, shared=shared, blocking=blocking):
+            yield
     finally:
         with _guard:
             _active_locks.discard(path_key)
@@ -271,13 +283,20 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
     try:
         deadline = time.monotonic() + timeout
         output = bytearray()
+        leader_exited = False
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(argv, timeout)
-                for key, _ in selector.select(remaining):
+                if not leader_exited and process.poll() is not None:
+                    leader_exited = True
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                for key, _ in selector.select(min(remaining, 0.05)):
                     chunk = os.read(key.fileobj.fileno(), min(65536, limit + 1 - len(output)))
                     if not chunk:
                         selector.unregister(key.fileobj)

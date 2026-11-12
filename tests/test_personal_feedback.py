@@ -553,6 +553,21 @@ def test_packaged_help_explains_private_setup_without_source_readme(tmp_path):
     assert not list(home.iterdir()) and not list(cwd.iterdir())
 
 
+def test_cli_native_unicode_result_survives_restrictive_redirected_encoding(monkeypatch):
+    import io
+
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(feedback.sys, "stdout", stream)
+    monkeypatch.setattr(feedback.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"{}"), encoding="utf-8"))
+    monkeypatch.setattr(feedback.sys, "argv", ["personal_feedback.py", "read"])
+    result = {"status": "read", "title": "한국어 문서", "body": "<p>中文</p>"}
+    monkeypatch.setattr(feedback, "perform", lambda *args, **kwargs: result)
+    assert feedback.main() == 0
+    stream.flush()
+    assert json.loads(raw.getvalue().decode("utf-8")) == result
+
+
 def test_public_cli_default_help_and_invalid_action_from_unrelated_project(tmp_path):
     home = tmp_path / "home"
     home.mkdir(mode=0o700)

@@ -1,5 +1,4 @@
 """Change context through the installed hook entry points and local feed."""
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -16,6 +15,10 @@ except ModuleNotFoundError as error:
         raise
     from unittest import SkipTest
     raise SkipTest("pytest is required to collect this module") from error
+
+if os.name != "nt":
+    import fcntl
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugin/scripts"
@@ -130,6 +133,7 @@ def test_cursor_pages_gaps_and_recovers_new_epoch(setup_wiki):
     assert not hook(repo, env)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX old FileChannel record-lock interoperability; native suite covers consumer contention")
 def test_pending_publication_and_contended_lock_do_not_consume(setup_wiki):
     repo, env, control = setup_wiki
     publish(control, [page_event(1, 101)])
@@ -148,6 +152,34 @@ def test_pending_publication_and_contended_lock_do_not_consume(setup_wiki):
     assert "page 101" in hook(repo, env)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX retained directory/record-lock regression")
+def test_control_directory_replacement_cannot_change_locked_snapshot(setup_wiki, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import wiki_change_notice as notice
+
+    _, env, control = setup_wiki
+    publish(control, [page_event(1, 101)])
+    binding = notice._key([env["ATLASSIAN_BASE_URL"].rstrip("/"),
+                           env["ATLASSIAN_EMAIL"], env["ATLASSIAN_API_TOKEN"]])
+    with notice._directory(control) as directory:
+        old = tmp_path / "retained-control"
+        control.rename(old)
+        control.mkdir()
+        code = ("import fcntl,sys; f=open(sys.argv[1],'r+'); "
+                "fcntl.lockf(f,fcntl.LOCK_EX); print('locked',flush=True); sys.stdin.read()")
+        child = subprocess.Popen([sys.executable, "-B", "-c", code, str(old / "sync.lock")],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            assert child.stdout.readline() == b"locked\n"
+            with pytest.raises(BlockingIOError):
+                notice._consume(directory, "session", binding, "TEAM", 8)
+            assert not (old / "harness-cursors.json").exists()
+            assert not (control / "sync.lock").exists()
+        finally:
+            child.communicate(timeout=5)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture; native suite covers privilege-free junction rejection")
 def test_wrong_connection_scope_malformed_and_unsafe_feed_are_inert(setup_wiki, tmp_path):
     repo, env, control = setup_wiki
     publish(control, [page_event(1, 101)])
@@ -287,6 +319,8 @@ def test_two_spaces_deliver_labelled_notices_with_independent_shared_cursors(set
 
 @pytest.mark.parametrize("failure", ["malformed", "denied", "transaction", "wrong-credential", "busy"])
 def test_unavailable_first_space_does_not_suppress_other_space_or_consume_its_feed(setup_wiki, failure):
+    if os.name == "nt" and failure == "busy":
+        pytest.skip("POSIX record-lock fixture; native suite covers consumer contention")
     repo, env, team = setup_wiki
     dev = add_space(repo, env, "DEV")
     publish(team, [page_event(1, 101)])

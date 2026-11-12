@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import ctypes as C
 from ctypes import wintypes as W
+import hashlib
+import json
 import os
 from pathlib import Path
 import struct
@@ -260,3 +262,87 @@ def test_native_subprocess_utf8_bytes_and_shell_script_rejection(private):
     script.write_text("exit /b 0", encoding="ascii")
     with pytest.raises(ValueError):
         win.run_bounded([str(script)], cwd=private, env=dict(os.environ))
+
+
+def test_native_early_stdout_close_keeps_requested_execution_deadline(private):
+    result = win.run_bounded([sys.executable, "-B", "-c", "import os,time;os.close(1);time.sleep(5.3)"],
+                             cwd=private, env=dict(os.environ), timeout=9)
+    assert result.returncode == 0 and result.stdout == b""
+
+
+def _consumer_fixture(private):
+    project = private / "consumer"
+    win.ensure_private_directory(project / ".git")
+    win.ensure_private_directory(project / "doc/harness")
+    selected = {"backend": "atlassian", "enabled": True, "site": "https://fixture.invalid",
+                "spaces": [{"key": "TEAM", "rootPageId": "456"}]}
+    win.atomic_write(project / "doc/harness/manifest.yaml", json.dumps({"type": "library", "wiki": selected}).encode())
+    env = dict(HOME=str(private), ATLASSIAN_BASE_URL="https://fixture.invalid",
+               ATLASSIAN_EMAIL="fixture@example.invalid", ATLASSIAN_API_TOKEN="synthetic-native-only")
+    identity = [selected["site"], env["ATLASSIAN_EMAIL"], "456", "TEAM"]
+    partition = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
+    control = private / ".local/share/wiki-atlassian" / partition / "confluence/TEAM/.sync"
+    win.ensure_private_directory(control)
+    binding = hashlib.sha256(json.dumps([selected["site"], env["ATLASSIAN_EMAIL"], env["ATLASSIAN_API_TOKEN"]],
+                                       separators=(",", ":")).encode()).hexdigest()
+    win.atomic_write(control / "sync.lock", b"")
+    win.atomic_write(control / "state.json", json.dumps({"credentialBinding": binding}).encode())
+    win.atomic_write(control / "changes.json", json.dumps({"epoch": "1" * 32, "head": 1,
+                     "events": [{"seq": 1, "kind": "updated", "id": "101", "version": 2}]}).encode())
+    return project, env, control
+
+
+def test_native_project_selector_and_private_feedback_sources_are_independent(private, monkeypatch):
+    import document_destination as destination
+    import personal_feedback as feedback
+
+    project, env, _ = _consumer_fixture(private)
+    assert destination.select_destination(env, cwd=project)["mode"] == "external"
+    assert destination.select_destination(dict(env, ATLASSIAN_BASE_URL="https://other.invalid"), cwd=project)["mode"] == "unavailable"
+    win.ensure_private_directory(private / ".config/harness")
+    win.atomic_write(private / ".config/harness/feedback.yaml", json.dumps({"backend": "atlassian",
+                     "page": "https://private.invalid/wiki/spaces/TEAM/pages/123"}).encode())
+    def forbidden(*args, **kwargs):
+        raise AssertionError("status must not authenticate or contact any service")
+    monkeypatch.setattr(feedback, "_credentials", forbidden)
+    monkeypatch.setattr(feedback, "_request", forbidden)
+    status = feedback.perform("status", home=private, environment=env)
+    assert status["status"] == "configured" and status["site"] == "https://private.invalid"
+
+
+@pytest.mark.parametrize("fence", ["transaction.json", "notice-access-denied", "credential"])
+def test_native_notice_transaction_denial_credentials_and_cursor(private, fence):
+    import wiki_change_notice as notice
+
+    project, env, control = _consumer_fixture(private)
+    request = {"session_id": "native-session", "cwd": str(project)}
+    if fence == "credential":
+        blocked = dict(env, ATLASSIAN_API_TOKEN="different-synthetic-token")
+    else:
+        win.atomic_write(control / fence, b"")
+        blocked = env
+    assert notice.render_notice(request, "codex", blocked) == ""
+    assert not (control / "harness-cursors.json").exists()
+    if fence != "credential":
+        (control / fence).unlink()
+    assert "page 101" in notice.render_notice(request, "codex", env)
+    assert (control / "harness-cursors.json").is_file()
+    assert notice.render_notice(request, "codex", env) == ""
+
+
+def test_native_notice_observes_other_process_snapshot_lock(private):
+    import wiki_change_notice as notice
+
+    project, env, control = _consumer_fixture(private)
+    code = ("import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);import _wiki_windows as w\n"
+            "with w.file_lock(Path(sys.argv[2])):\n print('locked',flush=True);sys.stdin.read()")
+    child = subprocess.Popen([sys.executable, "-B", "-c", code, str(SCRIPTS), str(control / "sync.lock")],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    request = {"session_id": "native-lock-session", "cwd": str(project)}
+    try:
+        assert child.stdout.readline() == b"locked\r\n"
+        assert notice.render_notice(request, "codex", env) == ""
+        assert not (control / "harness-cursors.json").exists()
+    finally:
+        child.communicate(timeout=5)
+    assert "page 101" in notice.render_notice(request, "codex", env)

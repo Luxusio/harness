@@ -136,10 +136,13 @@ def test_bounded_process_stdout_timeout_and_utf8(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process group cleanup")
-def test_normal_exit_still_cleans_owned_descendants(tmp_path):
+@pytest.mark.parametrize("inherited_stdout", [False, True])
+def test_normal_exit_still_cleans_owned_descendants(tmp_path, inherited_stdout):
     child = "import time;time.sleep(60)"
     parent = "import subprocess,sys; p=subprocess.Popen([sys.executable,'-c',sys.argv[1]],stdout=subprocess.DEVNULL); print(p.pid)"
-    result = platform.run_bounded([sys.executable, "-c", parent, child], cwd=tmp_path, env=dict(os.environ))
+    if inherited_stdout:
+        parent = parent.replace(",stdout=subprocess.DEVNULL", "")
+    result = platform.run_bounded([sys.executable, "-c", parent, child], cwd=tmp_path, env=dict(os.environ), timeout=3)
     pid = int(result.stdout)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
