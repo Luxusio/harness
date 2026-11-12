@@ -779,7 +779,7 @@ class Replica:
                     nodes[id] = node
                 except RemoteError as error:
                     from .remote import RootScopeDenial
-                    if isinstance(error, RootScopeDenial):
+                    if isinstance(error, RootScopeDenial) or error.code == 'http_401':
                         raise
                     if error.code not in ('scope_outside_connection', 'scope_not_current'):
                         unavailable.add(id)

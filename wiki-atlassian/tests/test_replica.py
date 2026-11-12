@@ -240,6 +240,60 @@ class ReplicaTests(unittest.TestCase):
             replica.synchronize()
         self.assertTrue((replica.control / 'notice-access-denied').exists())
 
+    def test_actual_remote_omitted_page_recheck_propagates_401_and_retains_partial_403_404(self):
+        pages = dict(self.remote.pages)
+        for status in (401, 403, 404, 503):
+            with self.subTest(status=status):
+                settings = SpaceSettings(self.settings.config, self.settings.credentials, self.root / str(status))
+                omitted, calls, fences = False, [], []
+                def transport(method, target, headers, data, timeout):
+                    uri, query = urlsplit(target), parse_qs(urlsplit(target).query)
+                    calls.append(uri.path)
+                    match = re.fullmatch(r'/wiki/api/v2/pages/([1-9][0-9]*)(/direct-children)?', uri.path)
+                    if method != 'GET' or match is None:
+                        return 404, {}, b'{}'
+                    id, children = match.groups()
+                    if omitted and id == '211':
+                        return status, {}, b'{}'
+                    page = pages.get(id)
+                    if page is None:
+                        return 404, {}, b'{}'
+                    if children:
+                        value = dict(results=[] if omitted else [dict(id=p.node.id, type=p.node.type)
+                                     for p in pages.values() if p.node.parent_id == id])
+                    else:
+                        node = page.node
+                        value = dict(id=id, title=node.title, type=node.type, spaceId=node.space_id,
+                                     status=node.status, parentId=node.parent_id, version=dict(number=node.version))
+                        if query.get('body-format') == ['storage']:
+                            value['body'] = dict(storage=dict(value=page.body, representation='storage'))
+                    return 200, {}, compact_json(value).encode('utf-8')
+                replica = Replica(settings, Remote(settings.credentials, transport=transport))
+                self.addCleanup(replica.close)
+                replica.synchronize()
+                def global_fence():
+                    fences.append(True)
+                    replica.deny(timeout=0)
+                    return {}
+                replica.on_authorization_denied = global_fence
+                omitted = True
+                calls.clear()
+                if status == 401:
+                    with self.assertRaises(RemoteError) as caught:
+                        replica.synchronize()
+                    self.assertEqual('http_401', caught.exception.code)
+                    self.assertTrue(caught.exception.details['authorizationDenied'])
+                    self.assertEqual([True], fences)
+                    self.assertTrue((replica.control / 'notice-access-denied').exists())
+                    self.assertEqual('root_scope_denied', replica.get_document(dict(document='210'))['code'])
+                else:
+                    replica.synchronize()
+                    self.assertEqual([], fences)
+                    self.assertFalse((replica.control / 'notice-access-denied').exists())
+                    self.assertEqual('document_unavailable', replica.get_document(dict(document='211'))['code'])
+                    self.assertIn('content', replica.get_document(dict(document='210')))
+                self.assertEqual(1, calls.count('/wiki/api/v2/pages/211'))
+
     def test_authoritative_same_version_sweep_is_shared_and_repairs_survive_restart(self):
         self.replica.synchronize()
         self.remote.bodies.clear()
