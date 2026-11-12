@@ -154,6 +154,20 @@ body sweep. Known local publication failures trigger exact-page repair; after
 restart, a lost in-memory notification is recovered by the next due sweep,
 subject to service availability. Neither path repeats a remote mutation.
 
+Whole-space synchronization uses paginated native batches for authorized
+document bodies and complete bulk metadata verification before publication.
+It does not require several metadata requests per document. ROOT connections
+retain their narrower body-read scope. A complete current inventory cannot
+regrant a missing document from an older snapshot; observed admission drift
+fences unsafe cached access until a complete authorized repair succeeds.
+
+Synchronization remains bounded by elapsed time, request count, response size
+and aggregate bytes. `connection_status` exposes the sweep stage, elapsed time,
+request count and terminal failure reason without document bodies or credentials.
+Aggregate deadline exhaustion is distinct from a network timeout. A published
+document snapshot does not imply successful comment observation; failed comment
+polling preserves the previous fingerprint and reports its remaining work.
+
 Use the `knowledge` skill for source attribution, targeted retrieval and native
 editing. The `migrate-docs` skill and independent `document-reviewer` cover
 authorized knowledge consolidation and migration. They do not replace actual
@@ -266,7 +280,13 @@ actual cached payload bytes before reporting success.
 The registered marketplace path stays stable across upgrades. A private,
 installer-locked selection points to an immutable payload; existing processes
 retain their original runtime path while the next installation selects a new
-version. Unknown marketplace metadata or selections are preserved and refused.
+version. A recognized, owner-verified `packages/0.1.0+h…/plugin` selection can
+migrate once to the Python payload. The old immutable package stays intact;
+registration failure preserves the owned previous selection for recovery.
+Unknown, altered or linked marketplace selections are preserved and refused.
+Host-owned caches follow each CLI's lifecycle: Codex can remove its previous
+code cache during update, while installer-owned immutable launchers remain
+available. Preserving payloads does not claim that every host cache is retained.
 `--prepare-only` prepares the payload without registration. Restart/reconnect
 the host to load a changed MCP or skill. Installation does not inject a
 company connection, import documents, replace Talos or publish remote content.
