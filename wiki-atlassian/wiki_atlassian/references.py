@@ -12,6 +12,8 @@ def native_page_url_id(value, origin, space=None, allow_api=False):
                 or '\\' in value or '?' in value or '#' in value):
             raise ValueError()
         uri, expected = urlsplit(value), urlsplit(origin)
+        if any(character in uri.path for character in '[]<>"{}|^`'):
+            raise ValueError()
         if (expected.scheme != 'https' or not expected.hostname or expected.username is not None
                 or expected.password is not None or expected.path not in ('', '/') or expected.query or expected.fragment
                 or (uri.scheme, uri.hostname, uri.port) != (expected.scheme, expected.hostname, expected.port)

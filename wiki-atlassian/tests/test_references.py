@@ -9,7 +9,7 @@ def test_native_ui_and_api_page_references(path):
     assert native_page_url_id('https://site.invalid' + path, 'https://site.invalid', 'TEAM', True) == '42'
 
 
-@pytest.mark.parametrize('suffix', ['#', '?', '/..', '/%2e%2e', '/%252e', '/%ZZ', '/%2f', '/%255c', '/bad slug', '/%C2%80', '/%FF'])
+@pytest.mark.parametrize('suffix', ['#', '?', '/..', '/%2e%2e', '/%252e', '/%ZZ', '/%2f', '/%255c', '/bad slug', '/%C2%80', '/%FF', '/a[b]', '/a{b}', '/a|b', '/a^b', '/a`b'])
 def test_invalid_native_page_suffixes_do_not_supply_authority(suffix):
     with pytest.raises(RemoteError):
         native_page_url_id('https://site.invalid/wiki/spaces/TEAM/pages/42' + suffix, 'https://site.invalid', 'TEAM', True)
