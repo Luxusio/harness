@@ -237,14 +237,16 @@ The knowledge skill covers attributed source records, topic structure,
 explicit document relationships, correction, and handling notices. Document
 publication still uses the selected Confluence scope and native permissions.
 
-## Build and install
+## Install the Python runtime
 
-Java 21 and Gradle are build prerequisites. Build/test in this directory:
+Use Python 3.12 or later with PyYAML in that same interpreter. From this
+directory, run with the detected native Python (`py` on Windows, or `python3`
+on POSIX):
 
-```sh
-gradle --no-daemon test shadowJar
-python3 install.py --skip-build --runtime codex
-# Or: python3 install.py --skip-build --runtime claude
+```text
+python -m pip install "PyYAML>=6.0"
+python install.py --runtime codex
+python install.py --runtime claude
 ```
 
 The installer prepares a versioned standalone payload and registers its local
@@ -259,10 +261,18 @@ version. Unknown marketplace metadata or selections are preserved and refused.
 the host to load a changed MCP or skill. Installation does not inject a
 company connection, import documents, replace Talos or publish remote content.
 
-The stdio launcher uses `WIKI_ATLASSIAN_JAVA` when set to an absolute Java
-executable, otherwise `JAVA_HOME/bin/java`, otherwise Java from PATH. Source
-launches require `build/libs/wiki-atlassian.jar`; packaged launches use
-`lib/wiki-atlassian.jar`.
+The MCP runs directly in the installer-selected Python interpreter. Java,
+Gradle, WSL, Bash and privileged symlink creation are not prerequisites.
+Versioned payloads live inside the stable marketplace directory, and its
+manifest selects an ordinary relative directory. Windows uses native file
+handles, ACLs, locks and process jobs; POSIX uses its descriptor and record-lock
+implementations. Neither platform is an emulation prerequisite for the other.
+
+The plugin's portable tests run from this directory with
+`python -m pytest --confcutdir=. tests`. This keeps unrelated repository test
+infrastructure outside the standalone plugin's requirements. Native Windows
+filesystem, ACL, process and installation acceptance is reported separately
+from Linux tests and platform-specific skips.
 
 ## Personal Harness improvement inbox
 
@@ -280,8 +290,8 @@ starting without the old cursor. HTTP and body continuations are checked, not
 followed to arbitrary destinations. No background reading, acknowledgement,
 publication or local report storage occurs.
 
-The installed launcher pins its own Python invocation and the packaged canonical
-private helper. That Python needs PyYAML for configured private YAML; missing
+The installed launcher uses its own Python invocation and the packaged canonical
+private helper directly. That Python needs PyYAML for configured private YAML; missing
 dependencies return unavailable and are not installed automatically. Start via
 the launcher, then reconnect the host after installation to expose the new tool.
 

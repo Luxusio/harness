@@ -7,9 +7,11 @@ The archive records source snapshot dc620db6e668561b, fingerprint
 
 This is a selective source extraction, not a copy of the Talos application,
 its company corpus, runtime credentials or historical completion evidence.
-Existing Kotlin namespaces are retained to reduce changes to native editing
-semantics. Workflow/project activation and company-specific defaults are
-replaced by this plugin's injected-environment connection boundary.
+The original extraction used Kotlin namespaces. The user subsequently required
+a direct Python MCP with native Windows and POSIX implementations. Native
+editing, scope, replica and failure contracts are preserved through Python
+behavioral verification, rather than a JVM wrapper. Workflow/project activation
+and company-specific defaults use this plugin's injected-environment boundary.
 
 The archive's historical 523-test PASS and installed JAR are not this plugin's
 acceptance results. New behavior requires its own actual verification.

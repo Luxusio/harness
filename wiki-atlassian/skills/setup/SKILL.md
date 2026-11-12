@@ -51,11 +51,26 @@ token to a new origin. Never silently create/replace that pin from public YAML;
 establish the issuer from the private setup or authenticated issuance flow.
 Missing/mismatched binding leaves authentication pending. When it matches,
 check whether existing credentials authenticate the intended account/site.
-For a new credential, establish the protected browser-to-local transfer before
-clicking Create. The user's setup request authorizes routine issuance for the
-selected integration. Use the provider's actual UI and account policy. Give
-the token a recognizable integration name, retain the provider's allowed
-default expiration, and report its expiry without the token.
+For project wiki and personal feedback setup in the same environment, first
+check compatible existing credentials for the intended site, authenticated
+account, authentication transport and required permissions. Reuse a valid
+matching token; do not issue a second token merely for another private settings
+file or because the existing token expires sooner than a new token could.
+Keep the project and inbox settings separately owned. Deliberate setup may
+securely populate both with the same verified credential; runtime never borrows
+between them. Read access alone does not prove comment-create permission: use
+available provider permission evidence without creating a test comment, and
+preserve any unverified permission as such.
+
+If no matching token is usable, establish the protected browser-to-local
+transfer before clicking Create, then issue one compatible token for this
+setup. The user's setup request authorizes routine issuance for the selected
+integration. Use the provider's actual UI and account policy. Give the token a
+recognizable integration name and choose the maximum expiration currently
+selectable and permitted for that token. Do not hardcode a lifetime, extend a
+reused token, revoke other credentials or change account policy. Record the
+actual number issued (zero when reused), reuse/issuance result and actual
+expiry when observable, without the secret. Unknown expiry stays unknown.
 
 This runtime uses account email and personal API token with Basic auth on the
 selected HTTPS site origin. Atlassian Cloud scoped tokens require a gateway

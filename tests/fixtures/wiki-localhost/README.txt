@@ -1,0 +1,1 @@
+Public synthetic localhost-only TLS fixture, shared with the Python native transport tests. This known test key is never a production credential. Do not use it for external connections. Validity and SANs are checked by normal TLS verification.

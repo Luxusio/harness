@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build and register a standalone document plugin through the host CLI."""
+"""Prepare and register the native Python wiki MCP without a build toolchain."""
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import os
@@ -12,232 +11,235 @@ from pathlib import Path
 import re
 import secrets
 import shutil
-import stat
 import subprocess
 import sys
-import tempfile
 
 
 ROOT = Path(__file__).resolve().parent
-PAYLOAD_DIRS = (".claude-plugin", ".codex-plugin", "skills", "agents", "scripts")
+HELPERS = ROOT.parent / 'plugin/scripts'
+sys.path.insert(0, str(HELPERS))
+from wiki_platform import atomic_write, ensure_private_directory, file_lock, run_bounded, safe_read
+
+PAYLOAD_DIRS = ('.claude-plugin', '.codex-plugin', 'skills', 'agents', 'scripts', 'wiki_atlassian')
+SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py')
+VERSION = re.compile(r'0\.2\.0\+h[0-9a-f]{16}')
 
 
-def marketplace_bytes() -> bytes:
-    return (json.dumps({"name": "knowledge-documents", "owner": {"name": "knowledge-documents"},
-        "plugins": [{"name": "wiki-atlassian", "source": "./plugin"}]}, indent=2) + "\n").encode()
+class RegistrationFailure(Exception):
+    """Per-host failures were already rendered without sensitive CLI output."""
 
 
-@contextmanager
-def trusted_directory(path: Path):
-    """Walk/create private storage without following links or writable ancestry."""
-    if not path.is_absolute() or ".." in path.parts:
-        raise ValueError("Plugin storage must be an absolute canonical path")
-    descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def marketplace_bytes(relative):
+    return (json.dumps({'name': 'knowledge-documents', 'owner': {'name': 'knowledge-documents'},
+        'plugins': [{'name': 'wiki-atlassian', 'source': relative}]}, indent=2) + '\n').encode('utf-8')
+
+
+def _source_files():
+    result = {}
+    required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
+                'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references', 'cursors', 'policy')
+    if any(not (ROOT / 'wiki_atlassian' / (name + '.py')).is_file() for name in required):
+        raise ValueError('Python wiki source is incomplete; preserve the current installation')
+    for name in PAYLOAD_DIRS:
+        directory = ROOT / name
+        if not directory.is_dir() or directory.is_symlink():
+            raise ValueError('Plugin source directory is unavailable or unsafe')
+        for base, dirs, files in os.walk(directory, followlinks=False):
+            dirs[:] = [part for part in dirs if part != '__pycache__']
+            for part in dirs:
+                path = Path(base) / part
+                if path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
+                    raise ValueError('Plugin source may not contain linked directories')
+            for part in files:
+                if part.endswith(('.pyc', '.pyo')):
+                    continue
+                path = Path(base) / part
+                result[path.relative_to(ROOT).as_posix()] = safe_read(path, 16 * 1024 * 1024)
+    for name in ('.mcp.json', 'PROVENANCE.md', 'README.md', 'pyproject.toml'):
+        result[name] = safe_read(ROOT / name, 1024 * 1024)
+    for name in SHARED_HELPERS:
+        path = HELPERS / name
+        result['scripts/' + name] = safe_read(path, 1024 * 1024)
+    return result
+
+
+def _inventory(root):
+    result = {}
+    for base, dirs, files in os.walk(root, followlinks=False):
+        ensure_private_directory(Path(base))
+        for part in dirs:
+            ensure_private_directory(Path(base) / part)
+        for part in files:
+            path = Path(base) / part
+            result[path.relative_to(root).as_posix()] = safe_read(path, 16 * 1024 * 1024, private=True)
+    return result
+
+
+def prepare(data_dir):
+    """Publish one immutable payload under a symlink-free stable marketplace."""
+    data_dir = Path(data_dir)
+    if not data_dir.is_absolute() or '..' in data_dir.parts:
+        raise ValueError('Plugin data directory must be an absolute canonical path')
+    if sys.version_info < (3, 12):
+        raise ValueError('Python 3.12 or later is required')
     try:
-        for part in path.parts[1:]:
-            try:
-                os.mkdir(part, 0o700, dir_fd=descriptor)
-            except FileExistsError:
-                pass
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-            info = os.fstat(descriptor)
-            sticky = bool(info.st_mode & stat.S_ISVTX)
-            if info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022 and not sticky:
-                raise ValueError("Unsafe plugin storage directory; preserve it and choose private storage")
-        yield descriptor
-    finally:
-        os.close(descriptor)
-
-
-def prepare(data_dir: Path, jar: Path) -> Path:
-    if not jar.is_file() or jar.is_symlink():
-        raise ValueError("Build wiki-atlassian.jar before installation")
-    parent = data_dir / "packages"
-    # Never replace a pre-existing plugin tree; each attempt has private custody.
-    with trusted_directory(parent) as descriptor:
-        info = os.fstat(descriptor)
-        if info.st_uid != os.getuid() or info.st_mode & 0o022:
-            raise ValueError("Plugin package directory must be private and owned by the installer")
-        return _prepare(parent, descriptor, jar)
-
-
-def _prepare(parent: Path, parent_descriptor: int, jar: Path) -> Path:
-    with tempfile.TemporaryDirectory(prefix=".install-", dir=parent) as temporary:
-        stage = Path(temporary)
-        stage_identity = stage.stat()
-        plugin = stage / "plugin"
-        plugin.mkdir()
-        for name in PAYLOAD_DIRS:
-            shutil.copytree(ROOT / name, plugin / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        # copytree retains source directory modes, including frozen inputs.
-        # Only private staging directories become writable before adding files.
-        for path in plugin.rglob("*"):
-            if path.is_symlink():
-                raise ValueError("Plugin payload cannot contain symbolic links")
-            if path.is_dir():
-                path.chmod(0o700)
-        for name in (".mcp.json", "PROVENANCE.md", "README.md"):
-            shutil.copyfile(ROOT / name, plugin / name)
-        # Reuse the canonical private-auth implementation; never maintain a
-        # second credential reader inside the backend plugin.
-        for name in ("personal_feedback.py", "document_destination.py"):
-            shutil.copyfile(ROOT.parent / "plugin/scripts" / name, plugin / "scripts" / name)
-        (plugin / "lib").mkdir()
-        shutil.copyfile(jar, plugin / "lib/wiki-atlassian.jar")
-        # Frozen verification inputs are read-only; only our private copies change.
-        for path in plugin.rglob("*"):
-            if path.is_symlink():
-                raise ValueError("Plugin payload cannot contain symbolic links")
-            path.chmod(0o700 if path.is_dir() else 0o600)
-        digest = hashlib.sha256()
-        interpreter = str(Path(sys.executable).absolute())
-        digest.update((interpreter + "\0" + str(parent) + "\0").encode())
-        for path in sorted(plugin.rglob("*")):
-            if path.is_symlink():
-                raise ValueError("Plugin payload cannot contain symbolic links")
-            if path.is_file():
-                digest.update(str(path.relative_to(plugin)).encode() + b"\0")
-                with path.open("rb") as stream:
-                    while chunk := stream.read(1024 * 1024):
-                        digest.update(chunk)
-        version = "0.1.0+h" + digest.hexdigest()[:16]
-        for name in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
-            path = plugin / name
-            manifest = json.loads(path.read_text())
-            manifest["version"] = version
-            path.write_text(json.dumps(manifest, indent=2) + "\n")
-        market = stage / ".claude-plugin/marketplace.json"
-        market.parent.mkdir()
-        market.write_bytes(marketplace_bytes())
-        destination = parent / version
-        # Resolve transport paths during installation. Some hosts expand plugin
-        # variables in hooks but leave them literal in MCP argument arrays.
-        transport_path = plugin / ".mcp.json"
-        transport = json.loads(transport_path.read_text())
-        transport["mcpServers"]["atlassian"]["command"] = interpreter
-        transport["mcpServers"]["atlassian"]["args"] = [
-            "-I", str(destination / "plugin/scripts/launch.py"),
-        ]
-        transport_path.write_text(json.dumps(transport, indent=2) + "\n")
+        import yaml
+        if not hasattr(yaml, 'SafeLoader'):
+            raise ImportError()
+    except ImportError:
+        raise ValueError('Install PyYAML for the Python interpreter running this installer') from None
+    parent = data_dir / 'marketplace/versions'
+    ensure_private_directory(parent)
+    files = _source_files()
+    interpreter = str(Path(sys.executable).absolute())
+    digest = hashlib.sha256((interpreter + '\0' + str(parent) + '\0').encode('utf-8'))
+    for name, content in sorted(files.items()):
+        digest.update(name.encode('utf-8') + b'\0' + content + b'\0')
+    version = '0.2.0+h' + digest.hexdigest()[:16]
+    destination = parent / version
+    for name in ('.claude-plugin/plugin.json', '.codex-plugin/plugin.json'):
+        value = json.loads(files[name])
+        value['version'] = version
+        files[name] = (json.dumps(value, indent=2) + '\n').encode('utf-8')
+    transport = json.loads(files['.mcp.json'])
+    transport['mcpServers']['atlassian']['command'] = interpreter
+    transport['mcpServers']['atlassian']['args'] = ['-I', '-B', str(destination / 'plugin/scripts/launch.py')]
+    files['.mcp.json'] = (json.dumps(transport, indent=2) + '\n').encode('utf-8')
+    with file_lock(parent / 'publish.lock', blocking=False):
         if os.path.lexists(destination):
-            with trusted_directory(destination):
-                pass
-            # Validate existing bytes rather than trusting a hash-shaped pathname.
-            expected = {str(p.relative_to(stage)): p.read_bytes() for p in stage.rglob("*") if p.is_file()}
-            actual = {str(p.relative_to(destination)): p.read_bytes() for p in destination.rglob("*") if p.is_file() and not p.is_symlink()}
-            if destination.is_symlink() or expected != actual or any(p.is_symlink() for p in destination.rglob("*")):
-                raise ValueError("Existing versioned plugin payload differs; preserve it and inspect")
-        else:
-            before = os.stat(stage.name, dir_fd=parent_descriptor, follow_symlinks=False)
-            if not stat.S_ISDIR(before.st_mode) or (before.st_dev, before.st_ino) != (stage_identity.st_dev, stage_identity.st_ino):
-                raise ValueError("Private plugin staging directory changed")
-            os.rename(stage.name, destination.name, src_dir_fd=parent_descriptor, dst_dir_fd=parent_descriptor)
-            after = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
-            if not stat.S_ISDIR(after.st_mode) or (after.st_dev, after.st_ino) != (stage_identity.st_dev, stage_identity.st_ino):
-                raise ValueError("Published plugin directory changed; registration refused")
-        return destination
+            ensure_private_directory(destination)
+            if _inventory(destination / 'plugin') != files:
+                raise ValueError('Existing immutable plugin payload differs; preserve it and inspect')
+            return destination
+        stage = parent / ('.install-' + secrets.token_hex(16))
+        ensure_private_directory(stage)
+        try:
+            plugin = stage / 'plugin'
+            ensure_private_directory(plugin)
+            for name, content in files.items():
+                path = plugin.joinpath(*name.split('/'))
+                ensure_private_directory(path.parent)
+                atomic_write(path, content)
+            if _inventory(plugin) != files:
+                raise ValueError('Staged plugin payload changed; publication refused')
+            # All handles owned by inventory/read have closed, including on Windows.
+            os.rename(stage, destination)
+            ensure_private_directory(destination)
+            if _inventory(destination / 'plugin') != files:
+                raise ValueError('Published plugin payload changed; registration refused')
+        finally:
+            if stage.exists():
+                shutil.rmtree(stage)
+    return destination
 
 
 @contextmanager
-def marketplace(payload: Path):
-    """Keep host registration stable while retaining immutable runtime versions."""
-    if payload.parent.name != "packages" or not re.fullmatch(r"0\.1\.0\+h[0-9a-f]{16}", payload.name) or not payload.is_dir():
-        raise ValueError("Use a prepared immutable plugin payload")
-    with trusted_directory(payload):
-        pass
-    root = payload.parent.parent / "marketplace"
-    with trusted_directory(root) as directory:
-        owner = os.fstat(directory)
-        if owner.st_uid != os.getuid() or owner.st_mode & 0o022:
-            raise ValueError("Marketplace directory must be private and owned by the installer")
-        lock = os.open("install.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+def marketplace(payload):
+    payload = Path(payload)
+    if not payload.is_absolute() or payload.parent.name != 'versions' or not VERSION.fullmatch(payload.name):
+        raise ValueError('Use a prepared immutable plugin payload')
+    ensure_private_directory(payload)
+    _inventory(payload / 'plugin')
+    root = payload.parent.parent
+    metadata = root / '.claude-plugin'
+    ensure_private_directory(metadata)
+    with file_lock(root / 'install.lock', blocking=False):
+        path = metadata / 'marketplace.json'
         try:
-            info = os.fstat(lock)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022 or info.st_nlink != 1:
-                raise ValueError("Unsafe marketplace installation lock")
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            with trusted_directory(root / ".claude-plugin") as metadata:
-                try:
-                    descriptor = os.open("marketplace.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=metadata)
-                except FileNotFoundError:
-                    name = ".manifest-" + secrets.token_hex(8)
-                    descriptor = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=metadata)
-                    with os.fdopen(descriptor, "wb") as stream:
-                        stream.write(marketplace_bytes())
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(name, "marketplace.json", src_dir_fd=metadata, dst_dir_fd=metadata)
+            old = safe_read(path, 65536, private=True)
+        except FileNotFoundError:
+            old = None
+        if old is not None:
+            value = json.loads(old)
+            if value.get('name') != 'knowledge-documents' or not isinstance(value.get('plugins'), list) or len(value['plugins']) != 1:
+                raise ValueError('Existing marketplace metadata is not managed by this installer')
+            item = value['plugins'][0]
+            if item.get('name') != 'wiki-atlassian':
+                raise ValueError('Existing marketplace contains another plugin; preserve it')
+            selected = item.get('source')
+            if selected != './plugin':
+                if not isinstance(selected, str) or not re.fullmatch(r'\./versions/0\.2\.0\+h[0-9a-f]{16}/plugin', selected):
+                    raise ValueError('Existing marketplace selection is not a managed payload')
+        atomic_write(path, marketplace_bytes('./versions/' + payload.name + '/plugin'))
+        try:
+            yield root
+        except BaseException:
+            # Never erase either payload. Restore only the exact selection we own.
+            if safe_read(path, 65536, private=True) == marketplace_bytes('./versions/' + payload.name + '/plugin'):
+                if old is None:
+                    path.unlink()
                 else:
-                    with os.fdopen(descriptor, "rb") as stream:
-                        info = os.fstat(stream.fileno())
-                        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022 or stream.read(65537) != marketplace_bytes():
-                            raise ValueError("Existing marketplace metadata differs; preserve it and inspect")
-            try:
-                selected = os.stat("plugin", dir_fd=directory, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            else:
-                if not stat.S_ISLNK(selected.st_mode) or selected.st_uid != os.getuid():
-                    raise ValueError("Existing marketplace selection is not installer-owned")
-                target = Path(os.readlink("plugin", dir_fd=directory))
-                if target.parent.parent != payload.parent or target.name != "plugin" or not re.fullmatch(r"0\.1\.0\+h[0-9a-f]{16}", target.parent.name):
-                    raise ValueError("Existing marketplace selection points outside managed packages")
-            name = ".plugin-" + secrets.token_hex(8)
-            os.symlink(str(payload / "plugin"), name, target_is_directory=True, dir_fd=directory)
-            try:
-                os.replace(name, "plugin", src_dir_fd=directory, dst_dir_fd=directory)
-                if os.readlink("plugin", dir_fd=directory) != str(payload / "plugin"):
-                    raise ValueError("Marketplace selection changed; registration refused")
-                yield root
-            finally:
-                try:
-                    os.unlink(name, dir_fd=directory)
-                except FileNotFoundError:
-                    pass
-        finally:
-            os.close(lock)
+                    atomic_write(path, old)
+            raise
 
 
-def main() -> int:
+def _host_command(runtime):
+    executable = shutil.which(runtime + '.exe') if os.name == 'nt' else None
+    executable = executable or shutil.which(runtime)
+    if executable is None:
+        raise ValueError(runtime.title() + ' CLI is unavailable')
+    path = Path(executable)
+    if os.name == 'nt' and path.suffix.lower() in ('.cmd', '.bat'):
+        # Do not interpolate user paths into cmd.exe. Resolve known npm layouts
+        # to a real native executable or a Node program with literal argv.
+        modules = path.parent / 'node_modules'
+        if runtime == 'codex':
+            targets = {'AMD64': 'x86_64-pc-windows-msvc', 'ARM64': 'aarch64-pc-windows-msvc'}
+            target = targets.get(os.environ.get('PROCESSOR_ARCHITECTURE', '').upper())
+            candidates = [modules / '@openai/codex/vendor' / str(target) / 'codex/codex.exe']
+            if target:
+                candidates.append(modules / ('@openai/codex-win32-' + ('arm64' if target.startswith('aarch64') else 'x64')) / 'vendor' / target / 'codex/codex.exe')
+            for candidate in candidates:
+                if candidate.is_file() and not candidate.is_symlink():
+                    safe_read(candidate, 256 * 1024 * 1024)
+                    return [str(candidate)]
+        elif runtime == 'claude':
+            script = modules / '@anthropic-ai/claude-code/cli.js'
+            node = shutil.which('node.exe')
+            if node and script.is_file() and not script.is_symlink():
+                safe_read(script, 64 * 1024 * 1024)
+                return [node, str(script)]
+        raise ValueError('Native host executable unavailable; install the native CLI or a supported npm layout without a shell wrapper')
+    return [str(path)]
+
+
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime", choices=("codex", "claude"), action="append")
-    parser.add_argument("--skip-build", action="store_true", help="Use the already-built local JAR")
-    parser.add_argument("--prepare-only", action="store_true", help="Prepare a local marketplace without registering it")
+    parser.add_argument('--runtime', choices=('codex', 'claude'), action='append')
+    parser.add_argument('--prepare-only', action='store_true')
     args = parser.parse_args()
-    if not args.skip_build:
-        gradle = shutil.which("gradle")
-        if not gradle:
-            parser.error("Gradle is required to build; use --skip-build only after a verified build")
-        subprocess.run([gradle, "--no-daemon", "shadowJar"], cwd=ROOT, check=True)
-    base = Path.home() / ".local/share"
-    destination = prepare(base / "wiki-atlassian", ROOT / "build/libs/wiki-atlassian.jar")
-    runtimes = args.runtime or [name for name in ("codex", "claude") if shutil.which(name)]
-    if not runtimes and not args.prepare_only:
-        parser.error("No supported host CLI found; use --prepare-only for a portable payload")
-    failed = False
-    with marketplace(destination) as source:
-        if args.prepare_only:
-            print(source)
-            return 0
-        for runtime in runtimes:
-            try:
-                executable = shutil.which(runtime)
-                if not executable:
-                    raise ValueError(f"{runtime} CLI is unavailable")
-                subprocess.run([executable, "plugin", "marketplace", "add", str(source)], check=True, timeout=60,
-                               capture_output=True, text=True)
-                operation = "add" if runtime == "codex" else "install"
-                subprocess.run([executable, "plugin", operation, "wiki-atlassian@knowledge-documents"], check=True, timeout=60,
-                               capture_output=True, text=True)
-                print(f"{runtime.title()}: SUCCESS")
-            except (OSError, ValueError, subprocess.SubprocessError) as error:
-                failed = True
-                detail = getattr(error, "stderr", None) or getattr(error, "stdout", None) or str(error)
-                print(f"{runtime.title()}: FAILED\n  Error: {detail.strip()}")
-    return int(failed)
+    try:
+        payload = prepare(Path.home() / '.local/share/wiki-atlassian')
+        runtimes = args.runtime or [name for name in ('codex', 'claude') if shutil.which(name)]
+        if not runtimes and not args.prepare_only:
+            raise ValueError('No supported host CLI found; use --prepare-only for a portable payload')
+        failed = False
+        with marketplace(payload) as source:
+            if args.prepare_only:
+                print(source)
+                return 0
+            for runtime in runtimes:
+                try:
+                    command = _host_command(runtime)
+                    for argv in (['plugin', 'marketplace', 'add', str(source)],
+                                 ['plugin', 'add' if runtime == 'codex' else 'install', 'wiki-atlassian@knowledge-documents']):
+                        result = run_bounded([*command, *argv], cwd=ROOT, env=dict(os.environ), timeout=60, limit=2 * 1024 * 1024)
+                        if result.returncode:
+                            raise ValueError('Host CLI registration failed; existing payloads are preserved')
+                    print(runtime.title() + ': SUCCESS')
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    failed = True
+                    print(runtime.title() + ': FAILED\n  Error: ' + (str(exc) if isinstance(exc, ValueError) else 'Host CLI could not complete registration'))
+            if failed:
+                raise RegistrationFailure()
+        return int(failed)
+    except RegistrationFailure:
+        return 1
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        reason = str(exc) if isinstance(exc, ValueError) else 'Private payload operation failed; check file permissions and the selected interpreter'
+        print('Wiki: FAILED\n  Error: ' + reason, file=sys.stderr)
+        return 1
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

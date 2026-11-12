@@ -1,6 +1,6 @@
 {
   "name": "wiki-atlassian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared Atlassian wiki knowledge and native Confluence document operations, independent of project workflows.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"

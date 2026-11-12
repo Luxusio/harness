@@ -1,0 +1,9 @@
+[project]
+name = "wiki-atlassian"
+version = "0.2.0"
+description = "Native Python Atlassian wiki MCP for Windows and POSIX"
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
