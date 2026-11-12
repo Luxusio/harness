@@ -94,3 +94,41 @@ Aggregate deadline exhaustion, network timeout and size/request limits remain
 distinguishable. Document publication and successful comment observation are
 separate results. Native Windows and real-account acceptance must still be
 reported from actual execution, independently of synthetic or Linux tests.
+
+## Native Windows follow-up from feedback revision 56
+
+The same user request applies to the next feedback revision. Its author reports
+that the preceding installation and whole-space synchronization worked on
+Windows 11/NTFS at `887c645b`. That report is distinct from this workflow's
+execution evidence. Remaining reported failures concern replacement with an
+open delete-sharing reader, CPython-created private directories, and Windows
+test collection or DNS-fixture assumptions.
+
+Derived repairs preserve the existing publication and access-control contract:
+
+- A successful replacement keeps an existing delete-sharing handle on the old
+  bytes while a new open sees the new bytes. A reader that refuses delete
+  sharing must still prevent replacement. Preserve checked ancestry, ACLs,
+  reparse/hardlink checks, private temporaries and the previous target on failure.
+- Use the required extended rename capability without retrying a weaker
+  operation. Preserve the original native error and expose only a fixed
+  operation/capability label and bounded numeric code through installer errors.
+  Error 87 alone does not establish an unsupported filesystem or its cause.
+  Unpublished temporary cleanup targets only the owned handle; a failed cleanup
+  attempt must not replace the primary error or imply guaranteed removal.
+- Interpret only OWNER_RIGHTS as the actual owner obtained from the retained
+  handle, after that owner passes the existing policy. Ordinary CPython `0700`
+  directories can then work without rewriting ACLs. Foreign owners or grants,
+  unsupported ACEs and other symbolic owner identities remain rejected under
+  the existing policy.
+- Selected native tests collect without `fcntl`. Only the POSIX marker fixture
+  may skip before its unavailable primitives or filesystem mutation. Preserve
+  all other test isolation and installation/ledger protections.
+- Synthetic stale-DNS answers are deterministic. Separate real-TLS tests cover
+  address fallback and the unchanged aggregate deadline; a host's IPv6 ordering
+  is not evidence that production DNS behavior is defective.
+
+The extended rename requires a supporting Windows API and filesystem/driver;
+an OS or filesystem name alone does not prove support. New native regressions,
+installed MCP and real-account acceptance require actual execution. Linux,
+modeled descriptors or supplied reports do not turn an unrun case into PASS.

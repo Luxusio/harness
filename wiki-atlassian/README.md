@@ -298,11 +298,37 @@ manifest selects an ordinary relative directory. Windows uses native file
 handles, ACLs, locks and process jobs; POSIX uses its descriptor and record-lock
 implementations. Neither platform is an emulation prerequisite for the other.
 
+Windows atomic replacement requires `FileRenameInfoEx` with replacement and
+POSIX semantics (Windows 10 RS1 or later, with supporting filesystem/driver).
+The operation retains checked directory handles and validates the target's
+ownership, ACL, reparse and hardlink properties. A delete-sharing reader keeps
+its old bytes while new opens see the replacement; a reader refusing delete
+sharing still blocks it. Unsupported or failed operations do not retry a weaker
+rename. The installer reports only the fixed native operation and numeric
+error; error 87 does not by itself identify the cause. Failed publication
+attempts cleanup through the exact owned temporary handle. A cleanup failure
+can leave a private temporary and does not replace the primary error.
+
+CPython-created private directories using OWNER_RIGHTS are checked against the
+object's verified owner. This does not trust another owner or permit a foreign
+grant, and does not rewrite existing ACLs.
+
 The plugin's portable tests run from this directory with
 `python -m pytest --confcutdir=. tests`. This keeps unrelated repository test
 infrastructure outside the standalone plugin's requirements. Native Windows
 filesystem, ACL, process and installation acceptance is reported separately
 from Linux tests and platform-specific skips.
+
+From the repository root on native Windows, run the selected native tests with
+the same Python used for the installation:
+
+```text
+py -3.12 -m pytest -p no:cacheprovider tests/test_wiki_windows_native.py tests/test_wiki_platform.py tests/test_wiki_atlassian_plugin.py
+```
+
+The root test entry point does not require POSIX `fcntl`; the POSIX-only session
+marker fixture skips before accessing unsupported primitives. Collection,
+Linux tests and modeled owner descriptors do not establish native execution.
 
 ## Personal Harness improvement inbox
 
