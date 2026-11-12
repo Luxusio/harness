@@ -18,7 +18,7 @@ import unicodedata
 from urllib.parse import urlsplit
 import uuid
 
-from wiki_platform import safe_read, ensure_private_directory, atomic_write, file_lock
+from wiki_platform import safe_metadata_read, trusted_metadata_directory, ensure_private_directory, atomic_write, file_lock
 from . import changes
 from .models import Node, Page, RemoteError, compact_json, native_id
 from .references import native_page_url_id
@@ -218,7 +218,7 @@ class Replica:
         return (self.base if base is None else base) / PurePosixPath(_relative(relative))
 
     def _read(self, path, limit=MANIFEST_LIMIT):
-        raw = safe_read(path, limit, private=True)
+        raw = safe_metadata_read(path, limit)
         if isinstance(raw, str):
             raw = raw.encode('utf-8')
         def invalid_constant(value):
@@ -229,7 +229,8 @@ class Replica:
         return value
 
     def _write(self, path, text):
-        ensure_private_directory(path.parent)
+        if not path.parent.exists():
+            ensure_private_directory(path.parent)
         atomic_write(path, text.encode('utf-8') if isinstance(text, str) else text)
 
     def _metadata(self, path, value):
@@ -397,7 +398,7 @@ class Replica:
             self.on_repair()
 
     def _body(self, row, format):
-        raw = safe_read(self._path(row['storage' if format == 'storage' else 'path']), BODY_LIMIT, private=True)
+        raw = safe_metadata_read(self._path(row['storage' if format == 'storage' else 'path']), BODY_LIMIT)
         text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
         if format == 'storage' and _hash(text) != row['bodyHash']:
             raise RemoteError('replica_unavailable', 'Native replica hash mismatch; wait for synchronization')
@@ -587,7 +588,7 @@ class Replica:
 
     def _denial_token(self):
         try:
-            raw = safe_read(self.control / changes.DENIAL, 64, private=True)
+            raw = safe_metadata_read(self.control / changes.DENIAL, 64)
             return raw.decode('utf-8') if isinstance(raw, bytes) else raw
         except FileNotFoundError:
             return None
@@ -617,7 +618,11 @@ class Replica:
     def synchronize(self, authoritative_bodies=True):
         if self.closed:
             return
-        ensure_private_directory(self.control)
+        ensure_private_directory(self.settings.corpus_root)
+        if not self.control.exists():
+            ensure_private_directory(self.control)
+        with trusted_metadata_directory(self.control):
+            pass
         try:
             with file_lock(self.control / 'sweep.lock'):
                 with self._operation():
@@ -769,7 +774,7 @@ class Replica:
                             changes=changed, unavailable=sorted(unavailable), manifest=str(self.control / 'manifest.json'))
             finally:
                 if not (self.control / 'transaction.json').exists():
-                    self._discard_stage(stage)
+                    self._discard_stage(stage, list(paths.values()) + [old[i]['path'] for i in unavailable])
 
     def _validate_native(self, node):
         native_id(node.id)
@@ -826,28 +831,58 @@ class Replica:
         self._write(self._path(path, stage), markdown)
         return dict(_row(node, path, storage, hash), relations=knowledge_relations(page.body, self.settings.site, self.settings.space))
 
-    def _discard_stage(self, stage):
-        # Never follow a tree supplied by metadata; remove only our bounded stage tree.
-        if stage.is_symlink():
-            raise ValueError('Invalid stage directory')
-        paths = []
-        if stage.exists():
-            ensure_private_directory(stage)
-            for path in stage.rglob('*'):
-                paths.append(path)
-                if len(paths) > 4*PAGE_LIMIT+10:
-                    raise ValueError('Stage cleanup exceeds its bound')
-        for path in sorted(paths, key=lambda p: len(p.parts), reverse=True):
-            if path.is_symlink():
-                raise ValueError('Invalid stage symlink')
-            if path.is_dir():
-                ensure_private_directory(path)
-                path.rmdir()
-            else:
-                safe_read(path, MANIFEST_LIMIT, private=True)
+    def _discard_stage(self, stage, relative_paths=()):
+        # Delete only proven projection names, never recursively walk an untrusted
+        # or replaced tree. Unknown contents remain recoverable and untouched.
+        if not stage.exists():
+            return
+        with trusted_metadata_directory(stage):
+            identity = stage.stat(follow_symlinks=False)
+            def unchanged():
+                current = stage.stat(follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+                    raise ValueError('Stage directory identity changed')
+            names = set(relative_paths)
+            try:
+                manifest = self._read(stage / 'manifest.json')
+                self._validate(manifest)
+                names.update(r['path'] for r in manifest['pages'].values())
+            except FileNotFoundError:
+                pass
+            if len(names) > PAGE_LIMIT:
+                raise ValueError('Stage cleanup exceeds its bound')
+            directories = set()
+            for relative in names:
+                path = self._path(relative, stage)
+                try:
+                    safe_metadata_read(path, BODY_LIMIT)
+                except FileNotFoundError:
+                    continue
+                unchanged()
                 path.unlink()
-        if stage.exists():
+                parent = path.parent
+                while parent != stage:
+                    directories.add(parent)
+                    parent = parent.parent
+            try:
+                safe_metadata_read(stage / 'manifest.json', MANIFEST_LIMIT)
+            except FileNotFoundError:
+                pass
+            else:
+                unchanged()
+                (stage / 'manifest.json').unlink()
+            for directory in sorted(directories, key=lambda p: len(p.parts), reverse=True):
+                with trusted_metadata_directory(directory):
+                    unchanged()
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            unchanged()
+        try:
             stage.rmdir()
+        except OSError:
+            pass
 
     def _recover(self, allow_credential_switch=False):
         journal_path = self.control / 'transaction.json'
@@ -882,7 +917,7 @@ class Replica:
         for relative in desired:
             _relative(relative)
             source = self._path(relative, stage) if relative in files else self._path(relative)
-            raw = safe_read(source, BODY_LIMIT, private=True)
+            raw = safe_metadata_read(source, BODY_LIMIT)
             total += len(raw.encode('utf-8')) if isinstance(raw, str) else len(raw)
             if total > 64*1024*1024:
                 raise RemoteError('replica_body_limit', 'Staged projections exceed the publication budget')
@@ -892,7 +927,8 @@ class Replica:
             if destination.parent.exists():
                 # Detect the same obstruction on case-sensitive hosts before exporting
                 # a cache that would collide on native Windows.
-                ensure_private_directory(destination.parent)
+                with trusted_metadata_directory(destination.parent):
+                    pass
                 if destination.parent not in directory_entries:
                     names = set()
                     for sibling in destination.parent.iterdir():
@@ -908,7 +944,7 @@ class Replica:
             if row['path'] not in desired:
                 obsolete = self._path(row['path'])
                 if obsolete.exists():
-                    safe_read(obsolete, BODY_LIMIT, private=True)
+                    safe_metadata_read(obsolete, BODY_LIMIT)
                     obsolete.unlink()
                 parent = obsolete.parent
                 while parent != self.base / 'pages':
@@ -918,7 +954,7 @@ class Replica:
                         break
                     parent = parent.parent
         for relative in files:
-            self._write(self._path(relative), safe_read(self._path(relative, stage), BODY_LIMIT, private=True))
+            self._write(self._path(relative), safe_metadata_read(self._path(relative, stage), BODY_LIMIT))
         self._metadata(self.control / 'manifest.json', next)
         state = dict(cursor=next['cursor'], status='synced', credentialBinding=next.get('credentialBinding'))
         prior_state = self._checkpoint()
@@ -1026,7 +1062,7 @@ class Replica:
                     self._recover()
             finally:
                 if not (self.control / 'transaction.json').exists():
-                    self._discard_stage(stage)
+                    self._discard_stage(stage, [rows[i]['path'] for i in changed])
 
     def poll_comments(self, page_ids=None, interval_seconds=None):
         targets = self.settings.watched_comment_pages if page_ids is None else page_ids

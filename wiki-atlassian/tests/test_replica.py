@@ -330,6 +330,23 @@ class ReplicaTests(unittest.TestCase):
         self.assertEqual([('211', False)], self.remote.bodies)
         self.assertIn('Shared evidence', self.replica.get_document(dict(document='211', format='storage'))['content'])
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX legacy mode compatibility; native DACL tested by platform lane')
+    def test_legacy_readable_metadata_and_nonwritable_directory_modes_are_reused_without_chmod(self):
+        self.replica.synchronize()
+        row = self.metadata('manifest.json')['pages']['211']
+        markdown = self.replica.base / row['path']
+        markdown.chmod(0o644)
+        markdown.parent.chmod(0o755)
+        storage = self.replica.base / row['storage']
+        storage.chmod(0o644)
+        storage.parent.chmod(0o755)
+        self.assertIn('Shared evidence', self.replica.get_document(dict(document='211'))['content'])
+        before, after = self.change('211', body='<p>Native verified next version</p>', version=2)
+        self.replica.publish_verified(after, before)
+        self.assertIn('Native verified next version', self.replica.get_document(dict(document='211'))['content'])
+        self.assertEqual(0o755, markdown.parent.stat().st_mode & 0o777)
+        self.assertEqual(0o755, storage.parent.stat().st_mode & 0o777)
+
     def test_native_version_history_falls_back_but_snapshot_never_does(self):
         self.replica.synchronize()
         self.assertIsNone(self.replica.get_document(dict(document='211', version=999)))
