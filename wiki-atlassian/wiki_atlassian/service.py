@@ -31,6 +31,8 @@ def comment_ref(value, origin):
     if match:
         return match[1], match[2]
     if value.startswith('https://'):
+        require(not any(c.isspace() or ord(c) < 32 or 127 <= ord(c) <= 159 for c in value)
+                and '?' not in value and '#' not in value, 'invalid_request')
         uri, expected = urlsplit(value), urlsplit(origin)
         require((uri.scheme, uri.netloc) == (expected.scheme, expected.netloc) and not uri.query and not uri.fragment)
         match = re.fullmatch(r'/wiki/api/v2/(footer|inline)-comments/([1-9][0-9]{0,31})', uri.path)
@@ -105,7 +107,7 @@ class WikiService:
             body = storage.storage_section(body, section)
         content = storage.outline(body) if format == 'outline' else storage.to_markdown(
             body, self._url(page.node.id)) if format == 'markdown' else body
-        audit = self.remote.version(page.node.id, page.node.version)
+        audit = self.remote.version(page.node.id, page.node.version, scope=self.settings)
         require(audit.get('message', '') == page.version_message, 'readback_mismatch')
         if account is not None:
             require(audit.get('authorId') == account.get('accountId'), 'readback_mismatch')
@@ -128,6 +130,11 @@ class WikiService:
                 result['verified'] = True
             if 'content' in result:
                 result.update(offset=offset, nextOffset=end, totalLength=len(content), offsetUnit='unicode_code_points')
+        if account is not None:
+            require(self.remote.require_scope(self.settings, page.node.id) == page.node, 'scope_metadata_changed')
+            self._content_policy(page.node.title, page.body, page)
+            require(self.remote.current_user() == account, 'account_changed')
+        self.unchanged()
         return result
 
     def _url(self, id):
@@ -313,8 +320,6 @@ class WikiService:
             require(self.remote.require_scope(self.settings, linked_id).type == 'page', 'scope_metadata_changed')
         if destination is not None:
             require(self.remote.ancestry(self.settings, saved.node.id) == [saved.node, *destination_ancestry], 'scope_metadata_changed')
-        audit = self.remote.version(saved.node.id, saved.node.version)
-        require(audit.get('authorId') == account['accountId'] and audit.get('message', '') == saved.version_message, 'readback_mismatch')
         return self._publish(saved, self._result(saved, 'created' if creating else 'updated', data, account), before)
 
     def _resolve_comment(self, value):
@@ -329,7 +334,7 @@ class WikiService:
                 raise
             return 'inline', id, self.remote.comment_location(id, 'inline')
 
-    def _comment_row(self, row, data):
+    def _comment_row(self, row, data, page_id):
         result = dict(row) if data.get('metadata') else {key: row[key] for key in ('id', 'body', 'format', 'version') if key in row}
         result['reference'] = row['kind'] + ':' + row['id']
         context = row.get('inlineContext')
@@ -342,7 +347,7 @@ class WikiService:
             result.pop('body', None)
             result.pop('format', None)
         elif data.get('format', 'markdown') == 'markdown' and 'body' in result:
-            result.update(body=storage.to_markdown(result['body']), format='markdown')
+            result.update(body=storage.to_markdown(result['body'], self._url(page_id)), format='markdown')
         return result
 
     def _comments(self, operation, data, effect):
@@ -369,12 +374,12 @@ class WikiService:
             batch = self.remote.list_comments(page_id, kind, ref[1] if ref else None, limit, state.get('native'), self.settings)
             rows = []
             for row in batch['results']:
-                projected = self._comment_row(row, {**data, 'format': format})
+                projected = self._comment_row(row, {**data, 'format': format}, page_id)
                 if expanded:
                     children = self.remote.list_comments(page_id, kind, row['id'], replies, None, self.settings)
                     reply_binding = [self.identity, page_id, [kind, row['id']], replies, format, False, 0]
                     projected['replies'] = dict(target=f"{kind}:{row['id']}", limit=replies, format=format,
-                        comments=[self._comment_row(child, {**data, 'format': format}) for child in children['results']],
+                        comments=[self._comment_row(child, {**data, 'format': format}, page_id) for child in children['results']],
                         hasMore=bool(children.get('cursor')), complete=not children.get('cursor'))
                     if children.get('cursor'):
                         projected['replies']['cursor'] = encode_cursor(reply_binding, {'kind': kind, 'native': children['cursor']})
@@ -384,7 +389,7 @@ class WikiService:
             result = dict(status='listed', target=page_id, comments=rows, hasMore=more, complete=not more,
                           threadScope='direct native replies' if ref else 'page root comments with bounded replies' if expanded else 'page root comments; replies not included')
             if selected:
-                result['comment'] = self._comment_row(selected, {**data, 'format': format})
+                result['comment'] = self._comment_row(selected, {**data, 'format': format}, page_id)
             if more:
                 result['cursor'] = encode_cursor(binding, {'kind': kind if native else 'inline', 'native': native})
             require(self.remote.require_scope(self.settings, page_id) == node, 'scope_metadata_changed')
@@ -419,7 +424,7 @@ class WikiService:
                                             'inline' if selection else reply[0] if reply else 'footer', selection, guard))
         effect.update(saved=True, reference=saved['kind'] + ':' + saved['id'])
         require(saved.get('editorId') == account['accountId'], 'readback_mismatch')
-        result = self._comment_row(saved, {**data, 'format': data.get('format', 'storage'), 'includeBody': data.get('includeBody', False)})
+        result = self._comment_row(saved, {**data, 'format': data.get('format', 'storage'), 'includeBody': data.get('includeBody', False)}, page_id)
         result['status'] = 'updated' if before else 'created'
         if selection:
             current = self.remote.require_scope(self.settings, page_id)

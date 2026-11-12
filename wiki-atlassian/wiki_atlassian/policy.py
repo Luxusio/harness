@@ -74,15 +74,15 @@ def reject_secrets(body, token=''):
     visible = _visible(document)
     found = (bool(token) and (token in body or token in visible)) or any(
         pattern.search(body) or pattern.search(visible) for pattern in PATTERNS)
-    locations = []
+    def reject(locations):
+        raise RemoteError('secret_detected', 'Content resembles private authentication material; redact it before writing',
+            details={'locations': locations},
+            next='Replace private values with REDACTED or an environment reference. Keep credentials outside the Wiki.')
+    if found:
+        reject([dict(block='document', index=1, field='secret')])
     for table_index, table in enumerate((n for n in elements if n.tag == 'table'), 1):
         rows = [n for n in table.descendants() if n.tag == 'tr' and _nearest(n, 'table') is table]
-        try:
-            grid = _grid(rows)
-        except RemoteError:
-            if not found:
-                raise
-            break
+        grid = _grid(rows)
         for r, row in enumerate(rows):
             cells = [n for n in row.children if isinstance(n, Element) and n.tag in ('td', 'th')]
             for c, label in enumerate(cells):
@@ -101,10 +101,6 @@ def reject_secrets(body, token=''):
                         continue
                     if value.tag == 'th' and re.fullmatch(r'(?i)(?:dev(?:elopment)?|개발|qa)(?:\s*[1-9][0-9]*차)?', text):
                         continue
-                    found = True
-                    if len(locations) < 10:
-                        locations.append(dict(block='table', index=table_index, row=r + 1, field=field))
-    if found:
-        raise RemoteError('secret_detected', 'Content resembles private authentication material; redact it before writing',
-            details={'locations': locations or [dict(block='document', index=1, field='secret')]},
-            next='Replace private values with REDACTED or an environment reference. Keep credentials outside the Wiki.')
+                    # Rejection is already established; stop before scanning
+                    # other headers/rows merely to enrich diagnostics.
+                    reject([dict(block='table', index=table_index, row=r + 1, field=field)])

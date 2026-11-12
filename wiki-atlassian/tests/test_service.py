@@ -58,7 +58,7 @@ class Native:
     def current_user(self):
         return dict(self.actor)
 
-    def version(self, id, number):
+    def version(self, id, number, scope=None):
         return {'number': number, 'message': self.message, 'authorId': 'actor', 'createdAt': '2026-11-12T00:00:00Z'}
 
     def update(self, before, body, message, scope, title=None, before_effect=None, parent_id=None, **kwargs):
@@ -187,3 +187,37 @@ def test_secret_detection_does_not_echo_values(service):
     result = api.execute('update_document', {'document': '2', 'version': 1, 'append': '<p>fixture-private-credential</p>'})
     assert result['code'] == 'secret_detected' and 'fixture-private-credential' not in str(result)
     assert not remote.writes
+
+
+@pytest.mark.parametrize('changed', ['scope', 'actor'])
+def test_last_native_audit_cannot_acknowledge_changed_scope_or_account(service, changed):
+    api, remote, replica = service
+    original = remote.version
+    def audit(id, number, scope=None):
+        result = original(id, number, scope)
+        if changed == 'scope':
+            remote.nodes[id] = replace(remote.nodes[id], space_id='20')
+        else:
+            remote.actor = {'accountId': 'new-actor'}
+        return result
+    remote.version = audit
+    result = api.execute('update_document', dict(document='2', version=1, append='<p>Mine</p>', metadata=True))
+    assert result['status'] == 'unknown' and not result.get('verified')
+    assert len(remote.writes) == 1
+
+
+@pytest.mark.parametrize('suffix', ['?', '#', '\t'])
+def test_comment_reference_rejects_raw_uri_normalization(service, suffix):
+    from wiki_atlassian.service import comment_ref
+    api, remote, replica = service
+    value = api.settings.site + '/wiki/api/v2/footer-comments/60' + suffix
+    with pytest.raises(RemoteError):
+        comment_ref(value, api.settings.site)
+
+
+def test_comment_markdown_keeps_native_page_anchor_context(service):
+    api, remote, replica = service
+    result = api._comment_row(dict(id='60', kind='footer', version=1,
+        body='<ac:link ac:anchor="part"><ac:plain-text-link-body><![CDATA[Jump]]></ac:plain-text-link-body></ac:link>',
+        format='storage'), dict(format='markdown'), '2')
+    assert api._url('2') + '#part' in result['body']

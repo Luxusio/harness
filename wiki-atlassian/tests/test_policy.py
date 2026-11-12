@@ -35,3 +35,11 @@ def test_literal_current_token_cannot_be_hidden_in_inline_markup():
     with pytest.raises(RemoteError) as failure:
         reject_secrets('<p>ordinary-<b>credential</b></p>', 'ordinary-credential')
     assert failure.value.code == 'secret_detected'
+
+
+def test_large_repeated_credential_headers_reject_without_diagnostic_expansion():
+    body = '<table>' + ('<tr>' + '<th>token</th>' * 10 + '</tr>') * 800 + '</table>'
+    with pytest.raises(RemoteError) as failure:
+        reject_secrets(body)
+    assert failure.value.code == 'secret_detected'
+    assert len(failure.value.details['locations']) <= 10
