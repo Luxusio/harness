@@ -132,7 +132,11 @@ class Remote:
 
     def budget_remaining(self):
         budget = _budget.get()
-        return budget is None or budget.requests < budget.maximum and budget.bytes < budget.size and time.monotonic() < budget.deadline
+        while budget is not None:
+            if budget.requests >= budget.maximum or budget.bytes >= budget.size or time.monotonic() >= budget.deadline:
+                return False
+            budget = budget.parent
+        return True
 
     def _url(self, value, base=None):
         _need(isinstance(value, str) and len(value) <= 16384 and '#' not in value and

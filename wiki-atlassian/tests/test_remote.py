@@ -1228,6 +1228,143 @@ def test_tls_comment_denial_followed_by_unavailable_scope_recheck_records_failed
         replica.close()
 
 
+def test_tls_page_comment_inventory_limit_yields_to_healthy_peer_on_repeated_sweeps(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9', watchCommentPages='10,11'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        manifest = json.loads((replica.control/'manifest.json').read_text())
+        fingerprint = manifest['wikiCommentWatch']['10']['fingerprint']
+        state.comments = {('footer', str(10000+i)): comment_raw(str(10000+i), page='10') for i in range(300)}
+        for sweep in range(2):
+            manifest = json.loads((replica.control/'manifest.json').read_text())
+            for row in manifest['wikiCommentWatch'].values():
+                row['attemptedAt'] = 0
+            replica._metadata(replica.control/'manifest.json', manifest)
+            state.comments[('footer', '11000')] = comment_raw('11000', page='11', version=sweep+1)
+            calls = len(state.calls)
+            replica.synchronize()
+            observed = state.calls[calls:]
+            watch = json.loads((replica.control/'manifest.json').read_text())['wikiCommentWatch']
+            assert len(observed) < 512
+            assert any(path == '/wiki/api/v2/pages/11/footer-comments' for _, path, _, _ in observed)
+            assert watch['10']['status'] == 'unavailable' and watch['10']['attemptedAt'] > 0
+            assert watch['10']['fingerprint'] == fingerprint
+            assert watch['11']['status'] == 'ready' and watch['11']['attemptedAt'] > 0
+            assert replica.status()['status'] == 'partial'
+    finally:
+        replica.close()
+
+
+def test_tls_first_page_using_shared_budget_yields_to_healthy_peer(native):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    state.pages = {str(10+i): page_raw(str(10+i), '10' if i else None) for i in range(30)}
+    settings = SpaceSettings(dict(space='DOC', spaceId='9', rootPageId='10', watchCommentPages='10,11'),
+                             rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        manifest = json.loads((replica.control/'manifest.json').read_text())
+        fingerprint = manifest['wikiCommentWatch']['10']['fingerprint']
+        for row in manifest['wikiCommentWatch'].values():
+            row['attemptedAt'] = 0
+        replica._metadata(replica.control/'manifest.json', manifest)
+        state.comments = {('footer', str(10000+i)): comment_raw(str(10000+i), page='10') for i in range(300)}
+        previous_attempt = None
+        for sweep in range(2):
+            checkpoint = json.loads((replica.control/'state.json').read_text())
+            replica._metadata(replica.control/'state.json', dict(checkpoint, bodyRefreshedAt=0))
+            calls = len(state.calls)
+            replica.synchronize()
+            observed = state.calls[calls:]
+            watch = json.loads((replica.control/'manifest.json').read_text())['wikiCommentWatch']
+            assert watch['10']['status'] == 'unavailable' and watch['10']['fingerprint'] == fingerprint
+            if sweep == 0:
+                assert len(observed) == 512
+                assert watch['10']['attemptedAt'] > 0 and watch['11']['attemptedAt'] == 0
+                previous_attempt = watch['10']['attemptedAt']
+            else:
+                assert len(observed) < 512
+                footer_pages = [path for _, path, _, _ in observed if path.endswith('/footer-comments')]
+                assert footer_pages == ['/wiki/api/v2/pages/11/footer-comments']
+                assert watch['11']['status'] == 'ready' and watch['11']['attemptedAt'] > 0
+                assert watch['10']['attemptedAt'] == previous_attempt
+    finally:
+        replica.close()
+
+
+def test_tls_two_configured_managers_keep_unobserved_comment_watch_incomplete(native):
+    from wiki_atlassian.config import Project
+    from wiki_atlassian.multispace import MultiSpaceKnowledge
+    from wiki_atlassian.replica import Replica
+    from wiki_platform import ensure_private_directory, file_lock
+    state, remote, rooted = native
+    project = Project(dict(enabled=True, site=rooted.site, spaces=[dict(key='DOC', watchCommentPages='11')]),
+                      rooted.credentials, rooted.corpus_root)
+    control = Replica(project.resolve(remote, 'DOC'), remote).control
+    ensure_private_directory(control)
+    first = MultiSpaceKnowledge(project, remote, start_workers=False)
+    second = MultiSpaceKnowledge(project, remote, start_workers=False)
+    try:
+        with file_lock(control/'comments.lock'):
+            first.synchronize('DOC')
+            with file_lock(control/'sweep.lock'):
+                second.synchronize('DOC')
+            for manager in (first, second):
+                status = manager.status()
+                assert status['ready'] and not status['complete'] and status['status'] == 'partial'
+                assert status['spaces'][0]['commentWatch'] == 'unavailable'
+        assert not any(path.endswith('/footer-comments') for _, path, _, _ in state.calls)
+        second.synchronize('DOC')
+        assert first.status()['complete'] and second.status()['complete']
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.parametrize('failure_point', ['checkpoint', 'cleanup'])
+def test_tls_post_publication_failure_retains_document_publication_certainty(native, monkeypatch, failure_point):
+    from wiki_atlassian.replica import Replica
+    state, remote, rooted = native
+    settings = SpaceSettings(dict(space='DOC', spaceId='9'), rooted.credentials, rooted.corpus_root)
+    replica = Replica(settings, remote)
+    try:
+        replica.synchronize()
+        state.pages['11']['body']['storage']['value'] = '<p>New committed native evidence</p>'
+        metadata, discard = replica._metadata, replica._discard_stage
+        writes, cleanup_failed = 0, False
+        def write(path, value):
+            nonlocal writes
+            if path == replica.control/'state.json':
+                writes += 1
+                if writes == 2 and failure_point == 'checkpoint':
+                    raise OSError('Synthetic post-publication checkpoint failure')
+            return metadata(path, value)
+        def cleanup(*args, **kwargs):
+            nonlocal cleanup_failed
+            if failure_point == 'cleanup' and not cleanup_failed and not (replica.control/'transaction.json').exists():
+                cleanup_failed = True
+                raise OSError('Synthetic post-publication cleanup failure')
+            return discard(*args, **kwargs)
+        monkeypatch.setattr(replica, '_metadata', write)
+        monkeypatch.setattr(replica, '_discard_stage', cleanup)
+        with pytest.raises(OSError, match='Synthetic post-publication'):
+            replica.synchronize()
+        assert not (replica.control/'transaction.json').exists()
+        assert 'New committed native evidence' in replica.get_document(dict(document='11'))['content']
+        assert replica.status()['syncProgress']['stage'] == 'documents_published'
+        assert replica.status()['syncProgress']['terminalReason'] == 'sync_failed'
+        monkeypatch.setattr(replica, '_metadata', metadata)
+        monkeypatch.setattr(replica, '_discard_stage', discard)
+        replica.synchronize()
+        assert replica.status()['status'] == 'ready' and replica.status()['syncProgress']['stage'] == 'complete'
+    finally:
+        replica.close()
+
+
 # Public synthetic localhost fixture material; never used outside these tests.
 CERT = '-----BEGIN CERTIFICATE-----\nMIIDJTCCAg2gAwIBAgIUeKKFNjV4PJOEwIfBw1V2zjDlfSkwDQYJKoZIhvcNAQEL\nBQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MTExMjAxMjYwMloXDTM2MTEw\nOTAxMjYwMlowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\nAAOCAQ8AMIIBCgKCAQEAzAsSj/NOwmVNyOhbM0O+U5z6Z2uj4TaRNoH9RLQtThRt\nMqHbzWgWB4EL2ZZu4u8nkuwpFvWxJ+uKCyC+lFmIaXRTSn2SjA0GESz2S6AywUGx\nIG4Uu28tcy3chYKsgDXDNU5Lfx2ec5MLWt71GzAg/1rjqQ8WKOnSVt6VCGRQF2zF\n960BI4N0d/wpOANkptiZ+H+pZR6XxCYSj10Bde1YlF6Ql6O6Cv0mxWy0qZrsUT5g\nOiA/vKwR0NOoBP8YcA/XAIUf9SsL3mT1u1BeSG6MsuYepQN8SD2ogPlfoNlkC8w0\nU0pE58d6ehogaqx8pzkVjJ9SFqNK7VFFCmz8bovaBwIDAQABo28wbTAdBgNVHQ4E\nFgQU6DGM5/6XY7fvitpDPJtuPjrzSH8wHwYDVR0jBBgwFoAU6DGM5/6XY7fvitpD\nPJtuPjrzSH8wDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgglsb2NhbGhvc3SH\nBH8AAAEwDQYJKoZIhvcNAQELBQADggEBALuf8oT/YW/n27ULDYklkm6vu/GTcBxk\nLmjnDao1K2FyUThpPZsfgiybmkK4g3zcdWGZ6u3IVnHJLjBKxFSxp/3JSDVpTJal\nyNYtYT/jXU6jBvS34Et3ykOrR0ki3v9Lx5Pi3pAvSKE3ZK2ET8CZcI65qIltblnW\ntsjj2FDwHfL/p6QEmCxfdp+imuRE2ByhQrq47sxVojHHBi0TE5kw09GJVvIZn/DK\nQ/V+fugBS7gMtaL97Gbb0XgIPj8sgZiCkZJeRTJ00rGXKZymixVr75waOOOyPJv2\nm9SA3qy6WbWe+uukyS7gw18LNCsZOjopgvtKGkblPop+QvjqrjBtyoc=\n-----END CERTIFICATE-----\n'
 KEY = '-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDMCxKP807CZU3I\n6FszQ75TnPpna6PhNpE2gf1EtC1OFG0yodvNaBYHgQvZlm7i7yeS7CkW9bEn64oL\nIL6UWYhpdFNKfZKMDQYRLPZLoDLBQbEgbhS7by1zLdyFgqyANcM1Tkt/HZ5zkwta\n3vUbMCD/WuOpDxYo6dJW3pUIZFAXbMX3rQEjg3R3/Ck4A2Sm2Jn4f6llHpfEJhKP\nXQF17ViUXpCXo7oK/SbFbLSpmuxRPmA6ID+8rBHQ06gE/xhwD9cAhR/1KwveZPW7\nUF5Iboyy5h6lA3xIPaiA+V+g2WQLzDRTSkTnx3p6GiBqrHynORWMn1IWo0rtUUUK\nbPxui9oHAgMBAAECggEACi99UDlFk7ep398VemQl0pex+kqpxhrKue1YPr89ybmE\nT/Q7fC/3dY1wEX8MbwCgOZnXXUGLg+IipHaQfOhRQm5foAbPs3UM+fuEGfdXwUTt\nuiA0obyliKvf57xDryy/31/WrfRFDiDnfrRFiQNoika3uZ86rHUrnlGDIAWd5+Vb\nuLSIKD+BHbM4GzFGALffqbxeV1JSkneXeIkBA3bKLR2vYzIpcYYG+2cAQDsCGXcF\nuMoYy0Eg1cMM2PcajEgtV3vFKSTUj6huveFCUrxdJHn2yvZ6E38bzWDUBxzPVSQP\n1inCWFe7FOYgSb7nFAoUmmreWHsavbVWJPmwmmFsqQKBgQD8On11AzY10szBdNHY\ntb/oeOaU56wnPtLq8HqkU4HqCthOWJO9gCXiliffRozfvUV3KeUBOn60Ski1Smg/\nZKOQv+2N5Oz9EXR/6vY/ou5NuSJNgTEoAGBXbXW8RLg2iTlcFcQsyLi1lrr1WOz2\neXnwXlPOwiuumrd0IIXB0NGCbwKBgQDPGCIjU08iJUu/XzyQmTDD1wCj1P9rBUDZ\nR+ja2R0DQv3Tr6mfXo2DiOhKALYllNzXtM8EBu/kSImR+DdXO/XewIZOB8q880h2\nQklHnJDOREqLindv3dG2S7BJujNgJIYDYOLSWiG2PrbVoO7/WxS9xYSxvrKYTq6k\ne0S7w8uN6QKBgQCs7lk30cToMChMdxCtGSeDduj4rMJegfdQNyKO6eZHlbnqNVbN\n9T+EU9jwf0l02Sr4YZPuPLHEYK3rBiHlXNW8F6sCvzMw6zfJwEmnJclnJoh7RRlz\nyJZFOvoe46q9UWYvWYkP/2qMrdRvBNIqxuywvauONZiHdPJUvzuVv9r1JwKBgQCz\nwrgHP85Fzmfk0s8omMCajesxSrb295VlxaSbKrCjXygi8qzi+FkQHuu7KMjy8DeO\nSZUUYs0is9AuU23+G779PtKVsu/JecehV0JylbWgRekLHQM1qC7b9PEt3iGwR6PI\nFPZuLuxqXB+qacpq/22OmH/pJaWyzUGM5q8v6PGs2QKBgQDItcOZfrY7VV0w89as\nTUAGofZzlQJzTs9XNRlOkQURRLt36Zj8/C0jQJyDzNnnDwDtdfbUnxlsRfRXRxUG\nxlgtzelNae7lcXR1e1MTJiYg+R6O8N8YPi+gTyNKbuOW9j0ZQOujDudjuZwiL+PV\nGCM0hhJfC+T0kl12OH4xKWIUHw==\n-----END PRIVATE KEY-----\n'

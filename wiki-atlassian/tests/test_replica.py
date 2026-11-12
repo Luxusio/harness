@@ -44,6 +44,10 @@ class Native:
     def operation(self, **kwargs):
         yield
 
+    def budget_remaining(self):
+        # Explicit synthetic budget failures model shared exhaustion.
+        return False
+
     def _fail(self, id):
         if id in self.denied:
             error = RemoteError('http_403', 'Synthetic denied')

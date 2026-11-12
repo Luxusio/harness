@@ -409,6 +409,8 @@ class Replica:
                 result = dict(enabled=True, ready=True, status='failed' if self.last_failure else 'ready',
                               documents=len(manifest['pages']), freshness=self._freshness(manifest))
                 watch = changes.comment_status(manifest, self.settings.watched_comment_pages)
+                if self.settings.watched_comment_pages and watch is None:
+                    watch = 'unavailable'
                 if watch is not None:
                     result['commentWatch'] = watch
                 if self.last_failure:
@@ -759,12 +761,14 @@ class Replica:
             pass
         deadline = time.monotonic() + 30
         published = False
+        def mark_published():
+            nonlocal published
+            published = True
         try:
             with self._operation(progress=self._budget_progress):
                 with file_lock(self.control / 'sweep.lock'):
                     self._progress('inventory', elapsed=0.0, requests=0)
-                    result = self._synchronize(authoritative_bodies, deadline)
-                    published = True
+                    result = self._synchronize(authoritative_bodies, deadline, mark_published)
                 self._progress('comments')
                 observation = self.poll_comments(_deadline=deadline)
                 self.last_success, self.last_failure = _now(), None
@@ -799,7 +803,7 @@ class Replica:
             raise
         return result
 
-    def _synchronize(self, authoritative_bodies, deadline):
+    def _synchronize(self, authoritative_bodies, deadline, on_published):
         identity, started = self.settings.identity(), int(time.time() * 1000)
         with self._state_lock:
             denial_generation = self._denial_generation
@@ -966,7 +970,7 @@ class Replica:
                 self._check_projection_budget(stage, manifest['pages'])
                 self._metadata(self.control / 'transaction.json', dict(stage=stage.name))
                 with file_lock(self.control / 'notice-access.lock'):
-                    self._recover(allow_credential_switch=True)
+                    self._recover(allow_credential_switch=True, on_published=on_published)
                     with self._state_lock:
                         if denial_generation == self._denial_generation and self._denial_token() == prior_denial:
                             (self.control / changes.DENIAL).unlink(missing_ok=True)
@@ -1104,7 +1108,7 @@ class Replica:
             raw = safe_metadata_read(source, min(BODY_LIMIT, remaining))
             remaining -= len(raw)
 
-    def _recover(self, allow_credential_switch=False):
+    def _recover(self, allow_credential_switch=False, on_published=None):
         journal_path = self.control / 'transaction.json'
         if not journal_path.exists():
             return
@@ -1216,6 +1220,8 @@ class Replica:
             raise RemoteError('replica_feed_limit', 'Notification feed exceeds its byte budget')
         self._write(self.control / 'changes.json', feed)
         journal_path.unlink()
+        if on_published is not None:
+            on_published()
         self._discard_stage(stage)
 
     def publish_verified(self, page, before=None):
@@ -1361,12 +1367,17 @@ class Replica:
                             error.details = dict(error.details, scopeFence='pending', scopeFenceCode=pending.code)
                         raise error
                     if error.code in ('wiki_request_limit', 'wiki_body_limit', 'wiki_timeout'):
-                        if time.monotonic() >= page_deadline and page_deadline < deadline and time.monotonic() < deadline:
-                            # A per-page timeout is an unavailable observation,
-                            # not exhaustion of the shared request/scan budget.
+                        if self.remote.budget_remaining():
+                            # The failed page context has unwound. Its own
+                            # limit must not prevent a healthy peer's attempt.
                             attempted.append(id)
                             continue
-                        budget_blocked = id
+                        if attempted:
+                            budget_blocked = id
+                        else:
+                            # A page using the available shared budget alone
+                            # must yield its position on the next watch pass.
+                            attempted.append(id)
                         break
                     if isinstance(error, RootScopeDenial):
                         try:
