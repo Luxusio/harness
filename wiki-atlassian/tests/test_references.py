@@ -1,4 +1,10 @@
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != 'pytest':
+        raise
+    from unittest import SkipTest
+    raise SkipTest('pytest is required') from error
 
 from wiki_atlassian.references import native_page_url_id
 from wiki_atlassian.models import RemoteError
