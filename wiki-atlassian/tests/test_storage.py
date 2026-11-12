@@ -217,6 +217,51 @@ def test_inline_utf16_length_boundary():
     assert inline_selection('<p>' + '😀' * 500 + '</p>', '😀' * 500) == (0, 1)
 
 
+def test_inline_visible_line_break_does_not_create_an_artificial_duplicate():
+    assert inline_selection('<p>x<br/>y</p><p>xy</p>', 'xy') == (0, 1)
+    saved = '<p>x<br/>y</p><p><ac:inline-comment-marker ac:ref="new">xy</ac:inline-comment-marker></p>'
+    assert selection_anchored(saved, 'xy', 0, 'new')
+    assert not selection_anchored('<p><ac:inline-comment-marker ac:ref="new">x<br/>y</ac:inline-comment-marker></p>', 'xy', 0, 'new')
+
+
+@pytest.mark.parametrize('encoded,visible', [('&#9;', '\t'), ('&#10;', '\n'), ('&#13;', '\r'), ('&NewLine;', '\n'), ('&Tab;', '\t')])
+def test_visible_whitespace_entities_decode_without_weakening_identity(encoded, visible):
+    body = '<p>A' + encoded + 'B</p>'
+    assert apply_edits(body, [edit('A' + visible + 'B', 'Changed')], 'text') == '<p>Changed</p>'
+    assert not equivalent(body, '<p>A' + visible + 'B</p>')
+    assert not native_page_readback(body, '<p>A' + visible + 'B</p>')
+
+
+def test_numeric_entity_leading_zeroes_do_not_escape_python_integer_limits():
+    for encoded in ('&#' + '0' * 4300 + '65;', '&#x' + '0' * 4300 + '41;'):
+        body = '<p>' + encoded + '</p>'
+        assert inline_selection(body, 'A') == (0, 1)
+        assert apply_edits(body, [edit('A', 'B')], 'text') == '<p>B</p>'
+        assert outline('<h2>' + encoded + '</h2>') == '1 A'
+        assert equivalent(body, '<p>A</p>')
+    invalid = '&#' + '9' * 5000 + ';'
+    assert equivalent('<p>' + invalid + '&amp;</p>', '<p>' + invalid + '&#38;</p>')
+
+
+@pytest.mark.parametrize('fragment', ['not valid', '%ZZ', '%', 'x#y', 'x<y', 'x"y', 'x\\y', 'x\u00a0y'])
+def test_retarget_rejects_malformed_uri_fragments(fragment):
+    error('invalid_link_target', lambda: retarget_links('<a href="old">label</a>', {'old': '123#' + fragment}, 'https://wiki.example', 'COMMON'))
+
+
+def test_retarget_keeps_valid_encoded_and_unicode_fragments_exact():
+    assert retarget_links('<a href="old">label</a>', {'old': '123#한글%20A?x=1&y=2'}, 'https://wiki.example', 'COMMON') == '<a href="https://wiki.example/wiki/spaces/COMMON/pages/123#한글%20A?x=1&amp;y=2">label</a>'
+
+
+@pytest.mark.parametrize('path', ['/wiki/api/v2/pages/123', '/wiki/api/v2/pages/123/Title%20😀', '/wiki/spaces/COMMON/pages/123/Title%20😀'])
+def test_retarget_supports_exact_native_api_and_ui_references(path):
+    assert retarget_links('<a href="old">label</a>', {'old': 'https://wiki.example' + path + '#part'}, 'https://wiki.example', 'COMMON') == '<a href="https://wiki.example/wiki/spaces/COMMON/pages/123#part">label</a>'
+
+
+@pytest.mark.parametrize('path', ['/wiki/spaces/COMMON/pages/123/../456', '/wiki/spaces/COMMON/pages/123/.', '/wiki/spaces/COMMON/pages/123/%2e%2e', '/wiki/spaces/COMMON/pages/123/a%2fb', '/wiki/spaces/COMMON/pages/123/a%5cb', '/wiki/spaces/COMMON/pages/123/a%252fb', '/wiki/api/v2/pages/123/%255c', '/wiki/pages/viewpage.action?pageId=123'])
+def test_retarget_rejects_traversal_encoded_separators_and_non_native_routes(path):
+    error('invalid_link_target', lambda: retarget_links('<a href="old">label</a>', {'old': 'https://wiki.example' + path}, 'https://wiki.example', 'COMMON'))
+
+
 @pytest.mark.parametrize('left,right', [
     ('<p>A&amp;B&nbsp;C</p>', '<p>A&#38;B&#160;C</p>'),
     ('<a href="a&amp;b">A&middot;B</a>', '<a href="a&#38;b">A·B</a>'),

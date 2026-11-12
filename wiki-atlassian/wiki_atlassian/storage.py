@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from html import escape
 from html.entities import html5
 import re
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from .models import RemoteError
 
@@ -23,16 +23,22 @@ def _error(code, message, **details):
     raise RemoteError(code, message, details=details, next='Read the current native storage and use an exact complete context.')
 
 
-def decode_entities(value):
-    """Decode one serialization layer without repairing invalid XML characters."""
+def decode_entities(value, visible=False):
+    """Decode one layer; identity keeps XML line-whitespace references distinct."""
     def decode(match):
         raw = match[0]
         if raw.startswith('&#'):
             digits = raw[2:-1]
-            number = int(digits[1:], 16) if digits[:1].lower() == 'x' else int(digits)
-            return chr(number) if (0x20 <= number <= 0xD7FF or 0xE000 <= number <= 0xFFFD or 0x10000 <= number <= 0x10FFFF) else raw
+            hexadecimal = digits[:1].lower() == 'x'
+            significant = (digits[1:] if hexadecimal else digits).lstrip('0') or '0'
+            # Invalid references remain literal, including arbitrarily long numbers.
+            if len(significant) > (6 if hexadecimal else 7):
+                return raw
+            number = int(significant, 16 if hexadecimal else 10)
+            valid = 0x20 <= number <= 0xD7FF or 0xE000 <= number <= 0xFFFD or 0x10000 <= number <= 0x10FFFF
+            return chr(number) if valid or visible and number in (9, 10, 13) else raw
         decoded = html5.get(raw[1:])
-        return decoded if decoded is not None and not any(c in '\t\r\n' for c in decoded) else raw
+        return decoded if decoded is not None and (visible or not any(c in '\t\r\n' for c in decoded)) else raw
     return _ENTITY.sub(decode, value)
 
 
@@ -45,7 +51,7 @@ class Text:
     parent: Element | None = None
 
     def text(self):
-        return decode_entities(self.data) if self.kind == 'text' else self.data if self.kind == 'cdata' else ''
+        return decode_entities(self.data, visible=True) if self.kind == 'text' else self.data if self.kind == 'cdata' else ''
 
 
 @dataclass(eq=False)
@@ -83,6 +89,8 @@ class Element:
             node = stack.pop()
             if isinstance(node, Text):
                 result.append(node.text())
+            elif node.tag == 'br':
+                result.append('\n')
             else:
                 stack.extend(reversed(node.children))
         return ''.join(result)
@@ -127,7 +135,7 @@ def _opening(body, start):
         value_end = body.find(delimiter, value_start)
         if value_end < 0 or '<' in body[value_start:value_end]:
             raise ValueError('value')
-        attrs[key] = decode_entities(body[value_start:value_end])
+        attrs[key] = decode_entities(body[value_start:value_end], visible=True)
         ranges[key] = (value_start, value_end, separator, value_end + 1)
         cursor = value_end + 1
     raise ValueError('unclosed')
@@ -358,31 +366,36 @@ def retarget_links(body, links, origin, space=None):
     if any(not values for values in found.values()):
         _error('link_not_found', 'Every links key must match an existing document link', missingCount=sum(not v for v in found.values()))
     base = urlsplit(origin)
-    if base.scheme not in ('https', 'http') or not base.hostname or base.username or base.password or base.path not in ('', '/') or base.query or base.fragment:
+    if base.scheme != 'https' or not base.hostname or base.username or base.password or base.path not in ('', '/') or base.query or base.fragment:
         _error('invalid_link_target', 'Use an exact same-origin native document reference')
     patches = []
     for old, reference in links.items():
         try:
-            if len(reference) > 4096 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in reference):
+            if len(reference) > 4096 or any(c.isspace() or ord(c) < 32 or 127 <= ord(c) <= 159 or c in '<>"{}|\\^`' for c in reference) or re.search(r'%(?![0-9A-Fa-f]{2})', reference):
                 raise ValueError()
             target, separator, fragment = reference.partition('#')
-            if len(fragment) > 3000:
+            if len(fragment) > 3000 or '#' in fragment:
                 raise ValueError()
             selected_space = space
             if re.fullmatch(r'[1-9][0-9]*', target):
                 page_id = target
             else:
                 parsed = urlsplit(target)
-                if parsed.scheme != base.scheme or parsed.netloc != base.netloc or parsed.username or parsed.password:
+                if not target.startswith('https://') or parsed.hostname != base.hostname or parsed.port != base.port or parsed.username or parsed.password or parsed.query:
                     raise ValueError()
-                match = re.fullmatch(r'/wiki/spaces/([^/]+)/pages/([1-9][0-9]*)(?:/[^?#]*)?', parsed.path)
-                if match and not parsed.query:
-                    if space is not None and match[1] != quote(space, safe=''):
+                match = re.fullmatch(r'/wiki/spaces/([A-Za-z0-9_-]+)/pages/([1-9][0-9]*)(?:/([^/]*))?', parsed.path)
+                api = re.fullmatch(r'/wiki/api/v2/pages/([1-9][0-9]*)(?:/([^/]*))?', parsed.path)
+                if match:
+                    if space is not None and match[1] != space:
                         raise ValueError()
                     selected_space, page_id = match[1], match[2]
-                elif parsed.path == '/wiki/pages/viewpage.action' and set(parse_qs(parsed.query)) == {'pageId'} and len(parse_qs(parsed.query)['pageId']) == 1 and re.fullmatch(r'[1-9][0-9]*', parse_qs(parsed.query)['pageId'][0]):
-                    page_id = parse_qs(parsed.query)['pageId'][0]
+                    slug = match[3] or ''
+                elif api:
+                    page_id, slug = api[1], api[2] or ''
                 else:
+                    raise ValueError()
+                decoded = unquote(slug)
+                if decoded in ('.', '..') or any(c in '/\\' or ord(c) < 32 or 127 <= ord(c) <= 159 for c in decoded) or re.search(r'%2e|%2f|%5c', decoded, re.IGNORECASE):
                     raise ValueError()
             href = origin.rstrip('/') + (f'/wiki/spaces/{quote(selected_space, safe="%")}/pages/{page_id}' if selected_space else f'/wiki/pages/viewpage.action?pageId={page_id}') + ('#' + fragment if separator else '')
             replacement = escape(href, quote=True).replace('&#x27;', '&apos;')
