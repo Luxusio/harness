@@ -13,6 +13,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import threading
 import time
 import unicodedata
 from urllib.parse import urlsplit
@@ -130,7 +131,7 @@ def _owners(pages, known=None):
 
 def knowledge_relations(body, origin, space):
     """Only explicitly labelled links in the authored knowledge-relations section."""
-    from .storage import parse_storage
+    from .storage import parse_storage, Text
     root = parse_storage(body)
     excluded = {'pre', 'code', 'blockquote', 'q', 'ac:structured-macro', 'ac:macro', 'ac:plain-text-body'}
     types = {'근거': 'evidence', '의존': 'depends_on', '반박': 'contradicts', '대체': 'supersedes', '관련': 'related'}
@@ -159,8 +160,20 @@ def knowledge_relations(body, origin, space):
             continue
         link = links[0]
         anchor = link.parent if link.parent is not None and link.parent.tag == 'ac:link' else link
-        # Parse only the suffix to obtain decoded reason text, never attribute text.
-        suffix = ' '.join(parse_storage(body[anchor.end:element.close_start]).text().split())
+        # Read positioned text from the balanced native tree. A raw suffix can
+        # begin with a formatting close tag when the link is inside strong/em.
+        parts, pending = [], list(reversed(element.children))
+        while pending:
+            child = pending.pop()
+            if isinstance(child, Text):
+                if child.start >= anchor.end:
+                    parts.append(child.text())
+            elif child.end > anchor.end:
+                if child.tag == 'br' and child.start >= anchor.end:
+                    parts.append('\n')
+                else:
+                    pending.extend(reversed(child.children))
+        suffix = ' '.join(''.join(parts).split())
         reason = re.fullmatch(r'[—–-]\s+(.+)', suffix)
         if reason is None or not 1 <= len(reason[1]) <= 1000:
             complete = False
@@ -208,6 +221,10 @@ class Replica:
         self.on_repair = None
         self.last_failure = None
         self.last_success = None
+        self._denied = False
+        self._denial_pending = False
+        self._denial_generation = 0
+        self._state_lock = threading.Lock()
         self.search_identity = _hash(str(settings.corpus_root) + '\0' + settings.space)
         self.closed = False
 
@@ -234,7 +251,15 @@ class Replica:
         atomic_write(path, text.encode('utf-8') if isinstance(text, str) else text)
 
     def _metadata(self, path, value):
-        self._write(path, compact_json(value))
+        limit = 65536 if path.name == 'state.json' else MANIFEST_LIMIT
+        data = bytearray()
+        encoder = json.JSONEncoder(ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+        for chunk in encoder.iterencode(value):
+            encoded = chunk.encode('utf-8')
+            if len(data) + len(encoded) > limit:
+                raise RemoteError('replica_metadata_limit', 'Candidate metadata exceeds its readable byte budget')
+            data.extend(encoded)
+        self._write(path, bytes(data))
 
     def _manifest(self, missing=False):
         try:
@@ -313,14 +338,14 @@ class Replica:
                 manifest = self._manifest()
                 if manifest.get('credentialBinding') != self.settings.credential_fingerprint:
                     raise RemoteError('credential_reauthorization_pending', 'Wait for complete synchronization with the current credentials')
-                if (self.control / changes.DENIAL).exists():
+                if self._denied or (self.control / changes.DENIAL).exists():
                     raise RemoteError('root_scope_denied', 'Confirmed scope denial blocks this snapshot until fresh synchronization')
                 if manifest.get('inventoryComplete') is not True:
                     raise RemoteError('replica_incomplete', 'Wait for a complete inventory synchronization')
                 yield manifest
                 if self.settings.identity() != identity:
                     raise RemoteError('replica_unavailable', 'Connection changed during read')
-                if (self.control / changes.DENIAL).exists():
+                if self._denied or (self.control / changes.DENIAL).exists():
                     raise RemoteError('root_scope_denied', 'Confirmed scope denial blocks this snapshot')
         except FileNotFoundError:
             raise RemoteError('replica_missing', 'No local snapshot exists yet') from None
@@ -349,7 +374,10 @@ class Replica:
     @staticmethod
     def _error(error):
         if isinstance(error, RemoteError):
-            return dict(status='error', code=error.code, message=str(error))
+            result = dict(status='error', code=error.code, message=str(error))
+            if error.details:
+                result['details'] = error.details
+            return result
         return dict(status='error', code='replica_unavailable', message='Check connection_status; no verified local projection is available')
 
     def status(self):
@@ -365,7 +393,8 @@ class Replica:
                 return result
         except Exception as error:
             reason = error.code if isinstance(error, RemoteError) else 'replica_unavailable'
-            failure = self.last_failure or ('root_scope_denied' if reason == 'root_scope_denied' else None)
+            failure = ('replica_denial_pending' if self._denial_pending else self.last_failure
+                       or ('root_scope_denied' if reason == 'root_scope_denied' else None))
             status = 'busy' if reason == 'replica_busy' else 'failed' if failure else 'pending' if reason in (
                 'replica_missing', 'replica_recovery_pending', 'replica_incomplete', 'credential_reauthorization_pending') else 'unavailable'
             result = dict(enabled=True, ready=False, status=status, reason='replica_scope_denied' if reason == 'root_scope_denied' else reason,
@@ -585,15 +614,47 @@ class Replica:
     def _operation(self, timeout=30):
         return self.remote.operation(max_requests=512, max_response_bytes=32*1024*1024, timeout=timeout)
 
-    def deny(self):
-        """Fence only this currently admitted credential, including in-flight old hosts."""
-        try:
-            with file_lock(self.control / 'notice-access.lock'):
-                current = self._manifest(missing=True)
-                if current.get('credentialBinding') == self.settings.credential_fingerprint:
-                    self._write(self.control / changes.DENIAL, str(uuid.uuid4()))
-        except (OSError, ValueError, RemoteError):
-            pass
+    def deny(self, timeout=3):
+        """Fence this credential now; bounded durable contention is explicit.
+
+        The existing worker owns later authorization/fencing retries. This
+        method never wakes it itself, avoiding a repeated-401 request loop.
+        """
+        with self._state_lock:
+            self._denied, self._denial_pending = True, True
+            self._denial_generation += 1
+            generation = self._denial_generation
+        deadline = time.monotonic() + min(3, max(0, timeout))
+        while True:
+            try:
+                with file_lock(self.control / 'notice-access.lock'):
+                    current = self._manifest(missing=True)
+                    if current.get('credentialBinding') == self.settings.credential_fingerprint:
+                        self._write(self.control / changes.DENIAL, str(uuid.uuid4()))
+                    with self._state_lock:
+                        if generation == self._denial_generation:
+                            self._denial_pending = False
+                    return
+            except BlockingIOError as error:
+                remaining = deadline-time.monotonic()
+                if remaining <= 0:
+                    raise RemoteError('replica_denial_pending', 'Current reads are fenced; shared denial persistence is pending',
+                                      details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending')) from error
+                time.sleep(min(.025, remaining))
+            except FileNotFoundError:
+                # A cold namespace has no admitted snapshot to revoke.
+                if not (self.control / 'manifest.json').exists():
+                    with self._state_lock:
+                        if generation == self._denial_generation:
+                            self._denial_pending = False
+                    return
+                raise RemoteError('replica_denial_pending', 'Current reads are fenced; shared denial persistence is pending',
+                                  details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending')) from None
+            except (OSError, ValueError, RemoteError) as error:
+                if isinstance(error, RemoteError) and error.code == 'replica_denial_pending':
+                    raise
+                raise RemoteError('replica_denial_pending', 'Current reads are fenced; shared denial persistence is pending',
+                                  details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending')) from error
 
     def _denial_token(self):
         try:
@@ -602,9 +663,10 @@ class Replica:
         except FileNotFoundError:
             return None
 
-    def handle_denial(self, error):
+    def handle_denial(self, error, timeout=3):
         """Record confirmed root loss; an ordinary child denial only triggers recheck."""
         from .remote import RootScopeDenial, is_scope_denial
+        deadline = time.monotonic() + min(3, max(0, timeout))
         causes, seen = [], set()
         cause = error
         while cause is not None and id(cause) not in seen:
@@ -614,13 +676,13 @@ class Replica:
         if any(isinstance(cause, RootScopeDenial)
                and cause.settings.identity() == self.settings.identity()
                and cause.settings.credential_fingerprint == self.settings.credential_fingerprint for cause in causes):
-            self.deny()
+            self.deny(timeout=max(0, deadline-time.monotonic()))
         elif isinstance(error, RemoteError) and (is_scope_denial(error) or error.code == 'scope_metadata_changed'):
             try:
-                with self._operation(timeout=3):
+                with self._operation(timeout=max(.001, deadline-time.monotonic())):
                     self._root_access()
             except RootScopeDenial:
-                self.deny()
+                self.deny(timeout=max(0, deadline-time.monotonic()))
             except RemoteError:
                 pass
 
@@ -632,23 +694,31 @@ class Replica:
             ensure_private_directory(self.control)
         with trusted_metadata_directory(self.control):
             pass
+        deadline = time.monotonic() + 30
         try:
-            with file_lock(self.control / 'sweep.lock'):
-                with self._operation():
+            with self._operation():
+                with file_lock(self.control / 'sweep.lock'):
                     result = self._synchronize(authoritative_bodies)
+                self.poll_comments()
                 self.last_success, self.last_failure = _now(), None
         except BlockingIOError:
             return
         except Exception as error:
             self.sync_failed(getattr(error, 'code', 'sync_failed'))
             if isinstance(error, RemoteError):
-                self.handle_denial(error)
+                try:
+                    self.handle_denial(error, timeout=max(0, min(3, deadline-time.monotonic())))
+                except RemoteError as pending:
+                    if pending.code != 'replica_denial_pending':
+                        raise
+                    error.details = dict(error.details, scopeFence='pending', scopeFenceCode=pending.code)
             raise
-        self.poll_comments()
         return result
 
     def _synchronize(self, authoritative_bodies):
         identity, started = self.settings.identity(), int(time.time() * 1000)
+        with self._state_lock:
+            denial_generation = self._denial_generation
         with file_lock(self.control / 'sync.lock'):
             with file_lock(self.control / 'notice-access.lock'):
                 prior_denial = self._denial_token()
@@ -774,6 +844,9 @@ class Replica:
                     if (previous.get('credentialBinding') != self.settings.credential_fingerprint
                         or (prior_denial is not None and self._denial_token() == prior_denial)):
                         (self.control / changes.DENIAL).unlink(missing_ok=True)
+                    with self._state_lock:
+                        if denial_generation == self._denial_generation and not (self.control / changes.DENIAL).exists():
+                            self._denied, self._denial_pending = False, False
                 if full_pass:
                     state = self._checkpoint()
                     state['bodyRefreshedAt'] = started
@@ -967,8 +1040,9 @@ class Replica:
         self._metadata(self.control / 'manifest.json', next)
         state = dict(cursor=next['cursor'], status='synced', credentialBinding=next.get('credentialBinding'))
         prior_state = self._checkpoint()
-        if 'bodyRefreshedAt' in prior_state:
-            state['bodyRefreshedAt'] = prior_state['bodyRefreshedAt']
+        stamp = prior_state.get('bodyRefreshedAt')
+        if type(stamp) is int and 0 <= stamp <= 9223372036854775807:
+            state['bodyRefreshedAt'] = stamp
         self._metadata(self.control / 'state.json', state)
         feed = compact_json(next[changes.NOTICES])
         if len(feed.encode('utf-8')) > 65536:
@@ -990,7 +1064,7 @@ class Replica:
             previous = self._manifest()
             if previous.get('credentialBinding') != self.settings.credential_fingerprint:
                 raise RemoteError('credential_reauthorization_pending', 'Complete inventory admission is required')
-            if (self.control / changes.DENIAL).exists():
+            if self._denied or (self.control / changes.DENIAL).exists():
                 raise RemoteError('root_scope_denied', 'A fresh inventory is required after confirmed denial')
             with file_lock(self.control / 'notice-access.lock'):
                 self._recover()
@@ -1088,6 +1162,7 @@ class Replica:
 
     def _poll_comments(self, targets, interval):
         started = int(time.time()*1000)
+        deadline = time.monotonic() + 30
         try:
             with self._locked_manifest() as manifest:
                 admitted = changes.admitted(manifest)
@@ -1113,13 +1188,21 @@ class Replica:
                             attempted.append(id)
                         break
                     if isinstance(error, RootScopeDenial):
-                        self.deny()
+                        try:
+                            self.deny(timeout=max(0, deadline-time.monotonic()))
+                        except RemoteError as pending:
+                            error.details = dict(error.details, scopeFence='pending', scopeFenceCode=pending.code)
+                            raise error
                         return
                     if is_scope_denial(error) or error.code == 'scope_metadata_changed':
                         try:
                             self._root_access()
-                        except RootScopeDenial:
-                            self.deny()
+                        except RootScopeDenial as denial:
+                            try:
+                                self.deny(timeout=max(0, deadline-time.monotonic()))
+                            except RemoteError as pending:
+                                denial.details = dict(denial.details, scopeFence='pending', scopeFenceCode=pending.code)
+                                raise denial
                             return
                         except RemoteError:
                             return
@@ -1131,7 +1214,7 @@ class Replica:
         try:
             with file_lock(self.control / 'sync.lock'):
                 current = self._manifest()
-                if (self.control / 'transaction.json').exists() or (self.control / changes.DENIAL).exists() or current.get('credentialBinding') != self.settings.credential_fingerprint:
+                if self._denied or (self.control / 'transaction.json').exists() or (self.control / changes.DENIAL).exists() or current.get('credentialBinding') != self.settings.credential_fingerprint:
                     return
                 pages = changes.admitted(current)
                 confirmed = {i: h for i, h in observed.items() if pages.get(i) == watched[i]}
@@ -1173,7 +1256,12 @@ class Replica:
                                              'Affected candidates depend on the starting document; verify premises, dates and deployment evidence before editing.'])
         except Exception as error:
             if isinstance(error, RemoteError):
-                self.handle_denial(error)
+                try:
+                    self.handle_denial(error)
+                except RemoteError as pending:
+                    if pending.code != 'replica_denial_pending':
+                        raise
+                    error.details = dict(error.details, scopeFence='pending', scopeFenceCode=pending.code)
             return self._error(error)
 
     def _relations(self, data, manifest):
@@ -1280,6 +1368,9 @@ class Replica:
                     and edge['type'] in ('evidence', 'depends_on') and edge['from'] != start and edge['from'] not in affected}
             affected.extend(sorted(next))
             frontier = next
+        for id, node in visible.items():
+            if self.remote.require_scope(self.settings, id) != node:
+                raise RemoteError('scope_metadata_changed', 'A consumed native graph endpoint changed before return')
         self._root_access()
         return dict(document=start, nodes=[dict(id=i, title=visible[i].title, version=visible[i].version) for i in selected if i in visible],
                     relations=[dict(e, version=visible[e['from']].version) for e in selected_edges], affectedCandidates=affected,

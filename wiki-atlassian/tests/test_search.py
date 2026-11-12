@@ -26,6 +26,8 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(content[korean.body_offset:].startswith('한 운영'))
         adjacent = '😀 한글'
         self.assertEqual(adjacent.index('ᄀ'), Query('글').match('기록', adjacent).body_offset)
+        for prefix in ['\u09c7\u09be', '\u0bc6\u0bbe']:
+            self.assertEqual(len(prefix)+1, Query('needle').match('x', prefix+' needle').body_offset)
 
     def test_numbers_do_not_match_digits_inside_other_numbers(self):
         self.assertIsNone(Query('201').match('2015 results', '12010 2015'))
@@ -164,6 +166,16 @@ class ReplicaSearchTests(unittest.TestCase):
         self.assertEqual('invalid_query', self.replica.get_document(dict(document='211', offset=1))['code'])
         self.assertEqual('invalid_query', self.replica.search(dict(query='Shared', limit=26))['code'])
         self.assertEqual('invalid_query', self.replica.search(dict(query=' '*3))['code'])
+
+    def test_indic_compositions_keep_exact_excerpt_and_read_locator_at_matched_text(self):
+        from wiki_atlassian.models import Page
+        for prefix in ['\u09c7\u09be', '\u0bc6\u0bbe']:
+            self.remote.pages['211'] = Page(self.remote.pages['211'].node, '<p>'+prefix+'TARGET</p>')
+            self.replica.request_repair('211')
+            self.replica.synchronize(authoritative_bodies=False)
+            hit = self.replica.search(dict(query='TARGET', snippetLength=1))['results'][0]
+            self.assertEqual('T', hit['excerpt'])
+            self.assertEqual('T', self.replica.get_document(hit['read'])['content'])
 
     def test_scan_budget_refuses_broad_projection_but_exact_id_and_narrow_root_remain_available(self):
         from wiki_atlassian.models import Node, Page

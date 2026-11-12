@@ -8,6 +8,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from urllib.parse import parse_qs, urlsplit
 
@@ -150,6 +152,31 @@ class ReplicaTests(unittest.TestCase):
         current = self.remote.pages[id]
         self.remote.pages[id] = Page(replace(current.node, **node), current.body if body is None else body)
         return current, self.remote.pages[id]
+
+    @contextmanager
+    def competing_notice_lock(self, seconds):
+        script = ('import sys,time; sys.path.insert(0,sys.argv[1]); from wiki_platform import file_lock\n'
+                  'with file_lock(sys.argv[2]):\n print("locked",flush=True); time.sleep(float(sys.argv[3]))\n')
+        process = subprocess.Popen([sys.executable, '-B', '-c', script, str(Path(wiki_platform.__file__).parent),
+                                    str(self.replica.control / 'notice-access.lock'), str(seconds)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ready, output = threading.Event(), []
+        def read_ready():
+            output.append(process.stdout.readline().strip())
+            ready.set()
+        reader = threading.Thread(target=read_ready, daemon=True)
+        reader.start()
+        try:
+            self.assertTrue(ready.wait(5), 'Competing lock holder did not start')
+            self.assertEqual(['locked'], output)
+            yield process
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+            reader.join(timeout=1)
+            process.stdout.close()
+            process.stderr.close()
 
     def test_cold_pending_failed_status_sanitized_then_success_and_shared_offline_read(self):
         self.assertEqual('pending', self.replica.status()['status'])
@@ -329,6 +356,68 @@ class ReplicaTests(unittest.TestCase):
         self.replica.handle_denial(wrapper)
         self.assertTrue((self.replica.control / 'notice-access-denied').exists())
 
+    def test_confirmed_denial_waits_for_real_competing_lease_and_preserves_primary_error(self):
+        self.replica.synchronize()
+        self.remote.denied.add('210')
+        with self.competing_notice_lock(.3):
+            started = time.monotonic()
+            result = self.replica.relations(dict(document='211'))
+            self.assertGreater(time.monotonic()-started, .15)
+            self.assertEqual('http_403', result['code'])
+        self.assertTrue((self.replica.control / 'notice-access-denied').exists())
+        self.assertEqual('root_scope_denied', Replica(self.settings, self.remote).get_document(dict(document='211'))['code'])
+
+    def test_pending_denial_is_bounded_memory_fenced_and_retried_without_new_ledger(self):
+        self.replica.synchronize()
+        wakes = []
+        self.replica.on_repair = lambda: wakes.append(True)
+        with self.competing_notice_lock(1):
+            started = time.monotonic()
+            with self.assertRaises(RemoteError) as caught:
+                self.replica.deny(timeout=.05)
+            self.assertLess(time.monotonic()-started, .3)
+            self.assertEqual('replica_denial_pending', caught.exception.code)
+            self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
+            self.assertEqual('replica_denial_pending', self.replica.status()['code'])
+            self.assertFalse((self.replica.control / 'notice-access-denied').exists())
+            self.assertEqual([], wakes, 'Background denial must not create a wake/HTTP loop')
+        self.replica.deny()
+        self.assertTrue((self.replica.control / 'notice-access-denied').exists())
+        self.replica.synchronize()
+        self.assertIn('content', self.replica.get_document(dict(document='211')))
+
+    def test_pending_fence_preserves_primary_graph_denial_and_background_401(self):
+        self.replica.synchronize()
+        original_deny = self.replica.deny
+        self.replica.deny = lambda timeout=3: original_deny(timeout=min(timeout, .05))
+        self.remote.denied.add('210')
+        with self.competing_notice_lock(1):
+            result = self.replica.relations(dict(document='211'))
+            self.assertEqual('http_403', result['code'])
+            self.assertEqual('pending', result['details']['scopeFence'])
+            self.assertEqual('replica_denial_pending', result['details']['scopeFenceCode'])
+        original_fail = self.remote._fail
+        lease = None
+        def unauthorized_root(id):
+            nonlocal lease
+            if id == '210':
+                # The first metadata notice lease is already released when
+                # native authorization discovers the new denial.
+                if lease is None:
+                    lease = self.competing_notice_lock(1)
+                    lease.__enter__()
+                raise RootScopeDenial(self.settings, RemoteError('http_401', 'Synthetic revoked token'))
+            return original_fail(id)
+        self.remote._fail = unauthorized_root
+        try:
+            with self.assertRaises(RootScopeDenial) as caught:
+                self.replica.synchronize()
+            self.assertEqual('http_401', caught.exception.code)
+            self.assertEqual('pending', caught.exception.details['scopeFence'])
+        finally:
+            if lease is not None:
+                lease.__exit__(None, None, None)
+
     def test_late_old_credential_comment_observation_cannot_commit_after_rotation(self):
         self.replica.synchronize()
         rotated = Replica(self.setting('rotated'), self.remote)
@@ -408,6 +497,32 @@ class ReplicaTests(unittest.TestCase):
         self.replica.request_repair('211')
         self.replica.synchronize(authoritative_bodies=False)
         self.assertEqual(original, (self.root / 'settings.json').read_bytes())
+
+    def test_oversized_candidate_is_refused_before_journal_and_retains_readable_generation(self):
+        from wiki_atlassian.replica import MANIFEST_LIMIT
+        body = '<h2>지식 연결</h2>' + ''.join(
+            '<p>근거: <ac:link><ri:page ri:content-id="211" /></ac:link> — '+('x'*990)+f'{i:010d}</p>' for i in range(100))
+        for number in range(500, 660):
+            id = str(number)
+            self.remote.pages[id] = Page(Node(id, 'Bounded '+id, '210', 'page', '20', 1), body)
+        self.replica.synchronize()
+        baseline = (self.replica.control / 'manifest.json').read_bytes()
+        self.assertLessEqual(len(baseline), MANIFEST_LIMIT)
+        self.assertLess(MANIFEST_LIMIT-len(baseline), 110000)
+        candidate = Page(Node('999', 'Additional', '210', 'page', '20', 1), body)
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.publish_verified(candidate)
+        self.assertEqual('replica_metadata_limit', caught.exception.code)
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+        self.assertEqual(baseline, (self.replica.control / 'manifest.json').read_bytes())
+        self.assertIn('content', self.replica.get_document(dict(document='211')))
+
+    def test_large_malformed_sweep_value_does_not_strand_recovery_state(self):
+        self.replica.synchronize()
+        self.write_metadata('state.json', dict(bodyRefreshedAt='x'*65300))
+        self.replica.synchronize()
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+        self.assertIs(type(self.metadata('state.json')['bodyRefreshedAt']), int)
 
     def test_storage_tamper_rejects_read_and_sync_retrieves_untampered_native_body(self):
         self.replica.synchronize()
@@ -565,6 +680,29 @@ class ReplicaTests(unittest.TestCase):
         stale = self.replica.relations(dict(document='211'))
         self.assertEqual([], stale['relations'])
         self.assertTrue(stale['syncRequired'])
+
+    def test_inline_formatted_relation_link_does_not_make_valid_storage_unreadable(self):
+        body = ('<h2>지식 연결</h2><p>근거: <strong><ac:link><ri:page ri:content-id="211" />'
+                '</ac:link></strong> — <em>Observed deployment</em></p>')
+        self.remote.pages['212'] = Page(Node('212', 'Conclusion', '210', 'page', '20', 1), body)
+        self.replica.synchronize()
+        self.assertTrue(self.replica.status()['ready'])
+        self.assertEqual(dict(items=[dict(type='evidence', reason='Observed deployment', to='211')], complete=True),
+                         knowledge_relations(body, self.settings.site, self.settings.space))
+
+    def test_graph_rechecks_previously_consumed_endpoint_before_public_service_returns(self):
+        from wiki_atlassian.service import WikiService
+        body = '<h2>지식 연결</h2><p>근거: <ac:link><ri:page ri:content-id="211" /></ac:link> — Observed deployment</p>'
+        self.remote.pages['212'] = Page(Node('212', 'Conclusion', '210', 'page', '20', 1), body)
+        self.replica.synchronize()
+        def change_earlier_endpoint(id):
+            if id == '212':
+                self.change('211', title='Changed target', version=2)
+        self.remote.after_body = change_earlier_endpoint
+        result = WikiService(self.settings, self.remote, self.replica).execute('document_relations', dict(document='211'))
+        self.assertEqual('scope_metadata_changed', result['code'])
+        self.assertNotIn('nodes', result)
+        self.assertNotIn('affectedCandidates', result)
 
     def test_cold_relation_read_returns_native_start_with_sync_required_without_cache_edges(self):
         result = self.replica.relations(dict(document='211'))

@@ -22,19 +22,17 @@ def _pattern(value):
 def original_offset(content, normalized, offset):
     if offset <= 0 or content == normalized:
         return offset
-    # NFC only composes within canonical combining sequences, plus Hangul Jamo.
-    # Locate the normalization prefix boundary without quadratic prefix scans.
+    # A zero combining class does not always end a normalization sequence:
+    # spacing Indic vowel signs and Hangul can compose across that boundary.
+    # Flush only when NFC is stable across the proposed next starter.
     start, position = 0, 0
     for end in range(1, len(content) + 1):
         if end < len(content):
-            previous, following = ord(content[end - 1]), ord(content[end])
-            # A trailing consonant and the next syllable's initial consonant
-            # are separate clusters, even though both are Hangul Jamo.
-            hangul = ((0x1100 <= previous <= 0x1112 and 0x1161 <= following <= 0x1175)
-                      or ((0x1161 <= previous <= 0x1175
-                           or (0xAC00 <= previous <= 0xD7A3 and (previous-0xAC00) % 28 == 0))
-                          and 0x11A8 <= following <= 0x11C2))
-            if unicodedata.combining(content[end]) or hangul:
+            if unicodedata.combining(content[end]):
+                continue
+            left = unicodedata.normalize('NFC', content[start:end])
+            right = unicodedata.normalize('NFC', content[end])
+            if unicodedata.normalize('NFC', left + right) != left + right:
                 continue
         position += len(unicodedata.normalize('NFC', content[start:end]))
         if position > offset:
