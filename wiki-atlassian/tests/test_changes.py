@@ -115,6 +115,48 @@ class ChangesTests(unittest.TestCase):
         self.assertEqual(result['wikiNotices']['epoch'], epoch)
         self.assertEqual('created', events[0]['kind'])
 
+    def test_real_replica_feed_delivers_once_per_host_and_suppresses_busy_denied_foreign_credential(self):
+        import tempfile
+        from dataclasses import replace
+        import wiki_change_notice
+        from wiki_atlassian.config import SpaceSettings, corpus_path
+        from wiki_atlassian.models import Credentials, Page, compact_json
+        from wiki_atlassian.replica import Replica
+        from wiki_platform import file_lock
+        from test_replica import Native
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            credentials = Credentials('https://example.test', 'fixture@example.test', 'fixture-token')
+            root = corpus_path(home / '.local/share/wiki-atlassian', credentials, 'COMMON', '210')
+            settings = SpaceSettings(dict(space='COMMON', spaceId='20', rootPageId='210'), credentials, root)
+            remote = Native(settings)
+            replica = Replica(settings, remote)
+            replica.synchronize()
+            project = home / 'project'
+            directory = project / 'doc/harness'
+            directory.mkdir(parents=True)
+            (directory / 'manifest.yaml').write_text(compact_json(dict(wiki=dict(backend='atlassian', enabled=True,
+                site=credentials.base_url, spaces=[dict(key='COMMON', rootPageId='210')]))), 'utf-8')
+            environment = dict(HOME=str(home), USERPROFILE=str(home), ATLASSIAN_BASE_URL=credentials.base_url,
+                               ATLASSIAN_EMAIL=credentials.email, ATLASSIAN_API_TOKEN=credentials.api_token)
+            data = dict(session_id='synthetic-session', cwd=str(project))
+            self.assertEqual('', wiki_change_notice.render_notice(data, 'codex', environment))
+            before = remote.pages['211']
+            after = Page(replace(before.node, version=2), '<p>Private changed human body</p>')
+            replica.publish_verified(after, before)
+            with file_lock(replica.control / 'sync.lock'):
+                self.assertEqual('', wiki_change_notice.render_notice(data, 'codex', environment))
+            notice = wiki_change_notice.render_notice(data, 'codex', environment)
+            self.assertIn('page 211, observed version 2', notice)
+            self.assertNotIn('Private', notice)
+            self.assertEqual('', wiki_change_notice.render_notice(data, 'codex', environment))
+            self.assertIn('page 211', wiki_change_notice.render_notice(data, 'claude', environment))
+            foreign = dict(environment, ATLASSIAN_API_TOKEN='unadmitted-token')
+            fresh_session = dict(data, session_id='new-session')
+            self.assertEqual('', wiki_change_notice.render_notice(fresh_session, 'codex', foreign))
+            replica.deny()
+            self.assertEqual('', wiki_change_notice.render_notice(fresh_session, 'codex', environment))
+
 
 if __name__ == '__main__':
     unittest.main()
