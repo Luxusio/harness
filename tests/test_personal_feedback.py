@@ -237,7 +237,11 @@ def test_real_mise_private_account_is_independent_of_project_environment(tmp_pat
     folder, auth = private_auth(home)
     environment = {k: v for k, v in os.environ.items()
                    if not k.startswith(("MISE_", "__MISE_", "ATLASSIAN_"))}
-    environment.update(HOME=str(home), ATLASSIAN_BASE_URL="https://project.invalid",
+    environment.update(HOME=str(home), USERPROFILE=str(home),
+                       XDG_CONFIG_HOME=str(home / ".config"), XDG_DATA_HOME=str(home / ".local/share"),
+                       XDG_CACHE_HOME=str(home / ".cache"), XDG_STATE_HOME=str(home / ".local/state"),
+                       APPDATA=str(home / "AppData/Roaming"), LOCALAPPDATA=str(home / "AppData/Local"),
+                       ATLASSIAN_BASE_URL="https://project.invalid",
                        ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token")
     monkeypatch.setattr(feedback, "_request", forbidden)
     assert feedback.perform("check", home=home, environment=environment)["status"] == "unavailable"
@@ -540,7 +544,7 @@ def test_packaged_help_explains_private_setup_without_source_readme(tmp_path):
     cwd.mkdir()
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("MISE_", "__MISE_", "ATLASSIAN_", "HARNESS_"))}
-    env.update(HOME=str(home), PYTHONDONTWRITEBYTECODE="1")
+    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONDONTWRITEBYTECODE="1")
     result = subprocess.run([sys.executable, "-S", "-B", str(package / "personal_feedback.py"), "--help"],
                             cwd=cwd, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0 and not result.stderr
@@ -568,6 +572,25 @@ def test_cli_native_unicode_result_survives_restrictive_redirected_encoding(monk
     assert json.loads(raw.getvalue().decode("utf-8")) == result
 
 
+@pytest.mark.parametrize("payload", [None, [], True, 10, {"limit": 0}, {"limit": "bad"},
+                                     {"limit": True}, {"cursor": ""}, {"cursor": []},
+                                     {"cursor": "x" * 8193}, {"extra": "ignored"}])
+def test_actual_read_cli_rejects_invalid_options_without_traceback(tmp_path, payload):
+    home = tmp_path / "isolated-home"
+    home.mkdir(mode=0o700)
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith(("MISE_", "__MISE_", "ATLASSIAN_", "HARNESS_"))}
+    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPTS / "personal_feedback.py"), "read"],
+                            input=json.dumps(payload).encode("utf-8"), cwd=consumer, env=env,
+                            capture_output=True, timeout=10)
+    assert result.returncode == 1 and result.stderr == b""
+    assert json.loads(result.stdout)["status"] == "unavailable"
+    assert not list(home.iterdir()) and not list(consumer.iterdir())
+
+
 def test_public_cli_default_help_and_invalid_action_from_unrelated_project(tmp_path):
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
@@ -576,7 +599,7 @@ def test_public_cli_default_help_and_invalid_action_from_unrelated_project(tmp_p
     (project / ".git").mkdir()
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("MISE_", "__MISE_", "ATLASSIAN_", "HARNESS_"))}
-    env.update(HOME=str(home), PYTHONDONTWRITEBYTECODE="1")
+    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONDONTWRITEBYTECODE="1")
     command = [sys.executable, "-B", str(SCRIPTS / "personal_feedback.py")]
     result = subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0 and json.loads(result.stdout)["status"] == "unconfigured"

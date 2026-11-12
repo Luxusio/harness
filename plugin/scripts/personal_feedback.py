@@ -496,8 +496,10 @@ If unknown, inspect the page/known comment ID before another submission.
                     value[key] = item
                 return value
             request = json.loads(raw.decode("utf-8"), object_pairs_hook=unique) if raw.strip() else {}
+            if not isinstance(request, dict):
+                raise ValueError()
             _read_options(request)
-        except (ValueError, OSError):
+        except (ValueError, OSError, FeedbackError):
             print(json.dumps({"status": "unavailable", "message": "Read requires a bounded JSON object with only limit and the returned cursor."}))
             return 1
     if args.action == "send":
