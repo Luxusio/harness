@@ -253,6 +253,21 @@ class ReplicaTests(unittest.TestCase):
         self.assertFalse((self.replica.control / 'notice-access-denied').exists())
         self.assertEqual(feed, (self.replica.control / 'changes.json').read_bytes())
 
+    def test_late_denial_marker_survives_inventory_that_started_before_it(self):
+        self.replica.synchronize()
+        self.replica.deny()
+        earlier = (self.replica.control / 'notice-access-denied').read_bytes()
+        def deny_during_root(id):
+            self.remote.after_root = None
+            self.replica.deny()
+        self.remote.after_root = deny_during_root
+        self.replica.synchronize()
+        newer = (self.replica.control / 'notice-access-denied').read_bytes()
+        self.assertNotEqual(earlier, newer)
+        self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
+        self.replica.synchronize()
+        self.assertFalse((self.replica.control / 'notice-access-denied').exists())
+
     def test_transient_sync_failure_keeps_snapshot_readable_and_reports_staleness(self):
         self.replica.synchronize()
         self.remote.transient.add('210')
@@ -393,6 +408,13 @@ class ReplicaTests(unittest.TestCase):
         stale = self.replica.relations(dict(document='211'))
         self.assertEqual([], stale['relations'])
         self.assertTrue(stale['syncRequired'])
+
+    def test_cold_relation_read_returns_native_start_with_sync_required_without_cache_edges(self):
+        result = self.replica.relations(dict(document='211'))
+        self.assertEqual([dict(id='211', title='Operations', version=1)], result['nodes'])
+        self.assertEqual([], result['relations'])
+        self.assertTrue(result['syncRequired'])
+        self.assertFalse(result['complete'])
 
 
 if __name__ == '__main__':

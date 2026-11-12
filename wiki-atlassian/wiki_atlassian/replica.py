@@ -26,6 +26,7 @@ from .search import Query, Match, authored_start, projected_headings
 BODY_LIMIT = 8 * 1024 * 1024
 MANIFEST_LIMIT = 16 * 1024 * 1024
 PAGE_LIMIT = 20_000
+_DEVICE = r'(?i)(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?'
 
 
 def _hash(text):
@@ -53,9 +54,12 @@ def _relative(value):
         or any(ord(c) < 32 for c in value)):
         raise ValueError('Invalid replica path')
     # Windows strips trailing dots/spaces and interprets device names even with extensions.
-    for part in value.split('/'):
-        if (part.rstrip(' .') != part or re.search(r'[<>"|?*]', part)
-            or re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', part)):
+    parts = value.split('/')
+    if len(parts) > 102:
+        raise ValueError('Replica path exceeds ancestry budget')
+    for part in parts:
+        if (len(part.encode('utf-8')) > 240 or part.rstrip(' .') != part or re.search(r'[<>"|?*]', part)
+            or re.fullmatch(_DEVICE, part)):
             raise ValueError('Invalid replica path component')
     return value
 
@@ -63,7 +67,7 @@ def _relative(value):
 def _segment(title):
     name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', '_', unicodedata.normalize('NFC', title)).rstrip(' .')
     name = name if name and name not in ('.', '..') else '_'
-    if re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', name):
+    if re.fullmatch(_DEVICE, name):
         name = '_' + name
     if len(name.encode('utf-8')) > 200:
         raise ValueError('Page title exceeds mirror filename budget')
@@ -873,7 +877,8 @@ class Replica:
                 raise RemoteError('invalid_mirror_snapshot', 'Unavailable page differs from retained checkpoint')
         # Preflight the complete workset before touching the readable generation.
         owned = {r['path'] for r in prior.values()}
-        total = 0
+        owned_canonical = {_canonical(p) for p in owned}
+        total, entry_count, directory_entries = 0, 0, {}
         for relative in desired:
             _relative(relative)
             source = self._path(relative, stage) if relative in files else self._path(relative)
@@ -882,8 +887,23 @@ class Replica:
             if total > 64*1024*1024:
                 raise RemoteError('replica_body_limit', 'Staged projections exceed the publication budget')
             destination = self._path(relative)
-            if relative not in owned and destination.exists():
+            if _canonical(relative) not in owned_canonical and destination.exists():
                 raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
+            if destination.parent.exists():
+                # Detect the same obstruction on case-sensitive hosts before exporting
+                # a cache that would collide on native Windows.
+                ensure_private_directory(destination.parent)
+                if destination.parent not in directory_entries:
+                    names = set()
+                    for sibling in destination.parent.iterdir():
+                        entry_count += 1
+                        if entry_count > 4*PAGE_LIMIT:
+                            raise RemoteError('replica_path_limit', 'Mirror directories exceed their entry budget')
+                        names.add(_canonical(sibling.name))
+                    directory_entries[destination.parent] = names
+                if (_canonical(destination.name) in directory_entries[destination.parent]
+                    and _canonical(relative) not in owned_canonical):
+                    raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
         for row in prior.values():
             if row['path'] not in desired:
                 obsolete = self._path(row['path'])
@@ -1089,8 +1109,23 @@ class Replica:
     def relations(self, data):
         try:
             with self._operation(timeout=45):
-                with self._locked_manifest() as manifest:
-                    return self._relations(data, manifest)
+                try:
+                    with self._locked_manifest() as manifest:
+                        return self._relations(data, manifest)
+                except RemoteError as error:
+                    if error.code != 'replica_missing':
+                        raise
+                    depth, limit = data.get('depth', 2), data.get('limit', 25)
+                    if type(depth) is not int or type(limit) is not int or not 1 <= depth <= 5 or not 1 <= limit <= 25:
+                        raise RemoteError('invalid_request', 'Graph requires depth 1..5 and limit 1..25')
+                    node = self.remote.require_scope(self.settings, self._page_id(data['document']))
+                    if node.type != 'page':
+                        raise RemoteError('invalid_request', 'A native page is required')
+                    self._root_access()
+                    return dict(document=node.id, nodes=[dict(id=node.id, title=node.title, version=node.version)],
+                                relations=[], affectedCandidates=[], syncRequired=True, truncated=False, complete=False,
+                                limitations=['One synchronized scope and bounded explicit relations; not global logical closure.',
+                                             'Affected candidates depend on the starting document; verify premises, dates and deployment evidence before editing.'])
         except Exception as error:
             if isinstance(error, RemoteError):
                 self._handle_denial(error)
