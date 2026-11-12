@@ -219,6 +219,7 @@ class Replica:
         self.control = self.base / '.sync'
         self.pending_repair = set()
         self.on_repair = None
+        self.on_authorization_denied = None
         self.last_failure = None
         self.last_success = None
         self._denied = False
@@ -673,6 +674,26 @@ class Replica:
             seen.add(id(cause))
             causes.append(cause)
             cause = cause.__cause__
+        if any(isinstance(cause, RemoteError) and cause.code == 'http_401' for cause in causes):
+            if self.on_authorization_denied is None:
+                self.deny(timeout=max(0, deadline-time.monotonic()))
+                return
+            # The owner fences every runtime admission before waiting on any
+            # namespace lease, and caches one result for the current operation.
+            with self._state_lock:
+                self._denied = True
+                self._denial_generation += 1
+            try:
+                pending = self.on_authorization_denied()
+            except Exception as failure:
+                with self._state_lock:
+                    self._denial_pending = True
+                raise RemoteError('replica_denial_pending', 'Current reads are fenced; shared denial persistence is pending',
+                                  details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending')) from failure
+            if pending:
+                raise RemoteError('replica_denial_pending', 'Current reads are fenced; shared denial persistence is pending',
+                                  details=dict(scopeFence='pending', scopeFenceCode='replica_denial_pending'))
+            return
         if any(isinstance(cause, RootScopeDenial)
                and cause.settings.identity() == self.settings.identity()
                and cause.settings.credential_fingerprint == self.settings.credential_fingerprint for cause in causes):
@@ -1218,23 +1239,36 @@ class Replica:
         attempted, observed = [], {}
         with self._operation(timeout=max(.001, deadline-time.monotonic())):
             for id, row in watched.items():
+                page_deadline = min(deadline, time.monotonic()+8)
                 try:
-                    expected = _node(row)
-                    if self.remote.require_scope(self.settings, id) != expected:
-                        raise RemoteError('scope_metadata_changed', 'Comment target metadata changed')
-                    inventory = self.remote.comment_inventory(id, expected_node=expected, scope=self.settings)
-                    if self.remote.require_scope(self.settings, id) != expected:
-                        raise RemoteError('scope_metadata_changed', 'Comment target metadata changed')
-                    observed[id] = changes.comment_fingerprint(inventory)
+                    with self._operation(timeout=max(.001, page_deadline-time.monotonic())):
+                        expected = _node(row)
+                        if self.remote.require_scope(self.settings, id) != expected:
+                            raise RemoteError('scope_metadata_changed', 'Comment target metadata changed')
+                        inventory = self.remote.comment_inventory(id, expected_node=expected, scope=self.settings)
+                        if self.remote.require_scope(self.settings, id) != expected:
+                            raise RemoteError('scope_metadata_changed', 'Comment target metadata changed')
+                        observed[id] = changes.comment_fingerprint(inventory)
                 except RemoteError as error:
                     from .remote import RootScopeDenial, is_scope_denial
+                    if error.code == 'http_401':
+                        try:
+                            self.handle_denial(error, timeout=max(0, deadline-time.monotonic()))
+                        except RemoteError as pending:
+                            error.details = dict(error.details, scopeFence='pending', scopeFenceCode=pending.code)
+                        raise error
                     if error.code in ('wiki_request_limit', 'wiki_body_limit', 'wiki_timeout'):
+                        if time.monotonic() >= page_deadline and page_deadline < deadline and time.monotonic() < deadline:
+                            # A per-page timeout is an unavailable observation,
+                            # not exhaustion of the shared request/scan budget.
+                            attempted.append(id)
+                            continue
                         if not attempted:
                             attempted.append(id)
                         break
                     if isinstance(error, RootScopeDenial):
                         try:
-                            self.deny(timeout=max(0, deadline-time.monotonic()))
+                            self.handle_denial(error, timeout=max(0, deadline-time.monotonic()))
                         except RemoteError as pending:
                             error.details = dict(error.details, scopeFence='pending', scopeFenceCode=pending.code)
                             raise error
@@ -1244,9 +1278,11 @@ class Replica:
                             self._root_access()
                         except RootScopeDenial as denial:
                             try:
-                                self.deny(timeout=max(0, deadline-time.monotonic()))
+                                self.handle_denial(denial, timeout=max(0, deadline-time.monotonic()))
                             except RemoteError as pending:
                                 denial.details = dict(denial.details, scopeFence='pending', scopeFenceCode=pending.code)
+                                raise denial
+                            if denial.code == 'http_401':
                                 raise denial
                             return
                         except RemoteError:

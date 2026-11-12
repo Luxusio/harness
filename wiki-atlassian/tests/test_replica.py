@@ -418,6 +418,35 @@ class ReplicaTests(unittest.TestCase):
             if lease is not None:
                 lease.__exit__(None, None, None)
 
+    def test_authorization_denial_hook_runs_before_local_lease_wait_and_only_for_401(self):
+        self.replica.synchronize()
+        calls = []
+        def global_fence():
+            calls.append(True)
+            self.replica.deny(timeout=0)
+            return {}
+        self.replica.on_authorization_denied = global_fence
+        wrapped = RemoteError('unknown_update', 'Synthetic unknown write', outcome_unknown=True)
+        wrapped.__cause__ = RootScopeDenial(self.settings, RemoteError('http_401', 'Synthetic expired token'))
+        self.replica.handle_denial(wrapped)
+        self.assertEqual([True], calls)
+        self.assertTrue((self.replica.control / 'notice-access-denied').exists())
+        self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
+        self.replica.synchronize()
+        self.replica.handle_denial(RootScopeDenial(self.settings, RemoteError('http_403', 'Synthetic root loss')))
+        self.assertEqual([True], calls, 'A per-space 403 must not revoke sibling spaces')
+
+    def test_authorization_denial_hook_failure_is_explicit_and_memory_fenced(self):
+        self.replica.synchronize()
+        def failed_coordinator():
+            raise OSError('Synthetic coordinator publication failure')
+        self.replica.on_authorization_denied = failed_coordinator
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.handle_denial(RemoteError('http_401', 'Synthetic authentication loss'))
+        self.assertEqual('replica_denial_pending', caught.exception.code)
+        self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])
+        self.assertEqual('replica_denial_pending', self.replica.status()['code'])
+
     def test_late_old_credential_comment_observation_cannot_commit_after_rotation(self):
         self.replica.synchronize()
         rotated = Replica(self.setting('rotated'), self.remote)
@@ -732,6 +761,48 @@ class ReplicaTests(unittest.TestCase):
         self.remote.comment_reads.clear()
         self.replica.poll_comments(['211', '212', '213'], 0)
         self.assertEqual('212', self.remote.comment_reads[0])
+
+    def test_actual_remote_watch_page_timeout_keeps_fingerprint_and_advances_healthy_peer(self):
+        from unittest.mock import patch
+        settings = self.setting(watch='210,211')
+        pages = dict(self.remote.pages)
+        slow, clock, footer_reads = [False], [time.monotonic()], []
+        def transport(method, target, headers, data, timeout):
+            self.assertEqual('GET', method)
+            uri = urlsplit(target)
+            match = re.fullmatch(r'/wiki/api/v2/pages/(210|211)(?:/(direct-children|footer-comments|inline-comments))?', uri.path)
+            if match is None:
+                return 404, {}, b'{}'
+            id, operation = match.groups()
+            if operation in ('footer-comments', 'inline-comments'):
+                if operation == 'footer-comments':
+                    footer_reads.append((id, timeout))
+                    if slow[0] and id == '210':
+                        clock[0] += 8.5
+                value = dict(results=[])
+            elif operation == 'direct-children':
+                value = dict(results=[dict(id=p.node.id, type=p.node.type) for p in pages.values() if p.node.parent_id == id])
+            else:
+                page = pages[id]
+                node = page.node
+                value = dict(id=id, type='page', title=node.title, parentId=node.parent_id,
+                             status='current', spaceId='20', version=dict(number=1))
+                if parse_qs(uri.query).get('body-format') == ['storage']:
+                    value['body'] = dict(storage=dict(value=page.body, representation='storage'))
+            return 200, {}, compact_json(value).encode('utf-8')
+        replica = Replica(settings, Remote(settings.credentials, transport=transport))
+        replica.synchronize()
+        before = self.metadata('manifest.json')['wikiCommentWatch']
+        footer_reads.clear()
+        slow[0], clock[0] = True, time.monotonic()
+        with patch('time.monotonic', side_effect=lambda: clock[0]):
+            replica.poll_comments(interval_seconds=0)
+        current = self.metadata('manifest.json')['wikiCommentWatch']
+        self.assertLessEqual(next(timeout for id, timeout in footer_reads if id == '210'), 8)
+        self.assertIn('211', [id for id, _ in footer_reads])
+        self.assertEqual('unavailable', current['210']['status'])
+        self.assertEqual(before['210']['fingerprint'], current['210']['fingerprint'])
+        self.assertEqual('ready', current['211']['status'])
 
     def test_relation_extraction_only_explicit_authored_links_and_verified_native_sources(self):
         body = ('<h2>지식 연결</h2><p>근거: <ac:link><ri:page ri:content-id="211" /></ac:link> — Observed deployment</p>'
