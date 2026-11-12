@@ -123,3 +123,20 @@ def test_private_tool_exceptions_do_not_echo_credentials():
     value = Server(personal=unsafe).handle({'id': 1, 'method': 'tools/call', 'params': {'name': 'read_personal_feedback'}})
     assert value['result']['isError']
     assert 'secret-do-not-print' not in json.dumps(value)
+
+
+def test_overflowing_numeric_rpc_id_is_refused_before_dispatch_and_stream_survives():
+    class Documents:
+        calls = 0
+        def execute(self, *args):
+            self.calls += 1
+            return {'status': 'created'}
+    documents = Documents()
+    requests = (b'{"jsonrpc":"2.0","id":1e999,"method":"tools/call","params":'
+                b'{"name":"create_document","arguments":{"title":"Synthetic","content":"<p>Test</p>"}}}\n'
+                b'{"jsonrpc":"2.0","id":2,"method":"ping"}\n')
+    writer = io.BytesIO()
+    Server(documents=documents).run(io.BytesIO(requests), writer)
+    rows = [json.loads(line) for line in writer.getvalue().splitlines()]
+    assert documents.calls == 0 and rows[0]['error']['code'] == -32600 and rows[0]['id'] is None
+    assert rows[1]['id'] == 2 and rows[1]['result'] == {}

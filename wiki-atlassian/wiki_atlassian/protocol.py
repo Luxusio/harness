@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import sys
 
 from . import __version__
@@ -32,7 +33,7 @@ class Server:
         if not isinstance(request, dict):
             return self.error(None, -32600, 'Invalid request')
         id = request.get('id')
-        if id is not None and type(id) not in (str, int, float):
+        if id is not None and (type(id) not in (str, int, float) or type(id) is float and not math.isfinite(id)):
             return self.error(None, -32600, 'Invalid request ID')
         method = request.get('method')
         if not isinstance(method, str) or not method.strip():
