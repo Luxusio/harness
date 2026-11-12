@@ -54,7 +54,6 @@ class Native:
 
     def require_space(self, settings):
         self.reads.append('space')
-        self._fail('210')
 
     def require_scope(self, settings, id):
         self.reads.append(id)
@@ -88,6 +87,8 @@ class Native:
         self.require_space(settings) if settings.whole_space else self.require_scope(settings, settings.root_page_id)
         result = []
         for id in self.pages:
+            if id in self.denied:
+                continue
             try:
                 result.append(self.require_scope(settings, id))
             except RootScopeDenial:
@@ -348,6 +349,34 @@ class ReplicaTests(unittest.TestCase):
         self.assertEqual('replica_path_collision', caught.exception.code)
         self.assertEqual(b'user-owned obstruction', path.read_bytes())
         self.assertEqual('replica_recovery_pending', self.replica.get_document(dict(document='211'))['code'])
+
+    def test_case_only_rename_and_unowned_case_variant_are_portable(self):
+        self.replica.synchronize()
+        before, after = self.change('211', title='operations', version=2)
+        self.replica.publish_verified(after, before)
+        self.assertIn('operations.md', self.metadata('manifest.json')['pages']['211']['path'])
+        self.remote.pages['212'] = Page(Node('212', 'New', '210', 'page', '20', 1), '<p>new</p>')
+        obstruction = self.replica.base / 'pages/Knowledge/NEW.md'
+        atomic_write(obstruction, b'preserved unowned case variant')
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.synchronize()
+        self.assertEqual('replica_path_collision', caught.exception.code)
+        self.assertEqual(b'preserved unowned case variant', obstruction.read_bytes())
+
+    def test_whole_space_cache_keeps_parentless_and_visible_children_without_parent_access(self):
+        settings = self.setting(root=None)
+        remote = Native(settings)
+        replica = Replica(settings, remote)
+        remote.denied.add('210')
+        remote.pages['212'] = Page(Node('212', 'Parentless', None, 'page', '20', 1), '<p>Independent tree</p>')
+        replica.synchronize()
+        self.assertIn('Shared evidence', replica.get_document(dict(document='211'))['content'])
+        self.assertIn('Independent tree', replica.get_document(dict(document='212'))['content'])
+        self.assertNotIn('210', remote.reads)
+        data = json.loads((replica.control / 'manifest.json').read_text('utf-8'))
+        self.assertEqual('', data['homePageId'])
+        self.assertTrue(data['wholeSpace'])
+        self.assertTrue(data['pages']['211']['path'].endswith('Operations~211.md'))
 
     def test_writer_lock_blocks_read_without_releasing_cross_process_lease(self):
         self.replica.synchronize()
