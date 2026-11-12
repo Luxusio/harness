@@ -37,10 +37,10 @@ def _key(parts):
 
 
 def _control(env, config, space):
-    home = env.get("HOME", "")
-    if not home.strip():
-        home = str(Path.home())
-    data = Path(home) / ".local/share"
+    # Match the runtime's native profile selection; a Unix HOME inherited by a
+    # Windows host must not redirect notices away from its actual corpus.
+    home = env.get("USERPROFILE" if os.name == "nt" else "HOME")
+    data = (Path(home) if home else Path.home()) / ".local/share"
     if not data.is_absolute() or ".." in data.parts:
         return None
     partition = _key([

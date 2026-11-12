@@ -277,7 +277,9 @@ def _consumer_fixture(private):
     selected = {"backend": "atlassian", "enabled": True, "site": "https://fixture.invalid",
                 "spaces": [{"key": "TEAM", "rootPageId": "456"}]}
     win.atomic_write(project / "doc/harness/manifest.yaml", json.dumps({"type": "library", "wiki": selected}).encode())
-    env = dict(HOME=str(private), ATLASSIAN_BASE_URL="https://fixture.invalid",
+    # Native runtime and hooks must agree even when a Unix-style HOME survives
+    # in the host environment beside the real Windows profile.
+    env = dict(HOME=str(private / "wrong-home"), USERPROFILE=str(private), ATLASSIAN_BASE_URL="https://fixture.invalid",
                ATLASSIAN_EMAIL="fixture@example.invalid", ATLASSIAN_API_TOKEN="synthetic-native-only")
     identity = [selected["site"], env["ATLASSIAN_EMAIL"], "456", "TEAM"]
     partition = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
@@ -315,6 +317,8 @@ def test_native_notice_transaction_denial_credentials_and_cursor(private, fence)
     import wiki_change_notice as notice
 
     project, env, control = _consumer_fixture(private)
+    assert notice._control(env, {"site": env["ATLASSIAN_BASE_URL"]},
+                           {"key": "TEAM", "rootPageId": "456"}) == control
     request = {"session_id": "native-session", "cwd": str(project)}
     if fence == "credential":
         blocked = dict(env, ATLASSIAN_API_TOKEN="different-synthetic-token")

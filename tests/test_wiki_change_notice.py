@@ -38,6 +38,7 @@ def setup_wiki(tmp_path):
     env.update(
         PYTHONDONTWRITEBYTECODE="1",
         HOME=str(tmp_path / "home"),
+        USERPROFILE=str(tmp_path / "home"),
         XDG_DATA_HOME=str(tmp_path / "ignored-override"),
         ATLASSIAN_BASE_URL="https://example.invalid/",
         ATLASSIAN_EMAIL="fixture@example.invalid",
