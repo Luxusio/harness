@@ -569,7 +569,11 @@ def test_failed_first_address_closes_before_second_actual_tls_success(native, mo
 
 
 def test_address_attempts_consume_one_aggregate_budget_with_decreasing_timeouts(native, monkeypatch):
+    from types import SimpleNamespace
     state, remote, _ = native
+    clock = [100.0]
+    # Advance only the transport clock; attempt counts cannot depend on scheduling.
+    monkeypatch.setattr(sys.modules[Remote.__module__], 'time', SimpleNamespace(monotonic=lambda: clock[0]))
     port = urlsplit(remote.origin).port
     monkeypatch.setattr(socket, 'getaddrinfo', lambda *args, **kwargs: [
         (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.2', port))
@@ -582,18 +586,15 @@ def test_address_attempts_consume_one_aggregate_budget_with_decreasing_timeouts(
             sockets.append(self)
         def connect(self, address):
             timeouts.append(self.gettimeout())
-            time.sleep(min(.04, self.gettimeout()))
+            clock[0] += 4
             raise TimeoutError('synthetic candidate timeout')
     monkeypatch.setattr(socket, 'socket', CandidateSocket)
-    started = time.monotonic()
     with pytest.raises(RemoteError) as failure:
-        with remote.operation(timeout=.12):
+        with remote.operation(timeout=12):
             remote.current_user()
     assert failure.value.code == 'wiki_timeout'
-    assert 2 <= len(timeouts) < 8
-    assert all(earlier > later for earlier, later in zip(timeouts, timeouts[1:]))
-    assert timeouts[0] <= .12 and timeouts[-1] < timeouts[0] - .02
-    assert time.monotonic() - started < .5
+    assert timeouts == [12, 8, 4]
+    assert clock[0] == 112
     assert sockets and all(candidate.fileno() == -1 for candidate in sockets)
     assert not state.calls
 
