@@ -4,19 +4,19 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
-from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'wiki-atlassian'))
 sys.path.insert(0, str(ROOT / 'plugin/scripts'))
 from wiki_atlassian.config import SpaceSettings
 from wiki_atlassian.models import Credentials, Node, Page, RemoteError, compact_json
-from wiki_atlassian.remote import RootScopeDenial
+from wiki_atlassian.remote import Remote, RootScopeDenial
 from wiki_atlassian.replica import Replica, knowledge_relations
 from wiki_platform import atomic_write, file_lock
 import wiki_platform
@@ -162,6 +162,56 @@ class ReplicaTests(unittest.TestCase):
         self.assertIn('Shared evidence 😀', other.get_document(dict(document='211'))['content'])
         self.assertEqual('local_replica', other.search(dict(query='Shared'))['freshness']['source'])
         self.assertEqual([], self.remote.reads)
+
+    def test_actual_remote_native_protocol_drives_shared_replica_and_confirmed_denial(self):
+        calls, denied = [], set()
+        pages = dict(self.remote.pages)
+        def transport(method, target, headers, data, timeout):
+            uri = urlsplit(target)
+            query = parse_qs(uri.query)
+            calls.append((method, uri.path, query))
+            self.assertEqual('GET', method)
+            self.assertIsNone(data)
+            self.assertTrue(headers['Authorization'].startswith('Basic '))
+            self.assertGreater(timeout, 0)
+            match = re.fullmatch(r'/wiki/api/v2/(pages|folders)/([1-9][0-9]*)(/direct-children)?', uri.path)
+            if match is None:
+                return 404, {}, b'{}'
+            kind, id, children = match.groups()
+            if id in denied:
+                return 403, {}, b'{}'
+            if id not in pages or kind != ('folders' if pages[id].node.type == 'folder' else 'pages'):
+                return 404, {}, b'{}'
+            if children:
+                value = dict(results=[dict(id=p.node.id, type=p.node.type) for p in pages.values()
+                                      if p.node.parent_id == id and p.node.id not in denied])
+            else:
+                page = pages[id]
+                node = page.node
+                value = dict(id=node.id, title=node.title, type=node.type, spaceId=node.space_id,
+                             status=node.status, parentId=node.parent_id, version=dict(number=node.version))
+                if query.get('body-format') == ['storage']:
+                    value['body'] = dict(storage=dict(value=page.body, representation='storage'))
+            return 200, {}, compact_json(value).encode('utf-8')
+        remote = Remote(self.settings.credentials, transport=transport)
+        replica = Replica(self.settings, remote)
+        replica.synchronize()
+        count = len(calls)
+        hit = replica.search(dict(query='Shared'))['results'][0]
+        self.assertEqual(hit['excerpt'], replica.get_document(hit['read'])['content'])
+        self.assertEqual(count, len(calls))
+        self.expire()
+        pages['211'] = Page(pages['211'].node, '<p>Native authoritative changed marker</p>')
+        replica.synchronize()
+        self.assertIn('Native authoritative changed marker', replica.get_document(dict(document='211'))['content'])
+        denied.add('211')
+        replica.synchronize()
+        self.assertEqual('document_unavailable', replica.get_document(dict(document='211'))['code'])
+        self.assertFalse((replica.control / 'notice-access-denied').exists())
+        denied.add('210')
+        with self.assertRaises(RootScopeDenial):
+            replica.synchronize()
+        self.assertTrue((replica.control / 'notice-access-denied').exists())
 
     def test_authoritative_same_version_sweep_is_shared_and_repairs_survive_restart(self):
         self.replica.synchronize()
