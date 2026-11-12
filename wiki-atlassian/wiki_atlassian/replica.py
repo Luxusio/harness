@@ -21,6 +21,7 @@ import uuid
 from wiki_platform import safe_read, ensure_private_directory, atomic_write, file_lock
 from . import changes
 from .models import Node, Page, RemoteError, compact_json, native_id
+from .references import native_page_url_id
 from .search import Query, Match, authored_start, projected_headings
 
 BODY_LIMIT = 8 * 1024 * 1024
@@ -179,14 +180,9 @@ def knowledge_relations(body, origin, space):
                 fragment = anchor.attrs.get('ac:anchor')
             else:
                 href = link.attrs['href']
-                uri = urlsplit(origin + href if href.startswith('/wiki/') else href)
-                if (uri.scheme != 'https' or uri.netloc != urlsplit(origin).netloc or uri.query
-                    or uri.username is not None):
-                    raise ValueError('Cross-origin relation')
-                target = re.fullmatch(r'/wiki/(?:spaces/([^/]+)/)?pages/([1-9][0-9]*)(?:/[^/]*)?', uri.path)
-                if target is None or (target[1] is not None and target[1] != space):
-                    raise ValueError('Invalid native relation URL')
-                item['to'] = native_id(target[2])
+                href = origin + href if href.startswith('/wiki/') else href
+                uri = urlsplit(href)
+                item['to'] = native_page_url_id(href.partition('#')[0], origin, space=space)
                 fragment = uri.fragment
             if fragment:
                 if len(fragment) > 1000 or any(ord(c) < 32 for c in fragment):
@@ -402,15 +398,9 @@ class Replica:
         return text
 
     def _page_id(self, value):
-        if changes.ID.fullmatch(value):
+        if isinstance(value, str) and changes.ID.fullmatch(value):
             return value
-        uri, site = urlsplit(value), urlsplit(self.settings.site)
-        if uri.scheme != 'https' or uri.netloc != site.netloc or uri.username is not None or uri.query or uri.fragment:
-            raise RemoteError('invalid_request', 'Use a document ID or configured Confluence URL')
-        match = re.fullmatch(r'/wiki/(?:spaces/([^/]+)/)?pages/([1-9][0-9]*)(?:/[^/]*)?', uri.path)
-        if match is None or (match[1] is not None and match[1] != self.settings.space):
-            raise RemoteError('invalid_request', 'Use a document from the selected space')
-        return native_id(match[2])
+        return native_page_url_id(value, self.settings.site, space=self.settings.space, allow_api=True)
 
     def _snapshot(self, id, row, markdown):
         return _hash(':'.join((self.search_identity, id, str(row['version']), row['bodyHash'], _hash(markdown))))
@@ -596,7 +586,8 @@ class Replica:
         except FileNotFoundError:
             return None
 
-    def _handle_denial(self, error):
+    def handle_denial(self, error):
+        """Record confirmed root loss; an ordinary child denial only triggers recheck."""
         from .remote import RootScopeDenial, is_scope_denial
         causes, seen = [], set()
         cause = error
@@ -604,11 +595,14 @@ class Replica:
             seen.add(id(cause))
             causes.append(cause)
             cause = cause.__cause__
-        if any(isinstance(cause, RootScopeDenial) for cause in causes):
+        if any(isinstance(cause, RootScopeDenial)
+               and cause.settings.identity() == self.settings.identity()
+               and cause.settings.credential_fingerprint == self.settings.credential_fingerprint for cause in causes):
             self.deny()
         elif is_scope_denial(error) or getattr(error, 'code', '') == 'scope_metadata_changed':
             try:
-                self._root_access()
+                with self._operation(timeout=3):
+                    self._root_access()
             except RootScopeDenial:
                 self.deny()
             except RemoteError:
@@ -628,7 +622,7 @@ class Replica:
         except Exception as error:
             self.sync_failed(getattr(error, 'code', 'sync_failed'))
             if isinstance(error, RemoteError):
-                self._handle_denial(error)
+                self.handle_denial(error)
             raise
         self.poll_comments()
         return result
@@ -1128,7 +1122,7 @@ class Replica:
                                              'Affected candidates depend on the starting document; verify premises, dates and deployment evidence before editing.'])
         except Exception as error:
             if isinstance(error, RemoteError):
-                self._handle_denial(error)
+                self.handle_denial(error)
             return self._error(error)
 
     def _relations(self, data, manifest):
