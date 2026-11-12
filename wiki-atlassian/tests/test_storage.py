@@ -262,6 +262,15 @@ def test_retarget_rejects_traversal_encoded_separators_and_non_native_routes(pat
     error('invalid_link_target', lambda: retarget_links('<a href="old">label</a>', {'old': 'https://wiki.example' + path}, 'https://wiki.example', 'COMMON'))
 
 
+@pytest.mark.parametrize('path', ['/wiki/api/v2/pages/123/a[b]', '/wiki/spaces/COMMON/pages/123/a[b]', '/wiki/api/v2/pages/123?', '/wiki/spaces/COMMON/pages/123?'])
+def test_retarget_rejects_raw_path_brackets_and_empty_query_delimiters(path):
+    error('invalid_link_target', lambda: retarget_links('<a href="old">label</a>', {'old': 'https://wiki.example' + path}, 'https://wiki.example', 'COMMON'))
+
+
+def test_retarget_allows_encoded_slug_brackets_and_fragment_brackets():
+    assert retarget_links('<a href="old">label</a>', {'old': 'https://wiki.example/wiki/api/v2/pages/123/a%5Bb%5D#[part]'}, 'https://wiki.example', 'COMMON') == '<a href="https://wiki.example/wiki/spaces/COMMON/pages/123#[part]">label</a>'
+
+
 @pytest.mark.parametrize('left,right', [
     ('<p>A&amp;B&nbsp;C</p>', '<p>A&#38;B&#160;C</p>'),
     ('<a href="a&amp;b">A&middot;B</a>', '<a href="a&#38;b">A·B</a>'),
