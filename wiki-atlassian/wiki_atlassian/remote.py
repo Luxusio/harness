@@ -180,7 +180,8 @@ class Remote:
             if isinstance(error, RemoteError):
                 raise
             raise RemoteError('transport_failed', 'Native request failed; inspect uncertain mutations before retrying', mutating) from None
-        _need(type(status) is int and isinstance(response_headers, dict) and isinstance(raw, bytes), 'malformed_response', 'Invalid transport response')
+        if type(status) is not int or not isinstance(response_headers, dict) or not isinstance(raw, bytes):
+            raise RemoteError('malformed_response', 'Invalid transport response', mutating)
         if budget:
             budget.accept(len(raw), mutating)
         if not 200 <= status < 300:
@@ -200,6 +201,9 @@ class Remote:
             result = json.loads(raw.decode('utf-8'), object_pairs_hook=unique, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('constant')))
             if not isinstance(result, dict):
                 raise ValueError('object')
+            # JSON escapes can smuggle isolated UTF-16 surrogates through an
+            # otherwise valid UTF-8 envelope; those cannot enter native strings.
+            compact_json(result).encode('utf-8')
         except (ValueError, UnicodeError, RecursionError):
             raise RemoteError('malformed_response', 'Confluence returned invalid JSON', mutating) from None
         return {str(k).lower(): v for k, v in response_headers.items()}, result
@@ -228,15 +232,22 @@ class Remote:
             response = connection.getresponse()
             limit = MAX_BODY if 200 <= response.status < 300 else 65536
             chunks, size = [], 0
-            while size <= limit:
-                remaining()
-                chunk = response.read1(min(65536, limit + 1 - size))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                size += len(chunk)
-                if response.isclosed():
-                    break
+            try:
+                while size <= limit:
+                    remaining()
+                    chunk = response.read1(min(65536, limit + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if response.isclosed():
+                        break
+            except (OSError, http.client.HTTPException):
+                if 200 <= response.status < 300:
+                    raise
+                # A native rejection is already definite even if its optional
+                # diagnostic body is unreadable. Never turn a 409 into unknown.
+                chunks = []
             response_headers = {}
             for key, value in response.getheaders():
                 key = key.lower()
@@ -251,15 +262,55 @@ class Remote:
         try:
             value = json.loads(raw)
             entries = [value] + (value.get('errors', [])[:8] if isinstance(value.get('errors'), list) else [])
-            allowed = {'INVALID_STORAGE', 'BAD_REQUEST', 'FORBIDDEN', 'VERSION_CONFLICT', 'CONFLICT', 'PERMISSION_DENIED', 'UNAUTHORIZED', 'NOT_FOUND', 'DUPLICATE_TITLE', 'TITLE_ALREADY_EXISTS', 'INVALID_PARENT', 'INVALID_SPACE'}
+            allowed = {'INVALID_STORAGE', 'BAD_REQUEST', 'FORBIDDEN', 'VERSION_CONFLICT', 'CONFLICT', 'PERMISSION_DENIED', 'UNAUTHORIZED', 'NOT_FOUND', 'DUPLICATE_TITLE', 'TITLE_ALREADY_EXISTS', 'duplicateTitle', 'INVALID_PARENT', 'INVALID_SPACE'}
             secrets = (self.credentials.email, self.credentials.api_token,
                        base64.b64encode((self.credentials.email + ':' + self.credentials.api_token).encode()).decode())
             codes = list(dict.fromkeys(e[k] for e in entries if isinstance(e, dict) for k in ('code', 'errorCode')
                                       if isinstance(e.get(k), str) and e[k] in allowed and
                                       not any(secret and secret.casefold() in e[k].casefold() for secret in secrets)))[:3]
-            return {'providerCodes': codes} if codes else {}
-        except (ValueError, AttributeError, TypeError):
+            messages = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                messages.extend(entry[k] for k in ('message', 'detail', 'title') if isinstance(entry.get(k), str))
+                if isinstance(entry.get('errorMessages'), list):
+                    messages.extend(x for x in entry['errorMessages'][:8] if isinstance(x, str))
+            reasons = []
+            for original in messages + codes:
+                message = original[:2048]
+                for secret in secrets:
+                    if secret:
+                        message = re.sub(re.escape(secret), '[redacted]', message, flags=re.I)
+                message = re.sub(r'(?i)(?:basic|bearer)\s+[^\s,;]+|(?:authorization|password|token|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+', '[redacted]', message).lower()
+                reason = None
+                if 'title' in message and any(x in message for x in ('duplicate', 'already exists', 'already_exists', 'alreadyexists', 'same title')):
+                    reason = 'A page with this title already exists in the native space.'
+                elif any(x in message for x in ('invalid parent', 'invalid_parent', 'parent is invalid', 'parent not found', 'parent does not exist', 'parent id is invalid')):
+                    reason = 'The native parent is invalid or unavailable.'
+                elif any(x in message for x in ('invalid space', 'invalid_space', 'space is invalid', 'space not found', 'space does not exist', 'space id is invalid')):
+                    reason = 'The native space is invalid or unavailable.'
+                elif ('storage' in message or 'xhtml' in message) and any(x in message for x in ('invalid', 'mismatch', 'parse', 'malformed')):
+                    reason = 'Native storage XHTML is invalid or malformed.'
+                elif any(x in message for x in ('permission', 'forbidden', 'not authorized', 'access denied')):
+                    reason = 'The native account lacks permission for this operation.'
+                elif 'version' in message and any(x in message for x in ('conflict', 'current', 'latest', 'mismatch')):
+                    reason = 'The requested native version conflicts with the current version.'
+                if reason and reason not in reasons:
+                    reasons.append(reason)
+            result = {}
+            if codes:
+                result['providerCodes'] = codes
+            if reasons:
+                result['providerMessages'] = reasons[:3]
+            return result
+        except (ValueError, AttributeError, TypeError, RecursionError):
             return {}
+
+    @staticmethod
+    def _node_mismatch(actual, expected):
+        fields = {'id': 'id', 'title': 'title', 'parent_id': 'parentId', 'type': 'type',
+                  'space_id': 'spaceId', 'version': 'version', 'status': 'status'}
+        return [public for name, public in fields.items() if getattr(actual, name) != getattr(expected, name)]
 
     def _parse_node(self, obj, expected_type='page', expected_id=None, current=True):
         _need(isinstance(obj, dict))
@@ -374,7 +425,10 @@ class Remote:
         native_id(id)
         observed = self.ancestry(scope, id) if scope is not None else [self.scope_node(id)]
         node = observed[0]
-        _need(node.type == 'page' and (expected_node is None or node == expected_node), 'scope_metadata_changed', 'Page differs from the admitted native identity')
+        _need(node.type == 'page', 'scope_metadata_changed', 'Page differs from the admitted native identity')
+        if expected_node is not None and node != expected_node:
+            raise RemoteError('readback_mismatch', 'Page differs from its expected native identity',
+                              details={'mismatchFields': self._node_mismatch(node, expected_node)})
         metadata = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + id))[1]
         _need(self._parse_node(metadata, 'page', id) == node, 'scope_metadata_changed', 'Page changed before its storage read')
         message = metadata.get('version', {}).get('message', '')
@@ -666,7 +720,8 @@ class Remote:
                 mismatch.append('content')
             if parent is not None and saved.version_message != message:
                 mismatch.append('message')
-            _need(not mismatch, 'readback_mismatch', 'Created page readback differs')
+            if mismatch:
+                raise RemoteError('readback_mismatch', 'Created page readback differs', details={'mismatchFields': mismatch})
             return saved
         except Exception as error:
             raise self._unknown('unknown_create', 'Created page readback could not be verified', error, created) from error
@@ -707,7 +762,13 @@ class Remote:
         expected = replace(before.node, title=title, parent_id=parent_id if parent_id is not None else before.node.parent_id, version=before.node.version + 1)
         try:
             saved = self.page(before.node.id, expected, scope, True)
-            _need(saved.node == expected and saved.version_message == message and self._page_equivalent(saved.body, body), 'readback_mismatch', 'Updated page readback differs')
+            mismatch = self._node_mismatch(saved.node, expected)
+            if saved.version_message != message:
+                mismatch.append('message')
+            if not self._page_equivalent(saved.body, body):
+                mismatch.append('content')
+            if mismatch:
+                raise RemoteError('readback_mismatch', 'Updated page readback differs', details={'mismatchFields': mismatch})
             audit = self.version(saved.node.id, saved.node.version)
             _need(audit['authorId'] == account['accountId'] and audit.get('message', '') == message and self.current_user() == account,
                   'readback_mismatch', 'Updated page native audit differs')
@@ -831,8 +892,14 @@ class Remote:
                 while pending:
                     parent, cursor = pending.pop(0), None
                     while True:
-                        batch = self.list_comments(target, kind, parent, 50, cursor, scope)
-                        for item in batch['results']:
+                        # Every parent came from this admitted page's native
+                        # child list. Retain one graph for the complete poll;
+                        # per-comment graph/history reads would spend the whole
+                        # request budget before a modest thread was observed.
+                        path = '/wiki/api/v2/' + (kind + '-comments/' + parent + '/children' if parent else 'pages/' + target + '/' + kind + '-comments')
+                        batch = self.batch(path, {'body-format': 'storage', 'limit': 100}, cursor)
+                        for raw in batch['results']:
+                            item = self._comment(raw, target, kind, parent, root=parent is None)
                             _need(item['id'] not in identities and len(comments) < 2000, 'comment_limit', 'Duplicate or excessive native comment inventory')
                             identities.add(item['id'])
                             size += len(compact_json(item).encode())
@@ -844,6 +911,8 @@ class Remote:
                             break
             if scope:
                 self._verify(scope, observed)
+            else:
+                _need(self.scope_node(target) == observed[0], 'scope_metadata_changed', 'Comment parent page changed')
             parent = {'id': target, 'title': observed[0].title, 'status': observed[0].status, 'closed': False}
             return {'provider': 'confluence', 'target': target, 'parent': parent, 'comments': comments}
 
@@ -881,8 +950,11 @@ class Remote:
         reference = kind + ':' + selected
         try:
             saved = self.comment_detail(target, selected, kind, reply_to, scope=scope)
-            _need(saved['authorId'] == account['accountId'] and saved['editorId'] == account['accountId'] and saved['version'] == 1 and
-                  saved['status'] == 'current' and equivalent(saved['body'], body), 'readback_mismatch', 'Created native comment readback differs')
+            mismatch = [field for field, expected in (('authorId', account['accountId']), ('editorId', account['accountId']), ('version', 1), ('status', 'current')) if saved[field] != expected]
+            if not equivalent(saved['body'], body):
+                mismatch.append('content')
+            if mismatch:
+                raise RemoteError('readback_mismatch', 'Created native comment readback differs', details={'mismatchFields': mismatch})
             if selection:
                 context = saved.get('inlineContext', {})
                 marked = self.page(target, scope=scope, fresh_storage=True)
@@ -911,11 +983,15 @@ class Remote:
         try:
             saved = self.comment_detail(target, selected, kind, parent, scope=scope)
             mismatch = [name for name in ('authorId', 'parentId', 'inlineContext') if saved.get(name) != before.get(name)]
-            _need(not mismatch and saved['version'] == number + 1 and saved['editorId'] == account['accountId'] and saved['status'] == 'current' and
-                  equivalent(saved['body'], body) and self.current_user() == account, 'readback_mismatch', 'Updated native comment readback differs')
+            mismatch.extend(field for field, expected in (('version', number + 1), ('editorId', account['accountId']), ('status', 'current')) if saved[field] != expected)
+            if not equivalent(saved['body'], body):
+                mismatch.append('content')
+            if mismatch:
+                raise RemoteError('readback_mismatch', 'Updated native comment readback differs', details={'mismatchFields': mismatch})
+            _need(self.current_user() == account, 'account_unavailable', 'Authenticated account changed after comment')
             return saved
         except Exception as error:
             raise self._unknown('unknown_update_comment', 'Updated native comment readback could not be verified', error) from error
 
     def close(self):
-        """The stdlib opener does not retain an owned worker or persistent session."""
+        """Requests retain no owned worker or persistent connection."""

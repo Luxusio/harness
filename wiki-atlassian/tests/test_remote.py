@@ -380,7 +380,7 @@ def test_recognized_provider_code_cannot_reflect_a_secret(native):
     assert failure.value.details == {}
 
 
-@pytest.mark.parametrize('raw', [b'{"accountId":"one","accountId":"two"}', b'{"a":NaN}', b'\xff', b'[]', b'{}' + b' ' * (8 * 1024 * 1024)])
+@pytest.mark.parametrize('raw', [b'{"accountId":"one","accountId":"two"}', b'{"a":NaN}', b'{"a":"\\ud800"}', b'\xff', b'[]', b'{}' + b' ' * (8 * 1024 * 1024)])
 def test_bounded_json_response_rejects_duplicates_nonnative_or_overflow(native, raw):
     state, _, settings = native
     state.hook = lambda m, p, q, d: (200, {}, raw)
@@ -413,6 +413,26 @@ def test_real_tls_slow_drip_body_cannot_extend_operation_deadline(native):
     assert failure.value.code == 'transport_failed'
 
 
+def test_native_conflict_stays_definite_when_its_optional_error_body_times_out(native):
+    state, remote, settings = native
+    state.slow_body = True
+    state.hook = lambda m, p, q, d: (409, {}, {'message': 'Synthetic diagnostic body'})
+    with pytest.raises(RemoteError) as failure:
+        with remote.operation(timeout=.15):
+            remote._request('PUT', settings.site + '/wiki/api/v2/pages/11', {})
+    assert failure.value.code == 'http_409' and not failure.value.outcome_unknown
+    assert len(state.calls) == 1
+
+
+def test_safe_provider_reasons_preserve_useful_error_without_private_echo(native):
+    state, remote, settings = native
+    state.hook = lambda m, p, q, d: (400, {}, {'code': 'INVALID_STORAGE', 'message': 'Malformed XHTML private content synthetic-token'})
+    with pytest.raises(RemoteError) as failure:
+        remote.current_user()
+    assert failure.value.details == {'providerCodes': ['INVALID_STORAGE'], 'providerMessages': ['Native storage XHTML is invalid or malformed.']}
+    assert 'private' not in json.dumps(failure.value.details) and 'synthetic-token' not in json.dumps(failure.value.details)
+
+
 def test_ambiguous_space_identity_is_never_selected(native):
     state, remote, settings = native
     state.hook = lambda m, p, q, d: (200, {}, {'results': [{'id': '9', 'key': 'DOC'}, {'id': '8', 'key': 'DOC'}]})
@@ -432,6 +452,16 @@ def test_comments_native_original_author_editor_replies_and_inline_context(nativ
     inventory = remote.comment_inventory('11', scope=settings)
     assert {row['id'] for row in inventory['comments']} == {'50', '51', '52'}
     assert remote.comment_detail('11', '52', 'inline', scope=settings)['inlineContext']['resolutionStatus'] == 'open'
+
+
+def test_comment_inventory_shares_one_scope_graph_instead_of_spending_budget_per_thread(native):
+    state, _, settings = native
+    remote = injected(state, settings)
+    state.comments = {('footer', str(50 + n)): comment_raw(str(50 + n), version=2) for n in range(20)}
+    with remote.operation(max_requests=40):
+        inventory = remote.comment_inventory('11', scope=settings)
+    assert len(inventory['comments']) == 20 and len(state.calls) < 40
+    assert not any('/versions/' in path for _, path, _, _ in state.calls)
 
 
 def test_missing_original_history_keeps_unknown_author_and_native_edit_permission(native):
