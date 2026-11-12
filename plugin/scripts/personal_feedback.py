@@ -16,7 +16,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -25,6 +24,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from document_destination import _origin, _yaml_mapping
+from wiki_platform import run_bounded, safe_read, same_file
 
 
 MAX_CONFIG = 65536
@@ -46,6 +46,11 @@ def _directory(home=None):
 
 def _read_private(name, home=None):
     """Read bounded owner-private files through non-following directory FDs."""
+    if os.name == "nt":
+        try:
+            return safe_read(_directory(home) / name, MAX_CONFIG, private=True)
+        except ValueError:
+            raise FeedbackError("Private settings require an owner-private Windows ACL and safely owned directories.") from None
     root = Path.home() if home is None else Path(home)
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -111,22 +116,11 @@ def load_destination(home=None):
 
 
 def _private_mise(argv, **kwargs):
-    # Private mise may evaluate commands which outlive it. Keep their process
-    # group addressable even after its leader exits and descendants reparent.
-    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          start_new_session=os.name == "posix", **kwargs) as process:
-        try:
-            output, _ = process.communicate(timeout=20)
-            return subprocess.CompletedProcess(argv, process.returncode, output, "")
-        finally:
-            if os.name == "posix":
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            elif process.poll() is None:
-                process.kill()
-            process.wait()
+    kwargs.pop("stdin", None)
+    kwargs.pop("text", None)
+    result = run_bounded(argv, **kwargs)
+    return subprocess.CompletedProcess(argv, result.returncode,
+                                       result.stdout.decode("utf-8", errors="strict"), "")
 
 
 def _credentials(directory, environment):
@@ -137,7 +131,7 @@ def _credentials(directory, environment):
         raise FeedbackError("mise is required for private feedback authentication.")
     # Never let the consuming project's activated mise environment choose credentials.
     child_env = {k: v for k, v in environment.items()
-                 if not k.startswith(("ATLASSIAN_", "MISE_", "__MISE_"))}
+                 if not k.upper().startswith(("ATLASSIAN_", "MISE_", "__MISE_"))}
     child_env["MISE_YES"] = "0"
     try:
         result = _private_mise([mise, "env", "--json-extended"], cwd=directory,
@@ -149,7 +143,7 @@ def _credentials(directory, environment):
         expected = str(directory / "mise.local.toml")
         for name in CREDENTIALS:
             entry = data[name]
-            if (entry["source"] != expected or not isinstance(entry["value"], str)
+            if (not same_file(entry["source"], expected) or not isinstance(entry["value"], str)
                     or not entry["value"].strip() or any(ord(c) < 32 for c in entry["value"])):
                 raise ValueError("private source or credential unavailable")
             credentials[name] = entry["value"]
@@ -467,7 +461,8 @@ def main():
 Use mode 0600 for both files; own their directories and prevent other users
 from writing them (0700 for ~/.config/harness). Review the mise file, then run:
   mise trust ~/.config/harness/mise.local.toml
-Requires a POSIX host, PyYAML in this Python and mise for check/send.
+Requires native Windows or POSIX, PyYAML in this Python and mise for check/send.
+On Windows use an owner-private ACL; mode bits do not establish privacy.
 A compatible Confluence Cloud personal API token is required. Scoped gateway
 tokens and Data Center are not supported. The private BASE_URL must match
 the page origin. Project/global credentials never fill missing private values.

@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import stat
 import sys
 
+if os.name != "nt":
+    import fcntl
+
 from document_destination import select_destination
+from wiki_platform import atomic_write, file_lock, safe_metadata_read, trusted_metadata_directory
 
 MAX_BYTES = 64 * 1024
 MAX_SESSIONS = 128
@@ -37,7 +39,7 @@ def _key(parts):
 def _control(env, config, space):
     home = env.get("HOME", "")
     if not home.strip():
-        home = pwd.getpwuid(os.getuid()).pw_dir
+        home = str(Path.home())
     data = Path(home) / ".local/share"
     if not data.is_absolute() or ".." in data.parts:
         return None
@@ -49,8 +51,19 @@ def _control(env, config, space):
     return data / "wiki-atlassian" / partition / "confluence" / space["key"] / ".sync"
 
 
+class _DirectoryFD(int):
+    def __new__(cls, descriptor, path):
+        value = int.__new__(cls, descriptor)
+        value.path = path
+        return value
+
+
 @contextmanager
 def _directory(path):
+    if os.name == "nt":
+        with trusted_metadata_directory(path) as selected:
+            yield selected
+        return
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open(path.anchor, flags)
     try:
@@ -66,7 +79,7 @@ def _directory(path):
         info = os.fstat(fd)
         if info.st_uid != os.getuid() or info.st_mode & 0o022:
             raise ValueError("unsafe wiki control directory")
-        yield fd
+        yield _DirectoryFD(fd, path)
     finally:
         os.close(fd)
 
@@ -82,6 +95,11 @@ def _open_file(directory, name, flags=os.O_RDONLY, *, private=True):
 
 
 def _read(directory, name, default=None):
+    if os.name == "nt":
+        try:
+            return json.loads(safe_metadata_read(directory / name, MAX_BYTES))
+        except FileNotFoundError:
+            return default
     try:
         fd = _open_file(directory, name)
     except FileNotFoundError:
@@ -94,6 +112,8 @@ def _read(directory, name, default=None):
 
 
 def _present(directory, name):
+    if os.name == "nt":
+        return os.path.lexists(directory / name)
     try:
         os.stat(name, dir_fd=directory, follow_symlinks=False)
         return True
@@ -130,6 +150,10 @@ def _events(feed):
 
 
 def _write_cursors(directory, cursors):
+    if os.name == "nt":
+        atomic_write(directory / "harness-cursors.json",
+                     json.dumps(cursors, separators=(",", ":")).encode("utf-8"))
+        return
     # Use the already opened directory for both the temporary file and rename.
     name = ".harness-cursors-" + os.urandom(12).hex()
     fd = _open_file(directory, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
@@ -144,13 +168,27 @@ def _write_cursors(directory, cursors):
             pass
 
 
+@contextmanager
+def _cursor_lock(directory, control):
+    if os.name == "nt":
+        with file_lock(control / "harness-cursors.lock"):
+            yield
+        return
+    # Keep the pre-existing hook cursor protocol while sync.lock remains the
+    # FileChannel-compatible record lock. Older installed hooks use flock here.
+    descriptor = _open_file(directory, "harness-cursors.lock", os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def _consume(directory, session, credential, space, limit):
     # The protected directory owns the lock inode. Older mirrors may have
     # created it using the process umask. Its contents are never read.
-    lock = _open_file(directory, "sync.lock", private=False)
-    try:
-        # Java FileChannel uses POSIX record locks on this file.
-        fcntl.lockf(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    control = directory if os.name == "nt" else directory.path
+    with file_lock(control / "sync.lock", shared=True):
         if _present(directory, "transaction.json") or _present(directory, "notice-access-denied"):
             return ""
         state = _read(directory, "state.json")
@@ -162,9 +200,7 @@ def _consume(directory, session, credential, space, limit):
         epoch, head, events = _events(feed)
         if head == 0:
             return ""
-        cursor_lock = _open_file(directory, "harness-cursors.lock", os.O_RDWR | os.O_CREAT)
-        try:
-            fcntl.flock(cursor_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with _cursor_lock(directory, control):
             cursors = _read(directory, "harness-cursors.json", {})
             if not isinstance(cursors, dict):
                 raise ValueError("invalid notice cursors")
@@ -188,10 +224,6 @@ def _consume(directory, session, credential, space, limit):
             cursors[session] = [epoch, batch[-1]["seq"] if len(pending) > len(batch) else head]
             _write_cursors(directory, dict(list(cursors.items())[-MAX_SESSIONS:]))
             return "\n".join(lines)
-        finally:
-            os.close(cursor_lock)
-    finally:
-        os.close(lock)
 
 
 def render_notice(data, runtime, environment=None):

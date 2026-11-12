@@ -532,7 +532,7 @@ def test_actual_http_protocol_failure_retains_effect_uncertainty(tmp_path, monke
 def test_packaged_help_explains_private_setup_without_source_readme(tmp_path):
     package = tmp_path / "installed/scripts"
     package.mkdir(parents=True)
-    for name in ("personal_feedback.py", "document_destination.py"):
+    for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py"):
         shutil.copyfile(SCRIPTS / name, package / name)
     home = tmp_path / "home"
     home.mkdir(mode=0o700)

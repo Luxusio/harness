@@ -17,6 +17,7 @@ except ModuleNotFoundError as error:
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugin/scripts"
+sys.path.insert(0, str(SCRIPTS))
 spec = importlib.util.spec_from_file_location("document_destination_test", SCRIPTS / "document_destination.py")
 destination = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(destination)

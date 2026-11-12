@@ -12,6 +12,8 @@ import re
 import stat
 from urllib.parse import urlsplit
 
+from wiki_platform import safe_read
+
 
 LOCAL_NOTICE = (
     "[harness-doc-gate] Durable decisions require doc/ update before final; "
@@ -52,25 +54,10 @@ def _project_root(cwd):
 
 def _manifest_bytes(root):
     """Read through directory descriptors so no manifest component follows links."""
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        for part in CONFIG_PARTS[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = child
-        fd = os.open(CONFIG_PARTS[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        with os.fdopen(fd, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
-                raise ValueError("invalid project configuration")
-            raw = stream.read(MAX_CONFIG_BYTES + 1)
-        if len(raw) > MAX_CONFIG_BYTES:
-            raise ValueError("invalid project configuration")
-        return raw
+        return safe_read(root.joinpath(*CONFIG_PARTS), MAX_CONFIG_BYTES)
     except FileNotFoundError:
         return None
-    finally:
-        os.close(directory)
 
 
 def _proves_no_key(source, key):
