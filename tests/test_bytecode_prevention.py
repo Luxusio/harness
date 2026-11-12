@@ -72,7 +72,12 @@ def test_every_process_that_imports_the_installed_tree_disables_bytecode():
         for matcher in matchers
         for hook in matcher["hooks"]
     ]
-    assert len(commands) == 4, commands
+    for entrypoint in (
+        "hook_session_start.py", "hook_pre_tool_use.py",
+        "hook_user_prompt_submit.py", "hook_post_tool_use.py",
+        "wiki_change_notice.py",
+    ):
+        assert any(entrypoint in command for command in commands), entrypoint
     for command in commands:
         assert command.startswith("PYTHONDONTWRITEBYTECODE=1 "), command
 
