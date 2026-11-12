@@ -87,6 +87,61 @@ def test_native_private_acl_unicode_atomic_snapshot_and_bound(private):
     assert not list(private.glob(".wiki-*"))
 
 
+def test_native_rename_abi_absolute_destination_and_held_ancestors(private, monkeypatch):
+    assert win.RENAME_INFO.name.offset == (20 if C.sizeof(win.HANDLE) == 8 else 12)
+    target = private / "new destination 한글.txt"
+    real_set = win._SetFileInformation
+    observed = []
+
+    def inspect(handle, kind, buffer, size):
+        if kind == 3:
+            rename = C.cast(buffer, C.POINTER(win.RENAME_INFO)).contents
+            assert not rename.directory and rename.replace == 1
+            raw = C.string_at(C.addressof(buffer) + win.RENAME_INFO.name.offset, rename.length)
+            assert raw.decode("utf-16-le") == str(target)
+            assert size >= win.RENAME_INFO.name.offset + rename.length
+            # Parent components remain held without DELETE sharing through
+            # publication even though FileRenameInfo uses a NULL root.
+            with pytest.raises(OSError):
+                os.rename(private, private.with_name("moved ancestor"))
+            observed.append(handle)
+        return real_set(handle, kind, buffer, size)
+
+    monkeypatch.setattr(win, "_SetFileInformation", inspect)
+    win.atomic_write(target, b"created")
+    win.atomic_write(target, b"")
+    assert len(observed) == 2 and win.safe_read(target, 0, private=True) == b""
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_native_failed_rename_preserves_target_and_deletes_exact_temporary(private, monkeypatch, existing):
+    target = private / "prior file 한글.txt"
+    if existing:
+        win.atomic_write(target, b"prior bytes")
+    real_set = win._SetFileInformation
+    failed, deleted = [], []
+
+    def refuse(handle, kind, buffer, size):
+        if kind == 3:
+            failed.append(handle)
+            C.set_last_error(87)
+            return False
+        if kind == 4:
+            deleted.append(handle)
+        return real_set(handle, kind, buffer, size)
+
+    monkeypatch.setattr(win, "_SetFileInformation", refuse)
+    with pytest.raises(OSError) as error:
+        win.atomic_write(target, b"candidate")
+    assert error.value.errno == 87
+    assert failed == deleted and len(deleted) == 1
+    if existing:
+        assert win.safe_read(target, 100, private=True) == b"prior bytes"
+    else:
+        assert not target.exists()
+    assert not list(private.glob(".wiki-*"))
+
+
 def test_native_permissive_acl_is_not_mistaken_for_private_mode(private):
     path = private / "settings"
     win.atomic_write(path, b"synthetic secret")

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import secrets
 import shutil
@@ -24,6 +24,8 @@ from wiki_platform import (atomic_write, ensure_private_directory, file_lock, ru
 PAYLOAD_DIRS = ('.claude-plugin', '.codex-plugin', 'skills', 'agents', 'scripts', 'wiki_atlassian')
 SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py')
 VERSION = re.compile(r'0\.2\.0\+h[0-9a-f]{16}')
+LEGACY_SOURCE = re.compile(r'\./packages/(0\.1\.0\+h[0-9a-f]{16})/plugin')
+LEGACY_MAX_ENTRIES, LEGACY_MAX_BYTES = 1024, 128 * 1024 * 1024
 
 
 class RegistrationFailure(Exception):
@@ -64,9 +66,16 @@ def _source_files():
     return result
 
 
-def _inventory(root, private=True):
+def _inventory(root, private=True, *, legacy=False):
+    def refuse_partial(error):
+        raise error
+
     result = {}
-    for base, dirs, files in os.walk(root, followlinks=False):
+    total, entries = 0, 0
+    for base, dirs, files in os.walk(root, followlinks=False, onerror=refuse_partial if legacy else None):
+        entries += len(dirs) + len(files)
+        if legacy and entries > LEGACY_MAX_ENTRIES:
+            raise ValueError('Legacy payload exceeds the supported inventory limit')
         if private:
             ensure_private_directory(Path(base))
         else:
@@ -80,8 +89,14 @@ def _inventory(root, private=True):
                     pass
         for part in files:
             path = Path(base) / part
-            result[path.relative_to(root).as_posix()] = (safe_read(path, 16 * 1024 * 1024, private=True)
-                if private else safe_metadata_read(path, 16 * 1024 * 1024))
+            name = path.relative_to(root).as_posix()
+            limit = 64 * 1024 * 1024 if legacy and name == 'plugin/lib/wiki-atlassian.jar' else 16 * 1024 * 1024
+            if legacy:
+                limit = min(limit, LEGACY_MAX_BYTES - total)
+            content = (safe_read(path, limit, private=True)
+                if private else safe_metadata_read(path, limit))
+            total += len(content)
+            result[name] = content
     return result
 
 
@@ -168,7 +183,10 @@ def marketplace(payload):
                 raise ValueError('Existing marketplace contains another plugin; preserve it')
             selected = item.get('source')
             if selected != './plugin':
-                if not isinstance(selected, str) or not re.fullmatch(r'\./versions/0\.2\.0\+h[0-9a-f]{16}/plugin', selected):
+                legacy = LEGACY_SOURCE.fullmatch(selected) if isinstance(selected, str) else None
+                if legacy:
+                    _legacy_selection(root, old, selected, legacy[1])
+                elif not isinstance(selected, str) or not re.fullmatch(r'\./versions/0\.2\.0\+h[0-9a-f]{16}/plugin', selected):
                     raise ValueError('Existing marketplace selection is not a managed payload')
         atomic_write(path, marketplace_bytes('./versions/' + payload.name + '/plugin'))
         try:
@@ -181,6 +199,55 @@ def marketplace(payload):
                 else:
                     atomic_write(path, old)
             raise
+
+
+def _legacy_selection(root, metadata, selected, version):
+    """Recognize the nonlinked Windows 0.1 layout without running its payload."""
+    error = 'Existing legacy marketplace payload differs; preserve it and inspect'
+    if metadata != marketplace_bytes(selected):
+        raise ValueError(error)
+    package = root / 'packages' / version
+    # Reading the complete tree checks custody, reparse points, hardlinks and
+    # foreign-write access, including files we retain but never execute.
+    with trusted_metadata_directory(package):
+        for name in ('.claude-plugin', '.codex-plugin', 'skills', 'agents', 'scripts', 'lib'):
+            with trusted_metadata_directory(package / 'plugin' / name):
+                pass
+        # A historical fat JAR can exceed the Python payload's per-file limit.
+        files = _inventory(package, private=False, legacy=True)
+    if files.get('.claude-plugin/marketplace.json') != marketplace_bytes('./plugin'):
+        raise ValueError(error)
+    for name in ('scripts/launch.py', 'lib/wiki-atlassian.jar', 'README.md', 'PROVENANCE.md'):
+        if not files.get('plugin/' + name):
+            raise ValueError(error)
+    description = 'Shared Atlassian wiki knowledge and native Confluence document operations, independent of project workflows.'
+    expected = {'name': 'wiki-atlassian', 'version': version, 'description': description}
+    for directory in ('.claude-plugin', '.codex-plugin'):
+        manifest = dict(expected)
+        if directory == '.codex-plugin':
+            manifest['skills'] = './skills/'
+        manifest['mcpServers'] = './.mcp.json'
+        content = (json.dumps(manifest, indent=2) + '\n').encode()
+        if files.get('plugin/' + directory + '/plugin.json', b'').replace(b'\r\n', b'\n') != content:
+            raise ValueError(error)
+    raw = files.get('plugin/.mcp.json', b'')
+    transport = json.loads(raw)
+    servers = transport.get('mcpServers') if isinstance(transport, dict) else None
+    server = servers.get('wiki_atlassian') if isinstance(servers, dict) else None
+    if not isinstance(server, dict):
+        raise ValueError(error)
+    command = server.get('command')
+    executable = PureWindowsPath(command) if isinstance(command, str) else PureWindowsPath()
+    if (not executable.is_absolute() or executable.name.lower() != 'java.exe' or
+            '..' in executable.parts or '\x00' in str(executable) or
+            str(executable).startswith(('\\\\?\\', '\\\\.\\'))):
+        raise ValueError(error)
+    expected = {'mcpServers': {'wiki_atlassian': {'command': command,
+        'args': ['-jar', str(package / 'plugin/lib/wiki-atlassian.jar')],
+        'env_vars': ['HOME', 'JAVA_HOME', 'WIKI_ATLASSIAN_JAVA', 'ATLASSIAN_EMAIL',
+                     'ATLASSIAN_API_TOKEN', 'ATLASSIAN_BASE_URL', 'SystemRoot']}}}
+    if raw.replace(b'\r\n', b'\n') != (json.dumps(expected, indent=2) + '\n').encode():
+        raise ValueError(error)
 
 
 def _host_command(runtime):

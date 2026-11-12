@@ -371,10 +371,12 @@ def atomic_write(path, data):
                     raise OSError("Native Windows write made no progress")
                 offset += count.value
             _check(_FlushFileBuffers(handle))
-            encoded = path.name.encode("utf-16-le")
+            # Use the documented full-path/NULL-root form. Retained _walk
+            # handles still prevent ancestor replacement during this rename.
+            encoded = str(path).encode("utf-16-le")
             buffer = C.create_string_buffer(max(C.sizeof(RENAME_INFO), RENAME_INFO.name.offset + len(encoded) + 2))
             rename = C.cast(buffer, C.POINTER(RENAME_INFO)).contents
-            rename.replace, rename.directory, rename.length = 1, directory, len(encoded)
+            rename.replace, rename.directory, rename.length = 1, None, len(encoded)
             C.memmove(C.addressof(buffer) + RENAME_INFO.name.offset, encoded, len(encoded))
             _check(_SetFileInformation(handle, 3, buffer, len(buffer)))
             published = True
