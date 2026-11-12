@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
+import json
 import threading
 import time
 
+from wiki_platform import safe_metadata_read
+from .config import SpaceSettings
 from .cursors import decode_cursor, encode_cursor
 from .models import RemoteError, digest, native_id
 from .references import native_page_url_id
@@ -31,31 +35,81 @@ class MultiSpaceKnowledge:
         self.stop = threading.Event()
         self.permit = threading.BoundedSemaphore(4)
         self.threads = []
+        self._revocations = threading.local()
         if start_workers:
             for key in self.slots:
                 thread = threading.Thread(target=self._worker, args=(key,), name='wiki-sync-' + key, daemon=True)
                 thread.start()
                 self.threads.append(thread)
 
+    @contextmanager
+    def _revocation_call(self):
+        if getattr(self._revocations, 'operation', None) is not None:
+            yield
+            return
+        self._revocations.operation = {}
+        try:
+            yield
+        finally:
+            del self._revocations.operation
+
+    def _configured_fencer(self, key, slot):
+        if slot.replica is not None:
+            return slot.replica
+        root = self.project.corpus_root(key)
+        try:
+            raw = safe_metadata_read(root / 'confluence' / key / '.sync/manifest.json', 16 * 1024 * 1024)
+        except FileNotFoundError:
+            return None
+        manifest = json.loads(raw.decode('utf-8'))
+        # Cached identity is used only to revoke an existing admission, never
+        # to initialize a running service or grant native access.
+        config = dict(enabled=True, site=self.project.credentials.base_url, space=key,
+                      spaceId=native_id(manifest['spaceId']), pollIntervalSeconds=self.project.poll_interval_seconds)
+        config.update({k: v for k, v in slot.selection.items() if k != 'key'})
+        return Replica(SpaceSettings(config, self.project.credentials, root), self.remote)
+
     def _deny_all(self, wake=True):
         # A sync may call this while holding its own slot lock. Never acquire
         # sibling slot locks in opposite order during simultaneous 401s.
         for slot in self.slots.values():
             slot.denied = True
-        pending = {}
-        deadline = time.monotonic() + 3
-        for key, slot in self.slots.items():
-            if slot.replica:
+        operation = getattr(self._revocations, 'operation', None)
+        if operation is not None and 'pending' in operation:
+            pending = operation['pending']
+        else:
+            pending, fencers = {}, {}
+            deadline = time.monotonic() + 3
+            # Fence every available sibling before waiting on any held lease.
+            for key, slot in self.slots.items():
                 try:
-                    slot.replica.deny(timeout=max(0, deadline - time.monotonic()))
+                    fencer = self._configured_fencer(key, slot)
+                    if fencer is not None:
+                        fencers[key] = fencer
+                        fencer.deny(timeout=0)
                 except Exception:
                     pending[key] = 'replica_denial_pending'
-                    slot.failure = 'replica_denial_pending'
-                    if wake:
-                        slot.wake.set()
+            for key in list(pending):
+                if key not in fencers:
+                    continue
+                try:
+                    fencers[key].deny(timeout=max(0, deadline - time.monotonic()))
+                    pending.pop(key)
+                except Exception:
+                    pass  # The original failure remains explicitly pending.
+            if operation is not None:
+                operation['pending'] = pending
+        for key in pending:
+            self.slots[key].failure = 'replica_denial_pending'
+            if wake:
+                self.slots[key].wake.set()
         return pending
 
     def synchronize(self, key):
+        with self._revocation_call():
+            return self._synchronize(key)
+
+    def _synchronize(self, key):
         slot = self.slots[key]
         with slot.lock, self.remote.operation(timeout=30):
             try:
@@ -68,6 +122,7 @@ class MultiSpaceKnowledge:
                     slot.settings = settings
                     slot.replica = Replica(settings, self.remote)
                     slot.replica.on_repair = slot.wake.set
+                    slot.replica.on_authorization_denied = lambda: self._deny_all(wake=False)
                     slot.service = WikiService(settings, self.remote, slot.replica)
                 slot.replica.synchronize(authoritative_bodies=True)
                 slot.failure, slot.denied = None, False
@@ -115,6 +170,8 @@ class MultiSpaceKnowledge:
                 row['spaceId'] = slot.settings.space_id
             if slot.failure:
                 row.update(status='failed', code=slot.failure, syncError='Automatic synchronization for this space failed')
+                if slot.failure == 'replica_denial_pending':
+                    row.update(authorizationDenied=True, scopeFence='pending', scopeFenceCode='replica_denial_pending')
             if slot.denied:
                 row['ready'] = False
             entries.append(row)
@@ -167,6 +224,10 @@ class MultiSpaceKnowledge:
             return self.remote.comment_location(id, 'inline')[0]
 
     def execute(self, operation, data):
+        with self._revocation_call():
+            return self._execute(operation, data)
+
+    def _execute(self, operation, data):
         if operation == 'connection_status':
             return self.status()
         try:
