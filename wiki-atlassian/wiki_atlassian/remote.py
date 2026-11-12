@@ -215,7 +215,7 @@ class Remote:
         """
         with self._resolver_lock:
             future = self._resolver_future
-            if future is None:
+            if future is None or future.done():
                 future = Future()
                 self._resolver_future = future
                 def resolve():

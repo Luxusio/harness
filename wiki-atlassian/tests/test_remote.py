@@ -496,6 +496,28 @@ def test_transient_resolver_thread_start_failure_does_not_poison_later_reads(nat
     assert len(state.calls) == 1
 
 
+def test_completed_timed_out_dns_result_is_not_a_new_requests_cached_authority(native, monkeypatch):
+    state, existing, _ = native
+    credentials = Credentials(existing.origin.replace('127.0.0.1', 'localhost'), 'user@example.invalid', 'synthetic-token')
+    remote = Remote(credentials, ssl_context=existing._ssl_context)
+    original = socket.getaddrinfo
+    calls = []
+    def changing_resolver(host, port, **kwargs):
+        calls.append(host)
+        if len(calls) == 1:
+            time.sleep(.15)
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.2', port))]
+        return original(host, port, **kwargs)
+    monkeypatch.setattr(socket, 'getaddrinfo', changing_resolver)
+    with pytest.raises(RemoteError):
+        with remote.operation(timeout=.03):
+            remote.current_user()
+    remote._resolver_future.result(timeout=1)
+    with remote.operation(timeout=1):
+        assert remote.current_user()['accountId'] == 'account'
+    assert len(calls) == 2 and len(state.calls) == 1
+
+
 def test_watchdog_start_failure_closes_the_actual_owned_tls_socket(native, monkeypatch):
     state, remote, _ = native
     sockets = []
