@@ -267,7 +267,7 @@ def test_origin_rejects_empty_delimiters_or_missing_native_port(origin):
     assert failure.value.code == 'invalid_origin'
 
 
-@pytest.mark.parametrize('change', [dict(id=11), dict(spaceId=9), dict(status='archived'), dict(parentId='11'), dict(spaceId='8'), dict(version={'number': '1'})])
+@pytest.mark.parametrize('change', [dict(id=11), dict(spaceId=9), dict(status='archived'), dict(parentId='11'), dict(spaceId='8'), dict(version={'number': '1'}), dict(version=None)])
 def test_invalid_native_identity_refuses_before_storage(native, change):
     state, remote, settings = native
     state.pages['11'].update(change)
@@ -306,10 +306,13 @@ def test_whole_space_child_with_unreadable_parent_and_no_home(native):
     assert not any(path.endswith('/999') for _, path, _, _ in state.calls)
 
 
-def test_nested_native_folder_is_admitted_and_inventory_keeps_its_parent(native):
+@pytest.mark.parametrize('null_version', [False, True], ids=['absent-version', 'null-version'])
+def test_nested_native_folder_is_admitted_and_inventory_keeps_its_parent(native, null_version):
     state, remote, settings = native
     state.pages['11']['parentId'] = '20'
     folder = dict(id='20', title='Folder', type='folder', spaceId='9', status='current', parentId='10')
+    if null_version:
+        folder['version'] = None
     def folders(method, path, query, data):
         if path == '/wiki/api/v2/folders/20':
             return 200, {}, folder
@@ -320,6 +323,18 @@ def test_nested_native_folder_is_admitted_and_inventory_keeps_its_parent(native)
     state.hook = folders
     assert remote.scoped_page(settings, '11').node.parent_id == '20'
     assert [(n.id, n.type) for n in remote.inventory(settings)] == [('10', 'page'), ('20', 'folder'), ('11', 'page')]
+
+
+@pytest.mark.parametrize('identifier', ['10', '11'])
+def test_inventory_retains_root_child_listing_denial_without_poisoning_siblings(native, identifier):
+    state, remote, settings = native
+    state.hook = lambda m, p, q, d: (403, {}, {}) if p.endswith('/pages/' + identifier + '/direct-children') else None
+    with pytest.raises(RemoteError) as failure:
+        remote.inventory(settings)
+    assert isinstance(failure.value, RootScopeDenial) is (identifier == '10')
+    if identifier == '10':
+        assert failure.value.settings is settings
+    assert not any('body-format' in query for _, _, query, _ in state.calls)
 
 
 def test_move_deeper_preserves_all_ancestors_and_whole_space_move_cannot_escape(native):

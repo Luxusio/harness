@@ -408,6 +408,8 @@ class Remote:
         if current:
             _need(status == 'current', 'scope_not_current', 'Native content must be explicitly current')
         version = obj.get('version', {})
+        if expected_type == 'folder' and version is None:
+            version = {}
         _need(isinstance(version, dict))
         number = _positive(version.get('number')) if expected_type == 'page' else version.get('number', 0)
         _need(type(number) is int and number >= 0)
@@ -664,7 +666,9 @@ class Remote:
                     parent, depth = pending.pop(0)
                     _need(depth <= 100 and self.require_scope(settings, parent.id) == parent, 'scope_metadata_changed', 'Native hierarchy changed during inventory')
                     path = '/wiki/api/v2/' + ('folders' if parent.type == 'folder' else 'pages') + '/' + parent.id + '/direct-children'
-                    for raw in self._list(path, {'limit': 250}):
+                    with self._scope_errors(settings, parent.id):
+                        children = self._list(path, {'limit': 250})
+                    for raw in children:
                         _need(isinstance(raw.get('type'), str), 'malformed_child', 'Child content type is unavailable')
                         if raw['type'] not in ('page', 'folder'):
                             continue
