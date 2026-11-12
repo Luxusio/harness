@@ -269,6 +269,28 @@ class ReplicaTests(unittest.TestCase):
         self.replica.synchronize()
         self.assertFalse((self.replica.control / 'notice-access-denied').exists())
 
+    def test_child_denial_does_not_fence_scope_but_wrapped_confirmed_root_denial_does(self):
+        self.replica.synchronize()
+        self.replica.handle_denial(RemoteError('http_403', 'Child denied'))
+        self.assertFalse((self.replica.control / 'notice-access-denied').exists())
+        wrapper = RemoteError('unknown_create_comment', 'Outcome unknown', outcome_unknown=True)
+        wrapper.__cause__ = RootScopeDenial(self.settings, RemoteError('http_403', 'Root denied'))
+        self.replica.handle_denial(wrapper)
+        self.assertTrue((self.replica.control / 'notice-access-denied').exists())
+
+    def test_late_old_credential_comment_observation_cannot_commit_after_rotation(self):
+        self.replica.synchronize()
+        rotated = Replica(self.setting('rotated'), self.remote)
+        original = self.remote.comment_inventory
+        def rotate_during_observation(*args, **kwargs):
+            rotated.synchronize()
+            return original(*args, **kwargs)
+        self.remote.comment_inventory = rotate_during_observation
+        self.replica.poll_comments(['211'], 0)
+        current = self.metadata('manifest.json')
+        self.assertEqual(rotated.settings.credential_fingerprint, current['credentialBinding'])
+        self.assertNotIn('211', current.get('wikiCommentWatch', {}))
+
     def test_transient_sync_failure_keeps_snapshot_readable_and_reports_staleness(self):
         self.replica.synchronize()
         self.remote.transient.add('210')
