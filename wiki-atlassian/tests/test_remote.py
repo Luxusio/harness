@@ -48,6 +48,7 @@ class NativeState:
         self.version_author = 'account'
         self.version_time = '2026-11-12T00:00:00Z'
         self.slow_body = False
+        self.truncated_body = False
 
     def response(self, method, target, payload=None):
         parsed = urlsplit(target)
@@ -171,7 +172,7 @@ def native(tmp_path):
                 return
             self.send_response(status)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(value)))
+            self.send_header('Content-Length', str(len(value) + (10 if state.truncated_body else 0)))
             for name, item in headers.items():
                 self.send_header(name, item)
             self.end_headers()
@@ -240,6 +241,13 @@ def test_page_url_reference_uses_literal_id_and_validates_space():
     assert native_page_url_id('https://example.invalid/wiki/api/v2/pages/11', 'https://example.invalid', allow_api=True) == '11'
     with pytest.raises(RemoteError):
         native_page_url_id('https://example.invalid/wiki/spaces/OTHER/pages/11', 'https://example.invalid', 'DOC')
+
+
+@pytest.mark.parametrize('origin', ['https://example.invalid?', 'https://example.invalid#', 'https://example.invalid:', 'https://example.invalid:0'])
+def test_origin_rejects_empty_delimiters_or_missing_native_port(origin):
+    with pytest.raises(RemoteError) as failure:
+        Remote(Credentials(origin, 'user@example.invalid', 'synthetic-token'))
+    assert failure.value.code == 'invalid_origin'
 
 
 @pytest.mark.parametrize('change', [dict(id=11), dict(spaceId=9), dict(status='archived'), dict(parentId='11'), dict(spaceId='8'), dict(version={'number': '1'})])
@@ -322,6 +330,15 @@ def test_root_revocation_is_classified_but_child_denial_is_not(native):
     with pytest.raises(RemoteError) as failure:
         remote.require_scope(settings, '11')
     assert not isinstance(failure.value, RootScopeDenial)
+
+
+@pytest.mark.parametrize('identifier,root_denied', [('10', True), ('11', False)])
+def test_published_root_body_denial_survives_successful_initial_metadata(native, identifier, root_denied):
+    state, remote, settings = native
+    state.hook = lambda m, p, q, d: (403, {}, {}) if p.endswith('/pages/' + identifier) and 'body-format' in q else None
+    with pytest.raises(RemoteError) as failure:
+        remote.scoped_page(settings, identifier)
+    assert isinstance(failure.value, RootScopeDenial) is root_denied
 
 
 @pytest.mark.parametrize('next_url', [
@@ -424,6 +441,16 @@ def test_native_conflict_stays_definite_when_its_optional_error_body_times_out(n
     assert len(state.calls) == 1
 
 
+def test_truncated_http_body_with_valid_json_is_not_mistaken_for_complete_response(native):
+    state, remote, settings = native
+    state.truncated_body = True
+    state.hook = lambda m, p, q, d: (200, {}, {'id': '12'})
+    with pytest.raises(RemoteError) as failure:
+        remote._request('POST', settings.site + '/wiki/api/v2/pages', {})
+    assert failure.value.outcome_unknown
+    assert sum(method == 'POST' for method, _, _, _ in state.calls) == 1
+
+
 def test_safe_provider_reasons_preserve_useful_error_without_private_echo(native):
     state, remote, settings = native
     state.hook = lambda m, p, q, d: (400, {}, {'code': 'INVALID_STORAGE', 'message': 'Malformed XHTML private content synthetic-token'})
@@ -512,7 +539,7 @@ def test_rootless_create_pins_v2_native_space_and_audit_without_fake_message(nat
     assert posts[0][3]['spaceId'] == '9' and 'version' not in posts[0][3]
 
 
-@pytest.mark.parametrize('field,value', [('version_author', 'another-account'), ('version_time', 'not-a-time')])
+@pytest.mark.parametrize('field,value', [('version_author', 'another-account'), ('version_time', 'not-a-time'), ('version_time', '2026-11-12')])
 def test_rootless_native_audit_mismatch_is_unknown_without_repeated_create(native, field, value):
     state, remote, settings = native
     setattr(state, field, value)

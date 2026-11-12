@@ -58,7 +58,7 @@ def _origin(value):
         uri = urlsplit(value)
         _need(isinstance(value, str) and uri.scheme == 'https' and uri.hostname and
               uri.username is None and uri.password is None and uri.path in ('', '/') and
-              not uri.query and not uri.fragment and uri.port != 0 and
+              '?' not in value and '#' not in value and not uri.netloc.endswith(':') and uri.port != 0 and
               not any(c.isspace() or ord(c) < 32 or c == '\\' for c in value),
               'invalid_origin', 'Configured Atlassian URL must be an HTTPS origin')
         return value.rstrip('/')
@@ -237,6 +237,8 @@ class Remote:
                     remaining()
                     chunk = response.read1(min(65536, limit + 1 - size))
                     if not chunk:
+                        if response.length not in (None, 0):
+                            raise http.client.IncompleteRead(b''.join(chunks), response.length)
                         break
                     chunks.append(chunk)
                     size += len(chunk)
@@ -367,6 +369,16 @@ class Remote:
                 raise RootScopeDenial(scope, failure) from failure
             raise
 
+    @contextmanager
+    def _scope_errors(self, scope, id):
+        try:
+            yield
+        except RemoteError as failure:
+            if (not isinstance(failure, RootScopeDenial) and scope is not None and is_scope_denial(failure)
+                    and (id == scope.root_page_id or scope.whole_space and failure.code == 'http_401')):
+                raise RootScopeDenial(scope, failure) from failure
+            raise
+
     def _any_node(self, scope, id):
         try:
             return self._connection_node(scope, id)
@@ -429,14 +441,19 @@ class Remote:
         if expected_node is not None and node != expected_node:
             raise RemoteError('readback_mismatch', 'Page differs from its expected native identity',
                               details={'mismatchFields': self._node_mismatch(node, expected_node)})
-        metadata = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + id))[1]
-        _need(self._parse_node(metadata, 'page', id) == node, 'scope_metadata_changed', 'Page changed before its storage read')
+        with self._scope_errors(scope, id):
+            metadata = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + id))[1]
+            current = self._parse_node(metadata, 'page', id)
+            _need(scope is None or current.space_id == scope.space_id, 'scope_outside_connection', 'Native content is outside the configured space')
+            _need(current == node, 'scope_metadata_changed', 'Page changed before its storage read')
         message = metadata.get('version', {}).get('message', '')
         _need(isinstance(message, str))
         if scope:
             self._verify(scope, observed)
-        raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + id, {'body-format': 'storage'}))[1]
-        result = self._parse_page(raw, id)
+        with self._scope_errors(scope, id):
+            raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + id, {'body-format': 'storage'}))[1]
+            result = self._parse_page(raw, id)
+            _need(scope is None or result.node.space_id == scope.space_id, 'scope_outside_connection', 'Native content is outside the configured space')
         _need(result.node == node and result.version_message == message, 'scope_metadata_changed', 'Page changed during storage read')
         if scope:
             self._verify(scope, observed)
@@ -712,7 +729,9 @@ class Remote:
             revision = self.version(created, 1)
             _need(revision['authorId'] == account['accountId'] and self.current_user() == account,
                   'readback_mismatch', 'Created page account readback differs')
-            datetime.fromisoformat(revision['createdAt'].replace('Z', '+00:00'))
+            timestamp = datetime.fromisoformat(revision['createdAt'].replace('Z', '+00:00'))
+            _need('T' in revision['createdAt'] and timestamp.tzinfo is not None and timestamp.utcoffset() is not None,
+                  'readback_mismatch', 'Created page native timestamp is unavailable')
             mismatch = []
             if saved.node != expected:
                 mismatch.append('identity')
