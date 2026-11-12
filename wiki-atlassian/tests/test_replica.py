@@ -137,11 +137,13 @@ def test_cold_native_root_reuses_observations_within_the_existing_budget(tmp_pat
         remote = Remote(settings.credentials, state.transport)
         replica = Replica(settings, remote)
         try:
-            result = replica.synchronize()
-            assert result['pages'] == count and len(state.calls) <= 512
-            assert replica.get_document(dict(document=str(9+count)))['content'].endswith('\n\nOriginal')
-            manifest = json.loads((replica.control / 'manifest.json').read_text())
-            assert manifest['inventoryComplete'] and len(manifest['pages']) == count
+            for _ in range(3):
+                start = len(state.calls)
+                result = replica.synchronize()
+                assert result['pages'] == count and len(state.calls) - start <= 512
+                assert replica.get_document(dict(document=str(9+count)))['content'].endswith('\n\nOriginal')
+                manifest = json.loads((replica.control / 'manifest.json').read_text())
+                assert manifest['inventoryComplete'] and len(manifest['pages']) == count
         finally:
             replica.close()
 

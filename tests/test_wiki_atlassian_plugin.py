@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ssl
 import sys
 import threading
+import time
+import signal
 
 try:
     import pytest
@@ -214,6 +216,59 @@ def test_personal_feedback_uses_packaged_mcp_and_private_identity_without_projec
         assert not (project / "doc").exists() and not list(other.iterdir())
         assert all(secret not in json.dumps(first) + json.dumps(second) for secret in (
             "private-mcp-fixture", "project-token-sentinel", "project@example.invalid", "project-import-poison"))
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX nested process-group cleanup; Windows native Job lifetime has its own suite')
+@pytest.mark.parametrize('cancel', [False, True])
+def test_private_read_timeout_and_server_termination_reap_nested_mise(tmp_path, cancel):
+    package, command = personal_payload(tmp_path)
+    project = tmp_path / 'consumer'; project.mkdir()
+    pidfile = tmp_path / 'nested-mise.pid'
+    child = None
+    pid = None
+    with private_inbox(tmp_path) as (home, _, settings, _):
+        mise = Path(settings['PATH'].split(os.pathsep)[0]) / 'mise'
+        mise.write_text('#!' + sys.executable + ' -I\nimport os,time\nfrom pathlib import Path\n'
+                        + 'Path(' + repr(str(pidfile)) + ').write_text(str(os.getpid()))\ntime.sleep(60)\n')
+        mise.chmod(0o700)
+        env = clean_environment(home, **settings)
+        argv = command if cancel else [sys.executable, '-I', '-B', '-c',
+            "import sys,json;sys.path[:0]=sys.argv[1:3];from wiki_atlassian.main import read_personal;print(json.dumps(read_personal({},timeout=3)))",
+            str(package), str(package / 'scripts')]
+        try:
+            child = subprocess.Popen(argv, cwd=project, env=env, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if cancel:
+                child.stdin.write(json.dumps(dict(jsonrpc='2.0', id=1, method='tools/call',
+                    params=dict(name='read_personal_feedback', arguments={}))) + '\n')
+                child.stdin.flush()
+            deadline = time.monotonic() + 5
+            while not pidfile.exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            assert pidfile.exists(), 'The actual nested authentication helper did not start'
+            pid = int(pidfile.read_text())
+            if cancel:
+                child.terminate()
+            output, error = child.communicate(timeout=6)
+            if not cancel:
+                assert child.returncode == 0 and json.loads(output)['status'] == 'unavailable', error
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(.02)
+            else:
+                raise AssertionError('Nested mise survived private execution cleanup')
+        finally:
+            if child is not None and child.poll() is None:
+                child.kill(); child.communicate(timeout=5)
+            if pid is not None:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 @pytest.mark.parametrize("fault", ["missing-auth", "unsafe-settings", "mismatched-origin"])

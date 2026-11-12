@@ -148,7 +148,7 @@ def test_private_read_has_an_owned_process_deadline_and_keeps_stdio_usable(tmp_p
     import time
     from wiki_atlassian.main import read_personal
     helper = tmp_path / 'personal_feedback.py'
-    helper.write_text("import os,sys,time\ndef perform(action,request):\n"
+    helper.write_text("import os,sys,time\ndef perform(action,request,deadline=None):\n"
                       " if request['limit']==2: time.sleep(10)\n"
                       " assert '_HARNESS_PRIVATE_READ_REQUEST' not in os.environ\n"
                       " assert request['cursor'] not in repr(sys.argv)\n"
@@ -166,3 +166,15 @@ def test_private_read_has_an_owned_process_deadline_and_keeps_stdio_usable(tmp_p
     else:
         assert result['request'] == values
     assert server.handle(dict(id=2, method='ping'))['result'] == {}
+
+
+def test_private_process_transports_large_unicode_as_utf8(tmp_path, monkeypatch):
+    import personal_feedback
+    from wiki_atlassian.main import read_personal
+    helper = tmp_path / 'personal_feedback.py'
+    helper.write_text("def perform(action,request,deadline=None):\n"
+                      " return dict(status='read',comments=[dict(body='가'*11900) for _ in range(25)])\n")
+    monkeypatch.setattr(personal_feedback, '__file__', str(helper))
+    result = read_personal(dict(limit=25), timeout=5)
+    assert result['status'] == 'read' and len(result['comments']) == 25
+    assert result['comments'][-1]['body'] == '가' * 11900

@@ -19,6 +19,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -123,7 +124,7 @@ def _private_mise(argv, **kwargs):
                                        result.stdout.decode("utf-8", errors="strict"), "")
 
 
-def _credentials(directory, environment):
+def _credentials(directory, environment, deadline=None):
     home = directory.parent.parent
     before = _read_private("mise.local.toml", home)
     mise = shutil.which("mise")
@@ -134,8 +135,11 @@ def _credentials(directory, environment):
                  if not k.upper().startswith(("ATLASSIAN_", "MISE_", "__MISE_"))}
     child_env["MISE_YES"] = "0"
     try:
+        timeout = 20 if deadline is None else min(20, deadline-time.monotonic()-1)
+        if timeout <= 0:
+            raise ValueError("private execution deadline exhausted")
         result = _private_mise([mise, "env", "--json-extended"], cwd=directory,
-                               env=child_env, stdin=subprocess.DEVNULL, text=True)
+                               env=child_env, stdin=subprocess.DEVNULL, text=True, timeout=timeout)
         if result.returncode or len(result.stdout.encode("utf-8")) > MAX_RESPONSE:
             raise ValueError("private mise evaluation failed")
         data = json.loads(result.stdout)
@@ -379,7 +383,7 @@ def _read_feedback(selected, credentials, account, key, state, page, limit):
     return result
 
 
-def perform(action, report=None, home=None, environment=None, request=None):
+def perform(action, report=None, home=None, environment=None, request=None, deadline=None):
     selected = load_destination(home)
     if action == "status" or selected["status"] != "configured":
         return selected
@@ -392,7 +396,9 @@ def perform(action, report=None, home=None, environment=None, request=None):
         if action == "send" and (not isinstance(report, str) or not report.strip()
                 or len(report.encode("utf-8")) > MAX_REPORT or any(ord(c) < 32 and c not in "\n\t\r" for c in report)):
             raise FeedbackError("Send requires nonempty UTF-8 report text on stdin, at most 128 KiB.")
-        credentials = _credentials(_directory(home), dict(os.environ if environment is None else environment))
+        directory, env = _directory(home), dict(os.environ if environment is None else environment)
+        credentials = (_credentials(directory, env) if deadline is None
+                       else _credentials(directory, env, deadline=deadline))
         if _origin(credentials["ATLASSIAN_BASE_URL"]) != selected["site"]:
             raise FeedbackError("Private credential origin does not match the feedback page; no request was sent.")
         if ":" in credentials["ATLASSIAN_EMAIL"]:

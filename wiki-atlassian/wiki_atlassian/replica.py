@@ -836,8 +836,6 @@ class Replica:
                         except (OSError, ValueError, RemoteError):
                             pass
                     if cached is not None:
-                        if self.remote.require_scope(self.settings, id) != node:
-                            raise RemoteError('scope_metadata_changed', 'Native metadata changed during synchronization')
                         page = Page(node, cached)
                     else:
                         page = self.remote.inventory_page(self.settings, node, fresh_storage=refresh)

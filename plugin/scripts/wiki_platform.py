@@ -271,7 +271,7 @@ def same_file(left, right):
         return False
 
 
-def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
+def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False):
     """Run a private helper with bounded bytes and complete owned-tree cleanup."""
     if timeout <= 0 or type(limit) is not int or limit < 0:
         raise ValueError("Positive timeout and nonnegative byte limit required")
@@ -307,6 +307,14 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
             process.wait(timeout=max(0.001, deadline - time.monotonic()))
         return subprocess.CompletedProcess(argv, process.returncode, bytes(output), b"")
     finally:
+        if graceful:
+            # A trusted Python owner may have nested helper groups to reap.
+            # Let its termination handler unwind them before the hard ceiling.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=1)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
