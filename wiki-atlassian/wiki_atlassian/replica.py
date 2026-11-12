@@ -258,13 +258,14 @@ class Replica:
                 native_id(node.space_id)
                 if node.parent_id is not None:
                     native_id(node.parent_id)
-                if (node.id != id or node.type != 'page' or type(node.version) is not int or node.version <= 0
+                if (node.id != id or node.type != 'page' or node.status != 'current'
+                    or type(node.version) is not int or node.version <= 0
                     or not isinstance(node.title, str) or len(node.title) > 1000
                     or not isinstance(row['bodyHash'], str) or not changes.HASH.fullmatch(row['bodyHash'])):
                     raise ValueError('Invalid replica node')
                 _relative(row['path'])
                 _relative(row['storage'])
-                if not re.fullmatch(r'\.sync/storage/' + re.escape(id) + r'-[1-9][0-9]*-[a-f0-9]{64}\.xhtml', row['storage']):
+                if row['storage'] != f'.sync/storage/{id}-{node.version}-{row["bodyHash"]}.xhtml':
                     raise ValueError('Invalid native body path')
             _owners(pages)
             for key in ('explicitPages', 'unavailable'):
@@ -287,6 +288,8 @@ class Replica:
                 raise ValueError('Invalid credential binding')
             if type(manifest.get('inventoryComplete', False)) is not bool:
                 raise ValueError('Invalid inventory status')
+            if type(manifest.get('wholeSpace', False)) is not bool:
+                raise ValueError('Invalid whole-space selection')
             if datetime.fromisoformat(manifest['cursor'].replace('Z', '+00:00')).tzinfo is None:
                 raise ValueError('Invalid replica cursor timestamp')
             changes.validate(manifest)
@@ -766,7 +769,9 @@ class Replica:
 
     def _validate_native(self, node):
         native_id(node.id)
-        if node.space_id != self.settings.space_id or node.type not in ('page', 'folder'):
+        if (node.space_id != self.settings.space_id or node.type not in ('page', 'folder')
+            or not isinstance(node.title, str) or len(node.title) > 1000
+            or type(node.version) is not int or node.version < 0):
             raise RemoteError('invalid_inventory', 'Cross-space or unsupported native inventory entry')
 
     def _paths(self, nodes, selected, chain, retained):
