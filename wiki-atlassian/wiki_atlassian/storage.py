@@ -244,6 +244,33 @@ def storage_section(body, key):
     return body[start:end]
 
 
+def _retained_identity(body, element):
+    """Compare parsed native fragments without retaining incidental quote spelling.
+
+    Only the preservation guard uses this key. Human text and literal nodes stay
+    exact, and neither this key nor the parsed tree is serialized into a write.
+    """
+    result, stack = [], [element]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Element):
+            name = _NAME.match(body, node.start + 1)[0]
+            attributes = []
+            for start, end, separator, _ in node.attribute_ranges.values():
+                while body[separator] in _WS:
+                    separator += 1
+                attributes.append((_NAME.match(body, separator)[0], decode_entities(body[start:end])))
+            result.append(('start', name, tuple(attributes), node.self_closing))
+            if not node.self_closing:
+                stack.append(('end', name))
+                stack.extend(reversed(node.children))
+        elif isinstance(node, Text):
+            result.append((node.kind, decode_entities(node.data) if node.kind == 'text' else node.data))
+        else:
+            result.append(node)
+    return tuple(result)
+
+
 def _section_references(body):
     root = parse_storage(body, 'section_context_required')
     excluded = _LINK_LITERAL | {'ac:structured-macro', 'ac:macro', 'ac:adf-extension', 'ac:placeholder'}
@@ -251,7 +278,7 @@ def _section_references(body):
     for element in root.descendants():
         retained = element.tag in {'ac:image', 'ri:attachment', 'ac:structured-macro', 'ac:macro', 'ac:adf-extension', 'ac:placeholder', 'ac:inline-comment-marker'} or any(name in element.attrs for name in ('id', 'local-id', 'ac:local-id')) or element.tag == 'a' and 'name' in element.attrs
         if retained and not _hidden(element, excluded):
-            result[tuple(_identity_tokens(body[element.start:element.end]))] += 1
+            result[_retained_identity(body, element)] += 1
     return result
 
 

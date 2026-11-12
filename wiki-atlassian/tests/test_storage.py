@@ -83,6 +83,23 @@ def test_section_references_retain_fragments_and_reject_hidden_copies(asset):
     assert replace_section(body, '1', asset + '<p>New</p>') == '<h2>Top</h2>' + asset + '<p>New</p><h2>Other</h2>'
 
 
+def test_section_retention_ignores_authored_attribute_quotes_and_tag_separators():
+    before = "<ac:image ac:width='100'><ri:attachment ri:filename='keep.png'/></ac:image>"
+    replacement = '<ac:image  ac:width = "100"><ri:attachment ri:filename="keep.png" /></ac:image>'
+    prefix, suffix = '<p>Untouched &amp; exact</p><h2>Top</h2>', '<h2>Next</h2><p>Outside 😀</p>'
+    assert replace_section(prefix + before + suffix, '1', replacement) == prefix + replacement + suffix
+    assert not equivalent(before, replacement)
+    assert not native_page_readback(before, replacement)
+
+
+@pytest.mark.parametrize('changed', [
+    '<p id="keep">Changed human text</p>', '<p id="keep">A B</p>',
+    '<p id="keep"><![CDATA[A  B]]></p>', '<p ID="keep">A  B</p>',
+])
+def test_section_canonical_reference_comparison_keeps_human_text_and_native_names_exact(changed):
+    error('section_reference_removal', lambda: replace_section('<h2>Top</h2><p id="keep">A  B</p>', '1', changed))
+
+
 def test_seven_contextual_edits_use_original_disjoint_ranges():
     original = '<p>A😀</p><p>B</p><table><tbody><tr>' + ''.join('<td>' + x + '</td>' for x in 'CDEFG') + '</tr></tbody></table>'
     edits = [edit('<p>A😀</p>', '<p>B</p>'), edit('<p>B</p>', '<p>A😀 changed</p>')] + [edit('<td>' + x + '</td>', '<td>' + x + ' changed</td>') for x in 'CDEFG']
