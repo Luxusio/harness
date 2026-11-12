@@ -429,6 +429,8 @@ class Replica:
                 if row is None:
                     raise RemoteError('document_not_found', 'Search the configured corpus for a current document ID')
                 expected = data.get('version')
+                if expected is not None and (type(expected) is not int or not 1 <= expected <= 2147483647):
+                    raise RemoteError('invalid_query', 'Use an exact positive native version')
                 if expected is not None and expected != row['version']:
                     if locator is not None:
                         raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
