@@ -61,3 +61,36 @@ execution is mandatory acceptance evidence; Linux or mocked platform checks
 cannot establish it. An unavailable Windows device remains unfinished with its
 real unblock condition. Completion evidence belongs to the owning WBS rather
 than a copied claim in this requirement.
+
+## Installation and synchronization feedback follow-up
+
+The user explicitly requested “개선의견 다시 확인해서 개선 ㄱ”. The configured
+Harness feedback inbox, version 55 dated 2026-11-12, reports two regressions
+against the Python migration: native Windows atomic publication fails with
+Win32 error 87, and a several-hundred-page whole-space synchronization exhausts
+its aggregate budget before publishing a readable snapshot. These are reported
+observations; the particular rejected Windows argument is not established.
+Unrelated product feedback is not an additional Harness requirement.
+
+The accepted observable repairs are safe native publication of new and replaced
+files, including Unicode paths, and successful cold and warm synchronization
+of an authorized whole space of representative size. Recognized installer-owned
+0.1 package selections have a checked one-way upgrade; unknown or modified
+selections remain protected. Existing payloads and unrelated settings survive
+failed publication or registration.
+
+Derived from the existing security and bounded-execution requirements: use
+authorized bulk results only for whole-space connections, validate the complete
+current selected graph before atomic admission, and never regrant a missing
+page from older cache data. Observed revocation or unresolvable admission drift
+must keep unsafe cached content fenced even if candidate publication fails.
+ROOT connections retain their narrower body-read scope. Preserve response,
+aggregate byte, request and elapsed-time guards; reducing duplicate work must
+not replace them with an unlimited operation.
+
+Synchronization status distinguishes its bounded stage, elapsed time, request
+count and terminal reason without source bodies or authentication data.
+Aggregate deadline exhaustion, network timeout and size/request limits remain
+distinguishable. Document publication and successful comment observation are
+separate results. Native Windows and real-account acceptance must still be
+reported from actual execution, independently of synthetic or Linux tests.
