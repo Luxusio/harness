@@ -228,7 +228,7 @@ def selection(repo, paths):
     for path in paths:
         _rel(path)
         _require(path in links and path in declared, 'selection is not a declared direct gitlink')
-        root = os.path.join(repo, path)
+        root = os.path.normpath(os.path.join(repo, path))
         gd, ident = _metadata(root)
         modules_dir = os.path.join(repo, '.git', 'modules')
         embedded = gd == os.path.join(root, '.git') and os.path.isdir(gd)

@@ -541,7 +541,7 @@ def main_boundary(repo, expected=None, scopes=None):
 
 
 def module_ownership(repo, item):
-    roots = [os.path.join(repo, path) for path in item['submodules']]
+    roots = [os.path.normpath(os.path.join(repo, path)) for path in item['submodules']]
     scopes = item['resolved_scopes']
     require(all(any(os.path.commonpath((root, scope)) in (root, scope) for scope in scopes)
                 for root in roots), 'selected module is outside request scopes')

@@ -618,7 +618,7 @@ def preflight(repo_root: str, requests: dict, submodules=None, *, dirty_scopes=N
             report["scopes"].append(scope)
             boundary = dict(scope)
             if scope["class"] == "selected-submodule":
-                boundary["resolved"] = os.path.join(root, scope["owner"])
+                boundary["resolved"] = os.path.normpath(os.path.join(root, scope["owner"]))
             ownership.append(boundary)
             if selected_mode and boundary["resolved"] not in report["ownership_scopes"][slug]:
                 report["ownership_scopes"][slug].append(boundary["resolved"])
@@ -630,7 +630,7 @@ def preflight(repo_root: str, requests: dict, submodules=None, *, dirty_scopes=N
         scopes = [scope["resolved"] for scope in report["scopes"]
                   if scope["request"] == slug and scope["class"] in ("tracked-area", "selected-submodule")]
         for path in paths:
-            selected = os.path.join(root, path)
+            selected = os.path.normpath(os.path.join(root, path))
             if not any(_is_within(selected, scope) or _is_within(scope, selected) for scope in scopes):
                 report["refusals"].append(f"selected submodule {path} is not covered by a literal scope of {slug}")
     # An excluded request never runs in any wave, so pairing it would only
