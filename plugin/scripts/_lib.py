@@ -2656,15 +2656,40 @@ def emit_compact_context(wbs_dir, *, measure_wbs=False, measured_progress=None, 
     if not st:
         return {"error": "missing or invalid exact four-field WBS.control.json", "wbs_dir": wbs_dir,
                 "next_action": "Use wbs(action='migrate') preview/apply for old controls, or open a new WBS."}
-    from wbs import wbs_progress, summary
+    from wbs import wbs_progress, summary, _unavailable
     from verification_target import applicability
     repo = find_repo_root(wbs_dir)
     progress = measured_progress if measured_progress is not None else wbs_progress(
         wbs_dir, repo, st["run_id"], measure=measure_wbs)
-    targets = applicability(wbs_dir, repo, measure=measure_wbs or measure_targets,
-                            measured_inputs=measured_target_inputs)
     status = wbs_control_status(wbs_dir, st)
-    routing = compile_routing(wbs_dir)
+    try:
+        targets = applicability(wbs_dir, repo, measure=measure_wbs or measure_targets,
+                                measured_inputs=measured_target_inputs)
+        routing = compile_routing(wbs_dir)
+        review_lenses = required_review_lenses(wbs_dir, st)
+        qa_lenses = _required_qa_lenses(wbs_dir, st)
+    except (OSError, ValueError, RuntimeError) as exc:
+        # An advisory read must report corrupt/unsafe metadata without turning
+        # it into a usable default policy or escaping before progress is shown.
+        progress = _unavailable(exc)
+        reason = progress['reason']
+        return dict(wbs_id=os.path.basename(wbs_dir), wbs_dir=wbs_dir, status=status,
+                    error='WBS metadata unavailable: ' + reason, context_complete=False,
+                    routing=dict(status='invalid', work_kind=None, work_policy=None,
+                                 orchestration_mode='unassigned', reason=reason),
+                    runtime_verdict='BLOCKED_ENV', verification_basis='current_wbs_checks',
+                    workflow_verification='Workflow requirements are unavailable; no verification or completion is implied.',
+                    progress=progress,
+                    verification_targets=dict(status='unavailable', enforced=True, targets=[], reason=reason),
+                    source_write_allowed=False, why_source_write_blocked=reason,
+                    required_review_lenses=None, required_qa_lenses=None,
+                    missing_for_close=['valid WBS metadata'],
+                    next_action='Repair the reported WBS metadata, retain this WBS/run and its checks, then retry context.',
+                    effective_close_gate='micro' if _is_micro_loop_state(st) else 'standard',
+                    summary=dict(advisory=True, wbs_id=os.path.basename(wbs_dir), wbs_status=status,
+                                 work_kind=None, measurement='invalid', outcomes=[],
+                                 evidence=dict(implemented='unknown', integrated='unknown',
+                                               software_verified='unknown', actual_environment='unknown', complete='unknown')))
     has_plan = artifact_exists(wbs_dir, "PLAN.md")
     source_allowed = status == "open" and has_plan and routing["orchestration_mode"] in {"direct", "document"}
     why = "" if source_allowed else "Create PLAN.md before source writes." if not has_plan else "Fresh execution assignment required: dispatch prepare with current host inventory and ownership"
@@ -2705,8 +2730,8 @@ def emit_compact_context(wbs_dir, *, measure_wbs=False, measured_progress=None, 
                                           "Document/planning verification and configured document review are workflow-owned; product QA is not implied."),
                    progress=progress, verification_targets=targets,
                    source_write_allowed=source_allowed, why_source_write_blocked=why,
-                   required_review_lenses=required_review_lenses(wbs_dir, st),
-                   required_qa_lenses=_required_qa_lenses(wbs_dir, st),
+                   required_review_lenses=review_lenses,
+                   required_qa_lenses=qa_lenses,
                    missing_for_close=missing, next_action=next_action,
                    effective_close_gate="micro" if _is_micro_loop_state(st) else "standard")
     context["summary"] = summary(context)

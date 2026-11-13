@@ -1,6 +1,7 @@
 """Global hooks must no-op in repos without doc/harness/manifest.yaml."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -155,7 +156,7 @@ def _enable(root: Path) -> None:
 
 _REGISTERED = json.loads((REPO / "plugin/hooks/hooks.json").read_text())["hooks"]
 _HOOK_COMMANDS = [
-    pytest.param(event, group.get("matcher", ""), hook["command"],
+    pytest.param(event, group.get("matcher", ""), (event, index, hook_index),
                  id=f"{event}-{index}-{hook_index}")
     for event, groups in _REGISTERED.items()
     for index, group in enumerate(groups)
@@ -163,7 +164,25 @@ _HOOK_COMMANDS = [
 ]
 
 
-@pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS)
+@pytest.fixture(scope="module")
+def canonical_registered_hooks():
+    # Resolve the actual installed mise base in the parent home before any
+    # child HOME is isolated. Canonical installation pins this executable;
+    # raw marketplace bootstrap prerequisites are covered by resolver tests.
+    spec = importlib.util.spec_from_file_location("harness_install_noop_test", REPO / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = install
+    spec.loader.exec_module(install)
+    return json.loads(install._claude_runtime_projection()["hooks/hooks.json"])["hooks"]
+
+
+@pytest.fixture
+def command(request, canonical_registered_hooks):
+    event, index, hook_index = request.param
+    return canonical_registered_hooks[event][index]["hooks"][hook_index]["command"]
+
+
+@pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS, indirect=["command"])
 @pytest.mark.parametrize("kind", ["plain", "git", "nested-git"])
 def test_actual_registered_claude_hooks_are_inactive_outside_initialized_project(
     tmp_path: Path, event: str, matcher: str, command: str, kind: str,
@@ -254,7 +273,7 @@ def test_codex_wrappers_respect_uninitialized_payload_project(
 
 @pytest.mark.parametrize("alias", [False, True])
 def test_registered_welcome_activates_in_initialized_non_git_project_subdirectory(
-    tmp_path: Path, alias: bool,
+    tmp_path: Path, alias: bool, canonical_registered_hooks,
 ):
     root = tmp_path / "enabled"
     _enable(root)
@@ -266,7 +285,7 @@ def test_registered_welcome_activates_in_initialized_non_git_project_subdirector
         cwd = link / "src"
     home = tmp_path / "home"
     home.mkdir()
-    command = _REGISTERED["SessionStart"][0]["hooks"][0]["command"]
+    command = canonical_registered_hooks["SessionStart"][0]["hooks"][0]["command"]
     result = subprocess.run(command, shell=True, input=json.dumps({"cwd": str(cwd)}),
                             text=True, capture_output=True, cwd=tmp_path,
                             env=_isolated_env(home), timeout=12)
@@ -299,7 +318,7 @@ def test_manifest_alias_is_not_hook_activation_authority(tmp_path: Path, compone
     assert _tree(tmp_path) == before
 
 
-@pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS)
+@pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS, indirect=["command"])
 @pytest.mark.parametrize("cwd_value", [None, "missing", 42, ""])
 def test_registered_claude_hooks_ignore_invalid_explicit_cwd(
     tmp_path: Path, event: str, matcher: str, command: str, cwd_value,
@@ -323,7 +342,7 @@ def test_registered_claude_hooks_ignore_invalid_explicit_cwd(
     assert _tree(tmp_path) == before
 
 
-@pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS)
+@pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS, indirect=["command"])
 @pytest.mark.parametrize("kind", ["oversized", "malformed", "non-object"])
 def test_registered_hooks_never_fallback_after_rejected_input(
     tmp_path: Path, event: str, matcher: str, command: str, kind: str,

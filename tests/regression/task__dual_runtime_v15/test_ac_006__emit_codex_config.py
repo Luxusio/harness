@@ -62,14 +62,17 @@ def test_codex_plugin_manifest_points_at_plugin_local_hooks(tmp_path):
     )
     assert manifest["hooks"] == "./hooks.json"
     assert manifest["mcpServers"] == "./.mcp.json"
+    runtime_root = module._codex_cached_plugin_root(module._codex_home_for_config(None), plugin_root)
+    assert runtime_root.name == manifest["version"]
+    assert runtime_root != plugin_root
     hooks = module.json.loads(hooks_path.read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
-    assert str(plugin_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
+    assert str(runtime_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
     assert "hook_session_start.sh" not in hooks_path.read_text()
     mcp = module.json.loads((install_root / "plugins" / "harness" / ".mcp.json").read_text())
     assert mcp["mcpServers"]["harness"]["command"] == module._python_cmd()
-    assert mcp["mcpServers"]["harness"]["args"] == [str(plugin_root / "mcp" / "harness_server.py")]
-    assert mcp["mcpServers"]["harness"]["env"]["HARNESS_PLUGIN_ROOT"] == str(plugin_root)
+    assert mcp["mcpServers"]["harness"]["args"] == ["-E", "-s", "-B", str(runtime_root / "mcp" / "harness_server.py")]
+    assert mcp["mcpServers"]["harness"]["env"]["HARNESS_PLUGIN_ROOT"] == str(runtime_root)
 
 
 def test_install_refuses_existing_without_force(tmp_path):

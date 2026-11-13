@@ -20,7 +20,14 @@ MCP_DIR = REPO_ROOT / "plugin" / "mcp"
 README = REPO_ROOT / "README.md"
 
 # Internal helpers not expected in user-facing README.
-INTERNAL_EXCLUDES = {"_lib.py"}
+INTERNAL_EXCLUDES = {
+    "_lib.py",
+    "_wiki_windows.py",  # Native implementation behind wiki_platform.
+    "wiki_platform.py",  # Shared filesystem/process boundary, no user CLI.
+    "work_policy.py",  # Effective WBS policy consumed by its existing owners.
+    "mise_python.py",  # Owned marketplace bootstrap, not a user interpreter CLI.
+    "wiki_change_notice.py",  # Registered hook delivering session context.
+}
 
 # Ignore scripts mentioned with these prefixes (paths that obviously aren't plugin/scripts/).
 _PY_PATTERN = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\.py")

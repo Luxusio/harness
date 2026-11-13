@@ -188,6 +188,46 @@ def test_native_stdio_open_plan_check_assignment_and_stale_authority(private):
     assert "native checked" in checked["structuredContent"]["output"]
 
 
+def test_native_oversized_plan_refuses_context_and_check_without_executing(private):
+    repo = _project(private)
+    marker = private / "verification command ran"
+    command = [sys.executable, "-I", "-B", "-c",
+               f"from pathlib import Path; Path({str(marker)!r}).write_bytes(b'checked')"]
+    opened = _public(repo, "open")
+    assert not opened.get("isError"), opened
+    run = opened["structuredContent"]["run_id"]
+    assert not _public(repo, "plan", plan=_plan(command)).get("isError")
+    initial = _public(repo, "check", node_id="A")
+    assert not initial.get("isError") and initial["structuredContent"]["passed"], initial
+    assert marker.read_bytes() == b"checked"
+    marker.unlink()
+    directory = repo / "doc/harness/wbs/WBS__native"
+    before = {name: (directory / name).read_bytes()
+              for name in ("WBS.json", "WBS.control.json")}
+    source_before = (repo / "source.py").read_bytes()
+    target = directory / "PLAN.md"
+    target.write_bytes(target.read_bytes() + b" " * (1024 * 1024))
+    assert stat.S_ISREG(target.lstat().st_mode) and target.stat().st_size > 1024 * 1024
+
+    observed = _public(repo, "context")
+    assert observed.get("isError"), observed
+    context = observed["structuredContent"]
+    assert context.get("error"), context
+    assert len(json.dumps(observed).encode("utf-8")) < 65536
+    assert context["progress"]["status"] == "invalid", context
+    assert context["progress"]["percentage"] is None, context
+    assert context["source_write_allowed"] is False, context
+    assert context["runtime_verdict"] != "PASS" and context["missing_for_close"], context
+    refused = _public(repo, "check", node_id="A")
+    assert refused.get("isError"), refused
+    assert refused["structuredContent"].get("passed") is not True, refused
+    assert _public(repo, "close").get("isError")
+    assert not marker.exists()
+    assert {name: (directory / name).read_bytes() for name in before} == before
+    assert json.loads(before["WBS.control.json"])["run_id"] == run
+    assert (repo / "source.py").read_bytes() == source_before
+
+
 def test_native_future_case_variant_control_names_require_the_protected_writer(private):
     repo = _project(private)
     opened = _public(repo, "open")

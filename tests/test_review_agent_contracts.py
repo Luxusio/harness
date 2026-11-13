@@ -232,14 +232,14 @@ def test_claude_sequential_coordinator_reads_developer_core_before_editing():
         )
 
 
-def test_known_ceilings_are_promoted_to_a_greppable_doc_ledger_before_close():
+def test_known_ceilings_are_preserved_in_owning_docs_or_change_summary_before_close():
     for path in DEVELOP_SKILLS:
         body = _text(path)
         _assert_all(
             body,
             (
-                "Copy every reported `Known ceiling:` line under a `Known ceiling` heading",
-                "never copy an absent ceiling",
+                "Preserve every reported `Known ceiling:` in the owning document or Phase 8.7 change summary",
+                "never invent a ceiling",
                 "Required when a `Known ceiling:` was reported",
             ),
             path,
@@ -961,7 +961,7 @@ def test_stop_judge_mirrors_are_removed_from_both_trees():
         contracts,
         (
             "Actual independent review PASS precedes actual QA",
-            "WBS verify/close enforce measured outcome checks",
+            "WBS verify/close enforce current checks, not review attestation",
             "without a replacement ledger",
         ),
         "CONTRACTS.md",

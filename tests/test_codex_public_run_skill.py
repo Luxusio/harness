@@ -15,12 +15,13 @@ def test_public_run_is_thin_implicit_entry_to_canonical_workflow():
 
     assert "name: run" in body
     assert "user-invocable:" not in body
-    assert "repository-mutating" in body
-    assert "Do not use for read-only" in body
+    assert "single public Codex entry point for repository mutation" in body
+    assert "Read-only questions and discussion need no WBS" in body
     assert "../../internal-skills/run/SKILL.md" in body
     assert INTERNAL_RUN.is_file()
     assert "spawn_agent" in body
-    assert "conditional security reviewer" in body
+    assert "independent code review, conditional security review and applicable QA" in body
+    assert "reviewer PASS precedes actual QA" in body
     assert 'wbs(action="verify")' in body and 'wbs(action="close")' in body
     assert "allow_implicit_invocation: true" in metadata
     assert "$harness:run" in metadata
@@ -72,9 +73,11 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     develop = (REPO / "plugin-codex/internal-skills/develop/SKILL.md").read_text(encoding="utf-8")
     assert "Phase 9 is the only normal owner of `wbs(action=\"close\")`" in develop
     assert develop.index("### Phase 8.7: Distilled Change Doc") < develop.index("### Phase 9:")
-    assert "current WBS applicability and trusted WBS/source ownership" in develop
-    assert "checks are not lifecycle gates" in develop
-    assert "Do not rerun installation for docs-only edits" in develop
+    delivery = " ".join(develop.split())
+    assert "apply `workflow.install` after current required review/QA and verification" in delivery
+    assert "No changed payload means no runtime comparison/refresh" in delivery
+    assert "Explicit installer invocation retains its full integrity checks" in delivery
+    assert "installer checks trusted source/WBS ownership, current WBS applicability and stable payload bytes" in run
 
 
 def test_run_skills_use_only_native_goal_and_learn_before_next_child():

@@ -156,13 +156,11 @@ def test_batch_skill_integrates_leads_without_merge_commits():
 def test_develop_skill_points_to_task_lead_carveouts():
     body = _text(DEVELOP_SKILL)
     assert "plugin/agents/wbs-lead.md" in body, DEVELOP_SKILL
-    # Referenced once near the write-focus pre-flight and once near auto-install.
-    assert body.count("plugin/agents/wbs-lead.md") >= 2, DEVELOP_SKILL
     _assert_all(
         body,
         (
             "never calls `AskUserQuestion`",
-            "skips this step",
+            "Batch leads leave delivery to the integration coordinator",
         ),
         DEVELOP_SKILL,
     )

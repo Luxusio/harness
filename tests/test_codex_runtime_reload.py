@@ -369,19 +369,24 @@ def test_endpoint_inspection_error_preserves_discovery_failure(tmp_path, monkeyp
     assert "next session" not in detail
 
 
-def test_daemon_install_reports_deferred_or_failed_discovery(tmp_path, monkeypatch, capsys, missing_target):
+def test_daemon_install_reports_deferred_or_failed_discovery(
+        tmp_path, monkeypatch, capsys, missing_target, selected_installer_python):
     module = _installer()
     # Match the runtime config while exercising shell quoting in its parent path.
     config = tmp_path / "home with 'quotes' $dollar; semicolon" / "config.toml"
     monkeypatch.setenv("CODEX_HOME", str(config.parent))
-    source = tmp_path / "mirror" / "plugins" / "harness"
+    source = config.parent / "harness" / "plugins" / "harness"
     manifest = source / ".codex-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True)
     manifest.write_text('{"name":"harness","version":"9.9.9"}')
-    monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", tmp_path / "mirror")
+    monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", config.parent / "harness")
     monkeypatch.setattr(module.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(module, "_normalize_payload_modes", lambda root: [])
     monkeypatch.setattr(module, "_prune_bytecode_caches", lambda root: [])
+    # The daemon fixture models publication, but selected-cache validation
+    # still inspects a real matching projection in this disposable CODEX_HOME.
+    cached = module._codex_cached_plugin_root(config.parent, source)
+    module._build_codex_cache_payload(source, cached, cached)
     endpoint = config.parent / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir(parents=True)
     if missing_target:
@@ -395,6 +400,10 @@ def test_daemon_install_reports_deferred_or_failed_discovery(tmp_path, monkeypat
             return 0, "codex 0.158.0", ""
         if command == ["codex", "app-server", "daemon", "version"]:
             return 1, "", error
+        if command == ["codex", "plugin", "list", "--json", "--marketplace", "harness"]:
+            selected = dict(pluginId="harness@harness", version="9.9.9", installed=True,
+                            enabled=True, source=dict(path=str(source)), installPath=str(cached))
+            return 0, json.dumps(dict(installed=[selected])), ""
         return 0, "", ""
 
     monkeypatch.setattr(module, "_run", cli)
@@ -403,7 +412,7 @@ def test_daemon_install_reports_deferred_or_failed_discovery(tmp_path, monkeypat
     backup = str(config) + ".bak"
     with (
         mock.patch.object(module, "sync_codex_payload", return_value=source) as publish,
-        mock.patch.object(module, "install_codex_plugin_cache", return_value=tmp_path / "cache") as cache,
+        mock.patch.object(module, "install_codex_plugin_cache", return_value=cached) as cache,
         mock.patch.object(module, "emit_and_install_codex_config", return_value={
             "ok": True, "message": "merged", "backup_path": backup,
         }),
