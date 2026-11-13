@@ -88,6 +88,87 @@ def test_native_private_acl_unicode_atomic_snapshot_and_bound(private):
     assert not list(private.glob(".wiki-*"))
 
 
+def test_native_atomic_temporary_crosses_legacy_path_boundary(private, monkeypatch):
+    units = lambda value: len(str(value).encode("utf-16-le")) // 2
+    prefix = "boundary 한글 😀-"
+    # A one-character destination at223 UTF16 units needs a260-unit temporary.
+    # Keep an already-long test base intact instead of shortening the fixture.
+    parent_units = max(221, units(private) + 1 + units(prefix))
+    padding = parent_units - units(private) - 1 - units(prefix)
+    parent = win.ensure_private_directory(private / (prefix + "長" * padding))
+    target = parent / "x"
+    assert units(target) == parent_units + 2 >= 223
+    assert units(parent / (".wiki-" + "0" * 32)) == parent_units + 39 >= 260
+
+    first, replacement = "first 한글 😀".encode("utf-8"), b"replacement snapshot"
+    win.atomic_write(target, first)
+    assert win.safe_read(target, 100, private=True) == first
+    old = win._open(target, win.GENERIC_READ)
+    try:
+        win.atomic_write(target, replacement)
+        buffer, count = C.create_string_buffer(100), W.DWORD()
+        win._check(win._ReadFile(old, buffer, 100, C.byref(count), None))
+        assert buffer.raw[:count.value] == first
+        assert win.safe_read(target, 100, private=True) == replacement
+    finally:
+        win._close(old)
+    assert not list(parent.glob(".wiki-*"))
+    unrelated = parent / ".wiki-unrelated"
+    win.atomic_write(unrelated, b"keep unrelated file")
+
+    real_set = win._SetFileInformation
+
+    def refuse_rename(handle, kind, *args):
+        assert kind != 3, "long paths must not fall back to basic rename"
+        if kind == win.FileRenameInfoEx:
+            C.set_last_error(5)
+            return False
+        return real_set(handle, kind, *args)
+
+    monkeypatch.setattr(win, "_SetFileInformation", refuse_rename)
+    with pytest.raises(PermissionError) as error:
+        win.atomic_write(target, b"unpublished candidate")
+    assert error.value._wiki_operation == 'FileRenameInfoEx'
+    assert error.value._wiki_native_code == 5
+    assert win.safe_read(target, 100, private=True) == replacement
+    assert win.safe_read(unrelated, 100, private=True) == b"keep unrelated file"
+    assert [entry.name for entry in parent.glob(".wiki-*")] == [unrelated.name]
+    monkeypatch.setattr(win, "_SetFileInformation", real_set)
+
+    # The same internal boundary also serves valid ordinary paths whose
+    # directory and final destination already exceed the legacy limit.
+    deep = win.ensure_private_directory(parent / ("deeper-" + "界" * 80))
+    long_target = deep / "source.py"
+    assert units(deep) > 260 and units(long_target) > 260
+    win.atomic_write(long_target, replacement)
+    assert win.safe_read(long_target, 100, private=True) == replacement
+    data, identity = win.safe_metadata_snapshot(long_target, 100)
+    assert data == replacement and identity
+    entries = win.metadata_tree_inventory(deep, max_entries=1, max_bytes=len(replacement))
+    assert set(entries) == {long_target.name}
+    assert entries[long_target.name]["sha256"] == hashlib.sha256(replacement).hexdigest()
+
+
+@pytest.mark.parametrize('spelling', [
+    'extended-device', 'dos-device', 'alternate-stream', 'reserved-name',
+    'trailing-dot', 'trailing-space', 'parent-traversal',
+])
+def test_native_internal_long_path_support_does_not_accept_caller_aliases(private, spelling):
+    ordinary = str(private / "snapshot")
+    invalid = {
+        'extended-device': "\\\\?\\" + ordinary,
+        'dos-device': "\\\\.\\" + ordinary,
+        'alternate-stream': ordinary + ":alternate",
+        'reserved-name': str(private / "CON.txt"),
+        'trailing-dot': ordinary + ".",
+        'trailing-space': ordinary + " ",
+        'parent-traversal': str(private / ".." / "snapshot"),
+    }[spelling]
+    with pytest.raises(ValueError):
+        win.atomic_write(invalid, b"must not publish")
+    assert not list(private.iterdir())
+
+
 def test_native_rename_abi_absolute_destination_and_held_ancestors(private, monkeypatch):
     assert win.RENAME_INFO.name.offset == (20 if C.sizeof(win.HANDLE) == 8 else 12)
     target = private / "new destination 한글.txt"
@@ -101,7 +182,9 @@ def test_native_rename_abi_absolute_destination_and_held_ancestors(private, monk
             rename = C.cast(buffer, C.POINTER(win.RENAME_INFO)).contents
             assert not rename.directory and rename.flags == 3
             raw = C.string_at(C.addressof(buffer) + win.RENAME_INFO.name.offset, rename.length)
-            assert raw.decode("utf-16-le") == str(target)
+            ordinary = str(target)
+            expected = "\\\\?\\UNC\\" + ordinary[2:] if ordinary.startswith("\\\\") else "\\\\?\\" + ordinary
+            assert raw.decode("utf-16-le") == expected
             assert size >= win.RENAME_INFO.name.offset + rename.length
             # Parent components remain held without DELETE sharing through
             # publication even though FileRenameInfoEx uses a NULL root.
