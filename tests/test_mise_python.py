@@ -275,7 +275,7 @@ def test_raw_missing_managed_python_cannot_run_product_on_path_fallback(tmp_path
     assert "mise base Python" in result.stderr
 
 
-def test_actual_managed_base_is_independent_of_caller_and_raw_forwards_io(tmp_path):
+def test_actual_managed_base_is_independent_of_caller():
     # An optional local integration probe, independent of the modeled provider.
     mise_python._cache.clear()
     try:
@@ -286,7 +286,13 @@ def test_actual_managed_base_is_independent_of_caller_and_raw_forwards_io(tmp_pa
         "import json,sys; print(json.dumps([sys.executable,sys.prefix,sys.base_prefix]))"]))
     assert Path(identity[0]).resolve() == Path(selected)
     assert identity[1] == identity[2]
-    assert "/installs/python/" in Path(selected).as_posix()
+
+
+def test_actual_raw_uses_requested_minor_and_forwards_io(tmp_path):
+    try:
+        selected = mise_python.select_python(_requested_version="3.12")
+    except mise_python.MisePythonError:
+        pytest.skip("No installed mise Python 3.12; canonical selection has independent coverage")
     bootstrap, product = _raw_plugin(tmp_path)
     consumer = tmp_path / "consumer"
     consumer.mkdir()

@@ -170,6 +170,7 @@ def main() -> int:
                 proc = subprocess.run(
                     [
                         sys.executable,
+                        "-E", "-s", "-B",
                         os.path.join(SCRIPTS_DIR, "tool_routing.py"),
                         "--goal-hint-worker",
                     ],
@@ -199,7 +200,7 @@ def main() -> int:
         return 0
     try:
         proc = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS_DIR, "tool_routing.py")],
+            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "tool_routing.py")],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

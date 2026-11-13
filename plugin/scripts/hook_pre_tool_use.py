@@ -46,7 +46,7 @@ def _run(script: str, payload: bytes) -> tuple[bytes, bool]:
     """
     try:
         proc = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS_DIR, script)],
+            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, script)],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

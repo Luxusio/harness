@@ -35,7 +35,7 @@ def _run(args: list[str], payload: bytes, *, deadline: float) -> bytes:
         return b""
     try:
         proc = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS_DIR, args[0]), *args[1:]],
+            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, args[0]), *args[1:]],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

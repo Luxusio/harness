@@ -6,6 +6,7 @@ import io
 import json
 import os
 import signal
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -301,7 +302,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         calls: list[str] = []
 
         def fake_run(*args, **kwargs):
-            calls.append(Path(args[0][1]).name)
+            calls.append(Path(args[0][4]).name)
             self.assertEqual(kwargs["timeout"], mod.CHILD_TIMEOUT_SECONDS)
             return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
 
@@ -685,11 +686,42 @@ def test_spawn_names_never_invoke_a_collector_or_gate(tmp_path):
         assert not output.getvalue()
 
 
+def test_generated_pretool_command_keeps_real_source_denial_with_poisoned_pythonhome(
+        tmp_path, selected_installer_python):
+    spec = importlib.util.spec_from_file_location("install_for_isolated_child", REPO_ROOT / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = install
+    spec.loader.exec_module(install)
+    command = install._codex_hooks_config(REPO_ROOT / "plugin")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assignment, *argv = shlex.split(command)
+    assert assignment == "PYTHONDONTWRITEBYTECODE=1"
+    repo = tmp_path / "consumer"
+    (repo / ".git").mkdir(parents=True)
+    manifest = repo / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("version: 5\ntype: library\nstrict_compliance_requires_delegation: true\n")
+    payload = json.dumps({"cwd": str(repo), "tool_name": "Write",
+                          "tool_input": {"file_path": str(repo / "source.py"), "content": "pass\n"}})
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", HARNESS_SESSION_ID="isolated-child-fixture")
+    env.pop("PYTHONHOME", None)
+    baseline = subprocess.run(argv, input=payload, cwd=repo, env=env,
+                              capture_output=True, text=True, timeout=10)
+    assert baseline.returncode == 0, baseline.stderr
+    decision = json.loads(baseline.stdout)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "No active WBS" in decision["permissionDecisionReason"]
+    env["PYTHONHOME"] = str(tmp_path / "nonexistent-python-home")
+    poisoned = subprocess.run(argv, input=payload, cwd=repo, env=env,
+                              capture_output=True, text=True, timeout=10)
+    assert poisoned.returncode == 0, poisoned.stderr
+    assert poisoned.stdout == baseline.stdout
+
+
 def test_session_start_only_runs_recovery_and_project_format_from_payload_cwd(tmp_path):
     mod = _load("hook_session_start")
     calls = []
     def run(args, **kwargs):
-        calls.append((Path(args[1]).name, kwargs["cwd"]))
+        calls.append((Path(args[4]).name, kwargs["cwd"]))
         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
     with mock.patch.object(mod.subprocess, "run", side_effect=run), \
          mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": str(tmp_path)}))):

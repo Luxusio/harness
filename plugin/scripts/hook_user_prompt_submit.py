@@ -76,7 +76,7 @@ def main() -> int:
         if remaining <= 0:
             raise subprocess.TimeoutExpired("prompt_memory.py", 0)
         proc = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS_DIR, "prompt_memory.py")],
+            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "prompt_memory.py")],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
