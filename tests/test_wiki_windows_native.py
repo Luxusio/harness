@@ -270,11 +270,17 @@ def test_native_permissive_acl_is_not_mistaken_for_private_mode(private):
     win.atomic_write(path, b"synthetic secret")
     _acl(path, "(A;;GR;;;WD)")
     assert win.safe_metadata_read(path, 100) == b"synthetic secret"
+    assert win.safe_metadata_snapshot(path, 100)[0] == b"synthetic secret"
+    assert win.metadata_tree_inventory(private, max_entries=1, max_bytes=100)["settings"]["size"] == len(b"synthetic secret")
     with pytest.raises(ValueError):
         win.safe_read(path, 100, private=True)
     _acl(path, "(A;;GW;;;WD)")
     with pytest.raises(ValueError):
         win.safe_metadata_read(path, 100)
+    with pytest.raises(ValueError):
+        win.safe_metadata_snapshot(path, 100)
+    with pytest.raises(ValueError):
+        win.metadata_tree_inventory(private, max_entries=1, max_bytes=100)
     # An ordinary project manifest deliberately has no confidentiality policy.
     assert win.safe_read(path, 100) == b"synthetic secret"
 
@@ -299,11 +305,19 @@ def test_native_hardlinks_and_unsafe_directory_acl_are_rejected(private):
     os.link(path, alias)
     with pytest.raises(ValueError):
         win.safe_read(path, 100, private=True)
+    with pytest.raises(ValueError):
+        win.safe_metadata_snapshot(path, 100)
+    with pytest.raises(ValueError):
+        win.metadata_tree_inventory(private, max_entries=2, max_bytes=100)
     assert not win.same_file(path, alias)
     alias.unlink()
     _acl(private, "(A;;GW;;;WD)")
     with pytest.raises(ValueError):
         win.safe_read(path, 100, private=True)
+    with pytest.raises(ValueError):
+        win.safe_metadata_snapshot(path, 100)
+    with pytest.raises(ValueError):
+        win.metadata_tree_inventory(private, max_entries=1, max_bytes=100)
     with pytest.raises(ValueError):
         win.atomic_write(path, b"changed")
     _acl(private, "")
@@ -330,6 +344,10 @@ def test_native_junction_components_are_rejected_without_symlink_privilege(priva
     try:
         with pytest.raises((ValueError, OSError)):
             win.safe_read(junction / "data", 100)
+        with pytest.raises((ValueError, OSError)):
+            win.safe_metadata_snapshot(junction / "data", 100)
+        with pytest.raises((ValueError, OSError)):
+            win.metadata_tree_inventory(private, max_entries=10, max_bytes=100)
         with pytest.raises((ValueError, OSError)):
             win.ensure_private_directory(junction / "new")
         assert not win.same_file(target / "data", junction / "data")
@@ -363,11 +381,107 @@ def test_native_foreign_generic_all_cannot_control_a_lock(private):
 
 def test_native_retained_directory_handle_prevents_component_substitution(private):
     moved = private.with_name(private.name + " moved")
+    target = private / "retained source.py"
+    win.atomic_write(target, b"original source")
+    rename = [sys.executable, "-I", "-B", "-c",
+              "import os,sys; os.rename(sys.argv[1],sys.argv[2])", str(private), str(moved)]
     with win.trusted_metadata_directory(private) as observed:
         assert observed == private
         with pytest.raises(OSError):
             private.rename(moved)
+        refused = subprocess.run(rename, capture_output=True, timeout=10)
+        assert refused.returncode != 0, "another process replaced a retained namespace component"
+        assert win.safe_metadata_read(target, 100) == b"original source"
     assert private.is_dir() and not moved.exists()
+    # Distinguish handle custody from a fixture whose DACL forbids rename even
+    # after the transaction. Both processes use this same user and path.
+    released = subprocess.run(rename, capture_output=True, timeout=10)
+    assert released.returncode == 0, released.stderr.decode("utf-8", errors="replace")
+    assert not private.exists() and (moved / target.name).read_bytes() == b"original source"
+    moved.rename(private)
+
+
+def test_native_metadata_snapshot_never_accepts_concurrent_path_replacement(private, monkeypatch):
+    path = private / "canonical source.py"
+    win.atomic_write(path, b"original source")
+    real_read = win._ReadFile
+    attempted = []
+
+    def publish_during_read(*args):
+        result = real_read(*args)
+        if result and not attempted:
+            attempted.append("attempted")
+            try:
+                win.atomic_write(path, b"replacement source")
+            except OSError:
+                attempted.append("blocked")
+            else:
+                attempted.append("published")
+        return result
+
+    monkeypatch.setattr(win, "_ReadFile", publish_during_read)
+    try:
+        data, identity = win.safe_metadata_snapshot(path, 100)
+    except ValueError:
+        assert attempted == ["attempted", "published"], "read failed without the controlled path replacement"
+    else:
+        assert attempted == ["attempted", "blocked"]
+        assert data == b"original source" and identity
+    monkeypatch.setattr(win, "_ReadFile", real_read)
+    # Any sharing denial must end when the bounded source read releases custody.
+    win.atomic_write(path, b"after read")
+    assert win.safe_metadata_read(path, 100) == b"after read"
+
+
+def test_native_metadata_snapshot_revalidates_access_after_read(private, monkeypatch):
+    path = private / "source with changing access.py"
+    win.atomic_write(path, b"canonical source")
+    real_read = win._ReadFile
+    changed = []
+
+    def change_access_during_read(*args):
+        result = real_read(*args)
+        if result and not changed:
+            _acl(path, "(A;;GW;;;WD)")
+            changed.append(True)
+        return result
+
+    monkeypatch.setattr(win, "_ReadFile", change_access_during_read)
+    try:
+        with pytest.raises(ValueError):
+            win.safe_metadata_snapshot(path, 100)
+        assert changed == [True], "fixture must change the source DACL during the real native read"
+    finally:
+        monkeypatch.setattr(win, "_ReadFile", real_read)
+        _acl(path, "")
+    assert win.safe_metadata_read(path, 100) == b"canonical source"
+
+
+def test_native_inventory_retains_namespace_until_all_hashing_finishes(private, monkeypatch):
+    child = win.ensure_private_directory(private / "nested")
+    raw = b"bounded source" * 10000
+    win.atomic_write(child / "source.py", raw)
+    moved = private.with_name(private.name + " moved inventory")
+    real_read = win._ReadFile
+    attempts = []
+
+    def rename_during_hash(*args):
+        result = real_read(*args)
+        if result and not attempts:
+            with pytest.raises(OSError):
+                private.rename(moved)
+            attempts.append("blocked")
+        return result
+
+    monkeypatch.setattr(win, "_ReadFile", rename_during_hash)
+    entries = win.metadata_tree_inventory(private, max_entries=2, max_bytes=len(raw))
+    assert attempts == ["blocked"]
+    assert entries["nested/source.py"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert entries["nested/source.py"]["size"] == len(raw)
+    assert private.is_dir() and not moved.exists()
+    private.rename(moved)
+    assert (moved / "nested/source.py").read_bytes() == raw
+    moved.rename(private)
 
 
 def test_native_source_identity_accepts_case_alias_and_rejects_other_file(private):

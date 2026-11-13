@@ -1,5 +1,6 @@
 """Real filesystem/process invariants; native-only details have their own suite."""
 from pathlib import Path
+import hashlib
 import os
 import subprocess
 import sys
@@ -16,6 +17,82 @@ except ModuleNotFoundError as error:
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugin/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import wiki_platform as platform
+
+
+def test_metadata_snapshot_binds_exact_bytes_and_file_identity(tmp_path):
+    folder = platform.ensure_private_directory(tmp_path / "source Unicode 한글")
+    target = folder / "source.py"
+    raw = "# 원문\nvalue = 1\n".encode("utf-8")
+    platform.atomic_write(target, raw)
+    data, identity = platform.safe_metadata_snapshot(target, len(raw))
+    assert data == raw and identity
+    assert platform.safe_metadata_snapshot(target, len(raw)) == (data, identity)
+    with pytest.raises(ValueError):
+        platform.safe_metadata_snapshot(target, len(raw) - 1)
+    with pytest.raises(ValueError):
+        platform.safe_metadata_snapshot(target, -1)
+    platform.atomic_write(target, raw)
+    replaced, new_identity = platform.safe_metadata_snapshot(target, len(raw))
+    assert replaced == raw and new_identity != identity
+
+
+def test_metadata_inventory_hashes_nested_files_and_enforces_aggregate_budgets(tmp_path):
+    root = platform.ensure_private_directory(tmp_path / "inventory 한글")
+    child = platform.ensure_private_directory(root / "nested")
+    platform.atomic_write(root / "empty", b"")
+    raw = "source 한글".encode("utf-8")
+    target = child / "source.py"
+    platform.atomic_write(target, raw)
+    entries = platform.metadata_tree_inventory(root, max_entries=3, max_bytes=len(raw))
+    assert set(entries) == {"empty", "nested", "nested/source.py"}
+    assert entries["nested"]["kind"] == "dir"
+    assert entries["nested"]["size"] == 0 and entries["nested"]["sha256"] == ""
+    assert entries["empty"]["kind"] == "file" and entries["empty"]["size"] == 0
+    assert entries["empty"]["sha256"] == hashlib.sha256(b"").hexdigest()
+    assert entries["nested/source.py"] == {
+        "kind": "file", "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "readonly": False,
+    }
+    with pytest.raises(ValueError):
+        platform.metadata_tree_inventory(root, max_entries=2, max_bytes=len(raw))
+    with pytest.raises(ValueError):
+        platform.metadata_tree_inventory(root, max_entries=3, max_bytes=len(raw) - 1)
+    target.chmod(0o400)
+    try:
+        assert platform.metadata_tree_inventory(root, max_entries=3, max_bytes=len(raw))["nested/source.py"]["readonly"]
+    finally:
+        target.chmod(0o600)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX link and foreign-writable mode fixtures; native ACL cases are separate")
+def test_metadata_snapshot_and_inventory_reject_unsafe_children(tmp_path):
+    root = platform.ensure_private_directory(tmp_path / "private inventory")
+    target = root / "source.py"
+    platform.atomic_write(target, b"source")
+    outside = platform.ensure_private_directory(tmp_path / "outside")
+    platform.atomic_write(outside / "other.py", b"unrelated")
+    hardlink = root / "hardlink"
+    os.link(target, hardlink)
+    with pytest.raises(ValueError):
+        platform.safe_metadata_snapshot(target, 100)
+    with pytest.raises(ValueError):
+        platform.metadata_tree_inventory(root, max_entries=10, max_bytes=100)
+    hardlink.unlink()
+    source_alias = root / "source-alias.py"
+    source_alias.symlink_to(target)
+    with pytest.raises((ValueError, OSError)):
+        platform.safe_metadata_snapshot(source_alias, 100)
+    source_alias.unlink()
+    alias = root / "alias"
+    alias.symlink_to(outside, target_is_directory=True)
+    with pytest.raises((ValueError, OSError)):
+        platform.metadata_tree_inventory(root, max_entries=10, max_bytes=100)
+    alias.unlink()
+    target.chmod(0o666)
+    with pytest.raises(ValueError):
+        platform.safe_metadata_snapshot(target, 100)
+    with pytest.raises(ValueError):
+        platform.metadata_tree_inventory(root, max_entries=10, max_bytes=100)
+    assert target.read_bytes() == b"source" and (outside / "other.py").read_bytes() == b"unrelated"
 
 
 def test_private_atomic_roundtrip_bounds_and_unicode(tmp_path):
