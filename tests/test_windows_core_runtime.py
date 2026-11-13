@@ -461,6 +461,89 @@ def test_native_public_migration_rejects_unsafe_root_control_lock(private, unsaf
             os.rmdir(lock)
 
 
+@pytest.mark.parametrize("retained_history", [False, True])
+def test_native_old_control_migration_retries_prepared_publication_without_retargeting(
+        private, monkeypatch, retained_history):
+    import _lib
+    import goal_migration
+    from test_harness_mcp_server import harness_server
+    from test_receipt_free_migration import historical_control, legacy_control
+
+    repo = _project(private)
+    opened = _public(repo, "open")
+    assert not opened.get("isError"), opened
+    assert not _public(repo, "plan", plan=_plan()).get("isError")
+    checked = _public(repo, "check", node_id="A")
+    assert not checked.get("isError"), checked
+    directory = repo / "doc/harness/wbs/WBS__native"
+    current = json.loads((directory / "WBS.control.json").read_bytes())
+    measured = {name: (directory / name).read_bytes() for name in ("PLAN.md", "WBS.json")}
+    opaque = directory / "RECEIPTS.jsonl"
+    opaque.write_bytes(b"opaque current-run history\x00\xff\n")
+    legacy = legacy_control(directory)
+    before = (directory / "WBS.control.json").read_bytes()
+    historical = repo / "doc/harness/archive/batch/WBS__historical"
+    historical_bytes = {}
+    if retained_history:
+        historical_control(historical)
+        (historical / "RECEIPTS.jsonl").write_bytes(b"opaque pre-UUIDv7 history\x00\xff\n")
+        historical_bytes = {name: (historical / name).read_bytes()
+                            for name in ("WBS.control.json", "RECEIPTS.jsonl")}
+    preview = _public(repo, "migrate")
+    assert not preview.get("isError"), preview
+    journal = repo / goal_migration.CONTROL_MANIFEST
+    assert not journal.exists()
+    interrupted = False
+
+    def interrupt(*args, **kwargs):
+        nonlocal interrupted
+        interrupted = True
+        raise OSError("fixture interruption before old-control conversion")
+
+    # Enter the canonical public handler in the real disposable checkout;
+    # only the publication fault is injected, with no authority/root bypass.
+    with monkeypatch.context() as fault:
+        fault.chdir(repo)
+        for key in ("HARNESS_RUNTIME", "HARNESS_SESSION_ID", "CLAUDE_SESSION_ID"):
+            fault.setenv(key, _environment()[key])
+        fault.setattr(goal_migration, "_control_write", interrupt)
+        result = harness_server.call_tool("wbs", dict(action="migrate", apply=True))
+    assert result.get("isError"), result
+    assert interrupted, result
+    prepared = journal.read_bytes()
+    assert json.loads(prepared)["status"] == "prepared"
+    assert (directory / "WBS.control.json").read_bytes() == before
+
+    # A prepared publication cannot be redirected to another run. Restore only
+    # this disposable fixture's exact admitted bytes before the genuine retry.
+    retargeted = dict(legacy, run_id=_lib.new_uuid7())
+    (directory / "WBS.control.json").write_bytes(json.dumps(retargeted).encode("utf-8"))
+    denied = _public(repo, "migrate", apply=True)
+    assert denied.get("isError"), denied
+    assert json.loads((directory / "WBS.control.json").read_bytes()) == retargeted
+    assert journal.read_bytes() == prepared
+    (directory / "WBS.control.json").write_bytes(before)
+
+    for apply in (False, True, True):
+        result = _public(repo, "migrate", apply=apply)
+        assert not result.get("isError"), result
+        report = result["structuredContent"]["wbs_control_migration"]
+        retained = report["retained_historical_controls"]
+        if retained_history:
+            assert retained == [dict(path=str(historical / "WBS.control.json"),
+                reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle")]
+            for name, raw in historical_bytes.items():
+                assert (historical / name).read_bytes() == raw
+        else:
+            assert retained == []
+        for name, raw in measured.items():
+            assert (directory / name).read_bytes() == raw
+        assert opaque.read_bytes() == b"opaque current-run history\x00\xff\n"
+    assert json.loads((directory / "WBS.control.json").read_bytes()) == current
+    assert json.loads(journal.read_bytes())["status"] == "complete"
+    assert not _public(repo, "context").get("isError")
+
+
 def _native_closed_batch(private, monkeypatch):
     from test_batch_state import Pool, complete
 
@@ -554,6 +637,79 @@ def test_native_batch_archive_pending_intent_survives_interruption_and_controls_
             assert (archive / name).read_bytes() == expected
         from test_batch_state import _git
         assert not _git("branch", "--list", branch, cwd=pool.repo)
+
+
+def test_native_partial_residue_uses_saved_archive_proof_and_preserves_unknown_bytes(
+        private, monkeypatch, capsys):
+    import batch_finish
+    import batch_harvest
+    from test_batch_state import _git, load_state_module
+
+    pool, worktree, _, directory, originals = _native_closed_batch(private, monkeypatch)
+    # Capture the actual checkout representation; Git's native conversion
+    # policy may make these working-tree bytes differ from the stored blob.
+    tracked = worktree / "README.md"
+    remainder = {tracked.relative_to(worktree): tracked.read_bytes(),
+                 (directory / "evidence.bin").relative_to(worktree): originals["evidence.bin"]}
+    owner = load_state_module()
+    real_finish = batch_finish.finish
+    saved_harvested = False
+
+    def interrupted(repo, args, checkpoint=None, **kwargs):
+        assert checkpoint is not None
+
+        def callback(stage, result):
+            nonlocal saved_harvested
+            saved = checkpoint(stage, result)
+            if stage == "harvested":
+                saved_harvested = True
+                raise RuntimeError("fixture interruption after durable harvested checkpoint")
+            return saved
+
+        return real_finish(repo, args, checkpoint=callback, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(batch_finish, "finish", interrupted)
+        assert owner.main(pool.argv("finish", "--slug", "a")[2:]) != 0
+    diagnostics = capsys.readouterr()
+    assert saved_harvested, diagnostics.out + diagnostics.err
+    checkpoint = json.loads(pool.state.read_bytes())["requests"][0]["checkpoint"]
+    assert checkpoint["stage"] == "harvested" and checkpoint["closed"] is True
+    assert checkpoint["run_id"] == json.loads(originals["WBS.control.json"])["run_id"]
+    assert "archive_publication" not in checkpoint
+    archive = Path(checkpoint["harvest"]["archived"])
+    archive_before = {name: (archive / name).read_bytes() for name in originals}
+    assert archive_before == originals
+    batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), directory.name,
+                                       checkpoint=checkpoint)
+    # Real Git removes both registration and administrative back-pointers.
+    # Recreate only captured, proven bytes to model interruption mid-removal.
+    _git("worktree", "remove", "--force", "--force", str(worktree), cwd=pool.repo)
+    assert not worktree.exists()
+    for relative, raw in remainder.items():
+        destination = worktree / relative
+        win.ensure_private_directory(destination.parent)
+        destination.write_bytes(raw)
+    assert batch_harvest.ordinary_unregistered(str(pool.repo), str(worktree))
+    precious = worktree / directory.relative_to(worktree) / "precious.bin"
+    precious.write_bytes(b"unique unpreserved user bytes\x00\xff")
+    saved_state = pool.state.read_bytes()
+    with pytest.raises(batch_harvest.HarvestError, match="unpreserved"):
+        batch_harvest.remove_ordinary_residue(str(pool.repo), str(worktree), directory.name,
+                                            checkpoint["integrated_tip"], checkpoint)
+    assert precious.read_bytes() == b"unique unpreserved user bytes\x00\xff"
+    for relative, raw in remainder.items():
+        assert (worktree / relative).read_bytes() == raw
+    assert pool.state.read_bytes() == saved_state
+    for name, raw in archive_before.items():
+        assert (archive / name).read_bytes() == raw
+    precious.unlink()
+    batch_harvest.remove_ordinary_residue(str(pool.repo), str(worktree), directory.name,
+                                        checkpoint["integrated_tip"], checkpoint)
+    assert not worktree.exists()
+    assert pool.state.read_bytes() == saved_state
+    for name, raw in archive_before.items():
+        assert (archive / name).read_bytes() == raw
 
 
 def test_native_batch_refuses_identical_archive_without_saved_publication_intent(private, monkeypatch, capsys):
@@ -976,8 +1132,13 @@ def test_native_bounded_stdin_backpressure_returns_and_cleans_writer_and_process
 
 
 def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(private, monkeypatch):
+    import verify_runner
+
     actual_git = shutil.which("git")
     assert actual_git and Path(actual_git).suffix.lower() == ".exe", "native Git fixture is required"
+    home = win.ensure_private_directory(private / "shadow lease home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     repo = _project(private)
     shadow = repo / "git.exe"
     # A known Python binary is a benign, observable substitute, never user code.
@@ -1001,6 +1162,54 @@ def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(p
                                       timeout=10, limit=4096)
     assert result["returncode"] == 0 and not result["error"], result
     assert result["output"] == expected.stdout, result
+    # The public scheduler resolves commands before handing an absolute path to
+    # _execute, so the already-tested process facade cannot repair its choice.
+    monkeypatch.setenv("PATH", env["PATH"])
+    monkeypatch.setenv("PYTHONHOME", env["PYTHONHOME"])
+    item = dict(job_id="path-git", outcome_id="A", kind="consumer", argv=["git", "--version"],
+                inputs=dict(source=["source.py"]), outputs=[], resources=[], requires=["executable:git"],
+                environment=["PATH", "PYTHONHOME", "HOME", "USERPROFILE", "SYSTEMROOT", "PYTHONDONTWRITEBYTECODE"])
+    scheduled = verify_runner.run_jobs(
+        [item], repo, wbs_id="WBS__shadow-fixture", run_id="shadow-fixture-run",
+        execution_generation="one", results_path=repo / "shadow-results.json", max_workers=1, timeout=20,
+    )
+    assert scheduled["status"] == "PASS", scheduled
+    record = scheduled["commands"][0]
+    assert record["returncode"] == 0 and not record["error"], record
+    assert record["output"].strip() == expected.stdout.decode("utf-8").strip(), record
+
+
+def test_native_retro_reads_real_utf8_git_commits_under_default_python_encoding(private, monkeypatch):
+    home = win.ensure_private_directory(private / "retro home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    repo = _project(private)
+    message = "Native 회고 소식 😀"
+    message_file = private / "commit-message.txt"
+    message_file.write_bytes((message + "\n").encode("utf-8"))
+    subprocess.run(["git", "add", "."], cwd=repo, env=_environment(),
+                   capture_output=True, check=True, timeout=10)
+    committed = subprocess.run(
+        ["git", "-c", "user.name=Native Fixture", "-c", "user.email=native@example.test",
+         "-c", "i18n.commitEncoding=UTF-8", "commit", "-q", "--file", str(message_file)],
+        cwd=repo, env=_environment(), capture_output=True, timeout=10,
+    )
+    assert committed.returncode == 0, committed.stderr
+    code = (
+        "import json,locale,sys; sys.path.insert(0,sys.argv[1]); import retro; "
+        "value=dict(section=retro._section_commits(sys.argv[2],1),"
+        "message=retro._git(['log','-1','--format=%s'],sys.argv[2]),"
+        "encoding=locale.getencoding(),utf8_mode=sys.flags.utf8_mode); "
+        "sys.stdout.buffer.write(json.dumps(value,ensure_ascii=False).encode('utf-8'))"
+    )
+    env = {key: value for key, value in _environment().items()
+           if key.upper() not in {"PYTHONUTF8", "PYTHONIOENCODING"}}
+    completed = subprocess.run([sys.executable, "-E", "-s", "-B", "-c", code, str(SCRIPTS), str(repo)],
+                               cwd=repo, env=env, capture_output=True, timeout=20)
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    actual = json.loads(completed.stdout.decode("utf-8"))
+    assert actual["message"] == message, actual
+    assert "**1** commits" in actual["section"], actual
 
 
 def test_native_scoped_verification_cancellation_reaps_nested_job(private):

@@ -558,7 +558,11 @@ def test_main_module_external_gitdir_remains_unsupported(tmp_path, monkeypatch):
     _git(module, "config", "core.worktree", str(module))
     foreign_store = tmp_path / "foreign-module-store"
     shutil.move(str(old_store), str(foreign_store))
-    (module / ".git").write_text(f"gitdir: {foreign_store}\n")
+    # Git for Windows marks this pointer hidden. Update the existing fixture
+    # in place so CREATE_ALWAYS does not reject or replace its file identity.
+    with (module / ".git").open("r+", encoding="utf-8") as pointer:
+        pointer.write(f"gitdir: {foreign_store}\n")
+        pointer.truncate()
     # This is a working repository, not an incidental broken Git binding.
     assert Path(_git(module, "rev-parse", "--show-toplevel")) == module
     assert _git(module, "status", "--porcelain") == ""
