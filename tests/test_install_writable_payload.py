@@ -27,6 +27,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SMOKE_SCRIPT = REPO_ROOT / "plugin" / "scripts" / "install_smoke.py"
 
 
+try:
+    import pytest
+except ModuleNotFoundError:
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
+
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 def _load_install_module():
     name = "harness_install_for_writable_payload_test"
     spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "install.py")

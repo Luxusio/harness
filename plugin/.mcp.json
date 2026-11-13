@@ -1,10 +1,20 @@
 {
   "mcpServers": {
     "harness": {
-      "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"],
+      "command": "mise",
+      "args": [
+        "exec",
+        "python@3.12",
+        "--",
+        "python",
+        "-I",
+        "-B",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py",
+        "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"
+      ],
       "env": {
-        "PYTHONDONTWRITEBYTECODE": "1"
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "MISE_AUTO_INSTALL": "0"
       }
     }
   }

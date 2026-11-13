@@ -25,12 +25,28 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from pathlib import Path
 
 import pytest
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
+
+
+@pytest.fixture
+def selected_installer_python(monkeypatch):
+    """Model selection explicitly for installer tests about other behavior.
+
+    Resolver/raw-launch tests do not use this fixture. This supplies only a
+    test interpreter; source ownership, publication, and runtime guards remain
+    real. Subprocess CLI fixtures must model their own mise provider.
+    """
+    monkeypatch.syspath_prepend(SCRIPTS_DIR)
+    import mise_python
+    selected = str(Path(sys.executable).absolute())
+    monkeypatch.setattr(mise_python, "select_python", lambda **kwargs: selected)
+    return selected
 
 # Two CPython builds that share a cache tag (here /usr/bin/python3 3.12.3 and
 # the mise/.venv 3.12.14; on 2026-09-09 two 3.12.13 builds) accept each

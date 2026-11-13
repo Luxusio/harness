@@ -14,6 +14,9 @@ except ModuleNotFoundError as error:
     raise SkipTest("pytest is required to collect this module") from error
 
 
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 @pytest.fixture
 def installer():
     spec = importlib.util.spec_from_file_location(

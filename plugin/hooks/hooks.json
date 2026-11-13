@@ -5,25 +5,25 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_session_start.py\" --claude-banner || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_session_start.py\" --claude-banner || true",
             "timeout": 5,
             "statusMessage": "harness ready"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verification_gap_check.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/verification_gap_check.py\" || true",
             "timeout": 5,
             "statusMessage": "Checking verification gaps"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/project_format_check.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/project_format_check.py\" || true",
             "timeout": 5,
             "statusMessage": "Checking Harness project format"
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/drift_warn.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/drift_warn.py\" || true",
             "timeout": 5,
             "statusMessage": "Checking installed plugin drift"
           }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prewrite_gate.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/prewrite_gate.py\" || true",
             "timeout": 10,
             "statusMessage": "Checking write gate"
           }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prompt_memory.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/prompt_memory.py\" || true",
             "timeout": 3,
             "statusMessage": "Injecting task context"
           }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tool_routing.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/tool_routing.py\" || true",
             "timeout": 3,
             "statusMessage": "Routing hint on bash failures"
           }
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hook_post_tool_use.py || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/hook_post_tool_use.py\" || true",
             "timeout": 10,
             "statusMessage": "Binding exact task focus"
           }
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/wiki_change_notice.py\" claude || true",
+            "command": "PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/wiki_change_notice.py\" claude || true",
             "timeout": 3
           }
         ]

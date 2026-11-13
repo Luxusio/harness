@@ -20,6 +20,15 @@ HOOKS_JSON = REPO / "plugin" / "hooks" / "hooks.json"
 sys.path.insert(0, str(SCRIPTS))
 
 
+try:
+    import pytest
+except ModuleNotFoundError:
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
+
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 def _load_install():
     """Import `install.py` by path; it is not an importable package member."""
     name = "harness_install_for_bytecode_test"
@@ -44,11 +53,14 @@ def test_hooks_never_write_bytecode_into_an_installed_tree():
         if isinstance(matcher, dict)
         for hook in matcher.get("hooks", [])
     ]
-    python_commands = [c for c in commands if "python3" in c]
+    python_commands = [c for c in commands if "/scripts/" in c and ".py" in c]
+    assert len(python_commands) == len(commands)
     assert python_commands, "no python hook commands found — the check would be vacuous"
 
     for command in python_commands:
         assert command.startswith("PYTHONDONTWRITEBYTECODE=1 "), command
+        assert " python -I -B " in command, command
+        assert "mise_python.py" in command, command
         # C-12 stays intact: this change must not cost the harness fail-safety.
         assert command.rstrip().endswith("|| true"), command
 

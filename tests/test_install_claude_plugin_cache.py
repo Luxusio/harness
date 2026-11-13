@@ -27,6 +27,15 @@ REFRESHED = '✔ Plugin "harness" updated from 2.3.0 to 2.3.0+h0badc0de for scop
 CURRENT = "✔ harness is already at the latest version (2.3.0+h0badc0de)."
 
 
+try:
+    import pytest
+except ModuleNotFoundError:
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
+
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 def _load_install_module():
     spec = importlib.util.spec_from_file_location("harness_install_cache", REPO_ROOT / "install.py")
     module = importlib.util.module_from_spec(spec)

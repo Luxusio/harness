@@ -16,6 +16,9 @@ except ModuleNotFoundError as error:
     raise SkipTest('pytest is required to collect this module') from error
 
 
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('install_content_cache', Path(__file__).resolve().parents[1] / 'install.py')

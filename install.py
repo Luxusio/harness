@@ -30,7 +30,7 @@ Per-runtime steps:
     5b. claude plugin update harness@harness — the mirror's plugin.json version
         carries a payload content hash (`<base>+h<sha8>`), so any payload change
         is a new version and refreshes the plugin cache Claude actually runs
-    6. claude mcp add harness ... -- python3 <installed plugin>/mcp/harness_server.py
+    6. claude mcp add harness ... -- <validated mise Python> <installed plugin>/mcp/harness_server.py
     7. Print verification command
 """
 from __future__ import annotations
@@ -71,12 +71,13 @@ _CODEX_RUNTIME_HOME: ContextVar[Path | None] = ContextVar("codex_runtime_home", 
 
 DEFAULT_CLAUDE_INSTALL_ROOT = Path.home() / ".claude" / "harness-dev"
 
+sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+from mise_python import select_python, MisePythonError
+
 
 def _python_cmd() -> str:
-    """Return a Python executable that bypasses cwd-sensitive shims."""
-    executable = Path(sys.executable)
-    # Resolving a venv symlink would discard that environment's hook dependencies.
-    return str(executable.absolute() if sys.prefix != sys.base_prefix else executable.resolve())
+    """Resolve the installed mise base Python independently of this caller."""
+    return select_python()
 
 
 NO_BYTECODE_ENV = "PYTHONDONTWRITEBYTECODE=1"
@@ -92,7 +93,7 @@ def _python_hook_cmd() -> str:
     Disable bytecode writing on every launcher so a cached interpreter-specific
     module cannot interfere with canonical source validation.
     """
-    return f"{NO_BYTECODE_ENV} {shlex.quote(_python_cmd())}"
+    return f"{NO_BYTECODE_ENV} {shlex.quote(_python_cmd())} -E -s -B"
 
 @dataclass
 class InstallResult:
@@ -563,17 +564,18 @@ def _run(cmd: list[str], dry: bool) -> tuple[int, str, str]:
 
 
 def _mcp_block(plugin_root: str) -> str:
+    quote = lambda value: json.dumps(str(value), ensure_ascii=False)
     return (
         "# Registers the harness MCP server with Codex. Same protocol both runtimes consume.\n"
         "[mcp_servers.harness]\n"
-        f'command = "{_python_cmd()}"\n'
-        f'args = ["{plugin_root}/mcp/harness_server.py"]\n'
+        f'command = {quote(_python_cmd())}\n'
+        f'args = ["-E", "-s", "-B", {quote(plugin_root + "/mcp/harness_server.py")}]\n'
         # PYTHONDONTWRITEBYTECODE is load-bearing, not tidiness: this server
         # imports `_lib` and `codex_hook_registration` from the installed scripts tree, which is
         # how four of the six caches were poisoned on 2026-09-16. This TOML
         # block is the registration Codex actually launches; the JSON
         # `_codex_mcp_config` is the sibling writer and carries the same key.
-        f'env = {{ HARNESS_PLUGIN_ROOT = "{plugin_root}", CLAUDE_PLUGIN_ROOT = "{plugin_root}", HARNESS_RUNTIME = "codex", PYTHONDONTWRITEBYTECODE = "1" }}\n'
+        f'env = {{ HARNESS_PLUGIN_ROOT = {quote(plugin_root)}, CLAUDE_PLUGIN_ROOT = {quote(plugin_root)}, HARNESS_RUNTIME = "codex", PYTHONDONTWRITEBYTECODE = "1" }}\n'
         "startup_timeout_sec = 10\n"
         "tool_timeout_sec = 60\n"
         "enabled = true\n"
@@ -923,7 +925,7 @@ def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple
         return False, [f"runtime smoke: {script} is missing"]
     try:
         proc = subprocess.run(
-            [_python_cmd(), str(script), "--plugin-root", str(plugin_root)],
+            [_python_cmd(), "-E", "-s", "-B", str(script), "--plugin-root", str(plugin_root)],
             capture_output=True, text=True, timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1036,6 +1038,7 @@ def _install_step(stage: str, steps: list[str], operation):
 
 
 def _build_codex_payload(target: Path, final_root: Path) -> None:
+    _python_cmd()
     _copytree_clean(PLUGIN_CODEX_ROOT, target)
     _copytree_clean(PLUGIN_ROOT / "scripts", target / "scripts")
     _copytree_clean(PLUGIN_ROOT / "mcp", target / "mcp")
@@ -1166,6 +1169,7 @@ def _write_codex_marketplace(install_root: Path, *, version: str | None = None) 
 
 
 def _build_codex_cache_payload(source_root: Path, target: Path, final_root: Path) -> None:
+    _python_cmd()
     _copytree_clean(source_root, target)
     (target / "hooks.json").write_text(
         json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"
@@ -1178,9 +1182,46 @@ def _build_codex_cache_payload(source_root: Path, target: Path, final_root: Path
 
 
 def _build_claude_payload(target: Path) -> None:
+    projection = _claude_runtime_projection()
     _copytree_clean(REPO_ROOT / ".claude-plugin", target / ".claude-plugin")
     _copytree_clean(PLUGIN_ROOT, target / "plugin", extra_ignores=(".git",))
+    for relative, content in projection.items():
+        (target / "plugin" / relative).write_text(content, encoding="utf-8")
     _stamp_claude_plugin_version(target / "plugin")
+
+
+def _claude_runtime_projection() -> dict[str, str]:
+    """Rewrite only the portable command slots owned by this installer."""
+    interpreter = _python_cmd()
+    result = {}
+    manifest_path = PLUGIN_ROOT / ".mcp.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        server = manifest["mcpServers"]["harness"]
+        if (server.get("command") != "mise" or server.get("args") != [
+                "exec", "python@3.12", "--", "python", "-I", "-B",
+                "${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py",
+                "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]):
+            raise ValueError("Unexpected Harness MCP template; preserve the current installation")
+        server["command"] = interpreter
+        server["args"] = ["-E", "-s", "-B", "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
+        result[".mcp.json"] = json.dumps(manifest, indent=2) + "\n"
+    hooks_path = PLUGIN_ROOT / "hooks/hooks.json"
+    if hooks_path.exists():
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+        prefix = ('PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B '
+                  '"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py" ')
+        for groups in hooks["hooks"].values():
+            for group in groups:
+                for hook in group.get("hooks", []):
+                    if hook.get("type") != "command":
+                        continue
+                    command = hook.get("command", "")
+                    if not command.startswith(prefix):
+                        raise ValueError("Unexpected Harness hook template; preserve the current installation")
+                    hook["command"] = _python_hook_cmd() + " " + command[len(prefix):]
+        result["hooks/hooks.json"] = json.dumps(hooks, indent=2) + "\n"
+    return result
 
 
 def _stamp_claude_plugin_version(plugin_root: Path) -> str:
@@ -1715,7 +1756,7 @@ def _codex_mcp_config(shared_plugin_root: Path) -> dict:
         "mcpServers": {
             "harness": {
                 "command": _python_cmd(),
-                "args": [str(plugin_root / "mcp" / "harness_server.py")],
+                "args": ["-E", "-s", "-B", str(plugin_root / "mcp" / "harness_server.py")],
                 "env": {
                     "HARNESS_PLUGIN_ROOT": str(plugin_root),
                     "CLAUDE_PLUGIN_ROOT": str(plugin_root),
@@ -1733,6 +1774,7 @@ def _codex_mcp_config(shared_plugin_root: Path) -> dict:
 
 def sync_claude_payload(install_root: Path | None = None) -> Path:
     """Copy the Claude plugin payload under ~/.claude and return plugin/ root."""
+    _python_cmd()
     target = install_root or Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
     _reject_real_install_root_under_test(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1749,6 +1791,7 @@ def sync_claude_payload(install_root: Path | None = None) -> Path:
 
 def sync_codex_payload(install_root: Path | None = None) -> Path:
     """Copy the Codex plugin source under ~/.codex and return its plugin root."""
+    _python_cmd()
     if install_root is None:
         install_root = _codex_install_root()
     _reject_real_install_root_under_test(install_root)
@@ -1826,6 +1869,7 @@ def _codex_plugin_version(source_root: Path) -> str:
 
 
 def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
+    _python_cmd()
     _reject_real_install_root_under_test(codex_home)
     version = _codex_plugin_version(source_root)
     target = (
@@ -1965,6 +2009,7 @@ def _install_codex(*, dry_run: bool, force: bool,
     steps: list[str] = []
     if not shutil.which("codex"):
         return InstallResult("codex", False, "codex CLI not found in PATH", steps)
+    _python_cmd()
     # Step 1: version check
     rc, out, err = _install_step("Codex version check", steps, lambda: _run(["codex", "--version"], dry_run))
     if dry_run:
@@ -2181,6 +2226,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     previous_selection = _claude_selection_identity() if not dry_run else None
     if not shutil.which("claude"):
         return InstallResult("claude", False, "claude CLI not found in PATH", steps)
+    _python_cmd()
     # Step 1: version
     rc, out, err = _run(["claude", "--version"], dry_run)
     if dry_run:
@@ -2331,7 +2377,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     # Step 4: MCP server registration
     installed_mcp_server = installed_plugin_root / "mcp" / "harness_server.py"
     if dry_run:
-        steps.append(f"would run: claude mcp add harness python3 -- {installed_mcp_server} "
+        steps.append(f"would run: claude mcp add harness -- {shlex.quote(_python_cmd())} -E -s -B {shlex.quote(str(installed_mcp_server))} "
                      f"(env: HARNESS_PLUGIN_ROOT={installed_plugin_root}, "
                      f"CLAUDE_PLUGIN_ROOT={installed_plugin_root}, "
                      "HARNESS_RUNTIME=claude, PYTHONDONTWRITEBYTECODE=1)")
@@ -2348,7 +2394,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
         "-e", "PYTHONDONTWRITEBYTECODE=1",
     ]
     _run(["claude", "mcp", "remove", "harness"], dry_run)
-    cmd = ["claude", "mcp", "add", "harness"] + env_args + ["--", "python3", str(installed_mcp_server)]
+    cmd = ["claude", "mcp", "add", "harness"] + env_args + ["--", _python_cmd(), "-E", "-s", "-B", str(installed_mcp_server)]
     rc, out, err = _run(cmd, dry_run)
     combined = (out + err).lower()
     if rc != 0 and "already" not in combined and "exists" not in combined:
@@ -2403,6 +2449,14 @@ def main() -> int:
         detail = f"; skipped: {', '.join(skipped)}" if skipped else ""
         print(f"ERROR: no supported runtime CLI found{detail}", file=sys.stderr)
         return 2
+
+    # Select before either worker can prune, chmod, copy, or register anything.
+    if any(shutil.which(name) for name, _ in tasks):
+        try:
+            _python_cmd()
+        except MisePythonError as error:
+            print("ERROR: " + str(error), file=sys.stderr)
+            return 1
 
     if args.verbose:
         print(f"harness install — repo root: {REPO_ROOT}")

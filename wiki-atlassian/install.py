@@ -20,9 +20,10 @@ HELPERS = ROOT.parent / 'plugin/scripts'
 sys.path.insert(0, str(HELPERS))
 from wiki_platform import (atomic_write, ensure_private_directory, file_lock, run_bounded,
                            safe_read, safe_metadata_read, trusted_metadata_directory)
+from mise_python import select_python
 
 PAYLOAD_DIRS = ('.claude-plugin', '.codex-plugin', 'skills', 'agents', 'scripts', 'wiki_atlassian')
-SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py')
+SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py', 'mise_python.py')
 VERSION = re.compile(r'0\.2\.0\+h[0-9a-f]{16}')
 LEGACY_SOURCE = re.compile(r'\./packages/(0\.1\.0\+h[0-9a-f]{16})/plugin')
 LEGACY_MAX_ENTRIES, LEGACY_MAX_BYTES = 1024, 128 * 1024 * 1024
@@ -105,18 +106,10 @@ def prepare(data_dir):
     data_dir = Path(data_dir)
     if not data_dir.is_absolute() or '..' in data_dir.parts:
         raise ValueError('Plugin data directory must be an absolute canonical path')
-    if sys.version_info < (3, 12):
-        raise ValueError('Python 3.12 or later is required')
-    try:
-        import yaml
-        if not hasattr(yaml, 'SafeLoader'):
-            raise ImportError()
-    except ImportError:
-        raise ValueError('Install PyYAML for the Python interpreter running this installer') from None
+    interpreter = select_python(require_yaml=True)
     parent = data_dir / 'marketplace/versions'
     ensure_private_directory(parent)
     files = _source_files()
-    interpreter = str(Path(sys.executable).absolute())
     digest = hashlib.sha256((interpreter + '\0' + str(parent) + '\0').encode('utf-8'))
     for name, content in sorted(files.items()):
         digest.update(name.encode('utf-8') + b'\0' + content + b'\0')
@@ -337,10 +330,11 @@ def main():
     parser.add_argument('--prepare-only', action='store_true')
     args = parser.parse_args()
     try:
-        payload = prepare(Path.home() / '.local/share/wiki-atlassian')
         runtimes = args.runtime or [name for name in ('codex', 'claude') if shutil.which(name)]
         if not runtimes and not args.prepare_only:
             raise ValueError('No supported host CLI found; use --prepare-only for a portable payload')
+        commands = {} if args.prepare_only else {runtime: _host_command(runtime) for runtime in runtimes}
+        payload = prepare(Path.home() / '.local/share/wiki-atlassian')
         failed = False
         with marketplace(payload) as source:
             if args.prepare_only:
@@ -348,7 +342,7 @@ def main():
                 return 0
             for runtime in runtimes:
                 try:
-                    command = _host_command(runtime)
+                    command = commands[runtime]
                     operations = [['plugin', 'marketplace', 'add', str(source)],
                                   ['plugin', 'add' if runtime == 'codex' else 'install', 'wiki-atlassian@knowledge-documents']]
                     if runtime == 'claude':

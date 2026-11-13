@@ -43,6 +43,9 @@ CODEX_PLUGIN_VERSION = json.loads(
 )["version"]
 
 
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 @pytest.fixture(autouse=True)
 def isolated_installer_home(tmp_path, monkeypatch):
     """Default install surfaces belong to this fixture, never the host user."""
@@ -61,11 +64,39 @@ def _load_install_module():
     return module
 
 
+def _model_mise_provider(env):
+    """Synthetic CLI regression provider; selected identity is not native proof."""
+    search = env.get("PATH", "")
+    if not any(shutil.which(host, path=search) for host in ("codex", "claude")):
+        return
+    first = Path(env["HOME"]) / ".test-mise-bin"
+    first.mkdir(parents=True, exist_ok=True)
+    env["PATH"] = str(first) + os.pathsep + search
+    version = ".".join(map(str, sys.version_info[:3]))
+    installation = Path(env["HOME"]) / ".local/share/mise/installs/python" / version
+    executable = installation / "bin/python"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    probe = dict(executable=str(executable), prefix=str(installation), base_prefix=str(installation), version=list(sys.version_info[:3]), yaml=True)
+    source = ("#!" + sys.executable + "\nimport os,sys,json\n"
+              + "if '-c' in sys.argv and 'result = dict(executable=' in sys.argv[sys.argv.index('-c')+1]:\n"
+              + " print(" + repr(json.dumps(probe)) + ")\n"
+              + "else: os.execv(" + repr(sys.executable) + ", [" + repr(sys.executable) + ",*sys.argv[1:]])\n")
+    executable.write_text(source)
+    executable.chmod(0o700)
+    mise = first / "mise"
+    inventory = json.dumps([dict(version=version, install_path=str(installation), installed=True)])
+    mise.write_text("#!/bin/sh\ncase \" $* \" in\n*' where '*) printf '%s\\n' " + shlex.quote(str(installation)) + ";;\n*' ls '*) printf '%s\\n' " + shlex.quote(inventory) + ";;\n*' which '*) printf '%s\\n' " + shlex.quote(str(executable)) + ";;\n*) exit 1;;\nesac\n")
+    mise.chmod(0o700)
+    env.pop("MISE_DATA_DIR", None)
+    env.pop("XDG_DATA_HOME", None)
+
+
 def _run(args: list[str], extra_path: str | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     if extra_path is not None:
         # Replace PATH so neither codex nor claude is discoverable
         env["PATH"] = extra_path
+    _model_mise_provider(env)
     return subprocess.run(
         [sys.executable, str(INSTALL_PY)] + args,
         capture_output=True, text=True, timeout=30, env=env,
@@ -82,6 +113,7 @@ def _run_with_env(args: list[str], env: dict[str, str]) -> subprocess.CompletedP
             action = 'if [ "$1" = "plugin" ] && [ "$2" = "update" ]; then printf \'%s\\n\' "$*" >> "$CLAUDE_LOG"; ' + shlex.quote(sys.executable) + ' -c ' + shlex.quote(publish) + '; exit $?; fi\n'
             content = fake_cli.read_text()
             fake_cli.write_text(content.replace("#!/bin/sh\n", "#!/bin/sh\n" + action, 1))
+    _model_mise_provider(merged)
     return subprocess.run(
         [sys.executable, str(INSTALL_PY)] + args,
         capture_output=True, text=True, timeout=180, env=merged,
@@ -885,7 +917,7 @@ def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
     assert mcp_path.is_file()
     mcp = json.loads(mcp_path.read_text())["mcpServers"]["harness"]
     assert mcp["command"] == module._python_cmd()
-    assert mcp["args"] == [str(plugin_root / "mcp" / "harness_server.py")]
+    assert mcp["args"] == ["-E", "-s", "-B", str(plugin_root / "mcp" / "harness_server.py")]
     assert mcp["env"]["HARNESS_PLUGIN_ROOT"] == str(plugin_root)
     assert str(REPO_ROOT) not in mcp_path.read_text()
 
@@ -1064,7 +1096,7 @@ def test_codex_mcp_config_uses_absolute_python_and_installed_plugin_root(tmp_pat
 
     assert mcp["command"] == module._python_cmd()
     assert Path(mcp["command"]).is_absolute()
-    assert mcp["args"] == [str(plugin_root.resolve() / "mcp" / "harness_server.py")]
+    assert mcp["args"] == ["-E", "-s", "-B", str(plugin_root.resolve() / "mcp" / "harness_server.py")]
     # Keep installed shared modules free from interpreter-specific caches.
     assert mcp["env"] == {
         "HARNESS_PLUGIN_ROOT": str(plugin_root.resolve()),
@@ -1143,7 +1175,7 @@ def test_emit_codex_config_rehomes_everything_to_installed_codex_root(tmp_path):
     assert parsed["marketplaces"]["harness"]["source"] == str(module.CODEX_INSTALL_ROOT)
     harness = parsed["mcp_servers"]["harness"]
     assert harness["command"] == module._python_cmd()
-    assert harness["args"] == [str(installed_plugin_root / "mcp" / "harness_server.py")]
+    assert harness["args"] == ["-E", "-s", "-B", str(installed_plugin_root / "mcp" / "harness_server.py")]
     assert harness["env"]["HARNESS_PLUGIN_ROOT"] == str(installed_plugin_root)
     assert harness["env"]["CLAUDE_PLUGIN_ROOT"] == str(installed_plugin_root)
     assert str(REPO_ROOT) not in json.dumps(parsed)
@@ -1222,7 +1254,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
     assert parsed["mcp_servers"]["chrome-devtools"]["command"] == "new-chrome"
     assert parsed["mcp_servers"]["x11-display"]["command"] == "new-x11"
     assert parsed["mcp_servers"]["harness"]["args"] == [
-        str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
+        "-E", "-s", "-B", str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
     ]
 
 
@@ -1306,7 +1338,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert parsed["plugins"]["harness@harness"]["enabled"] is True
     assert parsed["marketplaces"]["harness"]["source"] == str(codex_install_root)
     assert parsed["mcp_servers"]["harness"]["args"] == [
-        str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
+        "-E", "-s", "-B", str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
     ]
     assert parsed["hooks"]["state"]["harness@harness:hooks.json:pre_tool_use:0:0"][
         "trusted_hash"
@@ -1701,7 +1733,7 @@ def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
     assert f"plugin marketplace add {harness_dest}" in lines
     assert "plugin install harness@harness" in lines
     assert any(
-        line.endswith(f"-- python3 {harness_dest / 'plugin' / 'mcp' / 'harness_server.py'}")
+        line.endswith(f"-E -s -B {harness_dest / 'plugin' / 'mcp' / 'harness_server.py'}")
         for line in lines
     )
     assert (harness_dest / "plugin" / "mcp" / "harness_server.py").is_file()

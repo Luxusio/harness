@@ -18,6 +18,9 @@ except ModuleNotFoundError as error:
 from test_install_writable_source_comparison import _load_install_module
 
 
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 def test_claude_read_only_sources_are_writable_only_in_private_projection(tmp_path, monkeypatch):
     install = _load_install_module()
     source = tmp_path / "source"

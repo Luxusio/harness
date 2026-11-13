@@ -29,6 +29,9 @@ PLUGIN = ROOT / "wiki-atlassian"
 sys.path.insert(0, str(ROOT / 'plugin/scripts'))
 
 
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 @contextmanager
 def private_inbox(tmp_path):
     home = tmp_path / "private-home"; home.mkdir(mode=0o700)
@@ -176,7 +179,7 @@ def personal_payload(tmp_path):
     package = module.prepare(tmp_path / "payload-data") / "plugin"
     transport = json.loads((package / ".mcp.json").read_text())["mcpServers"]["atlassian"]
     assert transport["command"] == str(Path(sys.executable).absolute())
-    for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py"):
+    for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py", "mise_python.py"):
         assert (package / "scripts" / name).read_bytes() == (ROOT / "plugin/scripts" / name).read_bytes()
     return package, [transport["command"], *transport["args"]]
 
@@ -192,7 +195,7 @@ def test_private_payload_accepts_frozen_readonly_sources_without_modifying_them(
     for name in (".mcp.json", "PROVENANCE.md", "README.md", "pyproject.toml"):
         shutil.copyfile(PLUGIN / name, wiki / name)
     helpers = source / "plugin/scripts"; helpers.mkdir(parents=True)
-    for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py"):
+    for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py", "mise_python.py"):
         shutil.copyfile(ROOT / "plugin/scripts" / name, helpers / name)
     paths = [source, *source.rglob("*")]
     for path in paths:

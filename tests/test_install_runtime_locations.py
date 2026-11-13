@@ -9,6 +9,15 @@ import tomllib
 from pathlib import Path
 
 
+try:
+    import pytest
+except ModuleNotFoundError:
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
+
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 def _load():
     spec = importlib.util.spec_from_file_location("install_runtime_locations", Path(__file__).resolve().parents[1] / "install.py")
     module = importlib.util.module_from_spec(spec)

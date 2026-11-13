@@ -11,8 +11,8 @@
 enabled = true
 
 [mcp_servers.harness]
-command = "python3"
-args = ["/home/you/.codex/harness/plugins/harness/mcp/harness_server.py"]
+command = "/home/you/.local/share/mise/installs/python/3.12.15/bin/python3.12"
+args = ["-E", "-s", "-B", "/home/you/.codex/harness/plugins/harness/mcp/harness_server.py"]
 env = { HARNESS_PLUGIN_ROOT = "/home/you/.codex/harness/plugins/harness", CLAUDE_PLUGIN_ROOT = "/home/you/.codex/harness/plugins/harness", HARNESS_RUNTIME = "codex", PYTHONDONTWRITEBYTECODE = "1" }
 startup_timeout_sec = 10
 tool_timeout_sec = 60

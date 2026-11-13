@@ -195,6 +195,17 @@ def test_legacy_prepare_only_needs_no_host_cli(installer, monkeypatch, capsys):
     assert package.is_dir()
 
 
+@pytest.mark.parametrize('arguments', [[], ['--runtime', 'codex']])
+def test_missing_host_refuses_before_preparing_or_resolving_python(installer, monkeypatch, capsys, arguments):
+    module, _, _ = installer
+    monkeypatch.setattr(module.sys, 'argv', ['install.py', *arguments])
+    monkeypatch.setattr(module.shutil, 'which', lambda *a, **k: None)
+    monkeypatch.setattr(module, 'prepare', lambda *a: pytest.fail('missing host prepared a payload'))
+    monkeypatch.setattr(module, 'select_python', lambda **k: pytest.fail('missing host required mise'))
+    assert module.main() == 1
+    assert 'CLI' in capsys.readouterr().err
+
+
 def test_host_cli_failure_restores_legacy_selection(installer, monkeypatch, capsys):
     module, payload, _ = installer
     package, metadata, old = _legacy(installer)

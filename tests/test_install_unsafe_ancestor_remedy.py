@@ -23,6 +23,16 @@ HOME = Path("/home/someone")
 CHOWN = 'sudo chown "$(id -u):$(id -g)" {c} && chmod go-w {c}'
 
 
+try:
+    import pytest
+except ModuleNotFoundError:
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module")
+
+
+pytestmark = pytest.mark.usefixtures("selected_installer_python")
+
+
 def _load_install_module():
     spec = importlib.util.spec_from_file_location("harness_install_remedy", REPO_ROOT / "install.py")
     module = importlib.util.module_from_spec(spec)
@@ -32,6 +42,11 @@ def _load_install_module():
 
 
 install = _load_install_module()
+
+
+@pytest.fixture(autouse=True)
+def model_selected_runtime(selected_installer_python, monkeypatch):
+    monkeypatch.setattr(install, "select_python", lambda **kwargs: selected_installer_python)
 
 
 def _remedy(component, uid, *, final=False, current_uid=1001, mode=0o777):
