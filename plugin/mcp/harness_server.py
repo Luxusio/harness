@@ -275,7 +275,7 @@ def _atomic_write_text(path: str, text: str) -> None:
 
 def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
     script = SCRIPTS_DIR / "verify_runner.py"
-    cmd = [sys.executable, str(script), "--json"]
+    cmd = [sys.executable, "-E", "-s", "-B", str(script), "--json"]
     if parallel:
         cmd.append("--parallel")
     if max_workers:

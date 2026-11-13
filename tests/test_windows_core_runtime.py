@@ -1179,6 +1179,49 @@ def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(p
     assert record["output"].strip() == expected.stdout.decode("utf-8").strip(), record
 
 
+@pytest.mark.parametrize("channel", ["declared-pythonpath", "cwd-stdlib"])
+def test_native_public_runner_ignores_declared_python_startup_code_in_trusted_helpers(private, monkeypatch, channel):
+    import verify_runner
+
+    actual_git = shutil.which("git")
+    assert actual_git and Path(actual_git).suffix.lower() == ".exe", "native Git fixture is required"
+    home = win.ensure_private_directory(private / "startup lease home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    repo = _project(private)
+    marker = private / "untrusted startup executed"
+    if channel == "declared-pythonpath":
+        startup = win.ensure_private_directory(private / "declared Python path")
+        (startup / "sitecustomize.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_bytes(b'untrusted startup ran')\n", encoding="utf-8")
+        # The actual user command retains its declared environment; trusted
+        # Python helpers must independently isolate their interpreter startup.
+        monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(startup), str(SCRIPTS)]))
+    else:
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+        # -E/-s alone still expose cwd to a -c helper's stdlib imports.
+        (repo / "json.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_bytes(b'untrusted cwd json imported')\n"
+            "raise RuntimeError('fixture cwd stdlib canary imported')\n", encoding="utf-8")
+    argv = [actual_git, "--definitely-invalid-native-startup-fixture"]
+    baseline = subprocess.run(argv, cwd=repo, env=_environment(), capture_output=True, timeout=10)
+    assert baseline.returncode == 129 and not marker.exists(), baseline
+    item = dict(job_id="startup-git", outcome_id="A", kind="consumer", argv=argv,
+                inputs=dict(source=["source.py"]), outputs=[], resources=[], requires=["executable:git"],
+                environment=["PATH", "PYTHONPATH", "HOME", "USERPROFILE", "SYSTEMROOT", "PYTHONDONTWRITEBYTECODE"])
+    scheduled = verify_runner.run_jobs(
+        [item], repo, wbs_id="WBS__startup-fixture", run_id="startup-fixture-run",
+        execution_generation="one", results_path=repo / "startup-results.json", max_workers=1, timeout=20,
+    )
+    record = scheduled["commands"][0]
+    assert scheduled["status"] == "FAIL", scheduled
+    assert record["returncode"] == 129, record
+    assert "forged helper result" not in record["output"], record
+    assert not marker.exists(), f"trusted helper executed {channel} canary"
+
+
 def test_native_retro_reads_real_utf8_git_commits_under_default_python_encoding(private, monkeypatch):
     home = win.ensure_private_directory(private / "retro home")
     monkeypatch.setenv("HOME", str(home))

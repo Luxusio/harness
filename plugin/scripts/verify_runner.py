@@ -327,7 +327,7 @@ def _scoped_call(code, value, root, env, held=(), *, cancelled=None):
         # lifeline cancels execution without pretending inherited handles keep
         # a terminated process's byte-range locks alive.
         prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3]);import wbs\n"
-        argv = [sys.executable, "-B", "-c", prefix + code,
+        argv = [sys.executable, "-I", "-B", "-c", prefix + code,
                 str(Path(__file__).resolve().parent), json.dumps(value), str(root)]
         result = execute_bounded(argv, cwd=root, env=env, timeout=max(150, (value.get("timeout", 0) if isinstance(value, dict) else 0) + 30),
                                  limit=MAX_RESULT_BYTES, cancelled=cancelled.is_set if cancelled is not None else None)
@@ -337,7 +337,7 @@ def _scoped_call(code, value, root, env, held=(), *, cancelled=None):
     prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3]);import wbs;wbs._PARENT_LIFELINE=int(sys.argv[4])\n"
     reader, writer = os.pipe()
     try:
-        with subprocess.Popen([sys.executable, "-B", "-c", prefix + code,
+        with subprocess.Popen([sys.executable, "-I", "-B", "-c", prefix + code,
                                str(Path(__file__).resolve().parent), json.dumps(value), str(root), str(reader)],
                               cwd=str(root), env=env, pass_fds=(*held, reader),
                               start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:

@@ -110,7 +110,18 @@ def test_migrated_stopped_lead_finishes_without_losing_legacy_bytes(tmp_path, mo
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     assert (recovery / 'doc/harness/tasks/TASK__a/historical-review.bin').read_bytes() == before
     assert (recovery / 'doc/harness/tasks/TASK__a/PLAN.md').read_text() == '# Fixture task\n'
-    assert (recovery / 'doc/harness/archive/wbs-namespace-migration/original/doc/harness/tasks/TASK__a/TASK.json').is_file()
+    original_control = recovery / 'doc/harness/archive/wbs-namespace-migration/original/doc/harness/tasks/TASK__a/TASK.json'
+    if os.name == 'nt':
+        from wiki_platform import safe_metadata_snapshot
+        # The logical historical name can exceed MAX_PATH; read its genuine
+        # retained bytes through the same native-safe metadata boundary.
+        raw, _ = safe_metadata_snapshot(original_control, 16384)
+        expected = dict(run_id=RUN, execution_mode='standard',
+                        required_lenses=['review-code', 'qa-cli'], closed=True)
+        assert json.loads(raw) == expected
+        assert raw == json.dumps(expected).encode('utf-8')
+    else:
+        assert original_control.is_file()
     assert (recovery / 'doc/harness/checkpoints/TASK__a.md').read_text().startswith('# Checkpoint — TASK__a\n')
     if frozen:
         source = recovery / 'doc/harness/tasks/TASK__a/work/verification-targets/0123456789abcdef/source/source.rs'
