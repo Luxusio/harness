@@ -926,13 +926,14 @@ def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
     assert "hook_session_start.py" in hooks_path.read_text()
     assert "hook_session_start.sh" not in hooks_path.read_text()
-    assert str(plugin_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
+    cache_root = module._codex_cached_plugin_root(module._codex_home_for_config(None), plugin_root)
+    assert str(cache_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
     mcp_path = tmp_path / "codex" / "harness" / "plugins" / "harness" / ".mcp.json"
     assert mcp_path.is_file()
     mcp = json.loads(mcp_path.read_text())["mcpServers"]["harness"]
     assert mcp["command"] == module._python_cmd()
-    assert mcp["args"] == ["-E", "-s", "-B", str(plugin_root / "mcp" / "harness_server.py")]
-    assert mcp["env"]["HARNESS_PLUGIN_ROOT"] == str(plugin_root)
+    assert mcp["args"] == ["-E", "-s", "-B", str(cache_root / "mcp" / "harness_server.py")]
+    assert mcp["env"]["HARNESS_PLUGIN_ROOT"] == str(cache_root)
     assert str(REPO_ROOT) not in mcp_path.read_text()
 
 
@@ -980,7 +981,8 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     mcp_text = (codex_plugin / ".mcp.json").read_text()
     assert str(REPO_ROOT) not in hooks_text
     assert str(REPO_ROOT) not in mcp_text
-    assert str(plugin_root) in mcp_text
+    cache_root = module._codex_cached_plugin_root(module._codex_home_for_config(None), plugin_root)
+    assert str(cache_root) in mcp_text
     assert (codex_plugin / "scripts" / "hook_pre_tool_use.py").is_file()
     for removed in (
         "goal_queue_runner.py",
@@ -1944,6 +1946,7 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
     monkeypatch.setattr(sys, "argv", [str(INSTALL_PY), "--config-path", str(cfg), "--force"])
 
+    _model_codex_listing(fake_codex, cfg)
     rc = module.main()
     captured = capsys.readouterr()
 

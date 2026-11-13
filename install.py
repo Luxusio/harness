@@ -1037,7 +1037,7 @@ def _install_step(stage: str, steps: list[str], operation):
         raise _InstallStepError(stage, steps, exc) from exc
 
 
-def _build_codex_payload(target: Path, final_root: Path) -> None:
+def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | None = None) -> None:
     _python_cmd()
     _copytree_clean(PLUGIN_CODEX_ROOT, target)
     _copytree_clean(PLUGIN_ROOT / "scripts", target / "scripts")
@@ -1101,6 +1101,11 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
         if not (target / rel).is_file():
             raise RuntimeError(f"incomplete Codex payload: {rel}")
     _stamp_codex_plugin_version(target)
+    # Native plugin add copies these bytes into the versioned cache. Bind the
+    # mirror before that copy so activation cannot replace cache-root commands.
+    cache_root = _codex_cached_plugin_root(codex_home or _codex_home_for_config(None), target)
+    for name, render in (("hooks.json", _codex_hooks_config), (".mcp.json", _codex_mcp_config)):
+        (target / name).write_text(json.dumps(render(cache_root), indent=2) + "\n")
 
 
 def _stamp_codex_plugin_version(plugin_root: Path) -> str:
@@ -1108,6 +1113,7 @@ def _stamp_codex_plugin_version(plugin_root: Path) -> str:
     # before changing the copied manifest. Runtime paths are not artifact identity.
     version = _codex_plugin_version(PLUGIN_CODEX_ROOT)
     digest = hashlib.sha256()
+    digest.update(b"codex-versioned-cache-command-binding-v1\0")
     for path in sorted(plugin_root.rglob("*")):
         relative = path.relative_to(plugin_root).as_posix()
         if path.is_dir():
@@ -1985,7 +1991,7 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
         with tempfile.TemporaryDirectory(prefix="harness-codex-compare-") as tmp:
             expected_root = Path(tmp)
             expected_mirror = expected_root / "mirror"
-            _build_codex_payload(expected_mirror, mirror)
+            _build_codex_payload(expected_mirror, mirror, codex_home=codex_home)
             version = _codex_plugin_version(expected_mirror)
             cache = codex_home / "plugins" / "cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME / version
             state, reason = _compare_payload_trees(expected_mirror, mirror)

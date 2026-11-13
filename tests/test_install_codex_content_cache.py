@@ -40,15 +40,15 @@ def inventory(root):
 @pytest.mark.parametrize('failure', [None, 'add', 'list', 'old-selection', 'duplicate', 'cache-bytes'])
 def test_native_selection_refreshes_old_version_and_verifies_actual_cache(project, tmp_path, monkeypatch, failure):
     install, _ = project
-    mirror = install.sync_codex_payload(tmp_path / 'mirror')
     home = tmp_path / 'runtime'
+    monkeypatch.setenv('CODEX_HOME', str(home))
+    mirror = install.sync_codex_payload(tmp_path / 'mirror')
     cache = install.install_codex_plugin_cache(mirror, home)
     version = install._codex_plugin_version(mirror)
     prior = cache.parent / 'retained-old'
     prior.mkdir()
     (prior / 'retained').write_text('old session payload')
-    if failure == 'cache-bytes':
-        (cache / '.mcp.json').write_text('{}\n')
+    before = inventory(cache)
     selected, calls = 'old-version', []
     def run(argv, dry):
         nonlocal selected
@@ -57,6 +57,11 @@ def test_native_selection_refreshes_old_version_and_verifies_actual_cache(projec
         if argv == ['codex', 'plugin', 'add', 'harness@harness']:
             if failure == 'add':
                 return 7, '', 'untrusted output must not be echoed'
+            # Actual native add overwrites the cache with its mirror, even
+            # when the installer already published this version's directory.
+            shutil.copytree(mirror, cache, dirs_exist_ok=True)
+            if failure == 'cache-bytes':
+                (cache / '.mcp.json').write_text('{}\n')
             if failure != 'old-selection':
                 selected = version
             return 0, '', ''
@@ -74,6 +79,13 @@ def test_native_selection_refreshes_old_version_and_verifies_actual_cache(projec
     assert (prior / 'retained').read_text() == 'old session payload'
     if failure is None:
         assert selected == version and str(version) in reason
+        assert inventory(cache) == before
+        for relative in ('.mcp.json', 'hooks.json'):
+            assert (mirror / relative).read_bytes() == (cache / relative).read_bytes()
+        command = json.loads((cache / '.mcp.json').read_text())['mcpServers']['harness']
+        assert command['args'][-1] == str(cache / 'mcp/harness_server.py')
+        assert install._select_codex_plugin(mirror, home)[0]
+        assert inventory(cache) == before
 
 
 def test_identity_is_root_independent_repeatable_and_source_preserving(project, tmp_path):
