@@ -31,6 +31,13 @@ codex exec "list harness mcp tools" < /dev/null
 
 If step 2 fails, re-run with `python3 install.py --codex-only --force`. The installer copies `plugin/` plus the Codex plugin manifest tree into `~/.codex/harness/`, writes `.agents/plugins/marketplace.json`, writes plugin-local `hooks.json`, then writes only plugin enablement and MCP registration into `~/.codex/config.toml`.
 
+Installed cache versions combine an ordered generation with the payload hash.
+Unchanged reruns reuse the current version; changed payloads receive a higher
+generation while prior session paths remain present. The installer verifies
+Codex's native selection without invoking the host command that prunes old
+versions. A `local` or unrecognized cache directory is preserved and refused
+until its selection conflict is resolved.
+
 ## Capability routing — read before opening a WBS
 
 QA and review routing uses tools available in the actual session. When browser

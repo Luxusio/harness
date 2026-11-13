@@ -21,6 +21,7 @@ pytestmark = pytest.mark.usefixtures("selected_installer_python")
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'runtime'))
     spec = importlib.util.spec_from_file_location('install_content_cache', Path(__file__).resolve().parents[1] / 'install.py')
     install = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = install
@@ -37,34 +38,26 @@ def inventory(root):
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
 
-@pytest.mark.parametrize('failure', [None, 'add', 'list', 'old-selection', 'duplicate', 'cache-bytes'])
-def test_native_selection_refreshes_old_version_and_verifies_actual_cache(project, tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize('failure', [None, 'list', 'old-selection', 'duplicate', 'cache-bytes'])
+def test_native_selection_verifies_published_version_and_preserves_prior_cache(project, tmp_path, monkeypatch, failure):
     install, _ = project
     home = tmp_path / 'runtime'
     monkeypatch.setenv('CODEX_HOME', str(home))
     mirror = install.sync_codex_payload(tmp_path / 'mirror')
     cache = install.install_codex_plugin_cache(mirror, home)
     version = install._codex_plugin_version(mirror)
-    prior = cache.parent / 'retained-old'
+    prior = cache.parent / '2.3.0+codex.20260929030000.hffffffffffffffff'
     prior.mkdir()
+    (prior / '.codex-plugin').mkdir()
+    (prior / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=prior.name)))
     (prior / 'retained').write_text('old session payload')
     before = inventory(cache)
-    selected, calls = 'old-version', []
+    if failure == 'cache-bytes':
+        (cache / '.mcp.json').write_text('{}\n')
+    selected, calls = ('old-version' if failure == 'old-selection' else version), []
     def run(argv, dry):
-        nonlocal selected
         assert not dry
         calls.append(argv)
-        if argv == ['codex', 'plugin', 'add', 'harness@harness']:
-            if failure == 'add':
-                return 7, '', 'untrusted output must not be echoed'
-            # Actual native add overwrites the cache with its mirror, even
-            # when the installer already published this version's directory.
-            shutil.copytree(mirror, cache, dirs_exist_ok=True)
-            if failure == 'cache-bytes':
-                (cache / '.mcp.json').write_text('{}\n')
-            if failure != 'old-selection':
-                selected = version
-            return 0, '', ''
         assert argv == ['codex', 'plugin', 'list', '--json', '--marketplace', 'harness']
         if failure == 'list':
             return 8, '', 'untrusted output must not be echoed'
@@ -74,7 +67,7 @@ def test_native_selection_refreshes_old_version_and_verifies_actual_cache(projec
     monkeypatch.setattr(install, '_run', run)
     ok, reason = install._select_codex_plugin(mirror, home)
     assert ok == (failure is None), reason
-    assert calls[0] == ['codex', 'plugin', 'add', 'harness@harness']
+    assert calls[0] == ['codex', 'plugin', 'list', '--json', '--marketplace', 'harness']
     assert 'untrusted output' not in reason
     assert (prior / 'retained').read_text() == 'old session payload'
     if failure is None:
@@ -101,6 +94,67 @@ def test_identity_is_root_independent_repeatable_and_source_preserving(project, 
     assert manifest.read_bytes() == original and manifest.stat().st_mode == mode
     marketplace = json.loads((tmp_path / 'one/.agents/plugins/marketplace.json').read_text())
     assert marketplace['plugins'][0]['version'] == version
+
+
+def test_native_generations_increase_for_changes_and_rollback_but_reuse_equal_reruns(project, tmp_path):
+    install, source = project
+    root, home = tmp_path / 'mirror', tmp_path / 'runtime'
+    changed = source / 'plugin/scripts/_lib.py'
+    original = changed.read_bytes()
+    versions, snapshots = [], {}
+    for content in (original, original + b'\n# changed artifact\n', original):
+        changed.write_bytes(content)
+        mirror = install.sync_codex_payload(root)
+        cache = install.install_codex_plugin_cache(mirror, home)
+        versions.append(cache.name)
+        snapshots[cache] = inventory(cache)
+    assert versions[0] < versions[1] < versions[2]
+    assert versions[0].rsplit('.h', 1)[1] == versions[2].rsplit('.h', 1)[1]
+    mirror = install.sync_codex_payload(root)
+    assert install.install_codex_plugin_cache(mirror, home).name == versions[2]
+    assert all(inventory(cache) == snapshot for cache, snapshot in snapshots.items())
+
+
+@pytest.mark.parametrize('shadow', ['local', 'unknown-native-version', 'mismatched-manifest', 'missing-manifest', 'symlink'])
+def test_native_shadow_or_unsafe_cache_refuses_without_changing_existing_paths(project, tmp_path, shadow):
+    install, _ = project
+    root, home = tmp_path / 'mirror', tmp_path / 'runtime'
+    mirror = install.sync_codex_payload(root)
+    current = install.install_codex_plugin_cache(mirror, home)
+    before = inventory(current)
+    name = '2.3.0' if shadow in {'mismatched-manifest', 'missing-manifest'} else shadow
+    entry = current.parent / name
+    if shadow == 'symlink':
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        entry.symlink_to(outside, target_is_directory=True)
+    else:
+        entry.mkdir()
+        (entry / 'retained').write_text('existing session data')
+        if shadow == 'mismatched-manifest':
+            (entry / '.codex-plugin').mkdir()
+            (entry / '.codex-plugin/plugin.json').write_text('{"name":"harness","version":"0.0.0"}')
+    with pytest.raises(RuntimeError, match='Codex cache'):
+        install.sync_codex_payload(root)
+    assert os.path.lexists(entry) and inventory(current) == before
+    if shadow != 'symlink':
+        assert (entry / 'retained').read_text() == 'existing session data'
+
+
+def test_competing_artifact_allocation_refuses_then_reruns_above_published_generation(project, tmp_path):
+    install, source = project
+    home = tmp_path / 'runtime'
+    first = install.sync_codex_payload(tmp_path / 'first')
+    with (source / 'plugin/scripts/_lib.py').open('a') as stream:
+        stream.write('\n# competing artifact\n')
+    second = install.sync_codex_payload(tmp_path / 'second')
+    published = install.install_codex_plugin_cache(first, home)
+    before = inventory(published)
+    with pytest.raises(RuntimeError, match='generation changed'):
+        install.install_codex_plugin_cache(second, home)
+    retry = install.sync_codex_payload(tmp_path / 'second')
+    newer = install.install_codex_plugin_cache(retry, home)
+    assert newer.name > published.name and inventory(published) == before
 
 
 @pytest.mark.parametrize('relative', ['plugin/scripts/_lib.py', 'plugin-codex/skills/run/SKILL.md', 'plugin/skills/plan/intake.md'])

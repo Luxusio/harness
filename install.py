@@ -1100,7 +1100,7 @@ def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | N
     ):
         if not (target / rel).is_file():
             raise RuntimeError(f"incomplete Codex payload: {rel}")
-    _stamp_codex_plugin_version(target)
+    _stamp_codex_plugin_version(target, codex_home=codex_home)
     # Native plugin add copies these bytes into the versioned cache. Bind the
     # mirror before that copy so activation cannot replace cache-root commands.
     cache_root = _codex_cached_plugin_root(codex_home or _codex_home_for_config(None), target)
@@ -1108,7 +1108,46 @@ def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | N
         (target / name).write_text(json.dumps(render(cache_root), indent=2) + "\n")
 
 
-def _stamp_codex_plugin_version(plugin_root: Path) -> str:
+_CODEX_GENERATION = re.compile(r"harness\.g([0-9]{20})\.h([0-9a-f]{16})")
+_CODEX_LEGACY = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-codex|\+codex\.[0-9]{14}(?:\.h[0-9a-f]{16})?)?")
+
+
+def _codex_cache_generations(codex_home: Path) -> dict[int, tuple[str, str]]:
+    """Read ordering authority from guarded existing cache directories only."""
+    from wiki_platform import safe_read
+    parent = codex_home / "plugins/cache/harness/harness"
+    state, inventory, reason = _tree_inventory(parent)
+    if state == PAYLOAD_ERROR:
+        raise RuntimeError("Codex cache inventory refused: " + reason)
+    result = {}
+    for name in sorted(path[:-1] for path, item in inventory.items()
+                       if item[0] == "dir" and path.count("/") == 1):
+        if name.startswith(".cache-staging-"):
+            continue
+        generation = _CODEX_GENERATION.fullmatch(name)
+        if name == "local" or not (generation or _CODEX_LEGACY.fullmatch(name)):
+            raise RuntimeError("Codex cache contains an unsupported native selection; preserve it and inspect before installing")
+        relative = name + "/.codex-plugin/plugin.json"
+        if relative not in inventory:
+            raise RuntimeError("Codex cache manifest is unavailable; preserve existing versions and inspect")
+        try:
+            metadata = safe_read(parent / relative, 65536)
+            manifest = json.loads(metadata)
+        except (OSError, ValueError, TypeError, RuntimeError):
+            raise RuntimeError("Codex cache manifest is unavailable; preserve existing versions and inspect") from None
+        if hashlib.sha256(metadata).hexdigest() != inventory[relative][2]:
+            raise RuntimeError("Codex cache manifest changed during inspection")
+        if not isinstance(manifest, dict) or manifest.get("name") != CODEX_PLUGIN_NAME or manifest.get("version") != name:
+            raise RuntimeError("Codex cache manifest does not match its native version directory")
+        if generation:
+            number = int(generation[1])
+            if not number or number in result:
+                raise RuntimeError("Codex cache contains conflicting native generations")
+            result[number] = (name, generation[2])
+    return result
+
+
+def _stamp_codex_plugin_version(plugin_root: Path, *, codex_home: Path | None = None) -> str:
     # Hash the effective projection, including generated configuration semantics,
     # before changing the copied manifest. Runtime paths are not artifact identity.
     version = _codex_plugin_version(PLUGIN_CODEX_ROOT)
@@ -1131,7 +1170,15 @@ def _stamp_codex_plugin_version(plugin_root: Path) -> str:
         digest.update(data + b"\0")
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["version"] = version + ".h" + digest.hexdigest()[:16]
+    artifact = digest.hexdigest()[:16]
+    generations = _codex_cache_generations(codex_home or _codex_home_for_config(None))
+    latest = max(generations, default=0)
+    if latest and generations[latest][1] == artifact:
+        manifest["version"] = generations[latest][0]
+    else:
+        if latest >= 10**20 - 1:
+            raise RuntimeError("Codex cache generation limit reached; preserve existing versions")
+        manifest["version"] = f"harness.g{latest + 1:020d}.h{artifact}"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     return _codex_plugin_version(plugin_root)
 
@@ -1798,6 +1845,7 @@ def sync_claude_payload(install_root: Path | None = None) -> Path:
 def sync_codex_payload(install_root: Path | None = None) -> Path:
     """Copy the Codex plugin source under ~/.codex and return its plugin root."""
     _python_cmd()
+    _codex_cache_generations(_codex_home_for_config(None))
     if install_root is None:
         install_root = _codex_install_root()
     _reject_real_install_root_under_test(install_root)
@@ -1860,12 +1908,9 @@ def _codex_cached_plugin_root(codex_home: Path, source_plugin_root: Path) -> Pat
 
 
 def _select_codex_plugin(source_root: Path, codex_home: Path) -> tuple[bool, str]:
-    """Refresh native selection and verify the cache that version identifies."""
+    """Verify native directory selection without a pruning host installation."""
     try:
         version = _codex_plugin_version(source_root)
-        rc, _, _ = _run(["codex", "plugin", "add", CODEX_PLUGIN_ID], False)
-        if rc:
-            return False, f"codex plugin add {CODEX_PLUGIN_ID} failed (exit {rc})"
         rc, out, _ = _run(["codex", "plugin", "list", "--json", "--marketplace", CODEX_PLUGIN_MARKETPLACE], False)
         if rc:
             return False, f"codex plugin list failed (exit {rc}); plugin selection could not be verified"
@@ -1923,29 +1968,37 @@ def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
         / version
     )
     target.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cache-staging-"))
+    # Allocation is rechecked under the existing cache publication lock. A
+    # competing different artifact must rerun rather than share a generation.
+    import fcntl
+    fd = os.open(target.parent / ".publish.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    staged = None
     try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+            raise PermissionError("unsafe Codex cache publication lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cache-staging-"))
         _build_codex_cache_payload(source_root, staged, target)
-        # Only serialize publication into this marketplace's cache. Do not
-        # replace an existing identity, even for --force or concurrent installs.
-        import fcntl
-        fd = os.open(target.parent / ".publish.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        exists = os.path.lexists(target)
+        if exists:
+            state, reason = _compare_payload_trees(staged, target)
+            if state != PAYLOAD_SYNCHRONIZED:
+                raise RuntimeError(f"Codex cache identity mismatch at {target}: {reason}; stop sessions using this cache and move this exact directory aside before retrying")
+        generations = _codex_cache_generations(codex_home)
+        latest = max(generations, default=0)
+        generation = _CODEX_GENERATION.fullmatch(version)
+        if (not generation or int(generation[1]) != latest + (not exists)
+                or exists and generations[latest][0] != version):
+            raise RuntimeError("Codex cache generation changed; preserve existing versions and rerun installation")
+        if not exists:
+            os.rename(staged, target)
+    finally:
         try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o022:
-                raise PermissionError("unsafe Codex cache publication lock")
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            if os.path.lexists(target):
-                state, reason = _compare_payload_trees(staged, target)
-                if state != PAYLOAD_SYNCHRONIZED:
-                    raise RuntimeError(f"Codex cache identity mismatch at {target}: {reason}; stop sessions using this cache and move this exact directory aside before retrying")
-            else:
-                os.rename(staged, target)
+            if staged is not None and staged.exists():
+                shutil.rmtree(staged)
         finally:
             os.close(fd)
-    finally:
-        if staged.exists():
-            shutil.rmtree(staged)
     # Keep prior version directories intact. Already-running Codex sessions
     # retain the absolute hook commands from the cache version they loaded;
     # deleting that directory mid-session breaks SessionStart and
@@ -2123,7 +2176,7 @@ def _install_codex(*, dry_run: bool, force: bool,
                 if not selected_ok:
                     return InstallResult("codex", False, selected_message, steps)
             else:
-                steps.append(f"would run: codex plugin add {CODEX_PLUGIN_ID} and verify selected cache")
+                steps.append("would verify the native selected Codex plugin cache")
             # Same reason as install_claude: the default run is the harness's own
             # delivery path, so the probe belongs on the skip branch as well.
             # The cache entry is the tree Codex loads; when it is absent there
@@ -2207,7 +2260,7 @@ def _install_codex(*, dry_run: bool, force: bool,
     # [marketplaces.harness] entry Codex writes.
     if dry_run:
         steps.append(f"would run: codex plugin marketplace add {_codex_install_root()}")
-        steps.append(f"would run: codex plugin add {CODEX_PLUGIN_ID} and verify selected cache")
+        steps.append("would verify the native selected Codex plugin cache")
         steps.append("would run: codex features enable plugin_hooks")
 
     # Remove any stale source before the TOML merge. The merge writes the

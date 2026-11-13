@@ -26,7 +26,8 @@ def load(relative, name):
 
 
 @pytest.fixture
-def installer(monkeypatch):
+def installer(monkeypatch, tmp_path):
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex'))
     module = load("install.py", "mise_projection_installer")
     monkeypatch.setattr(module, "select_python", lambda **kwargs: "/managed mise/python/3.12.15/bin/python")
     return module

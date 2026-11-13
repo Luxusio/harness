@@ -409,8 +409,10 @@ def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
     cache = module.install_codex_plugin_cache(mirror, codex_home)
     assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
 
-    old_cache = cache.parent / "older-version"
+    old_cache = cache.parent / "2.3.0+codex.20260929030000.hffffffffffffffff"
     old_cache.mkdir()
+    (old_cache / '.codex-plugin').mkdir()
+    (old_cache / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=old_cache.name)))
     (old_cache / "left-for-live-session").write_text("old\n")
     assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
 
@@ -1132,10 +1134,12 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     stale_suffix = codex_home / "plugins" / "cache" / "harness" / "harness" / "2.3.0-codex"
     stale_suffix.mkdir(parents=True)
     (stale_suffix / "stale.txt").write_text("old")
+    (stale_suffix / '.codex-plugin').mkdir()
+    (stale_suffix / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=stale_suffix.name)))
 
     cached = module.install_codex_plugin_cache(source_root, codex_home)
 
-    assert re.fullmatch(re.escape(CODEX_PLUGIN_VERSION) + r"\.h[0-9a-f]{16}", cached.name)
+    assert re.fullmatch(r"harness\.g[0-9]{20}\.h[0-9a-f]{16}", cached.name)
     assert cached == codex_home / "plugins" / "cache" / "harness" / "harness" / module._codex_plugin_version(source_root)
     assert (stale_suffix / "stale.txt").read_text() == "old"
     assert (cached / "hooks.json").is_file()
@@ -1583,18 +1587,20 @@ def test_codex_plugin_cache_preserves_prior_versions_for_running_sessions(tmp_pa
     module.sync_codex_payload(install_root)
     codex_home = tmp_path / "codex-home"
     cache_parent = codex_home / "plugins" / "cache" / "harness" / "harness"
-    for version in ["2.2.0", "2.3.0-codex", "local"]:
+    for version in ["2.2.0", "2.3.0-codex"]:
         stale = cache_parent / version
         stale.mkdir(parents=True)
         (stale / "stale.txt").write_text("old")
+        (stale / '.codex-plugin').mkdir()
+        (stale / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=version)))
 
     cached = module.install_codex_plugin_cache(install_root / "plugins" / "harness", codex_home)
 
     assert cached == cache_parent / module._codex_plugin_version(install_root / "plugins" / "harness")
     assert sorted(path.name for path in cache_parent.iterdir() if path.is_dir()) == sorted(
-        ["2.2.0", "2.3.0-codex", "local", cached.name]
+        ["2.2.0", "2.3.0-codex", cached.name]
     )
-    for version in ["2.2.0", "2.3.0-codex", "local"]:
+    for version in ["2.2.0", "2.3.0-codex"]:
         assert (cache_parent / version / "stale.txt").read_text() == "old"
 
 
@@ -1647,6 +1653,8 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
     stale = tmp_path / "codex-home" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
     stale.mkdir(parents=True)
     (stale / "stale.txt").write_text("old")
+    (stale / '.codex-plugin').mkdir()
+    (stale / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=stale.name)))
 
     cached = module.install_codex_plugin_cache(source_root, tmp_path / "codex-home")
 
