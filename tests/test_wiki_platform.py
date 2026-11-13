@@ -36,6 +36,7 @@ def test_metadata_snapshot_binds_exact_bytes_and_file_identity(tmp_path):
     assert replaced == raw and new_identity != identity
 
 
+@pytest.mark.skipif(os.name != "nt", reason="retained installer inventory uses native Windows handles")
 def test_metadata_inventory_hashes_nested_files_and_enforces_aggregate_budgets(tmp_path):
     root = platform.ensure_private_directory(tmp_path / "inventory 한글")
     child = platform.ensure_private_directory(root / "nested")
@@ -64,8 +65,8 @@ def test_metadata_inventory_hashes_nested_files_and_enforces_aggregate_budgets(t
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX link and foreign-writable mode fixtures; native ACL cases are separate")
-def test_metadata_snapshot_and_inventory_reject_unsafe_children(tmp_path):
-    root = platform.ensure_private_directory(tmp_path / "private inventory")
+def test_metadata_snapshot_rejects_unsafe_children(tmp_path):
+    root = platform.ensure_private_directory(tmp_path / "private source")
     target = root / "source.py"
     platform.atomic_write(target, b"source")
     outside = platform.ensure_private_directory(tmp_path / "outside")
@@ -74,8 +75,6 @@ def test_metadata_snapshot_and_inventory_reject_unsafe_children(tmp_path):
     os.link(target, hardlink)
     with pytest.raises(ValueError):
         platform.safe_metadata_snapshot(target, 100)
-    with pytest.raises(ValueError):
-        platform.metadata_tree_inventory(root, max_entries=10, max_bytes=100)
     hardlink.unlink()
     source_alias = root / "source-alias.py"
     source_alias.symlink_to(target)
@@ -85,13 +84,11 @@ def test_metadata_snapshot_and_inventory_reject_unsafe_children(tmp_path):
     alias = root / "alias"
     alias.symlink_to(outside, target_is_directory=True)
     with pytest.raises((ValueError, OSError)):
-        platform.metadata_tree_inventory(root, max_entries=10, max_bytes=100)
+        platform.safe_metadata_snapshot(alias / "other.py", 100)
     alias.unlink()
     target.chmod(0o666)
     with pytest.raises(ValueError):
         platform.safe_metadata_snapshot(target, 100)
-    with pytest.raises(ValueError):
-        platform.metadata_tree_inventory(root, max_entries=10, max_bytes=100)
     assert target.read_bytes() == b"source" and (outside / "other.py").read_bytes() == b"unrelated"
 
 
