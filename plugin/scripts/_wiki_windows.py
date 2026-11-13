@@ -56,6 +56,14 @@ class ACL(C.Structure):
                 ("count", W.WORD), ("reserved2", W.WORD)]
 
 
+class SID_AND_ATTRIBUTES(C.Structure):
+    _fields_ = [("sid", P), ("attributes", DWORD)]
+
+
+class TOKEN_GROUPS(C.Structure):
+    _fields_ = [("count", DWORD), ("groups", SID_AND_ATTRIBUTES * 1)]
+
+
 class ACE_HEADER(C.Structure):
     _fields_ = [("kind", W.BYTE), ("flags", W.BYTE), ("size", W.WORD)]
 
@@ -133,16 +141,21 @@ def _sid_text(sid):
         _LocalFree(C.cast(text, P))
 
 
+def _token_information(token, kind):
+    size = DWORD()
+    _GetTokenInformation(token, kind, None, 0, C.byref(size))
+    if not size.value or size.value > 65536:
+        raise ValueError("Current Windows account identity unavailable")
+    data = C.create_string_buffer(size.value)
+    _check(_GetTokenInformation(token, kind, data, size, C.byref(size)))
+    return data
+
+
 def _user_sid():
     token = HANDLE()
     _check(_OpenProcessToken(_GetCurrentProcess(), 8, C.byref(token)))
     try:
-        size = DWORD()
-        _GetTokenInformation(token, 1, None, 0, C.byref(size))
-        if not size.value or size.value > 65536:
-            raise ValueError("Current Windows account identity unavailable")
-        data = C.create_string_buffer(size.value)
-        _check(_GetTokenInformation(token, 1, data, size, C.byref(size)))
+        data = _token_information(token, 1)
         return _sid_text(C.cast(data, C.POINTER(P))[0])
     finally:
         _close(token)
@@ -154,6 +167,45 @@ TRUSTED_SIDS = frozenset((USER_SID, "S-1-5-18", "S-1-5-32-544"))
 ANCESTOR_TRUSTED_SIDS = TRUSTED_SIDS | {
     "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
 }
+
+
+def _default_owner_state():
+    token = HANDLE()
+    _check(_OpenProcessToken(_GetCurrentProcess(), 8, C.byref(token)))
+    try:
+        owner = _token_information(token, 4)  # TOKEN_OWNER
+        owner_sid = _sid_text(C.cast(owner, C.POINTER(P))[0])
+        groups = _token_information(token, 2)  # TOKEN_GROUPS
+        count = DWORD.from_buffer(groups).value
+        offset, stride = TOKEN_GROUPS.groups.offset, C.sizeof(SID_AND_ATTRIBUTES)
+        if count and offset + count * stride > len(groups):
+            raise ValueError("Invalid Windows owner group information")
+        values = []
+        for index in range(count):
+            group = SID_AND_ATTRIBUTES.from_buffer(groups, offset + index * stride)
+            values.append((_sid_text(group.sid), group.attributes))
+        return owner_sid, tuple(values)
+    finally:
+        _close(token)
+
+
+def _current_default_owner(owner_sid):
+    """Recognize the elevated process's actual native creator ownership.
+
+    CPython 0700 directories can be owned by the token's default Administrators
+    group. That group is already trusted by the private DACL policy, but it is
+    an owner only when the current token actually selects and enables it as an
+    owner group. Other default groups, SYSTEM and foreign users gain no trust.
+    """
+    if owner_sid != "S-1-5-32-544":
+        return False
+    default, groups = _default_owner_state()
+    return default == owner_sid and any(
+        sid == owner_sid and flags & 0x0C == 0x0C and not flags & 0x10
+        for sid, flags in groups
+    )
+
+
 # Directory ancestors need integrity, not confidentiality.  Adding an unrelated
 # child is harmless; replacing a retained component, changing its DACL, or
 # turning it into a reparse point is not.  Leaf metadata also protects contents.
@@ -171,7 +223,8 @@ def _security(handle, policy):
         if not owner.value or not dacl.value:
             raise ValueError("A verified Windows owner and explicit access list are required")
         owner_sid = _sid_text(owner)
-        if owner_sid not in (ANCESTOR_TRUSTED_SIDS if policy == "ancestor" else (USER_SID,)):
+        if not (owner_sid in ANCESTOR_TRUSTED_SIDS if policy == "ancestor" else
+                owner_sid == USER_SID or _current_default_owner(owner_sid)):
             raise ValueError("Windows path has an untrusted owner")
         header = C.cast(dacl, C.POINTER(ACL)).contents
         if header.size < C.sizeof(ACL):
