@@ -92,6 +92,10 @@ def pytest_generate_tests(metafunc):
         "store_kind": ["alternates", "shallow", "promisor", "replace"],
         "drift": ["dirty", "untracked", "ignored", "detached", "gitfile", "branch"],
         "reconcile_drift": ["dirty", "wrong-ref", "wrong-tip", "foreign-module"],
+        "conversion_boolean": [("true", "true"), ("yes", "true"), ("ON", "true"), ("1", "true"),
+                               ("false", "false"), ("no", "false"), ("off", "false"), ("0", "false"),
+                               ("", "false"), (None, "true"), ("input", "input")],
+        "invalid_conversion_key": ["core.autocrlf", "core.eol"],
     }
     for name, values in cases.items():
         if name in metafunc.fixturenames:
@@ -850,3 +854,100 @@ def test_preexisting_annotated_tag_survives_independent_clone_and_normal_disposa
         peer = source_gitdir / "objects" / obj.relative_to(private / "objects")
         if obj.is_file() and peer.is_file():
             assert (obj.stat().st_dev, obj.stat().st_ino) != (peer.stat().st_dev, peer.stat().st_ino)
+
+
+def _conversion_fixture(tmp_path, monkeypatch):
+    """Fresh policy fixtures only; never alter retained Native diagnostic repos."""
+    home = tmp_path / "conversion-home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    for key in list(os.environ):
+        if key.upper().startswith("GIT_"):
+            monkeypatch.delenv(key, raising=False)
+    _git(tmp_path, "config", "--global", "core.autocrlf", "true")
+    _git(tmp_path, "config", "--global", "core.eol", "crlf")
+    return _helper(), _repo(tmp_path / "conversion-source"), home
+
+
+def _conversion_flags(policy):
+    return [arg for key, value in policy.items() for arg in ("-c", key + "=" + value)]
+
+
+def _isolated_conversion_git(root, *args, policy=None):
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_TERMINAL_PROMPT="0")
+    result = subprocess.run(
+        ["git", "--no-optional-locks", *_conversion_flags(policy or {}),
+         "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull, *args],
+        cwd=root, env=env, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_conversion_policy_preserves_crlf_cleanliness_and_detects_real_content_changes(tmp_path, monkeypatch):
+    helper, source, home = _conversion_fixture(tmp_path, monkeypatch)
+    clone = tmp_path / "ordinary-crlf-clone"
+    _git(tmp_path, "clone", "--template=", "--no-local", "--no-hardlinks", str(source), str(clone))
+    assert (clone / "file.txt").read_bytes() == b"initial\r\n"
+    assert _isolated_conversion_git(clone, "show", "HEAD:file.txt") == b"initial\n"
+    assert b"file.txt" in _isolated_conversion_git(clone, "status", "--porcelain")
+    before = {path: path.read_bytes() for path in
+              (source / ".git/config", clone / ".git/config", home / ".gitconfig")}
+    policy = helper._conversion_policy(clone)
+    assert policy == {"core.autocrlf": "true", "core.eol": "crlf"}
+    assert _isolated_conversion_git(clone, "status", "--porcelain", policy=policy) == b""
+    (clone / "file.txt").write_bytes(b"real content change\r\n")
+    assert b"file.txt" in _isolated_conversion_git(clone, "status", "--porcelain", policy=policy)
+    assert {path: path.read_bytes() for path in before} == before
+    assert _isolated_conversion_git(clone, "show", "HEAD:file.txt") == b"initial\n"
+
+
+def test_conversion_policy_uses_selected_source_for_clone_when_outer_repository_differs(tmp_path, monkeypatch):
+    helper, source, home = _conversion_fixture(tmp_path, monkeypatch)
+    outer = _repo(tmp_path / "outer-repository")
+    _git(outer, "config", "core.autocrlf", "false")
+    _git(outer, "config", "core.eol", "lf")
+    source_policy = helper._conversion_policy(source)
+    outer_policy = helper._conversion_policy(outer)
+    assert source_policy == {"core.autocrlf": "true", "core.eol": "crlf"}
+    assert outer_policy == {"core.autocrlf": "false", "core.eol": "lf"}
+    before = {path: path.read_bytes() for path in
+              (source / ".git/config", outer / ".git/config", home / ".gitconfig")}
+    clone = tmp_path / "selected-source-clone"
+    clone_config = [arg for key, value in source_policy.items() for arg in ("--config", key + "=" + value)]
+    _git(outer, *_conversion_flags(outer_policy), *_conversion_flags(source_policy),
+         "clone", "--template=", "--no-local", "--no-hardlinks", *clone_config, str(source), str(clone))
+    assert (clone / "file.txt").read_bytes() == b"initial\r\n"
+    assert _git(clone, "config", "--local", "--get", "core.autocrlf") == "true"
+    assert _git(clone, "config", "--local", "--get", "core.eol") == "crlf"
+    assert _isolated_conversion_git(clone, "status", "--porcelain") == b""
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_conversion_policy_honors_git_boolean_aliases_implicit_and_empty_values(
+        tmp_path, monkeypatch, conversion_boolean):
+    helper, source, home = _conversion_fixture(tmp_path, monkeypatch)
+    raw, expected = conversion_boolean
+    if raw is None:
+        with (source / ".git/config").open("a", encoding="utf-8") as stream:
+            stream.write("\n[core]\n\tautocrlf\n")
+    else:
+        _git(source, "config", "core.autocrlf", raw)
+    before = {path: path.read_bytes() for path in (source / ".git/config", home / ".gitconfig")}
+    assert helper._conversion_policy(source)["core.autocrlf"] == expected
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_conversion_policy_refuses_invalid_values_without_rewriting_config(
+        tmp_path, monkeypatch, invalid_conversion_key):
+    import pytest
+
+    helper, source, home = _conversion_fixture(tmp_path, monkeypatch)
+    _git(source, "config", invalid_conversion_key, "unrecognized-setting")
+    before = {path: path.read_bytes() for path in (source / ".git/config", home / ".gitconfig")}
+    with pytest.raises(helper.SubmoduleError, match="conversion policy"):
+        helper._conversion_policy(source)
+    assert {path: path.read_bytes() for path in before} == before

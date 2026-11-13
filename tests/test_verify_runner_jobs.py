@@ -382,24 +382,27 @@ def test_cross_process_named_leases_skip_waiters_and_release(tmp_path, ownership
             proc.communicate()
 
 
-def test_output_leases_conflict_only_at_ancestor_or_same_leaf(tmp_path):
+def test_output_leases_conflict_only_at_ancestor_or_same_leaf(tmp_path, monkeypatch):
+    home = tmp_path / "private-lease-home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     first, second, shared = {}, {}, {}
     runner._path_leases(first, tmp_path / "build" / "a", True)
     runner._path_leases(second, tmp_path / "build" / "b", True)
     runner._path_leases(shared, tmp_path / "build", True)
     held = runner._lease(first)
+    assert held is not None
     try:
         independent = runner._lease(second)
         assert independent is not None
-        for fd in independent:
-            os.close(fd)
+        runner._close_leases(independent)
         assert runner._lease(shared) is None
         reader = {}
         runner._path_leases(reader, tmp_path / "build" / "a", False)
         assert runner._lease(reader) is None
     finally:
-        for fd in held:
-            os.close(fd)
+        runner._close_leases(held)
 
 
 def test_scoped_toolchain_probe_and_malformed_success_are_not_false_reuse(tmp_path, monkeypatch):
@@ -530,9 +533,13 @@ def test_closed_parent_lifeline_refuses_command_before_spawn(tmp_path, monkeypat
         os.close(reader)
 
 
-def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path):
+def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path, monkeypatch):
     from contextlib import ExitStack
 
+    home = tmp_path / "private-lease-home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
         server.listen(2)
@@ -933,7 +940,8 @@ def test_retained_failure_reserves_task_and_run_provenance_before_execution(tmp_
     assert path.read_bytes() == original
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason='root bypasses file read permissions')
+@pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0,
+                    reason='requires non-root POSIX file read permissions')
 def test_unreadable_result_preserves_failure_without_execution(tmp_path):
     item = job(tmp_path, 'check', "print('authentic failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])

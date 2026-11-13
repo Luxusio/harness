@@ -50,10 +50,10 @@ PROTECTED = (
     f"{TASKS}/.active",
     "doc/harness/goals/current.json",
 )
-# README.md is an ordinary file, src/app.py a gated source file the full gate
-# would deny here (an invalid open WBS exists), plugin/CLAUDE.md a
-# workflow-control file the full gate would deny without MAINTENANCE. The
-# protected-only fallback allows all three.
+# README.md is a known narrative role requiring an active WBS. The full gate
+# would also deny src/app.py here (an invalid open WBS exists), and would deny
+# workflow-control plugin/CLAUDE.md without MAINTENANCE. The protected-only
+# fallback still allows all three; large ordinary payloads use unrelated.bin.
 UNPROTECTED = ("README.md", "src/app.py", "plugin/CLAUDE.md")
 
 
@@ -264,7 +264,7 @@ class GateReadsWholePayload(_TmpRepoCase):
         self.assertIn("rule=C-05-protected-artifact", reason)
 
     def test_big_write_to_an_ordinary_file_stays_allowed(self):
-        (decision, _reason), size = _run_script(GATE, _write(self.repo, "README.md"), self.repo)
+        (decision, _reason), size = _run_script(GATE, _write(self.repo, "unrelated.bin"), self.repo)
         self.assertGreater(size, DEFAULT_CAP)
         self.assertIsNone(decision)
 
@@ -283,7 +283,7 @@ class CodexWrapperPassesWholePayload(_TmpRepoCase):
     def test_big_apply_patch_through_wrapper_is_denied(self):
         for rel in (f"{TASKS}/WBS__x/WBS.control.json", f"{TASKS}/WBS__x/PLAN.md"):
             with self.subTest(rel=rel):
-                payload = _patch(self.repo, ["README.md", rel])
+                payload = _patch(self.repo, ["unrelated.bin", rel])
                 (decision, reason), size = _run_script(WRAPPER, payload, self.repo)
                 self.assertGreater(size, 2 * BIG)
                 self.assertEqual(decision, "deny")
@@ -292,7 +292,7 @@ class CodexWrapperPassesWholePayload(_TmpRepoCase):
 
     def test_big_apply_patch_to_ordinary_file_stays_allowed(self):
         (decision, _reason), _size = _run_script(
-            WRAPPER, _patch(self.repo, ["README.md"]), self.repo,
+            WRAPPER, _patch(self.repo, ["unrelated.bin"]), self.repo,
         )
         self.assertIsNone(decision)
 

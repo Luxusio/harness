@@ -13,6 +13,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "plugin/scripts"))
 SPEC = importlib.util.spec_from_file_location(
     "wbs_control_lib", ROOT / "plugin/scripts/_lib.py"
 )
@@ -72,13 +73,21 @@ def test_wbs_control_exact_four_field_schema_fails_closed(tmp_path):
         {**valid, "run_id": "a" * 32},
         {**valid, "closed": "true"},
         {**valid, "closed": 1},
-        {**valid, "required_lenses": ["review-security", "qa-cli"]},
-        {**valid, "required_lenses": ["review-code"]},
+        {**valid, "required_lenses": None},
+        {**valid, "required_lenses": "review-code"},
+        {**valid, "required_lenses": ["qa-cli", "review-code"]},
         {**valid, "required_lenses": ["review-code", "qa-cli", "qa-cli"]},
         {**valid, "required_lenses": ["review-code", "qa-unknown"]},
     ):
         (task / "WBS.control.json").write_text(json.dumps(mutation) + "\n", encoding="utf-8")
         assert lib.read_wbs_control(task) == {}
+
+    # Role declarations are schema data shared by development and document work.
+    # Purpose-specific minimums are enforced when the declarations are consumed.
+    for lenses in (["review-security", "qa-cli"], ["review-code"], [], ["review-document"]):
+        declared = dict(valid, required_lenses=lenses)
+        (task / "WBS.control.json").write_text(json.dumps(declared) + "\n", encoding="utf-8")
+        assert lib.read_wbs_control(task) == declared
 
     (task / "WBS.control.json").write_text(json.dumps(valid) + "\n", encoding="utf-8")
     assert lib.read_wbs_control(task) == valid
@@ -121,10 +130,24 @@ def test_wbs_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp_
     ]
     assert lib._required_qa_lenses(explicit_task) == ["qa-api", "qa-browser"]
 
+    minimal_task = _task(tmp_path / "minimal-development")
+    minimal_control = dict(lib.read_wbs_control(minimal_task), required_lenses=["review-security", "qa-cli"])
+    (minimal_task / "WBS.control.json").write_text(json.dumps(minimal_control) + "\n", encoding="utf-8")
+    assert lib.read_wbs_control(minimal_task) == minimal_control
+    assert lib.required_review_lenses(minimal_task) == ["review-code", "review-security"]
+    assert lib._required_qa_lenses(minimal_task) == ["qa-cli"]
+
+    minimal_control["required_lenses"] = ["review-code"]
+    (minimal_task / "WBS.control.json").write_text(json.dumps(minimal_control) + "\n", encoding="utf-8")
+    assert lib.read_wbs_control(minimal_task) == minimal_control
+    assert lib.required_review_lenses(minimal_task) == ["review-code"]
+    assert lib._required_qa_lenses(minimal_task) == ["qa-cli"]
+
     malformed_task = _task(tmp_path / "malformed")
     (malformed_task / "WBS.control.json").write_text("not json", encoding="utf-8")
-    assert lib.required_review_lenses(malformed_task) == []
-    assert lib._required_qa_lenses(malformed_task) == []
+    assert lib.read_wbs_control(malformed_task) == {}
+    assert lib.required_review_lenses(malformed_task) == ["review-code"]
+    assert lib._required_qa_lenses(malformed_task) == ["qa-cli"]
 
 def test_control_writer_rejects_forged_first_module_and_rebinding():
     import pytest

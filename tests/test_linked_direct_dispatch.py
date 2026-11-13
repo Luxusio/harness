@@ -139,3 +139,91 @@ def test_stdio_linked_invalid_prepare_preserves_controls(tmp_path, extra):
     before = controls(directory)
     assert public(cwd, tree, 'dispatch', **extra).get('isError')
     assert controls(directory) == before
+
+
+def _retired_common_control(main):
+    # Disposable legacy fixture: normal source admission must never migrate it.
+    retired = main / 'doc/harness/tasks/TASK__unrelated/TASK.json'
+    retired.parent.mkdir(parents=True)
+    retired.write_text('{"historical":"preserve unrelated retired control"}\n')
+    return retired
+
+
+@pytest.mark.parametrize('metadata', ['lock-only', 'unrelated-current'])
+@pytest.mark.parametrize('linked_cwd', [False, True])
+def test_stdio_linked_direct_ignores_unrelated_common_namespace(tmp_path, linked_cwd, metadata):
+    main, tree, cwd, directory = planned(tmp_path, linked_cwd)
+    assert not public(cwd, tree, 'dispatch', ownership={'A': ['a.py']}, host=host_snapshot()).get('isError')
+    batches = main / 'doc/harness/runtime/batches'
+    if metadata == 'lock-only':
+        batches.mkdir(parents=True)
+        (batches / '.lock').write_bytes(b'')
+    else:
+        from test_batch_state import SCRIPT, request
+        exclude = main / '.git/info/exclude'
+        exclude.write_bytes(exclude.read_bytes() + b'\n/doc/harness/runtime/\n')
+        requests = tmp_path / 'unrelated-requests.json'
+        requests.write_text(json.dumps([request('unrelated')]))
+        initialized = subprocess.run(
+            [sys.executable, str(SCRIPT), '--repo', str(main), '--batch-id', 'unrelated',
+             'init', '--requests-file', str(requests)], capture_output=True, text=True, timeout=20)
+        assert initialized.returncode == 0, initialized.stderr
+    retired = _retired_common_control(main)
+    preserved = {path: path.read_bytes() for path in [retired, *batches.iterdir()]}
+    before = controls(directory)
+    assert check(cwd, tree / 'a.py') == {}
+    assert check(cwd, tree / 'outside.py').get('permissionDecision') == 'deny'
+    refreshed = public(cwd, tree, 'dispatch', ownership={'A': ['a.py']}, host=host_snapshot())
+    assert not refreshed.get('isError'), refreshed
+    assert check(cwd, tree / 'a.py') == {}
+    # The assignment remains the same; common-root history stays untouched.
+    assert (directory / 'WBS.control.json').read_bytes() == before['WBS.control.json']
+    assert (directory / 'PLAN.md').read_bytes() == before['PLAN.md']
+    assert all(path.read_bytes() == raw for path, raw in preserved.items())
+    assert not (main / 'doc/harness/archive/wbs-namespace-migration').exists()
+
+
+def test_stdio_matching_managed_assignment_still_requires_common_migration(tmp_path, monkeypatch):
+    from test_batch_state import Pool, request
+
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init([request('ordinary', 'a.py')])
+    pool.claim()
+    tree, _ = pool.bind('ordinary')
+    assert not public(pool.repo, tree, 'open').get('isError')
+    text = '# Plan\n```wbs\n' + json.dumps([
+        dict(id='A', title='Managed source fixture', weight=1)]) + '\n```\n'
+    assert not public(pool.repo, tree, 'plan', plan=text).get('isError')
+    assert not public(pool.repo, tree, 'dispatch', ownership={'A': ['a.py']}, host=host_snapshot()).get('isError')
+    assert check(pool.repo, tree / 'a.py') == {}
+    retired = _retired_common_control(pool.repo)
+    before = pool.state.read_bytes(), retired.read_bytes()
+    denied = check(pool.repo, tree / 'a.py')
+    assert denied.get('permissionDecision') == 'deny'
+    assert 'migration' in denied['permissionDecisionReason'] or 'retired' in denied['permissionDecisionReason']
+    assert (pool.state.read_bytes(), retired.read_bytes()) == before
+
+
+@pytest.mark.parametrize('unsafe', ['file', 'symlink', 'ancestor-symlink'])
+def test_stdio_unrelated_common_metadata_still_rejects_unsafe_paths(tmp_path, unsafe):
+    main, tree, cwd, directory = planned(tmp_path, True)
+    assert not public(cwd, tree, 'dispatch', ownership={'A': ['a.py']}, host=host_snapshot()).get('isError')
+    batches = main / 'doc/harness/runtime/batches'
+    outside = tmp_path / 'external batches'
+    outside.mkdir()
+    (outside / 'precious.txt').write_bytes(b'outside state must survive')
+    if unsafe == 'ancestor-symlink':
+        (outside / 'batches').mkdir()
+        batches.parent.symlink_to(outside, target_is_directory=True)
+    else:
+        batches.parent.mkdir(parents=True)
+        if unsafe == 'file':
+            batches.write_bytes(b'invalid state directory, preserve bytes')
+        else:
+            batches.symlink_to(outside, target_is_directory=True)
+    before = controls(directory)
+    assert check(cwd, tree / 'a.py').get('permissionDecision') == 'deny'
+    assert controls(directory) == before
+    assert (outside / 'precious.txt').read_bytes() == b'outside state must survive'
+    if unsafe == 'file':
+        assert batches.read_bytes() == b'invalid state directory, preserve bytes'
