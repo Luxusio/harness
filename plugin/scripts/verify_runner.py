@@ -17,8 +17,9 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 # Loaded lazily by the argv job path; the legacy manifest runner stays standalone.
@@ -27,6 +28,173 @@ VERSION = 2
 MAX_FAILURES = 128
 MAX_FAILURE_LOG_BYTES = 32 * 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
+
+
+_NATIVE_EXECUTION_OWNER = False
+_NATIVE_OWNER_CANCELLED = None
+_NATIVE_LEASE_GUARD = threading.RLock()
+_NATIVE_LEASES = {}
+
+
+class _NativeLease:
+    """One reference to a genuinely held process-owned byte-range lock."""
+    def __init__(self, key, owner):
+        self.key, self.owner, self.closed = key, owner, False
+
+    def close(self):
+        with _NATIVE_LEASE_GUARD:
+            if self.closed:
+                return
+            if _NATIVE_LEASES.get(self.key) is not self.owner:
+                raise RuntimeError('Native lease owner identity changed')
+            self.closed = True
+            self.owner['count'] -= 1
+            if not self.owner['count']:
+                del _NATIVE_LEASES[self.key]
+                self.owner['stack'].close()
+
+
+def _native_run_jobs(jobs, repo_root, **options):
+    """The short-lived owner, rather than the caller, owns every Native lease.
+
+    Its stdin is a parent-only lifeline after one bounded request. It survives
+    parent exit, cancels existing command Jobs and waits their cleanup before
+    the existing runner finally releases job and result leases.
+    """
+    # Resolve caller-relative arguments before changing the child's cwd, just
+    # as the original in-process runner did.
+    repo_root = Path(repo_root).resolve()
+    options['results_path'] = str(Path(options['results_path']).absolute())
+    raw = (json.dumps(dict(jobs=jobs, repo_root=str(repo_root), options=options)) + "\n").encode('utf-8')
+    if len(raw) > MAX_RESULT_BYTES:
+        raise ValueError('Native execution request exceeds byte limit')
+    try:
+        process = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(Path(__file__).absolute()), '--native-job-owner'],
+                                   cwd=str(repo_root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, close_fds=True,
+                                   creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    except OSError as exc:
+        raise OSError('Native execution owner could not start') from exc
+    from wiki_platform import _native
+    output, errors, failures, input_state, started = [], [], [], {}, []
+    def send():
+        try:
+            input_state['thread'] = _native._OpenThread(0x100001, False, threading.get_native_id())
+            if not input_state['thread']:
+                raise _native._error()
+            process.stdin.write(raw)
+            process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            failures.append(exc)
+    def read(stream, limit, target):
+        try:
+            target.append(stream.read(limit + 1))
+        except (OSError, ValueError) as exc:
+            failures.append(exc)
+    writer = threading.Thread(target=send)
+    readers = [threading.Thread(target=read, args=(process.stdout, MAX_RESULT_BYTES, output)),
+               threading.Thread(target=read, args=(process.stderr, 65536, errors))]
+    try:
+        for worker in (writer, *readers):
+            worker.start()
+            started.append(worker)
+        while process.poll() is None:
+            if failures or (output and len(output[0]) > MAX_RESULT_BYTES) or (errors and len(errors[0]) > 65536):
+                # Closing only this writer signals cancellation to the actual
+                # lease owner; do not kill the owner and release locks early.
+                if not writer.is_alive():
+                    process.stdin.close()
+                raise ValueError('Native execution transport exceeded its bound or failed')
+            time.sleep(0.01)
+        writer.join(5)
+        for worker in readers:
+            worker.join(5)
+        if writer.is_alive() or any(worker.is_alive() for worker in readers):
+            raise OSError('Native execution transport did not terminate')
+        if failures or process.returncode or not output:
+            raise ValueError('Native execution owner failed: ' + (errors[0].decode('utf-8', 'replace')[-4000:] if errors else 'transport unavailable'))
+        envelope = json.loads(output[0])
+        if not isinstance(envelope, dict) or type(envelope.get('ok')) is not bool:
+            raise ValueError('invalid Native execution owner response')
+        if not envelope['ok']:
+            error = envelope.get('reason')
+            if envelope.get('kind') == 'TimeoutError':
+                raise TimeoutError(str(error))
+            raise ValueError(str(error))
+        return envelope['value']
+    finally:
+        # Ordinary interruption asks the same owner to cancel. Abrupt parent
+        # death closes the pipe in the kernel and follows the identical path.
+        if writer in started and writer.is_alive():
+            _native._join_input(writer, input_state)
+        process.stdin.close()
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired as exc:
+            raise OSError('Native execution owner is still cleaning up; leases retained by that owner') from exc
+        for worker in started:
+            worker.join(5)
+        _native._close(input_state.get('thread'))
+        for stream in (process.stdout, process.stderr):
+            stream.close()
+        if any(worker.is_alive() for worker in started):
+            raise OSError('Native execution transport worker did not terminate')
+
+
+def _native_owner_main():
+    global _NATIVE_EXECUTION_OWNER, _NATIVE_OWNER_CANCELLED
+    if os.name != 'nt' or sys.argv[1:] != ['--native-job-owner']:
+        raise ValueError('unsupported Native execution owner invocation')
+    raw = sys.stdin.buffer.readline(MAX_RESULT_BYTES + 1)
+    if not raw.endswith(b'\n') or len(raw) > MAX_RESULT_BYTES:
+        raise ValueError('Native execution request exceeds byte limit')
+    request = json.loads(raw)
+    if (not isinstance(request, dict) or set(request) != {'jobs', 'repo_root', 'options'}
+            or not isinstance(request['repo_root'], str) or not isinstance(request['options'], dict)
+            or set(request['options']) != {'wbs_id', 'run_id', 'execution_generation', 'results_path',
+                                           'capabilities', 'max_workers', 'timeout', 'reuse_only'}):
+        raise ValueError('invalid Native execution request')
+    _NATIVE_EXECUTION_OWNER = True
+    _NATIVE_OWNER_CANCELLED = threading.Event()
+    from wiki_platform import _native
+    reader_state, reader_ready = {}, threading.Event()
+    def parent_lifetime():
+        try:
+            # Read the genuine stdin HANDLE without taking a Python buffered
+            # stream lock. Commands inherit only their own explicit handles.
+            import ctypes
+            import msvcrt
+            reader_state['thread'] = _native._OpenThread(0x100001, False, threading.get_native_id())
+            if not reader_state['thread']:
+                raise _native._error()
+            buffer, count = ctypes.create_string_buffer(1), _native.DWORD()
+            reader_ready.set()
+            _native._ReadFile(msvcrt.get_osfhandle(sys.stdin.fileno()), buffer, 1, ctypes.byref(count), None)
+        except OSError as exc:
+            reader_state['error'] = exc
+        finally:
+            reader_ready.set()
+            _NATIVE_OWNER_CANCELLED.set()
+    watcher = threading.Thread(target=parent_lifetime)
+    watcher.start()
+    try:
+        try:
+            if not reader_ready.wait(2) or not reader_state.get('thread'):
+                raise OSError('Native execution parent lifeline unavailable')
+            value = run_jobs(request['jobs'], Path(request['repo_root']), **request['options'])
+            response = dict(ok=True, value=value)
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            response = dict(ok=False, kind=type(exc).__name__, reason=str(exc))
+    finally:
+        # Ordinary completion also cancels and joins its owned blocked reader;
+        # there are no daemon I/O workers left at interpreter shutdown.
+        _native._join_input(watcher, reader_state)
+        _native._close(reader_state.get('thread'))
+    raw = json.dumps(response).encode('utf-8')
+    if len(raw) > MAX_RESULT_BYTES:
+        raise ValueError('Native execution response exceeds byte limit')
+    sys.stdout.buffer.write(raw)
+    sys.stdout.buffer.flush()
 
 
 def _digest(value):
@@ -46,11 +214,51 @@ def _file_path(root, name):
             break
     if path.exists() and not path.is_file():
         raise ValueError("output/artifact must be a regular file: " + name)
+    if os.name == "nt":
+        from wiki_platform import _native
+        existing = path.parent
+        while not os.path.lexists(existing):
+            existing = existing.parent
+        with _native._walk(existing, owner_neutral=True):
+            if os.path.lexists(path):
+                with _native._walk(path.parent, owner_neutral=True):
+                    handle = _native._open(path, 0, owner_neutral=True, allow_hardlinks=True)
+                    _native._close(handle)
     return path
 
 
 def _lease(keys):
     """Try all stable host-wide leases; waiters never occupy pool workers."""
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory, file_lock
+        directory = ensure_private_directory(Path.home() / ".cache" / "harness-verification-leases")
+        held = []
+        try:
+            for key, exclusive in sorted(keys.items()):
+                identity = os.path.normcase(str(directory / _digest(key)))
+                with _NATIVE_LEASE_GUARD:
+                    owner = _NATIVE_LEASES.get(identity)
+                    if owner is not None:
+                        if exclusive or owner['exclusive']:
+                            raise BlockingIOError('conflicting Native lease already held')
+                        owner['count'] += 1
+                    else:
+                        stack = ExitStack()
+                        try:
+                            stack.enter_context(file_lock(Path(identity), shared=not exclusive))
+                        except BaseException:
+                            stack.close()
+                            raise
+                        owner = dict(stack=stack, exclusive=exclusive, count=1)
+                        _NATIVE_LEASES[identity] = owner
+                    held.append(_NativeLease(identity, owner))
+            return held
+        except BlockingIOError:
+            _close_leases(held)
+            return None
+        except BaseException:
+            _close_leases(held)
+            raise
     import fcntl
     import stat
     directory = Path.home() / ".cache" / "harness-verification-leases"
@@ -83,9 +291,19 @@ def _path_leases(keys, path, exclusive):
     # Shared ancestors permit independent sibling files but exclude a writer
     # whose declared leaf is an ancestor of this path.
     for parent in path.parents:
-        keys.setdefault("file:" + str(parent), False)
-    key = "file:" + str(path)
+        identity = os.path.normcase(str(parent)) if os.name == 'nt' else str(parent)
+        keys.setdefault("file:" + identity, False)
+    identity = os.path.normcase(str(path)) if os.name == 'nt' else str(path)
+    key = "file:" + identity
     keys[key] = keys.get(key, False) or exclusive
+
+
+def _close_leases(held):
+    for value in reversed(held):
+        if os.name == "nt":
+            value.close()
+        else:
+            os.close(value)
 
 
 @contextmanager
@@ -102,6 +320,20 @@ def _scoped_call(code, value, root, env, held=(), *, cancelled=None):
     # inherits ownership and survives runner death until _execute reaps its group.
     if cancelled is not None and cancelled.is_set():
         raise ValueError("verification execution cancelled")
+    if os.name == "nt":
+        from wiki_platform import execute_bounded
+        # The short-lived execution owner keeps its actual LockFileEx leases
+        # until this outer Job and nested commands are fully reaped. Its parent
+        # lifeline cancels execution without pretending inherited handles keep
+        # a terminated process's byte-range locks alive.
+        prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3]);import wbs\n"
+        argv = [sys.executable, "-B", "-c", prefix + code,
+                str(Path(__file__).resolve().parent), json.dumps(value), str(root)]
+        result = execute_bounded(argv, cwd=root, env=env, timeout=max(150, (value.get("timeout", 0) if isinstance(value, dict) else 0) + 30),
+                                 limit=MAX_RESULT_BYTES, cancelled=cancelled.is_set if cancelled is not None else None)
+        if result["returncode"] or result["error"]:
+            raise ValueError("scoped execution unavailable: " + (result["error"] or result["output"].decode(errors="replace")[-4000:]))
+        return json.loads(result["output"])
     prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3]);import wbs;wbs._PARENT_LIFELINE=int(sys.argv[4])\n"
     reader, writer = os.pipe()
     try:
@@ -160,6 +392,11 @@ def _job_spec(value, root):
 def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_path,
              capabilities=(), max_workers=4, timeout=60, reuse_only=False):
     """One producer and its read-only consumers; records are advisory, not QA."""
+    if os.name == 'nt' and not _NATIVE_EXECUTION_OWNER:
+        return _native_run_jobs(jobs, repo_root, wbs_id=wbs_id, run_id=run_id,
+                                execution_generation=execution_generation, results_path=str(results_path),
+                                capabilities=list(capabilities), max_workers=max_workers,
+                                timeout=timeout, reuse_only=reuse_only)
     import verification_target as vt
     import wbs
     from threading import RLock, Event
@@ -169,8 +406,8 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
     _file_path(Path(results_path.anchor), results_path.relative_to(results_path.anchor).as_posix())
     if _is_protected_artifact(str(results_path), repo_root=str(root)):
         raise ValueError("execution results cannot overwrite protected lifecycle artifacts")
-    if os.name != "posix" or not all(isinstance(x, str) and x for x in (wbs_id, run_id, execution_generation)):
-        raise ValueError("POSIX host and explicit WBS/run/execution_generation required")
+    if os.name not in {"posix", "nt"} or not all(isinstance(x, str) and x for x in (wbs_id, run_id, execution_generation)):
+        raise ValueError("supported host and explicit WBS/run/execution_generation required")
     if not isinstance(jobs, list) or not 1 <= len(jobs) <= 32 or not 0 < timeout <= 3600 or not 1 <= max_workers <= 32:
         raise ValueError("bounded jobs, workers and timeout required")
     jobs = [_job_spec(job, root) for job in jobs]
@@ -215,6 +452,8 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
     _path_leases(keys, log_directory, True)
     deadline = time.monotonic() + timeout
     while (result_lease := _lease(keys)) is None:
+        if _NATIVE_OWNER_CANCELLED is not None and _NATIVE_OWNER_CANCELLED.is_set():
+            raise ValueError('Native execution parent ended before result admission')
         if time.monotonic() >= deadline:
             raise TimeoutError("result lease timeout")
         time.sleep(0.01)
@@ -223,7 +462,7 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
     successful = {}
     latest = {}
     running = {}
-    cancelled = Event()
+    cancelled = _NATIVE_OWNER_CANCELLED if _NATIVE_OWNER_CANCELLED is not None else Event()
 
     def scoped_call(code, value, root, env, held=()):
         return _scoped_call(code, value, root, env, held, cancelled=cancelled)
@@ -522,6 +761,8 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                 continue
             with ThreadPoolExecutor(max_workers=max_workers) as pool, _cancel_on_error(cancelled):
                 while pending or running:
+                    if cancelled.is_set():
+                        raise ValueError('verification execution cancelled')
                     for job in list(pending):
                         if len(running) >= max_workers:
                             break
@@ -548,8 +789,7 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                                     publish()
                                 lease_deadline = time.monotonic() + timeout
                             finally:
-                                for fd in held:
-                                    os.close(fd)
+                                _close_leases(held)
                     if pending and not running and time.monotonic() >= lease_deadline:
                         raise TimeoutError("job resource lease timeout")
                     if pending or running:
@@ -573,10 +813,8 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
     finally:
         cancelled.set()
         for held in running.values():
-            for fd in held:
-                os.close(fd)
-        for fd in result_lease:
-            os.close(fd)
+            _close_leases(held)
+        _close_leases(result_lease)
 
 
 def _find_repo_root(start: str | None = None) -> Path:
@@ -711,7 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.commands or not args.results:
             parser.error("--jobs requires --results and cannot be combined with shell commands")
         try:
-            payload = run_jobs(json.loads(args.jobs.read_text()), repo_root, wbs_id=args.wbs_id,
+            payload = run_jobs(json.loads(args.jobs.read_text(encoding="utf-8")), repo_root, wbs_id=args.wbs_id,
                                run_id=args.run_id, execution_generation=args.generation,
                                results_path=args.results, capabilities=args.capability,
                                max_workers=args.max_workers, timeout=args.timeout or 60, reuse_only=args.reuse_only)
@@ -737,4 +975,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if os.name == 'nt' and sys.argv[1:] == ['--native-job-owner']:
+        _native_owner_main()
+    else:
+        sys.exit(main())

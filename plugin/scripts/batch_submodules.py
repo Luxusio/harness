@@ -16,7 +16,7 @@ import re
 import stat
 import subprocess
 
-from _lib import _trusted_git_env
+from _lib import _git_executable, _trusted_git_env
 
 MAX_MODULES = 16
 MAX_INVENTORY = 4096
@@ -34,11 +34,50 @@ def _require(condition, message):
         raise SubmoduleError(message)
 
 
+def _conversion_policy(root):
+    """Read only safe effective conversion values, never execute configured tools."""
+    from wiki_platform import run_bounded
+    env = _trusted_git_env()
+    env.update(GIT_TERMINAL_PROMPT='0', LC_ALL='C')
+    policy = {}
+    for key, default, allowed in (
+            ('core.autocrlf', 'false', {'false', 'true', 'input'}),
+            ('core.eol', 'native', {'lf', 'crlf', 'native'})):
+        try:
+            result = run_bounded(
+                [_git_executable(root, env), '--no-pager', '--no-optional-locks', 'config', '--includes',
+                 '--null', '--type=bool-or-str', '--get', key],
+                cwd=root, env=env, timeout=10, limit=32)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SubmoduleError('Git conversion policy unavailable: ' + key) from exc
+        except ValueError as exc:
+            raise SubmoduleError('invalid Git conversion policy: ' + key) from exc
+        _require(len(result.stdout) <= 32 and len(result.stderr) <= 4096
+                 and result.returncode in (0, 1), 'invalid Git conversion policy: ' + key)
+        if result.returncode == 1:
+            _require(not result.stdout, 'invalid Git conversion policy: ' + key)
+            value = default
+        else:
+            raw = result.stdout
+            _require(raw.endswith(b'\0'), 'invalid Git conversion policy: ' + key)
+            try:
+                value = raw[:-1].decode('ascii').lower()
+            except UnicodeError as exc:
+                raise SubmoduleError('invalid Git conversion policy: ' + key) from exc
+            _require(value in allowed, 'invalid Git conversion policy: ' + key)
+        policy[key] = value
+    return policy
+
+
 def _git(root, *args, allow=False):
     env = _trusted_git_env()
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT='0', GIT_NO_LAZY_FETCH='1', GIT_NO_REPLACE_OBJECTS='1', LC_ALL='C')
-    command = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+    conversion = []
+    if os.name == 'nt':
+        for key, value in _conversion_policy(root).items():
+            conversion.extend(('-c', key + '=' + value))
+    command = [_git_executable(root, env), '--no-optional-locks', *conversion, '-c', 'core.fsmonitor=false',
                '-c', 'core.hooksPath=' + os.devnull, '-c', 'submodule.recurse=false',
                '-c', 'fetch.recurseSubmodules=false', '-c', 'protocol.allow=never',
                '-c', 'protocol.file.allow=always', '-c', 'maintenance.auto=false',
@@ -56,6 +95,22 @@ def _git(root, *args, allow=False):
 
 def _safe(path, *, exists=True):
     path = os.path.abspath(path)
+    if os.name == "nt":
+        from wiki_platform import _native
+        target = Path(path)
+        missing = []
+        while not os.path.lexists(target):
+            _require(not exists, 'missing path: ' + path)
+            missing.append(target.name)
+            target = target.parent
+        if target.is_dir():
+            with _native._walk(target, owner_neutral=True):
+                pass
+        else:
+            with _native._walk(target.parent, owner_neutral=True):
+                handle = _native._open(target, 0, owner_neutral=True, allow_hardlinks=True)
+                _native._close(handle)
+        return path
     _require(os.path.realpath(path) == path, 'symlink or noncanonical path')
     current = Path('/')
     for part in Path(path).parts[1:]:
@@ -86,8 +141,8 @@ def _metadata(root):
     root = _safe(root)
     gitfile = os.path.join(root, '.git')
     _identity(gitfile, os.path.isdir(gitfile))
-    _require(_git(root, 'rev-parse', '--show-toplevel') == root, 'foreign checkout binding')
-    gd = _git(root, 'rev-parse', '--absolute-git-dir')
+    _require(os.path.normcase(os.path.abspath(_git(root, 'rev-parse', '--show-toplevel'))) == os.path.normcase(root), 'foreign checkout binding')
+    gd = os.path.abspath(_git(root, 'rev-parse', '--absolute-git-dir'))
     _safe(gd)
     common = os.path.abspath(os.path.join(root, _git(root, 'rev-parse', '--git-common-dir')))
     _require(common == gd, 'module linked worktrees are unsupported')
@@ -191,12 +246,12 @@ def selection(repo, paths):
 def _admin(repo, worktree):
     _safe(worktree)
     _identity(os.path.join(worktree, '.git'))
-    gd = _git(worktree, 'rev-parse', '--absolute-git-dir')
+    gd = os.path.abspath(_git(worktree, 'rev-parse', '--absolute-git-dir'))
     _require(os.path.dirname(gd) == os.path.join(repo, '.git', 'worktrees'), 'worktree not registered under control repository')
     _identity(gd, True)
     back = Path(gd, 'gitdir')
     _identity(str(back))
-    _require(back.read_text().strip() == os.path.join(worktree, '.git'), 'worktree registration backpointer mismatch')
+    _require(os.path.normcase(os.path.abspath(back.read_text(encoding='utf-8' if os.name == 'nt' else None).strip())) == os.path.normcase(os.path.join(worktree, '.git')), 'worktree registration backpointer mismatch')
     _require(os.path.abspath(os.path.join(worktree, _git(worktree, 'rev-parse', '--git-common-dir'))) == os.path.join(repo, '.git'), 'foreign common Git directory')
     return gd
 
@@ -322,6 +377,189 @@ def _sync_preparation(root, gitdir, admin):
     _sync_directory(os.path.dirname(root))
 
 
+def _native_inventory(path):
+    from wiki_platform import metadata_tree_inventory
+    try:
+        # Match the owning Native batch archive's bounded tree policy.
+        return metadata_tree_inventory(path, max_entries=100000, max_bytes=8 * 1024 ** 3)
+    except ValueError as exc:
+        raise SubmoduleError('private preparation inventory refused (100000 entries, 8 GiB per tree); '
+                             'retained: ' + path + ': ' + str(exc)) from exc
+
+
+def _native_subset(present, expected):
+    # A stopped copy may not have sealed its newly created directories yet.
+    return all(name in expected and (entry == expected[name] or entry['kind'] == 'dir'
+               and dict(entry, readonly=expected[name]['readonly']) == expected[name]
+               and not entry['readonly']) for name, entry in present.items())
+
+
+def _native_copy_tree(source, destination, inventory, overrides=None):
+    """Resume only byte-identical subsets of an owned publication stage."""
+    from wiki_platform import (ensure_private_directory, metadata_copy, metadata_write,
+                               metadata_set_readonly, safe_metadata_snapshot)
+    overrides = overrides or {}
+    expected = copy.deepcopy(inventory)
+    for name, data in overrides.items():
+        _require(name in expected and expected[name]['kind'] == 'file', 'missing clone binding')
+        expected[name].update(size=len(data), sha256=hashlib.sha256(data).hexdigest(), readonly=False)
+    ensure_private_directory(destination)
+    present = _native_inventory(destination)
+    _require(_native_subset(present, expected),
+             'foreign or changed private publication stage retained: ' + destination)
+    for name, entry in expected.items():
+        target = os.path.join(destination, *name.split('/'))
+        if entry['kind'] == 'dir':
+            ensure_private_directory(target)
+        elif name in overrides:
+            if name in present:
+                data, _ = safe_metadata_snapshot(target, MAX_MANIFEST_BYTES)
+                _require(data == overrides[name], 'private binding changed')
+            else:
+                metadata_write(target, overrides[name], expected=None)
+        else:
+            metadata_copy(os.path.join(source, *name.split('/')), target,
+                          max_bytes=entry['size'], expected_sha256=entry['sha256'],
+                          expected_size=entry['size'], readonly=entry['readonly'])
+    for name in sorted(expected, key=lambda name: name.count('/'), reverse=True):
+        entry = expected[name]
+        if entry['kind'] == 'dir':
+            metadata_set_readonly(os.path.join(destination, *name.split('/')),
+                                  entry['readonly'], directory=True)
+    _require(_native_inventory(destination) == expected, 'private publication copy changed')
+    _require(_native_inventory(source) == inventory, 'private clone changed during copy')
+    return expected
+
+
+def _native_remove_tree(path, inventory):
+    """Retire only the exact owned copy whose surviving peer was checked."""
+    from wiki_platform import metadata_remove, metadata_remove_empty
+    present = _native_inventory(path)
+    _require(_native_subset(present, inventory),
+             'foreign or changed private cleanup content retained: ' + path)
+    for name in sorted(present, key=lambda name: (name.count('/'), name), reverse=True):
+        entry = present[name]
+        target = os.path.join(path, *name.split('/'))
+        if entry['kind'] == 'dir':
+            metadata_remove_empty(target)
+        else:
+            metadata_remove(target, expected_sha256=entry['sha256'], max_bytes=entry['size'])
+    metadata_remove_empty(path)
+
+
+def _native_clone_proof(repo, root, gd, m):
+    actual, ident = _metadata(root)
+    _require(actual == gd and _git(root, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + m['branch']
+             and _git(root, 'rev-parse', 'HEAD') == m['initial_gitlink']
+             and os.path.normcase(os.path.abspath(_git(root, 'config', '--local', '--get', 'remote.origin.url')))
+                 == os.path.normcase(os.path.join(repo, m['path'])),
+             'incomplete or foreign private clone retained: ' + root)
+    _supported(root, gd)
+    _clean(root, True)
+    _closure(root, {m['initial_gitlink']})
+    return ident
+
+
+def _prepare_native(repo, worktree, value, m, persist):
+    """Publish flushed private copies; the existing owned checkpoint admits replay."""
+    from wiki_platform import (ensure_private_directory, metadata_remove_empty,
+                               metadata_rename_directory, safe_metadata_snapshot)
+    root, gd = os.path.join(worktree, m['path']), m['private_gitdir']
+    parent = os.path.dirname(gd)
+    clone = os.path.join(parent, 'clone')
+    clone_root, clone_gd = os.path.join(clone, 'worktree'), os.path.join(clone, 'git')
+    git_stage, root_stage = os.path.join(parent, 'publish-git'), os.path.join(parent, 'publish-worktree')
+    if m['phase'] == 'intent':
+        _require(not os.path.lexists(parent) and (not os.path.lexists(root)
+                 or os.path.isdir(root) and not os.listdir(root)), 'unknown partial module preparation retained')
+        ensure_private_directory(parent)
+        m['private_parent_identity'] = _identity(parent, True)
+        m['private_identity'] = {'gitdir': [0, 0], 'gitfile': [0, 0]}
+        m['phase'] = 'owned'
+        persist(value)
+    _require(_identity(parent, True) == m['private_parent_identity'], 'private preparation container replaced')
+    _require(set(os.listdir(parent)) <= {'clone', 'publish-git', 'publish-worktree', 'git'},
+             'unknown private preparation content retained: ' + parent)
+    final_worktree = root.replace('\\', '/').replace('"', '\\"')
+    config_suffix = ('\n[core]\n\tworktree = "' + final_worktree + '"\n').encode('utf-8')
+    gitfile = ('gitdir: ' + gd.replace('\\', '/') + '\n').encode('utf-8')
+    if os.path.lexists(gd) and os.path.lexists(os.path.join(root, '.git')):
+        ident = _native_clone_proof(repo, root, gd, m)
+        git_inventory, root_inventory = _native_inventory(gd), _native_inventory(root)
+        config, _ = safe_metadata_snapshot(os.path.join(gd, 'config'), MAX_MANIFEST_BYTES)
+        actual_gitfile, _ = safe_metadata_snapshot(os.path.join(root, '.git'), MAX_MANIFEST_BYTES)
+        _require(config.endswith(config_suffix) and actual_gitfile == gitfile,
+                 'private final binding changed')
+        for stage, inventory in ((git_stage, git_inventory), (root_stage, root_inventory)):
+            if os.path.lexists(stage):
+                _native_remove_tree(stage, inventory)
+        if os.path.lexists(clone):
+            _require(set(os.listdir(clone)) <= {'git', 'worktree'},
+                     'unknown private clone content retained: ' + clone)
+            # Reverse only the two exact binding changes. This proves each
+            # remaining source byte survives in the published clone, even if
+            # an earlier cleanup stopped after retiring some source entries.
+            originals = ((clone_gd, git_inventory, 'config', config[:-len(config_suffix)]),
+                         (clone_root, root_inventory, '.git',
+                          ('gitdir: ' + clone_gd.replace('\\', '/') + '\n').encode('utf-8')))
+            for path, inventory, name, data in originals:
+                expected = copy.deepcopy(inventory)
+                expected[name].update(size=len(data), sha256=hashlib.sha256(data).hexdigest(), readonly=False)
+                if os.path.lexists(path):
+                    _native_remove_tree(path, expected)
+            metadata_remove_empty(clone)
+        m['private_identity'] = ident
+        m['phase'] = 'prepared'
+        persist(value)
+        return
+    if not os.path.lexists(clone) and not os.path.lexists(gd):
+        _require(not os.path.lexists(git_stage) and not os.path.lexists(root_stage),
+                 'publication stage without completed clone retained: ' + parent)
+        ensure_private_directory(clone)
+        conversion = [arg for key, setting in _conversion_policy(os.path.join(repo, m['path'])).items()
+                      for arg in ('--config', key + '=' + setting)]
+        _git(repo, 'clone', '--template=', '--no-local', '--no-hardlinks', '--no-checkout', '--no-tags',
+             *conversion, '--separate-git-dir', clone_gd, '--', os.path.join(repo, m['path']), clone_root)
+        _git(clone_root, 'checkout', '-b', m['branch'], m['initial_gitlink'])
+    if os.path.lexists(clone):
+        # Partial Git output is never erased or restarted. The owner must
+        # inspect the retained clone path if this completed-clone proof fails.
+        _require(set(os.listdir(clone)) == {'git', 'worktree'},
+                 'incomplete private clone retained for owner inspection: ' + clone)
+        _native_clone_proof(repo, clone_root, clone_gd, m)
+        git_inventory, root_inventory = _native_inventory(clone_gd), _native_inventory(clone_root)
+        config, _ = safe_metadata_snapshot(os.path.join(clone_gd, 'config'), MAX_MANIFEST_BYTES)
+        config += config_suffix
+        for source, stage, final, inventory, overrides in (
+                (clone_gd, git_stage, gd, git_inventory, {'config': config}),
+                (clone_root, root_stage, root, root_inventory, {'.git': gitfile})):
+            expected = copy.deepcopy(inventory)
+            for name, data in overrides.items():
+                expected[name].update(size=len(data), sha256=hashlib.sha256(data).hexdigest(), readonly=False)
+            if os.path.lexists(final) and (final != root or os.listdir(root)):
+                _require(_native_inventory(final) == expected, 'foreign private publication retained: ' + final)
+                if os.path.lexists(stage):
+                    _native_remove_tree(stage, expected)
+            else:
+                _native_copy_tree(source, stage, inventory, overrides)
+                if final == root and os.path.lexists(root):
+                    metadata_remove_empty(root)
+                metadata_rename_directory(stage, final)
+        ident = _native_clone_proof(repo, root, gd, m)
+        # Final Git must resolve the recorded paths, including copied index
+        # and core.worktree, before original staging bytes can be retired.
+        _native_remove_tree(clone_root, root_inventory)
+        _native_remove_tree(clone_gd, git_inventory)
+        metadata_remove_empty(clone)
+    else:
+        _require(not os.path.lexists(git_stage) and not os.path.lexists(root_stage),
+                 'publication stage without completed clone retained: ' + parent)
+        ident = _native_clone_proof(repo, root, gd, m)
+    m['private_identity'] = ident
+    m['phase'] = 'prepared'
+    persist(value)
+
+
 def prepare(repo, worktree, value, persist):
     _bindings(repo, worktree, value)
     persist(value)  # writeahead: no directory or Git side effect before this
@@ -330,6 +568,10 @@ def prepare(repo, worktree, value, persist):
         gd = m['private_gitdir']
         _safe(root, exists=False)
         _safe(gd, exists=False)
+        if os.name == 'nt' and m['phase'] != 'prepared':
+            _prepare_native(repo, worktree, value, m, persist)
+            _validate_private(worktree, m, clean=True)
+            continue
         if m['phase'] == 'intent':
             _require(not os.path.lexists(os.path.dirname(gd)) and (not os.path.lexists(root) or os.path.isdir(root) and not os.listdir(root)), 'unknown partial module preparation retained')
             Path(gd).parent.parent.mkdir(exist_ok=True)
@@ -426,7 +668,7 @@ def _inventory(worktree, m, history):
                 logfile = os.path.join(current, name)
                 _identity(logfile)
                 _require(os.path.getsize(logfile) <= MAX_MANIFEST_BYTES, 'reflog exceeds bound')
-                for line in Path(logfile).read_text().splitlines():
+                for line in Path(logfile).read_text(encoding='utf-8' if os.name == 'nt' else None).splitlines():
                     fields = line.split(' ', 2)
                     _require(len(fields) == 3 and all(OID.fullmatch(o) for o in fields[:2]), 'malformed reflog')
                     reflog_objects.update(o for o in fields[:2] if set(o) != {'0'})
@@ -586,6 +828,11 @@ def _disposable_metadata(worktree, m):
                           'core.logallrefupdates', 'core.ignorecase', 'core.precomposeunicode',
                           'remote.origin.url', 'remote.origin.fetch', 'remote.origin.tagopt',
                           'user.name', 'user.email'}
+        if os.name == 'nt':
+            allowed = allowed or key == 'core.symlinks' and value == 'false'
+            allowed = allowed or key == 'core.autocrlf' and value in {'false', 'true', 'input'}
+            allowed = allowed or key == 'core.eol' and value in {'lf', 'crlf', 'native'}
+            allowed = allowed or key == 'core.worktree' and os.path.normcase(os.path.abspath(value)) == os.path.normcase(root)
         if key.startswith('branch.') and key.endswith(('.remote', '.merge')):
             branch, kind = key[7:].rsplit('.', 1)
             allowed = 'refs/heads/' + branch in inv['refs'] and (
@@ -636,7 +883,7 @@ def _disposable_metadata(worktree, m):
         known_text = known_text or rel in inv['refs'] or rel.startswith('logs/') and rel[5:] in inv['refs']
         _require(known_text, 'unknown private metadata file retained: ' + rel)
         try:
-            text = Path(path).read_text()
+            text = Path(path).read_text(encoding='utf-8' if os.name == 'nt' else None)
         except (OSError, UnicodeError) as exc:
             raise SubmoduleError('unreadable private metadata retained: ' + rel) from exc
         if rel == 'HEAD':

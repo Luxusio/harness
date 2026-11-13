@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import hashlib
 import os
 import re
 import stat
@@ -63,6 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore  # noqa: E402
     GitBindingError,
     _trusted_git_env,
+    _git_executable,
     find_repo_root,
     resolve_registered_worktree,
 )
@@ -91,16 +93,41 @@ def retention_bytes(retention):
     return (json.dumps(retention, sort_keys=True) + '\n').encode()
 
 
+def write_retention(path, retention):
+    """Create the exact bootstrap marker without replacing any existing byte."""
+    raw = retention_bytes(retention)
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import metadata_write
+        metadata_write(Path(path).absolute(), raw, expected=None)
+        return
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def validate_retention(worktree, retention):
     expected = retention_bytes(retention)
     path = os.path.join(worktree, RETENTION_MARKER)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as handle:
-        info = os.fstat(handle.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_nlink != 1 or info.st_mode & 0o022
-                or handle.read(len(expected) + 1) != expected):
-            raise FinishError('unsafe or changed bootstrap retention marker')
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import safe_metadata_snapshot
+        try:
+            raw, _ = safe_metadata_snapshot(Path(path).absolute(), len(expected))
+            if raw != expected:
+                raise ValueError('changed bootstrap retention marker')
+        except (OSError, ValueError) as exc:
+            raise FinishError('unsafe or changed bootstrap retention marker') from exc
+    else:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as handle:
+            info = os.fstat(handle.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_nlink != 1 or info.st_mode & 0o022
+                    or handle.read(len(expected) + 1) != expected):
+                raise FinishError('unsafe or changed bootstrap retention marker')
     if (_git_out(worktree, 'ls-files', '--', RETENTION_MARKER).strip()
             or _git(worktree, 'check-ignore', '--no-index', '-q', '--', RETENTION_MARKER).returncode != 1):
         raise FinishError('bootstrap retention marker must be untracked and nonignored')
@@ -134,6 +161,7 @@ def _git(cwd: str, *args: str) -> subprocess.CompletedProcess:
     # untracked files even when repository config normally hides them.
     command = ["git", "-c", "core.fsmonitor=false", "-c", "status.showUntrackedFiles=all", *args]
     try:
+        command[0] = _git_executable(cwd, env)
         return subprocess.run(
             command, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
             errors="replace", check=False, env=env, stdin=subprocess.DEVNULL,
@@ -437,7 +465,13 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
     try:
         if retention is not None:
             validate_retention(worktree, retention)
-            os.unlink(os.path.join(worktree, RETENTION_MARKER))
+            if os.name == "nt":
+                from pathlib import Path
+                from wiki_platform import metadata_remove
+                metadata_remove(Path(worktree) / RETENTION_MARKER,
+                                expected_sha256=hashlib.sha256(retention_bytes(retention)).hexdigest())
+            else:
+                os.unlink(os.path.join(worktree, RETENTION_MARKER))
         try:
             if submodules is None:
                 removed = _git(repo, "worktree", "remove", worktree)
@@ -455,11 +489,7 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
                     registered = False
                 if registered:
                     try:
-                        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                        with os.fdopen(fd, 'wb') as handle:
-                            handle.write(retention_bytes(retention))
-                            handle.flush()
-                            os.fsync(handle.fileno())
+                        write_retention(marker, retention)
                     except OSError as restore_error:
                         cleanup['marker_restore_error'] = str(restore_error)
     except batch_harvest.HarvestError as exc:
@@ -497,6 +527,8 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
         from wbs_namespace_migration import require_complete
         require_complete(repo)
         require_complete(worktree)
+        if os.name == "nt" and not callable(checkpoint):
+            raise FinishError('Native finish requires the durable batch owner; use WBS dispatch completion/recovery')
         if retention is not None and checkpoint is None:
             raise FinishError('retention cleanup requires a durable checkpoint callback')
         if submodules is not None:
@@ -570,7 +602,13 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
         if checkpoint:
             checkpoint("integrated", copy.deepcopy(result))
         try:
-            result["harvest"] = batch_harvest.harvest(repo, worktree, args.wbs_id)
+            if os.name == "nt":
+                publication = checkpoint('archive-pending', copy.deepcopy(result))
+                wanted = batch_harvest.validate_native_publication(repo, worktree, args.wbs_id, publication)
+                result['archive_publication'] = wanted
+                result["harvest"] = batch_harvest.harvest(repo, worktree, args.wbs_id, publication=publication)
+            else:
+                result["harvest"] = batch_harvest.harvest(repo, worktree, args.wbs_id)
         except Exception as exc:  # any harvest failure is local to this lead
             raise Outcome("kept", f"harvest refused, worktree kept: {type(exc).__name__}: {exc}")
         removal_checkpoint = None
@@ -609,6 +647,34 @@ def _arg(pattern, what: str):
     return check
 
 
+def _finish_native_owned(repo, args):
+    """Route the standalone CLI through its already admitted durable owner."""
+    import batch_state
+    from types import SimpleNamespace
+    repo, worktree = os.path.realpath(repo), os.path.realpath(args.worktree)
+    directory = os.path.join(repo, 'doc', 'harness', 'runtime', 'batches')
+    if not os.path.lexists(directory):
+        raise FinishError('No batch owner for this Native worktree; use WBS dispatch completion/recovery')
+    with batch_state.locked_records(repo) as (directory, records):
+        matches = [(data, item) for data in records.values() for item in data['requests']
+                   if item.get('worktree') == worktree and item.get('branch') == args.branch
+                   and item.get('wbs_id') == args.wbs_id]
+        if len(matches) != 1:
+            raise FinishError('Native finish requires one exact existing batch owner; use WBS dispatch completion/recovery')
+        data, item = matches[0]
+        batch_state.bound(repo, item)
+        control = batch_state.control(item, closed=True)
+        if (not item.get('run_id') or item['run_id'] != control['run_id']
+                or not isinstance(item.get('result'), dict) or item['result'].get('commit') != args.commit):
+            raise FinishError('Native finish WBS/run/returned commit differs from its batch owner; use WBS dispatch recovery')
+        batch_state.execute(SimpleNamespace(repo=repo, batch_id=data['batch_id'], command='finish',
+                                            slug=item['slug'], resume=args.resume), directory, records)
+        result = item.get('finish_result')
+        if not isinstance(result, dict) or result.get('wbs_id') != args.wbs_id:
+            raise FinishError('Native batch owner did not return the matching finish result')
+        return copy.deepcopy(result)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -626,7 +692,8 @@ def main(argv=None) -> int:
     if not os.path.isabs(args.worktree):
         parser.error(f"--worktree must be an absolute path: {args.worktree}")
     try:
-        result = finish(args.repo or find_repo_root(), args)
+        repo = args.repo or find_repo_root()
+        result = _finish_native_owned(repo, args) if os.name == 'nt' else finish(repo, args)
     except Exception as exc:  # a crash must never read as integrated
         result = _result(args, os.path.realpath(args.worktree))
         result["reason"] = f"batch_finish failed: {type(exc).__name__}: {exc}"

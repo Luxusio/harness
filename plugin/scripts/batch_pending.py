@@ -22,13 +22,18 @@ MAX_PROJECTION_BYTES = 64 * 1024
 
 def _pointer(path):
     owner.safe(path)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as handle:
-        info = os.fstat(handle.fileno())
-        owner.require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
-                      and info.st_nlink == 1 and not info.st_mode & 0o022,
-                      'unsafe Git pointer')
-        raw = handle.read(4097)
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import safe_metadata_snapshot
+        raw, _ = safe_metadata_snapshot(Path(path).absolute(), 4096)
+    else:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as handle:
+            info = os.fstat(handle.fileno())
+            owner.require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                          and info.st_nlink == 1 and not info.st_mode & 0o022,
+                          'unsafe Git pointer')
+            raw = handle.read(4097)
     owner.require(len(raw) <= 4096, 'oversized Git pointer')
     return raw.decode('utf-8').strip()
 

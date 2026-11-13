@@ -12,13 +12,15 @@ import errno
 from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from functools import wraps
-import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
+
+if os.name != "nt":
+    import fcntl
 
 LIMIT = 1024 * 1024
 MAX_RECORDS = 256
@@ -59,7 +61,8 @@ def _encode(value):
 _UNSPECIFIED = object()
 
 _ROOT = ContextVar("goal_migration_root", default=None)
-_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+if os.name != "nt":
+    _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 def _safe_dir(fd):
@@ -76,7 +79,10 @@ def _same(left, right):
 def _parts(relative):
     _require(isinstance(relative, str) and relative and not relative.startswith("/")
              and all(p not in ("", ".", "..") for p in relative.split("/")), "invalid relative path")
-    return relative.split("/")
+    parts = relative.split("/")
+    if os.name == "nt":
+        _require(all("\\" not in p and ":" not in p for p in parts), "invalid native relative path")
+    return parts
 
 
 def _root_fd(repo):
@@ -102,6 +108,10 @@ def _pinned(function):
             from _lib import _trusted_control_writer
             _require(_trusted_control_writer(), "apply requires the WBS MCP owner")
         repo = Path(repo_root).absolute()
+        if os.name == "nt":
+            from wiki_platform import trusted_metadata_directory
+            with trusted_metadata_directory(repo):
+                return function(repo)
         fd = _root_fd(repo)
         token = _ROOT.set((str(repo), fd))
         try:
@@ -114,6 +124,22 @@ def _pinned(function):
 
 @contextmanager
 def _directory(repo, parts, *, create=False):
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory, trusted_metadata_directory
+        path = Path(repo).joinpath(*parts)
+        if create:
+            try:
+                with trusted_metadata_directory(path):
+                    pass
+            except FileNotFoundError:
+                ensure_private_directory(path)
+        with trusted_metadata_directory(path):
+            def bound():
+                with trusted_metadata_directory(path):
+                    pass
+            yield path, bound
+            bound()
+        return
     root = _root_fd(repo)
     chain, opened = [], [root]
     def bound():
@@ -154,6 +180,15 @@ def _path(repo, relative):
     # Path is only a selector for non-I/O callers. All storage operations below
     # independently use no-follow descriptors, never this returned path.
     parts = _parts(relative)
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory
+        path = repo.joinpath(*parts)
+        try:
+            with trusted_metadata_directory(path):
+                pass
+        except FileNotFoundError:
+            pass
+        return path
     try:
         with _directory(repo, parts[:-1]) as (parent, bound):
             try:
@@ -212,6 +247,13 @@ def _read_at(parent, name, relative, limit, *, publication=False):
 
 
 def _read(repo, relative, limit=LIMIT, *, publication=False):
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        path = Path(repo).joinpath(*_parts(relative))
+        try:
+            return safe_metadata_snapshot(path, limit)[0]
+        except FileNotFoundError:
+            return None
     parts = _parts(relative)
     try:
         with _directory(repo, parts[:-1]) as (parent, bound):
@@ -261,6 +303,10 @@ def _normalize_at(parent, name, relative, expected, *, stage_expected=_UNSPECIFI
 
 
 def _normalize_publication(repo, relative, expected, *, stage_expected=_UNSPECIFIED):
+    if os.name == "nt":
+        # Native handle rename has no hardlink publication alias to normalize.
+        _require(_read(repo, relative, 16 * LIMIT) == expected, "publication bytes changed: " + relative)
+        return
     parts = _parts(relative)
     with _directory(repo, parts[:-1]) as (parent, bound):
         bound()
@@ -275,6 +321,10 @@ def _check_originals(repo, sources, destinations):
     originals.update({p: before for p, (before, _) in destinations.items() if before is not None})
     for relative, expected in originals.items():
         archive = ARCHIVE + "/original/" + relative
+        if os.name == "nt":
+            current = _read(repo, archive)
+            _require(current is None or current == expected, "conflicting original archive")
+            continue
         parts = _parts(archive)
         try:
             with _directory(repo, parts[:-1]) as (parent, bound):
@@ -334,6 +384,13 @@ def _link_new(parent, temporary, destination):
 
 
 def _write(repo, relative, data, *, expected=_UNSPECIFIED):
+    if os.name == "nt":
+        from wiki_platform import metadata_write
+        before = _read(repo, relative, 16 * LIMIT)
+        if expected is not _UNSPECIFIED:
+            _require(_hash(before) == expected, "destination changed after preparation")
+        metadata_write(Path(repo).joinpath(*_parts(relative)), data, expected=before)
+        return
     parts = _parts(relative)
     with _directory(repo, parts[:-1], create=True) as (parent, bound):
         before = _read_at(parent, parts[-1], relative, 16 * LIMIT, publication=True)
@@ -384,6 +441,13 @@ def _write(repo, relative, data, *, expected=_UNSPECIFIED):
 
 
 def _retire(repo, relative, expected):
+    if os.name == "nt":
+        from wiki_platform import metadata_remove
+        try:
+            metadata_remove(Path(repo).joinpath(*_parts(relative)), expected_sha256=expected)
+        except FileNotFoundError:
+            pass
+        return
     if _read(repo, relative) is None:
         return
     parts = _parts(relative)
@@ -398,6 +462,13 @@ def _retire(repo, relative, expected):
 
 
 def _remove_empty(repo, relative):
+    if os.name == "nt":
+        from wiki_platform import metadata_remove_empty
+        try:
+            metadata_remove_empty(Path(repo).joinpath(*_parts(relative)))
+        except FileNotFoundError:
+            pass
+        return
     parts = _parts(relative)
     with _directory(repo, parts[:-1]) as (parent, bound):
         try:
@@ -419,6 +490,35 @@ def _remove_empty(repo, relative):
 
 def _entries(repo, relative):
     """Bounded no-follow directory enumeration; absent directory returns None."""
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        try:
+            with _directory(repo, _parts(relative)) as (directory, bound):
+                entries = []
+                with os.scandir(_win32_path(directory)) as iterator:
+                    for entry in iterator:
+                        _require(len(entries) < 4096, "too many directory entries")
+                        info = entry.stat(follow_symlinks=False)
+                        _require(not info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                                 and (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)),
+                                 "unsafe storage entry: " + entry.name)
+                        entries.append((entry.name, info))
+                if directory.name == ".active_sessions":
+                    # This exact runtime coordination file is not a marker.
+                    for name, _ in entries:
+                        if name == ".session.lock":
+                            from _wiki_windows import _open, _close, _metadata_stamp
+                            handle = _open(directory / name, 0)
+                            try:
+                                snapshot = _metadata_stamp(handle)
+                                _require(snapshot[3] == 0, "unsafe session coordination lock")
+                            finally:
+                                _close(handle)
+                    entries = [(name, info) for name, info in entries if name != ".session.lock"]
+                bound()
+                return sorted(entries)
+        except FileNotFoundError:
+            return None
     try:
         with _directory(repo, _parts(relative)) as (directory, bound):
             names = os.listdir(directory)
@@ -454,6 +554,65 @@ def _open_lock(repo, relative, *, directory=False):
         if fd is not None:
             os.close(fd)
         raise
+
+
+@contextmanager
+def _file_lock(repo, relative):
+    if os.name == "nt":
+        from wiki_platform import file_lock
+        parts = _parts(relative)
+        with _directory(repo, parts[:-1], create=True) as (directory, bound):
+            with file_lock(directory / parts[-1], blocking=False):
+                yield
+                bound()
+        return
+    fd = _open_lock(repo, relative)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _locked_directory(repo, parts, *, create=False, blocking=False,
+                      busy_message="Goal migration: WBS writer active; retry after it exits"):
+    with _directory(repo, parts, create=create) as (directory, bound), ExitStack() as locks:
+        try:
+            if os.name == "nt":
+                from wiki_platform import file_lock
+                name = ".session.lock" if parts[-1] == ".active_sessions" else ".control.lock"
+                locks.enter_context(file_lock(directory / name, blocking=blocking))
+            else:
+                fcntl.flock(directory, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError as exc:
+            # Convert contention before the storage context translates OSError
+            # into its separate unsafe-path failure.
+            raise ValueError(busy_message) from exc
+        yield directory, bound
+
+
+@contextmanager
+def _legacy_goal_lock(repo):
+    if os.name == "nt":
+        # The source directory is removed after retirement; its lock stays in
+        # the migration owner's archive, outside that disappearing namespace.
+        if _entries(repo, GOALS) is not None:
+            with _file_lock(repo, ARCHIVE + "/.legacy-goals.lock"):
+                yield
+        else:
+            yield
+        return
+    try:
+        fd = _open_lock(repo, GOALS, directory=True)
+    except FileNotFoundError:
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(fd)
 
 
 def _legacy_spec(goal_id, wbs_id, value):
@@ -703,38 +862,21 @@ def _apply_goals(repo_root):
         _require(not report["blockers"], "missing legacy pool; preview returns exact initialization intake")
         if not sources and not destinations:
             return dict(report, status="complete")
-    fd = _open_lock(repo, ARCHIVE + "/.lock")
-    goal_fd = None
-    batch_fd = None
-    task_locks = ExitStack()
-    try:
-        _require(stat.S_ISREG(os.fstat(fd).st_mode) and os.fstat(fd).st_nlink == 1, "unsafe migration lock")
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with ExitStack() as task_locks:
+        task_locks.enter_context(_file_lock(repo, ARCHIVE + "/.lock"))
         try:
-            goal_fd = _open_lock(repo, GOALS, directory=True)
-        except FileNotFoundError:
-            pass
-        if goal_fd is not None:
-            try:
-                fcntl.flock(goal_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise ValueError("Goal migration: legacy writer active; retry after it exits") from exc
+            task_locks.enter_context(_legacy_goal_lock(repo))
+        except BlockingIOError as exc:
+            raise ValueError("Goal migration: legacy writer active; retry after it exits") from exc
         planned_destinations = initial["destinations"] if initial is not None else destinations
         if any(p.startswith("doc/harness/runtime/batches/") for p in planned_destinations):
-            batch_fd = _open_lock(repo, "doc/harness/runtime/batches/.lock")
             try:
-                fcntl.flock(batch_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                task_locks.enter_context(_file_lock(repo, "doc/harness/runtime/batches/.lock"))
             except BlockingIOError as exc:
                 raise ValueError("Goal migration: batch writer active; retry after it exits") from exc
-        # WBS writers use the same task-directory flock for their task-state
-        # transaction. Hold it across hash recheck and metadata replacement.
         for relative in sorted(planned_destinations):
             if relative.endswith("/WBS.json"):
-                task_fd, _ = task_locks.enter_context(_directory(repo, _parts(relative)[:-1], create=True))
-                try:
-                    fcntl.flock(task_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError as exc:
-                    raise ValueError("Goal migration: WBS writer active; retry after it exits") from exc
+                task_locks.enter_context(_locked_directory(repo, _parts(relative)[:-1], create=True))
         journal = _manifest(repo)
         if journal is None:
             current = _collect(repo)
@@ -804,15 +946,6 @@ def _apply_goals(repo_root):
         journal["status"] = "complete"
         _write(repo, MANIFEST, _encode(journal))
         return _report(journal["sources"], journal["destinations"], journal["recoveries"], "complete")
-    finally:
-        try:
-            task_locks.close()
-        finally:
-            if batch_fd is not None:
-                os.close(batch_fd)
-            if goal_fd is not None:
-                os.close(goal_fd)
-            os.close(fd)
 
 
 CONTROL_ARCHIVE = "doc/harness/archive/wbs-control-migration"
@@ -922,6 +1055,11 @@ def _control_workspace(repo, root):
         _require(resolve_registered_worktree(str(repo), str(root)) == str(root), "unregistered migration worktree")
     if root == repo:
         yield root
+        return
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory
+        with trusted_metadata_directory(root):
+            yield root
         return
     token = _ROOT.set(None)
     fd = None
@@ -1221,19 +1359,12 @@ def _control_apply(repo):
     with ExitStack() as stack:
         for root in roots:
             stack.enter_context(active_session_transaction(root))
-        lock = _open_lock(repo, CONTROL_ARCHIVE + "/.lock")
-        stack.callback(os.close, lock)
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        batch_lock = _open_lock(repo, "doc/harness/runtime/batches/.lock")
-        stack.callback(os.close, batch_lock)
-        fcntl.flock(batch_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        stack.enter_context(_file_lock(repo, CONTROL_ARCHIVE + "/.lock"))
+        stack.enter_context(_file_lock(repo, "doc/harness/runtime/batches/.lock"))
         for root, directory in directories:
             with _control_workspace(repo, root) as source:
-                fd, _ = stack.enter_context(_directory(source, _parts(directory)))
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError as exc:
-                    raise ValueError("Goal migration: WBS writer active: " + str(source / directory)) from exc
+                stack.enter_context(_locked_directory(source, _parts(directory),
+                                                     busy_message="Goal migration: WBS writer active: " + str(source / directory)))
         _require(scope == _control_scope(repo), "migration lock scope changed before preparation")
         current = _control_journal(repo)
         fresh = current is None
@@ -1390,9 +1521,7 @@ def _legacy_focus_apply(repo, *, default=False):
     with ExitStack() as stack:
         for root in roots:
             stack.enter_context(active_session_transaction(root))
-        lock = _open_lock(repo, CONTROL_ARCHIVE + "/.lock")
-        stack.callback(os.close, lock)
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        stack.enter_context(_file_lock(repo, CONTROL_ARCHIVE + "/.lock"))
         current, now_exists = _legacy_focus_plan(repo, default=default)
         _require(current == archive and exists == now_exists,
                  "legacy focus changed before preparation")

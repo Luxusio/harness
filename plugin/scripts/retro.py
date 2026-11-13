@@ -29,12 +29,15 @@ import secrets
 import stat
 import subprocess
 import sys
+from pathlib import Path
+from contextlib import ExitStack
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
     canonical_wbs_dir,
+    _git_executable,
     find_repo_root,
     read_wbs_control,
     wbs_control_transaction,
@@ -60,7 +63,7 @@ def _cutoff(days: int) -> str:
 def _git(args: list[str], cwd: str) -> str:
     try:
         r = subprocess.run(
-            ["git", *args], capture_output=True, text=True, cwd=cwd, timeout=10,
+            [_git_executable(cwd), *args], capture_output=True, text=True, cwd=cwd, timeout=10,
         )
         return r.stdout.strip() if r.returncode == 0 else ""
     except (subprocess.SubprocessError, OSError):
@@ -132,54 +135,62 @@ def _safe_label(value: object, maximum: int = 120) -> str | None:
 
 def _load_jsonl_since(repo_root: str, since: str) -> list[dict]:
     """Read safe learning metadata from a bound, owner-controlled ledger."""
-    try:
-        fds = _open_bound_chain(repo_root)
-    except (OSError, RuntimeError):
-        return []
-    try:
-        harness_fd = fds[-1]
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
         try:
-            before = os.stat("learnings.jsonl", dir_fd=harness_fd, follow_symlinks=False)
-        except FileNotFoundError:
+            raw, _ = safe_metadata_snapshot(Path(repo_root) / LEARNINGS, MAX_LEARNINGS_BYTES)
+            text = raw.decode("utf-8")
+        except (OSError, ValueError, UnicodeError):
             return []
-        if (
-            stat.S_ISLNK(before.st_mode)
-            or not stat.S_ISREG(before.st_mode)
-            or before.st_uid not in {os.getuid(), 0}
-            or before.st_nlink != 1
-            or stat.S_IMODE(before.st_mode) & 0o022
-            or before.st_size > MAX_LEARNINGS_BYTES
-        ):
-            return []
-        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    else:
         try:
-            fd = os.open("learnings.jsonl", flags, dir_fd=harness_fd)
+            fds = _open_bound_chain(repo_root)
+        except (OSError, RuntimeError):
+            return []
+        try:
+            harness_fd = fds[-1]
+            try:
+                before = os.stat("learnings.jsonl", dir_fd=harness_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return []
+            if (
+                stat.S_ISLNK(before.st_mode)
+                or not stat.S_ISREG(before.st_mode)
+                or before.st_uid not in {os.getuid(), 0}
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) & 0o022
+                or before.st_size > MAX_LEARNINGS_BYTES
+            ):
+                return []
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+            try:
+                fd = os.open("learnings.jsonl", flags, dir_fd=harness_fd)
+            except OSError:
+                return []
+            try:
+                opened = os.fstat(fd)
+                if _control_identity(opened) != _control_identity(before):
+                    return []
+                data = os.read(fd, MAX_LEARNINGS_BYTES + 1)
+                if len(data) > MAX_LEARNINGS_BYTES or os.read(fd, 1):
+                    return []
+                after = os.fstat(fd)
+                if _control_identity(after) != _control_identity(opened):
+                    return []
+            finally:
+                os.close(fd)
+            current = os.stat("learnings.jsonl", dir_fd=harness_fd, follow_symlinks=False)
+            if _control_identity(current) != _control_identity(before) or not _bound_chain_matches(repo_root, fds):
+                return []
+            try:
+                text = data.decode("utf-8")
+            except UnicodeError:
+                return []
         except OSError:
             return []
-        try:
-            opened = os.fstat(fd)
-            if _control_identity(opened) != _control_identity(before):
-                return []
-            data = os.read(fd, MAX_LEARNINGS_BYTES + 1)
-            if len(data) > MAX_LEARNINGS_BYTES or os.read(fd, 1):
-                return []
-            after = os.fstat(fd)
-            if _control_identity(after) != _control_identity(opened):
-                return []
         finally:
-            os.close(fd)
-        current = os.stat("learnings.jsonl", dir_fd=harness_fd, follow_symlinks=False)
-        if _control_identity(current) != _control_identity(before) or not _bound_chain_matches(repo_root, fds):
-            return []
-        try:
-            text = data.decode("utf-8")
-        except UnicodeError:
-            return []
-    except OSError:
-        return []
-    finally:
-        for bound_fd in reversed(fds):
-            os.close(bound_fd)
+            for bound_fd in reversed(fds):
+                os.close(bound_fd)
 
     results = []
     for line in text.splitlines():
@@ -295,6 +306,20 @@ def _verified_close_publication_fd(task_fd: int) -> float | None:
 
 def _verified_close_publication(wbs_dir: str) -> float | None:
     """Path-compatible wrapper that binds the task leaf before verification."""
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot, trusted_metadata_directory
+        try:
+            path = Path(wbs_dir)
+            with trusted_metadata_directory(path), wbs_control_transaction(wbs_dir):
+                before, identity = safe_metadata_snapshot(path / "WBS.control.json", 16384)
+                published = (path / "WBS.control.json").stat().st_mtime
+                control = read_wbs_control(wbs_dir)
+                if not control or wbs_control_status(wbs_dir, control) != "closed":
+                    return None
+                after, current = safe_metadata_snapshot(path / "WBS.control.json", 16384)
+                return published if (before, identity) == (after, current) else None
+        except (OSError, RuntimeError, ValueError):
+            return None
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     try:
         task_fd = os.open(wbs_dir, flags)
@@ -397,7 +422,28 @@ def verified_closed_wbs_since(
     repo_root: str, cutoff_ts: float,
 ) -> list[tuple[float, str]]:
     """List published task closures published after ``cutoff_ts``."""
-    root = os.path.join(repo_root, WBS_ROOT)
+    root = os.path.normpath(os.path.join(repo_root, WBS_ROOT))
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory
+        tasks = []
+        try:
+            with trusted_metadata_directory(Path(root)):
+                with os.scandir(root) as entries:
+                    for entry in entries:
+                        if not entry.name.startswith("WBS__"):
+                            continue
+                        try:
+                            canonical = canonical_wbs_dir(wbs_id=entry.name, repo_root=repo_root)
+                            if canonical != os.path.join(root, entry.name):
+                                continue
+                            published = _verified_close_publication(canonical)
+                        except (OSError, RuntimeError, ValueError):
+                            continue
+                        if published is not None and published > cutoff_ts:
+                            tasks.append((published, entry.name))
+        except (OSError, ValueError):
+            return []
+        return sorted(tasks)
     opened_root = _safe_wbs_root(root)
     if opened_root is None:
         return []
@@ -500,6 +546,17 @@ def _save_report(repo_root: str, report: str, date_str: str) -> str:
     filename = f"{date_str}.md"
     if datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d") != date_str:
         raise ValueError("invalid retro date")
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory, trusted_metadata_directory, atomic_write
+        harness = Path(repo_root) / "doc/harness"
+        with trusted_metadata_directory(harness):
+            directory = harness / "retros"
+            if not os.path.lexists(directory):
+                ensure_private_directory(directory)
+            with trusted_metadata_directory(directory):
+                destination = directory / filename
+                atomic_write(destination, report.encode("utf-8"))
+                return str(destination)
     fds = _open_bound_chain(repo_root, include_retros=True)
     temp_name = f".{date_str}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     temp_created = False

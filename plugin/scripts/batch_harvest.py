@@ -34,10 +34,10 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-import fcntl
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import stat
@@ -45,10 +45,14 @@ import subprocess
 import sys
 import tempfile
 
+if os.name != "nt":
+    import fcntl
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore  # noqa: E402
     GitBindingError,
     _trusted_git_env,
+    _git_executable,
     resolve_registered_worktree,
     find_repo_root,
 )
@@ -74,7 +78,7 @@ def _verify_registered_worktree(repo_root: str, worktree: str) -> None:
 
 def _worktree_head_sha(worktree: str) -> str:
     result = subprocess.run(
-        ["git", "-C", worktree, "rev-parse", "HEAD"],
+        [_git_executable(os.getcwd(), _trusted_git_env()), "-C", worktree, "rev-parse", "HEAD"],
         capture_output=True, text=True, check=False, env=_trusted_git_env(),
     )
     if result.returncode != 0:
@@ -87,7 +91,7 @@ def _worktree_head_sha(worktree: str) -> str:
 
 def _verify_merged(repo_root: str, worktree: str) -> None:
     on_branch = subprocess.run(
-        ["git", "-C", worktree, "symbolic-ref", "-q", "HEAD"],
+        [_git_executable(os.getcwd(), _trusted_git_env()), "-C", worktree, "symbolic-ref", "-q", "HEAD"],
         capture_output=True, text=True, check=False, env=_trusted_git_env(),
     )
     if on_branch.returncode != 0:
@@ -97,7 +101,7 @@ def _verify_merged(repo_root: str, worktree: str) -> None:
         )
     sha = _worktree_head_sha(worktree)
     result = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+        [_git_executable(repo_root, _trusted_git_env()), "merge-base", "--is-ancestor", sha, "HEAD"],
         cwd=repo_root, capture_output=True, text=True, check=False,
         env=_trusted_git_env(),
     )
@@ -123,6 +127,10 @@ def _refuse_links_below(worktree: str, *parts: str) -> str:
 
 def _refuse_non_regular_tree(root: str) -> None:
     """Refuse symlinks, FIFOs, sockets, and devices anywhere under ``root``."""
+    if os.name == "nt":
+        from wiki_platform import metadata_tree_inventory
+        metadata_tree_inventory(Path(root), max_entries=100000, max_bytes=8 * 1024 ** 3)
+        return
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         for name in dirnames + filenames:
             full = os.path.join(dirpath, name)
@@ -144,6 +152,11 @@ def _hash_file(path: str) -> str:
 def _tree_entries(root: str) -> dict:
     """Map every relative path under `root` to a file hash, or None for a dir."""
     entries: dict = {}
+    if os.name == "nt":
+        from wiki_platform import metadata_tree_inventory
+        inventory = metadata_tree_inventory(Path(root), max_entries=100000, max_bytes=8 * 1024 ** 3)
+        return {relative: None if row["kind"] == "dir" else row["sha256"]
+                for relative, row in inventory.items()}
 
     def scan_error(error):
         raise error
@@ -168,7 +181,42 @@ def _tree_entries(root: str) -> dict:
     return entries
 
 
-def _archive_wbs(repo_root: str, worktree: str, wbs_id: str) -> str:
+_NATIVE_ARCHIVE_PROTOCOL = 'ntfs-write-through-v1'
+
+
+def native_archive_intent(repo, worktree, wbs_id):
+    """Describe existing closed source, never create a publication intent here."""
+    from _lib import read_wbs_control, wbs_control_status
+    if not isinstance(wbs_id, str) or not WBS_ID_RE.fullmatch(wbs_id):
+        raise HarvestError('invalid WBS archive identity')
+    source = os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id)
+    control = read_wbs_control(source)
+    if not control or wbs_control_status(source, control) != 'closed':
+        raise HarvestError('Native archive requires the exact closed source WBS')
+    entries = _tree_entries(source)
+    fingerprint = 'sha256:' + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
+    return dict(protocol=_NATIVE_ARCHIVE_PROTOCOL, source=source,
+                archived=os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id), fingerprint=fingerprint)
+
+
+def validate_native_publication(repo, worktree, wbs_id, publication):
+    from _lib import read_wbs_control
+    wanted = native_archive_intent(repo, worktree, wbs_id)
+    control = read_wbs_control(wanted['source'])
+    if (not isinstance(publication, dict) or publication.get('closed') is not True
+            or publication.get('run_id') != control['run_id']):
+        raise HarvestError('Native archive publication requires the durable batch owner checkpoint')
+    pending = publication.get('archive_publication')
+    completed = (publication.get('stage') == 'harvested'
+                 and publication.get('archive_fingerprint') == wanted['fingerprint']
+                 and isinstance(publication.get('harvest'), dict)
+                 and publication['harvest'].get('archived') == wanted['archived'])
+    if pending != wanted and not completed:
+        raise HarvestError('Native archive publication intent is missing or does not match source/archive')
+    return wanted
+
+
+def _archive_wbs(repo_root: str, worktree: str, wbs_id: str, *, publication=None) -> str:
     if not WBS_ID_RE.match(wbs_id):
         raise HarvestError(f"invalid wbs_id: {wbs_id}")
     source_dir = _refuse_links_below(worktree, "doc", "harness", "wbs", wbs_id)
@@ -180,6 +228,56 @@ def _archive_wbs(repo_root: str, worktree: str, wbs_id: str) -> str:
 
     dest_root = os.path.join(repo_root, "doc", "harness", "archive", "batch")
     dest_dir = os.path.join(dest_root, wbs_id)
+    if os.name == "nt":
+        from wiki_platform import (trusted_metadata_directory, ensure_private_directory,
+                                   metadata_tree_inventory, metadata_copy, metadata_rename_directory,
+                                   metadata_remove, metadata_remove_empty, metadata_set_readonly)
+        inventory_limit = dict(max_entries=100000, max_bytes=8 * 1024 ** 3)
+        validate_native_publication(repo_root, worktree, wbs_id, publication)
+        with trusted_metadata_directory(Path(source_dir)):
+            original = metadata_tree_inventory(Path(source_dir), **inventory_limit)
+            ensure_private_directory(Path(dest_root))
+            with trusted_metadata_directory(Path(dest_root)):
+                if os.path.lexists(dest_dir):
+                    if metadata_tree_inventory(Path(dest_dir), **inventory_limit) == original:
+                        return dest_dir
+                    raise HarvestError(f"archive already holds different evidence for {wbs_id}: {dest_dir}; refusing to overwrite it")
+                stage = Path(tempfile.mkdtemp(dir=dest_root, prefix=f".{wbs_id}.tmp-"))
+                copied = {}
+                try:
+                    with trusted_metadata_directory(stage):
+                        for relative, row in original.items():
+                            target = stage / relative
+                            if row['kind'] == 'dir':
+                                ensure_private_directory(target)
+                            else:
+                                metadata_copy(Path(source_dir) / relative, target,
+                                              max_bytes=row['size'], expected_sha256=row['sha256'],
+                                              expected_size=row['size'], readonly=row['readonly'])
+                            copied[relative] = row
+                        for relative, row in reversed(list(original.items())):
+                            if row['kind'] == 'dir':
+                                metadata_set_readonly(stage / relative, row['readonly'], directory=True)
+                        if (metadata_tree_inventory(Path(source_dir), **inventory_limit) != original
+                                or metadata_tree_inventory(stage, **inventory_limit) != original):
+                            raise HarvestError('WBS evidence changed during archive copy')
+                    metadata_rename_directory(stage, Path(dest_dir))
+                    return dest_dir
+                except BaseException:
+                    # Only remove exact objects we created, never a substituted
+                    # stage or newly arrived bytes. Unknown residue is retained.
+                    try:
+                        current = metadata_tree_inventory(stage, **inventory_limit)
+                        if current == copied:
+                            for relative, row in reversed(list(copied.items())):
+                                if row['kind'] == 'dir':
+                                    metadata_remove_empty(stage / relative)
+                                else:
+                                    metadata_remove(stage / relative, expected_sha256=row['sha256'], max_bytes=row['size'])
+                            metadata_remove_empty(stage)
+                    except (OSError, ValueError):
+                        pass
+                    raise
     os.makedirs(dest_root, exist_ok=True)
 
     if os.path.lexists(dest_dir):
@@ -211,6 +309,20 @@ def _archive_wbs(repo_root: str, worktree: str, wbs_id: str) -> str:
 
 def _read_learnings_rows(src: str) -> list:
     """Return the JSON-object rows of a worktree learnings file, no links followed."""
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        try:
+            raw, _ = safe_metadata_snapshot(Path(src), 16 * 1024 * 1024)
+        except FileNotFoundError:
+            return []
+        rows = []
+        for stripped in raw.decode("utf-8").splitlines():
+            try:
+                if isinstance(json.loads(stripped), dict):
+                    rows.append(stripped)
+            except ValueError:
+                continue
+        return rows
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(src, flags)
@@ -235,6 +347,9 @@ def _read_learnings_rows(src: str) -> list:
 def _append_learnings(repo_root: str, rows: list) -> int:
     if not rows:
         return 0
+    if os.name == "nt":
+        from _lib import _native_append_learning_lines
+        return _native_append_learning_lines(repo_root, rows, unique=True)
     dest = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(dest, "a+", encoding="utf-8") as handle:
@@ -253,7 +368,7 @@ def _append_learnings(repo_root: str, rows: list) -> int:
     return len(new_rows)
 
 
-def harvest(repo_root: str, worktree: str, wbs_id: str) -> dict:
+def harvest(repo_root: str, worktree: str, wbs_id: str, *, publication=None) -> dict:
     repo_root = os.path.realpath(repo_root)
     if not os.path.isabs(worktree):
         raise HarvestError(f"--worktree must be an absolute path: {worktree}")
@@ -266,7 +381,8 @@ def harvest(repo_root: str, worktree: str, wbs_id: str) -> dict:
     rows = _read_learnings_rows(
         _refuse_links_below(worktree, "doc", "harness", "learnings.jsonl")
     )
-    dest_dir = _archive_wbs(repo_root, worktree, wbs_id)
+    dest_dir = (_archive_wbs(repo_root, worktree, wbs_id, publication=publication)
+                if os.name == "nt" else _archive_wbs(repo_root, worktree, wbs_id))
     appended = _append_learnings(repo_root, rows)
     return {"archived": dest_dir, "learnings_appended": appended}
 
@@ -279,6 +395,14 @@ def _s1_require(condition, reason):
 def _s1_path(path, directory=False):
     """Check every existing ancestor, including before bounded state reads."""
     absolute = os.path.abspath(path)
+    if os.name == "nt":
+        from wiki_platform import _native
+        target = Path(absolute)
+        with _native._walk(target if directory else target.parent, owner_neutral=True):
+            if not directory:
+                handle = _native._open(target, 0, owner_neutral=True, allow_hardlinks=True)
+                _native._close(handle)
+        return absolute
     _s1_require(os.path.realpath(absolute) == absolute, "unsafe symlink in S1 proof path")
     current = os.path.sep
     parts = absolute.split(os.path.sep)[1:]
@@ -296,10 +420,10 @@ def _s1_git(root, *args):
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT='0', GIT_NO_LAZY_FETCH='1', GIT_NO_REPLACE_OBJECTS='1', LC_ALL='C')
     return subprocess.run(
-        ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+        [_git_executable(root, env), '--no-optional-locks', '-c', 'core.fsmonitor=false',
          '-c', 'core.hooksPath=' + os.devnull, '-c', 'submodule.recurse=false',
          '-c', 'protocol.allow=never', '-c', 'status.showUntrackedFiles=all', *args],
-        cwd=root, env=env, capture_output=True, text=True, timeout=120,
+        cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
 
 
@@ -366,7 +490,7 @@ def _s1_content(worktree, wbs_id, source_entries, manifest, repo, *, ordinary_al
         raise HarvestError('cannot inspect every worktree entry') from exc
     count = 0
     for current, dirs, files in os.walk(worktree, followlinks=False, onerror=unreadable):
-        relroot = os.path.relpath(current, worktree)
+        relroot = os.path.relpath(current, worktree).replace(os.sep, "/")
         relroot = '' if relroot == '.' else relroot
         keep = []
         for name in dirs:
@@ -425,6 +549,9 @@ def _ordinary_cache(root):
 
 def _ordinary_bytes(path, limit=65536):
     _s1_path(path)
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        return safe_metadata_snapshot(Path(path), limit)[0]
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as handle:
         info = os.fstat(handle.fileno())
@@ -444,6 +571,11 @@ def _ordinary_markers(worktree, wbs_id):
     if not control or wbs_control_status(source, control) != 'closed':
         return set()  # standalone legacy evidence can be archived, never infer marker ownership
     allowed = set()
+    if os.name == "nt":
+        promotion_lock = os.path.join(worktree, 'doc', 'harness', '.promotion.lock')
+        if os.path.lexists(promotion_lock):
+            _s1_require(_ordinary_bytes(promotion_lock, 0) == b"", 'nonempty native promotion lock')
+            allowed.add('doc/harness/.promotion.lock')
     tasks = os.path.dirname(source)
     sessions = os.path.join(tasks, '.active_sessions')
     owned_sessions = set()
@@ -451,6 +583,11 @@ def _ordinary_markers(worktree, wbs_id):
         _s1_path(sessions, True)
         allowed.add('doc/harness/wbs/.active_sessions')
         for name in os.listdir(sessions):
+            if os.name == "nt" and name == ".session.lock":
+                _s1_require(_ordinary_bytes(os.path.join(sessions, name), 0) == b"",
+                            'nonempty native session lock')
+                allowed.add('doc/harness/wbs/.active_sessions/' + name)
+                continue
             if not name.endswith('.json'):
                 continue  # unknown entries are rejected by the full inventory
             raw = _ordinary_bytes(os.path.join(sessions, name))
@@ -503,7 +640,7 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
     """
     from _lib import read_wbs_control, wbs_control_status, sanitize_session_id
 
-    task = control_dir or os.path.join(worktree, 'doc/harness/wbs', wbs_id)
+    task = control_dir or os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id)
     control = read_wbs_control(task)
     candidates = [('doc/harness/.watcher-diagnostics.json', 'watcher-diagnostics.json'),
                   ('doc/harness/checkpoints/' + wbs_id + '.md', 'checkpoint.md')]
@@ -515,7 +652,7 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
     run = control.get('run_id')
     _s1_require(isinstance(run, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', run),
                 'unsafe ancillary snapshot run identity')
-    root = os.path.join(repo, 'doc/harness/archive/worktree-recovery', wbs_id, run)
+    root = os.path.join(repo, 'doc', 'harness', 'archive', 'worktree-recovery', wbs_id, run)
     if not preserve:
         present = [(rel, name) for rel, name in candidates
                    if os.path.lexists(os.path.join(worktree, rel)) or os.path.lexists(os.path.join(root, name))]
@@ -561,22 +698,39 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
         snapshots.append((rel, name, raw))
     # No mutable manifest and no mutation of closed WBS evidence. Exact bytes
     # themselves are the preservation proof; an existing different copy refuses.
-    for directory in (os.path.join(repo, 'doc/harness/archive'),
-                      os.path.join(repo, 'doc/harness/archive/worktree-recovery'),
+    for directory in (os.path.join(repo, 'doc', 'harness', 'archive'),
+                      os.path.join(repo, 'doc', 'harness', 'archive', 'worktree-recovery'),
                       os.path.dirname(root), root):
-        if preserve:
-            try:
-                os.mkdir(directory, 0o700)
-            except FileExistsError:
+        if os.name == "nt":
+            from wiki_platform import ensure_private_directory, trusted_metadata_directory
+            if preserve and not os.path.lexists(directory):
+                ensure_private_directory(Path(directory))
+            with trusted_metadata_directory(Path(directory)):
                 pass
-        _s1_path(directory, True)
-        info = os.lstat(directory)
-        _s1_require(info.st_uid == os.getuid() and not info.st_mode & 0o022,
-                    'unsafe ancillary snapshot directory: ' + directory)
+        else:
+            if preserve:
+                try:
+                    os.mkdir(directory, 0o700)
+                except FileExistsError:
+                    pass
+            _s1_path(directory, True)
+            info = os.lstat(directory)
+            _s1_require(info.st_uid == os.getuid() and not info.st_mode & 0o022,
+                        'unsafe ancillary snapshot directory: ' + directory)
     preserved = set()
     for rel, name, raw in snapshots:
         destination = os.path.join(root, name)
-        if not os.path.lexists(destination):
+        if os.name == "nt":
+            from wiki_platform import metadata_write
+            existing = _ordinary_bytes(destination) if os.path.lexists(destination) else None
+            _s1_require(existing is None or existing == raw, 'ancillary snapshot collision; refusing overwrite: ' + destination)
+            _s1_require(preserve or existing == raw, 'ancillary snapshot was not preserved before partial removal: ' + rel)
+            if preserve:
+                # Advisory copies are writable. Re-publish exact same bytes
+                # under the batch owner lock with genuine NTFS write-through,
+                # rather than pretending a readonly directory fd can fsync.
+                metadata_write(Path(destination), raw, expected=existing)
+        elif not os.path.lexists(destination):
             _s1_require(preserve, 'ancillary snapshot was not preserved before partial removal: ' + rel)
             try:
                 fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -595,6 +749,10 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
         preserved.add(rel)
     # Publish every newly created directory entry durably before W can go.
     # Syncing only the run directory does not persist its name in its parent.
+    if os.name == "nt":
+        # The Native branch above performed actual flushed/write-through file
+        # publications, including their names; there is no POSIX dir-fd shim.
+        return preserved
     current = root
     while preserve and current != os.path.dirname(repo):
         _s1_path(current, True)
@@ -614,6 +772,18 @@ def _preserve_namespace_file(repo, worktree, relative, destination, expected):
     import base64
 
     storage = namespace.storage
+    if os.name == "nt":
+        from wiki_platform import metadata_copy
+        _s1_require('link' not in expected, 'native namespace link payload requires explicit migration support')
+        source = Path(worktree) / relative
+        target = Path(repo) / destination
+        _s1_require(namespace._hash_file(Path(worktree), relative) == expected,
+                    'namespace history changed during preservation: ' + relative)
+        with storage._directory(Path(repo), storage._parts(destination)[:-1], create=True):
+            metadata_copy(source, target, max_bytes=expected['size'],
+                          expected_sha256=expected['sha256'], expected_size=expected['size'],
+                          readonly=not bool(expected['mode'] & 0o200))
+        return
     saved = {**expected} if 'link' not in expected else {
         'sha256': expected['sha256'], 'size': expected['size'], 'mode': 0o600}
     identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid,
@@ -740,7 +910,7 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
     import wbs_namespace_migration as namespace
 
     repo, worktree = os.path.abspath(repo), os.path.abspath(worktree)
-    control_path = control_dir or os.path.join(worktree, 'doc/harness/wbs', wbs_id)
+    control_path = control_dir or os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id)
     control = read_wbs_control(control_path)
     if not control:
         return {}
@@ -791,8 +961,14 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
             directories.add(relative)
             if os.path.lexists(Path(worktree) / relative):
                 info = os.lstat(_s1_path(str(Path(worktree) / relative), True))
-                _s1_require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode)
-                            in {row['mode'], row['mode'] | stat.S_IWUSR}, 'namespace history directory changed')
+                if os.name == "nt":
+                    from wiki_platform import trusted_metadata_directory
+                    with trusted_metadata_directory(Path(worktree) / relative):
+                        _s1_require(bool(info.st_file_attributes & 1) == (not bool(row['mode'] & 0o200)),
+                                    'namespace history directory changed')
+                else:
+                    _s1_require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode)
+                                in {row['mode'], row['mode'] | stat.S_IWUSR}, 'namespace history directory changed')
             else:
                 _s1_require(not preserve, 'namespace history directory disappeared')
         else:
@@ -854,6 +1030,13 @@ def _thaw_namespace_history(repo, worktree, wbs_id):
             continue
         path = _s1_path(os.path.join(worktree, relative), True)
         before = os.lstat(path)
+        if os.name == "nt":
+            from wiki_platform import trusted_metadata_directory
+            # NTFS directory readonly attributes do not control child deletion.
+            # Preserve them; the actual DELETE handle remains owner/DACL-bound.
+            with trusted_metadata_directory(Path(path)):
+                pass
+            continue
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             info = os.fstat(fd)
@@ -872,8 +1055,8 @@ def ordinary_removal_proof(repo, worktree, wbs_id, retention=None, checkpoint=No
     """
     try:
         _verify_registered_worktree(repo, worktree)
-        source = _s1_path(os.path.join(worktree, 'doc/harness/wbs', wbs_id), True)
-        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
+        source = _s1_path(os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id), True)
+        archive = _s1_path(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id), True)
         for directory in (source, archive):
             _refuse_non_regular_tree(directory)
         entries = _tree_entries(source)
@@ -889,9 +1072,9 @@ def ordinary_removal_proof(repo, worktree, wbs_id, retention=None, checkpoint=No
         allowed.update(ancillary)
         namespace = _ordinary_namespace_history(repo, worktree, wbs_id)
         allowed.update(namespace)
-        learning = os.path.join(worktree, 'doc/harness/learnings.jsonl')
+        learning = os.path.join(worktree, 'doc', 'harness', 'learnings.jsonl')
         if os.path.lexists(learning):
-            _ordinary_learning_proof(learning, os.path.join(repo, 'doc/harness/learnings.jsonl'))
+            _ordinary_learning_proof(learning, os.path.join(repo, 'doc', 'harness', 'learnings.jsonl'))
         if retention is not None:
             from batch_finish import RETENTION_MARKER, validate_retention
             validate_retention(worktree, retention)
@@ -919,14 +1102,14 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     # candidates. The complete byte inventory follows collection, before chmod.
     _verify_registered_worktree(repo, worktree)
     from verification_target import _spec
-    task = _s1_path(os.path.join(worktree, 'doc/harness/wbs', wbs_id), True)
+    task = _s1_path(os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id), True)
     store = os.path.join(task, 'work/verification-targets')
     if not os.path.isdir(store):
         ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
         _thaw_namespace_history(repo, worktree, wbs_id)
         return
     _s1_path(store, True)
-    archive_task = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
+    archive_task = _s1_path(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id), True)
     _s1_require(checkpoint.get('stage') == 'harvested'
                 and checkpoint.get('harvest', {}).get('archived') == archive_task,
                 'task archive differs from durable removal checkpoint')
@@ -957,6 +1140,13 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     # Inventory/proof must finish before any permission change.
     ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
     for path, dev, ino, mode in directories:
+        if os.name == "nt":
+            from wiki_platform import trusted_metadata_directory
+            with trusted_metadata_directory(Path(path)):
+                info = os.lstat(path)
+                _s1_require((info.st_dev, info.st_ino, info.st_mode) == (dev, ino, mode),
+                            'verification directory changed before disposal')
+            continue
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             info = os.fstat(fd)
@@ -1002,7 +1192,7 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
     _s1_require(os.path.abspath(worktree) == os.path.realpath(worktree)
                 and os.path.commonpath([repo, worktree]) != worktree,
                 'unsafe residue root')
-    archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
+    archive = _s1_path(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id), True)
     _s1_require(os.path.commonpath([archive, worktree]) != worktree, 'archive lies inside residue')
     _refuse_non_regular_tree(archive)
     archived = _tree_entries(archive)
@@ -1046,12 +1236,21 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
             raise HarvestError('cannot inspect residue') from exc
         for current, dirs, files in os.walk(worktree, followlinks=False, onerror=unreadable):
             for path in [current] + [os.path.join(current, n) for n in files + dirs]:
-                rel = os.path.relpath(path, worktree)
+                rel = os.path.relpath(path, worktree).replace(os.sep, "/")
                 _s1_require(len(found) < 100000, 'residue inventory exceeds bound')
                 info = os.lstat(path)
                 identity = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
-                _s1_require(info.st_uid == os.getuid() and info.st_nlink == 1 or stat.S_ISDIR(info.st_mode)
-                            and info.st_uid == os.getuid(), 'unsafe residue ownership/link count')
+                if os.name == 'nt':
+                    from wiki_platform import _native
+                    with _native._walk(Path(path).parent, secure=True):
+                        handle = _native._open(Path(path), 0, directory=stat.S_ISDIR(info.st_mode))
+                        try:
+                            _native._security(handle, 'metadata')
+                        finally:
+                            _native._close(handle)
+                else:
+                    _s1_require(info.st_uid == os.getuid() and info.st_nlink == 1 or stat.S_ISDIR(info.st_mode)
+                                and info.st_uid == os.getuid(), 'unsafe residue ownership/link count')
                 if stat.S_ISLNK(info.st_mode):
                     from pathlib import Path
                     import wbs_namespace_migration
@@ -1085,28 +1284,47 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                 sha = hashlib.sha256()
                 blob = hashlib.new(algorithm)
                 blob.update(('blob ' + str(info.st_size) + '\0').encode())
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                with os.fdopen(fd, 'rb') as handle:
-                    before = os.fstat(handle.fileno())
-                    _s1_require((before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns) == identity,
-                                'residue changed during open')
-                    for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                        sha.update(chunk)
-                        blob.update(chunk)
-                    after = os.fstat(handle.fileno())
-                    _s1_require((after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == identity,
-                                'residue changed during read')
+                if os.name == 'nt':
+                    from wiki_platform import _native
+                    with _native._walk(Path(path).parent, secure=True):
+                        handle = _native._open(Path(path), _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+                        try:
+                            stamp = _native._metadata_stamp(handle)
+                            before = os.lstat(path)
+                            _s1_require((before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns) == identity,
+                                        'residue changed during open')
+                            for chunk in _native._file_chunks(handle, info.st_size):
+                                sha.update(chunk)
+                                blob.update(chunk)
+                            _s1_require(_native._metadata_stamp(handle) == stamp,
+                                        'residue changed during read')
+                        finally:
+                            _native._close(handle)
+                else:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    with os.fdopen(fd, 'rb') as handle:
+                        before = os.fstat(handle.fileno())
+                        _s1_require((before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns) == identity,
+                                    'residue changed during open')
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                            sha.update(chunk)
+                            blob.update(chunk)
+                        after = os.fstat(handle.fileno())
+                        _s1_require((after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == identity,
+                                    'residue changed during read')
                 archived_match = (preserved.get(rel) == sha.hexdigest()
-                                  and bool(info.st_mode & 0o111) == bool(os.lstat(os.path.join(archive, rel[len(task_rel) + 1:])).st_mode & 0o111))
-                matches = (archived_match or ancillary_entries.get(rel) == sha.hexdigest()
-                           or tracked.get(rel) == (blob.hexdigest(), bool(info.st_mode & 0o111)))
+                                  and (os.name == 'nt' or bool(info.st_mode & 0o111) == bool(os.lstat(os.path.join(archive, rel[len(task_rel) + 1:])).st_mode & 0o111)))
+                tracked_entry = tracked.get(rel)
+                tracked_match = (tracked_entry is not None and tracked_entry[0] == blob.hexdigest()
+                                 and (os.name == 'nt' or tracked_entry[1] == bool(info.st_mode & 0o111)))
+                matches = archived_match or ancillary_entries.get(rel) == sha.hexdigest() or tracked_match
                 if rel == 'doc/harness/learnings.jsonl':
                     _ordinary_learning_proof(path, os.path.join(repo, rel))
                     matches = True
                 _s1_require(matches, 'unpreserved or changed residue: ' + rel)
                 found[rel] = identity
             dirs[:] = [name for name in dirs
-                       if os.path.relpath(os.path.join(current, name), worktree) not in gitlinks]
+                       if os.path.relpath(os.path.join(current, name), worktree).replace(os.sep, "/") not in gitlinks]
         return found
     expected = inventory()
     _s1_require(inventory() == expected, 'residue inventory changed')
@@ -1116,6 +1334,54 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                 'ancillary preservation changed during residue proof')
     _s1_require(_ordinary_namespace_history(repo, worktree, wbs_id, control_dir=archive, preserve=False) == namespace,
                 'namespace preservation changed during residue proof')
+    if os.name == 'nt':
+        from wiki_platform import _native, metadata_remove_empty
+        import ctypes
+        handles = {}
+        base = Path(worktree)
+        with _native._walk(base.parent, secure=True):
+            try:
+                for relative in sorted(expected, key=lambda value: (value.count('/'), value)):
+                    original = expected[relative]
+                    if not stat.S_ISDIR(original[2]):
+                        continue
+                    target = base if relative == '.' else base / relative
+                    handle = _native._open(target, _native.FILE_LIST_DIRECTORY, directory=True,
+                                           share=_native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE)
+                    handles[relative] = handle
+                    _native._security(handle, 'metadata')
+                    info = target.lstat()
+                    _s1_require((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns) == original,
+                                'residue directory changed before disposal')
+                # Every directory name remains retained until its own empty
+                # removal; current files use real DELETE handles, never chmod.
+                for relative in sorted((value for value in expected if value != '.'),
+                                       key=lambda value: (value.count('/'), value), reverse=True):
+                    target, original = base / relative, expected[relative]
+                    if stat.S_ISDIR(original[2]):
+                        _native._close(handles.pop(relative))
+                        info = target.lstat()
+                        _s1_require((info.st_dev, info.st_ino) == original[:2], 'residue directory replaced before disposal')
+                        metadata_remove_empty(target)
+                        continue
+                    handle = _native._open(target, _native.DELETE, share=_native.FILE_SHARE_READ, write_through=True)
+                    try:
+                        _native._security(handle, 'metadata')
+                        info = target.lstat()
+                        _s1_require((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns) == original,
+                                    'residue changed before deletion')
+                        flags = _native.DWORD(1 | 0x10)
+                        _native._check(_native._SetFileInformation(handle, 21, ctypes.byref(flags), ctypes.sizeof(flags)))
+                    finally:
+                        _native._close(handle)
+                _native._close(handles.pop('.'))
+                info = base.lstat()
+                _s1_require((info.st_dev, info.st_ino) == expected['.'][:2], 'residue root replaced')
+                metadata_remove_empty(base)
+            finally:
+                for handle in handles.values():
+                    _native._close(handle)
+        return
     # Keep verified directory descriptors through deletion; never traverse a
     # newly replaced parent by pathname while removing its children.
     handles = {}
@@ -1175,7 +1441,7 @@ def remove_s1_worktree(repo, worktree, wbs_id, manifest, checkpoint, git_runner=
         _s1_require(manifest['repo'] == repo and manifest['worktree'] == worktree
                     and wbs_id == 'WBS__' + manifest['slug'], 'S1 removal identity mismatch')
         _verify_registered_worktree(repo, worktree)
-        state_path = _s1_path(os.path.join(repo, 'doc/harness/runtime/batches', manifest['batch_id'] + '.json'))
+        state_path = _s1_path(os.path.join(repo, 'doc', 'harness', 'runtime', 'batches', manifest['batch_id'] + '.json'))
         data = _read_json_file(state_path)
         _s1_require(type(data.get('schema_version')) is int and data['schema_version'] == 2
                     and data.get('repo') == repo and data.get('batch_id') == manifest['batch_id'], 'missing or incompatible durable S1 state')
@@ -1201,8 +1467,8 @@ def remove_s1_worktree(repo, worktree, wbs_id, manifest, checkpoint, git_runner=
                     and isinstance(item.get('branch'), str)
                     and _s1_git_text(worktree, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + item['branch'],
                     'integrated branch or destination changed')
-        source = _s1_path(os.path.join(worktree, 'doc/harness/wbs', wbs_id), True)
-        archive = _s1_path(os.path.join(repo, 'doc/harness/archive/batch', wbs_id), True)
+        source = _s1_path(os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id), True)
+        archive = _s1_path(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id), True)
         _s1_require(isinstance(checkpoint.get('harvest'), dict) and checkpoint['harvest'].get('archived') == archive,
                     'checkpoint archive path mismatch')
         for directory in (source, archive):

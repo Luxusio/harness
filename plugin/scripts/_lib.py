@@ -14,10 +14,11 @@ import sys
 import secrets
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import CodeType
+from pathlib import Path
 
 WBS_DIR = "doc/harness/wbs"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
@@ -107,7 +108,23 @@ def read_hook_input(max_chars=_STDIN_CAP_BYTES):
     if not isinstance(max_chars, int) or max_chars <= 0:
         max_chars = _STDIN_CAP_BYTES
     try:
-        raw = _sys.stdin.read(max_chars)
+        if os.name == "nt":
+            # Hook transport is UTF-8 even when the Windows ANSI codepage is
+            # different. Interpreter -E deliberately ignores encoding env vars.
+            for stream in (_sys.stdout, _sys.stderr):
+                configure = getattr(stream, "reconfigure", None)
+                if callable(configure):
+                    configure(encoding="utf-8", errors="strict")
+            binary = getattr(_sys.stdin, "buffer", None)
+            if binary is not None:
+                payload = binary.read(max_chars + 1)
+                if len(payload) > max_chars:
+                    raise ValueError("hook payload exceeds byte limit")
+                raw = payload.decode("utf-8")
+            else:
+                raw = _sys.stdin.read(max_chars)
+        else:
+            raw = _sys.stdin.read(max_chars)
     except Exception:
         _LAST_HOOK_INPUT = {}
         _HOOK_INPUT_REJECTED = True
@@ -151,6 +168,13 @@ def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str
 
 
 def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
+    if os.name == "nt":
+        from wiki_platform import source_snapshot
+        try:
+            data, _ = source_snapshot(Path(path).absolute(), max_size)
+            return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except (OSError, ValueError, UnicodeError):
+            return ""
     flags = os.O_RDONLY
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -179,6 +203,23 @@ def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
 def _strict_regular_text_snapshot(
     path: str, *, max_size: int = 1024 * 1024, allow_symlink: bool = False,
 ):
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot, trusted_source_directory
+        try:
+            with trusted_source_directory(Path(path).absolute().parent):
+                if allow_symlink and Path(path).is_symlink():
+                    before = os.lstat(path)
+                    target = os.readlink(path)
+                    after = os.lstat(path)
+                    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                        raise RuntimeError("snapshot link identity changed")
+                    return dict(exists=True, kind="symlink", target=target, text="")
+                data, _ = safe_metadata_snapshot(Path(path).absolute(), max_size)
+                return dict(exists=True, kind="regular", text=data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n"))
+        except FileNotFoundError:
+            return dict(exists=False, kind="absent", text="")
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise RuntimeError(f"snapshot read unavailable for {path}: {exc}") from exc
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
     binding_fn = globals().get("_wbs_control_lock_binding")
@@ -292,6 +333,21 @@ def _restore_text_snapshots(snapshots):
 
 
 def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate state key")
+                result[key] = value
+            return result
+        try:
+            raw, _ = safe_metadata_snapshot(Path(path).absolute(), max_size)
+            value = json.loads(raw, object_pairs_hook=unique_object)
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError, UnicodeError):
+            return {}
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         before = os.lstat(path)
@@ -342,6 +398,10 @@ def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
 
 
 def _atomic_text_write(path: str, text: str) -> None:
+    if os.name == "nt":
+        from wiki_platform import atomic_write
+        atomic_write(Path(path).absolute(), text.encode("utf-8"))
+        return
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
     binding_fn = globals().get("_wbs_control_lock_binding")
@@ -470,6 +530,13 @@ def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
         return False
     if len(payload) > DIAGNOSTICS_MAX_BYTES:
         return False
+    if os.name == "nt":
+        from wiki_platform import atomic_write
+        try:
+            atomic_write(Path(path).absolute(), payload)
+            return True
+        except (OSError, ValueError):
+            return False
     tmp = f".diag.{secrets.token_hex(8)}.tmp"
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -572,6 +639,38 @@ def _escape_hint(gate_name):
     return f"escape: {key}=1 <retry>"
 
 
+def _native_append_learning_lines(repo_root, rows, *, unique=False):
+    """Serialize Native read/append publication with the promotion reader."""
+    if os.name != "nt":
+        raise NotImplementedError("Native learning publication is Windows-only")
+    from wiki_platform import trusted_metadata_directory, file_lock, safe_metadata_snapshot, metadata_write
+    directory = Path(repo_root).absolute() / "doc/harness"
+    with trusted_metadata_directory(directory), file_lock(directory / ".promotion.lock", blocking=True):
+        destination = directory / "learnings.jsonl"
+        try:
+            before, _ = safe_metadata_snapshot(destination, 16 * 1024 * 1024)
+            expected = before
+        except FileNotFoundError:
+            before, expected = b"", None
+        existing = set(before.decode("utf-8").splitlines()) if unique else set()
+        added = []
+        for row in rows:
+            if not unique or row not in existing:
+                added.append(row)
+                existing.add(row)
+        if added:
+            payload = before + (b"\n" if before and not before.endswith(b"\n") else b"")
+            payload += ("\n".join(added) + "\n").encode("utf-8")
+            if len(payload) > 16 * 1024 * 1024:
+                raise ValueError("Learning ledger exceeds byte limit")
+            metadata_write(destination, payload, expected=expected)
+        elif rows:
+            # A harvested duplicate still needs actual flushed custody of its
+            # preserved bytes before the source worktree can be removed.
+            metadata_write(destination, before, expected=expected)
+        return len(added)
+
+
 def _log_gate_error(exc, source, repo_root=None):
     """Append a gate-exception entry to doc/harness/learnings.jsonl.
 
@@ -588,15 +687,19 @@ def _log_gate_error(exc, source, repo_root=None):
         if not is_harness_enabled_repo(repo_root):
             return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
-        os.makedirs(os.path.dirname(learn_path), exist_ok=True)
+        if os.name != "nt":
+            os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         entry = _json.dumps({
             "ts": now_iso(),
             "type": "gate-error",
             "source": str(source or "gate"),
             "error": f"{type(exc).__name__}: {str(exc)[:400]}",
         })
-        with open(learn_path, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
+        if os.name == "nt":
+            _native_append_learning_lines(repo_root, [entry])
+        else:
+            with open(learn_path, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
     except Exception:
         pass
 
@@ -626,7 +729,8 @@ def log_gate_crash(exc, script, hook_input=None):
         if not is_harness_enabled_repo(repo_root):
             return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
-        os.makedirs(os.path.dirname(learn_path), exist_ok=True)
+        if os.name != "nt":
+            os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         record = {
             "ts": now_iso(),
             "type": "gate-crash",
@@ -641,8 +745,11 @@ def log_gate_crash(exc, script, hook_input=None):
                 record["payload_keys"] = sorted(hook_input.keys())
             except Exception:
                 pass
-        with open(learn_path, "a", encoding="utf-8") as f:
-            f.write(_json.dumps(record) + "\n")
+        if os.name == "nt":
+            _native_append_learning_lines(repo_root, [_json.dumps(record)])
+        else:
+            with open(learn_path, "a", encoding="utf-8") as f:
+                f.write(_json.dumps(record) + "\n")
     except Exception:
         pass
 
@@ -684,15 +791,19 @@ def log_gate_bypass(gate_name, path=""):
         if not is_harness_enabled_repo(repo_root):
             return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
-        os.makedirs(os.path.dirname(learn_path), exist_ok=True)
+        if os.name != "nt":
+            os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         entry = _json.dumps({
             "ts": now_iso(),
             "type": "gate-bypass",
             "source": str(gate_name or "gate"),
             "path": str(path or ""),
         })
-        with open(learn_path, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
+        if os.name == "nt":
+            _native_append_learning_lines(repo_root, [entry])
+        else:
+            with open(learn_path, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
     except Exception:
         pass
 
@@ -916,6 +1027,13 @@ def _validate_wbs_control(data):
 
 
 def _read_wbs_control_text(path):
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        try:
+            raw, _ = safe_metadata_snapshot(Path(path).absolute(), 16 * 1024)
+            return raw.decode("utf-8")
+        except (OSError, ValueError, UnicodeError):
+            return ""
     flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
              | getattr(os, "O_NONBLOCK", 0))
     try:
@@ -1052,28 +1170,45 @@ def _make_control_writer_authority():
         owner = module
         for part in function.__qualname__.split("."):
             owner = getattr(owner, part, None)
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            before = os.lstat(expected_path)
-            fd = os.open(expected_path, flags)
+        if os.name == "nt":
+            from wiki_platform import safe_metadata_snapshot
             try:
-                opened = os.fstat(fd)
-                chunks = []
-                while True:
-                    chunk = os.read(fd, 64 * 1024)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                after = os.fstat(fd)
-            finally:
-                os.close(fd)
-            final_path = os.lstat(expected_path)
-        except OSError as exc:
-            raise PermissionError("WBS-control writer source is unsafe") from exc
-        source_identity = lambda value: (
-            value.st_dev, value.st_ino, value.st_size, value.st_mode,
-            value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
-        )
+                raw, _ = safe_metadata_snapshot(Path(expected_path), 8 * 1024 * 1024)
+            except (OSError, ValueError) as exc:
+                raise PermissionError("WBS-control writer source is unsafe") from exc
+            chunks, source_valid = [raw], True
+        else:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                before = os.lstat(expected_path)
+                fd = os.open(expected_path, flags)
+                try:
+                    opened = os.fstat(fd)
+                    chunks = []
+                    while True:
+                        chunk = os.read(fd, 64 * 1024)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    after = os.fstat(fd)
+                finally:
+                    os.close(fd)
+                final_path = os.lstat(expected_path)
+            except OSError as exc:
+                raise PermissionError("WBS-control writer source is unsafe") from exc
+            source_identity = lambda value: (
+                value.st_dev, value.st_ino, value.st_size, value.st_mode,
+                value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
+            )
+            source_valid = (
+                stat.S_ISREG(before.st_mode)
+                and before.st_uid == os.getuid()
+                and before.st_nlink == 1
+                and not before.st_mode & 0o022
+                and (before.st_dev, before.st_ino) == (opened.st_dev, opened.st_ino)
+                and source_identity(opened) == source_identity(after)
+                and (final_path.st_dev, final_path.st_ino) == (before.st_dev, before.st_ino)
+            )
         canonical_root = compile(b"".join(chunks), expected_path, "exec")
         candidates = []
         pending = [canonical_root]
@@ -1094,13 +1229,7 @@ def _make_control_writer_authority():
             or owner is not function
             or len(candidates) != 1
             or candidates[0] != function.__code__
-            or not stat.S_ISREG(before.st_mode)
-            or before.st_uid != os.getuid()
-            or before.st_nlink != 1
-            or before.st_mode & 0o022
-            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
-            or source_identity(opened) != source_identity(after)
-            or (final_path.st_dev, final_path.st_ino) != (before.st_dev, before.st_ino)
+            or not source_valid
         ):
             raise PermissionError("WBS-control writer requires its canonical module import")
         dependencies = tuple(
@@ -1279,12 +1408,14 @@ def find_repo_root(start_dir=None):
     if project:
         return project
     d = initial
-    while d != "/":
+    while True:
         git_path = os.path.join(d, ".git")
         if os.path.isdir(git_path) or os.path.isfile(git_path):
             return d
-        d = os.path.dirname(d)
-    return initial
+        parent = os.path.dirname(d)
+        if parent == d:
+            return initial
+        d = parent
 
 
 class GitBindingError(RuntimeError):
@@ -1307,6 +1438,15 @@ def _trusted_git_env():
     }
 
 
+def _git_executable(cwd, env=None):
+    """Select the declared Native PATH Git; POSIX keeps its existing lookup."""
+    if os.name != 'nt':
+        return 'git'
+    from wiki_platform import native_executable
+    return native_executable('git', cwd=Path(cwd).absolute(),
+                             env=_trusted_git_env() if env is None else env)
+
+
 def _canonical_git_relpath(value):
     """Normalize an explicitly returned Git path without resolving it."""
     rel = str(value or "")
@@ -1320,7 +1460,8 @@ def _canonical_git_relpath(value):
 def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
     """Return direct stage-0 gitlinks without traversing their worktrees."""
     try:
-        command = ["git"]
+        environment = _trusted_git_env()
+        command = [_git_executable(repo_root, environment)]
         if git_dir:
             command.extend([f"--git-dir={git_dir}", f"--work-tree={repo_root}"])
         command.extend(["ls-files", "--stage", "-z"])
@@ -1328,7 +1469,7 @@ def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
             command,
             capture_output=True,
             cwd=repo_root,
-            env=_trusted_git_env(),
+            env=environment,
             timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1721,6 +1862,9 @@ def read_active_session_marker(repo_root, session_id, *, strict=False):
 
 
 def _publish_session_marker(repo_root, sid, payload):
+    if os.name == "nt":
+        _atomic_text_write(_session_active_path(repo_root, sid), json.dumps(payload, ensure_ascii=False) + "\n")
+        return
     fd, tmp = tempfile.mkstemp(dir=_active_sessions_dir(repo_root), prefix=".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1746,6 +1890,18 @@ def active_session_transaction(repo_root):
     root = os.path.abspath(repo_root)
     sessions = _active_sessions_dir(root)
     os.makedirs(sessions, mode=0o700, exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory, file_lock
+        stack = ExitStack()
+        try:
+            stack.enter_context(trusted_metadata_directory(Path(sessions)))
+            stack.enter_context(file_lock(Path(sessions) / ".session.lock", blocking=True))
+        except (OSError, ValueError) as exc:
+            stack.close()
+            raise RuntimeError("active session storage integrity unavailable") from exc
+        with stack:
+            yield
+        return
     relative = os.path.relpath(sessions, root)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -1928,6 +2084,13 @@ def restore_active_marker_snapshot(snapshot):
 
 
 def _read_regular_marker(path, *, max_size=256 * 1024):
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        try:
+            raw, _ = safe_metadata_snapshot(Path(path).absolute(), max_size)
+            return raw.decode("utf-8")
+        except (OSError, ValueError, UnicodeError):
+            return ""
     return _read_regular_text_file(path, max_size=max_size)
 
 
@@ -1966,16 +2129,59 @@ def resolve_active_wbs_dir(repo_root=None, session_id=None):
     return resolve_session_wbs_binding(repo_root, sid).get("wbs_dir", "")
 
 
+def _session_revoked_in_registered_workspace(repo_root, session_id):
+    """Read only this coordinator's existing peer markers, without recursion."""
+    root = os.path.realpath(repo_root)
+    git = Path(root) / '.git'
+    if not git.is_file() and not (git / 'worktrees').is_dir():
+        return False
+    from codex_hook_registration import workspace_roots
+    roots = workspace_roots(root)
+    if not roots or root not in roots:
+        raise RuntimeError('exact-session workspace registry unavailable')
+    for peer in roots:
+        if peer == root:
+            continue
+        # No metadata validation/read/create when the exact marker is absent.
+        # Permission/format errors on an existing marker cannot become a grant.
+        candidate = os.path.join(peer, *WBS_DIR.split('/'), '.active_sessions', session_id + '.json')
+        try:
+            os.lstat(candidate)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        marker = _read_session_marker(_session_active_path(peer, session_id), session_id, strict=True)
+        if _has_binding_conflict_fence(marker):
+            return True
+        _local_session_wbs_binding(peer, session_id, strict=True, _marker=marker)
+    return False
+
+
 def resolve_session_wbs_binding(repo_root, session_id, *, strict=False):
+    """An existing same-session fence revokes every registered checkout."""
+    binding = _local_session_wbs_binding(repo_root, session_id, strict=strict)
+    if not binding:
+        return {}
+    try:
+        if _session_revoked_in_registered_workspace(repo_root, session_id):
+            return {}
+    except (OSError, ValueError, RuntimeError) as exc:
+        if strict:
+            raise RuntimeError('exact-session shared revocation state unavailable') from exc
+        return {}
+    return binding
+
+
+def _local_session_wbs_binding(repo_root, session_id, *, strict=False, _marker=None):
     """Resolve only an exact session marker and its current open run."""
     if not isinstance(session_id, str) or not session_id or session_id == "default":
         return {}
     if sanitize_session_id(session_id) != session_id:
         return {}
     try:
-        marker = _read_session_marker(
-            _session_active_path(repo_root, session_id), session_id, strict=strict,
-        )
+        marker = (_read_session_marker(_session_active_path(repo_root, session_id), session_id, strict=strict)
+                  if _marker is None else _marker)
+        if not isinstance(marker, dict) or marker and marker.get('session_id') != session_id:
+            raise ValueError('active session marker identity is invalid')
     except ValueError:
         if strict:
             raise RuntimeError("active session storage unavailable") from None
@@ -2156,6 +2362,9 @@ def _is_micro_loop_state(control):
 
 
 def _atomic_json_write(path, data):
+    if os.name == "nt":
+        _atomic_text_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".json.", suffix=".tmp")
     try:
@@ -2172,10 +2381,18 @@ def _atomic_json_write(path, data):
 
 
 _WBS_CONTROL_LOCK_HELD = ContextVar("harness_wbs_control_lock_held", default=())
+_NATIVE_WBS_CONTROL_LOCK_HELD = ContextVar("harness_native_wbs_control_lock_held", default=())
 
 
 def _validated_wbs_control_dir(wbs_dir):
     wbs_dir = os.path.abspath(os.fspath(wbs_dir))
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory
+        try:
+            with trusted_metadata_directory(Path(wbs_dir)):
+                return wbs_dir
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("WBS storage integrity unavailable") from exc
     current = wbs_dir
     for _ in range(4):
         try:
@@ -2226,6 +2443,9 @@ def _validate_wbs_control_dir_binding(binding):
 
 def _revalidate_wbs_control_transaction(wbs_dir):
     """Fail if a WBS directory changes during an enclosing WBS transaction."""
+    if os.name == "nt":
+        _validated_wbs_control_dir(wbs_dir)
+        return
     binding = _wbs_control_lock_binding(wbs_dir)
     if binding is not None:
         _validate_wbs_control_dir_binding(binding)
@@ -2242,6 +2462,25 @@ def _wbs_control_dir_fd(wbs_dir):
 @contextmanager
 def _wbs_control_lock(wbs_dir):
     wbs_dir = os.path.abspath(os.fspath(wbs_dir))
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory, file_lock
+        nested = wbs_dir in _NATIVE_WBS_CONTROL_LOCK_HELD.get()
+        stack = ExitStack()
+        try:
+            stack.enter_context(trusted_metadata_directory(Path(wbs_dir)))
+            if not nested:
+                stack.enter_context(file_lock(Path(wbs_dir) / ".control.lock", blocking=True))
+        except (OSError, ValueError) as exc:
+            stack.close()
+            raise RuntimeError("WBS storage integrity unavailable") from exc
+        with stack:
+            token = _NATIVE_WBS_CONTROL_LOCK_HELD.set(_NATIVE_WBS_CONTROL_LOCK_HELD.get() + (wbs_dir,))
+            try:
+                yield
+                _validated_wbs_control_dir(wbs_dir)
+            finally:
+                _NATIVE_WBS_CONTROL_LOCK_HELD.reset(token)
+        return
     nested = _wbs_control_lock_binding(wbs_dir)
     if nested is not None:
         _validate_wbs_control_dir_binding(nested)
@@ -2321,6 +2560,8 @@ def wbs_control_transaction(wbs_dir):
 @contextmanager
 def wbs_control_transaction_fd(task_fd):
     """Hold a WBS transaction on an already-bound WBS directory fd."""
+    if os.name == "nt":
+        raise ValueError("Native WBS transactions require a retained directory path")
     locked_fd = os.dup(task_fd)
     wbs_dir = os.path.abspath(f"/proc/self/fd/{task_fd}")
     try:
@@ -2364,6 +2605,13 @@ def required_review_lenses(wbs_dir, state=None):
 
 def _blocked_artifact_valid(wbs_dir):
     path = os.path.join(wbs_dir, "BLOCKED.md")
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        try:
+            safe_metadata_snapshot(Path(path), 256 * 1024)
+            return True
+        except (OSError, ValueError):
+            return False
     try:
         info = os.lstat(path)
     except OSError:
@@ -2470,7 +2718,8 @@ def _git_changed_paths(repo_root):
     """Return dirty paths for the explicit verified-install payload."""
     if not os.path.lexists(os.path.join(repo_root, ".git")):
         return set()
-    base = ["git", "-c", f"safe.directory={repo_root}"]
+    environment = _trusted_git_env()
+    base = [_git_executable(repo_root, environment), "-c", f"safe.directory={repo_root}"]
     commands = (
         base + ["diff", "--no-renames", "--name-only", "-z", "HEAD"],
         base + ["diff", "--cached", "--no-renames", "--name-only", "-z", "HEAD"],
@@ -2484,7 +2733,7 @@ def _git_changed_paths(repo_root):
                 cwd=repo_root,
                 capture_output=True,
                 timeout=5,
-                env=_trusted_git_env(),
+                env=environment,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(

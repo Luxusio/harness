@@ -6,7 +6,6 @@ import argparse
 import copy
 import contextlib
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -19,12 +18,15 @@ import tempfile
 import time
 from types import SimpleNamespace
 
+if os.name != "nt":
+    import fcntl
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import batch_finish as finish_helper
 import batch_harvest
 import batch_preflight
 import batch_submodules
-from _lib import find_repo_root, read_wbs_control, wbs_control_status, resolve_registered_worktree, _trusted_git_env, uuid7_timestamp_ms
+from _lib import find_repo_root, read_wbs_control, wbs_control_status, resolve_registered_worktree, _trusted_git_env, _git_executable, uuid7_timestamp_ms
 
 LIMIT = 1024 * 1024
 MAX_BATCHES = 100
@@ -58,6 +60,20 @@ def require(condition, reason):
 
 
 def safe(path, directory=False):
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import trusted_metadata_directory, _native
+        if directory:
+            with trusted_metadata_directory(Path(path).absolute()):
+                return
+        target = Path(path).absolute()
+        with _native._walk(target.parent, secure=True):
+            handle = _native._open(target, 0)
+            try:
+                _native._security(handle, "metadata")
+            finally:
+                _native._close(handle)
+        return
     info = os.lstat(path)
     require((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
             and info.st_uid == os.getuid() and not info.st_mode & 0o022
@@ -65,6 +81,20 @@ def safe(path, directory=False):
 
 
 def parents(path, create=False):
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import trusted_metadata_directory, ensure_private_directory
+        target = Path(path).absolute()
+        if create:
+            ensure_private_directory(target)
+        if not target.exists():
+            existing = target
+            while not existing.exists():
+                existing = existing.parent
+            with trusted_metadata_directory(existing):
+                raise Refusal(f'missing state directory: {path}')
+        with trusted_metadata_directory(target):
+            return
     current = os.path.abspath(path)
     missing = []
     while not os.path.lexists(current):
@@ -90,11 +120,16 @@ def parents(path, create=False):
 
 def read_json(path):
     safe(path)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as handle:
-        info = os.fstat(handle.fileno())
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid(), 'unsafe opened file')
-        raw = handle.read(LIMIT + 1)
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import safe_metadata_snapshot
+        raw, _ = safe_metadata_snapshot(Path(path).absolute(), LIMIT)
+    else:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as handle:
+            info = os.fstat(handle.fileno())
+            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid(), 'unsafe opened file')
+            raw = handle.read(LIMIT + 1)
     require(len(raw) <= LIMIT, 'JSON exceeds 1 MiB')
     def unique(pairs):
         result = {}
@@ -114,6 +149,18 @@ def write_json(path, value):
     parents(os.path.dirname(path))
     if os.path.lexists(path):
         safe(path)
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import metadata_write, safe_metadata_snapshot
+        target = Path(path).absolute()
+        try:
+            expected, _ = safe_metadata_snapshot(target, LIMIT)
+        except FileNotFoundError:
+            expected = None
+        # All production batch writers hold the owning .lock. Flush the
+        # write-ahead record before a Native archive or clone publication.
+        metadata_write(target, raw, expected=expected)
+        return
     fd, temporary = tempfile.mkstemp(prefix='.batch-', dir=os.path.dirname(path))
     try:
         with os.fdopen(fd, 'wb') as handle:
@@ -286,7 +333,17 @@ def validate(data, repo, batch_id):
             if 'recovery_commit' in checkpoint:
                 require(checkpoint['recovery_commit'] == checkpoint['branch_tip'] and re.fullmatch(r'[0-9a-f]{40}', checkpoint['recovery_commit']), 'invalid recovery commit acknowledgement')
             if checkpoint.get('harvest'):
-                require(isinstance(checkpoint['harvest'], dict) and checkpoint['harvest'].get('archived') == os.path.join(repo, 'doc/harness/archive/batch', item['wbs_id']), 'invalid checkpoint archive')
+                require(isinstance(checkpoint['harvest'], dict) and checkpoint['harvest'].get('archived') == os.path.join(repo, 'doc', 'harness', 'archive', 'batch', item['wbs_id']), 'invalid checkpoint archive')
+            if 'archive_publication' in checkpoint:
+                intent = checkpoint['archive_publication']
+                require(checkpoint['stage'] == 'integrated' and isinstance(intent, dict)
+                        and set(intent) == {'protocol', 'source', 'archived', 'fingerprint'}
+                        and intent['protocol'] == batch_harvest._NATIVE_ARCHIVE_PROTOCOL
+                        and intent['source'] == os.path.join(item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id'])
+                        and intent['archived'] == os.path.join(repo, 'doc', 'harness', 'archive', 'batch', item['wbs_id'])
+                        and isinstance(intent['fingerprint'], str)
+                        and re.fullmatch(r'sha256:[0-9a-f]{64}', intent['fingerprint']),
+                        'invalid native archive publication intent')
     return data
 
 
@@ -323,7 +380,7 @@ def cap(repo, explicit, managed=False):
         if not managed:
             return explicit_cap, 'explicit'
     section, key, default = ('develop', 'fanout_cap', 4) if managed else ('batch', 'max_leads', 3)
-    path = os.path.join(repo, 'doc/harness/manifest.yaml')
+    path = os.path.join(repo, 'doc', 'harness', 'manifest.yaml')
 
     def effective(value, source):
         if explicit_cap is not None and explicit_cap < value:
@@ -574,7 +631,7 @@ def bound(repo, item):
 
 
 def control(item, base=None, closed=False):
-    directory = os.path.join(base or item['worktree'], 'doc/harness/wbs', item['wbs_id'])
+    directory = os.path.join(base or item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id'])
     if base is not None:
         directory = base
     data = read_wbs_control(directory)
@@ -587,7 +644,7 @@ def control(item, base=None, closed=False):
 
 def resume_control(item, observe=False):
     """Pin an unobserved running generation; otherwise require exact presence."""
-    directory = os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id'])
+    directory = os.path.join(item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id'])
     if not item.get('run_id') and not observe:
         require(not os.path.lexists(directory), 'task appeared after recorded absence')
         return None
@@ -604,7 +661,7 @@ def resume_control(item, observe=False):
 def no_main_wbs(repo):
     # Focus markers identify a session's active WBS, not every open WBS.
     # A stopped coordinator can leave valid open control without a marker.
-    directory = os.path.join(repo, 'doc/harness/wbs')
+    directory = os.path.join(repo, 'doc', 'harness', 'wbs')
     if not os.path.lexists(directory):
         return
     parents(directory)
@@ -630,8 +687,18 @@ def fingerprint(path):
     return 'sha256:' + hashlib.sha256(json.dumps(_fingerprint_entries(path), sort_keys=True).encode()).hexdigest()
 
 
-def sync_harvest(repo, archive):
+def sync_harvest(repo, archive, *, publication=None):
     """Make copied evidence and its publication directory entries durable."""
+    if os.name == "nt":
+        require(isinstance(publication, dict), 'Native archive durability requires its batch checkpoint')
+        intent = publication.get('archive_publication')
+        require(isinstance(intent, dict) and intent.get('protocol') == batch_harvest._NATIVE_ARCHIVE_PROTOCOL
+                and intent.get('archived') == archive and fingerprint(archive) == intent.get('fingerprint'),
+                'Native archive publication proof changed')
+        # The admitted Native publisher already flushed each retained writer
+        # and published the held directory with NTFS write-through. Validation
+        # is reuse of that exact owner intent, not a fabricated directory fsync.
+        return
     def sync(path, directory=False):
         safe(path, directory)
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else os.O_NONBLOCK))
@@ -643,7 +710,7 @@ def sync_harvest(repo, archive):
         for name in files:
             sync(os.path.join(root, name))
         sync(root, True)
-    learnings = os.path.join(repo, 'doc/harness/learnings.jsonl')
+    learnings = os.path.join(repo, 'doc', 'harness', 'learnings.jsonl')
     if os.path.lexists(learnings):
         sync(learnings)
     parent = os.path.dirname(archive)
@@ -699,7 +766,7 @@ def observation(repo, item):
         result['branch_tip'] = finish_helper._resolve_commit(repo, 'refs/heads/' + item['branch'])
         try:
             result['registered_tip'] = bound(repo, item)
-            result['wbs_status'] = wbs_control_status(os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id']))
+            result['wbs_status'] = wbs_control_status(os.path.join(item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id']))
         except Exception as exc:
             result['identity_error'] = str(exc)
             result['next_action'] = 'preserve retained branch/evidence and restore exact registration before same-task resume: ' + str(exc)
@@ -714,18 +781,19 @@ def require_unused_wbs_ids(repo, requests, records):
         wbs_id = 'WBS__' + item['slug']
         retired_id = 'TASK__' + item['slug']
         require(wbs_id not in ids
-                and not os.path.lexists(os.path.join(repo, 'doc/harness/archive/batch', wbs_id))
-                and not os.path.lexists(os.path.join(repo, 'doc/harness/wbs', wbs_id))
-                and not os.path.lexists(os.path.join(repo, 'doc/harness/archive/batch', retired_id))
-                and not os.path.lexists(os.path.join(repo, 'doc/harness/tasks', retired_id)),
+                and not os.path.lexists(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id))
+                and not os.path.lexists(os.path.join(repo, 'doc', 'harness', 'wbs', wbs_id))
+                and not os.path.lexists(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', retired_id))
+                and not os.path.lexists(os.path.join(repo, 'doc', 'harness', 'tasks', retired_id)),
                 'WBS/archive identity already used; retired records require explicit migration')
 
 
 def _extension_git(worktree, *args):
     """Read raw Git paths without optional index writes or caller Git overrides."""
     try:
-        result = subprocess.run(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', *args],
-                                cwd=worktree, env=_trusted_git_env(), capture_output=True, timeout=60)
+        environment = _trusted_git_env()
+        result = subprocess.run([_git_executable(worktree, environment), '--no-optional-locks', '-c', 'core.fsmonitor=false', *args],
+                                cwd=worktree, env=environment, capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refusal('cannot inspect scope extension Git state') from exc
     require(result.returncode == 0 and not result.stderr, 'cannot inspect scope extension Git state')
@@ -738,7 +806,7 @@ def extension_witness(repo, data, item, head, run_id):
             'worktree HEAD differs from expected HEAD')
     proof = control(item)
     require(proof['run_id'] == run_id and wbs_control_status(
-        os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id']), proof) in {'open', 'blocked'},
+        os.path.join(item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id']), proof) in {'open', 'blocked'},
         'expected run must identify open or blocked task')
     require(not proof['closed'], 'task already has close evidence')
     require(item.get('retention') == retention_contract(data['batch_id'], item), 'bootstrap retention identity missing')
@@ -774,6 +842,32 @@ def _extension_dirty_snapshot(worktree, paths):
     for raw in paths:
         within_deadline()
         parts = os.fsdecode(raw).split('/')
+        if os.name == "nt":
+            from pathlib import Path
+            from wiki_platform import source_snapshot, trusted_source_directory
+            target = Path(worktree).joinpath(*parts)
+            try:
+                with trusted_source_directory(target.parent):
+                    before = target.lstat()
+                    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
+                            'dirty source must be a regular file without aliases')
+                    require(before.st_size <= remaining, 'dirty source snapshot byte limit exceeded')
+                    digest = hashlib.sha256()
+                    def consume(chunk):
+                        nonlocal remaining
+                        within_deadline()
+                        remaining -= len(chunk)
+                        require(remaining >= 0, 'dirty source snapshot byte limit exceeded')
+                        digest.update(chunk)
+                    source_snapshot(target, remaining, consume=consume)
+                    require(identity(before) == identity(target.lstat()),
+                            'dirty source path changed while reading')
+                    files.append((raw, identity(before), digest.digest()))
+            except FileNotFoundError:
+                files.append((raw, None))
+            except (OSError, ValueError) as exc:
+                raise Refusal('cannot safely inspect dirty source path: ' + repr(os.fsdecode(raw))) from exc
+            continue
         directory = os.open(worktree, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         descriptor = None
         try:
@@ -1045,7 +1139,7 @@ def execute(args, directory, records):
         require(bound(repo, candidate) == item['spawn_head'], 'bootstrap HEAD differs from reservation')
         for other in held(records, item):
             require(other.get('worktree') != worktree and other.get('branch') != args.branch, 'worktree/branch already owned')
-        require(not os.path.lexists(os.path.join(worktree, 'doc/harness/wbs', item['wbs_id'])), 'bootstrap started task before binding')
+        require(not os.path.lexists(os.path.join(worktree, 'doc', 'harness', 'wbs', item['wbs_id'])), 'bootstrap started task before binding')
         payload = retention_contract(batch_id, item)
         marker = os.path.join(worktree, finish_helper.RETENTION_MARKER)
         if os.path.lexists(marker):
@@ -1055,11 +1149,7 @@ def execute(args, directory, records):
             require(not finish_helper._git_out(worktree, 'ls-files', '--', finish_helper.RETENTION_MARKER).strip()
                     and finish_helper._git(worktree, 'check-ignore', '--no-index', '-q', '--', finish_helper.RETENTION_MARKER).returncode == 1,
                     'bootstrap marker must be untracked and nonignored')
-            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, 'wb') as handle:
-                handle.write(finish_helper.retention_bytes(payload))
-                handle.flush()
-                os.fsync(handle.fileno())
+            finish_helper.write_retention(marker, payload)
         return {'status': 'bootstrapped', 'marker': marker, 'payload': payload, 'worktree': worktree, 'branch': args.branch, 'spawn_head': item['spawn_head']}
     if args.command == 'bind':
         require(item['status'] == 'reserved', 'bind requires reservation')
@@ -1090,7 +1180,7 @@ def execute(args, directory, records):
         else:
             require(bound(repo, candidate) == item['spawn_head'], 'bootstrap HEAD differs from reservation')
             require(not finish_helper.lead_status(worktree, candidate.get('retention')), 'bootstrap modified source before binding')
-            require(not os.path.exists(os.path.join(worktree, 'doc/harness/wbs', item['wbs_id'])), 'bootstrap started task before binding')
+            require(not os.path.exists(os.path.join(worktree, 'doc', 'harness', 'wbs', item['wbs_id'])), 'bootstrap started task before binding')
         if item.get('submodules'):
             if item.get('resuming'):
                 batch_submodules.validate(repo, worktree, item['submodule_manifest'], 'resume')
@@ -1128,7 +1218,7 @@ def execute(args, directory, records):
             require(commit and finish_helper._resolve_commit(repo, commit) == tip, 'closed result commit is not branch tip')
             proof = control(item, closed=True)
         else:
-            proof = read_wbs_control(os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id']))
+            proof = read_wbs_control(os.path.join(item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id']))
             if proof:
                 control(item)
         if proof:
@@ -1136,7 +1226,7 @@ def execute(args, directory, records):
             item.update(run_id=proof['run_id'], closed=proof['closed'])
         else:
             require(result.get('run_id') is None, 'result claims missing WBS run')
-            require(not os.path.lexists(os.path.join(item['worktree'], 'doc/harness/wbs', item['wbs_id'])), 'WBS execution control missing or invalid')
+            require(not os.path.lexists(os.path.join(item['worktree'], 'doc', 'harness', 'wbs', item['wbs_id'])), 'WBS execution control missing or invalid')
             item['run_id'] = None
         item.update(result=result, status='returned' if result['verdict'] == 'closed' else result['verdict'], returned_at=now())
     elif args.command == 'release':
@@ -1204,11 +1294,30 @@ def execute(args, directory, records):
             require(result['destination_ref'] == data['destination_ref'], 'destination changed')
             control(item, closed=True)
             result.update(stage=stage, run_id=item['run_id'], closed=True)
+            if os.name == "nt":
+                prior = item.get('checkpoint', {})
+                if stage in {'rebase', 'integrated'} and ('archive_publication' in prior or prior.get('stage') == 'harvested'):
+                    require(prior.get('branch_tip') == result.get('branch_tip'), 'pending archive branch changed; retain original checkpoint')
+                    return copy.deepcopy(prior)
+                if stage == 'archive-pending':
+                    wanted = batch_harvest.native_archive_intent(repo, item['worktree'], item['wbs_id'])
+                    if prior.get('archive_publication') or prior.get('stage') == 'harvested':
+                        batch_harvest.validate_native_publication(repo, item['worktree'], item['wbs_id'], prior)
+                        return copy.deepcopy(prior)
+                    require(not os.path.lexists(wanted['archived']),
+                            'Native archive already exists without admitted publication intent; preserve source and investigate')
+                    result.update(stage='integrated', archive_publication=wanted)
             if stage == 'harvested':
                 archive = result['harvest']['archived']
                 control(item, base=archive, closed=True)
                 result['archive_fingerprint'] = fingerprint(archive)
-                sync_harvest(repo, archive)
+                if os.name == 'nt':
+                    prior = item.get('checkpoint', {})
+                    batch_harvest.validate_native_publication(repo, item['worktree'], item['wbs_id'], prior)
+                    sync_harvest(repo, archive, publication=result)
+                    result.pop('archive_publication', None)
+                else:
+                    sync_harvest(repo, archive)
             item['checkpoint'] = result
             save()
             return copy.deepcopy(result)
@@ -1311,6 +1420,19 @@ def execute(args, directory, records):
 def acquire_lock(directory):
     """Acquire the one batch ownership lock, shared by CLI and MCP."""
     path = os.path.join(directory, '.lock')
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import file_lock
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(file_lock(Path(path).absolute()))
+            return stack
+        except BlockingIOError as exc:
+            stack.close()
+            raise Busy('batch lock is busy; retry') from exc
+        except BaseException:
+            stack.close()
+            raise
     if os.path.lexists(path):
         safe(path)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
@@ -1328,18 +1450,44 @@ def acquire_lock(directory):
         raise
 
 
+def release_lock(lock):
+    if os.name == "nt":
+        lock.close()
+    else:
+        os.close(lock)
+
+
+@contextlib.contextmanager
+def assignment_records(repo):
+    """Inspect typed ownership without granting unrelated migration authority.
+
+    An ordinary linked checkout consumes only these read-only records before
+    falling back to its own admission. A matching managed request still has to
+    satisfy the common root's migration and lifecycle checks.
+    """
+    directory = os.path.join(repo, 'doc', 'harness', 'runtime', 'batches')
+    parents(directory)
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import trusted_metadata_directory
+        with trusted_metadata_directory(Path(directory)):
+            yield directory, load_all(directory, repo)
+    else:
+        yield directory, load_all(directory, repo)
+
+
 @contextlib.contextmanager
 def locked_records(repo, create=False, readonly=False):
     from wbs_namespace_migration import require_complete
     require_complete(repo)
-    directory = os.path.join(repo, 'doc/harness/runtime/batches')
+    directory = os.path.join(repo, 'doc', 'harness', 'runtime', 'batches')
     parents(directory, create=create)
     fd = None if readonly else acquire_lock(directory)
     try:
         yield directory, load_all(directory, repo)
     finally:
         if fd is not None:
-            os.close(fd)
+            release_lock(fd)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1382,7 +1530,7 @@ def main(argv=None):
         args.repo = os.path.realpath(args.repo or find_repo_root())
         from wbs_namespace_migration import require_complete
         require_complete(args.repo)
-        directory = os.path.join(args.repo, 'doc/harness/runtime/batches')
+        directory = os.path.join(args.repo, 'doc', 'harness', 'runtime', 'batches')
         parents(directory, create=args.command == 'init')
         if args.command != 'status':
             lock = acquire_lock(directory)
@@ -1401,7 +1549,7 @@ def main(argv=None):
         return 1
     finally:
         if lock is not None:
-            os.close(lock)
+            release_lock(lock)
 
 
 if __name__ == '__main__':

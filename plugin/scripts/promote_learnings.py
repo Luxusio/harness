@@ -21,10 +21,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import stat
 import sys
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +35,7 @@ from _lib import (
     find_repo_root,
     read_wbs_control,
     wbs_control_transaction_fd,
+    wbs_control_transaction,
     wbs_control_status,
 )
 
@@ -198,6 +201,17 @@ class _SafeRepoStorage:
         self.harness_fd = -1
 
     def __enter__(self):
+        if os.name == "nt":
+            from wiki_platform import trusted_metadata_directory
+            self._native_stack = ExitStack()
+            try:
+                self._native_root = self._native_stack.enter_context(trusted_metadata_directory(Path(self.repo_root)))
+                self._native_harness = self._native_stack.enter_context(
+                    trusted_metadata_directory(self._native_root / "doc/harness"))
+                return self
+            except BaseException:
+                self._native_stack.close()
+                raise
         try:
             self.repo_fd = self._open_root(self.repo_root)
             self.doc_fd = self._open_child_dir(
@@ -214,6 +228,8 @@ class _SafeRepoStorage:
             raise
 
     def __exit__(self, exc_type, exc, traceback):
+        if os.name == "nt":
+            return self._native_stack.__exit__(exc_type, exc, traceback)
         validation_error = None
         if exc_type is None:
             try:
@@ -281,6 +297,11 @@ class _SafeRepoStorage:
 
     @contextmanager
     def promotion_lock(self):
+        if os.name == "nt":
+            from wiki_platform import file_lock
+            with file_lock(self._native_harness / ".promotion.lock", blocking=True):
+                yield
+            return
         self._validate_bindings()
         try:
             import fcntl
@@ -358,12 +379,25 @@ class _SafeRepoStorage:
         return text
 
     def read_learnings(self) -> str | None:
+        if os.name == "nt":
+            from wiki_platform import safe_metadata_snapshot
+            try:
+                raw, _ = safe_metadata_snapshot(self._native_harness / "learnings.jsonl", MAX_LEARNINGS_BYTES)
+            except FileNotFoundError:
+                return None
+            return raw.decode("utf-8")
         return self._read_leaf_text(
             self.harness_fd, os.path.basename(LEARNINGS), max_size=MAX_LEARNINGS_BYTES
         )
 
     @contextmanager
     def wbs_binding(self, wbs_id: str):
+        if os.name == "nt":
+            from wiki_platform import trusted_metadata_directory
+            wbs_dir = canonical_wbs_dir(wbs_id=wbs_id, repo_root=self.repo_root)
+            with trusted_metadata_directory(Path(wbs_dir)):
+                yield wbs_dir, None
+            return
         initial_bindings = len(self._bindings)
         try:
             wbs_dir = canonical_wbs_dir(wbs_id=wbs_id, repo_root=self.repo_root)
@@ -417,6 +451,13 @@ def _valid_learning_candidate(
 
 
 def _load_entries(path: str) -> list[dict]:
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        try:
+            raw, _ = safe_metadata_snapshot(Path(path).absolute(), MAX_LEARNINGS_BYTES)
+        except FileNotFoundError:
+            return []
+        return _parse_entries(raw.decode("utf-8"))
     try:
         before = os.lstat(path)
     except FileNotFoundError:
@@ -498,13 +539,22 @@ def _audit_stale_files(entries: list[dict], repo_root: str) -> int:
     """
     seen_paths: set[str] = set()
     warned = 0
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    native_stack = ExitStack()
+    root_fd = None
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory
+        try:
+            native_root = native_stack.enter_context(trusted_metadata_directory(Path(repo_root)))
+        except (OSError, ValueError):
+            return 0
+    else:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            root_fd = os.open(repo_root, flags)
+        except OSError:
+            return 0
     try:
-        root_fd = os.open(repo_root, flags)
-    except OSError:
-        return 0
-    try:
-        if not _trusted_directory(os.fstat(root_fd)):
+        if os.name != "nt" and not _trusted_directory(os.fstat(root_fd)):
             return 0
         for e in entries:
             files = e.get("files") or []
@@ -518,9 +568,10 @@ def _audit_stale_files(entries: list[dict], repo_root: str) -> int:
                     or not rel
                     or len(rel) > 4096
                     or os.path.isabs(rel)
-                    or rel != os.path.normpath(rel)
+                    or os.name == 'nt' and ("\\" in rel or ":" in rel)
+                    or rel != (posixpath.normpath(rel) if os.name == 'nt' else os.path.normpath(rel))
                     or rel in {".", ".."}
-                    or rel.startswith(".." + os.sep)
+                    or rel.startswith("../" if os.name == 'nt' else ".." + os.sep)
                     or any(
                         ord(char) < 32
                         or ord(char) == 127
@@ -531,12 +582,26 @@ def _audit_stale_files(entries: list[dict], repo_root: str) -> int:
                     continue
                 if rel in seen_paths:
                     continue
-                exists = _repo_relative_regular_file(root_fd, rel)
+                if os.name == "nt":
+                    from wiki_platform import trusted_source_directory, source_snapshot
+                    target = native_root / rel
+                    try:
+                        with trusted_source_directory(target.parent):
+                            info = target.lstat()
+                            exists = stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+                    except FileNotFoundError:
+                        exists = False
+                    except (OSError, ValueError):
+                        exists = None
+                else:
+                    exists = _repo_relative_regular_file(root_fd, rel)
                 if exists is False:
                     seen_paths.add(rel)
                     warned += 1
     finally:
-        os.close(root_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+        native_stack.close()
     if warned:
         print(
             f"[hygiene] classification=stale-file count={warned}",
@@ -599,6 +664,15 @@ def _audit_contradictions(entries: list[dict]) -> int:
 def _verified_closed_run(storage: _SafeRepoStorage, wbs_id: str, wbs_run_id: str) -> bool:
     try:
         with storage.wbs_binding(wbs_id) as (wbs_dir, task_fd):
+            if os.name == "nt":
+                from wiki_platform import safe_metadata_snapshot
+                with wbs_control_transaction(wbs_dir):
+                    before, identity = safe_metadata_snapshot(Path(wbs_dir) / "WBS.control.json", 16384)
+                    control = read_wbs_control(wbs_dir)
+                    verified = bool(control and control.get("run_id") == wbs_run_id
+                                    and wbs_control_status(wbs_dir, control) == "closed")
+                    after, current = safe_metadata_snapshot(Path(wbs_dir) / "WBS.control.json", 16384)
+                    return verified and (before, identity) == (after, current)
             bound_wbs_dir = f"/proc/self/fd/{task_fd}"
             before = storage._leaf_info(task_fd, "WBS.control.json")
             if before is None:

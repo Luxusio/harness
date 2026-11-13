@@ -54,7 +54,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import _trusted_git_env, find_repo_root  # type: ignore  # noqa: E402
+from _lib import _trusted_git_env, _git_executable, find_repo_root  # type: ignore  # noqa: E402
 
 SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # Where Claude Code `isolation: worktree` creates every lead worktree.
@@ -79,6 +79,7 @@ def _run_git(cwd: str, *args: str) -> subprocess.CompletedProcess:
     env = _trusted_git_env()
     env["LC_ALL"] = "C"  # untranslated warnings, so UNREADABLE_WARNINGS match
     try:
+        command[0] = _git_executable(cwd, env)
         return subprocess.run(
             command, cwd=cwd, capture_output=True, check=False,
             env=env, timeout=GIT_TIMEOUT_SECONDS,

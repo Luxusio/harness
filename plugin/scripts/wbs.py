@@ -323,6 +323,14 @@ def fingerprint(repo, policy=None, *, _deadline=None):
     @contextmanager
     def directory_handle(path):
         """Open each component relative to its parent; verify the chain on exit."""
+        if os.name == "nt":
+            from wiki_platform import trusted_source_directory
+            with trusted_source_directory(path) as directory:
+                observed = root.lstat()
+                require((observed.st_dev, observed.st_ino) == (root_info.st_dev, root_info.st_ino),
+                        "checkout directory identity changed")
+                yield directory
+            return
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         with ExitStack() as stack:
             fd = os.open(root, flags)
@@ -348,8 +356,10 @@ def fingerprint(repo, policy=None, *, _deadline=None):
         nonlocal listing_bytes
         # Preserve the validated cwd across a concurrent pathname replacement.
         fd_root = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"
-        answer = _execute(["git", *args], f"{fd_root}/{directory_fd}", remaining(), env=_trusted_git_env(),
-                          pass_fds=(directory_fd,),
+        cwd = str(directory) if os.name == "nt" else f"{fd_root}/{directory_fd}"
+        inherited = () if os.name == "nt" else (directory_fd,)
+        answer = _execute(["git", *args], cwd, remaining(), env=_trusted_git_env(),
+                          pass_fds=inherited,
                           output_limit=MAX_LISTING_BYTES - listing_bytes, retain=MAX_LISTING_BYTES, binary=True)
         require(answer["returncode"] == 0 and not answer["error"],
                 "checkout Git evidence unavailable: " + (answer["error"] or "Git command failed")
@@ -377,6 +387,26 @@ def fingerprint(repo, policy=None, *, _deadline=None):
         nonlocal total
         limit = (policy or {}).get("source_byte_limit", MAX_EVIDENCE_BYTES) if category == "source" else MAX_ARTIFACT_BYTES
         budget_error = f"checkout evidence exceeds measurement budget ({category} bytes; input {path.relative_to(root)}; limit {limit})"
+        if os.name == "nt":
+            from wiki_platform import source_snapshot
+            hashed = hashlib.sha256()
+            def consume(chunk):
+                remaining()
+                total[category] += len(chunk)
+                require(total[category] <= limit, budget_error)
+                hashed.update(chunk)
+            try:
+                before = path.lstat()
+                require(stat.S_ISREG(before.st_mode), "nonregular or symlink scope cannot attest source")
+                require(before.st_size <= limit - total[category], budget_error + f"; size {before.st_size}")
+                _, mode = source_snapshot(path, limit - total[category], consume=consume)
+            except FileNotFoundError:
+                add(path, None)
+                return
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"WBS: source measurement unavailable (input {path.relative_to(root)}; limit {limit}): {exc}") from exc
+            add(path, digest([mode, hashed.hexdigest()]))
+            return
         try:
             before = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -481,11 +511,11 @@ def fingerprint(repo, policy=None, *, _deadline=None):
                         parent_stack.close()
                         parent_fd = parent_stack.enter_context(directory_handle(path.parent))
                         parent = path.parent
-                    info = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    info = path.lstat() if os.name == "nt" else os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     is_directory = stat.S_ISDIR(info.st_mode)
                 if is_directory:
                     with directory_handle(path) as directory_fd:
-                        with os.scandir(directory_fd) as children:
+                        with os.scandir(path if os.name == "nt" else directory_fd) as children:
                             candidates = []
                             for child in children:
                                 remaining()
@@ -705,6 +735,16 @@ def _diagnostic_path(path, repo, policy=None):
     for part in (path, *path.parents):
         require(not part.is_symlink(), "symlink diagnostic path")
     require(not path.exists() or path.is_file(), "diagnostic path must be a regular file")
+    if os.name == "nt":
+        from wiki_platform import _native
+        existing = path.parent
+        while not os.path.lexists(existing):
+            existing = existing.parent
+        with _native._walk(existing, owner_neutral=True):
+            if os.path.lexists(path):
+                with _native._walk(path.parent, owner_neutral=True):
+                    handle = _native._open(path, 0, owner_neutral=True, allow_hardlinks=True)
+                    _native._close(handle)
     if policy is not None and path.is_relative_to(Path(repo).resolve()):
         name = path.relative_to(Path(repo).resolve()).as_posix()
         excluded = any(covers(p, name) for p in policy.get("exclude", []) + policy.get("deny", []))
@@ -741,12 +781,45 @@ def _log_available(reference, repo):
     return reference
 
 
+def _execution_output(code, failure, output, *, retain, binary, log_path, repo):
+    captured = bytes(output[-retain:])
+    result = dict(returncode=code, error=failure, output=captured if binary else captured.decode(errors="replace"))
+    if log_path is not None:
+        import hashlib
+        reference = dict(path=str(log_path), bytes=len(output), sha256=hashlib.sha256(output).hexdigest(),
+                         truncated=failure == "output limit exceeded", available=False)
+        try:
+            _diagnostic_path(log_path, repo)
+            import tempfile
+            fd, temporary = tempfile.mkstemp(prefix=".diagnostic-", dir=log_path.parent)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(output)
+                _diagnostic_path(log_path, repo)
+                os.replace(temporary, log_path)
+                reference["available"] = True
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+        result["output_log"] = reference
+    return result
+
+
 def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=4000, binary=False, pass_fds=(), log_path=None):
     """Bound time and captured output, terminating the entire assertion group."""
     if log_path is not None:
         log_path = _diagnostic_path(log_path, repo)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         _diagnostic_path(log_path, repo)
+    if os.name == "nt":
+        from wiki_platform import execute_bounded
+        require(not pass_fds and _PARENT_LIFELINE is None,
+                "native assertions use Job ownership, not inherited POSIX descriptors")
+        completed = execute_bounded(argv, cwd=Path(repo).absolute(), env=dict(os.environ) if env is None else env,
+                                    timeout=timeout, limit=output_limit)
+        return _execution_output(completed["returncode"], completed["error"], completed["output"],
+                                 retain=retain, binary=binary, log_path=log_path, repo=repo)
     output, failure = bytearray(), None
     selector = selectors.DefaultSelector()
     if _PARENT_LIFELINE is not None:
@@ -796,28 +869,7 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
         except subprocess.TimeoutExpired:
             stop()
             code, failure = proc.wait(), "timeout"
-        captured = bytes(output[-retain:])
-        result = dict(returncode=code, error=failure, output=captured if binary else captured.decode(errors="replace"))
-        if log_path is not None:
-            import hashlib
-            reference = dict(path=str(log_path), bytes=len(output), sha256=hashlib.sha256(output).hexdigest(),
-                             truncated=failure == "output limit exceeded", available=False)
-            try:
-                _diagnostic_path(log_path, repo)
-                import tempfile
-                fd, temporary = tempfile.mkstemp(prefix=".diagnostic-", dir=log_path.parent)
-                try:
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(output)
-                    _diagnostic_path(log_path, repo)
-                    os.replace(temporary, log_path)
-                    reference["available"] = True
-                finally:
-                    Path(temporary).unlink(missing_ok=True)
-            except (OSError, ValueError):
-                pass
-            result["output_log"] = reference
-        return result
+        return _execution_output(code, failure, output, retain=retain, binary=binary, log_path=log_path, repo=repo)
     finally:
         selector.close()
         proc.stdout.close()
@@ -1000,11 +1052,13 @@ def require_source_assignment(repo, wbs_id, path=None):
             # No batch metadata is consumed; direct admission is worktree-local.
             pass
         else:
-            with batch_state.locked_records(root, readonly=True) as (_, records):
+            with batch_state.assignment_records(root) as (_, records):
                 for data in records.values():
                     for item in data['requests']:
                         owned = item.get('worktree') or item.get('creation_intent', {}).get('worktree')
                         if owned == repo:
+                            from wbs_namespace_migration import require_complete
+                            require_complete(root)
                             require(item['wbs_id'] == wbs_id, 'source belongs to another managed WBS')
                             require(not data['halted'] and item['status'] == 'running' and item.get('worker_id'),
                                     'managed lead is not currently bound for development')

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import math
 import os
 import re
 import signal
@@ -31,6 +33,8 @@ from _lib import (
     _read_regular_text_file,
     uuid7_timestamp_ms,
     resolve_session_wbs_binding,
+    _local_session_wbs_binding,
+    clear_active_marker,
     resolve_registered_worktree,
     wbs_control_status,
     write_active_marker,
@@ -44,6 +48,75 @@ WBS_RE = re.compile(r"^WBS__[A-Za-z0-9_.-]{1,180}$")
 REGISTRATION_BUDGET_SECONDS = 2.0
 AUTHENTICATION_BUDGET_SECONDS = 6.0
 NATIVE_METADATA_MAX_BYTES = 1024 * 1024
+_NATIVE_SUBPROCESS = False
+_NATIVE_REQUEST_LIMIT = 2 * 1024 * 1024
+
+
+def _native_operation(operation, arguments, budget_seconds, fallback, *, status_out=None):
+    """Bound one canonical typed self-operation with an actual Native Job.
+
+    Request/response bytes use owned pipes; there is no persistent request
+    state. A killed publication is unknown, not a claim of Python rollback.
+    """
+    from wiki_platform import execute_bounded
+    budget = float(budget_seconds)
+    if not math.isfinite(budget) or not 0 < budget <= 3600:
+        return fallback
+    raw = json.dumps(dict(version=1, arguments=arguments, budget_seconds=budget)).encode('utf-8')
+    if len(raw) > _NATIVE_REQUEST_LIMIT:
+        if status_out is not None:
+            status_out.update(status='failed', reason='native operation request exceeds byte limit')
+        return fallback
+    try:
+        result = execute_bounded([sys.executable, '-E', '-s', '-B', str(Path(__file__).absolute()),
+                                  '--native-operation', operation],
+                                 cwd=Path(__file__).absolute().parent, env=dict(os.environ),
+                                 timeout=budget, limit=256 * 1024, input_bytes=raw)
+        if result['error'] or result['returncode'] != 0:
+            raise RuntimeError('native operation interrupted; publication outcome unknown')
+        value = json.loads(result['output'])
+        if not isinstance(value, dict) or set(value) != {'value', 'status'} or not isinstance(value['status'], dict):
+            raise ValueError('invalid native operation response')
+        if status_out is not None:
+            status_out.update(value['status'])
+        return value['value']
+    except (OSError, ValueError, RuntimeError) as exc:
+        if status_out is not None:
+            status_out.update(status='failed', reason=str(exc)[:400])
+        return fallback
+
+
+def _native_main():
+    global _NATIVE_SUBPROCESS
+    if len(sys.argv) != 3 or sys.argv[1] != '--native-operation':
+        raise ValueError('unsupported native registration invocation')
+    operation = sys.argv[2]
+    if operation not in {'authenticate', 'register-native', 'register-result'}:
+        raise ValueError('unsupported native registration operation')
+    raw = sys.stdin.buffer.read(_NATIVE_REQUEST_LIMIT + 1)
+    if len(raw) > _NATIVE_REQUEST_LIMIT:
+        raise ValueError('native registration request exceeds byte limit')
+    request = json.loads(raw)
+    if (not isinstance(request, dict) or set(request) != {'version', 'arguments', 'budget_seconds'}
+            or request['version'] != 1 or not isinstance(request['arguments'], list)
+            or not isinstance(request['budget_seconds'], (int, float))
+            or not math.isfinite(request['budget_seconds']) or not 0 < request['budget_seconds'] <= 3600):
+        raise ValueError('invalid native registration request')
+    arguments = request['arguments']
+    expected = {'authenticate': 2, 'register-native': 6, 'register-result': 1}[operation]
+    maximum = _NATIVE_REQUEST_LIMIT if operation == 'register-result' else 8192
+    if len(arguments) != expected or any(not isinstance(x, str) or len(x) > maximum or '\x00' in x for x in arguments):
+        raise ValueError('invalid native registration arguments')
+    _NATIVE_SUBPROCESS = True
+    status = {}
+    if operation == 'authenticate':
+        value = authenticate_native_session(*arguments)
+    elif operation == 'register-native':
+        value = register_native_wbs(*arguments, budget_seconds=request['budget_seconds'], status_out=status)
+    else:
+        value = register_wbs_result(base64.b64decode(arguments[0], validate=True),
+                                    budget_seconds=request['budget_seconds'], status_out=status)
+    print(json.dumps(dict(value=value, status=status)))
 
 
 class _RegistrationTimeout(BaseException):
@@ -60,6 +133,13 @@ def _call_with_deadline(callback, deadline: float, fallback=False, *, status_out
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return failed("deadline exhausted")
+    if os.name == "nt" and _NATIVE_SUBPROCESS:
+        # The canonical parent owns the hard process/Job deadline. No timeout
+        # thread or delayed mutation can survive that supervising process.
+        try:
+            return callback()
+        except Exception as exc:
+            return failed(f"validation unavailable ({type(exc.__cause__ or exc).__name__})")
     if not hasattr(signal, "setitimer"):
         return failed("deadline enforcement unavailable")
 
@@ -179,6 +259,17 @@ def _native_session_cwd(thread_id: str) -> str:
         if len(candidates) != 1:
             return ""
         path = candidates[0]
+        if os.name == "nt":
+            from wiki_platform import safe_metadata_line
+            raw = safe_metadata_line(path.absolute(), NATIVE_METADATA_MAX_BYTES)
+            if not raw.endswith(b"\n") or len(raw) > NATIVE_METADATA_MAX_BYTES:
+                return ""
+            event = json.loads(raw)
+            meta = event.get("payload") if isinstance(event, dict) and event.get("type") == "session_meta" else None
+            if not isinstance(meta, dict) or meta.get("id") != thread_id:
+                return ""
+            cwd = meta.get("cwd")
+            return os.path.realpath(cwd) if isinstance(cwd, str) and os.path.isabs(cwd) else ""
         cursor = sessions
         for component in (None, *path.relative_to(sessions).parts[:-1]):
             if component is not None:
@@ -215,6 +306,12 @@ def _native_session_cwd(thread_id: str) -> str:
 
 def authenticate_native_session(thread_id: str, control_root: str) -> str:
     """Authenticate a process-owned native identity and its registered checkout."""
+    if os.name == "nt" and not _NATIVE_SUBPROCESS:
+        if (not isinstance(thread_id, str) or not THREAD_RE.fullmatch(thread_id)
+                or os.environ.get("CODEX_THREAD_ID") != thread_id or not find_harness_root(control_root)):
+            return ""
+        value = _native_operation('authenticate', [thread_id, control_root], AUTHENTICATION_BUDGET_SECONDS, "")
+        return value if isinstance(value, str) else ""
     def authenticate():
         cwd = _native_session_cwd(thread_id)
         root = find_harness_root(cwd) if cwd else ""
@@ -339,6 +436,12 @@ def register_wbs_result(
     status_out: dict | None = None,
 ) -> bool:
     """Bind a successful Harness WBS result to this exact Codex session."""
+    if os.name == "nt" and not _NATIVE_SUBPROCESS:
+        cwd, _ = _registration_identity(payload)
+        if not cwd or not find_harness_root(cwd):
+            return False
+        return bool(_native_operation('register-result', [base64.b64encode(payload).decode('ascii')],
+                                      budget_seconds, False, status_out=status_out))
     deadline = time.monotonic() + max(0.0, float(budget_seconds))
     result = bool(_call_with_deadline(
         lambda: _register_wbs_result(payload, deadline, status_out,
@@ -411,6 +514,11 @@ def register_native_wbs(
     *, budget_seconds: float = REGISTRATION_BUDGET_SECONDS, status_out: dict | None = None,
 ) -> bool:
     """Bind an authenticated process-owned native actor through the hook owner."""
+    if os.name == "nt" and not _NATIVE_SUBPROCESS:
+        if not find_harness_root(control_root):
+            return False
+        return bool(_native_operation('register-native', [session_cwd, thread_id, control_root, wbs_dir, wbs_id, run_id],
+                                      budget_seconds, False, status_out=status_out))
     if authenticate_native_session(thread_id, control_root) != os.path.realpath(session_cwd):
         return False
     deadline = time.monotonic() + max(0.0, float(budget_seconds))
@@ -464,7 +572,7 @@ def _bind_wbs_session(
                     status_out.update({"status": NOT_APPLICABLE,
                                        "reason": "coordinator conflict fence overflow requires a new coordinator"})
                 return False
-            bindings = {root: resolve_session_wbs_binding(root, thread_id, strict=True) for root in roots}
+            bindings = {root: _local_session_wbs_binding(root, thread_id, strict=True) for root in roots}
             lock_dirs = {canonical_wbs}
             for root in roots:
                 lock_dirs.update(_conflict_wbs_dirs(root, markers[root], roots=roots))
@@ -490,7 +598,7 @@ def _bind_wbs_session(
                 live = []
                 for root in roots:
                     live.extend(_live_conflicts(root, markers[root], roots=roots))
-                    binding = resolve_session_wbs_binding(root, thread_id, strict=True)
+                    binding = _local_session_wbs_binding(root, thread_id, strict=True)
                     if binding:
                         live.append({"wbs_dir": binding["wbs_dir"],
                                      "wbs_id": os.path.basename(binding["wbs_dir"]),
@@ -510,8 +618,19 @@ def _bind_wbs_session(
                             "reason": "conflicting open WBSs invalidated exact session binding",
                         })
                     return False
+                # An interrupted fence replacement can leave an unfenced old
+                # marker. Revoke stale pointers before clearing the last shared
+                # barrier, including blocked runs which could later resume.
+                for root in roots:
+                    marker = markers[root]
+                    if (not _has_binding_conflict_fence(marker)
+                            and any(key in marker for key in ('wbs_dir', 'wbs_id', 'run_id'))
+                            and any(marker.get(key) != value for key, value in candidate_binding.items())):
+                        clear_active_marker(root, session_id=thread_id, strict=True)
                 if any(_has_binding_conflict_fence(marker) for marker in markers.values()):
-                    for root in roots:
+                    # Keep the common marker's barrier until every peer cleanup
+                    # succeeded. Readers also honor an existing sibling fence.
+                    for root in [*roots[1:], roots[0]]:
                         if _has_binding_conflict_fence(markers[root]):
                             clear_binding_conflict_fence(root, thread_id)
                 write_active_marker(
@@ -532,3 +651,7 @@ def _bind_wbs_session(
 _bind_control_writer(register_wbs_result)
 _bind_control_writer(register_native_wbs)
 del _bind_control_writer
+
+
+if __name__ == "__main__" and os.name == "nt":
+    _native_main()

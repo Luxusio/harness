@@ -11,17 +11,17 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
+from contextlib import contextmanager, ExitStack
 
-try:
+if os.name != "nt":
     import fcntl
-except ImportError:  # pragma: no cover - harness development is POSIX-first
-    fcntl = None
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from _lib import (  # type: ignore  # noqa: E402
     _git_changed_paths,
+    _git_executable,
     active_wbs_binding_matches,
     current_session_id,
     find_repo_root,
@@ -54,7 +54,7 @@ def _trusted_harness_repo(repo_root: Path) -> tuple[bool, str]:
     if _normalized_remote(str(codex.get("repository") or "")) != CANONICAL_REMOTE:
         return False, "Codex manifest repository is not canonical harness"
     result = subprocess.run(
-        ["git", "config", "--get", "remote.origin.url"],
+        [_git_executable(repo_root), "config", "--get", "remote.origin.url"],
         cwd=repo_root, capture_output=True, text=True, timeout=3,
     )
     remote = _normalized_remote(result.stdout) if result.returncode == 0 else ""
@@ -148,6 +148,45 @@ def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=Fal
     rel = _normalize_payload_path(path)
     if not rel:
         return None
+    if os.name == "nt":
+        from wiki_platform import _native
+        target = Path(repo_root).absolute().joinpath(*PurePosixPath(rel).parts)
+        stack = ExitStack()
+        try:
+            stack.enter_context(_native._walk(target.parent, secure=True))
+            handle = _native._open(target, _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+            stack.callback(_native._close, handle)
+            before = _native._metadata_stamp(handle)
+            info = target.lstat()
+            if (readonly and not info.st_file_attributes & 1
+                    or not readonly and not source_input and info.st_file_attributes & 1
+                    or max_bytes is not None and info.st_size > max_bytes):
+                stack.close()
+                return None
+            limit = info.st_size if max_bytes is None else max_bytes
+        except (OSError, ValueError):
+            stack.close()
+            return None
+        chunks = []
+        with stack:
+            reader = iter(_native._file_chunks(handle, limit))
+            while True:
+                try:
+                    chunk = next(reader)
+                except StopIteration:
+                    break
+                except (OSError, ValueError):
+                    return None
+                if consume is None:
+                    chunks.append(chunk)
+                else:
+                    consume(chunk)
+            try:
+                if _native._metadata_stamp(handle) != before:
+                    return None
+            except (OSError, ValueError):
+                return None
+            return b"".join(chunks), info
     parts = PurePosixPath(rel).parts
     directory_fd = -1
     file_fd = -1
@@ -247,7 +286,7 @@ def _git_index_modes(repo_root: Path, paths: set[str]) -> dict[str, str] | None:
     if not paths:
         return {}
     result = subprocess.run(
-        ["git", "ls-files", "--stage", "-z", "--", *sorted(paths)],
+        [_git_executable(repo_root), "ls-files", "--stage", "-z", "--", *sorted(paths)],
         cwd=repo_root, capture_output=True, timeout=5,
     )
     if result.returncode != 0:
@@ -272,6 +311,13 @@ def _payload_modes_match_index(repo_root: Path, paths: set[str]) -> bool:
         if current is None:
             return False
         expected = modes.get(rel)
+        if os.name == "nt":
+            # Git's executable index bit has no NTFS permission equivalent.
+            # _payload_lstat has already retained and authenticated the native
+            # regular object; never infer ACL trust from synthesized mode bits.
+            if expected not in {"100644", "100755", None}:
+                return False
+            continue
         actual = stat.S_IMODE(current.st_mode)
         if expected == "100755":
             if actual != 0o755:
@@ -286,7 +332,7 @@ def _payload_modes_match_index(repo_root: Path, paths: set[str]) -> bool:
 
 def _tracked_install_payload(repo_root: Path) -> set[str]:
     result = subprocess.run(
-        ["git", "ls-files", "-z", "--", *PAYLOAD_FILES, *PAYLOAD_ROOTS],
+        [_git_executable(repo_root), "ls-files", "-z", "--", *PAYLOAD_FILES, *PAYLOAD_ROOTS],
         cwd=repo_root, capture_output=True, timeout=5,
     )
     if result.returncode != 0:
@@ -377,6 +423,18 @@ def _global_lock_path() -> Path:
     return Path.home() / ".cache/harness/install.lock"
 
 
+@contextmanager
+def _delivery_lock(path):
+    if os.name == "nt":
+        from wiki_platform import file_lock
+        with file_lock(path, blocking=True):
+            yield
+    else:
+        with path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            yield
+
+
 def install_verified(wbs_dir: Path) -> int:
     wbs_dir = wbs_dir.resolve()
     repo_root = Path(find_repo_root(str(wbs_dir))).resolve()
@@ -385,9 +443,7 @@ def install_verified(wbs_dir: Path) -> int:
     lock_path = _global_lock_path()
     wbs_dir.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        if fcntl is not None:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with _delivery_lock(lock_path):
         with wbs_control_transaction(str(wbs_dir)):
             valid_task, reason = _validate_wbs_dir(repo_root, wbs_dir, session_id)
             if not valid_task:
@@ -509,11 +565,11 @@ def automatic_delivery_required(wbs_dir: Path) -> tuple[bool, str]:
         return True, 'delivery baseline unavailable; conservative payload verification required'
     from _lib import _trusted_git_env
     environment = _trusted_git_env()
-    ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=repo,
+    ancestry = subprocess.run([_git_executable(repo, environment), 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=repo,
                               env=environment, capture_output=True, timeout=5)
     if ancestry.returncode != 0:
         return True, 'delivery baseline is not current ancestry; conservative verification required'
-    changed = subprocess.run(['git', 'diff', '--no-renames', '--name-only', '-z', base, 'HEAD', '--'], cwd=repo,
+    changed = subprocess.run([_git_executable(repo, environment), 'diff', '--no-renames', '--name-only', '-z', base, 'HEAD', '--'], cwd=repo,
                              env=environment, capture_output=True, timeout=5)
     if changed.returncode or len(changed.stdout) > 2 * 1024 * 1024:
         return True, 'delivery change range unavailable; conservative verification required'

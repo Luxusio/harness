@@ -36,8 +36,14 @@ def _witness(repo, item):
     gitdir = batch.finish_helper._git_out(intent['worktree'], 'rev-parse', '--absolute-git-dir').strip()
     lock = os.path.join(gitdir, 'locked')
     batch.safe(lock)
-    with open(lock, encoding='utf-8') as handle:
-        batch.require(handle.read(256).rstrip('\n') == _reason(intent), 'creation ownership witness differs')
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import safe_metadata_snapshot
+        raw, _ = safe_metadata_snapshot(Path(lock), 256)
+        batch.require(raw.decode('utf-8').rstrip('\n') == _reason(intent), 'creation ownership witness differs')
+    else:
+        with open(lock, encoding='utf-8') as handle:
+            batch.require(handle.read(256).rstrip('\n') == _reason(intent), 'creation ownership witness differs')
 
 
 
@@ -47,7 +53,12 @@ def _creation_parent(repo):
     for component in ('.claude', 'worktrees'):
         current = os.path.join(current, component)
         if not os.path.lexists(current):
-            os.mkdir(current, 0o700)
+            if os.name == "nt":
+                from pathlib import Path
+                from wiki_platform import ensure_private_directory
+                ensure_private_directory(Path(current))
+            else:
+                os.mkdir(current, 0o700)
         batch.safe(current, True)
     return current
 

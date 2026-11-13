@@ -66,17 +66,25 @@ def _spec(value):
 def _context(spec, repo):
     tools = {}
     for name in spec["toolchains"]:
-        location = shutil.which(name)
+        if os.name == 'nt':
+            from wiki_platform import native_executable
+            location = native_executable(name, cwd=Path(repo).absolute(), env=dict(os.environ))
+        else:
+            location = shutil.which(name)
         _require(location is not None, "toolchain unavailable: " + name)
         digest = hashlib.sha256()
-        fd = os.open(str(Path(location).resolve()), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as stream:
-            _require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), "toolchain is not a regular executable: " + name)
-            total = 0
-            while data := stream.read(1024 * 1024):
-                total += len(data)
-                _require(total <= 256 * 1024 * 1024, "toolchain exceeds 256 MiB identity budget: " + name)
-                digest.update(data)
+        if os.name == "nt":
+            from wiki_platform import source_snapshot
+            source_snapshot(Path(location).resolve(), 256 * 1024 * 1024, consume=digest.update)
+        else:
+            fd = os.open(str(Path(location).resolve()), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                _require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), "toolchain is not a regular executable: " + name)
+                total = 0
+                while data := stream.read(1024 * 1024):
+                    total += len(data)
+                    _require(total <= 256 * 1024 * 1024, "toolchain exceeds 256 MiB identity budget: " + name)
+                    digest.update(data)
         # Proxies such as rustup can retain identical wrapper bytes while the
         # actual selected compiler changes. Resolve version in the source cwd.
         version = wbs._execute([location, "--version"], str(repo), 3,
@@ -220,7 +228,12 @@ def _seal_view(root, output_dirs=()):
             cursor = cursor / part
             cursor.mkdir(mode=0o700, exist_ok=True)
             info = cursor.lstat()
-            _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid(), "unsafe runtime output directory")
+            if os.name == "nt":
+                from wiki_platform import trusted_metadata_directory
+                with trusted_metadata_directory(cursor):
+                    pass
+            else:
+                _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid(), "unsafe runtime output directory")
     for directory, _, _ in os.walk(root, topdown=False):
         relative = Path(directory).relative_to(root).as_posix()
         os.chmod(directory, 0o700 if any(wbs.covers(p, relative) for p in output_dirs) else 0o500)
@@ -268,7 +281,12 @@ def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
         except FileExistsError:
             _require(part != token, "snapshot nonce already exists; preserve existing data")
             info = current.lstat()
-            _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022, "unsafe snapshot storage: " + str(current))
+            if os.name == "nt":
+                from wiki_platform import trusted_metadata_directory
+                with trusted_metadata_directory(current):
+                    pass
+            else:
+                _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022, "unsafe snapshot storage: " + str(current))
     try:
         manifest = _manifest(repo, paths, destination=root)
         _seal_view(root, output_dirs)
@@ -283,12 +301,25 @@ def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
         _require(work_policy.load(wbs_dir, repo)['verification_identity'] == work_identity,
                  'workflow policy changed during target capture')
         digest = _write_private(_record_path(wbs_dir, token), record)
-    except BaseException:
+    except BaseException as exc:
         # This operation owns only this freshly random unissued directory.
         # Never delete previous views/metadata or any active target pointer.
-        for directory, _, _ in os.walk(root.parent, topdown=False):
-            os.chmod(directory, 0o700)
-        shutil.rmtree(root.parent)
+        if os.name == 'nt':
+            from wiki_platform import metadata_tree_inventory, metadata_remove, metadata_remove_empty
+            try:
+                inventory = metadata_tree_inventory(root.parent, max_entries=100000, max_bytes=8 * 1024 ** 3)
+                for relative, row in reversed(list(inventory.items())):
+                    if row['kind'] == 'dir':
+                        metadata_remove_empty(root.parent / relative)
+                    else:
+                        metadata_remove(root.parent / relative, expected_sha256=row['sha256'], max_bytes=row['size'])
+                metadata_remove_empty(root.parent)
+            except (OSError, ValueError) as cleanup_error:
+                raise RuntimeError('unissued verification view retained after cleanup refusal: ' + str(root.parent)) from cleanup_error
+        else:
+            for directory, _, _ in os.walk(root.parent, topdown=False):
+                os.chmod(directory, 0o700)
+            shutil.rmtree(root.parent)
         raise
     if spec["purpose"] == "acceptance":
         for lens in spec["lenses"]:

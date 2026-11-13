@@ -8,7 +8,6 @@ from __future__ import annotations
 import base64
 from contextlib import ExitStack, contextmanager
 import copy
-import fcntl
 import hashlib
 import json
 import os
@@ -56,6 +55,8 @@ def _link_at(parent, name, relative):
 
 
 def _link_file(repo, relative):
+    if os.name == "nt":
+        raise ValueError('WBS namespace migration: native historical reparse links are unsupported; original payload is preserved: ' + relative)
     parts = storage._parts(relative)
     with storage._directory(repo, parts[:-1]) as (parent, bound):
         result = _link_at(parent, parts[-1], relative)
@@ -106,6 +107,30 @@ def _hash_file(repo, relative, *, destination=None):
 
 def _tree(repo, relative):
     """Pin each directory once, then verify its binding after all siblings."""
+    if os.name == "nt":
+        from wiki_platform import metadata_tree_inventory
+        inventory = metadata_tree_inventory(Path(repo).joinpath(*storage._parts(relative)),
+                                            max_entries=MAX_FILES, max_bytes=MAX_BYTES, allow_control_lock=True)
+        entries, siblings = {}, {}
+        for name, row in inventory.items():
+            parts = storage._parts(name)
+            require(len(parts) <= 128, 'payload directory-depth budget exceeded: ' + name)
+            parent = tuple(parts[:-1])
+            siblings[parent] = siblings.get(parent, 0) + 1
+            require(siblings[parent] <= 4096, 'directory-entry budget exceeded: ' + name)
+            if name == '.control.lock':
+                # Inventory already checks owner/DACL/type/link count and
+                # charges this runtime lock against the aggregate budgets.
+                require(row['kind'] == 'file' and row['size'] == 0
+                        and row['sha256'] == hashlib.sha256(b'').hexdigest(),
+                        'unsafe execution coordination lock: ' + relative)
+                continue
+            readonly = row['readonly']
+            if row['kind'] == 'dir':
+                entries[name] = dict(directory=True, mode=0o555 if readonly else 0o700)
+            else:
+                entries[name] = dict(sha256=row['sha256'], size=row['size'], mode=0o444 if readonly else 0o600)
+        return entries
     entries, total = {}, 0
     with storage._directory(repo, storage._parts(relative)) as (root, bound):
         def frame(fd, path, parent=None, name=None):
@@ -191,6 +216,11 @@ def _change_workspace(repo, change):
         return
     common = _common_git_root(repo)
     require(change['root'] == str(common), 'Git-local ignore destination changed')
+    if os.name == "nt":
+        from wiki_platform import trusted_metadata_directory
+        with trusted_metadata_directory(common):
+            yield common
+        return
     token = storage._ROOT.set(None)
     fd, pinned = None, None
     try:
@@ -213,11 +243,12 @@ def _has_git(repo):
 
 
 def _runtime_ignored(repo, paths=()):
-    from _lib import _trusted_git_env
+    from _lib import _trusted_git_env, _git_executable
     paths = sorted({b'doc/harness/wbs/.harness-runtime-probe', b'doc/harness/archive/wbs-namespace-migration/.harness-runtime-probe', *(os.fsencode(path) for path in paths)})
     require(len(paths) <= MAX_FILES + 4096 and sum(len(path) for path in paths) <= MAX_MANIFEST, 'planned runtime ignore path budget exceeded')
-    result = subprocess.run(['git', '-C', str(repo), 'check-ignore', '--stdin', '-z'], input=b'\0'.join(paths) + b'\0',
-                            capture_output=True, timeout=10, env=_trusted_git_env())
+    environment = _trusted_git_env()
+    result = subprocess.run([_git_executable(repo, environment), '-C', str(repo), 'check-ignore', '--stdin', '-z'], input=b'\0'.join(paths) + b'\0',
+                            capture_output=True, timeout=10, env=environment)
     require(result.returncode in (0, 1), 'cannot inspect Git ignore policy at ' + str(repo) + ': ' + result.stderr[:1000].decode(errors='replace'))
     return set(result.stdout.split(b'\0')) - {b''} == set(paths)
 
@@ -244,8 +275,7 @@ def ensure_runtime_ignored(repo, *, paths=()):
     try:
         path = '.git/info/exclude'
         try:
-            with storage._directory(common, ['.git', 'info'], create=True) as (directory, bound):
-                fcntl.flock(directory, fcntl.LOCK_EX)
+            with storage._locked_directory(common, ['.git', 'info'], create=True, blocking=True) as (directory, bound):
                 before = storage._read(common, path)
                 after = _exclude_bytes(before)
                 if after != before:
@@ -863,7 +893,37 @@ def _plan(repo, *, archive_prefix=None):
     return journal
 
 
-def _copy(repo, source, destination, expected):
+def _copy(repo, source, destination, expected, *, journal=None):
+    if os.name == "nt":
+        from wiki_platform import metadata_copy
+        # The caller supplies its authenticated prepared journal under the
+        # migration/session/WBS locks. A matching readonly destination is a
+        # validated replay of that publication, not a request for a new flush.
+        require(isinstance(journal, dict) and journal.get('status') == 'prepared',
+                'native publication/replay requires the authenticated prepared journal; '
+                'arbitrary or imported incomplete destinations require explicit reconciliation')
+        admitted = False
+        for tree in journal['trees']:
+            prefix = tree['destination'] + '/'
+            if tree['root'] != str(repo) or not destination.startswith(prefix):
+                continue
+            name = destination[len(prefix):]
+            original = 'TASK.json' if name == 'WBS.control.json' else name
+            sources = {tree['source'] + '/' + original}
+            if original == 'TASK.json':
+                sources.add(_archive_prefix(journal) + '/' + tree['source'] + '/TASK.json')
+            admitted = (name not in tree['replacement'] and source in sources
+                        and tree['entries'].get(original) == expected)
+            break
+        require(admitted, 'native copy does not match the authenticated prepared journal')
+        # New publication preflushes and seals its retained write handle before
+        # write-through rename. Imported incomplete copies do not establish
+        # that Native publication guarantee and are unsupported recovery input.
+        metadata_copy(Path(repo).joinpath(*storage._parts(source)),
+                      Path(repo).joinpath(*storage._parts(destination)),
+                      max_bytes=MAX_BYTES, expected_sha256=expected['sha256'],
+                      expected_size=expected['size'], readonly=not bool(expected['mode'] & 0o200))
+        return
     parts = storage._parts(destination)
     with storage._directory(repo, parts[:-1], create=True) as (parent, bound):
         name, temporary = parts[-1], storage._publication_stage(parts[-1])
@@ -1005,9 +1065,7 @@ def apply(repo):
     if initial['status'] == 'complete':
         return _report(initial)
     with ExitStack() as stack:
-        lock = storage._open_lock(repo, ARCHIVE + '/.lock')
-        stack.callback(os.close, lock)
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        stack.enter_context(storage._file_lock(repo, ARCHIVE + '/.lock'))
         current = _journal(repo)
         journal = initial if current == initial_current else _next_plan(repo, current)
         if journal['status'] == 'complete':
@@ -1017,23 +1075,17 @@ def apply(repo):
         for root in roots:
             with storage._control_workspace(repo, root) as source:
                 for namespace in (OLD_ROOT, NEW_ROOT):
-                    fd, _ = stack.enter_context(storage._directory(source, storage._parts(namespace + '/.active_sessions'), create=True))
-                    try:
-                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError as exc:
-                        raise ValueError('WBS namespace migration: session writer active; retry after it exits') from exc
+                    stack.enter_context(storage._locked_directory(
+                        source, storage._parts(namespace + '/.active_sessions'), create=True,
+                        busy_message='WBS namespace migration: session writer active; retry after it exits'))
                 for directory in (OLD_ROOT, NEW_ROOT):
                     for name, _ in storage._entries(source, directory) or []:
                         if OLD_ID.fullmatch(name) or re.fullmatch(r'WBS__[A-Za-z0-9_.-]{1,180}', name):
-                            fd, _ = stack.enter_context(storage._directory(source, storage._parts(directory + '/' + name)))
-                            try:
-                                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            except BlockingIOError as exc:
-                                raise ValueError('WBS namespace migration: execution writer active; stop it before migration') from exc
+                            stack.enter_context(storage._locked_directory(
+                                source, storage._parts(directory + '/' + name),
+                                busy_message='WBS namespace migration: execution writer active; stop it before migration'))
         if os.path.lexists(repo / 'doc/harness/runtime/batches'):
-            batch_lock = storage._open_lock(repo, 'doc/harness/runtime/batches/.lock')
-            stack.callback(os.close, batch_lock)
-            fcntl.flock(batch_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            stack.enter_context(storage._file_lock(repo, 'doc/harness/runtime/batches/.lock'))
         if current is None or current['status'] == 'complete':
             require(journal == _plan(repo, archive_prefix=_archive_prefix(journal)), 'migration inputs changed during admission')
             _validate_semantics(repo, journal)
@@ -1091,12 +1143,16 @@ def apply(repo):
                         control_source = tree['source'] + '/' + name
                         if name == 'TASK.json' and raw is None:
                             control_source = archive
-                        _copy(source, control_source, dest, row)
+                        _copy(source, control_source, dest, row, journal=journal)
                 # Freeze copied snapshots only after their children are published.
                 for name, row in sorted(tree['entries'].items(), key=lambda item: -item[0].count('/')):
                     if row.get('directory'):
                         with storage._directory(source, storage._parts(tree['destination'] + '/' + name)) as (fd, bound):
-                            os.fchmod(fd, row['mode'])
+                            if os.name == "nt":
+                                from wiki_platform import metadata_set_readonly
+                                metadata_set_readonly(fd, not bool(row['mode'] & 0o200), directory=True)
+                            else:
+                                os.fchmod(fd, row['mode'])
                             bound()
         for tree in journal['trees']:
             with storage._control_workspace(repo, tree['root']) as source:

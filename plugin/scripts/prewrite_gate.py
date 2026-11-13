@@ -151,17 +151,39 @@ def _rel(path, repo_root):
         rel = path
     if rel.startswith("./"):
         rel = rel[2:]
-    return rel
+    return rel.replace(os.sep, "/")
+
+
+def _reserved_spelling(path):
+    """Comparison only for C-05; never use this value for I/O or admission."""
+    normalized = os.path.normpath(str(path))
+    if os.name == "nt":
+        drive, tail = os.path.splitdrive(normalized)
+        # Full-gate writes still reject these aliases through _native._path.
+        # Fallback only recognizes aliases of an actual reserved identifier;
+        # unrelated unsupported names do not become a new denial category.
+        tail = os.sep.join(part.split(":", 1)[0].rstrip(" .") for part in tail.split(os.sep))
+        return os.path.normcase(drive + tail)
+    return normalized
+
+
+def _protected_basename(path):
+    name = os.path.basename(_reserved_spelling(path))
+    if os.name == "nt":
+        # Native reserved files are case-insensitive even before they exist.
+        return next((canonical for canonical in PROTECTED_ARTIFACTS
+                     if os.path.normcase(canonical) == os.path.normcase(name)), name)
+    return name
 
 
 def _is_migration_artifact(path):
     if not path: return False
-    normalized = os.path.normpath(str(path))
+    normalized = _reserved_spelling(path)
     if (normalized == RETIRED_TASKS or normalized.endswith(os.sep + RETIRED_TASKS)
             or normalized.startswith(RETIRED_TASKS + os.sep)
             or os.sep + RETIRED_TASKS + os.sep in normalized):
         return True
-    retired_batch = os.path.join("doc", "harness", "archive", "batch") + os.sep + "TASK__"
+    retired_batch = os.path.normcase(os.path.join("doc", "harness", "archive", "batch") + os.sep + "TASK__")
     if normalized.startswith(retired_batch) or os.sep + retired_batch in normalized:
         return True
     if normalized == RETIRED_GOALS or normalized.endswith(os.sep + RETIRED_GOALS):
@@ -170,6 +192,7 @@ def _is_migration_artifact(path):
                     "doc/harness/archive/goal-wbs-migration",
                     "doc/harness/archive/wbs-control-migration",
                     "doc/harness/archive/wbs-namespace-migration"):
+        archive = os.path.normpath(archive)
         if normalized == archive or normalized.endswith(os.sep + archive) or normalized.startswith(archive + os.sep) or os.sep + archive + os.sep in normalized:
             return True
     marker = os.sep + RETIRED_GOALS + os.sep
@@ -179,7 +202,7 @@ def _is_migration_artifact(path):
 
 
 def _is_pool_control_artifact(path):
-    normalized = os.path.normpath(str(path or ""))
+    normalized = _reserved_spelling(path or "")
     marker = os.path.join("doc", "harness", "runtime", "batches")
     return (normalized == marker or normalized.endswith(os.sep + marker)
             or normalized.startswith(marker + os.sep) or os.sep + marker + os.sep in normalized)
@@ -191,6 +214,8 @@ def _is_wbs_local_review_detail(path, repo_root=None):
         str(path) if os.path.isabs(str(path)) else os.path.join(root, str(path))
     )
     tasks_root = os.path.join(root, WBS_DIR)
+    if os.name == "nt":
+        normalized, tasks_root = _reserved_spelling(normalized), _reserved_spelling(tasks_root)
     try:
         relative = os.path.relpath(normalized, tasks_root)
     except ValueError:
@@ -198,8 +223,8 @@ def _is_wbs_local_review_detail(path, repo_root=None):
     parts = relative.split(os.sep)
     return (
         len(parts) == 2
-        and parts[0].startswith("WBS__")
-        and parts[1] == "REVIEWS.jsonl"
+        and (parts[0].casefold().startswith("wbs__") if os.name == "nt" else parts[0].startswith("WBS__"))
+        and _protected_basename(parts[1]) == "REVIEWS.jsonl"
     )
 
 
@@ -214,19 +239,23 @@ def _is_native_session_metadata(path):
     for target in (candidate, os.path.realpath(candidate)):
         for root in (sessions, os.path.realpath(sessions)):
             try:
-                parts = os.path.relpath(target, root).split(os.sep)
+                if os.name == "nt":
+                    parts = os.path.relpath(_reserved_spelling(target), _reserved_spelling(root)).split(os.sep)
+                else:
+                    parts = os.path.relpath(target, root).split(os.sep)
             except ValueError:
                 continue
+            name = parts[-1].casefold() if os.name == "nt" else parts[-1]
             if (len(parts) >= 4 and parts[0] != ".."
-                    and re.fullmatch(r"rollout-[A-Za-z0-9_.:-]+\.jsonl", parts[-1])):
+                    and re.fullmatch(r"rollout-[A-Za-z0-9_.:-]+\.jsonl", name)):
                 return True
     return False
 
 
 def _is_protected_artifact(path, repo_root=None):
     if not path: return False
-    normalized = os.path.normpath(str(path))
-    basename = os.path.basename(normalized)
+    normalized = _reserved_spelling(path)
+    basename = _protected_basename(normalized)
     return (
         (
             basename in PROTECTED_ARTIFACTS
@@ -239,14 +268,14 @@ def _is_protected_artifact(path, repo_root=None):
         or _is_migration_artifact(normalized)
         or _is_native_session_metadata(normalized)
         or _is_pool_control_artifact(normalized)
-        or normalized.endswith(os.path.join(WBS_DIR, ".active"))
-        or os.path.join(WBS_DIR, ".active_sessions") + os.sep in normalized
+        or normalized.endswith(os.path.normpath(os.path.join(WBS_DIR, ".active")))
+        or os.path.normpath(os.path.join(WBS_DIR, ".active_sessions")) + os.sep in normalized
     )
 
 
 def _protected_denial(path):
     """Return ``(owner, human)`` for a C-05 protected-artifact deny of ``path``."""
-    basename = os.path.basename(path)
+    basename = _protected_basename(path)
     goal_control = _is_migration_artifact(path)
     pool_control = _is_pool_control_artifact(path)
     if _is_native_session_metadata(path):
@@ -313,10 +342,10 @@ def _is_source_file(path, repo_root=None):
     root = repo_root or find_repo_root()
     rel = _rel(path, root)
 
-    if rel.startswith(WBS_DIR + os.sep) or rel == WBS_DIR:
+    if rel.startswith(WBS_DIR + "/") or rel == WBS_DIR:
         return False
     for prefix in EXEMPT_PREFIXES:
-        if rel == prefix or rel.startswith(prefix + os.sep) or rel.startswith(prefix):
+        if rel == prefix or rel.startswith(prefix + "/") or rel.startswith(prefix):
             return False
     if _is_protected_artifact(path, repo_root=root):
         return False
@@ -717,6 +746,19 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
             return 0
     elif not is_harness_enabled_repo(repo_root):
         return 0
+    if os.name == "nt" and not protected_only:
+        from wiki_platform import _native
+        try:
+            # Use the same ordinary disk/UNC namespace contract as the actual
+            # Native writers. Never normalize ADS/device/dot aliases into trust.
+            _native._path(requested_path)
+        except (OSError, ValueError) as exc:
+            if _is_protected_artifact(requested_path, repo_root=repo_root):
+                owner, human = _protected_denial(requested_path)
+                _deny("C-05-protected-artifact", requested_path, owner, human, repo_root)
+            else:
+                _deny("invalid-native-path", requested_path, "developer", str(exc), repo_root)
+            return 0
     file_path = os.path.realpath(requested_path)
     try:
         requested_common = os.path.commonpath([repo_root, requested_path])
@@ -770,7 +812,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
                 foreign_root,
             )
         return 0
-    wbs_root = os.path.join(repo_root, WBS_DIR)
+    wbs_root = os.path.normpath(os.path.join(repo_root, WBS_DIR))
     if not protected_only:
         try:
             from wbs_namespace_migration import require_complete
@@ -801,7 +843,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
 
     # Exempt prefixes (harness operational files) allowed without a WBS.
     for prefix in EXEMPT_PREFIXES:
-        prefix_abs = os.path.join(repo_root, prefix)
+        prefix_abs = os.path.normpath(os.path.join(repo_root, prefix))
         if file_path == prefix_abs or file_path.startswith(prefix_abs + os.sep):
             return 0
 

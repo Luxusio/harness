@@ -312,7 +312,8 @@ def _log_gate_warn(wbs_id: str, key: str, insight: str) -> None:
         import json as _json
         repo_root = _control_root()
         learn = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
-        os.makedirs(os.path.dirname(learn), exist_ok=True)
+        if os.name != "nt":
+            os.makedirs(os.path.dirname(learn), exist_ok=True)
         entry = _json.dumps({
             "ts": now_iso(),
             "type": "gate-warn",
@@ -321,8 +322,12 @@ def _log_gate_warn(wbs_id: str, key: str, insight: str) -> None:
             "insight": insight,
             "wbs_id": wbs_id,
         })
-        with open(learn, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
+        if os.name == "nt":
+            from _lib import _native_append_learning_lines
+            _native_append_learning_lines(repo_root, [entry])
+        else:
+            with open(learn, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
     except Exception:
         pass
 
