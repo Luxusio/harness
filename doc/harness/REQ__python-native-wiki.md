@@ -182,3 +182,10 @@ an environment precondition to fix in an isolated test fixture, not permission
 to disable guards, substitute UID values or skip native coverage. Record actual
 Windows and Linux results independently; unexecuted account or platform checks
 remain explicit.
+
+Derived native ownership rule: elevated Windows processes can create a private
+CPython directory owned by their actual token's Administrators default owner.
+Accept that owner only when the OS reports it as the current default owner and
+the token has the enabled owner-capable Administrators group, without deny-only
+membership. This uses the already trusted administrator principal; it does not
+admit arbitrary token groups, foreign owners or SYSTEM-owned leaf files.
