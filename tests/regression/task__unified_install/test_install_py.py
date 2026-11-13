@@ -730,6 +730,8 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
         pyc.write_bytes(b"stale-bytecode")
         (scripts / "_lib.py").write_text("ok\n")
         stale.append(pyc)
+    (cached.parent / '.codex-plugin').mkdir()
+    (cached.parent / '.codex-plugin/plugin.json').write_text('{"name":"harness","version":"0.1.0"}')
 
     with (
         mock.patch.object(module, "_select_codex_plugin", return_value=(True, "selection stubbed for payload call-site test")),

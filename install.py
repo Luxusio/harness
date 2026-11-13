@@ -254,7 +254,7 @@ def _repair_from_reason(reason: str) -> str | None:
     return reason.rsplit(_REPAIR_MARKER, 1)[1].strip() or None
 
 
-def _open_inventory_root(root: Path) -> int:
+def _open_inventory_root(root: Path, *, repairable_root: Path | None = None) -> int:
     """Open every root component without following symlinks."""
     absolute = Path(os.path.abspath(root))
     current_fd = os.open(
@@ -273,13 +273,16 @@ def _open_inventory_root(root: Path) -> int:
             info = os.fstat(current_fd)
             mode = stat.S_IMODE(info.st_mode)
             final = index == len(absolute.parts[1:]) - 1
+            component = Path(*absolute.parts[: index + 2])
+            repairable = (repairable_root is not None and component.is_relative_to(repairable_root)
+                          and info.st_uid == os.getuid())
             trusted_owner = info.st_uid in {os.getuid(), 0}
             sticky_shared = info.st_uid == 0 and bool(mode & stat.S_ISVTX)
             if (
                 not stat.S_ISDIR(info.st_mode)
                 or not trusted_owner
-                or (mode & 0o022 and not sticky_shared)
-                or (final and not _trusted_inventory_directory(current_fd))
+                or (mode & 0o022 and not sticky_shared and not repairable)
+                or (final and not _trusted_inventory_directory(current_fd) and not repairable)
             ):
                 # Name the component that was rejected, not the path that was
                 # asked for. Naming the payload root sent a reader to inspect a
@@ -288,7 +291,6 @@ def _open_inventory_root(root: Path) -> int:
                 # ancestors, the repair the tool prints left the default run
                 # failing identically on the next run. An unrecoverable loop
                 # deserves at least an accurate name.
-                component = Path(*absolute.parts[: index + 2])
                 raise PermissionError(
                     _unsafe_component_message(component, info, absolute, final=final)
                 )
@@ -1110,6 +1112,54 @@ def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | N
 
 _CODEX_GENERATION = re.compile(r"harness\.g([0-9]{20})\.h([0-9a-f]{16})")
 _CODEX_LEGACY = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-codex|\+codex\.[0-9]{14}(?:\.h[0-9a-f]{16})?)?")
+
+
+def _codex_selection_preflight(codex_home: Path) -> None:
+    """Classify selection before maintenance; recognized owned modes may repair."""
+    parent = codex_home / "plugins/cache/harness/harness"
+    try:
+        directory = _open_inventory_root(parent, repairable_root=parent.parent)
+    except FileNotFoundError:
+        return
+    try:
+        names = os.listdir(directory)
+        if len(names) > PAYLOAD_MAX_ENTRIES:
+            raise RuntimeError("Codex cache selection exceeds the supported entry limit")
+        generations = set()
+        for name in names:
+            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if stat.S_ISREG(info.st_mode):
+                continue
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                raise RuntimeError("Codex cache selection has an unsafe directory; preserve it and inspect")
+            generation = _CODEX_GENERATION.fullmatch(name)
+            if not (generation or _CODEX_LEGACY.fullmatch(name)):
+                raise RuntimeError("Codex cache contains an unsupported native selection; preserve it and inspect before installing")
+            if generation:
+                number = int(generation[1])
+                if not number or number in generations:
+                    raise RuntimeError("Codex cache contains conflicting native generations; preserve existing versions and inspect")
+                generations.add(number)
+            metadata_dir = _open_inventory_root(parent / name / ".codex-plugin", repairable_root=parent.parent)
+            try:
+                descriptor = os.open("plugin.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=metadata_dir)
+                with os.fdopen(descriptor, "rb") as stream:
+                    before = os.fstat(stream.fileno())
+                    if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                            or before.st_nlink != 1 or before.st_size > 65536):
+                        raise RuntimeError("Codex cache manifest is unsafe; preserve existing versions and inspect")
+                    data = stream.read(65537)
+                    after = os.fstat(stream.fileno())
+                    if (len(data) != before.st_size or any(getattr(before, key) != getattr(after, key)
+                            for key in ("st_dev", "st_ino", "st_size", "st_mode", "st_uid", "st_nlink", "st_mtime_ns", "st_ctime_ns"))):
+                        raise RuntimeError("Codex cache manifest changed during inspection")
+                manifest = json.loads(data)
+                if not isinstance(manifest, dict) or manifest.get("name") != CODEX_PLUGIN_NAME or manifest.get("version") != name:
+                    raise RuntimeError("Codex cache manifest does not match its native version directory")
+            finally:
+                os.close(metadata_dir)
+    finally:
+        os.close(directory)
 
 
 def _codex_cache_generations(codex_home: Path) -> dict[int, tuple[str, str]]:
@@ -2105,6 +2155,12 @@ def _install_codex(*, dry_run: bool, force: bool,
     if not shutil.which("codex"):
         return InstallResult("codex", False, "codex CLI not found in PATH", steps)
     _python_cmd()
+    try:
+        _codex_selection_preflight(_codex_home_for_config(config_path))
+    except (OSError, ValueError, RuntimeError) as exc:
+        repair = _repair_from_reason(str(exc))
+        reason = str(exc) if isinstance(exc, RuntimeError) or repair else "Codex cache selection metadata is unavailable or malformed; preserve existing versions and inspect"
+        return InstallResult("codex", False, reason, steps, repair=repair)
     # Step 1: version check
     rc, out, err = _install_step("Codex version check", steps, lambda: _run(["codex", "--version"], dry_run))
     if dry_run:

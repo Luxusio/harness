@@ -231,6 +231,8 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     )
     cached = tmp_path / "plugins" / "cache" / "harness" / "harness" / "9.9.9"
     (cached / "scripts").mkdir(parents=True)
+    (cached / '.codex-plugin').mkdir()
+    (cached / '.codex-plugin/plugin.json').write_text('{"name":"harness","version":"9.9.9"}')
     with (
         mock.patch.object(install, "_select_codex_plugin", return_value=(True, "native selection stubbed for smoke call-site test")),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_install_root),

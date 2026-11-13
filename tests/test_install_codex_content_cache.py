@@ -141,6 +141,47 @@ def test_native_shadow_or_unsafe_cache_refuses_without_changing_existing_paths(p
         assert (entry / 'retained').read_text() == 'existing session data'
 
 
+@pytest.mark.parametrize('force', [False, True])
+@pytest.mark.parametrize('shadow', ['local', 'unknown-native-version', 'malformed-recognized', 'zero-generation', 'conflicting-generation'])
+def test_public_install_refuses_selection_before_any_maintenance(project, tmp_path, monkeypatch, force, shadow):
+    install, _ = project
+    home = tmp_path / 'runtime'
+    parent = home / 'plugins/cache/harness/harness'
+    name = ('2.3.0' if shadow == 'malformed-recognized' else
+            'harness.g00000000000000000000.h0000000000000000' if shadow == 'zero-generation' else
+            'harness.g00000000000000000001.h0000000000000000' if shadow == 'conflicting-generation' else shadow)
+    entry = parent / name
+    (entry / '__pycache__').mkdir(parents=True)
+    (entry / '__pycache__/retained.pyc').write_bytes(b'existing bytecode')
+    (entry / 'retained.py').write_bytes(b'existing source\n')
+    (entry / 'retained.py').chmod(0o666)
+    if shadow == 'malformed-recognized':
+        (entry / '.codex-plugin').mkdir()
+        (entry / '.codex-plugin/plugin.json').write_bytes(b'{invalid metadata')
+    elif shadow == 'conflicting-generation':
+        other = parent / 'harness.g00000000000000000001.hffffffffffffffff'
+        for root in (entry, other):
+            (root / '.codex-plugin').mkdir(parents=True)
+            (root / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=root.name)))
+    def snapshot():
+        return {str(path.relative_to(parent)): (path.lstat().st_ino, path.lstat().st_mode,
+                    path.read_bytes() if path.is_file() else None)
+                for path in (parent, *parent.rglob('*'))}
+    before = snapshot()
+    monkeypatch.setattr(install.shutil, 'which', lambda *a, **k: '/synthetic/codex')
+    calls = []
+    def run(argv, dry):
+        calls.append(argv)
+        assert argv == ['codex', '--version']
+        return 0, 'codex 0.167.2\n', ''
+    monkeypatch.setattr(install, '_run', run)
+    result = install.install_codex(dry_run=False, force=force, config_path=str(home / 'config.toml'))
+    assert not result.ok
+    assert 'Codex cache' in result.summary
+    assert snapshot() == before
+    assert calls == []
+
+
 def test_competing_artifact_allocation_refuses_then_reruns_above_published_generation(project, tmp_path):
     install, source = project
     home = tmp_path / 'runtime'

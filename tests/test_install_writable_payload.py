@@ -220,6 +220,9 @@ def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path)
         module_file.write_text("ok\n", encoding="utf-8")
         os.chmod(module_file, 0o777)
         victims.append(module_file)
+    metadata = cached.parent / '.codex-plugin'
+    metadata.mkdir()
+    (metadata / 'plugin.json').write_text('{"name":"harness","version":"0.1.0"}')
 
     with (
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_root),

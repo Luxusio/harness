@@ -198,6 +198,8 @@ def test_install_clears_a_writable_installer_created_ancestor(tmp_path, monkeypa
     )
     for root in (mirror, cached):
         _tree(root)
+    (cached / '.codex-plugin').mkdir()
+    (cached / '.codex-plugin/plugin.json').write_text('{"name":"harness","version":"0.1.0"}')
     # The ancestors, not the payload: exactly the state that used to stick.
     writable = [
         codex_root,
