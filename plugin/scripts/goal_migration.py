@@ -1190,7 +1190,7 @@ def _retained_control_root(repo, path):
     _require(isinstance(path, str) and os.path.isabs(path)
              and str(Path(path)) == path and ".." not in Path(path).parts,
              "invalid historical control path")
-    match = re.fullmatch(r"(.+)/doc/harness/(?:wbs|archive/batch)/WBS__[A-Za-z0-9_.-]{1,180}/WBS.control.json", path)
+    match = re.fullmatch(r"(.+)/doc/harness/(?:wbs|archive/batch)/WBS__[A-Za-z0-9_.-]{1,180}/WBS.control.json", Path(path).as_posix())
     _require(match is not None, "invalid historical control path")
     root = Path(match[1])
     from _lib import resolve_registered_worktree
@@ -1293,7 +1293,7 @@ def _check_retained_controls(repo, journal):
         with _control_workspace(repo, root) as source:
             if root not in bindings:
                 bindings[root] = _control_bindings(source) | pool_tasks
-            raw = _read(source, str(path.relative_to(source)))
+            raw = _read(source, path.relative_to(source).as_posix())
             _require(raw is not None and _historical_control(_json(raw))
                      and path.parent.name not in bindings[root],
                      "invalid or referenced historical WBS execution control during explicit migration: " + str(path))
@@ -1351,7 +1351,7 @@ def _control_apply(repo):
     if journal is not None:
         roots = (str(repo), *sorted((set(roots) | {row["root"] for row in journal["destinations"]}) - {str(repo)}))
         directories = tuple(sorted(set(directories) | {
-            (row["root"], str(Path(row["path"]).parent))
+            (row["root"], row["path"].rsplit("/", 1)[0])
             for row in journal["destinations"] if row["path"].endswith("/WBS.control.json")}))
     from _lib import resolve_registered_worktree
     for root in roots:

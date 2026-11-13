@@ -690,7 +690,7 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
                         and root_sid != 'default' and sanitize_session_id(root_sid) == root_sid,
                         'watcher diagnostics have unsafe root identity')
         else:
-            text = raw.decode('utf-8')
+            text = raw.decode('utf-8').replace('\r\n', '\n')
             _s1_require(text.startswith('# Checkpoint — ' + wbs_id + '\n\n- written: ')
                         and all(section in text for section in
                                 ('\n## WBS state\n', '\n## Progress\n', '\n## Next action\n')),
@@ -995,11 +995,13 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
     if os.path.lexists(checkpoint_source) or not preserve and os.path.lexists(checkpoint_copy):
         path = checkpoint_source if os.path.lexists(checkpoint_source) else checkpoint_copy
         raw = _ordinary_bytes(str(path))
-        text = raw.decode('utf-8')
+        text = raw.decode('utf-8').replace('\r\n', '\n')
         _s1_require(text.startswith('# Checkpoint — TASK__' + wbs_id[5:] + '\n\n- written: ')
                     and all(section in text for section in ('\n## Task state\n', '\n## Progress\n', '\n## Next action\n')),
                     'unknown or foreign historical checkpoint')
-        expected[old_checkpoint] = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=stat.S_IMODE(path.stat().st_mode))
+        info = path.stat()
+        mode = (0o444 if info.st_file_attributes & 1 else 0o600) if os.name == "nt" else stat.S_IMODE(info.st_mode)
+        expected[old_checkpoint] = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=mode)
     for relative, row in expected.items():
         destination = recovery + '/' + relative
         source_exists = os.path.lexists(Path(worktree) / relative)
@@ -1252,7 +1254,6 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                     _s1_require(info.st_uid == os.getuid() and info.st_nlink == 1 or stat.S_ISDIR(info.st_mode)
                                 and info.st_uid == os.getuid(), 'unsafe residue ownership/link count')
                 if stat.S_ISLNK(info.st_mode):
-                    from pathlib import Path
                     import wbs_namespace_migration
                     row = namespace.get(rel)
                     _s1_require(isinstance(row, dict) and 'link' in row

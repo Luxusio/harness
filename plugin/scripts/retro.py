@@ -62,6 +62,15 @@ def _cutoff(days: int) -> str:
 
 def _git(args: list[str], cwd: str) -> str:
     try:
+        if os.name == "nt":
+            r = subprocess.run(
+                [_git_executable(cwd), "-c", "i18n.logOutputEncoding=UTF-8", *args],
+                capture_output=True, cwd=cwd, timeout=10,
+            )
+            try:
+                return r.stdout.decode("utf-8").strip() if r.returncode == 0 else ""
+            except UnicodeDecodeError:
+                return ""
         r = subprocess.run(
             [_git_executable(cwd), *args], capture_output=True, text=True, cwd=cwd, timeout=10,
         )

@@ -83,7 +83,7 @@ def _prepare_one(repo, directory, records, data, item):
     batch.require(not item.get('resuming'), 'retained reservation must use original worktree')
     if 'creation_intent' not in item:
         token = secrets.token_hex(32)
-        intent = dict(token=token, worktree=os.path.join(repo, '.claude/worktrees', 'harness-' + token[:24]),
+        intent = dict(token=token, worktree=os.path.join(repo, '.claude', 'worktrees', 'harness-' + token[:24]),
                       branch='harness/' + token, spawn_head=item['spawn_head'])
         for other in batch.held(records, item):
             other_intent = other.get('creation_intent', {})

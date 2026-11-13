@@ -315,7 +315,7 @@ def validate(data, repo, batch_id):
                     and item['status'] != 'queued'
                     and isinstance(intent.get('spawn_head'), str) and finish_helper.COMMIT_RE.fullmatch(intent['spawn_head'])
                     and intent['spawn_head'] == item.get('spawn_head')
-                    and intent.get('worktree') == os.path.join(repo, '.claude/worktrees', 'harness-' + intent['token'][:24])
+                    and intent.get('worktree') == os.path.join(repo, '.claude', 'worktrees', 'harness-' + intent['token'][:24])
                     and intent.get('branch') == 'harness/' + intent['token'], 'invalid creation intent')
             if item.get('worktree'):
                 require(all(item[k] == intent[k] for k in ('worktree', 'branch')), 'creation intent binding changed')

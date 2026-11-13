@@ -99,6 +99,32 @@ def _hash_at(parent, name, relative, *, destination=None, publication=None, desc
 
 def _hash_file(repo, relative, *, destination=None):
     parts = storage._parts(relative)
+    if os.name == "nt":
+        require(destination is None, 'native payload hashing cannot write a POSIX destination descriptor')
+        from wiki_platform import _native
+        with storage._directory(repo, parts[:-1]) as (parent, bound):
+            path = parent / parts[-1]
+            handle = _native._open(path, _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+            try:
+                before = _native._metadata_stamp(handle)
+                require(before[3] <= MAX_BYTES, 'payload byte budget exceeded: ' + relative)
+                digest, count = hashlib.sha256(), 0
+                for chunk in _native._file_chunks(handle, MAX_BYTES, chunk_size=65536):
+                    count += len(chunk)
+                    digest.update(chunk)
+                require(count == before[3] and _native._metadata_stamp(handle) == before,
+                        'payload changed while reading: ' + relative)
+                named = _native._open(path, 0)
+                try:
+                    require(_native._metadata_stamp(named) == before,
+                            'payload name changed while reading: ' + relative)
+                finally:
+                    _native._close(named)
+                bound()
+                return dict(sha256=digest.hexdigest(), size=count,
+                            mode=0o444 if before[4] & 1 else 0o600)
+            finally:
+                _native._close(handle)
     with storage._directory(repo, parts[:-1]) as (parent, bound):
         result = _hash_at(parent, parts[-1], relative, destination=destination)
         bound()

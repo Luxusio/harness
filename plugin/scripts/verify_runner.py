@@ -642,14 +642,35 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                           state="executor_error", status="FAIL", returncode=None, reused=False)
             try:
                 available = set(capabilities) | {"platform:" + sys.platform}
-                missing = [c for c in job["requires"] if c not in available and not (c.startswith("executable:") and shutil.which(c[11:]))]
+                if os.name == 'nt':
+                    from wiki_platform import native_executable
+                    env = {key: os.environ[key] for key in set(job["spec"]["environment"]) | {"PATH"}
+                           if key in os.environ}
+                    def capability_available(capability):
+                        if not capability.startswith("executable:"):
+                            return False
+                        try:
+                            native_executable(capability[11:], cwd=root, env=env)
+                            return True
+                        except OSError:
+                            return False
+                    missing = [c for c in job["requires"] if c not in available and not capability_available(c)]
+                else:
+                    missing = [c for c in job["requires"] if c not in available and not (c.startswith("executable:") and shutil.which(c[11:]))]
                 if missing:
                     record.update(state="capability_unavailable", error="missing capabilities: " + ", ".join(missing))
                     return record
-                search_path = os.pathsep.join(str((root / p).resolve()) if not os.path.isabs(p) else p
-                                             for p in os.get_exec_path())
                 command = job["argv"][0]
-                executable = shutil.which(str(root / command) if os.sep in command else command, path=search_path)
+                if os.name == 'nt':
+                    try:
+                        executable = native_executable(command, cwd=root, env=env)
+                    except OSError as exc:
+                        record.update(state="start_failed", error=str(exc))
+                        return record
+                else:
+                    search_path = os.pathsep.join(str((root / p).resolve()) if not os.path.isabs(p) else p
+                                                 for p in os.get_exec_path())
+                    executable = shutil.which(str(root / command) if os.sep in command else command, path=search_path)
                 if not executable:
                     record.update(state="start_failed", error="executable unavailable")
                     return record
