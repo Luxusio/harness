@@ -163,3 +163,22 @@ Verify generated commands independently, actual fresh/update/rerun installation,
 and execution from a different consumer directory without the source checkout
 or its virtual environment. Modeled Windows path checks are distinct from
 actual Windows execution; the standing native/account acceptance remains.
+
+## Native repair completion
+
+User-explicit correction, 2026-11-13: testing and reporting Windows failures
+alone does not complete the requested work. Repair confirmed defects and
+continue through actual native verification of the resulting implementation.
+The measured startup, installer, hook and filesystem failures remain preserved
+as failed evidence until the affected behavior is reverified.
+
+Derived acceptance covers real protected WBS operations, canonical source
+authorization, current native CLI package layouts, clean installation and
+updates/reruns, and selected MCP/hook execution through mise Python. Preserve
+JSON input, denial output, Unicode paths, bounded execution, prior payloads and
+unrelated settings. Native SID/DACL, reparse, hardlink, locking and atomic
+publication checks must remain effective. An unsuitable test-machine ACL is
+an environment precondition to fix in an isolated test fixture, not permission
+to disable guards, substitute UID values or skip native coverage. Record actual
+Windows and Linux results independently; unexecuted account or platform checks
+remain explicit.
