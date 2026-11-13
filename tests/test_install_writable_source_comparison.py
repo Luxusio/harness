@@ -213,6 +213,7 @@ def test_install_clears_a_writable_installer_created_ancestor(tmp_path, monkeypa
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_select_codex_plugin", return_value=(True, "selection stubbed for permission call-site test")),
         mock.patch.object(
             install, "_codex_payload_state",
             return_value=(install.PAYLOAD_SYNCHRONIZED, ""),
@@ -262,6 +263,7 @@ def test_the_installer_does_not_chmod_what_it_does_not_exclusively_own(
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_select_codex_plugin", return_value=(True, "selection stubbed for permission call-site test")),
         mock.patch.object(
             install, "_codex_payload_state",
             return_value=(install.PAYLOAD_SYNCHRONIZED, ""),

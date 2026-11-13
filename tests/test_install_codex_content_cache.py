@@ -37,6 +37,45 @@ def inventory(root):
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
 
 
+@pytest.mark.parametrize('failure', [None, 'add', 'list', 'old-selection', 'duplicate', 'cache-bytes'])
+def test_native_selection_refreshes_old_version_and_verifies_actual_cache(project, tmp_path, monkeypatch, failure):
+    install, _ = project
+    mirror = install.sync_codex_payload(tmp_path / 'mirror')
+    home = tmp_path / 'runtime'
+    cache = install.install_codex_plugin_cache(mirror, home)
+    version = install._codex_plugin_version(mirror)
+    prior = cache.parent / 'retained-old'
+    prior.mkdir()
+    (prior / 'retained').write_text('old session payload')
+    if failure == 'cache-bytes':
+        (cache / '.mcp.json').write_text('{}\n')
+    selected, calls = 'old-version', []
+    def run(argv, dry):
+        nonlocal selected
+        assert not dry
+        calls.append(argv)
+        if argv == ['codex', 'plugin', 'add', 'harness@harness']:
+            if failure == 'add':
+                return 7, '', 'untrusted output must not be echoed'
+            if failure != 'old-selection':
+                selected = version
+            return 0, '', ''
+        assert argv == ['codex', 'plugin', 'list', '--json', '--marketplace', 'harness']
+        if failure == 'list':
+            return 8, '', 'untrusted output must not be echoed'
+        row = dict(pluginId='harness@harness', version=selected, installed=True, enabled=True,
+                   source=dict(path=str(mirror)))
+        return 0, json.dumps({'installed': [row, dict(row)] if failure == 'duplicate' else [row]}), ''
+    monkeypatch.setattr(install, '_run', run)
+    ok, reason = install._select_codex_plugin(mirror, home)
+    assert ok == (failure is None), reason
+    assert calls[0] == ['codex', 'plugin', 'add', 'harness@harness']
+    assert 'untrusted output' not in reason
+    assert (prior / 'retained').read_text() == 'old session payload'
+    if failure is None:
+        assert selected == version and str(version) in reason
+
+
 def test_identity_is_root_independent_repeatable_and_source_preserving(project, tmp_path):
     install, source = project
     manifest = source / 'plugin-codex/.codex-plugin/plugin.json'

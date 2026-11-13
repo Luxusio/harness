@@ -97,7 +97,7 @@ def test_a_clean_installed_tree_passes_and_is_not_written_to():
     assert not list(clean_tree.rglob("__pycache__")), "the smoke wrote into the tree"
 
 
-def test_the_installer_runs_the_smoke_on_the_tree_it_installed():
+def test_the_installer_runs_the_smoke_on_the_tree_it_installed(selected_installer_python):
     clean_tree = _clean_tree()
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     ok, steps = install._smoke_installed_runtime(clean_tree)
@@ -106,7 +106,7 @@ def test_the_installer_runs_the_smoke_on_the_tree_it_installed():
     assert all(step.startswith("runtime smoke: ") for step in steps), steps
 
 
-def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path):
+def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path, selected_installer_python):
     """An import failure fails delivery; pruning repairs stale bytecode."""
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     plugin_root = _installed_tree(tmp_path)
@@ -127,7 +127,7 @@ def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path):
     assert ok, steps
 
 
-def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path, monkeypatch):
+def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path, monkeypatch, selected_installer_python):
     """The call site, not just the callable.
 
     A smoke test nobody calls is the failure this task exists to remove: the
@@ -181,7 +181,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
     assert "smoke test" in result.summary
 
 
-def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch):
+def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch, selected_installer_python):
     """The default (conditional) run is the harness's own delivery path.
 
     `install_verified.py` calls `install.py` with no flags, which returns early on
@@ -232,6 +232,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     cached = tmp_path / "plugins" / "cache" / "harness" / "harness" / "9.9.9"
     (cached / "scripts").mkdir(parents=True)
     with (
+        mock.patch.object(install, "_select_codex_plugin", return_value=(True, "native selection stubbed for smoke call-site test")),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_install_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
@@ -254,7 +255,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     assert "smoke test" in result.summary
 
 
-def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path):
+def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path, selected_installer_python):
     """Nothing to probe is a stated step, never a silent pass."""
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     codex_install_root = tmp_path / "harness"
@@ -266,7 +267,10 @@ def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path):
     with (
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_install_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
-        mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_run", side_effect=lambda cmd, dry: (
+            (0, json.dumps({"installed": [{"pluginId": "harness@harness", "version": "9.9.9", "installed": True, "enabled": True}]}), "")
+            if cmd[1:3] == ["plugin", "list"] else (0, "codex 0.130.0\n", "")
+        )),
         mock.patch.object(
             install, "_codex_payload_state",
             return_value=(install.PAYLOAD_SYNCHRONIZED, "identical"),
@@ -276,8 +280,8 @@ def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path):
             dry_run=False, force=False,
             config_path=str(tmp_path / "config.toml"),
         )
-    assert result.ok
-    assert any("runtime smoke: skipped" in step for step in result.steps), result.steps
+    assert not result.ok
+    assert "cached payload differs" in result.summary
 
 
 def test_the_smoke_covers_every_registered_hook_module():

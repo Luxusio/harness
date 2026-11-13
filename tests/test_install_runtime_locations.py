@@ -41,8 +41,13 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
         "import os,sys,json\nfrom pathlib import Path\n"
         f"log=Path({str(log)!r})\n"
         "home=Path(os.environ['CODEX_HOME']);cfg=home/'config.toml'\n"
-        "with log.open('a') as f:f.write(json.dumps({'argv':sys.argv[1:],'home':str(home),'config_exists':cfg.exists()})+'\\n')\n"
+        "manifest=home/'harness/plugins/harness/.codex-plugin/plugin.json'\n"
+        "version=json.loads(manifest.read_text())['version'] if manifest.exists() else None\n"
+        "with log.open('a') as f:f.write(json.dumps({'argv':sys.argv[1:],'home':str(home),'config_exists':cfg.exists(),'version':version})+'\\n')\n"
         "if sys.argv[1:]==['--version']:print('codex 0.130.0')\n"
+        "if sys.argv[1:3]==['plugin','list']:\n"
+        " adds=[r for r in map(json.loads,log.read_text().splitlines()) if r['argv']==['plugin','add','harness@harness']]\n"
+        " print(json.dumps({'installed':[dict(pluginId='harness@harness',version=adds[-1]['version'],installed=True,enabled=True)] if adds else []}))\n"
         "if sys.argv[1:]==['app-server','daemon','version']:sys.exit(1)\n"
         "if sys.argv[1:]==['features','enable','plugin_hooks'] and '[features]' not in cfg.read_text():\n"
         " with cfg.open('a') as f:f.write('\\n[features]\\nplugin_hooks = true\\n')\n"
@@ -65,6 +70,8 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
     assert all(row["home"] == str(runtime) for row in records)
     assert any(row["argv"] == ["app-server", "daemon", "version"] for row in records)
     assert next(row for row in records if row["argv"] == ["features", "enable", "plugin_hooks"])["config_exists"]
+    assert any(row["argv"] == ["plugin", "add", "harness@harness"] for row in records)
+    assert any(row["argv"] == ["plugin", "list", "--json", "--marketplace", "harness"] for row in records)
     assert not (home / ".codex").exists()
     # A forced reinstall still goes through cache installation. Simulate the
     # host refusing to rename a loaded cache, while allowing mirror publication.
@@ -81,6 +88,8 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
     assert forced.ok, forced.summary
     skipped = install.install_codex(dry_run=False, force=False, config_path=None)
     assert skipped.ok and 'SYNCHRONIZED' in skipped.summary
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    assert sum(row["argv"] == ["plugin", "add", "harness@harness"] for row in records) == 3
 
 
 def test_explicit_config_selects_runtime_home_and_nonstandard_config_requires_session(tmp_path, monkeypatch):

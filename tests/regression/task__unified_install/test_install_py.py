@@ -64,6 +64,17 @@ def _load_install_module():
     return module
 
 
+def _model_codex_listing(executable, config_path):
+    """Existing fake hosts report native selection separately from version text."""
+    mirror = Path(config_path).parent / 'harness/plugins/harness'
+    code = ("import json;from pathlib import Path;root=Path(" + repr(str(mirror))
+            + ");version=json.loads((root/'.codex-plugin/plugin.json').read_text())['version'];"
+            + "print(json.dumps({'installed':[dict(pluginId='harness@harness',version=version,installed=True,enabled=True,source=dict(path=str(root)))]}))")
+    block = ('if [ "$1" = plugin ] && [ "$2" = list ]; then '
+             + shlex.quote(sys.executable) + ' -B -c ' + shlex.quote(code) + '; exit $?; fi\n')
+    executable.write_text(executable.read_text().replace('#!/bin/sh\n', '#!/bin/sh\n' + block, 1))
+
+
 def _model_mise_provider(env):
     """Synthetic CLI regression provider; selected identity is not native proof."""
     search = env.get("PATH", "")
@@ -476,6 +487,7 @@ def test_claude_payload_state_compares_full_generated_mirror(tmp_path, monkeypat
 def test_conditional_runtime_skips_payload_mutation_when_current(tmp_path):
     module = _load_install_module()
     with (
+        mock.patch.object(module, "_select_codex_plugin", return_value=(True, "selection stubbed for payload call-site test")),
         # `install_codex` prunes bytecode caches under CODEX_INSTALL_ROOT before
         # the staleness decision, so "no payload mutation" only holds for a root
         # this test owns.
@@ -526,6 +538,7 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
     config_path = tmp_path / "config.toml"
     codex_root = tmp_path / "codex-harness"
     with (
+        mock.patch.object(module, "_select_codex_plugin", return_value=(True, "selection stubbed for payload call-site test")),
         mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
@@ -717,6 +730,7 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
         stale.append(pyc)
 
     with (
+        mock.patch.object(module, "_select_codex_plugin", return_value=(True, "selection stubbed for payload call-site test")),
         mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
@@ -945,7 +959,7 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
         assert (codex_plugin / rel).exists(), f"manifest path must exist: {rel}"
 
     skill_names = sorted(path.parent.name for path in (codex_plugin / "skills").glob("*/SKILL.md"))
-    assert skill_names == ["run", "setup"]
+    assert skill_names == ["report-friction", "run", "setup"]
     assert (codex_plugin / "skills" / "run" / "agents" / "openai.yaml").is_file()
 
     internal_skill_names = sorted(
@@ -1051,9 +1065,10 @@ def test_codex_hook_trust_state_matches_normalized_codex_identity(tmp_path):
         "harness@harness:hooks.json:pre_tool_use:0:0",
         "harness@harness:hooks.json:user_prompt_submit:0:0",
         "harness@harness:hooks.json:post_tool_use:0:0",
+        "harness@harness:hooks.json:post_tool_use:1:0",
     }
     assert all(value.startswith("sha256:") for value in state.values())
-    assert len({value for value in state.values()}) == 4
+    assert len({value for value in state.values()}) == 5
 
 
 def test_install_codex_hook_trust_state_preserves_user_state_and_enabled_flag(tmp_path):
@@ -1247,6 +1262,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
+    _model_codex_listing(fake_codex, config_path)
     result = module.install_codex(dry_run=False, force=True, config_path=str(config_path))
 
     assert result.ok is True, result.summary
@@ -1294,6 +1310,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
 
     monkeypatch.setattr(module, "_reload_codex_runtime", reload_after_installed_state)
 
+    _model_codex_listing(fake_codex, config_path)
     result = module.install_codex(dry_run=False, force=True, config_path=str(config_path))
     assert reload_calls == [str(config_path)]
 
@@ -1362,6 +1379,7 @@ def test_codex_install_rejects_version_below_pin_before_mutating_payload(tmp_pat
     monkeypatch.setattr(module, "CODEX_VERSION_PIN_FILE", pin)
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
+    _model_codex_listing(fake_codex, tmp_path / ".codex" / "config.toml")
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
     assert result.ok is False
@@ -1389,6 +1407,7 @@ def test_codex_install_fails_if_plugin_hooks_feature_cannot_be_enabled(tmp_path,
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
+    _model_codex_listing(fake_codex, tmp_path / ".codex" / "config.toml")
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
     assert result.ok is False
@@ -1418,6 +1437,7 @@ def test_codex_install_fails_if_marketplace_add_fails_after_plugin_hooks(tmp_pat
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
+    _model_codex_listing(fake_codex, tmp_path / ".codex" / "config.toml")
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
     assert result.ok is False
@@ -1443,6 +1463,7 @@ def test_codex_install_treats_existing_marketplace_as_success(tmp_path, monkeypa
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
+    _model_codex_listing(fake_codex, tmp_path / ".codex" / "config.toml")
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
     assert result.ok is True, result.summary
@@ -1476,6 +1497,7 @@ def test_default_codex_install_replaces_an_existing_harness_block_with_a_backup(
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
+    _model_codex_listing(fake_codex, config_path)
     result = module.install_codex(dry_run=False, force=False, config_path=str(config_path))
 
     assert result.ok is True, result.summary + "\n" + "\n".join(result.steps)

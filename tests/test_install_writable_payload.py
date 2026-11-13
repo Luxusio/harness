@@ -225,6 +225,7 @@ def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path)
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_select_codex_plugin", return_value=(True, "selection stubbed for permission call-site test")),
         mock.patch.object(
             install, "_codex_payload_state",
             return_value=(install.PAYLOAD_SYNCHRONIZED, ""),

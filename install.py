@@ -1853,6 +1853,42 @@ def _codex_cached_plugin_root(codex_home: Path, source_plugin_root: Path) -> Pat
     )
 
 
+def _select_codex_plugin(source_root: Path, codex_home: Path) -> tuple[bool, str]:
+    """Refresh native selection and verify the cache that version identifies."""
+    try:
+        version = _codex_plugin_version(source_root)
+        rc, _, _ = _run(["codex", "plugin", "add", CODEX_PLUGIN_ID], False)
+        if rc:
+            return False, f"codex plugin add {CODEX_PLUGIN_ID} failed (exit {rc})"
+        rc, out, _ = _run(["codex", "plugin", "list", "--json", "--marketplace", CODEX_PLUGIN_MARKETPLACE], False)
+        if rc:
+            return False, f"codex plugin list failed (exit {rc}); plugin selection could not be verified"
+        if len(out) > 1024 * 1024:
+            raise ValueError()
+        rows = json.loads(out)["installed"]
+        if not isinstance(rows, list):
+            raise ValueError()
+        selected = [row for row in rows if isinstance(row, dict) and row.get("pluginId") == CODEX_PLUGIN_ID]
+        if (len(selected) != 1 or selected[0].get("version") != version
+                or selected[0].get("installed") is not True or selected[0].get("enabled") is not True):
+            raise ValueError()
+        row = selected[0]
+        cache = _codex_cached_plugin_root(codex_home, source_root)
+        if "installPath" in row and Path(row["installPath"]).resolve() != cache.resolve():
+            raise ValueError()
+        if "source" in row and Path(row["source"]["path"]).resolve() != source_root.resolve():
+            raise ValueError()
+        with tempfile.TemporaryDirectory(prefix="harness-codex-selected-") as temporary:
+            expected = Path(temporary) / "expected"
+            _build_codex_cache_payload(source_root, expected, cache)
+            state, _ = _compare_payload_trees(expected, cache)
+        if state != PAYLOAD_SYNCHRONIZED:
+            raise ValueError()
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError):
+        return False, "Codex selected version or cached payload differs from the installed projection; preserve existing versions and retry installation"
+    return True, f"codex plugin selection verified: {CODEX_PLUGIN_ID} {version}"
+
+
 def _codex_plugin_version(source_root: Path) -> str:
     manifest_path = source_root / ".codex-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text())
@@ -2072,6 +2108,16 @@ def _install_codex(*, dry_run: bool, force: bool,
             )
         if payload_state == PAYLOAD_SYNCHRONIZED:
             steps.append("payload comparison: SYNCHRONIZED")
+            if not dry_run:
+                selected_ok, selected_message = _select_codex_plugin(
+                    _codex_install_root() / "plugins" / CODEX_PLUGIN_NAME,
+                    _codex_home_for_config(config_path),
+                )
+                steps.append(selected_message)
+                if not selected_ok:
+                    return InstallResult("codex", False, selected_message, steps)
+            else:
+                steps.append(f"would run: codex plugin add {CODEX_PLUGIN_ID} and verify selected cache")
             # Same reason as install_claude: the default run is the harness's own
             # delivery path, so the probe belongs on the skip branch as well.
             # The cache entry is the tree Codex loads; when it is absent there
@@ -2102,7 +2148,7 @@ def _install_codex(*, dry_run: bool, force: bool,
             return InstallResult(
                 "codex", True,
                 "Codex payload SYNCHRONIZED — install skipped "
-                "(config/registry health not checked)",
+                "(configuration health not checked)",
                 steps,
             )
         steps.append(f"payload comparison: STALE ({payload_reason})")
@@ -2155,6 +2201,7 @@ def _install_codex(*, dry_run: bool, force: bool,
     # [marketplaces.harness] entry Codex writes.
     if dry_run:
         steps.append(f"would run: codex plugin marketplace add {_codex_install_root()}")
+        steps.append(f"would run: codex plugin add {CODEX_PLUGIN_ID} and verify selected cache")
         steps.append("would run: codex features enable plugin_hooks")
 
     # Remove any stale source before the TOML merge. The merge writes the
@@ -2203,6 +2250,10 @@ def _install_codex(*, dry_run: bool, force: bool,
                              f"codex plugin marketplace add failed: {err.strip() or out.strip()}",
                              steps, backup_path=result["backup_path"])
     steps.append("codex plugin marketplace registered")
+    selected_ok, selected_message = _select_codex_plugin(codex_plugin_source_root, codex_home)
+    steps.append(selected_message)
+    if not selected_ok:
+        return InstallResult("codex", False, selected_message, steps, backup_path=result["backup_path"])
     reload_ok, reload_message, restart_required = _install_step("Codex hook reload", steps, lambda: _reload_codex_runtime(config_path))
     if not reload_ok:
         retry = ["python3", "install.py", "--codex-only", "--force"]

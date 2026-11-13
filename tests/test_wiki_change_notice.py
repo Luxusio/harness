@@ -215,7 +215,7 @@ def test_replaced_token_reuses_feed_only_after_current_authorization(setup_wiki,
     assert not (tmp_path / "ignored-override").exists()
 
 
-def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, monkeypatch):
+def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, monkeypatch, selected_installer_python):
     repo, env, control = setup_wiki
     publish(control, [page_event(1, 101)])
     spec = importlib.util.spec_from_file_location("harness_install_wiki_test", ROOT / "install.py")
@@ -223,7 +223,7 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
     monkeypatch.setitem(sys.modules, spec.name, install)
     spec.loader.exec_module(install)
     codex = install._codex_hooks_config(ROOT / "plugin")
-    claude = json.loads((ROOT / "plugin/hooks/hooks.json").read_text())
+    claude = json.loads(install._claude_runtime_projection()["hooks/hooks.json"])
     for runtime, config in (("codex", codex), ("claude", claude)):
         entry = config["hooks"]["PostToolUse"][-1]
         assert re.fullmatch(entry["matcher"], "Read")
