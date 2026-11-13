@@ -229,17 +229,8 @@ def test_native_cpython_0700_owner_rights_and_inherited_child(tmp_path, monkeypa
     assert win.safe_read(target, 100, private=True) == b'CPython private snapshot'
 
 
-@pytest.mark.parametrize('policy', ['private', 'metadata', 'lock', 'ancestor'])
-@pytest.mark.parametrize('scenario', ['owner-rights', 'foreign-owner', 'foreign-read',
-                                     'foreign-mutation', 'creator-owner', 'system-owner'])
-def test_native_modeled_descriptor_owner_rights_preserve_existing_policy(monkeypatch, policy, scenario):
-    """Native-built descriptor metadata; no physical foreign-owned file is claimed."""
-    owner = ('S-1-5-21-111-222-333-444' if scenario == 'foreign-owner' else
-             'SY' if scenario == 'system-owner' else win.USER_SID)
-    grants = '(A;;FA;;;OW)(A;;FA;;;' + win.USER_SID + ')'
-    grants += {'foreign-read': '(A;;GR;;;WD)', 'foreign-mutation': '(A;;GA;;;WD)',
-               'creator-owner': '(A;;FA;;;CO)'}.get(scenario, '')
-    sddl = 'O:' + owner + 'D:P' + grants
+def _modeled_security_descriptor(monkeypatch, sddl):
+    """Use real native descriptor parsing while controlling only fixture bytes."""
     get_owner = win._bind(win.A, 'GetSecurityDescriptorOwner', [win.P, C.POINTER(win.P), C.POINTER(W.BOOL)])
     get_dacl = win._bind(win.A, 'GetSecurityDescriptorDacl',
                         [win.P, C.POINTER(W.BOOL), C.POINTER(win.P), C.POINTER(W.BOOL)])
@@ -254,6 +245,19 @@ def test_native_modeled_descriptor_owner_rights_preserve_existing_policy(monkeyp
         return 0
 
     monkeypatch.setattr(win, '_GetSecurityInfo', modeled_info)
+
+
+@pytest.mark.parametrize('policy', ['private', 'metadata', 'lock', 'ancestor'])
+@pytest.mark.parametrize('scenario', ['owner-rights', 'foreign-owner', 'foreign-read',
+                                     'foreign-mutation', 'creator-owner', 'system-owner'])
+def test_native_modeled_descriptor_owner_rights_preserve_existing_policy(monkeypatch, policy, scenario):
+    """Native-built descriptor metadata; no physical foreign-owned file is claimed."""
+    owner = ('S-1-5-21-111-222-333-444' if scenario == 'foreign-owner' else
+             'SY' if scenario == 'system-owner' else win.USER_SID)
+    grants = '(A;;FA;;;OW)(A;;FA;;;' + win.USER_SID + ')'
+    grants += {'foreign-read': '(A;;GR;;;WD)', 'foreign-mutation': '(A;;GA;;;WD)',
+               'creator-owner': '(A;;FA;;;CO)'}.get(scenario, '')
+    _modeled_security_descriptor(monkeypatch, 'O:' + owner + 'D:P' + grants)
     assert 'S-1-3-4' not in win.TRUSTED_SIDS and 'S-1-3-4' not in win.ANCESTOR_TRUSTED_SIDS
     if scenario == 'foreign-owner' or scenario == 'system-owner' and policy != 'ancestor':
         with pytest.raises(ValueError, match='untrusted owner'):
@@ -263,6 +267,46 @@ def test_native_modeled_descriptor_owner_rights_preserve_existing_policy(monkeyp
             win._security(None, policy)
     else:
         win._security(None, policy)
+
+
+@pytest.mark.parametrize('scenario', [
+    'current-default-owner', 'different-default-owner', 'group-not-owner',
+    'group-not-enabled', 'group-deny-only', 'different-group',
+    'system-default-owner', 'foreign-default-owner', 'foreign-write',
+])
+def test_native_default_owner_requires_current_eligible_administrators_group(monkeypatch, scenario):
+    """Model token facts; actual elevated-token CPython0700 coverage stays above."""
+    administrators = 'S-1-5-32-544'
+    foreign = 'S-1-5-21-111-222-333-444'
+    owner = default_owner = administrators
+    groups = ((administrators, 0xF),)  # mandatory, enabled-by-default, enabled, owner
+    if scenario == 'different-default-owner':
+        default_owner = win.USER_SID
+    elif scenario == 'group-not-owner':
+        groups = ((administrators, 0x7),)
+    elif scenario == 'group-not-enabled':
+        groups = ((administrators, 0xB),)
+    elif scenario == 'group-deny-only':
+        groups = ((administrators, 0x1F),)
+    elif scenario == 'different-group':
+        groups = ((foreign, 0xF),)
+    elif scenario == 'system-default-owner':
+        owner = default_owner = 'S-1-5-18'
+        groups = ((owner, 0xF),)
+    elif scenario == 'foreign-default-owner':
+        owner = default_owner = foreign
+        groups = ((owner, 0xF),)
+    monkeypatch.setattr(win, '_default_owner_state', lambda: (default_owner, groups))
+    grants = '(A;;FA;;;OW)(A;;FA;;;' + win.USER_SID + ')'
+    if scenario == 'foreign-write':
+        grants += '(A;;GW;;;WD)'
+    _modeled_security_descriptor(monkeypatch, 'O:' + owner + 'D:P' + grants)
+    if scenario == 'current-default-owner':
+        win._security(None, 'metadata')
+    else:
+        reason = 'unsafe access' if scenario == 'foreign-write' else 'untrusted owner'
+        with pytest.raises(ValueError, match=reason):
+            win._security(None, 'metadata')
 
 
 def test_native_permissive_acl_is_not_mistaken_for_private_mode(private):
