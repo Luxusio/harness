@@ -433,6 +433,13 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False):
         process.stdout.close()
 
 
+def native_executable(command, *, cwd, env):
+    """Resolve an explicitly selected native Windows command."""
+    if os.name != "nt":
+        raise NotImplementedError("Native command resolution requires Windows")
+    return _native.native_executable(command, cwd=cwd, env=env)
+
+
 def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
     """Run a native verification command with bounded merged partial output."""
     if os.name != "nt":

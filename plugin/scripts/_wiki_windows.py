@@ -1201,16 +1201,11 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
     return subprocess.CompletedProcess(argv, result["returncode"], result["output"], b"")
 
 
-def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
-    """Run one native verification command, retaining bounded partial logs."""
-    if cancelled is not None and not callable(cancelled):
-        raise ValueError("Cancellation must be a callback")
-    if cancelled is not None and cancelled():
-        return dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+def native_executable(command, *, cwd, env):
+    """Resolve a native command from explicit paths, without an implicit cwd."""
     env = dict(os.environ) if env is None else env
-    if not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(a, str) or "\x00" in a for a in argv):
-        raise ValueError("Invalid verification command")
-    command = argv[0]
+    if not isinstance(command, str) or "\x00" in command:
+        raise ValueError("Invalid native command")
     if os.path.dirname(command):
         candidate = Path(command)
         if not candidate.is_absolute():
@@ -1232,6 +1227,19 @@ def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_byt
         raise FileNotFoundError("Native verification executable is unavailable")
     if Path(executable).suffix.lower() not in (".exe", ".com"):
         raise OSError("Verification needs a native executable or an explicit native shell")
+    return executable
+
+
+def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
+    """Run one native verification command, retaining bounded partial logs."""
+    if cancelled is not None and not callable(cancelled):
+        raise ValueError("Cancellation must be a callback")
+    if cancelled is not None and cancelled():
+        return dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+    env = dict(os.environ) if env is None else env
+    if not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(a, str) or "\x00" in a for a in argv):
+        raise ValueError("Invalid verification command")
+    executable = native_executable(argv[0], cwd=cwd, env=env)
     with trusted_source_directory(cwd):
         return _process([executable, *argv[1:]], cwd=cwd, env=env, timeout=timeout,
                         limit=limit, merge_stderr=True, cancelled=cancelled, input_bytes=input_bytes)
