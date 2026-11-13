@@ -13,7 +13,9 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import stat
 import subprocess
+import threading
 import time
 
 
@@ -32,7 +34,9 @@ DELETE = 0x10000
 GENERIC_READ, GENERIC_WRITE = 0x80000000, 0x40000000
 FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT = 0x10, 0x400
 FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT = 0x02000000, 0x00200000
+FILE_FLAG_WRITE_THROUGH = 0x80000000
 FILE_READ_ATTRIBUTES = 0x80
+FILE_WRITE_ATTRIBUTES = 0x100
 FILE_LIST_DIRECTORY = 1
 FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE = 1, 2, 4
 OPEN_EXISTING, OPEN_ALWAYS, CREATE_NEW = 3, 4, 1
@@ -76,6 +80,11 @@ class OVERLAPPED(C.Structure):
 class RENAME_INFO(C.Structure):
     # The first union is DWORD-sized; FileName starts at offset 20 on Win64.
     _fields_ = [("flags", DWORD), ("directory", HANDLE), ("length", DWORD), ("name", W.WCHAR * 1)]
+
+
+class BASIC_INFO(C.Structure):
+    _fields_ = [(name, C.c_longlong) for name in ("creation", "access", "write", "change")] + [
+        ("attributes", DWORD)]
 
 
 def _bind(dll, name, args, result=W.BOOL):
@@ -310,18 +319,23 @@ def _win32_path(value):
     return "\\\\?\\UNC\\" + path[2:] if path.startswith("\\\\") else "\\\\?\\" + path
 
 
-def _open(path, access, *, directory=False, create=OPEN_EXISTING, attributes=None, share=None):
+def _open(path, access, *, directory=False, create=OPEN_EXISTING, attributes=None, share=None,
+          owner_neutral=False, allow_hardlinks=False, write_through=False):
     if share is None:
         share = FILE_SHARE_READ | FILE_SHARE_DELETE
     flags = FILE_FLAG_OPEN_REPARSE_POINT | (FILE_FLAG_BACKUP_SEMANTICS if directory else 0)
-    handle = _CreateFile(_win32_path(path), access | FILE_READ_ATTRIBUTES | READ_CONTROL, share,
+    if write_through:
+        flags |= FILE_FLAG_WRITE_THROUGH
+    requested = access | FILE_READ_ATTRIBUTES | (0 if owner_neutral else READ_CONTROL)
+    handle = _CreateFile(_win32_path(path), requested, share,
                          C.byref(attributes) if attributes is not None else None, create, flags, None)
     if handle == INVALID_HANDLE:
         raise _error()
     try:
         info = _info(handle)
         if (_GetFileType(handle) != 1 or bool(info.attributes & FILE_ATTRIBUTE_DIRECTORY) != directory
-                or info.attributes & FILE_ATTRIBUTE_REPARSE_POINT or (not directory and info.links != 1)):
+                or info.attributes & FILE_ATTRIBUTE_REPARSE_POINT
+                or (not directory and not allow_hardlinks and info.links != 1)):
             raise ValueError("Windows path is not a regular, nonlinked disk object")
         return handle
     except BaseException:
@@ -341,7 +355,7 @@ def _identity(handle):
 
 
 @contextmanager
-def _walk(value, *, create=False, secure=False, leaf="metadata", writing=False):
+def _walk(value, *, create=False, secure=False, leaf="metadata", writing=False, owner_neutral=False):
     path = _path(value)
     handles = []
     try:
@@ -362,7 +376,8 @@ def _walk(value, *, create=False, secure=False, leaf="metadata", writing=False):
             # Attribute-only access is exempt from Windows sharing checks.
             # Request directory data access so withholding DELETE sharing
             # really retains each component's name until this context closes.
-            handle = _open(current, FILE_LIST_DIRECTORY, directory=True, share=share)
+            handle = _open(current, FILE_LIST_DIRECTORY, directory=True, share=share,
+                           owner_neutral=owner_neutral)
             handles.append(handle)
             if secure:
                 _security(handle, leaf if index == len(path.parts) - 1 else "ancestor")
@@ -406,19 +421,105 @@ def safe_metadata_read(path, limit):
     return _read(path, limit, "metadata")
 
 
-def _metadata_stamp(handle):
+def safe_metadata_line(path, limit):
+    """Read one bounded metadata record while its owned log keeps appending."""
+    if type(limit) is not int or limit < 0:
+        raise ValueError("Nonnegative line limit required")
+    path = _path(path)
+    with _walk(path.parent, secure=True, writing=True):
+        handle = _open(path, GENERIC_READ, share=FILE_SHARE_READ | FILE_SHARE_WRITE)
+        try:
+            before = _metadata_stamp(handle)
+            data = bytearray()
+            while len(data) <= limit:
+                size = min(4096, limit + 1 - len(data))
+                buffer, count = C.create_string_buffer(size), DWORD()
+                _check(_ReadFile(handle, buffer, size, C.byref(count), None))
+                if not count.value:
+                    break
+                data.extend(buffer.raw[:count.value])
+                newline = data.find(b"\n")
+                if newline >= 0:
+                    del data[newline + 1:]
+                    break
+            if len(data) > limit:
+                raise ValueError("Metadata first line exceeds byte limit")
+            after = _metadata_stamp(handle)
+            stable = lambda stamp: (stamp[:3], stamp[4:7], stamp[8])
+            if stable(before) != stable(after) or after[3] < before[3]:
+                raise ValueError("Metadata log changed during first-line read")
+            named = _open(path, 0, share=FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            try:
+                if _identity(named) != before[:3]:
+                    raise ValueError("Metadata log name changed during read")
+            finally:
+                _close(named)
+            return bytes(data)
+        finally:
+            _close(handle)
+
+
+def source_snapshot(path, limit, *, consume=None):
+    """Read stable ordinary inputs without imposing private metadata policy.
+
+    Ordinary hardlinks and publicly writable source permissions remain valid.
+    A consumer receives bounded 64KiB chunks instead of a retained body.
+    """
+    if type(limit) is not int or limit < 0 or consume is not None and not callable(consume):
+        raise ValueError("A nonnegative source limit and optional consumer are required")
+    path = _path(path)
+    with _walk(path.parent, owner_neutral=True):
+        handle = _open(path, GENERIC_READ, share=FILE_SHARE_READ,
+                       owner_neutral=True, allow_hardlinks=True)
+        try:
+            stamp = lambda: _metadata_free_stamp(handle)
+            before = stamp()
+            mode = os.lstat(_win32_path(path)).st_mode
+            if not stat.S_ISREG(mode) or before[3] > limit:
+                raise ValueError("Source exceeds byte limit or is not a regular file")
+            data, size = bytearray() if consume is None else None, 0
+            for chunk in _file_chunks(handle, limit, chunk_size=65536):
+                size += len(chunk)
+                if consume is None:
+                    data.extend(chunk)
+                else:
+                    consume(chunk)
+            if size != before[3] or stamp() != before or os.lstat(_win32_path(path)).st_mode != mode:
+                raise ValueError("Source changed during read")
+            named = _open(path, 0, owner_neutral=True, allow_hardlinks=True)
+            try:
+                if _identity(named) != before[:3]:
+                    raise ValueError("Source name changed during read")
+            finally:
+                _close(named)
+            return bytes(data) if data is not None else None, mode
+        finally:
+            _close(handle)
+
+
+@contextmanager
+def trusted_source_directory(path):
+    """Retain owner-neutral, non-reparse ancestry while ordinary inputs run."""
+    with _walk(path, owner_neutral=True) as (path, _):
+        yield path
+
+
+def _metadata_free_stamp(handle):
     info = _info(handle)
     times = tuple((value.dwHighDateTime << 32) | value.dwLowDateTime
                   for value in (info.creation, info.write))
     return (info.volume, info.indexHigh, info.indexLow,
-            (info.sizeHigh << 32) | info.sizeLow, info.attributes, info.links,
-            *times, _security(handle, "metadata"))
+            (info.sizeHigh << 32) | info.sizeLow, info.attributes, info.links, *times)
 
 
-def _file_chunks(handle, limit):
+def _metadata_stamp(handle):
+    return (*_metadata_free_stamp(handle), _security(handle, "metadata"))
+
+
+def _file_chunks(handle, limit, *, chunk_size=1024 * 1024):
     total = 0
     while True:
-        size = min(1024 * 1024, limit + 1 - total)
+        size = min(chunk_size, limit + 1 - total)
         buffer, count = C.create_string_buffer(size), DWORD()
         _check(_ReadFile(handle, buffer, size, C.byref(count), None))
         if not count.value:
@@ -458,7 +559,7 @@ def safe_metadata_snapshot(path, limit):
             _close(handle)
 
 
-def metadata_tree_inventory(root, *, max_entries, max_bytes):
+def metadata_tree_inventory(root, *, max_entries, max_bytes, allow_control_lock=False):
     """Stream a bounded trusted tree while native handles retain every entry.
 
     No volatility exemption bypasses security or aggregate limits. Read-only
@@ -466,8 +567,10 @@ def metadata_tree_inventory(root, *, max_entries, max_bytes):
     """
     if any(type(value) is not int or value < 0 for value in (max_entries, max_bytes)):
         raise ValueError("Nonnegative inventory limits required")
+    if type(allow_control_lock) is not bool:
+        raise ValueError("Control-lock admission must be a boolean")
     root = _path(root)
-    result, retained, stamps = {}, [], []
+    result, retained, stamps, control_names = {}, [], [], []
     used = discovered = 0
 
     def walk(path, prefix):
@@ -487,13 +590,22 @@ def metadata_tree_inventory(root, *, max_entries, max_bytes):
             relative = prefix + name
             info = os.lstat(_win32_path(child))
             directory = bool(info.st_file_attributes & FILE_ATTRIBUTE_DIRECTORY)
-            handle = _open(child, FILE_LIST_DIRECTORY if directory else GENERIC_READ,
-                           directory=directory, share=FILE_SHARE_READ)
+            control_lock = allow_control_lock and relative == ".control.lock"
+            if control_lock:
+                handle = _open(child, 0, share=FILE_SHARE_READ | FILE_SHARE_WRITE)
+            else:
+                handle = _open(child, FILE_LIST_DIRECTORY if directory else GENERIC_READ,
+                               directory=directory, share=FILE_SHARE_READ)
             retained.append(handle)
             before = _metadata_stamp(handle)
             stamps.append((handle, before))
             readonly = bool(before[4] & 1)
-            if directory:
+            if control_lock:
+                if before[3] != 0:
+                    raise ValueError("Native control lock must be empty")
+                control_names.append((child, before))
+                result[relative] = dict(kind="file", size=0, sha256=hashlib.sha256(b"").hexdigest(), readonly=readonly)
+            elif directory:
                 result[relative] = dict(kind="dir", size=0, sha256="", readonly=readonly)
                 walk(child, relative + "/")
             else:
@@ -515,6 +627,13 @@ def metadata_tree_inventory(root, *, max_entries, max_bytes):
             if _metadata_stamp(directory) != before_root or any(
                     _metadata_stamp(handle) != before for handle, before in stamps):
                 raise ValueError("Metadata tree changed during inventory")
+            for path, before in control_names:
+                named = _open(path, 0, share=FILE_SHARE_READ | FILE_SHARE_WRITE)
+                try:
+                    if _metadata_stamp(named) != before:
+                        raise ValueError("Native control-lock name changed during inventory")
+                finally:
+                    _close(named)
             return result
         finally:
             for handle in reversed(retained):
@@ -533,42 +652,76 @@ def ensure_private_directory(path):
         return path
 
 
-def atomic_write(path, data):
-    if not isinstance(data, bytes):
-        raise TypeError("Atomic data must be bytes")
+_EXPECTED_ANY = object()
+
+
+def _seal_readonly(handle, readonly):
+    before = _metadata_stamp(handle)
+    current = bool(before[4] & 1)
+    if current:
+        if not readonly:
+            raise ValueError("Readonly metadata cannot be unsealed")
+        return
+    if not readonly:
+        return
+    basic = BASIC_INFO()
+    basic.attributes = before[4] | 1
+    _check(_SetFileInformation(handle, 0, C.byref(basic), C.sizeof(basic)))
+    after = _metadata_stamp(handle)
+    if (after[:4] != before[:4] or after[4] != before[4] | 1
+            or after[5:7] != before[5:7] or after[8] != before[8]):
+        raise ValueError("Metadata changed while sealing readonly attributes")
+
+
+def _publish_metadata(path, chunks, *, expected=_EXPECTED_ANY, readonly=False, write_through=False):
     path = _path(path)
     with _walk(path.parent, create=True, secure=True, writing=True) as (_, directory):
         try:
             old = _open(path, 0, share=FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         except FileNotFoundError:
-            pass
+            if isinstance(expected, bytes):
+                raise
         else:
             try:
                 _security(old, "metadata")
+                if expected is None:
+                    raise FileExistsError("Metadata destination already exists")
             finally:
                 _close(old)
         temporary = path.parent / (".wiki-" + secrets.token_hex(16))
         with _private_attributes() as attributes:
-            handle = _open(temporary, GENERIC_WRITE | DELETE, create=CREATE_NEW, attributes=attributes)
+            handle = _open(temporary, GENERIC_WRITE | DELETE, create=CREATE_NEW, attributes=attributes,
+                           write_through=write_through)
         published = False
         try:
             _security(handle, "private")
-            offset = 0
-            while offset < len(data):
-                chunk = data[offset:offset + 65536]
-                count = DWORD()
-                _check(_WriteFile(handle, chunk, len(chunk), C.byref(count), None))
-                if not count.value:
-                    raise OSError("Native Windows write made no progress")
-                offset += count.value
+            for data in chunks:
+                offset = 0
+                while offset < len(data):
+                    chunk = data[offset:offset + (1024 * 1024 if write_through else 65536)]
+                    count = DWORD()
+                    _check(_WriteFile(handle, chunk, len(chunk), C.byref(count), None))
+                    if not count.value:
+                        raise OSError("Native Windows write made no progress")
+                    offset += count.value
             _check(_FlushFileBuffers(handle))
+            if readonly:
+                _seal_readonly(handle, True)
+                _check(_FlushFileBuffers(handle))
+            # The owning migration/control lock serializes the expected-value
+            # check with other authorized writers. This is not lock-free CAS.
+            if isinstance(expected, bytes):
+                current, _ = safe_metadata_snapshot(path, len(expected))
+                if current != expected:
+                    raise ValueError("Metadata changed before publication")
             # Use the full-path/NULL-root form, including the internal extended
             # spelling required for long destinations. Retained _walk handles
             # prevent ancestor replacement throughout this rename.
             encoded = _win32_path(path).encode("utf-16-le")
             buffer = C.create_string_buffer(max(C.sizeof(RENAME_INFO), RENAME_INFO.name.offset + len(encoded) + 2))
             rename = C.cast(buffer, C.POINTER(RENAME_INFO)).contents
-            rename.flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+            rename.flags = FILE_RENAME_FLAG_POSIX_SEMANTICS | (
+                0 if expected is None else FILE_RENAME_FLAG_REPLACE_IF_EXISTS)
             rename.directory, rename.length = None, len(encoded)
             C.memmove(C.addressof(buffer) + RENAME_INFO.name.offset, encoded, len(encoded))
             if not _SetFileInformation(handle, FileRenameInfoEx, buffer, len(buffer)):
@@ -579,9 +732,158 @@ def atomic_write(path, data):
             published = True
         finally:
             if not published:
-                delete = W.BOOLEAN(True)
                 # Delete our exact unpublished handle, never a substituted path.
-                _SetFileInformation(handle, 4, C.byref(delete), C.sizeof(delete))
+                # A new archive may already be sealed when publication fails.
+                # The owned DELETE handle can retire it without unsealing it;
+                # keep the private wiki writer's existing disposition protocol.
+                if readonly and write_through:
+                    delete = DWORD(1 | 0x10)  # DELETE | IGNORE_READONLY_ATTRIBUTE
+                    _SetFileInformation(handle, 21, C.byref(delete), C.sizeof(delete))
+                else:
+                    delete = W.BOOLEAN(True)
+                    _SetFileInformation(handle, 4, C.byref(delete), C.sizeof(delete))
+            _close(handle)
+
+
+def atomic_write(path, data):
+    if not isinstance(data, bytes):
+        raise TypeError("Atomic data must be bytes")
+    _publish_metadata(path, (data,))
+
+
+def metadata_write(path, data, *, expected):
+    """Publish a bounded control record under the caller's real owning lock."""
+    if not isinstance(data, bytes) or expected is not None and not isinstance(expected, bytes):
+        raise TypeError("Metadata records and expected contents must be bytes")
+    if len(data) > 16 * 1024 * 1024 or expected is not None and len(expected) > 16 * 1024 * 1024:
+        raise ValueError("Metadata manifest exceeds 16MiB limit")
+    _publish_metadata(path, (data,), expected=expected, write_through=True)
+
+
+def metadata_set_readonly(path, readonly, *, directory=False):
+    """Seal checked history, or validate existing attributes without unsealing."""
+    if type(readonly) is not bool or type(directory) is not bool:
+        raise ValueError("Readonly and directory selectors must be booleans")
+    path = _path(path)
+    with _walk(path.parent, secure=True, writing=True):
+        access = (FILE_LIST_DIRECTORY if directory else GENERIC_READ) | FILE_WRITE_ATTRIBUTES
+        handle = _open(path, access, directory=directory,
+                       share=FILE_SHARE_READ, write_through=True)
+        try:
+            _seal_readonly(handle, readonly)
+        finally:
+            _close(handle)
+
+
+def _expected_hash(value):
+    if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+        raise ValueError("An exact SHA256 digest is required")
+
+
+def _checked_chunks(handle, *, max_bytes, expected_sha256, expected_size):
+    before = _metadata_stamp(handle)
+    if before[3] != expected_size or before[3] > max_bytes:
+        raise ValueError("Metadata source size changed or exceeds budget")
+    digest, size = hashlib.sha256(), 0
+    for data in _file_chunks(handle, max_bytes):
+        digest.update(data)
+        size += len(data)
+        yield data
+    if (size != expected_size or digest.hexdigest() != expected_sha256
+            or _metadata_stamp(handle) != before):
+        raise ValueError("Metadata source changed during copy")
+
+
+def metadata_copy(source, destination, *, max_bytes, expected_sha256, expected_size, readonly):
+    """Create an authenticated archive copy, or validate an admitted retry.
+
+    Existing matching destinations are reuse under the caller's authenticated
+    prepared journal, not a fresh flush of arbitrary readonly files. New
+    publication preflushes a retained writer and uses NTFS write-through rename.
+    """
+    _expected_hash(expected_sha256)
+    if (type(max_bytes) is not int or max_bytes < 0 or type(expected_size) is not int
+            or not 0 <= expected_size <= max_bytes or type(readonly) is not bool):
+        raise ValueError("Invalid metadata copy bounds")
+    source, destination = _path(source), _path(destination)
+    with _walk(source.parent, secure=True), _walk(destination.parent, create=True, secure=True, writing=True):
+        original = _open(source, GENERIC_READ, share=FILE_SHARE_READ)
+        visible = None
+        try:
+            try:
+                visible = _open(destination, GENERIC_READ, share=FILE_SHARE_READ)
+            except FileNotFoundError:
+                pass
+            chunks = _checked_chunks(original, max_bytes=max_bytes, expected_sha256=expected_sha256,
+                                     expected_size=expected_size)
+            if visible is not None:
+                for _ in chunks:
+                    pass
+                before = _metadata_stamp(visible)
+                if bool(before[4] & 1) != readonly:
+                    raise ValueError("Existing archive readonly state changed")
+                for _ in _checked_chunks(visible, max_bytes=max_bytes, expected_sha256=expected_sha256,
+                                         expected_size=expected_size):
+                    pass
+                return "reused"
+            _publish_metadata(destination, chunks, expected=None, readonly=readonly, write_through=True)
+            return "published"
+        finally:
+            _close(visible)
+            _close(original)
+
+
+def metadata_remove(path, *, expected_sha256, max_bytes=1024 * 1024):
+    """Retire only the checked, bounded control object through its own handle."""
+    _expected_hash(expected_sha256)
+    if type(max_bytes) is not int or max_bytes < 0:
+        raise ValueError("A nonnegative metadata retirement limit is required")
+    path = _path(path)
+    with _walk(path.parent, secure=True, writing=True):
+        handle = _open(path, GENERIC_READ | DELETE, share=FILE_SHARE_READ, write_through=True)
+        try:
+            before = _metadata_stamp(handle)
+            for _ in _checked_chunks(handle, max_bytes=max_bytes, expected_sha256=expected_sha256,
+                                     expected_size=before[3]):
+                pass
+            flags = DWORD(1 | 0x10)  # DELETE | IGNORE_READONLY_ATTRIBUTE
+            _check(_SetFileInformation(handle, 21, C.byref(flags), C.sizeof(flags)))
+        finally:
+            _close(handle)
+
+
+def metadata_remove_empty(path):
+    """Remove the verified directory handle only if the filesystem finds it empty."""
+    path = _path(path)
+    with _walk(path.parent, secure=True, writing=True):
+        handle = _open(path, FILE_LIST_DIRECTORY | DELETE, directory=True,
+                       share=FILE_SHARE_READ, write_through=True)
+        try:
+            _security(handle, "metadata")
+            with os.scandir(_win32_path(path)) as iterator:
+                if next(iterator, None) is not None:
+                    raise OSError("Metadata directory is not empty")
+            flags = DWORD(1 | 0x10)
+            _check(_SetFileInformation(handle, 21, C.byref(flags), C.sizeof(flags)))
+        finally:
+            _close(handle)
+
+
+def metadata_rename_directory(source, destination):
+    """Publish a held private archive directory without replacement or copying."""
+    source, destination = _path(source), _path(destination)
+    with _walk(source.parent, secure=True, writing=True), _walk(destination.parent, secure=True, writing=True):
+        handle = _open(source, FILE_LIST_DIRECTORY | DELETE, directory=True,
+                       share=FILE_SHARE_READ, write_through=True)
+        try:
+            _security(handle, "metadata")
+            encoded = _win32_path(destination).encode("utf-16-le")
+            buffer = C.create_string_buffer(max(C.sizeof(RENAME_INFO), RENAME_INFO.name.offset + len(encoded) + 2))
+            rename = C.cast(buffer, C.POINTER(RENAME_INFO)).contents
+            rename.flags, rename.directory, rename.length = FILE_RENAME_FLAG_POSIX_SEMANTICS, None, len(encoded)
+            C.memmove(C.addressof(buffer) + RENAME_INFO.name.offset, encoded, len(encoded))
+            _check(_SetFileInformation(handle, FileRenameInfoEx, buffer, len(buffer)))
+        finally:
             _close(handle)
 
 
@@ -656,11 +958,18 @@ class JOB_EXTENDED_LIMIT(C.Structure):
                 ("PeakProcessMemoryUsed", SIZE_T), ("PeakJobMemoryUsed", SIZE_T)]
 
 
+class JOB_ACCOUNTING(C.Structure):
+    _fields_ = [(name, C.c_longlong) for name in ("user", "kernel", "period_user", "period_kernel")] + [
+        (name, DWORD) for name in ("faults", "total", "active", "terminated")]
+
+
 _CreatePipe = _bind(K, "CreatePipe", [C.POINTER(HANDLE), C.POINTER(HANDLE), C.POINTER(SECURITY_ATTRIBUTES), DWORD])
 _SetHandleInformation = _bind(K, "SetHandleInformation", [HANDLE, DWORD, DWORD])
 _CreateJobObject = _bind(K, "CreateJobObjectW", [P, W.LPCWSTR], HANDLE)
 _SetInformationJobObject = _bind(K, "SetInformationJobObject", [HANDLE, C.c_int, P, DWORD])
 _AssignProcessToJobObject = _bind(K, "AssignProcessToJobObject", [HANDLE, HANDLE])
+_TerminateJobObject = _bind(K, "TerminateJobObject", [HANDLE, W.UINT])
+_QueryJob = _bind(K, "QueryInformationJobObject", [HANDLE, C.c_int, P, DWORD, P])
 _InitializeAttributes = _bind(K, "InitializeProcThreadAttributeList", [P, DWORD, DWORD, C.POINTER(SIZE_T)])
 _UpdateAttribute = _bind(K, "UpdateProcThreadAttribute", [P, DWORD, SIZE_T, P, SIZE_T, P, P])
 _DeleteAttributes = _bind(K, "DeleteProcThreadAttributeList", [P], None)
@@ -671,9 +980,58 @@ _TerminateProcess = _bind(K, "TerminateProcess", [HANDLE, W.UINT])
 _WaitForSingleObject = _bind(K, "WaitForSingleObject", [HANDLE, DWORD], DWORD)
 _GetExitCodeProcess = _bind(K, "GetExitCodeProcess", [HANDLE, C.POINTER(DWORD)])
 _PeekNamedPipe = _bind(K, "PeekNamedPipe", [HANDLE, P, DWORD, P, C.POINTER(DWORD), P])
+_OpenThread = _bind(K, "OpenThread", [DWORD, W.BOOL, DWORD], HANDLE)
+_CancelSynchronousIo = _bind(K, "CancelSynchronousIo", [HANDLE])
 
 
-def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
+def _stop_job(job):
+    """Reap every owned process before releasing a verification resource."""
+    _check(_TerminateJobObject(job, 1))
+    deadline = time.monotonic() + 5
+    while True:
+        accounting = JOB_ACCOUNTING()
+        _check(_QueryJob(job, 1, C.byref(accounting), C.sizeof(accounting), None))
+        if accounting.active == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise OSError("Native job cleanup could not be confirmed")
+        time.sleep(0.005)
+
+
+def _feed_input(handle, data, state):
+    try:
+        state["thread"] = _OpenThread(0x100001, False, threading.get_native_id())
+        if not state["thread"]:
+            raise _error()
+        offset = 0
+        while offset < len(data):
+            chunk = data[offset:offset + 65536]
+            count = DWORD()
+            _check(_WriteFile(handle, chunk, len(chunk), C.byref(count), None))
+            if not count.value:
+                raise OSError("Native stdin write made no progress")
+            offset += count.value
+    except OSError as error:
+        state["error"] = error
+    finally:
+        _close(handle)
+
+
+def _join_input(writer, state):
+    writer.join(0.1)
+    deadline = time.monotonic() + 2
+    while writer.is_alive() and time.monotonic() < deadline:
+        handle = state.get("thread")
+        if handle:
+            # Only this owned writer can have synchronous I/O cancelled.
+            if not _CancelSynchronousIo(handle) and C.get_last_error() != 1168:
+                raise _error()
+        writer.join(0.02)
+    if writer.is_alive():
+        raise OSError("Native stdin writer cleanup could not be confirmed")
+
+
+def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=None, input_bytes=None):
     """Spawn suspended, assign a kill-on-close Job, then resume and bound stdout.
 
     The explicit inherited-handle list keeps unrelated private process handles
@@ -683,23 +1041,31 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
     if (not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(a, str) or "\x00" in a for a in argv)
             or type(limit) is not int or limit < 0 or timeout <= 0):
         raise ValueError("Invalid bounded process request")
+    if input_bytes is not None and (not isinstance(input_bytes, bytes) or len(input_bytes) > 2 * 1024 * 1024):
+        raise ValueError("Native stdin must be at most 2MiB of bytes")
     executable = shutil.which(argv[0], path=env.get("PATH"))
     if not executable or Path(executable).suffix.lower() not in (".exe", ".com"):
         raise ValueError("A native Windows executable is required; shell scripts are unsupported")
     if any(not isinstance(k, str) or not isinstance(v, str) or not k or "=" in k or "\x00" in k + v
            for k, v in env.items()):
         raise ValueError("Invalid process environment")
+    if cancelled is not None and cancelled():
+        return dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
     environment = C.create_unicode_buffer("\x00".join(f"{k}={v}" for k, v in
                                 sorted(env.items(), key=lambda item: item[0].upper())) + "\x00\x00")
     command = C.create_unicode_buffer(subprocess.list2cmdline([executable, *argv[1:]]))
-    read, write = HANDLE(), HANDLE()
+    read, write, input_read, input_write = HANDLE(), HANDLE(), HANDLE(), HANDLE()
     null, job, attribute_list = None, None, None
     process = PROCESS_INFORMATION()
     inherited = SECURITY_ATTRIBUTES(C.sizeof(SECURITY_ATTRIBUTES), None, True)
-    assigned = attributes_initialized = False
+    assigned = attributes_initialized = stopped = writer_started = writer_joined = False
+    writer, input_state = None, {}
     try:
         _check(_CreatePipe(C.byref(read), C.byref(write), C.byref(inherited), 65536))
         _check(_SetHandleInformation(read, 1, 0))
+        if input_bytes is not None:
+            _check(_CreatePipe(C.byref(input_read), C.byref(input_write), C.byref(inherited), 65536))
+            _check(_SetHandleInformation(input_write, 1, 0))
         null = _CreateFile("NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                             C.byref(inherited), OPEN_EXISTING, 0, None)
         if null == INVALID_HANDLE:
@@ -718,12 +1084,17 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
         attribute_list = C.cast(attribute_buffer, P)
         _check(_InitializeAttributes(attribute_list, 1, 0, C.byref(size)))
         attributes_initialized = True
-        handles = (HANDLE * 2)(write.value, null)
+        stdin = input_read.value if input_bytes is not None else null
+        stderr = write.value if merge_stderr else null
+        values = list(dict.fromkeys((write.value, stdin, stderr)))
+        handles = (HANDLE * len(values))(*values)
         _check(_UpdateAttribute(attribute_list, 0, 0x20002, handles, C.sizeof(handles), None, None))
         startup = STARTUPINFOEX()
         startup.StartupInfo.cb = C.sizeof(startup)
         startup.StartupInfo.dwFlags = 0x100
-        startup.StartupInfo.hStdInput, startup.StartupInfo.hStdOutput, startup.StartupInfo.hStdError = null, write.value, null
+        startup.StartupInfo.hStdInput = stdin
+        startup.StartupInfo.hStdOutput = write.value
+        startup.StartupInfo.hStdError = stderr
         startup.lpAttributeList = attribute_list
         flags = 4 | 0x400 | 0x80000 | 0x08000000
         _check(_CreateProcess(executable, command, None, None, True, flags, environment,
@@ -738,50 +1109,129 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
         write = HANDLE()
         _close(null)
         null = None
+        _close(input_read.value)
+        input_read = HANDLE()
+        if input_bytes is not None:
+            writer = threading.Thread(target=_feed_input, args=(input_write.value, input_bytes, input_state),
+                                      name="harness-native-stdin", daemon=False)
+            writer.start()
+            writer_started = True
         output = bytearray()
-        deadline, exited = time.monotonic() + timeout, False
-        while True:
+        deadline, exited, stdout_open = time.monotonic() + timeout, False, True
+        failure = None
+        while stdout_open or not exited:
             available = DWORD()
-            if not _PeekNamedPipe(read, None, 0, None, C.byref(available), None):
+            if stdout_open and not _PeekNamedPipe(read, None, 0, None, C.byref(available), None):
                 error = C.get_last_error()
-                if error == 109:  # All job-owned writers have closed the pipe.
-                    break
-                raise _error(error)
+                if error == 109:
+                    stdout_open = False
+                else:
+                    raise _error(error)
             if available.value:
                 size = min(65536, available.value, limit + 1 - len(output))
                 buffer, count = C.create_string_buffer(size), DWORD()
                 _check(_ReadFile(read, buffer, size, C.byref(count), None))
-                output.extend(buffer.raw[:count.value])
-                if len(output) > limit:
-                    raise ValueError("Process stdout exceeds the supported byte limit")
+                remaining = limit - len(output)
+                output.extend(buffer.raw[:min(count.value, remaining)])
+                if count.value > remaining:
+                    failure = "output limit exceeded"
             if not exited:
                 wait = _WaitForSingleObject(process.process, 0)
                 if wait == 0xFFFFFFFF:
                     raise _error()
                 if wait == 0:
                     exited = True
-                    _close(job)  # Kill descendants on ordinary parent completion too.
-                    job = None
-            if time.monotonic() >= deadline:
-                raise subprocess.TimeoutExpired(argv, timeout)
+                    _stop_job(job)
+                    stopped = True
+            if not failure and cancelled is not None and cancelled():
+                failure = "parent execution ended"
+            if not failure and time.monotonic() >= deadline:
+                failure = "timeout"
+            if failure:
+                if not stopped:
+                    _stop_job(job)
+                    stopped = True
+                if _WaitForSingleObject(process.process, 5000) != 0:
+                    raise OSError("Native process termination could not be confirmed")
+                break
             if not available.value:
                 time.sleep(0.005)
-        remaining = max(0, min(0xFFFFFFFE, int((deadline - time.monotonic()) * 1000)))
-        if _WaitForSingleObject(process.process, remaining) != 0:
-            raise subprocess.TimeoutExpired(argv, timeout)
         code = DWORD()
         _check(_GetExitCodeProcess(process.process, C.byref(code)))
-        return subprocess.CompletedProcess(argv, code.value, bytes(output), b"")
+        if writer_started:
+            _join_input(writer, input_state)
+            writer_joined = True
+            if input_state.get("error") is not None and failure is None:
+                failure = "stdin delivery failed"
+        return dict(returncode=code.value, error=failure, output=bytes(output))
     finally:
-        _close(job)
-        if process.process:
-            if not assigned or _WaitForSingleObject(process.process, 0) != 0:
-                _TerminateProcess(process.process, 1)
-            _WaitForSingleObject(process.process, 5000)
-        _close(process.thread)
-        _close(process.process)
-        _close(read.value)
-        _close(write.value)
-        _close(null)
-        if attributes_initialized:
-            _DeleteAttributes(attribute_list)
+        try:
+            if assigned and not stopped:
+                _stop_job(job)
+        finally:
+            try:
+                _close(job)
+                if process.process:
+                    if not assigned or _WaitForSingleObject(process.process, 0) != 0:
+                        _TerminateProcess(process.process, 1)
+                    _WaitForSingleObject(process.process, 5000)
+                if writer_started and not writer_joined:
+                    _join_input(writer, input_state)
+            finally:
+                _close(input_state.get("thread"))
+                if not writer_started:
+                    _close(input_write.value)
+                _close(input_read.value)
+                _close(process.thread)
+                _close(process.process)
+                _close(read.value)
+                _close(write.value)
+                _close(null)
+                if attributes_initialized:
+                    _DeleteAttributes(attribute_list)
+
+
+def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
+    """Keep the private helper's stdout-only and exception-based protocol."""
+    result = _process(argv, cwd=cwd, env=env, timeout=timeout, limit=limit)
+    if result["error"] == "timeout":
+        raise subprocess.TimeoutExpired(argv, timeout)
+    if result["error"] == "output limit exceeded":
+        raise ValueError("Process stdout exceeds the supported byte limit")
+    return subprocess.CompletedProcess(argv, result["returncode"], result["output"], b"")
+
+
+def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
+    """Run one native verification command, retaining bounded partial logs."""
+    if cancelled is not None and not callable(cancelled):
+        raise ValueError("Cancellation must be a callback")
+    if cancelled is not None and cancelled():
+        return dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+    env = dict(os.environ) if env is None else env
+    if not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(a, str) or "\x00" in a for a in argv):
+        raise ValueError("Invalid verification command")
+    command = argv[0]
+    if os.path.dirname(command):
+        candidate = Path(command)
+        if not candidate.is_absolute():
+            candidate = _path(cwd) / candidate
+        executable = shutil.which(str(candidate))
+    else:
+        # Windows which() otherwise prepends the ambient process directory.
+        # Verification commands honor only their supplied PATH; an explicitly
+        # listed relative/empty entry is relative to the requested child cwd.
+        executable = None
+        for entry in env.get("PATH", os.environ.get("PATH", os.defpath)).split(os.pathsep):
+            directory = Path(entry)
+            if not directory.is_absolute():
+                directory = _path(cwd) / directory
+            executable = shutil.which(str(directory / command))
+            if executable is not None:
+                break
+    if executable is None:
+        raise FileNotFoundError("Native verification executable is unavailable")
+    if Path(executable).suffix.lower() not in (".exe", ".com"):
+        raise OSError("Verification needs a native executable or an explicit native shell")
+    with trusted_source_directory(cwd):
+        return _process([executable, *argv[1:]], cwd=cwd, env=env, timeout=timeout,
+                        limit=limit, merge_stderr=True, cancelled=cancelled, input_bytes=input_bytes)

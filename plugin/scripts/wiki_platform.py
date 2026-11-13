@@ -125,6 +125,29 @@ def safe_metadata_read(path, limit):
             return data
 
 
+def safe_metadata_line(path, limit):
+    """Read a bounded first metadata line with native append-writer sharing."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata first-line reads require Windows")
+    return _native.safe_metadata_line(path, limit)
+
+
+def source_snapshot(path, limit, *, consume=None):
+    """Read stable ordinary native inputs, optionally streaming to a consumer."""
+    if os.name != "nt":
+        raise NotImplementedError("Native ordinary source reads require Windows")
+    return _native.source_snapshot(path, limit, consume=consume)
+
+
+@contextmanager
+def trusted_source_directory(path):
+    """Retain ordinary native ancestry without requiring metadata ownership."""
+    if os.name != "nt":
+        raise NotImplementedError("Native ordinary source directories require Windows")
+    with _native.trusted_source_directory(path) as directory:
+        yield directory
+
+
 def _metadata_identity(info):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_uid,
             info.st_nlink, info.st_mtime_ns, info.st_ctime_ns)
@@ -160,11 +183,12 @@ def safe_metadata_snapshot(path, limit):
             return data, identity
 
 
-def metadata_tree_inventory(root, *, max_entries, max_bytes):
+def metadata_tree_inventory(root, *, max_entries, max_bytes, allow_control_lock=False):
     """Inspect a native Windows tree with retained file and directory custody."""
     if os.name != "nt":
         raise NotImplementedError("Trusted metadata tree inventory requires native Windows")
-    return _native.metadata_tree_inventory(root, max_entries=max_entries, max_bytes=max_bytes)
+    return _native.metadata_tree_inventory(root, max_entries=max_entries, max_bytes=max_bytes,
+                                            allow_control_lock=allow_control_lock)
 
 
 def ensure_private_directory(path):
@@ -220,6 +244,50 @@ def atomic_write(path, data):
                 os.unlink(temporary, dir_fd=directory)
             except FileNotFoundError:
                 pass
+
+
+def metadata_write(path, data, *, expected):
+    """Publish a native metadata record under the caller's owning lock."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata publication requires Windows")
+    return _native.metadata_write(path, data, expected=expected)
+
+
+def metadata_copy(source, destination, *, max_bytes, expected_sha256, expected_size, readonly):
+    """Create or validate reuse of a journal-admitted native archive file."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata copying requires Windows")
+    return _native.metadata_copy(source, destination, max_bytes=max_bytes,
+                                  expected_sha256=expected_sha256, expected_size=expected_size,
+                                  readonly=readonly)
+
+
+def metadata_remove(path, *, expected_sha256, max_bytes=1024 * 1024):
+    """Retire one exact native metadata object after hash validation."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata retirement requires Windows")
+    return _native.metadata_remove(path, expected_sha256=expected_sha256, max_bytes=max_bytes)
+
+
+def metadata_remove_empty(path):
+    """Remove a held native metadata directory only when it is empty."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata directory removal requires Windows")
+    return _native.metadata_remove_empty(path)
+
+
+def metadata_set_readonly(path, readonly, *, directory=False):
+    """Seal native metadata attributes without unsealing existing history."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata attribute sealing requires Windows")
+    return _native.metadata_set_readonly(path, readonly, directory=directory)
+
+
+def metadata_rename_directory(source, destination):
+    """Publish a checked native directory without replacing its destination."""
+    if os.name != "nt":
+        raise NotImplementedError("Native metadata directory publication requires Windows")
+    return _native.metadata_rename_directory(source, destination)
 
 
 @contextmanager
@@ -363,3 +431,11 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False):
             pass
         process.wait()
         process.stdout.close()
+
+
+def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
+    """Run a native verification command with bounded merged partial output."""
+    if os.name != "nt":
+        raise NotImplementedError("Native verification execution requires Windows")
+    return _native.execute_bounded(argv, cwd=cwd, env=env, timeout=timeout,
+                                   limit=limit, cancelled=cancelled, input_bytes=input_bytes)
