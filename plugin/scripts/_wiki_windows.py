@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import ctypes as C
 from ctypes import wintypes as W
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -32,6 +33,7 @@ GENERIC_READ, GENERIC_WRITE = 0x80000000, 0x40000000
 FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT = 0x10, 0x400
 FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT = 0x02000000, 0x00200000
 FILE_READ_ATTRIBUTES = 0x80
+FILE_LIST_DIRECTORY = 1
 FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE = 1, 2, 4
 OPEN_EXISTING, OPEN_ALWAYS, CREATE_NEW = 3, 4, 1
 MAX_LOCK_LOW, MAX_LOCK_HIGH = 0xFFFFFFFF, 0x7FFFFFFF
@@ -172,6 +174,8 @@ def _security(handle, policy):
         if owner_sid not in (ANCESTOR_TRUSTED_SIDS if policy == "ancestor" else (USER_SID,)):
             raise ValueError("Windows path has an untrusted owner")
         header = C.cast(dacl, C.POINTER(ACL)).contents
+        if header.size < C.sizeof(ACL):
+            raise ValueError("Invalid Windows access list")
         for index in range(header.count):
             pointer = P()
             _check(_GetAce(dacl, index, C.byref(pointer)))
@@ -203,6 +207,7 @@ def _security(handle, policy):
             if policy == "private" or mask & (ANCESTOR_MUTATION if policy == "ancestor" else
                                                ANCESTOR_MUTATION if policy == "lock" else METADATA_MUTATION):
                 raise ValueError("Windows path grants unsafe access to another account")
+        return owner_sid, hashlib.sha256(C.string_at(dacl, header.size)).hexdigest()
     finally:
         _LocalFree(descriptor)
 
@@ -290,7 +295,10 @@ def _walk(value, *, create=False, secure=False, leaf="metadata", writing=False):
                             error = C.get_last_error()
                             if error != 183:
                                 raise _error(error)
-            handle = _open(current, 0, directory=True, share=share)
+            # Attribute-only access is exempt from Windows sharing checks.
+            # Request directory data access so withholding DELETE sharing
+            # really retains each component's name until this context closes.
+            handle = _open(current, FILE_LIST_DIRECTORY, directory=True, share=share)
             handles.append(handle)
             if secure:
                 _security(handle, leaf if index == len(path.parts) - 1 else "ancestor")
@@ -332,6 +340,121 @@ def safe_read(path, limit, private=False):
 def safe_metadata_read(path, limit):
     """Owner-owned, nonforeign-writable cache metadata; public read is allowed."""
     return _read(path, limit, "metadata")
+
+
+def _metadata_stamp(handle):
+    info = _info(handle)
+    times = tuple((value.dwHighDateTime << 32) | value.dwLowDateTime
+                  for value in (info.creation, info.write))
+    return (info.volume, info.indexHigh, info.indexLow,
+            (info.sizeHigh << 32) | info.sizeLow, info.attributes, info.links,
+            *times, _security(handle, "metadata"))
+
+
+def _file_chunks(handle, limit):
+    total = 0
+    while True:
+        size = min(1024 * 1024, limit + 1 - total)
+        buffer, count = C.create_string_buffer(size), DWORD()
+        _check(_ReadFile(handle, buffer, size, C.byref(count), None))
+        if not count.value:
+            return
+        total += count.value
+        if total > limit:
+            raise ValueError("Metadata exceeds byte limit")
+        yield buffer.raw[:count.value]
+
+
+def safe_metadata_snapshot(path, limit):
+    """Return exact trusted source bytes and their opaque stable identity.
+
+    Unlike a committed snapshot reader, a source-authentication read retains
+    the file's name as well as its contents until the final identity check.
+    """
+    if type(limit) is not int or limit < 0:
+        raise ValueError("Nonnegative byte limit required")
+    path = _path(path)
+    with _walk(path.parent, secure=True):
+        handle = _open(path, GENERIC_READ, share=FILE_SHARE_READ)
+        try:
+            before = _metadata_stamp(handle)
+            if before[3] > limit:
+                raise ValueError("Metadata exceeds byte limit")
+            data = b"".join(_file_chunks(handle, limit))
+            if len(data) != before[3] or _metadata_stamp(handle) != before:
+                raise ValueError("Metadata changed during source read")
+            named = _open(path, 0)
+            try:
+                if _identity(named) != before[:3]:
+                    raise ValueError("Metadata source name changed during read")
+            finally:
+                _close(named)
+            return data, before
+        finally:
+            _close(handle)
+
+
+def metadata_tree_inventory(root, *, max_entries, max_bytes):
+    """Stream a bounded trusted tree while native handles retain every entry.
+
+    No volatility exemption bypasses security or aggregate limits. Read-only
+    attributes are reported as provenance, never interpreted as a DACL.
+    """
+    if any(type(value) is not int or value < 0 for value in (max_entries, max_bytes)):
+        raise ValueError("Nonnegative inventory limits required")
+    root = _path(root)
+    result, retained, stamps = {}, [], []
+    used = discovered = 0
+
+    def walk(path, prefix):
+        nonlocal used, discovered
+        with os.scandir(path) as iterator:
+            names = []
+            for entry in iterator:
+                discovered += 1
+                if discovered > max_entries:
+                    raise ValueError("Metadata entry limit exceeded")
+                names.append(entry.name)
+        names.sort()
+        for name in names:
+            if len(result) >= max_entries:
+                raise ValueError("Metadata entry limit exceeded")
+            child = _path(path / name)
+            relative = prefix + name
+            info = child.lstat()
+            directory = bool(info.st_file_attributes & FILE_ATTRIBUTE_DIRECTORY)
+            handle = _open(child, FILE_LIST_DIRECTORY if directory else GENERIC_READ,
+                           directory=directory, share=FILE_SHARE_READ)
+            retained.append(handle)
+            before = _metadata_stamp(handle)
+            stamps.append((handle, before))
+            readonly = bool(before[4] & 1)
+            if directory:
+                result[relative] = dict(kind="dir", size=0, sha256="", readonly=readonly)
+                walk(child, relative + "/")
+            else:
+                if before[3] > max_bytes - used:
+                    raise ValueError("Metadata byte limit exceeded")
+                digest, size = hashlib.sha256(), 0
+                for data in _file_chunks(handle, max_bytes - used):
+                    size += len(data)
+                    digest.update(data)
+                if size != before[3]:
+                    raise ValueError("Metadata file changed during inventory")
+                used += size
+                result[relative] = dict(kind="file", size=size, sha256=digest.hexdigest(), readonly=readonly)
+
+    with _walk(root, secure=True, writing=True) as (_, directory):
+        before_root = _metadata_stamp(directory)
+        try:
+            walk(root, "")
+            if _metadata_stamp(directory) != before_root or any(
+                    _metadata_stamp(handle) != before for handle, before in stamps):
+                raise ValueError("Metadata tree changed during inventory")
+            return result
+        finally:
+            for handle in reversed(retained):
+                _close(handle)
 
 
 @contextmanager

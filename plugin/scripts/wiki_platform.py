@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import errno
+import hashlib
 import os
 from pathlib import Path
 import selectors
@@ -123,6 +124,116 @@ def safe_metadata_read(path, limit):
             if len(data) > limit:
                 raise ValueError("Metadata exceeds byte limit")
             return data
+
+
+def _metadata_identity(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_uid,
+            info.st_nlink, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _metadata_owner(info, *, directory=False):
+    if directory:
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("Metadata directory required")
+    else:
+        _regular(info)
+    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError("Unsafe metadata ownership or permissions")
+
+
+def safe_metadata_snapshot(path, limit):
+    """Return bounded source bytes and their verified stable object identity."""
+    if type(limit) is not int or limit < 0:
+        raise ValueError("Nonnegative byte limit required")
+    if os.name == "nt":
+        return _native.safe_metadata_snapshot(path, limit)
+    with _parent(path, private=True) as (directory, name):
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            _metadata_owner(before)
+            identity = _metadata_identity(before)
+            if before.st_size > limit:
+                raise ValueError("Metadata exceeds byte limit")
+            data = stream.read(limit + 1)
+            after = os.fstat(stream.fileno())
+            named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (len(data) > limit or len(data) != before.st_size
+                    or _metadata_identity(after) != identity
+                    or _metadata_identity(named) != identity):
+                raise ValueError("Metadata source changed during read")
+            return data, identity
+
+
+def metadata_tree_inventory(root, *, max_entries, max_bytes):
+    """Stream a no-follow trusted tree within aggregate entry and byte limits."""
+    if any(type(value) is not int or value < 0 for value in (max_entries, max_bytes)):
+        raise ValueError("Nonnegative inventory limits required")
+    if os.name == "nt":
+        return _native.metadata_tree_inventory(root, max_entries=max_entries, max_bytes=max_bytes)
+    root = _absolute(root)
+    result = {}
+    used = discovered = 0
+
+    def walk(directory, prefix):
+        nonlocal used, discovered
+        before_directory = os.fstat(directory)
+        _metadata_owner(before_directory, directory=True)
+        names = []
+        with os.scandir(directory) as iterator:
+            for entry in iterator:
+                discovered += 1
+                if discovered > max_entries:
+                    raise ValueError("Metadata entry limit exceeded")
+                names.append(entry.name)
+        for name in sorted(names):
+            relative = prefix + name
+            before = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if stat.S_ISDIR(before.st_mode):
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                try:
+                    opened = os.fstat(child)
+                    if _metadata_identity(opened) != _metadata_identity(before):
+                        raise ValueError("Metadata directory changed before inventory")
+                    _metadata_owner(opened, directory=True)
+                    result[relative] = dict(kind="dir", size=0, sha256="",
+                                            readonly=not bool(opened.st_mode & stat.S_IWUSR))
+                    walk(child, relative + "/")
+                finally:
+                    os.close(child)
+            else:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                with os.fdopen(fd, "rb") as stream:
+                    opened = os.fstat(stream.fileno())
+                    _metadata_owner(opened)
+                    if _metadata_identity(opened) != _metadata_identity(before):
+                        raise ValueError("Metadata file changed before inventory")
+                    if opened.st_size > max_bytes - used:
+                        raise ValueError("Metadata byte limit exceeded")
+                    digest, size = hashlib.sha256(), 0
+                    while data := stream.read(min(1024 * 1024, max_bytes - used - size + 1)):
+                        size += len(data)
+                        if used + size > max_bytes:
+                            raise ValueError("Metadata byte limit exceeded")
+                        digest.update(data)
+                    if (size != opened.st_size
+                            or _metadata_identity(os.fstat(stream.fileno())) != _metadata_identity(opened)):
+                        raise ValueError("Metadata file changed during inventory")
+                    used += size
+                    result[relative] = dict(kind="file", size=size, sha256=digest.hexdigest(),
+                                            readonly=not bool(opened.st_mode & stat.S_IWUSR))
+            if _metadata_identity(os.stat(name, dir_fd=directory, follow_symlinks=False)) != _metadata_identity(before):
+                raise ValueError("Metadata name changed during inventory")
+        if _metadata_identity(os.fstat(directory)) != _metadata_identity(before_directory):
+            raise ValueError("Metadata directory changed during inventory")
+
+    with _parent(root, private=True) as (parent, name):
+        directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            walk(directory, "")
+        finally:
+            os.close(directory)
+    return result
 
 
 def ensure_private_directory(path):
