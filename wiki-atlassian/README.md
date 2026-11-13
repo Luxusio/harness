@@ -261,12 +261,13 @@ publication still uses the selected Confluence scope and native permissions.
 
 ## Install the Python runtime
 
-Use Python 3.12 or later with PyYAML in that same interpreter. From this
-directory, run with the detected native Python (`py` on Windows, or `python3`
-on POSIX):
+Install mise and a managed Python 3.12 or later with PyYAML. The installer
+validates the managed base interpreter and registers its resolved executable;
+it never captures a project virtual environment or falls back to PATH Python.
+PyYAML must exist in that selected interpreter, regardless of which Python
+starts the installer. From this directory, run:
 
 ```text
-python -m pip install "PyYAML>=6.0"
 python install.py --runtime codex
 python install.py --runtime claude
 ```
@@ -277,6 +278,10 @@ the installed MCP configuration resolves the Python interpreter and private
 launcher path explicitly, without relying on host plugin-variable expansion.
 It refreshes Claude's cache and verifies the host's enabled selection and
 actual cached payload bytes before reporting success.
+Missing mise, a compatible installed Python or PyYAML fails before payload
+publication; dependencies are not installed implicitly. Raw template bootstraps
+require an installed Python 3.12 and validate it before product execution.
+Reinstall if the previously pinned mise version is deliberately removed.
 The registered marketplace path stays stable across upgrades. A private,
 installer-locked selection points to an immutable payload; existing processes
 retain their original runtime path while the next installation selects a new

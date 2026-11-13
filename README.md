@@ -34,6 +34,12 @@ does not send reports. See [personal inbox settings](#personal-improvement-inbox
 
 ### Install
 
+Install mise and a managed Python 3.12 or later first. The installer validates
+that base interpreter and pins installed MCP/hook commands to it, even when
+the installer itself is launched from a project virtual environment. It never
+records the checkout's Python path. Wiki-atlassian also needs PyYAML in the
+selected mise interpreter. Missing prerequisites fail without installing them.
+
 For Codex commands, see [README.codex.md](README.codex.md#install--3-commands).
 
 Run these commands in Claude Code:
@@ -51,6 +57,10 @@ The GitHub install path registers this repo's root marketplace manifest
 For local development installs, use `python3 install.py --claude-only`; it
 copies the same root marketplace manifest plus the plugin payload into
 `~/.claude/harness-dev/`, then registers that installed mirror root.
+Use this installer for direct, pinned interpreter registration. Raw marketplace
+entry points use a guarded mise bootstrap and require an installed Python 3.12;
+an unavailable managed interpreter never permits a PATH-Python fallback to run
+the product. Reinstall after deliberately removing the pinned mise version.
 
 Contributors / local development → see [CONTRIBUTING.md](CONTRIBUTING.md).
 

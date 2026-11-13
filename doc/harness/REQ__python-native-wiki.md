@@ -132,3 +132,34 @@ The extended rename requires a supporting Windows API and filesystem/driver;
 an OS or filesystem name alone does not prove support. New native regressions,
 installed MCP and real-account acceptance require actual execution. Linux,
 modeled descriptors or supplied reports do not turn an unrun case into PASS.
+
+## Mise-managed installed interpreters
+
+User-explicit correction, 2026-11-13: “플러그인 설치같은거 그 경로로 하면
+안된다” and “무조건 mise 경로 써야한다”, referring to a registered
+`/project/harness-…/.venv/bin/python`. Installed product execution must use
+mise-managed Python rather than remain coupled to the source checkout or its
+virtual environment.
+
+Derived implementation contract: both installers select and validate an installed
+mise base interpreter, Python 3.12 or later, and record its resolved executable
+in canonical MCP, hook and smoke commands. Wiki dependency checks apply to that
+interpreter, including PyYAML, rather than the installer caller. Selection uses
+an isolated home-based mise context; consumer activation, configuration and
+version overrides cannot silently redirect it. Legitimate mise storage settings
+remain usable. Missing or invalid mise, Python or required dependencies fail
+with bounded, nonsecret diagnostics before installation writes; no system or
+project-Python fallback or implicit dependency installation is permitted.
+
+Portable marketplace entry points may bootstrap through mise but must validate
+the managed base interpreter before any product entry point runs. Missing
+`python@3.12` must not execute product code through a PATH fallback. The raw
+templates require an installed 3.12 release; canonical installation accepts
+validated 3.12 or later. Preserve entrypoint arguments, hook fail-safety,
+timeouts, bytecode prevention, prior payloads and unrelated settings. Effective
+payload identities include interpreter changes, and equal reruns remain stable.
+
+Verify generated commands independently, actual fresh/update/rerun installation,
+and execution from a different consumer directory without the source checkout
+or its virtual environment. Modeled Windows path checks are distinct from
+actual Windows execution; the standing native/account acceptance remains.

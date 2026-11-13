@@ -8,7 +8,11 @@ If you're a Claude Code user, see the root [`README.md`](README.md) — your ins
 
 - `codex-cli` ≥ minimum pinned version. Check: `codex --version`. Minimum is recorded in [`plugin-codex/.codex-version`](plugin-codex/.codex-version) (written by AC-008). If you see "Codex 1.x.y required, found 1.a.b" during setup, run `codex upgrade` first.
 - Authenticated: `codex login` (or `OPENAI_API_KEY` exported). Test: `echo "ping" | codex exec "say pong"` should return `pong`.
-- `python3` available on PATH. The harness server and hook scripts are stdlib-only.
+- mise with an installed Python 3.12 or later. The installer selects the managed
+  base interpreter and pins MCP/hook commands to it; invoking installation from
+  a project virtual environment does not register that environment. Raw
+  marketplace bootstraps require an installed Python 3.12 release and fail closed
+  when it is missing. The server and hook scripts are stdlib-only.
 
 ## Install — 3 commands
 
