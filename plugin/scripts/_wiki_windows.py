@@ -299,11 +299,22 @@ def _path(value):
     return path
 
 
+def _win32_path(value):
+    """Render validated ordinary paths only at internal filesystem boundaries.
+
+    Private temporary names must not make an otherwise valid destination hit
+    the legacy MAX_PATH limit. Public inputs still pass the ordinary-path
+    validator before the internal extended disk/UNC spelling is introduced.
+    """
+    path = str(_path(value))
+    return "\\\\?\\UNC\\" + path[2:] if path.startswith("\\\\") else "\\\\?\\" + path
+
+
 def _open(path, access, *, directory=False, create=OPEN_EXISTING, attributes=None, share=None):
     if share is None:
         share = FILE_SHARE_READ | FILE_SHARE_DELETE
     flags = FILE_FLAG_OPEN_REPARSE_POINT | (FILE_FLAG_BACKUP_SEMANTICS if directory else 0)
-    handle = _CreateFile(str(path), access | FILE_READ_ATTRIBUTES | READ_CONTROL, share,
+    handle = _CreateFile(_win32_path(path), access | FILE_READ_ATTRIBUTES | READ_CONTROL, share,
                          C.byref(attributes) if attributes is not None else None, create, flags, None)
     if handle == INVALID_HANDLE:
         raise _error()
@@ -344,7 +355,7 @@ def _walk(value, *, create=False, secure=False, leaf="metadata", writing=False):
                 current /= part
                 if create:
                     with _private_attributes(directory=True) as attributes:
-                        if not _CreateDirectory(str(current), C.byref(attributes)):
+                        if not _CreateDirectory(_win32_path(current), C.byref(attributes)):
                             error = C.get_last_error()
                             if error != 183:
                                 raise _error(error)
@@ -461,7 +472,7 @@ def metadata_tree_inventory(root, *, max_entries, max_bytes):
 
     def walk(path, prefix):
         nonlocal used, discovered
-        with os.scandir(path) as iterator:
+        with os.scandir(_win32_path(path)) as iterator:
             names = []
             for entry in iterator:
                 discovered += 1
@@ -474,7 +485,7 @@ def metadata_tree_inventory(root, *, max_entries, max_bytes):
                 raise ValueError("Metadata entry limit exceeded")
             child = _path(path / name)
             relative = prefix + name
-            info = child.lstat()
+            info = os.lstat(_win32_path(child))
             directory = bool(info.st_file_attributes & FILE_ATTRIBUTE_DIRECTORY)
             handle = _open(child, FILE_LIST_DIRECTORY if directory else GENERIC_READ,
                            directory=directory, share=FILE_SHARE_READ)
@@ -551,9 +562,10 @@ def atomic_write(path, data):
                     raise OSError("Native Windows write made no progress")
                 offset += count.value
             _check(_FlushFileBuffers(handle))
-            # Use the documented full-path/NULL-root form. Retained _walk
-            # handles still prevent ancestor replacement during this rename.
-            encoded = str(path).encode("utf-16-le")
+            # Use the full-path/NULL-root form, including the internal extended
+            # spelling required for long destinations. Retained _walk handles
+            # prevent ancestor replacement throughout this rename.
+            encoded = _win32_path(path).encode("utf-16-le")
             buffer = C.create_string_buffer(max(C.sizeof(RENAME_INFO), RENAME_INFO.name.offset + len(encoded) + 2))
             rename = C.cast(buffer, C.POINTER(RENAME_INFO)).contents
             rename.flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
