@@ -436,6 +436,71 @@ def _s1_git_text(root, *args):
     return result.stdout.rstrip('\n')
 
 
+def _native_crlf_blob_matches(repo, path, relative, tip, expected, algorithm, stamp):
+    """Prove only built-in CRLF cleaning, never invoke a configured filter."""
+    from batch_submodules import _conversion_policy
+    from wiki_platform import _native
+    names = ('text', 'eol', 'filter', 'working-tree-encoding', 'ident')
+
+    def policy():
+        raw = _s1_git_text(repo, 'check-attr', '--source=' + tip, '-z', *names, '--', relative).split('\0')
+        _s1_require(len(raw) == len(names) * 3 + 1 and raw[-1] == '', 'invalid tracked text attributes')
+        attributes = {}
+        for index, name in enumerate(names):
+            entry = raw[index * 3:index * 3 + 3]
+            _s1_require(entry[:2] == [relative, name], 'tracked text attributes changed identity')
+            attributes[name] = entry[2]
+        return attributes, _conversion_policy(repo)
+
+    before = policy()
+    attributes, conversion = before
+    if (any(attributes[name] not in {'unset', 'unspecified'}
+            for name in ('filter', 'working-tree-encoding', 'ident'))
+            or attributes['text'] not in {'set', 'auto', 'unspecified'}
+            or attributes['eol'] not in {'lf', 'crlf', 'unset', 'unspecified'}
+            or not (attributes['text'] in {'set', 'auto'} or attributes['eol'] in {'lf', 'crlf'}
+                    or conversion['core.autocrlf'] in {'true', 'input'})):
+        return False
+
+    def converted():
+        # Open a new read-only position for each pass. The caller's original
+        # handle still denies writes/deletion for this entire proof.
+        handle = _native._open(Path(path), _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+        try:
+            _s1_require(_native._metadata_stamp(handle) == stamp, 'tracked residue changed before conversion proof')
+            pending = b''
+            for chunk in _native._file_chunks(handle, stamp[3], chunk_size=65536):
+                chunk = pending + chunk
+                pending = b'\r' if chunk.endswith(b'\r') else b''
+                if pending:
+                    chunk = chunk[:-1]
+                chunk = chunk.replace(b'\r\n', b'\n')
+                _s1_require(not any(value < 32 and value not in (9, 10) or value == 127 for value in chunk),
+                            'unsupported tracked text conversion')
+                yield chunk
+            _s1_require(not pending and _native._metadata_stamp(handle) == stamp,
+                        'tracked residue changed or contains a lone CR')
+        finally:
+            _native._close(handle)
+
+    size = sum(len(chunk) for chunk in converted())
+    if size >= stamp[3]:
+        return False
+    digest = hashlib.new(algorithm)
+    digest.update(('blob ' + str(size) + '\0').encode())
+    measured = 0
+    for chunk in converted():
+        measured += len(chunk)
+        digest.update(chunk)
+    named = _native._open(Path(path), 0)
+    try:
+        _s1_require(measured == size and _native._metadata_stamp(named) == stamp and policy() == before,
+                    'tracked residue or text policy changed during proof')
+    finally:
+        _native._close(named)
+    return digest.hexdigest() == expected
+
+
 def _s1_content(worktree, wbs_id, source_entries, manifest, repo, *, ordinary_allowed=(), ordinary_caches=False,
                 ordinary_links=None):
     """Every outer file must be tracked or have an exact preserved counterpart."""
@@ -989,6 +1054,21 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
                 expected[relative] = row
             elif not preserve and os.path.lexists(Path(repo) / recovery / relative):
                 expected[relative] = namespace._hash_file(Path(repo), recovery + '/' + relative)
+    if os.name == "nt":
+        # These are the complete retired coordination artifacts omitted by
+        # _entries/_tree, tied to this completed journal's exact source tree.
+        # No other lock name acquires historical disposal authority here.
+        for relative in (namespace.OLD_ROOT + '/.active_sessions/.session.lock',
+                         tree['source'] + '/.control.lock'):
+            row = None
+            if os.path.lexists(Path(worktree) / relative):
+                row = namespace._hash_file(Path(worktree), relative)
+            elif not preserve and os.path.lexists(Path(repo) / recovery / relative):
+                row = namespace._hash_file(Path(repo), recovery + '/' + relative)
+            if row is not None:
+                _s1_require(row['size'] == 0 and row['sha256'] == hashlib.sha256(b'').hexdigest(),
+                            'nonempty retired coordination lock')
+                expected[relative] = row
     old_checkpoint = 'doc/harness/checkpoints/TASK__' + wbs_id[5:] + '.md'
     checkpoint_source = Path(worktree) / old_checkpoint
     checkpoint_copy = Path(repo) / recovery / old_checkpoint
@@ -1285,6 +1365,8 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                 sha = hashlib.sha256()
                 blob = hashlib.new(algorithm)
                 blob.update(('blob ' + str(info.st_size) + '\0').encode())
+                tracked_entry = tracked.get(rel)
+                converted_match = False
                 if os.name == 'nt':
                     from wiki_platform import _native
                     with _native._walk(Path(path).parent, secure=True):
@@ -1297,6 +1379,11 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                             for chunk in _native._file_chunks(handle, info.st_size):
                                 sha.update(chunk)
                                 blob.update(chunk)
+                            if (tracked_entry is not None and tracked_entry[0] != blob.hexdigest()
+                                    and sha.hexdigest() not in {preserved.get(rel), ancillary_entries.get(rel)}
+                                    and rel != 'doc/harness/learnings.jsonl'):
+                                converted_match = _native_crlf_blob_matches(
+                                    repo, path, rel, tip, tracked_entry[0], algorithm, stamp)
                             _s1_require(_native._metadata_stamp(handle) == stamp,
                                         'residue changed during read')
                         finally:
@@ -1315,8 +1402,7 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                                     'residue changed during read')
                 archived_match = (preserved.get(rel) == sha.hexdigest()
                                   and (os.name == 'nt' or bool(info.st_mode & 0o111) == bool(os.lstat(os.path.join(archive, rel[len(task_rel) + 1:])).st_mode & 0o111)))
-                tracked_entry = tracked.get(rel)
-                tracked_match = (tracked_entry is not None and tracked_entry[0] == blob.hexdigest()
+                tracked_match = (tracked_entry is not None and (tracked_entry[0] == blob.hexdigest() or converted_match)
                                  and (os.name == 'nt' or tracked_entry[1] == bool(info.st_mode & 0o111)))
                 matches = archived_match or ancillary_entries.get(rel) == sha.hexdigest() or tracked_match
                 if rel == 'doc/harness/learnings.jsonl':

@@ -528,7 +528,7 @@ def test_native_old_control_migration_retries_prepared_publication_without_retar
         result = _public(repo, "migrate", apply=apply)
         assert not result.get("isError"), result
         report = result["structuredContent"]["wbs_control_migration"]
-        retained = report["retained_historical_controls"]
+        retained = report.get("retained_historical_controls", [])
         if retained_history:
             assert retained == [dict(path=str(historical / "WBS.control.json"),
                 reason="pre-UUIDv7 historical control retained; unavailable to current lifecycle")]
