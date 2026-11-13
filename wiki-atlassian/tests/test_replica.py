@@ -363,17 +363,19 @@ class ReplicaTests(unittest.TestCase):
                 self.assertEqual(1, calls.count('/wiki/api/v2/pages/211'))
 
     def test_authoritative_same_version_sweep_is_shared_and_repairs_survive_restart(self):
-        self.replica.synchronize()
-        self.remote.bodies.clear()
-        self.change('211', '<p>Changed without native revision</p>')
-        other = Replica(self.settings, self.remote)
-        other.synchronize()
-        self.assertEqual([], self.remote.bodies)
-        self.expire()
-        other.synchronize()
-        self.assertIn(('211', True), self.remote.bodies)
-        self.assertIn('Changed without native revision', other.get_document(dict(document='211'))['content'])
-        self.assertEqual([], self.metadata('manifest.json')['explicitPages'])
+        from unittest.mock import patch
+        with patch('wiki_atlassian.replica.time.time', return_value=time.time()):
+            self.replica.synchronize()
+            self.remote.bodies.clear()
+            self.change('211', '<p>Changed without native revision</p>')
+            other = Replica(self.settings, self.remote)
+            other.synchronize()
+            self.assertEqual([], self.remote.bodies)
+            self.expire()
+            other.synchronize()
+            self.assertIn(('211', True), self.remote.bodies)
+            self.assertIn('Changed without native revision', other.get_document(dict(document='211'))['content'])
+            self.assertEqual([], self.metadata('manifest.json')['explicitPages'])
 
     def test_requested_repair_bypasses_checkpoint_for_one_page_without_advancing_sweep(self):
         self.replica.synchronize()
