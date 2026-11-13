@@ -558,7 +558,8 @@ def test_real_postinstall_drift_withholds_success(tmp_path, monkeypatch, capsys,
 
     def run(command, *args, **kwargs):
         result = original_run(command, *args, **kwargs)
-        if len(command) == 2 and str(command[1]).endswith("/install.py"):
+        if (len(command) == 5 and list(command[:4]) == [sys.executable, "-E", "-s", "-B"]
+                and Path(command[4]).name == "install.py"):
             if drift == "source":
                 (repo / "plugin/source.bin").write_bytes(b"changed")
             elif drift == "mode":
