@@ -228,10 +228,16 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
         assert len(str(original_control).encode('utf-16-le')) // 2 > 260
         original_bytes = safe_metadata_snapshot(original_control, 16384)[0]
         assert json.loads(original_bytes)['run_id'] == RUN
-    _git('worktree', 'unlock', str(worktree), cwd=pool.repo, check=False)
-    _git('worktree', 'remove', str(worktree), cwd=pool.repo)
-    # Model native interruption: only a subset of old history survived after
-    # Git unregistered the worktree. Custody must use the existing main copy.
+    if os.name == 'nt':
+        removed = pool.cli('finish', '--slug', 'a', '--resume')
+        assert removed['status'] == 'integrated' and removed['cleanup']['removed'], removed
+    else:
+        _git('worktree', 'unlock', str(worktree), cwd=pool.repo, check=False)
+        _git('worktree', 'remove', str(worktree), cwd=pool.repo)
+    assert not _fixture_io(worktree).exists()
+    assert batch_harvest.ordinary_unregistered(str(pool.repo), str(worktree))
+    # Model interrupted residue after real lifecycle retirement. Only admitted
+    # old history remains; custody must use the existing main copy.
     residue = worktree / relative
     _fixture_io(residue.parent).mkdir(parents=True)
     _fixture_io(residue).write_bytes(expected)
