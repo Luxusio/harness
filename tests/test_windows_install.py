@@ -508,7 +508,9 @@ def test_native_deep_owned_entry_retains_canonical_public_wbs_writer(native_inst
                  argv=[fixture.python, "-I", "-B", "-c",
                        "from pathlib import Path;assert Path('prepared.txt').read_bytes()==Path('source.py').read_bytes();print('consumed')"],
                  inputs=dict(source=["source.py"], artifacts=["prepared.txt"]), outputs=[])]
-    jobs_path, results_path = fixture.consumer / "deep jobs.json", fixture.consumer / "deep results.json"
+    jobs_path = fixture.consumer / "deep jobs.json"
+    results_dir = win.ensure_private_directory(fixture.consumer / "verification metadata")
+    results_path = results_dir / "deep results.json"
     platform.atomic_write(jobs_path, json.dumps(jobs).encode("utf-8"))
     generation = "deep-source-native-1"
     runner_argv = cli.owned_python_argv(fixture.python, deep / "scripts/verify_runner.py", [
