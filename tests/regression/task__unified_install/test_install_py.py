@@ -206,25 +206,29 @@ def test_dry_run_prints_plan_without_mutation(tmp_path):
 
 
 def test_codex_only_skips_claude(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for runtime, version in (("codex", "codex 0.167.2"), ("claude", "claude 2.1.322")):
+        executable = fake_bin / runtime
+        _write_cli_fixture(executable, version)
+        executable.chmod(0o755)
     cfg = tmp_path / "fake-codex-config.toml"
-    r = _run(["--dry-run", "--codex-only", "--config-path", str(cfg)])
-    if r.returncode != 0:
-        # Same tolerance as test_claude_only_skips_codex: only a missing CLI.
-        expected = "Codex native CLI resolution: ValueError: Codex CLI is unavailable" if os.name == "nt" else "codex CLI not found in PATH"
-        assert expected in (r.stdout + r.stderr), r.stderr
-    assert "Claude:" not in r.stdout
-    # codex section present (or "codex CLI not found" if codex unavailable in env)
-    assert "Codex:" in r.stdout or "codex CLI not found" in r.stdout
+    r = _run(["--dry-run", "--codex-only", "--config-path", str(cfg)], extra_path=str(fake_bin))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout == "Codex: DRY RUN\n"
 
 
 def test_claude_only_skips_codex(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for runtime, version in (("codex", "codex 0.167.2"), ("claude", "claude 2.1.322")):
+        executable = fake_bin / runtime
+        _write_cli_fixture(executable, version)
+        executable.chmod(0o755)
     cfg = tmp_path / "fake-codex-config.toml"
-    r = _run(["--dry-run", "--claude-only", "--config-path", str(cfg)])
-    if r.returncode != 0:
-        expected = "Claude native CLI resolution: ValueError: Claude CLI is unavailable" if os.name == "nt" else "claude CLI not found"
-        assert expected in r.stdout
-    assert "Codex:" not in r.stdout
-    assert "Claude:" in r.stdout or "claude CLI not found" in r.stdout
+    r = _run(["--dry-run", "--claude-only", "--config-path", str(cfg)], extra_path=str(fake_bin))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout == "Claude: DRY RUN\n"
 
 
 def test_mutual_exclusion_rejected():

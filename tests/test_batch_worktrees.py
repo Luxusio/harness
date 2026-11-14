@@ -1,6 +1,8 @@
 """Real Git lifecycle checks: durable ownership, interrupted effects and disposal."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 import os
 import sys
@@ -251,7 +253,7 @@ def test_symlink_worktree_ancestor_refused_before_external_creation(tmp_path, mo
     _git('commit', '-qm', 'ignore managed parent for symlink guard fixture', cwd=pool.repo)
     external = tmp_path / 'outside'
     external.mkdir()
-    (pool.repo / '.claude').symlink_to(external, target_is_directory=True)
+    create_symlink(pool.repo / '.claude', external, target_is_directory=True)
     with pytest.raises(batch.Refusal, match='unsafe metadata (parent|path)'):
         call(pool, spec, available_slots=1)
     assert list(external.iterdir()) == []

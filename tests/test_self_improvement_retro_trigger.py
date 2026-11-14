@@ -366,18 +366,21 @@ class TestFirstFireBanner(unittest.TestCase):
         with open(path, encoding="utf-8") as stream:
             lines = stream.read().splitlines()
         condition = next(line for line in lines if line.startswith("if [ \"${_WBS_SINCE"))
+        bash = shutil.which("bash")
         enabled = subprocess.run(
-            ["bash", "-c", f"_WBS_SINCE=3; unset HARNESS_DISABLE_RETRO; {condition}\necho fired\nfi"],
-            capture_output=True, text=True, check=False,
+            [bash, "-s"],
+            input=f"_WBS_SINCE=3; unset HARNESS_DISABLE_RETRO; {condition}\necho fired\nfi\necho condition-checked\n",
+            capture_output=True, text=True, encoding="utf-8", check=False, timeout=10,
         )
         disabled = subprocess.run(
-            ["bash", "-c", f"_WBS_SINCE=3; HARNESS_DISABLE_RETRO=1; {condition}\necho fired\nfi"],
-            capture_output=True, text=True, check=False,
+            [bash, "-s"],
+            input=f"_WBS_SINCE=3; HARNESS_DISABLE_RETRO=1; {condition}\necho fired\nfi\necho condition-checked\n",
+            capture_output=True, text=True, encoding="utf-8", check=False, timeout=10,
         )
         self.assertEqual(enabled.returncode, 0, enabled.stderr)
-        self.assertEqual(enabled.stdout.strip(), "fired")
+        self.assertEqual(enabled.stdout.strip(), "fired\ncondition-checked")
         self.assertEqual(disabled.returncode, 0, disabled.stderr)
-        self.assertEqual(disabled.stdout.strip(), "")
+        self.assertEqual(disabled.stdout.strip(), "condition-checked")
 
 
 class TestRetroSafeIO(unittest.TestCase):

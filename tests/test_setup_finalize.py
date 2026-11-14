@@ -1,3 +1,5 @@
+
+from test_symlink_fixture import create_symlink
 import os
 import importlib.util
 import shutil
@@ -162,7 +164,7 @@ def test_project_doc_helper_rejects_symlink(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     external = tmp_path / "external.md"
     external.write_text("# Outside\n", encoding="utf-8")
-    (repo / "AGENTS.md").symlink_to(external)
+    create_symlink(repo / "AGENTS.md", external)
 
     result = run(
         repo,
@@ -1371,7 +1373,7 @@ def test_symlinked_managed_directory_is_rejected(tmp_path):
     outside.mkdir()
     repo.mkdir()
     (repo / "doc").mkdir()
-    (repo / "doc/harness").symlink_to(outside, target_is_directory=True)
+    create_symlink(repo / "doc/harness", outside, target_is_directory=True)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
 
     result = run(repo, plugin_root)
@@ -1386,7 +1388,7 @@ def test_exact_operational_file_symlink_is_rejected(tmp_path):
     repo = make_repo(tmp_path, manifest=canonical_manifest())
     outside = tmp_path / "outside.json"
     outside.write_text("{}")
-    (repo / "doc/harness/runbook_candidates.yaml").symlink_to(outside)
+    create_symlink(repo / "doc/harness/runbook_candidates.yaml", outside)
 
     result = run(repo, plugin_root)
 
@@ -1536,7 +1538,7 @@ def test_setup_ignores_existing_contracts_local_file_and_symlink(tmp_path):
     linked = make_repo(tmp_path / "linked", manifest=canonical_manifest())
     target = tmp_path / "outside-local"
     target.write_text("outside\n", encoding="utf-8")
-    (linked / "CONTRACTS.local.md").symlink_to(target)
+    create_symlink(linked / "CONTRACTS.local.md", target)
     result = run(linked, plugin_root)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (linked / "CONTRACTS.local.md").is_symlink()
@@ -1784,14 +1786,14 @@ def test_symlinked_claude_dir_satisfies_ignore_only_worktrees_entry(tmp_path):
     (shared / "worktrees/lead").mkdir(parents=True)
 
     repo = basic_repo(tmp_path / "migrate", "version: 6\nname: demo\n")
-    (repo / ".claude").symlink_to(shared, target_is_directory=True)
+    create_symlink(repo / ".claude", shared, target_is_directory=True)
     result = migrate_cli(repo)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "version: 7\n" in (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8")
 
     plugin_root = make_plugin_root(tmp_path)
     fresh = make_repo(tmp_path / "setup", manifest=canonical_manifest())
-    (fresh / ".claude").symlink_to(shared, target_is_directory=True)
+    create_symlink(fresh / ".claude", shared, target_is_directory=True)
     finalized = run(fresh, plugin_root)
     assert finalized.returncode == 0, finalized.stdout + finalized.stderr
     assert "SETUP_OK" in finalized.stdout
@@ -1803,7 +1805,7 @@ def test_symlinked_worktrees_dir_fails_until_the_symlink_is_ignored(tmp_path):
     target = tmp_path / "worktrees-elsewhere"
     target.mkdir()
     (repo / ".claude").mkdir()
-    (repo / ".claude/worktrees").symlink_to(target, target_is_directory=True)
+    create_symlink(repo / ".claude/worktrees", target, target_is_directory=True)
 
     result = migrate_cli(repo)
 

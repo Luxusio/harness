@@ -85,6 +85,7 @@ def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
     """QA finding: CRLF, quoted, and keyless manifests were reported as current."""
     import subprocess
     import shutil
+    import shlex
     import pytest
 
     bash = shutil.which("bash")
@@ -113,13 +114,15 @@ def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
         text = (REPO / rel).read_text(encoding="utf-8")
         block = text.split("# Version check\n", 1)[1].split("```", 1)[0]
         for index, (manifest, expected) in enumerate(cases.items()):
-            root = tmp_path / f"{rel.replace('/', '_')}_{index}"
+            root = tmp_path / "version fixtures 'quoted'" / f"{rel.replace('/', '_')}_{index}"
             if manifest is not None:
                 (root / "doc/harness").mkdir(parents=True)
                 (root / "doc/harness/manifest.yaml").write_bytes(manifest)
             result = subprocess.run(
-                [bash, "-c", f'_ROOT="{root}"\n{block}'],
-                capture_output=True, text=True, timeout=10,
+                [bash, "-s"],
+                input=f"_ROOT={shlex.quote(root.as_posix())}\n{block}",
+                capture_output=True, text=True, encoding="utf-8", timeout=10,
             )
+            assert result.returncode == 0, (rel, manifest, result.stdout, result.stderr)
             assert result.stdout.strip() == expected, (rel, manifest, result.stdout, result.stderr)
             assert result.stderr == "", (rel, manifest, result.stderr)

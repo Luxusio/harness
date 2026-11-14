@@ -222,6 +222,13 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
     install = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, install)
     spec.loader.exec_module(install)
+    # This test executes hooks without copying an executable. Use the intact
+    # test environment, where the declared YAML dependency is installed; a
+    # fresh base Python need not have its venv's packages.
+    interpreter = str(Path(sys.executable).resolve())
+    subprocess.run([interpreter, "-I", "-B", "-c", "import yaml"],
+                   check=True, capture_output=True, text=True, timeout=10)
+    monkeypatch.setattr(install, "select_python", lambda **kwargs: interpreter)
     codex = install._codex_hooks_config(ROOT / "plugin")
     claude = json.loads(install._claude_runtime_projection()["hooks/hooks.json"])
     for runtime, config in (("codex", codex), ("claude", claude)):
@@ -239,7 +246,9 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
             input=json.dumps({"cwd": str(repo), "session_id": "command-session", "tool_name": "Read"}),
             text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
-        assert result.returncode == 0, result.stderr
+        diagnostics = (runtime, result.args, result.returncode, result.stdout, result.stderr)
+        assert result.returncode == 0, diagnostics
+        assert result.stdout.strip(), diagnostics
         response = json.loads(result.stdout)["hookSpecificOutput"]
         assert response["hookEventName"] == "PostToolUse" and "page 101" in response["additionalContext"], runtime
 

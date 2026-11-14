@@ -1,6 +1,8 @@
 """CLI contracts for shared preparation, reuse and cooperative ownership."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import hashlib
 import json
@@ -465,10 +467,10 @@ def test_declarations_reject_before_execution(tmp_path, mutation):
     elif mutation == "unknown":
         jobs[0]["depends_on"] = ["alpha"]
     elif mutation == "symlink":
-        (tmp_path / "built").symlink_to(tmp_path / "prepare.py")
+        create_symlink(tmp_path / "built", tmp_path / "prepare.py")
     elif mutation == "source-symlink":
         (tmp_path / "alpha.py").unlink()
-        (tmp_path / "alpha.py").symlink_to(tmp_path / "beta.py")
+        create_symlink(tmp_path / "alpha.py", tmp_path / "beta.py")
     elif mutation == "result-overlap":
         jobs[0]["outputs"] = ["verification/results.json"]
     with pytest.raises(ValueError):
@@ -859,7 +861,7 @@ def test_diagnostic_destinations_reject_before_launch(tmp_path, unsafe):
     if unsafe == 'symlink':
         elsewhere = tmp_path / 'elsewhere'
         elsewhere.mkdir()
-        directory.symlink_to(elsewhere, target_is_directory=True)
+        create_symlink(directory, elsewhere, target_is_directory=True)
     elif unsafe == 'source':
         directory.mkdir()
         (directory / 'input').write_text('selected')

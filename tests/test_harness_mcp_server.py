@@ -489,14 +489,14 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_dir.mkdir(parents=True)
             outside = Path(tmp) / "outside-task-root"
             outside.mkdir()
-            (harness_dir / "wbs").symlink_to(outside, target_is_directory=True)
+            create_symlink(harness_dir / "wbs", outside, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "WBS root"):
                 harness_server.canonical_wbs_dir(wbs_id="WBS__safe", repo_root=tmp)
 
         with tempfile.TemporaryDirectory() as tmp:
             outside = Path(tmp) / "outside-doc"
             outside.mkdir()
-            (Path(tmp) / "doc").symlink_to(outside, target_is_directory=True)
+            create_symlink(Path(tmp) / "doc", outside, target_is_directory=True)
             result = self._call_in_repo(tmp, "wbs_open", {"wbs_id": "WBS__escape"})
             self.assertTrue(result.get("isError"))
             self.assertFalse((outside / "harness" / "wbs" / "WBS__escape").exists())
@@ -1201,10 +1201,10 @@ class HarnessMcpServerTests(unittest.TestCase):
             sentinel.write_text("keep", encoding="utf-8")
             request = Path(tmp) / "request.txt"
             request.write_text("request body", encoding="utf-8")
-            (wbs_dir / "REQUEST.md").symlink_to(sentinel)
-            (wbs_dir / "BLOCKED.md").symlink_to(sentinel)
+            create_symlink(wbs_dir / "REQUEST.md", sentinel)
+            create_symlink(wbs_dir / "BLOCKED.md", sentinel)
             active = wbs_dir.parent / ".active"
-            active.symlink_to(sentinel)
+            create_symlink(active, sentinel)
 
             start = self._call_in_repo(
                 tmp,
@@ -1225,7 +1225,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             external = Path(tmp) / "external-blocker.md"
             external.write_bytes(b"do not touch\n")
             blocker = wbs_dir / "BLOCKED.md"
-            blocker.symlink_to(external)
+            create_symlink(blocker, external)
             control_before = (wbs_dir / "WBS.control.json").read_bytes()
 
             for args in (
@@ -1264,7 +1264,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             external = Path(tmp) / "external-state.json"
             external.write_text(state.read_text(encoding="utf-8"), encoding="utf-8")
             state.unlink()
-            state.symlink_to(external)
+            create_symlink(state, external)
             before = external.read_bytes()
             result = self._call_in_repo(
                 tmp,

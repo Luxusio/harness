@@ -220,3 +220,33 @@ fixture; it cannot disable native reparse, ownership or ACL refusal coverage.
 The suite must continue protecting actual installed runtime files even when
 HOME or USERPROFILE is redirected. No global UID emulation, blanket Windows
 skip, permission weakening or CI run is authorized by this follow-up.
+
+## Native suite feedback revision 59
+
+User-requested follow-up, 2026-11-14: read the current improvement inbox and
+repair applicable remaining problems. Page 51773441 v59 reports a full run of
+`db76632a` with Python 3.12.13 in a real venv, Git for Windows 2.54, eight workers
+and a deeper user-profile temporary directory: 3192 passed, 147 failed, 299 skipped.
+These are supplied observations. Earlier scoped acceptance remains evidence for
+its recorded source, interpreter, Git version, depth and security token; it
+does not establish that this later full run passed.
+
+Derived acceptance covers original-depth clone, rebase, preservation and cleanup
+without shortening or aliasing paths or changing persistent Git/OS policy.
+Existing owned Git invocation may use its documented process-local Native path
+capability. A venv launcher copied without its required configuration is not a
+valid Native executable fixture; tests must exercise genuine supported runtime
+inputs. Missing symlink privilege is measured at actual creation, with meaningful
+non-symlink Native refusal coverage retained. Do not enable administrator,
+DeveloperMode or symlink privileges to manufacture a pass.
+
+Packaged connection diagnosis must separate interpreter/launcher, private
+settings, trusted synthetic mise authentication and consumer cwd failures,
+without exposing credentials or borrowing project/personal authorization.
+Shell fixture quoting must exercise the actual chosen interpreter while Native
+product operation retains literal argv and no POSIX-shell prerequisite. Preserve
+all existing scope, ACL, reparse, concurrency, publication and unknown-write
+protections; actual affected review and execution must precede completion.
+Acceptance includes the full root suite at the reported temporary-path depth
+with a genuine venv and matching Git version, plus short-path controls. Scoped
+retakes alone cannot establish that the reported full-suite failures are fixed.

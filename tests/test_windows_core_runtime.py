@@ -75,6 +75,32 @@ def _environment():
     return env
 
 
+def _copy_base_python_shadow(shadow, env):
+    """A runnable, genuine PE shadow even when pytest uses a venv launcher."""
+    executable = Path(getattr(sys, "_base_executable", sys.executable)).resolve()
+    shutil.copyfile(win._win32_path(executable), win._win32_path(shadow))
+    # The venv redirector cannot be renamed away from pyvenv.cfg. Copy the
+    # actual base binary and its genuine adjacent DLLs instead. Use ordinary
+    # public paths; extended spelling is confined to the fixture copy calls.
+    copied = set()
+    for directory in dict.fromkeys((executable.parent, Path(sys.base_prefix))):
+        for name in os.listdir(win._win32_path(directory)):
+            if Path(name).suffix.lower() != ".dll" or name.casefold() in copied:
+                continue
+            shutil.copyfile(win._win32_path(directory / name),
+                            win._win32_path(shadow.parent / name))
+            copied.add(name.casefold())
+    env = dict(env, PYTHONHOME=sys.base_prefix)
+    env["PATH"] = os.pathsep.join([str(executable.parent), env.get("PATH", "")])
+    # Prove the copied PE/runtime without imposing an unrelated deep process
+    # cwd prerequisite. The fixture's full executable name stays unchanged.
+    observed = subprocess.run([str(shadow), "--version"],
+                              executable=win._win32_path(shadow), cwd=executable.parent,
+                              env=env, capture_output=True, timeout=10)
+    assert observed.returncode == 0 and observed.stdout.startswith(b"Python "), observed
+    return env
+
+
 def _public(repo, action, **extra):
     requests = [
         dict(jsonrpc="2.0", id=1, method="initialize", params=dict(
@@ -1196,17 +1222,12 @@ def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(p
     repo = _project(private)
     shadow = repo / "git.exe"
     # A known Python binary is a benign, observable substitute, never user code.
-    shutil.copyfile(sys.executable, shadow)
-    env = _environment()
+    env = _copy_base_python_shadow(shadow, _environment())
     env["PATH"] = os.pathsep.join([str(Path(actual_git).parent),
-                                  str(Path(sys.executable).parent), env.get("PATH", "")])
-    env["PYTHONHOME"] = sys.base_prefix
+                                  env.get("PATH", "")])
     monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
     env = {key: value for key, value in env.items()
            if key.casefold() != "nodefaultcurrentdirectoryinexepath"}
-    known_shadow = subprocess.run([str(shadow), "--version"], cwd=repo, env=env,
-                                  capture_output=True, timeout=10)
-    assert known_shadow.returncode == 0 and known_shadow.stdout.startswith(b"Python "), known_shadow
     expected = subprocess.run([actual_git, "--version"], cwd=repo, env=env,
                               capture_output=True, timeout=10, check=True)
     assert expected.stdout.startswith(b"git version ") and not expected.stderr
@@ -1232,6 +1253,92 @@ def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(p
     record = scheduled["commands"][0]
     assert record["returncode"] == 0 and not record["error"], record
     assert record["output"].strip() == expected.stdout.decode("utf-8").strip(), record
+
+
+def test_native_trusted_git_environment_clones_and_rebases_deep_paths_without_persisting_config(
+        private, monkeypatch):
+    import _lib
+    import batch_finish
+    import batch_submodules
+
+    executable = shutil.which("git")
+    assert executable and Path(executable).suffix.lower() == ".exe", "actual native Git is required"
+    home = win.ensure_private_directory(private / "disposable Git profile")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    global_config = home / ".gitconfig"
+    global_bytes = b"[core]\n\tlongpaths = false\n[fixture]\n\tmarker = preserved\n"
+    win.atomic_write(global_config, global_bytes)
+    source = win.ensure_private_directory(private / "original repository")
+    setup_env = _environment()
+
+    def setup(*args):
+        completed = subprocess.run([executable, "-c", "core.longpaths=true", *args],
+                                   cwd=source, env=setup_env, capture_output=True, timeout=30)
+        assert completed.returncode == 0, (args, completed.stdout, completed.stderr)
+        return completed.stdout.decode("utf-8").strip()
+
+    identity = ["-c", "user.name=Native Fixture", "-c", "user.email=native-fixture@example.invalid"]
+    setup("init", "-q", "-b", "main")
+    setup("config", "--local", "core.longpaths", "false")
+    setup("config", "--local", "core.autocrlf", "false")
+    win.atomic_write(source / "base.txt", b"base\n")
+    setup("add", "base.txt")
+    setup(*identity, "commit", "-qm", "fixture baseline")
+    original = platform.metadata_tree_inventory(source)
+
+    deep = win.ensure_private_directory(private / ".local/share/wiki-atlassian-python/qa-db766")
+    while len(str(deep).encode("utf-16-le")) // 2 <= 300:
+        deep = win.ensure_private_directory(deep / ("retained-native-metadata-" + "depth" * 5))
+    clone_parent = win.ensure_private_directory(deep / "private-submodule/clone")
+    # Deep retained metadata is the reported boundary. A supported ordinary
+    # checkout cwd avoids conflating it with CreateProcess's cwd limit.
+    gitdir, checkout = clone_parent / "git", private / "deep git checkout"
+    assert len(str(gitdir / "objects/pack" / ("pack-" + "0" * 40 + ".keep")).encode("utf-16-le")) // 2 > 260
+
+    decoy = win.ensure_private_directory(private / "unrelated ambient overrides")
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_INDEX_FILE", "GIT_CEILING_DIRECTORIES",
+                "GIT_EXEC_PATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+        monkeypatch.setenv(key, str(decoy))
+    for key, value in {
+        "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "core.longpaths", "GIT_CONFIG_VALUE_0": "false",
+        "GIT_CONFIG_KEY_1": "fixture.poison", "GIT_CONFIG_VALUE_1": "ambient override",
+        "GIT_CONFIG_PARAMETERS": "'core.longpaths=false' 'fixture.poison=parameters'",
+    }.items():
+        monkeypatch.setenv(key, value)
+    assert {key: value for key, value in _lib._trusted_git_env().items()
+            if key.upper().startswith("GIT_")} == {
+        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.longpaths", "GIT_CONFIG_VALUE_0": "true"}
+
+    def git(cwd, *args):
+        completed = batch_finish._git(str(cwd), *args)
+        assert completed.returncode == 0, (args, completed.stdout, completed.stderr)
+        return completed.stdout.strip()
+
+    assert git(source, "config", "--type=bool", "--get", "core.longpaths") == "true"
+    batch_submodules._git(str(source), "clone", "--template=", "--no-local", "--no-hardlinks",
+                          "--no-checkout", "--separate-git-dir", str(gitdir), "--", str(source), str(checkout))
+    git(checkout, "config", "--local", "core.longpaths", "false")
+    git(checkout, "config", "--local", "core.autocrlf", "false")
+    clone_config = platform.safe_metadata_snapshot(gitdir / "config", 65536)[0]
+    git(checkout, "checkout", "-qb", "candidate", "HEAD")
+    win.atomic_write(checkout / "candidate.txt", b"candidate\n")
+    git(checkout, "add", "candidate.txt")
+    git(checkout, *identity, "commit", "-qm", "candidate change")
+    git(checkout, "checkout", "-qb", "integration", "HEAD~1")
+    win.atomic_write(checkout / "integration.txt", b"integration\n")
+    git(checkout, "add", "integration.txt")
+    git(checkout, *identity, "commit", "-qm", "integration change")
+    git(checkout, "checkout", "-q", "candidate")
+    git(checkout, *identity, "rebase", "integration")
+    assert git(checkout, "rev-list", "--count", "integration..HEAD") == "1"
+    assert platform.safe_metadata_snapshot(checkout / "candidate.txt", 64)[0] == b"candidate\n"
+    assert platform.safe_metadata_snapshot(checkout / "integration.txt", 64)[0] == b"integration\n"
+    assert platform.safe_metadata_snapshot(gitdir / "config", 65536)[0] == clone_config
+    assert platform.metadata_tree_inventory(source) == original
+    assert platform.safe_metadata_snapshot(global_config, 65536)[0] == global_bytes
+    assert list(decoy.iterdir()) == []
 
 
 @pytest.mark.parametrize("channel", ["declared-pythonpath", "cwd-stdlib"])

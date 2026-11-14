@@ -6,6 +6,8 @@ status settings) cannot change what the preflight sees.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import hashlib
 import ctypes
 from contextlib import contextmanager
@@ -305,7 +307,7 @@ def test_deep_and_gitfile_nested_repos_are_found(monkeypatch, tmp_path):
     # A linked worktree of an unrelated repository: its `.git` is a gitfile.
     _git("worktree", "add", "-q", "-b", "x", str(main / "src/vendor/lib"), cwd=other)
     # An ignored symlink to a repository is never walked.
-    (main / "linked").symlink_to(other)
+    create_symlink(main / "linked", other, target_is_directory=True)
     report = mod.preflight(str(main), {})
     assert report["nested_repos"] == ["ign/deep/nested", "src/vendor/lib"]
     assert report["verdict"] == "ok", report
@@ -448,7 +450,7 @@ def test_symlinked_claude_outside_the_repo_passes(monkeypatch, tmp_path):
     outside = tmp_path / "claude-config"
     (outside / "worktrees").mkdir(parents=True)
     main = _repo(tmp_path / "main", ignore_worktrees=False)
-    (main / ".claude").symlink_to(outside)
+    create_symlink(main / ".claude", outside, target_is_directory=True)
     _git("add", ".claude", cwd=main)
     _git("commit", "-q", "-m", "shared claude config", cwd=main)
     assert _plain_check_ignore(main) == 128  # "beyond a symbolic link"
@@ -465,7 +467,7 @@ def test_symlinked_worktrees_dir_outside_the_repo_passes(monkeypatch, tmp_path):
     outside.mkdir()
     main = _repo(tmp_path / "main", {"README.md": "r\n", ".claude/settings.json": "{}\n"},
                  ignore_worktrees=False)
-    (main / ".claude/worktrees").symlink_to(outside)
+    create_symlink(main / ".claude/worktrees", outside, target_is_directory=True)
     _git("add", ".claude/worktrees", cwd=main)
     _git("commit", "-q", "-m", "worktrees elsewhere", cwd=main)
     assert _plain_check_ignore(main) == 128
@@ -478,7 +480,7 @@ def test_symlinked_claude_inside_the_repo_is_checked_at_its_target(monkeypatch, 
     _isolate(monkeypatch, tmp_path)
     main = _repo(tmp_path / "main", {"README.md": "r\n", "config/claude/settings.json": "{}\n"},
                  ignore_worktrees=False)
-    (main / ".claude").symlink_to("config/claude")
+    create_symlink(main / ".claude", "config/claude", target_is_directory=True)
     _git("add", ".claude", cwd=main)
     _git("commit", "-q", "-m", "claude config lives in config/", cwd=main)
     assert _plain_check_ignore(main) == 128
@@ -584,7 +586,7 @@ def test_scopes_outside_the_work_tree(monkeypatch, tmp_path):
     main = _repo(tmp_path / "main")
     outside = tmp_path / "elsewhere"
     outside.mkdir()
-    (main / "escape").symlink_to(outside)
+    create_symlink(main / "escape", outside, target_is_directory=True)
     report = mod.preflight(
         str(main),
         {"a": ["../elsewhere/x"], "b": [str(outside)], "c": ["escape/x"], "d": [".git/hooks"]},
@@ -594,7 +596,7 @@ def test_scopes_outside_the_work_tree(monkeypatch, tmp_path):
     [reason] = report["excluded_requests"]["a"]
     assert "cannot run in harness:batch" in reason
     # A symlink that stays inside the work tree classifies by its target.
-    (main / "inside").symlink_to(main / "README.md")
+    create_symlink(main / "inside", main / "README.md")
     root = os.path.realpath(main)
     assert mod.classify_scope(root, "inside", set())["class"] == "tracked-area"
 

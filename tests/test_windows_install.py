@@ -401,10 +401,12 @@ def test_native_wiki_public_install_update_and_rerun_preserve_immutable_launcher
 
 @pytest.mark.parametrize("runtime", ["codex", "claude"])
 def test_native_host_discovery_uses_real_executable_and_preserves_literal_arguments(native_install, monkeypatch, runtime):
+    from test_windows_core_runtime import _copy_base_python_shadow
+
     fixture = native_install
     cli = _load(fixture.source / "plugin/scripts/native_cli.py", "native_host_cli_fixture")
     shadow = fixture.consumer / (runtime + ".exe")
-    shutil.copyfile(sys.executable, shadow)
+    fixture.env = _copy_base_python_shadow(shadow, fixture.env)
     monkeypatch.chdir(fixture.consumer)
     monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
     command = cli.host_command(runtime, cwd=fixture.consumer, env=fixture.env)

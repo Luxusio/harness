@@ -1430,12 +1430,17 @@ class GitBindingError(RuntimeError):
 
 
 def _trusted_git_env():
-    """Return an environment without ambient Git repository/config overrides."""
-    return {
+    """Strip ambient Git overrides and supply owned Native path capability."""
+    environment = {
         key: value
         for key, value in os.environ.items()
         if not key.upper().startswith("GIT_")
     }
+    if os.name == 'nt':
+        # Runtime-only configuration also reaches Git's clone/rebase children;
+        # no checkout, user configuration or host path policy is changed.
+        environment.update(GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.longpaths', GIT_CONFIG_VALUE_0='true')
+    return environment
 
 
 def _git_executable(cwd, env=None):

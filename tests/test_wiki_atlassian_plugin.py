@@ -30,7 +30,18 @@ PLUGIN = ROOT / "wiki-atlassian"
 sys.path.insert(0, str(ROOT / 'plugin/scripts'))
 
 
-pytestmark = pytest.mark.usefixtures("selected_installer_python")
+pytestmark = pytest.mark.usefixtures("selected_packaged_python")
+
+
+@pytest.fixture
+def selected_packaged_python(monkeypatch):
+    # These subprocesses execute the intact test interpreter, never a copied
+    # executable. Its installed test dependencies may exist only in the venv;
+    # the base-interpreter copy fixtures and real resolver tests stay separate.
+    import mise_python
+    selected = str(Path(sys.executable).absolute())
+    monkeypatch.setattr(mise_python, "select_python", lambda **kwargs: selected)
+    return selected
 
 
 @contextmanager
@@ -268,7 +279,7 @@ def test_personal_connection_uses_common_packaged_mcp_and_private_identity_witho
         assert {"get_document", "list_comments", "create_comment", "update_comment", "connection_status"} <= names
         assert "read_personal_feedback" not in names
         assert all("connection" in tool["inputSchema"]["properties"] for tool in tools)
-        assert first["status"] == "listed" and first["target"] == "790"
+        assert first["status"] == "listed" and first["target"] == "790", first
         assert first["connection"] == "personal"
         assert "Reuse compatible tokens" in first["comments"][0]["body"]
         assert first["hasMore"] and not first["complete"]
@@ -295,6 +306,7 @@ def test_packaged_personal_comment_cursors_reject_forgery_and_other_contexts(tmp
     with private_inbox(tmp_path, account=account) as (home, _, settings, calls):
         env = clean_environment(home, **settings)
         _, first = personal_call(package, command, project, env, target="790", format="storage", limit=1)
+        assert first.get("status") == "listed", first
         assert first["comments"][0]["id"] == "900" and first["hasMore"]
         cursor = first["cursor"]
         encoded, _, signature = cursor.partition('.')

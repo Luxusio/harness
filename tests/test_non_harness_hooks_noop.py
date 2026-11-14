@@ -1,6 +1,8 @@
 """Global hooks must no-op in repos without doc/harness/manifest.yaml."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import json
 import os
@@ -349,9 +351,9 @@ def test_manifest_alias_is_not_hook_activation_authority(tmp_path: Path, compone
     (repo / "doc").mkdir(parents=True)
     if component == "manifest":
         (repo / "doc/harness").mkdir()
-        (repo / "doc/harness/manifest.yaml").symlink_to(source / "doc/harness/manifest.yaml")
+        create_symlink(repo / "doc/harness/manifest.yaml", source / "doc/harness/manifest.yaml")
     else:
-        (repo / "doc/harness").symlink_to(source / "doc/harness", target_is_directory=True)
+        create_symlink(repo / "doc/harness", source / "doc/harness", target_is_directory=True)
     home = tmp_path / "home"
     home.mkdir()
     before = _tree(tmp_path)

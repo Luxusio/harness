@@ -11,6 +11,8 @@ This test pins the new behavior: the gate must follow the back-link.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 import sys
 from pathlib import Path
@@ -162,7 +164,7 @@ def test_external_reference_does_not_accept_unsafe_plan(tmp_path, kind):
     elif kind == "symlink":
         target = repo / "other.md"
         target.write_text("REQ: sync_pending\n")
-        path.symlink_to(target)
+        create_symlink(path, target)
     assert not _wbs_has_req_reference(str(td), str(repo))
 
 

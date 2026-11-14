@@ -181,18 +181,18 @@ def test_unsafe_paths_refuse(tmp_path, owner, location):
     outside.write_text("untouched")
     if location == "file":
         path.unlink()
-        path.symlink_to(outside)
+        create_symlink(path, outside)
     elif location == "directory":
         goal_dir = path.parent
         moved = tmp_path / "old"
         goal_dir.rename(moved)
-        goal_dir.symlink_to(moved, target_is_directory=True)
+        create_symlink(goal_dir, moved, target_is_directory=True)
     elif location == "hardlink":
         (tmp_path / "link").hardlink_to(path)
     else:
         target = tmp_path / migration.preview(tmp_path)["destinations"][0]
         target.parent.mkdir(parents=True)
-        target.symlink_to(outside)
+        create_symlink(target, outside)
     with pytest.raises(ValueError):
         migration.apply(tmp_path)
     assert outside.read_text() == "untouched"
