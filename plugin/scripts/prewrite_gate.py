@@ -371,13 +371,35 @@ def _wbs_has_req_reference(wbs_dir: str, repo_root: str = "") -> bool:
             text = _strict_regular_text_snapshot(os.path.join(wbs_dir, "PLAN.md"))["text"]
         except (OSError, ValueError, RuntimeError, UnicodeError):
             return False
-        fence = None
+        fence, comment = None, False
+        fence_pattern = re.compile(r" {0,3}(`{3,}|~{3,})[^\r\n]*")
         for line in text.splitlines():
             if fence is not None:
                 if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(fence[1]) + r",}[ \t]*", line):
                     fence = None
                 continue
-            opened = re.fullmatch(r" {0,3}(`{3,}|~{3,})[^\r\n]*", line)
+            # Comment markers in code are literal; inspect an opening fence
+            # before stripping visible HTML comments outside code blocks.
+            opened = None if comment else fence_pattern.fullmatch(line)
+            if opened:
+                marker = opened.group(1)
+                fence = (marker[0], len(marker))
+                continue
+            visible, fragment = [], line
+            while fragment:
+                if comment:
+                    _, closed, fragment = fragment.partition("-->")
+                    if not closed:
+                        break
+                    comment = False
+                else:
+                    prefix, opened_comment, fragment = fragment.partition("<!--")
+                    visible.append(prefix)
+                    if not opened_comment:
+                        break
+                    comment = True
+            line = "".join(visible)
+            opened = fence_pattern.fullmatch(line)
             if opened:
                 marker = opened.group(1)
                 fence = (marker[0], len(marker))
