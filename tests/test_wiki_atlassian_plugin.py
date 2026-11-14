@@ -201,11 +201,12 @@ def write_connection(cwd, **changes):
 
 def personal_payload(tmp_path):
     import importlib.util
+    from mise_python import select_python
     spec = importlib.util.spec_from_file_location("wiki_personal_install", PLUGIN / "install.py")
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     package = module.prepare(tmp_path / "payload-data") / "plugin"
     transport = json.loads((package / ".mcp.json").read_text())["mcpServers"]["atlassian"]
-    assert transport["command"] == str(Path(sys.executable).absolute())
+    assert transport["command"] == select_python(require_yaml=True)
     for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py", "mise_python.py"):
         assert (package / "scripts" / name).read_bytes() == (ROOT / "plugin/scripts" / name).read_bytes()
     return package, [transport["command"], *transport["args"]]

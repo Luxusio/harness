@@ -206,8 +206,9 @@ class _NativeService:
     """One private, persistent Windows Job; no PID-only termination authority.
 
     The random Job name and original process creation time live in the existing
-    service entry. A named Job survives its controller while descendants exist.
-    It never permits breakaway, so a shell exiting does not lose its children.
+    service entry. A service host keeps a user handle while descendants exist:
+    process references alone do not preserve the Job's reopenable name. The
+    Job never permits breakaway; losing its last handle kills the owned tree.
     """
 
     @staticmethod
@@ -308,14 +309,72 @@ class _NativeService:
         job = cls._open(entry, terminate=True)
         if job is None:
             return
+        process = None
         try:
+            # Retain the exact original host across termination, rather than
+            # treating a briefly retiring or reused PID as cleanup evidence.
+            open_process = _win._bind(_win.K, "OpenProcess", [_win.DWORD, _win.W.BOOL, _win.DWORD], _win.HANDLE)
+            candidate = open_process(0x1000 | 0x100000, False, entry["pid"])
+            if candidate:
+                member = _win.W.BOOL()
+                is_member = _win._bind(_win.K, "IsProcessInJob", [_win.HANDLE, _win.HANDLE, _win.C.POINTER(_win.W.BOOL)])
+                try:
+                    _win._check(is_member(candidate, job, _win.C.byref(member)))
+                    if member.value and cls._created(candidate) == entry["windows_created"]:
+                        process, candidate = candidate, None
+                finally:
+                    _win._close(candidate)
+            elif _win.C.get_last_error() not in (5, 87):
+                raise _win._error()
             _win._check(_win._TerminateJobObject(job, 1))
             deadline = time.monotonic() + timeout
             while cls._active(job):
                 if time.monotonic() >= deadline:
                     raise OSError("Owned Windows service tree termination could not be confirmed")
                 time.sleep(0.01)
+            if process and _win._WaitForSingleObject(process, max(0, int((deadline - time.monotonic()) * 1000))) != 0:
+                raise OSError("Owned Windows service host termination could not be confirmed")
         finally:
+            _win._close(process)
+            _win._close(job)
+
+    @classmethod
+    def host(cls, name, acl, ready, command):
+        """Hold one service's Job, launch its shell and wait for every child.
+
+        This execution owner has no state file or request loop. It is itself a
+        member of the Job, so controller/host failure cannot leave unmanaged
+        descendants, and ordinary stop terminates the host with its service.
+        """
+        job = None
+        try:
+            _win._check(_win._SetHandleInformation(ready, 1, 0))
+            open_job = _win._bind(_win.K, "OpenJobObjectW", [_win.DWORD, _win.W.BOOL, _win.W.LPCWSTR], _win.HANDLE)
+            job = open_job(_win.READ_CONTROL | 4, False, name)
+            if not job:
+                raise _win._error()
+            if cls._acl(job) != acl:
+                raise ValueError("Runtime service host Job custody changed")
+            member = _win.W.BOOL()
+            is_member = _win._bind(_win.K, "IsProcessInJob", [_win.HANDLE, _win.HANDLE, _win.C.POINTER(_win.W.BOOL)])
+            _win._check(is_member(_win._GetCurrentProcess(), job, _win.C.byref(member)))
+            if not member.value:
+                raise ValueError("Runtime service host is not in its owned Job")
+            process = subprocess.Popen(command, shell=True, executable=cls.command_processor(),
+                                       stdin=subprocess.DEVNULL, close_fds=True)
+            set_event = _win._bind(_win.K, "SetEvent", [_win.HANDLE])
+            _win._check(set_event(ready))
+            _win._close(ready)
+            ready = None
+            while True:
+                code = process.poll()
+                if code is not None and cls._active(job) == 1:
+                    return code
+                time.sleep(0.05)
+        finally:
+            _win._close(ready)
+            # KILL_ON_JOB_CLOSE remains set. If this host failed while its
+            # service was alive, releasing the final handle reaps that tree.
             _win._close(job)
 
     @classmethod
@@ -323,21 +382,24 @@ class _NativeService:
         """Publish durable ownership before the suspended shell may execute."""
         from contextlib import ExitStack
         import msvcrt
-        job = attribute_list = None
+        job = ready = attribute_list = None
         process = _win.PROCESS_INFORMATION()
         attributes_initialized = False
-        assigned = resumed = False
+        started = False
         with ExitStack() as stack:
             log = stack.enter_context(_log_stream(_service_log(runtime_dir, str(service["name"]))))
             log.write(f"[{_now()}] starting: {service['command']}\n")
             log.flush()
             null = stack.enter_context(open(os.devnull, "rb"))
-            # Explicit duplicates isolate the inherited handle list. The Job
-            # itself is never inherited by a child or an unrelated process.
-            copies = [os.dup(log.fileno()), os.dup(null.fileno())]
-            for fd in copies:
+            # The host inherits only its standard streams and an ephemeral
+            # ready event. It opens its own noninheritable Job handle after
+            # durable ownership publication and before acknowledgement.
+            copies = []
+            for original in (log.fileno(), null.fileno()):
+                fd = os.dup(original)
                 stack.callback(os.close, fd)
                 os.set_inheritable(fd, True)
+                copies.append(fd)
             output, stdin = map(msvcrt.get_osfhandle, copies)
             try:
                 with _win._private_attributes() as security:
@@ -351,26 +413,40 @@ class _NativeService:
                 limits.BasicLimitInformation.LimitFlags = 0x2000
                 _win._check(_win._SetInformationJobObject(job, 9, _win.C.byref(limits), _win.C.sizeof(limits)))
                 acl = cls._acl(job)
+                create_event = _win._bind(_win.K, "CreateEventW", [_win.P, _win.W.BOOL, _win.W.BOOL, _win.W.LPCWSTR], _win.HANDLE)
+                with _win._private_attributes() as security:
+                    security.bInheritHandle = True
+                    ready = create_event(_win.C.byref(security), True, False, None)
+                if not ready:
+                    raise _win._error()
                 size = _win.SIZE_T()
-                _win._InitializeAttributes(None, 1, 0, _win.C.byref(size))
+                _win._InitializeAttributes(None, 2, 0, _win.C.byref(size))
                 if not size.value or size.value > 65536:
                     raise ValueError("Native service handle isolation unavailable")
                 buffer = _win.C.create_string_buffer(size.value)
                 attribute_list = _win.C.cast(buffer, _win.P)
-                _win._check(_win._InitializeAttributes(attribute_list, 1, 0, _win.C.byref(size)))
+                _win._check(_win._InitializeAttributes(attribute_list, 2, 0, _win.C.byref(size)))
                 attributes_initialized = True
-                handles = (_win.HANDLE * 2)(output, stdin)
+                handles = (_win.HANDLE * 3)(output, stdin, ready)
                 _win._check(_win._UpdateAttribute(attribute_list, 0, 0x20002, handles,
                                                   _win.C.sizeof(handles), None, None))
+                jobs = (_win.HANDLE * 1)(job)
+                # Windows 10+ assigns membership during creation. An older or
+                # unsupported host refuses here, before any child is launched.
+                if not _win._UpdateAttribute(attribute_list, 0, 0x2000D, jobs,
+                                             _win.C.sizeof(jobs), None, None):
+                    error = _win._error()
+                    raise OSError(error.errno, "Native service startup cannot establish creation-time Job membership (Windows 10+ required)") from error
                 startup = _win.STARTUPINFOEX()
                 startup.StartupInfo.cb = _win.C.sizeof(startup)
                 startup.StartupInfo.dwFlags = 0x100
                 startup.StartupInfo.hStdInput = stdin
                 startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = output
                 startup.lpAttributeList = attribute_list
-                executable = cls.command_processor()
-                command = _win.C.create_unicode_buffer(subprocess.list2cmdline([executable]) +
-                                                        ' /d /s /c "' + str(service["command"]) + '"')
+                executable = str(Path(sys.executable).absolute())
+                command = _win.C.create_unicode_buffer(subprocess.list2cmdline(
+                    [executable, "-E", "-s", "-B", str(Path(__file__).absolute()),
+                     "--native-service-host", name, acl, str(ready), str(service["command"])]))
                 env = _service_env(service)
                 environment = _win.C.create_unicode_buffer("\x00".join(
                     f"{k}={v}" for k, v in sorted(env.items(), key=lambda item: item[0].upper())) + "\x00\x00")
@@ -378,32 +454,30 @@ class _NativeService:
                     4 | 0x400 | 0x80000 | 0x08000000, environment,
                     str(Path(service.get("cwd") or os.getcwd()).resolve()),
                     _win.C.byref(startup), _win.C.byref(process)))
-                _win._check(_win._AssignProcessToJobObject(job, process.process))
-                assigned = True
                 entry.update(pid=int(process.processId), windows_job=name,
                              windows_job_acl=acl, windows_created=cls._created(process.process))
                 publish()
-                # The durable entry now owns cleanup even if this controller
-                # crashes. Background services deliberately outlive the CLI.
-                limits.BasicLimitInformation.LimitFlags = 0
-                _win._check(_win._SetInformationJobObject(job, 9, _win.C.byref(limits), _win.C.sizeof(limits)))
                 if _win._ResumeThread(process.thread) == 0xFFFFFFFF:
                     raise _win._error()
-                resumed = True
+                wait_many = _win._bind(_win.K, "WaitForMultipleObjects",
+                    [_win.DWORD, _win.C.POINTER(_win.HANDLE), _win.W.BOOL, _win.DWORD], _win.DWORD)
+                waiting = (_win.HANDLE * 2)(ready, process.process)
+                if wait_many(2, waiting, False, 10000) != 0:
+                    raise OSError("Windows service host did not acknowledge Job custody")
+                started = True
                 return int(process.processId)
             finally:
                 try:
-                    if not resumed and process.process:
-                        if assigned:
-                            _win._stop_job(job)
-                        else:
-                            _win._TerminateProcess(process.process, 1)
-                            _win._WaitForSingleObject(process.process, 5000)
+                    if not started and process.process:
+                        _win._stop_job(job)
+                        if _win._WaitForSingleObject(process.process, 5000) != 0:
+                            raise OSError("Failed Windows service host cleanup could not be confirmed")
                 finally:
                     if attributes_initialized:
                         _win._DeleteAttributes(attribute_list)
                     _win._close(process.thread)
                     _win._close(process.process)
+                    _win._close(ready)
                     _win._close(job)
 
 
@@ -815,9 +889,10 @@ def status_services(args: argparse.Namespace) -> int:
         entry = state.get("services", {}).get(name, {})
         pid = int(entry.get("pid") or 0)
         alive = _entry_alive(entry)
-        if os.name == "nt" and alive and entry.get("status") != "running":
-            status = "starting" if entry.get("status") == "starting" else "unfinished"
-            ok, detail = False, "startup not confirmed; run start to recover the owned unfinished Job"
+        if os.name == "nt" and entry.get("status") != "running" and (alive or entry.get("status") == "starting"):
+            status = "starting" if alive and entry.get("status") == "starting" else "unfinished"
+            ok, detail = False, ("startup not confirmed; run start to recover the owned unfinished Job" if alive else
+                                 "startup not confirmed; previous owned Job is no longer running; run start to retry")
         else:
             ok, detail = _health_ok(service) if alive else (False, "not running")
             status = "running" if alive and ok else "blocked" if entry.get("status") == "blocked" else "stopped"
@@ -880,6 +955,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    request = sys.argv[1:] if argv is None else argv
+    if os.name == "nt" and request and request[0] == "--native-service-host":
+        if len(request) != 5:
+            raise ValueError("Invalid native service execution owner request")
+        return _NativeService.host(request[1], request[2], int(request[3]), request[4])
     args = build_parser().parse_args(argv)
     if os.name == "nt" and args.cmd in {"start", "status", "stop"}:
         # Only one CLI may publish/restart a service at a time. The existing

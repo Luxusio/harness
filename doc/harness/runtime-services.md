@@ -64,7 +64,9 @@ Fields:
 
 State lives at `doc/harness/runtime/services.json`; logs live under
 `doc/harness/runtime/logs/`. Windows records the private Job identity and
-original process creation time before allowing the service to run. Status and
+Python execution host's creation time before allowing the service to run. One
+Python host retains the Job handle for each live Windows service and exits
+when its service tree ends. Status and
 restart reuse that owned tree, including children surviving the original
 shell; shutdown never signals a reused foreign PID. A legacy PID-only Windows
 entry requires explicit recovery instead of automatic process adoption.

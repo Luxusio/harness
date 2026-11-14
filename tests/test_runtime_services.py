@@ -348,14 +348,16 @@ def test_manifest_preserves_individually_quoted_command_paths(tmp_path, monkeypa
     assert module._parse_manifest_services(path)[0]["command"] == command
 
 
-def _native_process_alive(module, pid):
+def _native_process_alive(module, pid, created=None):
     win = module._win
     open_process = win._bind(win.K, "OpenProcess", [win.DWORD, win.W.BOOL, win.DWORD], win.HANDLE)
-    handle = open_process(0x100000, False, pid)
+    handle = open_process(0x100000 | 0x1000, False, pid)
     if not handle:
         assert win.C.get_last_error() == 87
         return False
     try:
+        if created is not None and module._NativeService._created(handle) != created:
+            return False
         result = win._WaitForSingleObject(handle, 0)
         assert result in (0, 258)
         return result == 258
@@ -367,13 +369,15 @@ def _native_process_alive(module, pid):
 def test_native_persistent_job_reuses_descendants_after_leader_exit_and_preserves_foreign_pid(tmp_path, monkeypatch):
     module = _runtime_module(monkeypatch)
     pid_path = tmp_path / "child.pid"
+    launcher_pid_path = tmp_path / "launcher.pid"
     child = tmp_path / "child service.py"
     child.write_text("import os,pathlib,sys,time\npathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\ntime.sleep(300)\n")
     launcher = tmp_path / "launcher.py"
-    launcher.write_text("import subprocess,sys\nsubprocess.Popen([sys.executable,sys.argv[1],sys.argv[2]])\n")
+    launcher.write_text("import os,pathlib,subprocess,sys\npathlib.Path(sys.argv[3]).write_text(str(os.getpid()))\n"
+                        "subprocess.Popen([sys.executable,sys.argv[1],sys.argv[2]])\n")
     (tmp_path / "manifest.yaml").write_text(
         "runtime:\n  services:\n    - name: tree\n"
-        f"      command: {_command(sys.executable, launcher, child, pid_path)}\n"
+        f"      command: {_command(sys.executable, launcher, child, pid_path, launcher_pid_path)}\n"
         f"      healthcheck: {_exists(pid_path)}\n      ready_timeout_sec: 8\n")
     foreign = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(300)"])
     original = None
@@ -383,10 +387,12 @@ def test_native_persistent_job_reuses_descendants_after_leader_exit_and_preserve
         state = module._load_state(tmp_path / "runtime")
         original = dict(state["services"]["tree"])
         child_pid = int(pid_path.read_text())
+        launcher_pid = int(launcher_pid_path.read_text())
         deadline = time.monotonic() + 5
-        while _native_process_alive(module, original["pid"]):
+        while _native_process_alive(module, launcher_pid):
             assert time.monotonic() < deadline, "fixture leader did not exit"
             time.sleep(0.05)
+        assert _native_process_alive(module, original["pid"], original["windows_created"]), "execution owner must retain the Job after command-leader exit"
         assert module._entry_alive(original), "live descendant must retain the named Job"
         second = _run(tmp_path, "start")
         assert second.returncode == 0 and "running pid=" in second.stdout, second.stdout + second.stderr
@@ -419,7 +425,7 @@ def test_native_failed_ownership_publication_never_executes_and_reaps_suspended_
                                     tmp_path / "runtime", entry, fail_publish)
     assert not marker.exists()
     assert not module._entry_alive(entry)
-    assert not _native_process_alive(module, entry["pid"])
+    assert not _native_process_alive(module, entry["pid"], entry["windows_created"])
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires real Windows process identity and private state")
@@ -436,6 +442,43 @@ def test_native_legacy_pid_cannot_be_adopted_or_terminated(tmp_path, monkeypatch
     finally:
         foreign.terminate()
         foreign.wait(timeout=10)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows service-host death and Job kill-on-close")
+def test_native_service_host_death_reaps_owned_descendants(tmp_path, monkeypatch):
+    module = _runtime_module(monkeypatch)
+    pid_path = tmp_path / "service.pid"
+    service = tmp_path / "service.py"
+    service.write_text("import os,pathlib,sys,time\npathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\ntime.sleep(300)\n")
+    (tmp_path / "manifest.yaml").write_text(
+        "runtime:\n  services:\n    - name: host\n"
+        f"      command: {_command(sys.executable, service, pid_path)}\n"
+        f"      healthcheck: {_exists(pid_path)}\n      ready_timeout_sec: 8\n")
+    entry = None
+    process = child = None
+    win = module._win
+    try:
+        started = _run(tmp_path, "start")
+        assert started.returncode == 0, started.stdout + started.stderr
+        entry = module._load_state(tmp_path / "runtime")["services"]["host"]
+        open_process = win._bind(win.K, "OpenProcess", [win.DWORD, win.W.BOOL, win.DWORD], win.HANDLE)
+        process = open_process(1 | 0x1000 | 0x100000, False, entry["pid"])
+        child = open_process(0x1000 | 0x100000, False, int(pid_path.read_text()))
+        assert process and child
+        assert module._NativeService._created(process) == entry["windows_created"]
+        assert win._WaitForSingleObject(child, 0) == 258
+        # No outside Job handle is retained. Losing this actual execution
+        # owner's handle must terminate its child, rather than merely remove
+        # the name and strand the still-running product process.
+        win._check(win._TerminateProcess(process, 79))
+        assert win._WaitForSingleObject(process, 5000) == 0
+        assert win._WaitForSingleObject(child, 5000) == 0
+        assert not module._entry_alive(entry)
+    finally:
+        win._close(child)
+        win._close(process)
+        if entry is not None:
+            module._stop_entry(entry)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires real Windows Job creation-time validation")
@@ -459,13 +502,13 @@ def test_native_changed_creation_time_refuses_without_killing_original_tree(tmp_
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires actual controller death around Windows ResumeThread")
-@pytest.mark.parametrize("crash_stage", ["before-resume", "after-resume"])
+@pytest.mark.parametrize("crash_stage", ["before-resume", "after-resume", "after-ack"])
 def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_path, monkeypatch, crash_stage):
     module = _runtime_module(monkeypatch)
     marker = tmp_path / "executed.txt"
     service = tmp_path / "service.py"
     service.write_text(
-        "import pathlib,sys,time\npathlib.Path(sys.argv[1]).write_text('executed')\ntime.sleep(300)\n")
+        "import os,pathlib,sys,time\npathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\ntime.sleep(300)\n")
     manifest = tmp_path / "manifest.yaml"
     # No healthcheck is intentional: default readiness must not turn a
     # controller's abandoned, possibly suspended Job into a running service.
@@ -479,10 +522,22 @@ def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_pat
         "import runtime_services as runtime\n"
         "resume=runtime._win._ResumeThread\n"
         "def crash(thread):\n"
+        "    if sys.argv[2]=='after-ack':\n"
+        "        return resume(thread)\n"
         "    if sys.argv[2]=='after-resume':\n"
         "        assert resume(thread)!=0xFFFFFFFF\n"
         "    os._exit(91)\n"
         "runtime._win._ResumeThread=crash\n"
+        "bind=runtime._win._bind\n"
+        "def binding(dll,name,args,result=runtime._win.W.BOOL):\n"
+        "    fn=bind(dll,name,args,result)\n"
+        "    if name=='WaitForMultipleObjects' and sys.argv[2]=='after-ack':\n"
+        "        def acknowledged(*values):\n"
+        "            assert fn(*values)==0\n"
+        "            os._exit(91)\n"
+        "        return acknowledged\n"
+        "    return fn\n"
+        "runtime._win._bind=binding\n"
         "runtime.main(sys.argv[3:])\n")
     runtime_dir = tmp_path / "runtime"
     abandoned = recovered = None
@@ -495,16 +550,23 @@ def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_pat
         saved = module._load_state(runtime_dir)
         abandoned = dict(saved["services"]["startup"])
         assert abandoned["status"] == "starting" and abandoned["health"] == "pending"
-        assert module._entry_alive(abandoned), "fixture must leave an actual persistent owned Job"
+        if crash_stage == "after-ack":
+            assert module._entry_alive(abandoned), "acknowledged host must retain its actual Job handle"
         if crash_stage == "before-resume":
+            deadline = time.monotonic() + 5
+            while _native_process_alive(module, abandoned["pid"], abandoned["windows_created"]):
+                assert time.monotonic() < deadline, "controller death did not reap the suspended owned host"
+                time.sleep(0.01)
+            assert not module._entry_alive(abandoned)
             assert not marker.exists(), "suspended command unexpectedly executed"
         before_status = (runtime_dir / "services.json").read_bytes()
         status = _run(tmp_path, "status")
         assert status.returncode == 1, status.stdout + status.stderr
-        assert "startup: starting" in status.stdout and "health=fail" in status.stdout
+        assert ("startup: starting" in status.stdout or "startup: unfinished" in status.stdout) and "health=fail" in status.stdout
         assert "startup not confirmed" in status.stdout
         assert (runtime_dir / "services.json").read_bytes() == before_status
-        assert module._entry_alive(abandoned), "status must preserve the unfinished owned Job"
+        if crash_stage == "after-ack":
+            assert module._entry_alive(abandoned), "status must preserve the unfinished owned Job"
         if crash_stage == "before-resume":
             assert not marker.exists()
 
@@ -517,10 +579,29 @@ def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_pat
         assert not module._entry_alive(abandoned), "recovery must retire the entire abandoned owned Job"
         assert module._entry_alive(recovered)
         deadline = time.monotonic() + 8
-        while not marker.exists():
-            assert time.monotonic() < deadline, "recovered service command never executed"
-            time.sleep(0.05)
-        assert marker.read_text() == "executed"
+        job = module._NativeService._open(recovered)
+        try:
+            win = module._win
+            open_process = win._bind(win.K, "OpenProcess", [win.DWORD, win.W.BOOL, win.DWORD], win.HANDLE)
+            is_member = win._bind(win.K, "IsProcessInJob", [win.HANDLE, win.HANDLE, win.C.POINTER(win.W.BOOL)])
+            while True:
+                try:
+                    child_pid = int(marker.read_text())
+                except (FileNotFoundError, ValueError):
+                    child_pid = 0
+                child = open_process(0x1000, False, child_pid) if child_pid else None
+                member = win.W.BOOL()
+                try:
+                    if child:
+                        win._check(is_member(child, job, win.C.byref(member)))
+                    if member.value:
+                        break
+                finally:
+                    win._close(child)
+                assert time.monotonic() < deadline, "recovered service command never executed in its new owned Job"
+                time.sleep(0.05)
+        finally:
+            module._win._close(job)
     finally:
         if recovered is not None:
             module._stop_entry(recovered)
