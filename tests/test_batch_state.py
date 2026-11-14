@@ -911,6 +911,8 @@ def test_native_remove_refusal_restores_retention_marker_then_retry_succeeds(tmp
     module = load_state_module()
     original_run = subprocess.run
     attempted = []
+    tracked = worktree / 'README.md'
+    assert _git('ls-files', '--error-unmatch', tracked.name, cwd=worktree) == tracked.name
 
     def refuse_native_remove(command, *args, **kwargs):
         if "worktree" in command and "remove" in command:
@@ -925,7 +927,6 @@ def test_native_remove_refusal_restores_retention_marker_then_retry_succeeds(tmp
 
     if os.name == 'nt':
         from wiki_platform import _native
-        tracked = worktree / 'a.txt'
         tracked_before = (_fixture_io(tracked).read_bytes(), _fixture_io(tracked).stat().st_dev,
                           _fixture_io(tracked).stat().st_ino)
         actual_open = _native._open
