@@ -1307,29 +1307,42 @@ def test_thaw_rejects_source_and_archive_drift_during_collection(tmp_path, monke
         repo, work, task, *_ = _ordinary_snapshot_fixture(case, verification=True)
         checkpoint = _ordinary_checkpoint(repo, task)
         source = next((task / 'work/verification-targets').glob('*/source'))
-        target = source / 'README.md' if changed == 'source' else (
-            Path(checkpoint['harvest']['archived']) / source.relative_to(task) / 'README.md')
+        archived_source = Path(checkpoint['harvest']['archived']) / source.relative_to(task)
+        target = (source if changed == 'source' else archived_source) / 'README.md'
+        companion = (archived_source if changed == 'source' else source) / 'README.md'
+        original = target.read_bytes()
+        assert companion.read_bytes() == original
         path_check = mod._s1_path
         seen = []
         chmods = []
+        injected = []
+        mutation_owner = mod if os.name == 'nt' else mod.os
+        mutation_name = '_prepare_native_file_disposal' if os.name == 'nt' else 'fchmod'
+        prepare = getattr(mutation_owner, mutation_name)
 
         def drift_on_collection(path, directory=False):
             result = path_check(path, directory)
-            if os.fspath(path) == str(source):
+            if Path(result) == source:
                 seen.append(path)
                 if len(seen) == 2:
                     # Second validation is the os.walk collection, after root admission.
                     target.chmod(0o600)
                     target.write_bytes(b'drift after candidate admission')
+                    injected.append(target)
             return result
+
+        def observe_disposal(*args, **kwargs):
+            chmods.append((args, kwargs))
+            return prepare(*args, **kwargs)
 
         with monkeypatch.context() as patch:
             patch.setattr(mod, '_s1_path', drift_on_collection)
-            if os.name == 'nt':
-                patch.setattr(mod, '_prepare_native_file_disposal', lambda *args: chmods.append(args))
-            else:
-                patch.setattr(mod.os, 'fchmod', lambda *args: chmods.append(args))
+            patch.setattr(mutation_owner, mutation_name, observe_disposal)
             with _raises(mod.HarvestError, match='WBS evidence differs'):
                 mod.thaw_verification_sources(str(repo), str(work), task.name, None, checkpoint)
-        assert len(seen) >= 2 and not chmods
+        assert injected == [target] and len(seen) >= 2 and not chmods
+        assert target.read_bytes() == b'drift after candidate admission'
+        assert companion.read_bytes() == original
+        assert work.exists() and source.exists() and archived_source.exists()
         assert not source.stat().st_mode & 0o200
+        assert not archived_source.stat().st_mode & 0o200

@@ -504,6 +504,7 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
 
     if os.name == 'nt':
         tmp_path = tmp_path / ('retained epoch history ' + 'n' * 24)
+        tmp_path.mkdir()
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch, preexisting_epoch=True)
     current = next(iter(migration.journals(pool.repo)))[1]
     prefix = current['archive_prefix']
@@ -513,6 +514,7 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
         from wiki_platform import safe_metadata_snapshot
         assert len(str(worktree / original_control).encode('utf-16-le')) // 2 > 260
         before = safe_metadata_snapshot(worktree / original_control, 16384)[0]
+        _git('config', '--local', 'core.longpaths', 'false', cwd=pool.repo)
     else:
         before = (worktree / original_control).read_bytes()
     result = pool.cli('finish', '--slug', 'a')
@@ -520,6 +522,7 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     if os.name == 'nt':
         from wiki_platform import safe_metadata_snapshot
+        assert _git('config', '--local', '--get', 'core.longpaths', cwd=pool.repo) == 'false'
         assert safe_metadata_snapshot(recovery / original_control, 16384)[0] == before
     else:
         assert (recovery / original_control).read_bytes() == before

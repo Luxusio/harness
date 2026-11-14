@@ -256,9 +256,19 @@ def test_symlinked_missing_state_parent_is_refused(tmp_path, monkeypatch):
     runtime = pool.repo / "doc/harness/runtime"
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
+    precious = elsewhere / "retained-note"
+    precious.write_bytes(b"keep the symlink target unchanged")
     create_symlink(runtime, elsewhere, target_is_directory=True)
-    with pytest.raises(ValueError, match="unsafe"):
+    binding = runtime.readlink()
+    identity = (runtime.lstat().st_dev, runtime.lstat().st_ino)
+    assert not pool.state.exists()
+    with pytest.raises(ValueError, match=r"unsafe|Windows path is not a regular, nonlinked disk object"):
         route(pool, spec)
+    assert not pool.state.exists()
+    assert runtime.is_symlink() and runtime.readlink() == binding
+    assert (runtime.lstat().st_dev, runtime.lstat().st_ino) == identity
+    assert list(elsewhere.iterdir()) == [precious]
+    assert precious.read_bytes() == b"keep the symlink target unchanged"
 
 
 def mcp_integration(tmp_path, monkeypatch):

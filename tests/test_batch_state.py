@@ -1542,9 +1542,12 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
     original_task = (directory / 'PLAN.md').read_bytes()
     prior_row = json.dumps({'key': 'main-existing', 'insight': 'prior'}) + '\n'
     lead_row = json.dumps({'key': 'lead-new', 'insight': 'new'}) + '\n'
-    _write(pool.repo / 'doc/harness/learnings.jsonl', prior_row)
+    destination_ledger = pool.repo / 'doc/harness/learnings.jsonl'
+    _write(destination_ledger, prior_row)
+    prior_bytes = destination_ledger.read_bytes()
     ledger = worktree / 'doc/harness/learnings.jsonl'
     _write(ledger, lead_row)
+    lead_bytes = ledger.read_bytes()
     def interrupted(repo, tree, name, result, *args, **kwargs):
         # Real Git successfully drops its registration; simulate the subset left
         # by an interrupted filesystem removal without editing Git metadata.
@@ -1552,7 +1555,7 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
         _write(worktree / 'a.txt', 'a\n')
         directory.mkdir(parents=True, exist_ok=True)
         (directory / 'PLAN.md').write_bytes(original_task)
-        _write(ledger, lead_row)
+        ledger.write_bytes(lead_bytes)
         directory.chmod(0o500)
         raise OSError('simulated partial removal')
     monkeypatch.setattr(batch_finish, '_cleanup', interrupted)
@@ -1594,7 +1597,7 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
         elif kind in ('unknown-file', 'symlink', 'fifo'): path.unlink()
         elif kind == 'modified': (worktree / 'a.txt').write_text('a\n')
         elif kind == 'exec-bit': (worktree / 'a.txt').chmod(0o644)
-        elif kind in ('missing-row', 'malformed-row'): ledger.write_text(lead_row)
+        elif kind in ('missing-row', 'malformed-row'): ledger.write_bytes(lead_bytes)
         elif kind == 'cache-link': (cache / 'linked.pyc').unlink()
         elif kind == 'cache-git': (cache / '.git').unlink()
         elif kind == 'cache-special': (cache / 'pipe').unlink()
@@ -1604,9 +1607,8 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
             (path / '__pycache__').rmdir()
             path.rmdir()
         else: (archive / 'PLAN.md').write_bytes(original_archive)
-    destination_ledger = pool.repo / 'doc/harness/learnings.jsonl'
     preserved_ledger = destination_ledger.read_bytes()
-    assert prior_row.encode() in preserved_ledger and lead_row.encode() in preserved_ledger
+    assert preserved_ledger == prior_bytes + lead_bytes
     pool.cli('recover', '--slug', 'a', '--worker-stopped')
     assert destination_ledger.read_bytes() == preserved_ledger
     assert not worktree.exists() and not _git('branch', '--list', branch, cwd=pool.repo)

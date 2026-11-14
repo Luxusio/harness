@@ -718,16 +718,32 @@ def test_owned_but_incomplete_clone_is_retained_without_retry_overwrite(tmp_path
             helper.prepare(main, work, value, persist)
     assert durable["modules"][0]["phase"] == "owned"
     assert len(clone_attempted) == 1
-    gitdir = Path(durable["modules"][0]["private_gitdir"])
+    command = clone_attempted[0]
+    gitdir = Path(command[command.index("--separate-git-dir") + 1])
+    clone_worktree = Path(command[-1])
+    recorded = Path(durable["modules"][0]["private_gitdir"])
+    if os.name == "nt":
+        assert gitdir == recorded.parent / "clone" / "git"
+        assert clone_worktree == recorded.parent / "clone" / "worktree"
+        assert not recorded.exists()
+    else:
+        assert gitdir == recorded and clone_worktree == work / paths[0]
+    assert gitdir.is_dir() and clone_worktree.is_dir()
     precious = gitdir / "incomplete-clone-note"
     precious.write_bytes(b"never overwrite this interrupted clone")
-    identity = gitdir.stat().st_ino
-    gitfile = (work / paths[0] / ".git").read_bytes()
-    with pytest.raises(helper.SubmoduleError):
-        helper.prepare(main, work, durable, lambda _: None)
-    assert gitdir.stat().st_ino == identity
+    identity = (gitdir.stat().st_dev, gitdir.stat().st_ino)
+    gitfile = (clone_worktree / ".git").read_bytes()
+    def refuse_clone_retry(command, *args, **kwargs):
+        assert not (Path(command[0]).name.lower() in {"git", "git.exe"} and "clone" in command), "incomplete clone must not be retried"
+        return original(command, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "run", refuse_clone_retry)
+        with pytest.raises(helper.SubmoduleError):
+            helper.prepare(main, work, durable, lambda _: None)
+    assert durable["modules"][0]["phase"] == "owned"
+    assert (gitdir.stat().st_dev, gitdir.stat().st_ino) == identity
     assert precious.read_bytes() == b"never overwrite this interrupted clone"
-    assert (work / paths[0] / ".git").read_bytes() == gitfile
+    assert (clone_worktree / ".git").read_bytes() == gitfile
 
 
 def test_removal_refuses_unknown_private_parent_sibling_without_discard(tmp_path, monkeypatch):

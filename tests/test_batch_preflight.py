@@ -698,8 +698,17 @@ def test_unreadable_directory_fails_closed(monkeypatch, tmp_path):
     assert scan["verdict"] == "refuse"
     assert [r for r in scan["refusals"] if "cannot scan" in r], scan["refusals"]
     assert scoped["verdict"] == "refuse"
-    assert scoped["scopes"] == []  # never guessed tracked-area
-    assert [r for r in scoped["refusals"] if "cannot classify scope" in r], scoped["refusals"]
+    assert [r for r in scoped["refusals"] if "cannot scan" in r], scoped["refusals"]
+    if scoped["scopes"]:
+        # Native may deny listing while permitting metadata queries beneath
+        # the directory. That known nested repository must still be excluded.
+        [scope] = scoped["scopes"]
+        assert (scope["path"], scope["class"], scope["owner"], scope["request"]) == (
+            "secret/hidden/important.txt", "inside-ignored-nested-repo", "secret/hidden", "a")
+        assert set(scoped["excluded_requests"]) == {"a"}
+        assert scoped["excluded_requests"]["a"]
+    else:
+        assert [r for r in scoped["refusals"] if "cannot classify scope" in r], scoped["refusals"]
 
 
 def _skip_as_root() -> None:

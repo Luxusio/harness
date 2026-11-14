@@ -564,13 +564,17 @@ def _s1_content(worktree, wbs_id, source_entries, manifest, repo, *, ordinary_al
     def unreadable(exc):
         raise HarvestError('cannot inspect every worktree entry') from exc
     count = 0
-    for current, dirs, files in os.walk(worktree, followlinks=False, onerror=unreadable):
-        relroot = os.path.relpath(current, worktree).replace(os.sep, "/")
+    walk_root = worktree
+    if os.name == 'nt':
+        from wiki_platform import _native
+        walk_root = _native._win32_path(worktree)
+    for current, dirs, files in os.walk(walk_root, followlinks=False, onerror=unreadable):
+        relroot = os.path.relpath(current, walk_root).replace(os.sep, "/")
         relroot = '' if relroot == '.' else relroot
         keep = []
         for name in dirs:
             rel = '/'.join(filter(None, (relroot, name)))
-            full = os.path.join(worktree, rel)
+            full = os.path.join(current, name)
             if historical_link(rel):
                 continue  # Prove lexical link bytes only; never enter its target.
             _s1_require(name != '.git', 'unexpected nested repository')

@@ -159,7 +159,10 @@ def _git(cwd: str, *args: str) -> subprocess.CompletedProcess:
     env["LC_ALL"] = "C"
     # Native worktree removal runs its own status check; protect late-arriving
     # untracked files even when repository config normally hides them.
-    command = ["git", "-c", "core.fsmonitor=false", "-c", "status.showUntrackedFiles=all", *args]
+    # Git for Windows opts into long paths per command; disposal may include
+    # already-preserved deep metadata without changing the repository config.
+    longpaths = ["-c", "core.longpaths=true"] if os.name == "nt" and args[:2] == ("worktree", "remove") else []
+    command = ["git", "-c", "core.fsmonitor=false", "-c", "status.showUntrackedFiles=all", *longpaths, *args]
     try:
         command[0] = _git_executable(cwd, env)
         return subprocess.run(
