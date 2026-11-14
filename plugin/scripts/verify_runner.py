@@ -28,6 +28,9 @@ VERSION = 2
 MAX_FAILURES = 128
 MAX_FAILURE_LOG_BYTES = 32 * 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
+_SCOPED_CONTEXT_CODE = "import verification_target as vt\nprint(json.dumps(vt._context(value, root)))"
+_SCOPED_EXECUTE_CODE = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
+_SCOPED_REQUEST_BYTES = 2 * 1024 * 1024
 
 
 _NATIVE_EXECUTION_OWNER = False
@@ -68,8 +71,10 @@ def _native_run_jobs(jobs, repo_root, **options):
     raw = (json.dumps(dict(jobs=jobs, repo_root=str(repo_root), options=options)) + "\n").encode('utf-8')
     if len(raw) > MAX_RESULT_BYTES:
         raise ValueError('Native execution request exceeds byte limit')
+    from native_cli import owned_python_argv
+    argv = owned_python_argv(sys.executable, Path(__file__).absolute(), ['--native-job-owner'])
     try:
-        process = subprocess.Popen([sys.executable, '-E', '-s', '-B', str(Path(__file__).absolute()), '--native-job-owner'],
+        process = subprocess.Popen(argv,
                                    cwd=str(repo_root), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, close_fds=True,
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
@@ -322,15 +327,22 @@ def _scoped_call(code, value, root, env, held=(), *, cancelled=None):
         raise ValueError("verification execution cancelled")
     if os.name == "nt":
         from wiki_platform import execute_bounded
+        from native_cli import owned_python_argv
         # The short-lived execution owner keeps its actual LockFileEx leases
         # until this outer Job and nested commands are fully reaped. Its parent
         # lifeline cancels execution without pretending inherited handles keep
         # a terminated process's byte-range locks alive.
-        prefix = "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);value=json.loads(sys.argv[2]);root=Path(sys.argv[3]);import wbs\n"
-        argv = [sys.executable, "-I", "-B", "-c", prefix + code,
-                str(Path(__file__).resolve().parent), json.dumps(value), str(root)]
+        operation = {_SCOPED_CONTEXT_CODE: '--native-scoped-context',
+                     _SCOPED_EXECUTE_CODE: '--native-scoped-execute'}.get(code)
+        if operation is None:
+            raise ValueError('unsupported Native scoped operation')
+        raw = json.dumps(dict(value=value, root=str(root))).encode('utf-8')
+        if len(raw) > _SCOPED_REQUEST_BYTES:
+            raise ValueError('Native scoped request exceeds byte limit')
+        argv = owned_python_argv(sys.executable, Path(__file__).absolute(), [operation])
         result = execute_bounded(argv, cwd=root, env=env, timeout=max(150, (value.get("timeout", 0) if isinstance(value, dict) else 0) + 30),
-                                 limit=MAX_RESULT_BYTES, cancelled=cancelled.is_set if cancelled is not None else None)
+                                 limit=MAX_RESULT_BYTES, cancelled=cancelled.is_set if cancelled is not None else None,
+                                 input_bytes=raw)
         if result["returncode"] or result["error"]:
             raise ValueError("scoped execution unavailable: " + (result["error"] or result["output"].decode(errors="replace")[-4000:]))
         return json.loads(result["output"])
@@ -359,6 +371,39 @@ def _scoped_call(code, value, root, env, held=(), *, cancelled=None):
         for fd in (reader, writer):
             if fd is not None:
                 os.close(fd)
+
+
+def _native_scoped_main(operation):
+    """Run only the two typed trusted verification operations in this file."""
+    if os.name != 'nt' or sys.argv[1:] != [operation] or operation not in {
+            '--native-scoped-context', '--native-scoped-execute'}:
+        raise ValueError('unsupported Native scoped invocation')
+    raw = sys.stdin.buffer.read(_SCOPED_REQUEST_BYTES + 1)
+    if len(raw) > _SCOPED_REQUEST_BYTES:
+        raise ValueError('Native scoped request exceeds byte limit')
+    request = json.loads(raw)
+    if (not isinstance(request, dict) or set(request) != {'root', 'value'}
+            or not isinstance(request['root'], str) or not os.path.isabs(request['root'])
+            or os.path.normcase(os.path.abspath(request['root'])) != os.path.normcase(os.getcwd())
+            or not isinstance(request['value'], dict)):
+        raise ValueError('invalid Native scoped request')
+    root, value = Path(request['root']), request['value']
+    if operation == '--native-scoped-context':
+        import verification_target as vt
+        result = vt._context(vt._spec(value), root)
+    else:
+        if (set(value) != {'argv', 'timeout', 'log_path'}
+                or not isinstance(value['argv'], list) or not 0 < len(value['argv']) <= 128
+                or any(not isinstance(arg, str) or not arg or '\0' in arg for arg in value['argv'])
+                or type(value['timeout']) not in (int, float) or not 0 < value['timeout'] <= 3600
+                or not isinstance(value['log_path'], str) or not value['log_path'] or '\0' in value['log_path']):
+            raise ValueError('invalid Native scoped execution')
+        from wbs import _execute
+        try:
+            result = _execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])
+        except OSError as exc:
+            result = dict(returncode=None, error=str(exc), start_failed=True, output='')
+    print(json.dumps(result))
 
 
 def _job_spec(value, root):
@@ -680,7 +725,7 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                 argv = [executable, *job["argv"][1:]]
                 env = {key: os.environ[key] for key in spec["environment"] if key in os.environ}
                 def observe_context():
-                    observed = scoped_call("import verification_target as vt\nprint(json.dumps(vt._context(value, root)))", spec, root, env, [*held, *result_lease])
+                    observed = scoped_call(_SCOPED_CONTEXT_CODE, spec, root, env, [*held, *result_lease])
                     if not os.path.isabs(command) and Path(executable).is_relative_to(root) and executable not in job["spec"]["toolchains"]:
                         # Resolve absolute paths to execute, but identify a copied
                         # local command by its declared location and tool bytes.
@@ -748,7 +793,7 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                     records[job["job_id"]] = pending_record
                     publish()
                 try:
-                    code = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
+                    code = _SCOPED_EXECUTE_CODE
                     result = scoped_call(code, dict(argv=argv, timeout=timeout, log_path=str(log_paths[job["job_id"]]["attempt"])), root, env, [*held, *result_lease])
                 except OSError as exc:
                     record.update(state="start_failed", error=str(exc))
@@ -998,5 +1043,7 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     if os.name == 'nt' and sys.argv[1:] == ['--native-job-owner']:
         _native_owner_main()
+    elif os.name == 'nt' and sys.argv[1:] in (['--native-scoped-context'], ['--native-scoped-execute']):
+        _native_scoped_main(sys.argv[1])
     else:
         sys.exit(main())

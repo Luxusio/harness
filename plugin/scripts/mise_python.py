@@ -50,7 +50,14 @@ def _context():
     home = _absolute(str(Path.home()))
     if not home.is_dir():
         raise ValueError()
-    mise = shutil.which("mise", path=env.get("PATH", os.defpath))
+    if os.name == "nt":
+        from wiki_platform import native_executable
+        try:
+            mise = native_executable("mise", cwd=home, env=env)
+        except (OSError, ValueError):
+            mise = None
+    else:
+        mise = shutil.which("mise", path=env.get("PATH", os.defpath))
     if not mise:
         raise MisePythonError("Mise is required; install mise and a managed Python 3.12 or later.")
     mise = _absolute(mise)

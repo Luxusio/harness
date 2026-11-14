@@ -68,9 +68,10 @@ def _native_operation(operation, arguments, budget_seconds, fallback, *, status_
             status_out.update(status='failed', reason='native operation request exceeds byte limit')
         return fallback
     try:
-        result = execute_bounded([sys.executable, '-E', '-s', '-B', str(Path(__file__).absolute()),
-                                  '--native-operation', operation],
-                                 cwd=Path(__file__).absolute().parent, env=dict(os.environ),
+        from native_cli import owned_python_argv
+        argv = owned_python_argv(sys.executable, Path(__file__).absolute(), ['--native-operation', operation])
+        result = execute_bounded(argv,
+                                 cwd=Path.cwd(), env=dict(os.environ),
                                  timeout=budget, limit=256 * 1024, input_bytes=raw)
         if result['error'] or result['returncode'] != 0:
             raise RuntimeError('native operation interrupted; publication outcome unknown')

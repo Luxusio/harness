@@ -1031,8 +1031,9 @@ def _join_input(writer, state):
         raise OSError("Native stdin writer cleanup could not be confirmed")
 
 
-def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=None, input_bytes=None):
-    """Spawn suspended, assign a kill-on-close Job, then resume and bound stdout.
+def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=None, input_bytes=None,
+             capture_stderr=False):
+    """Spawn suspended, assign a kill-on-close Job, then bound captured bytes.
 
     The explicit inherited-handle list keeps unrelated private process handles
     out of the child. A Job is closed even after normal leader exit, so mise
@@ -1043,6 +1044,8 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
         raise ValueError("Invalid bounded process request")
     if input_bytes is not None and (not isinstance(input_bytes, bytes) or len(input_bytes) > 2 * 1024 * 1024):
         raise ValueError("Native stdin must be at most 2MiB of bytes")
+    if type(capture_stderr) is not bool or capture_stderr and merge_stderr:
+        raise ValueError("Separate stderr capture cannot be combined with merged stderr")
     executable = shutil.which(argv[0], path=env.get("PATH"))
     if not executable or Path(executable).suffix.lower() not in (".exe", ".com"):
         raise ValueError("A native Windows executable is required; shell scripts are unsupported")
@@ -1050,11 +1053,15 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
            for k, v in env.items()):
         raise ValueError("Invalid process environment")
     if cancelled is not None and cancelled():
-        return dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+        result = dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+        if capture_stderr:
+            result["stderr"] = b""
+        return result
     environment = C.create_unicode_buffer("\x00".join(f"{k}={v}" for k, v in
                                 sorted(env.items(), key=lambda item: item[0].upper())) + "\x00\x00")
     command = C.create_unicode_buffer(subprocess.list2cmdline([executable, *argv[1:]]))
     read, write, input_read, input_write = HANDLE(), HANDLE(), HANDLE(), HANDLE()
+    error_read, error_write = HANDLE(), HANDLE()
     null, job, attribute_list = None, None, None
     process = PROCESS_INFORMATION()
     inherited = SECURITY_ATTRIBUTES(C.sizeof(SECURITY_ATTRIBUTES), None, True)
@@ -1063,6 +1070,9 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
     try:
         _check(_CreatePipe(C.byref(read), C.byref(write), C.byref(inherited), 65536))
         _check(_SetHandleInformation(read, 1, 0))
+        if capture_stderr:
+            _check(_CreatePipe(C.byref(error_read), C.byref(error_write), C.byref(inherited), 65536))
+            _check(_SetHandleInformation(error_read, 1, 0))
         if input_bytes is not None:
             _check(_CreatePipe(C.byref(input_read), C.byref(input_write), C.byref(inherited), 65536))
             _check(_SetHandleInformation(input_write, 1, 0))
@@ -1085,7 +1095,7 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
         _check(_InitializeAttributes(attribute_list, 1, 0, C.byref(size)))
         attributes_initialized = True
         stdin = input_read.value if input_bytes is not None else null
-        stderr = write.value if merge_stderr else null
+        stderr = error_write.value if capture_stderr else write.value if merge_stderr else null
         values = list(dict.fromkeys((write.value, stdin, stderr)))
         handles = (HANDLE * len(values))(*values)
         _check(_UpdateAttribute(attribute_list, 0, 0x20002, handles, C.sizeof(handles), None, None))
@@ -1107,6 +1117,8 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
         process.thread = None
         _close(write.value)
         write = HANDLE()
+        _close(error_write.value)
+        error_write = HANDLE()
         _close(null)
         null = None
         _close(input_read.value)
@@ -1116,25 +1128,32 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
                                       name="harness-native-stdin", daemon=False)
             writer.start()
             writer_started = True
-        output = bytearray()
-        deadline, exited, stdout_open = time.monotonic() + timeout, False, True
+        output, error_output = bytearray(), bytearray()
+        streams = [(read, output)]
+        if capture_stderr:
+            streams.append((error_read, error_output))
+        deadline, exited = time.monotonic() + timeout, False
         failure = None
-        while stdout_open or not exited:
-            available = DWORD()
-            if stdout_open and not _PeekNamedPipe(read, None, 0, None, C.byref(available), None):
-                error = C.get_last_error()
-                if error == 109:
-                    stdout_open = False
-                else:
+        while streams or not exited:
+            ready = False
+            for stream, target in tuple(streams):
+                available = DWORD()
+                if not _PeekNamedPipe(stream, None, 0, None, C.byref(available), None):
+                    error = C.get_last_error()
+                    if error == 109:
+                        streams.remove((stream, target))
+                        continue
                     raise _error(error)
-            if available.value:
-                size = min(65536, available.value, limit + 1 - len(output))
-                buffer, count = C.create_string_buffer(size), DWORD()
-                _check(_ReadFile(read, buffer, size, C.byref(count), None))
-                remaining = limit - len(output)
-                output.extend(buffer.raw[:min(count.value, remaining)])
-                if count.value > remaining:
-                    failure = "output limit exceeded"
+                if available.value:
+                    ready = True
+                    remaining = limit - len(output) - len(error_output)
+                    size = min(65536, available.value, remaining + 1)
+                    buffer, count = C.create_string_buffer(size), DWORD()
+                    _check(_ReadFile(stream, buffer, size, C.byref(count), None))
+                    target.extend(buffer.raw[:min(count.value, remaining)])
+                    if count.value > remaining:
+                        failure = "output limit exceeded"
+                        break
             if not exited:
                 wait = _WaitForSingleObject(process.process, 0)
                 if wait == 0xFFFFFFFF:
@@ -1154,7 +1173,7 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
                 if _WaitForSingleObject(process.process, 5000) != 0:
                     raise OSError("Native process termination could not be confirmed")
                 break
-            if not available.value:
+            if not ready:
                 time.sleep(0.005)
         code = DWORD()
         _check(_GetExitCodeProcess(process.process, C.byref(code)))
@@ -1163,7 +1182,10 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
             writer_joined = True
             if input_state.get("error") is not None and failure is None:
                 failure = "stdin delivery failed"
-        return dict(returncode=code.value, error=failure, output=bytes(output))
+        result = dict(returncode=code.value, error=failure, output=bytes(output))
+        if capture_stderr:
+            result["stderr"] = bytes(error_output)
+        return result
     finally:
         try:
             if assigned and not stopped:
@@ -1186,19 +1208,26 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
                 _close(process.process)
                 _close(read.value)
                 _close(write.value)
+                _close(error_read.value)
+                _close(error_write.value)
                 _close(null)
                 if attributes_initialized:
                     _DeleteAttributes(attribute_list)
 
 
-def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576):
-    """Keep the private helper's stdout-only and exception-based protocol."""
-    result = _process(argv, cwd=cwd, env=env, timeout=timeout, limit=limit)
+def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, capture_stderr=False, input_bytes=None):
+    """Capture optional stderr with the private helper's exception protocol."""
+    result = _process(argv, cwd=cwd, env=env, timeout=timeout, limit=limit,
+                      capture_stderr=capture_stderr, input_bytes=input_bytes)
     if result["error"] == "timeout":
         raise subprocess.TimeoutExpired(argv, timeout)
     if result["error"] == "output limit exceeded":
         raise ValueError("Process stdout exceeds the supported byte limit")
-    return subprocess.CompletedProcess(argv, result["returncode"], result["output"], b"")
+    if result["error"]:
+        error = subprocess.SubprocessError("Native private helper failed: " + result["error"])
+        error.stdout, error.stderr = result["output"], result.get("stderr", b"")
+        raise error
+    return subprocess.CompletedProcess(argv, result["returncode"], result["output"], result.get("stderr", b""))
 
 
 def native_executable(command, *, cwd, env):
@@ -1230,16 +1259,22 @@ def native_executable(command, *, cwd, env):
     return executable
 
 
-def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
+def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None, capture_stderr=False):
     """Run one native verification command, retaining bounded partial logs."""
+    if type(capture_stderr) is not bool:
+        raise ValueError("Separate stderr capture must be a boolean")
     if cancelled is not None and not callable(cancelled):
         raise ValueError("Cancellation must be a callback")
     if cancelled is not None and cancelled():
-        return dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+        result = dict(returncode=None, error="parent execution ended", output=b"", start_failed=True)
+        if capture_stderr:
+            result["stderr"] = b""
+        return result
     env = dict(os.environ) if env is None else env
     if not isinstance(argv, (list, tuple)) or not argv or any(not isinstance(a, str) or "\x00" in a for a in argv):
         raise ValueError("Invalid verification command")
     executable = native_executable(argv[0], cwd=cwd, env=env)
     with trusted_source_directory(cwd):
         return _process([executable, *argv[1:]], cwd=cwd, env=env, timeout=timeout,
-                        limit=limit, merge_stderr=True, cancelled=cancelled, input_bytes=input_bytes)
+                        limit=limit, merge_stderr=not capture_stderr, cancelled=cancelled,
+                        input_bytes=input_bytes, capture_stderr=capture_stderr)

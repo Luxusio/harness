@@ -1317,11 +1317,12 @@ def test_native_scoped_verification_cancellation_reaps_nested_job(private):
 
     cancellation = threading.Thread(target=cancel_after_spawn)
     cancellation.start()
-    code = "result=wbs._execute(value, str(root), 20); print(json.dumps(result))"
     try:
         with pytest.raises(ValueError, match="cancel|scoped execution"):
-            verify_runner._scoped_call(code, [sys.executable, "-B", "-c", script],
-                                       private, _environment(), cancelled=cancelled)
+            value = dict(argv=[sys.executable, "-B", "-c", script], timeout=20,
+                         log_path=str(private / "scoped execution.log"))
+            verify_runner._scoped_call(verify_runner._SCOPED_EXECUTE_CODE, value,
+                                      private, _environment(), cancelled=cancelled)
         assert ready.exists(), "scoped command never reached the cancellation boundary"
         assert time.monotonic() - started < 12
         _dead(int(pidfile.read_text()))

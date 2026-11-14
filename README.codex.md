@@ -31,6 +31,11 @@ codex exec "list harness mcp tools" < /dev/null
 
 If step 2 fails, re-run with `python3 install.py --codex-only --force`. The installer copies `plugin/` plus the Codex plugin manifest tree into `~/.codex/harness/`, writes `.agents/plugins/marketplace.json`, writes plugin-local `hooks.json`, then writes only plugin enablement and MCP registration into `~/.codex/config.toml`.
 
+On native Windows, run `python install.py --codex-only` from PowerShell with
+mise and the native Codex CLI on PATH. Bash and WSL are not required. The
+installer generates Windows hook commands and trusts their effective command
+identity; a running MCP server still needs a new session to load updated code.
+
 Installed cache versions combine an ordered generation with the payload hash.
 Unchanged reruns reuse the current version; changed payloads receive a higher
 generation while prior session paths remain present. The installer verifies
@@ -116,4 +121,8 @@ codex plugin marketplace remove harness
 # OR manually remove [plugins."harness@harness"] and [mcp_servers.harness] from ~/.codex/config.toml
 ```
 
-The Codex runtime copy lives under `~/.codex/harness/`. `plugin-codex/` files in your repo can be deleted after install; Codex executes MCP and hooks from `~/.codex/harness/plugin`. Claude Code is unaffected.
+The Codex mirror lives under `~/.codex/harness/plugins/harness/`. Sessions use
+their selected version under `~/.codex/plugins/cache/harness/harness/`;
+installation preserves those earlier version directories. The source checkout
+is not a runtime dependency. Claude Code is unaffected by removing the Codex
+registration.

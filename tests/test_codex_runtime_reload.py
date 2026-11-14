@@ -18,7 +18,7 @@ import sys
 import tempfile
 import threading
 from types import SimpleNamespace
-from unittest import TestCase
+from unittest import TestCase, skipUnless
 from unittest import mock
 
 
@@ -237,6 +237,29 @@ def test_discovery_refreshes_only_reported_native_socket(tmp_path, monkeypatch):
     assert not restart_required
     assert calls == [(["codex", "app-server", "daemon", "version"], False)]
     assert requests[-1]["params"] == {"edits": [], "reloadUserConfig": True}
+
+
+@skipUnless(os.name == "nt", "requires actual Native branch; discovery reply is modeled")
+def test_native_running_daemon_discovery_defers_hooks_without_unix_reload(tmp_path, monkeypatch):
+    """A protocol unit fixture, not a claim about a live Windows daemon."""
+    module = _installer()
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    config = tmp_path / "config.toml"
+    original = b"# preserve unrelated installed configuration\n"
+    config.write_bytes(original)
+    discovery = dict(status="running", socketPath=str(tmp_path / "app-server-control/control.sock"))
+    with (
+        mock.patch.object(module, "_run", return_value=(0, json.dumps(discovery), "")) as discover,
+        mock.patch.object(module, "_reload_codex_daemon_hooks",
+                          side_effect=AssertionError("Native discovery must not enter Unix peer RPC")) as unix_reload,
+    ):
+        ok, detail, restart_required = module._reload_codex_runtime(str(config))
+    assert ok and restart_required, detail
+    assert "installed hooks will load in a new session" in detail
+    assert "not refreshed" in detail
+    discover.assert_called_once_with(["codex", "app-server", "daemon", "version"], False)
+    unix_reload.assert_not_called()
+    assert config.read_bytes() == original
 
 
 def test_discovery_rejects_unknown_or_malformed_native_status(monkeypatch):

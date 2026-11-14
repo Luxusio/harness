@@ -55,6 +55,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from contextvars import ContextVar
+from contextlib import contextmanager
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -73,6 +74,7 @@ DEFAULT_CLAUDE_INSTALL_ROOT = Path.home() / ".claude" / "harness-dev"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 from mise_python import select_python, MisePythonError
+from native_cli import host_command, owned_python_argv
 
 
 def _python_cmd() -> str:
@@ -118,6 +120,107 @@ PAYLOAD_ERROR = "ERROR"
 PAYLOAD_MAX_ENTRIES = 100_000
 PAYLOAD_MAX_BYTES = 256 * 1024 * 1024
 _VOLATILE_DIR_NAMES = {"__pycache__", ".pytest_cache"}
+
+
+def _io_path(path: Path) -> str:
+    """Use extended Win32 paths only at Python's filesystem I/O boundary."""
+    value = os.path.abspath(path)
+    if os.name != "nt":
+        return value
+    if value.startswith(("\\\\?\\", "\\\\.\\")) or ".." in Path(path).parts:
+        raise ValueError("Ordinary absolute installer paths are required")
+    return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+
+
+def _lexists(path: Path) -> bool:
+    return os.path.lexists(_io_path(path))
+
+
+def _is_dir(path: Path) -> bool:
+    return os.path.isdir(_io_path(path))
+
+
+def _is_file(path: Path) -> bool:
+    return os.path.isfile(_io_path(path))
+
+
+def _owned_directory(path: Path) -> None:
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(path).absolute())
+    else:
+        path = Path(path)
+        try:
+            try:
+                path.mkdir(mode=0o755)
+            except FileNotFoundError:
+                _owned_directory(path.parent)
+                path.mkdir(mode=0o755)
+        except FileExistsError:
+            if not stat.S_ISDIR(path.lstat().st_mode):
+                raise
+
+
+def _read_text(path: Path) -> str:
+    if os.name == "nt":
+        from wiki_platform import safe_metadata_snapshot
+        return safe_metadata_snapshot(Path(path).absolute(), PAYLOAD_MAX_BYTES)[0].decode("utf-8")
+    return Path(path).read_text(encoding="utf-8")
+
+
+def _source_bytes(path: Path) -> bytes:
+    if os.name == "nt":
+        from wiki_platform import source_snapshot
+        return source_snapshot(Path(path).absolute(), PAYLOAD_MAX_BYTES)[0]
+    return Path(path).read_bytes()
+
+
+def _chmod_payload(path: Path) -> None:
+    if os.name != "nt":
+        os.chmod(path, 0o644)
+
+
+def _staging_directory(parent: Path, prefix: str) -> Path:
+    _owned_directory(parent)
+    staged = Path(tempfile.mkdtemp(dir=_io_path(parent), prefix=prefix))
+    if os.name == "nt":
+        # Do not expose extended Win32 spellings in generated host configuration.
+        staged = parent / staged.name
+        _owned_directory(staged)
+    return staged
+
+
+def _write_text(path: Path, text: str) -> None:
+    if os.name == "nt":
+        from wiki_platform import atomic_write
+        atomic_write(Path(path).absolute(), text.encode("utf-8"))
+    else:
+        Path(path).write_text(text, encoding="utf-8")
+
+
+def _copy_file(source: Path, destination: Path) -> None:
+    if os.name == "nt":
+        from wiki_platform import atomic_write, source_snapshot
+        data, _ = source_snapshot(Path(source).absolute(), PAYLOAD_MAX_BYTES)
+        atomic_write(Path(destination).absolute(), data)
+    else:
+        shutil.copyfile(source, destination)
+
+
+def _remove_owned_tree(root: Path) -> None:
+    if os.name != "nt":
+        shutil.rmtree(root)
+        return
+    from wiki_platform import metadata_tree_inventory, metadata_remove, metadata_remove_empty
+    root = Path(root).absolute()
+    rows = metadata_tree_inventory(root, max_entries=PAYLOAD_MAX_ENTRIES, max_bytes=PAYLOAD_MAX_BYTES)
+    for relative, item in rows.items():
+        if item["kind"] == "file":
+            metadata_remove(root / relative, expected_sha256=item["sha256"], max_bytes=PAYLOAD_MAX_BYTES)
+    for relative in sorted((name for name, item in rows.items() if item["kind"] == "dir"),
+                           key=lambda value: value.count("/"), reverse=True):
+        metadata_remove_empty(root / relative)
+    metadata_remove_empty(root)
 
 
 def _trusted_inventory_directory(fd: int) -> bool:
@@ -303,6 +406,29 @@ def _open_inventory_root(root: Path, *, repairable_root: Path | None = None) -> 
 def _tree_inventory(root: Path) -> tuple[str, dict[str, tuple[str, int, str]], str]:
     """Return a bounded no-follow inventory for one installer-owned tree."""
     root = Path(root)
+    if os.name == "nt":
+        from wiki_platform import metadata_tree_inventory, trusted_metadata_directory
+        try:
+            if not _lexists(root):
+                parent = root.absolute().parent
+                while not _lexists(parent):
+                    parent = parent.parent
+                with trusted_metadata_directory(parent):
+                    return PAYLOAD_STALE, {}, "target is missing"
+            rows = metadata_tree_inventory(root.absolute(), max_entries=PAYLOAD_MAX_ENTRIES,
+                                           max_bytes=PAYLOAD_MAX_BYTES, allow_control_lock=True)
+            inventory = {}
+            for name, item in rows.items():
+                parts = name.split("/")
+                if any(part in _VOLATILE_DIR_NAMES for part in parts) or name.endswith(".pyc"):
+                    continue
+                # ACLs were checked by the native inventory. This field only
+                # compares readonly provenance; it is not a permission check.
+                inventory[name + ("/" if item["kind"] == "dir" else "")] = (
+                    item["kind"], 0 if item["kind"] == "dir" else int(item["readonly"]), item["sha256"])
+            return PAYLOAD_SYNCHRONIZED, inventory, ""
+        except (OSError, ValueError) as exc:
+            return PAYLOAD_ERROR, {}, str(exc)
     if not os.path.lexists(root):
         absolute = Path(os.path.abspath(root))
         current_fd = -1
@@ -536,9 +662,9 @@ def _compare_payload_trees(expected: Path, actual: Path) -> tuple[str, str]:
 
 
 def _read_codex_pin() -> str | None:
-    if not CODEX_VERSION_PIN_FILE.is_file():
+    if not _is_file(CODEX_VERSION_PIN_FILE):
         return None
-    for line in CODEX_VERSION_PIN_FILE.read_text().splitlines():
+    for line in _source_bytes(CODEX_VERSION_PIN_FILE).decode("utf-8").splitlines():
         s = line.strip()
         if s and not s.startswith("#"):
             return s
@@ -555,23 +681,42 @@ def _version_tuple(v: str) -> tuple[int, ...]:
     return tuple(out)
 
 
+def _host_available(runtime: str) -> bool:
+    if os.name != "nt":
+        return bool(shutil.which(runtime))
+    try:
+        host_command(runtime)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _run(cmd: list[str], dry: bool) -> tuple[int, str, str]:
     if dry:
         return 0, f"[dry-run] {' '.join(cmd)}", ""
     env = None
     if cmd and cmd[0] == "codex" and _CODEX_RUNTIME_HOME.get() is not None:
         env = dict(os.environ, CODEX_HOME=str(_CODEX_RUNTIME_HOME.get()))
+    if os.name == "nt" and cmd and cmd[0] in {"codex", "claude"}:
+        cmd = [*host_command(cmd[0], env=env), *cmd[1:]]
+    if os.name == "nt":
+        from wiki_platform import run_bounded
+        result = run_bounded(cmd, cwd=Path.cwd(), env=dict(os.environ) if env is None else env,
+                             timeout=120, limit=4 * 1024 * 1024, capture_stderr=True)
+        return result.returncode, result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace")
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
     return p.returncode, p.stdout, p.stderr
 
 
 def _mcp_block(plugin_root: str) -> str:
     quote = lambda value: json.dumps(str(value), ensure_ascii=False)
+    arguments = (["-E", "-s", "-B", plugin_root + "/mcp/harness_server.py"] if os.name != "nt" else
+                 owned_python_argv(_python_cmd(), Path(plugin_root) / "mcp/harness_server.py")[1:])
     return (
         "# Registers the harness MCP server with Codex. Same protocol both runtimes consume.\n"
         "[mcp_servers.harness]\n"
         f'command = {quote(_python_cmd())}\n'
-        f'args = ["-E", "-s", "-B", {quote(plugin_root + "/mcp/harness_server.py")}]\n'
+        f'args = {json.dumps(arguments, ensure_ascii=False)}\n'
         # PYTHONDONTWRITEBYTECODE is load-bearing, not tidiness: this server
         # imports `_lib` and `codex_hook_registration` from the installed scripts tree, which is
         # how four of the six caches were poisoned on 2026-09-16. This TOML
@@ -599,7 +744,7 @@ def _codex_marketplace_block() -> str:
         f"[marketplaces.{CODEX_PLUGIN_MARKETPLACE}]\n"
         f'last_updated = "{_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}"\n'
         'source_type = "local"\n'
-        f'source = "{_codex_install_root()}"\n'
+        f'source = {json.dumps(str(_codex_install_root()), ensure_ascii=False)}\n'
     )
 
 
@@ -624,8 +769,8 @@ def emit_codex_config(plugin_root: str, config_path: str | Path | None = None) -
 
 
 def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool) -> tuple[bool, str]:
-    if config_path.exists():
-        existing = config_path.read_text()
+    if _lexists(config_path):
+        existing = _read_text(config_path)
         if (
             ("[mcp_servers.harness]" in existing or f'[plugins."{CODEX_PLUGIN_ID}"]' in existing)
             and not force_merge
@@ -640,7 +785,7 @@ def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool)
             )
         timestamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = config_path.with_suffix(config_path.suffix + f".bak.{timestamp}")
-        shutil.copy2(config_path, backup)
+        _copy_file(config_path, backup) if os.name == "nt" else shutil.copy2(config_path, backup)
         if force_merge:
             stripped = _dedupe_codex_toml_tables(
                 _strip_codex_harness_sections(existing),
@@ -656,10 +801,11 @@ def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool)
             _dedupe_codex_marketplace_block(new_content),
             ("[mcp_servers.",),
         )
-        config_path.write_text(new_content)
+        _owned_directory(config_path.parent)
+        _write_text(config_path, new_content)
         return True, f"Merged into {config_path}; backup at {backup}"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(snippet)
+    _owned_directory(config_path.parent)
+    _write_text(config_path, snippet)
     return True, f"Wrote fresh {config_path}"
 
 
@@ -753,7 +899,7 @@ def emit_and_install_codex_config(
 ) -> dict:
     cfg = Path(config_path).expanduser() if config_path else _codex_home_for_config(None) / "config.toml"
     plugin_path = Path(plugin_root).resolve()
-    if not plugin_path.is_dir():
+    if not _is_dir(plugin_path):
         return {
             "ok": False,
             "message": f"plugin root not a directory: {plugin_path}",
@@ -763,14 +909,15 @@ def emit_and_install_codex_config(
             "blocks_added": [],
         }
     snippet = emit_codex_config(str(plugin_path), cfg)
-    pre_existing = cfg.exists() and (
-        "[mcp_servers.harness]" in cfg.read_text()
-        or f'[plugins."{CODEX_PLUGIN_ID}"]' in cfg.read_text()
+    pre_existing = _lexists(cfg) and (
+        "[mcp_servers.harness]" in _read_text(cfg)
+        or f'[plugins."{CODEX_PLUGIN_ID}"]' in _read_text(cfg)
     )
     ok, message = _do_codex_config_install(snippet, cfg, force)
     backup = None
-    if ok and cfg.exists() and pre_existing:
-        candidates = sorted(cfg.parent.glob(f"{cfg.name}.bak.*"))
+    if ok and _lexists(cfg) and pre_existing:
+        candidates = sorted(cfg.parent / name for name in os.listdir(_io_path(cfg.parent))
+                            if name.startswith(cfg.name + ".bak."))
         if candidates:
             backup = str(candidates[-1])
     blocks = [
@@ -785,6 +932,39 @@ def emit_and_install_codex_config(
         "backup_path": backup,
         "blocks_added": blocks if ok else [],
     }
+
+
+def _real_user_home() -> Path:
+    """OS profile identity, independent of HOME/USERPROFILE test overrides."""
+    if os.name != "nt":
+        import pwd
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    from ctypes import wintypes as W
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    profiles = ctypes.WinDLL("userenv", use_last_error=True)
+    kernel.GetCurrentProcess.restype = W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    security.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, ctypes.POINTER(W.HANDLE)]
+    security.OpenProcessToken.restype = W.BOOL
+    profiles.GetUserProfileDirectoryW.argtypes = [W.HANDLE, W.LPWSTR, ctypes.POINTER(W.DWORD)]
+    profiles.GetUserProfileDirectoryW.restype = W.BOOL
+    token, size = W.HANDLE(), W.DWORD()
+    if not security.OpenProcessToken(kernel.GetCurrentProcess(), 8, ctypes.byref(token)):
+        raise OSError("Windows profile identity unavailable")
+    try:
+        profiles.GetUserProfileDirectoryW(token, None, ctypes.byref(size))
+        if not 0 < size.value <= 32768:
+            raise OSError("Windows profile identity unavailable")
+        value = ctypes.create_unicode_buffer(size.value)
+        if not profiles.GetUserProfileDirectoryW(token, value, ctypes.byref(size)):
+            raise OSError("Windows profile identity unavailable")
+        home = Path(value.value)
+        if not home.is_absolute():
+            raise OSError("Windows profile identity unavailable")
+        return home
+    finally:
+        kernel.CloseHandle(token)
 
 
 def _reject_real_install_root_under_test(path: Path) -> None:
@@ -807,10 +987,10 @@ def _reject_real_install_root_under_test(path: Path) -> None:
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         return
     try:
-        import pwd
-
-        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        home = _real_user_home()
     except Exception:  # no password database: nothing to protect against
+        if os.name == "nt":
+            raise RuntimeError("refusing installer mutation from a test without verified Windows profile identity") from None
         return
     target = Path(path).expanduser().resolve()
     for root in (home / ".claude", home / ".codex"):
@@ -837,15 +1017,17 @@ def _prune_bytecode_caches(root: Path) -> list[str]:
     """
     steps: list[str] = []
     _reject_real_install_root_under_test(root)
-    if not root.is_dir():
+    if not _is_dir(root):
         return steps
-    for parent, dirnames, _files in os.walk(root):
+    for parent, dirnames, _files in os.walk(_io_path(root) if os.name == "nt" else root):
         if "__pycache__" not in dirnames:
             continue
         dirnames.remove("__pycache__")
         cache = Path(parent) / "__pycache__"
+        if os.name == "nt":
+            cache = root / cache.relative_to(Path(_io_path(root)))
         try:
-            shutil.rmtree(cache)
+            _remove_owned_tree(cache)
         except OSError as exc:
             steps.append(f"could not remove bytecode cache {cache}: {exc}")
             continue
@@ -874,6 +1056,12 @@ def _normalize_payload_modes(root: Path) -> list[str]:
     """
     steps: list[str] = []
     _reject_real_install_root_under_test(root)
+    if os.name == "nt":
+        if _is_dir(root):
+            state, _, reason = _tree_inventory(root)
+            if state == PAYLOAD_ERROR:
+                raise PermissionError("unsafe Windows payload ACL or object: " + reason)
+        return steps
     if not root.is_dir():
         return steps
     changed = 0
@@ -923,14 +1111,20 @@ def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple
     already-imported modules.
     """
     script = PLUGIN_ROOT / "scripts" / "install_smoke.py"
-    if not script.is_file():
+    if not _is_file(script):
         return False, [f"runtime smoke: {script} is missing"]
     try:
-        proc = subprocess.run(
-            [_python_cmd(), "-E", "-s", "-B", str(script), "--plugin-root", str(plugin_root)],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
+        argv = [_python_cmd(), "-E", "-s", "-B", str(script), "--plugin-root", str(plugin_root)]
+        if os.name == "nt":
+            from wiki_platform import run_bounded
+            argv = owned_python_argv(_python_cmd(), script, ["--plugin-root", str(plugin_root)], import_roots=[plugin_root])
+            result = run_bounded(argv, cwd=REPO_ROOT, env=dict(os.environ), timeout=timeout,
+                                 limit=4 * 1024 * 1024, capture_stderr=True)
+            proc = subprocess.CompletedProcess(argv, result.returncode, result.stdout.decode("utf-8", errors="replace"),
+                                               result.stderr.decode("utf-8", errors="replace"))
+        else:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return False, [f"runtime smoke: could not run {script}: {exc}"]
     lines = [
         f"runtime smoke: {line}"
@@ -941,6 +1135,27 @@ def _smoke_installed_runtime(plugin_root: Path, timeout: float = 120.0) -> tuple
 
 def _copytree_clean(src: Path, dst: Path, *, extra_ignores: tuple[str, ...] = ()) -> None:
     """Copy payload content without importing filesystem ownership metadata."""
+    if os.name == "nt":
+        from wiki_platform import trusted_source_directory
+        if _lexists(dst):
+            _remove_owned_tree(dst)
+        ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", ".omc", *extra_ignores)
+        def copy_native(source, destination):
+            with trusted_source_directory(source.absolute()):
+                _owned_directory(destination)
+                names = os.listdir(_io_path(source))
+                ignored = ignore(str(source), names)
+                for name in names:
+                    if name in ignored:
+                        continue
+                    original, target = source / name, destination / name
+                    info = os.lstat(_io_path(original))
+                    if stat.S_ISDIR(info.st_mode):
+                        copy_native(original, target)
+                    else:
+                        _copy_file(original, target)
+        copy_native(Path(src), Path(dst))
+        return
     if dst.exists():
         shutil.rmtree(dst)
     ignore = shutil.ignore_patterns(
@@ -984,23 +1199,27 @@ def _copytree_clean(src: Path, dst: Path, *, extra_ignores: tuple[str, ...] = ()
 def _activate_staged_tree(staged: Path, target: Path) -> None:
     """Activate a fully-built tree while retaining the prior tree on failure."""
     backup = target.with_name(f".{target.name}.previous")
-    if backup.exists():
+    rename = os.replace
+    if os.name == "nt":
+        from wiki_platform import metadata_rename_directory
+        rename = metadata_rename_directory
+    if _lexists(backup):
         try:
-            shutil.rmtree(backup)
+            _remove_owned_tree(backup)
         except OSError as exc:
             raise RuntimeError(f"previous backup cleanup failed before activation; target {target} unchanged; backup {backup}: {exc}") from exc
-    had_target = target.exists()
+    had_target = _lexists(target)
     if had_target:
         try:
-            os.replace(target, backup)
+            rename(target, backup)
         except OSError as exc:
             raise RuntimeError(f"activation did not begin; previous payload unchanged at {target}: {exc}") from exc
     try:
-        os.replace(staged, target)
+        rename(staged, target)
     except BaseException as activation_error:
-        if had_target and backup.exists():
+        if had_target and _lexists(backup):
             try:
-                os.replace(backup, target)
+                rename(backup, target)
             except OSError as rollback_error:
                 raise RuntimeError(
                     f"activation failed: {activation_error}; rollback failed: {rollback_error}; "
@@ -1010,9 +1229,9 @@ def _activate_staged_tree(staged: Path, target: Path) -> None:
                 f"activation failed; previous payload restored at {target}: {activation_error}"
             ) from activation_error
         raise
-    if backup.exists():
+    if _lexists(backup):
         try:
-            shutil.rmtree(backup)
+            _remove_owned_tree(backup)
         except OSError as exc:
             raise RuntimeError(f"new payload active at {target}; previous backup cleanup failed at {backup}: {exc}") from exc
 
@@ -1064,7 +1283,7 @@ def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | N
         for name in names:
             source_path = source_dir / ("SKILL.md" if relative_dir == "internal-skills/batch" else name)
             destination_path = destination_dir / name
-            text = source_path.read_text(encoding="utf-8")
+            text = _source_bytes(source_path).decode("utf-8")
             text = text.replace(
                 "${CLAUDE_PLUGIN_ROOT}/skills/",
                 "${HARNESS_PLUGIN_ROOT}/internal-skills/",
@@ -1073,23 +1292,23 @@ def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | N
             ).replace(
                 "plugin-codex/agents/", "${HARNESS_PLUGIN_ROOT}/agents/",
             )
-            destination_path.write_text(text, encoding="utf-8")
-            os.chmod(destination_path, 0o644)
+            _write_text(destination_path, text)
+            _chmod_payload(destination_path)
     codex_setup = target / "skills" / "setup"
     claude_setup = PLUGIN_ROOT / "skills" / "setup"
     for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):
         destination = codex_setup / name
-        shutil.copyfile(claude_setup / name, destination)
-        os.chmod(destination, 0o644)
+        _copy_file(claude_setup / name, destination)
+        _chmod_payload(destination)
     _copytree_clean(claude_setup / "templates", codex_setup / "templates")
-    (target / "hooks.json").write_text(
+    _write_text(target / "hooks.json",
         json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"
     )
-    os.chmod(target / "hooks.json", 0o644)
-    (target / ".mcp.json").write_text(
+    _chmod_payload(target / "hooks.json")
+    _write_text(target / ".mcp.json",
         json.dumps(_codex_mcp_config(final_root), indent=2) + "\n"
     )
-    os.chmod(target / ".mcp.json", 0o644)
+    _chmod_payload(target / ".mcp.json")
     for rel in (
         "skills/run/SKILL.md",
         "skills/run/agents/openai.yaml",
@@ -1100,14 +1319,14 @@ def _build_codex_payload(target: Path, final_root: Path, *, codex_home: Path | N
         "scripts/setup_finalize.py",
         "mcp/harness_server.py",
     ):
-        if not (target / rel).is_file():
+        if not _is_file(target / rel):
             raise RuntimeError(f"incomplete Codex payload: {rel}")
     _stamp_codex_plugin_version(target, codex_home=codex_home)
     # Native plugin add copies these bytes into the versioned cache. Bind the
     # mirror before that copy so activation cannot replace cache-root commands.
     cache_root = _codex_cached_plugin_root(codex_home or _codex_home_for_config(None), target)
     for name, render in (("hooks.json", _codex_hooks_config), (".mcp.json", _codex_mcp_config)):
-        (target / name).write_text(json.dumps(render(cache_root), indent=2) + "\n")
+        _write_text(target / name, json.dumps(render(cache_root), indent=2) + "\n")
 
 
 _CODEX_GENERATION = re.compile(r"harness\.g([0-9]{20})\.h([0-9a-f]{16})")
@@ -1117,6 +1336,9 @@ _CODEX_LEGACY = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-codex|\+codex\.[0-9]{14}(
 def _codex_selection_preflight(codex_home: Path) -> None:
     """Classify selection before maintenance; recognized owned modes may repair."""
     parent = codex_home / "plugins/cache/harness/harness"
+    if os.name == "nt":
+        _codex_cache_generations(codex_home)
+        return
     try:
         directory = _open_inventory_root(parent, repairable_root=parent.parent)
     except FileNotFoundError:
@@ -1164,7 +1386,7 @@ def _codex_selection_preflight(codex_home: Path) -> None:
 
 def _codex_cache_generations(codex_home: Path) -> dict[int, tuple[str, str]]:
     """Read ordering authority from guarded existing cache directories only."""
-    from wiki_platform import safe_read
+    from wiki_platform import safe_read, safe_metadata_snapshot
     parent = codex_home / "plugins/cache/harness/harness"
     state, inventory, reason = _tree_inventory(parent)
     if state == PAYLOAD_ERROR:
@@ -1181,7 +1403,8 @@ def _codex_cache_generations(codex_home: Path) -> dict[int, tuple[str, str]]:
         if relative not in inventory:
             raise RuntimeError("Codex cache manifest is unavailable; preserve existing versions and inspect")
         try:
-            metadata = safe_read(parent / relative, 65536)
+            metadata = (safe_metadata_snapshot(parent / relative, 65536)[0]
+                        if os.name == "nt" else safe_read(parent / relative, 65536))
             manifest = json.loads(metadata)
         except (OSError, ValueError, TypeError, RuntimeError):
             raise RuntimeError("Codex cache manifest is unavailable; preserve existing versions and inspect") from None
@@ -1203,23 +1426,30 @@ def _stamp_codex_plugin_version(plugin_root: Path, *, codex_home: Path | None = 
     version = _codex_plugin_version(PLUGIN_CODEX_ROOT)
     digest = hashlib.sha256()
     digest.update(b"codex-versioned-cache-command-binding-v1\0")
-    for path in sorted(plugin_root.rglob("*")):
+    native_rows = None
+    if os.name == "nt":
+        state, native_rows, reason = _tree_inventory(plugin_root)
+        if state != PAYLOAD_SYNCHRONIZED:
+            raise RuntimeError("Codex projection inventory refused: " + reason)
+    paths = ([plugin_root / name.rstrip("/") for name in sorted(native_rows)]
+             if native_rows is not None else sorted(plugin_root.rglob("*")))
+    for path in paths:
         relative = path.relative_to(plugin_root).as_posix()
-        if path.is_dir():
+        if (relative + "/" in native_rows) if native_rows is not None else path.is_dir():
             digest.update(json.dumps(["dir", relative]).encode() + b"\0")
             continue
-        data = path.read_bytes()
+        data = _source_bytes(path)
         if relative == ".codex-plugin/plugin.json":
             manifest = json.loads(data)
             manifest["version"] = version
             data = json.dumps(manifest, sort_keys=True).encode()
         elif relative in {"hooks.json", ".mcp.json"}:
             render = _codex_hooks_config if relative == "hooks.json" else _codex_mcp_config
-            data = json.dumps(render(Path("/HARNESS_PLUGIN_ROOT")), sort_keys=True).encode()
-        digest.update(json.dumps(["file", relative, stat.S_IMODE(path.stat().st_mode)]).encode() + b"\0")
+            data = json.dumps(render(Path("C:/HARNESS_PLUGIN_ROOT" if os.name == "nt" else "/HARNESS_PLUGIN_ROOT")), sort_keys=True).encode()
+        digest.update(json.dumps(["file", relative, (0o644 if native_rows is not None else stat.S_IMODE(path.stat().st_mode))]).encode() + b"\0")
         digest.update(data + b"\0")
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(_source_bytes(manifest_path).decode("utf-8"))
     artifact = digest.hexdigest()[:16]
     generations = _codex_cache_generations(codex_home or _codex_home_for_config(None))
     latest = max(generations, default=0)
@@ -1229,7 +1459,7 @@ def _stamp_codex_plugin_version(plugin_root: Path, *, codex_home: Path | None = 
         if latest >= 10**20 - 1:
             raise RuntimeError("Codex cache generation limit reached; preserve existing versions")
         manifest["version"] = f"harness.g{latest + 1:020d}.h{artifact}"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    _write_text(manifest_path, json.dumps(manifest, indent=2) + "\n")
     return _codex_plugin_version(plugin_root)
 
 
@@ -1255,33 +1485,31 @@ def _write_codex_marketplace(install_root: Path, *, version: str | None = None) 
     if version is None:
         version = _codex_plugin_version(install_root / "plugins" / CODEX_PLUGIN_NAME)
     marketplace_dir = install_root / ".agents" / "plugins"
-    marketplace_dir.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(
-        dir=marketplace_dir.parent, prefix=".plugins-staging-",
-    ))
+    _owned_directory(marketplace_dir.parent)
+    staged = _staging_directory(marketplace_dir.parent, ".plugins-staging-")
     try:
-        (staged / "marketplace.json").write_text(
+        _write_text(staged / "marketplace.json",
             json.dumps(_codex_marketplace_payload(version), indent=2) + "\n"
         )
-        os.chmod(staged / "marketplace.json", 0o644)
+        _chmod_payload(staged / "marketplace.json")
         _activate_staged_tree(staged, marketplace_dir)
     except BaseException:
-        if staged.exists():
-            shutil.rmtree(staged)
+        if _lexists(staged):
+            _remove_owned_tree(staged)
         raise
 
 
 def _build_codex_cache_payload(source_root: Path, target: Path, final_root: Path) -> None:
     _python_cmd()
     _copytree_clean(source_root, target)
-    (target / "hooks.json").write_text(
+    _write_text(target / "hooks.json",
         json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"
     )
-    os.chmod(target / "hooks.json", 0o644)
-    (target / ".mcp.json").write_text(
+    _chmod_payload(target / "hooks.json")
+    _write_text(target / ".mcp.json",
         json.dumps(_codex_mcp_config(final_root), indent=2) + "\n"
     )
-    os.chmod(target / ".mcp.json", 0o644)
+    _chmod_payload(target / ".mcp.json")
 
 
 def _build_claude_payload(target: Path) -> None:
@@ -1289,7 +1517,7 @@ def _build_claude_payload(target: Path) -> None:
     _copytree_clean(REPO_ROOT / ".claude-plugin", target / ".claude-plugin")
     _copytree_clean(PLUGIN_ROOT, target / "plugin", extra_ignores=(".git",))
     for relative, content in projection.items():
-        (target / "plugin" / relative).write_text(content, encoding="utf-8")
+        _write_text(target / "plugin" / relative, content)
     _stamp_claude_plugin_version(target / "plugin")
 
 
@@ -1298,8 +1526,8 @@ def _claude_runtime_projection() -> dict[str, str]:
     interpreter = _python_cmd()
     result = {}
     manifest_path = PLUGIN_ROOT / ".mcp.json"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if _is_file(manifest_path):
+        manifest = json.loads(_source_bytes(manifest_path).decode("utf-8"))
         server = manifest["mcpServers"]["harness"]
         if (server.get("command") != "mise" or server.get("args") != [
                 "exec", "python@3.12", "--", "python", "-I", "-B",
@@ -1308,10 +1536,12 @@ def _claude_runtime_projection() -> dict[str, str]:
             raise ValueError("Unexpected Harness MCP template; preserve the current installation")
         server["command"] = interpreter
         server["args"] = ["-E", "-s", "-B", "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
+        if os.name == "nt":
+            server["args"] = owned_python_argv(interpreter, "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py")[1:]
         result[".mcp.json"] = json.dumps(manifest, indent=2) + "\n"
     hooks_path = PLUGIN_ROOT / "hooks/hooks.json"
-    if hooks_path.exists():
-        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+    if _is_file(hooks_path):
+        hooks = json.loads(_source_bytes(hooks_path).decode("utf-8"))
         prefix = ('PYTHONDONTWRITEBYTECODE=1 MISE_AUTO_INSTALL=0 mise exec python@3.12 -- python -I -B '
                   '"${CLAUDE_PLUGIN_ROOT}/scripts/mise_python.py" ')
         for groups in hooks["hooks"].values():
@@ -1322,7 +1552,15 @@ def _claude_runtime_projection() -> dict[str, str]:
                     command = hook.get("command", "")
                     if not command.startswith(prefix):
                         raise ValueError("Unexpected Harness hook template; preserve the current installation")
-                    hook["command"] = _python_hook_cmd() + " " + command[len(prefix):]
+                    if os.name == "nt":
+                        tail = shlex.split(command[len(prefix):])
+                        if tail[-2:] != ["||", "true"]:
+                            raise ValueError("Unexpected Harness hook fail-safe template")
+                        argv = owned_python_argv(interpreter, tail[0], tail[1:-2])
+                        hook["command"], hook["args"] = argv[0], argv[1:]
+                        hook["onFailure"] = "continue"
+                    else:
+                        hook["command"] = _python_hook_cmd() + " " + command[len(prefix):]
         result["hooks/hooks.json"] = json.dumps(hooks, indent=2) + "\n"
     return result
 
@@ -1343,15 +1581,22 @@ def _stamp_claude_plugin_version(plugin_root: Path) -> str:
     """
     manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
     digest = hashlib.sha256()
-    for path in sorted(p for p in plugin_root.rglob("*") if p.is_file()):
+    if os.name == "nt":
+        state, rows, reason = _tree_inventory(plugin_root)
+        if state != PAYLOAD_SYNCHRONIZED:
+            raise RuntimeError("Claude projection inventory refused: " + reason)
+        files = [plugin_root / name for name in sorted(rows) if rows[name][0] == "file"]
+    else:
+        files = sorted(p for p in plugin_root.rglob("*") if p.is_file())
+    for path in files:
         digest.update(path.relative_to(plugin_root).as_posix().encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(_source_bytes(path))
         digest.update(b"\0")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads(_source_bytes(manifest_path).decode("utf-8"))
     base = str(manifest.get("version") or "0.0.0").split("+", 1)[0]
     manifest["version"] = f"{base}+h{digest.hexdigest()[:8]}"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    _write_text(manifest_path, json.dumps(manifest, indent=2) + "\n")
     return manifest["version"]
 
 
@@ -1376,7 +1621,7 @@ def _refresh_claude_plugin(dry_run: bool) -> tuple[bool, bool, str]:
 def _claude_selection_identity() -> tuple[str, str] | None:
     config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
     try:
-        entries = json.loads((config / "plugins" / "installed_plugins.json").read_text())["plugins"]["harness@harness"]
+        entries = json.loads(_read_text(config / "plugins" / "installed_plugins.json"))["plugins"]["harness@harness"]
         selected = [entry for entry in entries if entry.get("scope") == "user"]
         if len(selected) == 1:
             return str(selected[0]["installPath"]), str(selected[0]["version"])
@@ -1390,13 +1635,13 @@ def _verify_claude_selected_cache(mirror: Path, steps: list[str]) -> tuple[bool,
     config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser().absolute()
     registry = config / "plugins" / "installed_plugins.json"
     try:
-        data = json.loads(registry.read_text())
+        data = json.loads(_read_text(registry))
         entries = data["plugins"]["harness@harness"]
         selected = [entry for entry in entries if entry.get("scope") == "user"]
         if len(selected) != 1:
             raise ValueError("expected exactly one user-scope harness@harness selection")
         entry = selected[0]
-        version = json.loads((mirror / ".claude-plugin" / "plugin.json").read_text())["version"]
+        version = json.loads(_read_text(mirror / ".claude-plugin" / "plugin.json"))["version"]
         cache = Path(entry["installPath"])
         if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,179}", version):
             raise ValueError("expected version is not a safe cache component")
@@ -1428,6 +1673,39 @@ def _verify_claude_selected_cache(mirror: Path, steps: list[str]) -> tuple[bool,
     return True, "Claude selected cache verified"
 
 
+def _windows_hook_command(script: Path, extra: list[str], timeout: int) -> str:
+    """One cmd-compatible host command; child Python uses literal CRT argv.
+
+    Encoded PowerShell avoids cmd expansion of paths or user text. Raw stdin is
+    copied to the child and stdout stays inherited, including explicit deny JSON.
+    The host timeout remains authoritative; this wrapper also bounds its child.
+    """
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetSystemDirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+    kernel.GetSystemDirectoryW.restype = wintypes.UINT
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = kernel.GetSystemDirectoryW(buffer, len(buffer))
+    if not length or length >= len(buffer):
+        raise OSError("Windows system directory unavailable for hook host")
+    powershell = str(Path(buffer.value) / "WindowsPowerShell/v1.0/powershell.exe")
+    literal = lambda value: "'" + value.replace("'", "''") + "'"
+    arguments = subprocess.list2cmdline(owned_python_argv(_python_cmd(), script, extra)[1:])
+    program = (
+        "$ErrorActionPreference='Stop';$p=$null;try{"
+        "$s=New-Object System.Diagnostics.ProcessStartInfo;"
+        "$s.FileName=" + literal(_python_cmd()) + ";"
+        "$s.Arguments=" + literal(arguments) + ";"
+        "$s.UseShellExecute=$false;$s.RedirectStandardInput=$true;"
+        "$p=New-Object System.Diagnostics.Process;$p.StartInfo=$s;"
+        "[void]$p.Start();[Console]::OpenStandardInput().CopyTo($p.StandardInput.BaseStream);"
+        "$p.StandardInput.Close();if(!$p.WaitForExit(" + str(max(1, timeout - 1) * 1000) + ")){$p.Kill();$p.WaitForExit()}"
+        "}catch{}finally{if($null -ne $p){try{if(!$p.HasExited){$p.Kill();$p.WaitForExit()}}catch{};$p.Dispose()}};exit 0"
+    )
+    encoded = base64.b64encode(program.encode("utf-16-le")).decode("ascii")
+    return subprocess.list2cmdline([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
+
+
 def _codex_hooks_config(plugin_root: Path) -> dict:
     root = plugin_root.resolve()
     hooks = {
@@ -1437,7 +1715,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
         "PostToolUse": root / "scripts" / "hook_post_tool_use.py",
     }
 
-    return {
+    config = {
         "hooks": {
             "SessionStart": [
                 {
@@ -1507,6 +1785,18 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
         }
     }
 
+    if os.name == "nt":
+        for event, groups in config["hooks"].items():
+            for group in groups:
+                for hook in group["hooks"]:
+                    script = hooks[event]
+                    extra = []
+                    if "wiki_change_notice.py" in hook["command"]:
+                        script = root / "scripts/wiki_change_notice.py"
+                        extra = ["codex"]
+                    hook["commandWindows"] = _windows_hook_command(script, extra, hook["timeout"])
+    return config
+
 
 _CODEX_HOOK_EVENT_LABELS = {
     "SessionStart": "session_start",
@@ -1536,7 +1826,7 @@ def _codex_hook_trust_hash(event_name: str, entry: dict, hook: dict) -> str:
         "hooks": [
             {
                 "async": False,
-                "command": hook["command"],
+                "command": hook.get("commandWindows", hook["command"]) if os.name == "nt" else hook["command"],
                 "timeout": max(1, int(hook.get("timeout") or 600)),
                 "type": "command",
             }
@@ -1652,18 +1942,18 @@ def install_codex_hook_trust_state(
     plugin_id: str = CODEX_PLUGIN_ID,
 ) -> dict:
     cfg = Path(config_path)
-    if not cfg.exists():
+    if not _lexists(cfg):
         return {"ok": False, "message": f"Codex config not found: {cfg}", "state": {}}
     state = _codex_hook_trust_state(plugin_id, hooks_config)
     if not state:
         return {"ok": True, "message": "no Codex hook trust state to write", "state": state}
-    existing = cfg.read_text()
+    existing = _read_text(cfg)
     enabled_lines = _existing_hook_state_enabled_lines(existing, set(state))
     stripped = _dedupe_hooks_state_parent_table(
         _strip_codex_hook_state_tables(existing, set(state))
     ).rstrip("\n")
     block = _codex_hook_trust_block(state, enabled_lines)
-    cfg.write_text((stripped + "\n\n" + block).lstrip("\n"))
+    _write_text(cfg, (stripped + "\n\n" + block).lstrip("\n"))
     return {
         "ok": True,
         "message": f"trusted {len(state)} Codex harness hooks in {cfg}",
@@ -1845,8 +2135,12 @@ def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str, bool]:
         daemon = json.loads(out)
         if not isinstance(daemon, dict):
             raise ValueError("invalid daemon discovery result")
-        if daemon.get("status") != "running" or not isinstance(daemon.get("socketPath"), str):
+        if (daemon.get("status") != "running" or not isinstance(daemon.get("socketPath"), str)
+                or not daemon["socketPath"] or "\x00" in daemon["socketPath"]):
             raise ValueError("unknown daemon discovery status or endpoint")
+        if os.name == "nt":
+            return True, ("Codex reports a running Windows daemon; installed hooks will load in a new session. "
+                          "Running-session hooks were not refreshed."), True
         _reload_codex_daemon_hooks(daemon["socketPath"])
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return False, f"Codex payload installed, but loaded hooks were not refreshed: {exc}", False
@@ -1855,11 +2149,12 @@ def _reload_codex_runtime(config_path: str | None) -> tuple[bool, str, bool]:
 
 def _codex_mcp_config(shared_plugin_root: Path) -> dict:
     plugin_root = shared_plugin_root.resolve()
+    arguments = owned_python_argv(_python_cmd(), plugin_root / "mcp/harness_server.py")[1:]
     return {
         "mcpServers": {
             "harness": {
                 "command": _python_cmd(),
-                "args": ["-E", "-s", "-B", str(plugin_root / "mcp" / "harness_server.py")],
+                "args": arguments,
                 "env": {
                     "HARNESS_PLUGIN_ROOT": str(plugin_root),
                     "CLAUDE_PLUGIN_ROOT": str(plugin_root),
@@ -1880,14 +2175,14 @@ def sync_claude_payload(install_root: Path | None = None) -> Path:
     _python_cmd()
     target = install_root or Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
     _reject_real_install_root_under_test(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".harness-claude-staging-"))
+    _owned_directory(target.parent)
+    staged = _staging_directory(target.parent, ".harness-claude-staging-")
     try:
         _build_claude_payload(staged)
         _activate_staged_tree(staged, target)
     except BaseException:
-        if staged.exists():
-            shutil.rmtree(staged)
+        if _lexists(staged):
+            _remove_owned_tree(staged)
         raise
     return target / "plugin"
 
@@ -1899,7 +2194,7 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
     if install_root is None:
         install_root = _codex_install_root()
     _reject_real_install_root_under_test(install_root)
-    install_root.mkdir(parents=True, exist_ok=True)
+    _owned_directory(install_root)
     legacy_paths = (
         install_root / "plugin-codex",
         install_root / "plugin",
@@ -1907,20 +2202,24 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
         install_root / "marketplace.json",
     )
     codex_plugin_root = install_root / "plugins" / "harness"
-    codex_plugin_root.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(dir=codex_plugin_root.parent, prefix=".harness-staging-"))
+    _owned_directory(codex_plugin_root.parent)
+    staged = _staging_directory(codex_plugin_root.parent, ".harness-staging-")
     try:
         _build_codex_payload(staged, codex_plugin_root)
         _activate_staged_tree(staged, codex_plugin_root)
     except BaseException:
-        if staged.exists():
-            shutil.rmtree(staged)
+        if _lexists(staged):
+            _remove_owned_tree(staged)
         raise
     for legacy_path in legacy_paths:
-        if os.path.lexists(legacy_path):
-            legacy_info = os.lstat(legacy_path)
+        if _lexists(legacy_path):
+            legacy_info = os.lstat(_io_path(legacy_path))
             if stat.S_ISDIR(legacy_info.st_mode):
-                shutil.rmtree(legacy_path)
+                _remove_owned_tree(legacy_path)
+            elif os.name == "nt":
+                from wiki_platform import metadata_remove, safe_metadata_snapshot
+                data, _ = safe_metadata_snapshot(legacy_path.absolute(), PAYLOAD_MAX_BYTES)
+                metadata_remove(legacy_path.absolute(), expected_sha256=hashlib.sha256(data).hexdigest(), max_bytes=PAYLOAD_MAX_BYTES)
             else:
                 legacy_path.unlink()
     _write_codex_marketplace(install_root)
@@ -1992,7 +2291,7 @@ def _select_codex_plugin(source_root: Path, codex_home: Path) -> tuple[bool, str
 
 def _codex_plugin_version(source_root: Path) -> str:
     manifest_path = source_root / ".codex-plugin" / "plugin.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(_source_bytes(manifest_path).decode("utf-8"))
     version = str(manifest.get("version", "")).strip()
     if not version:
         return "local"
@@ -2005,55 +2304,56 @@ def _codex_plugin_version(source_root: Path) -> str:
     return version
 
 
-def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
-    _python_cmd()
-    _reject_real_install_root_under_test(codex_home)
-    version = _codex_plugin_version(source_root)
-    target = (
-        codex_home
-        / "plugins"
-        / "cache"
-        / CODEX_PLUGIN_MARKETPLACE
-        / CODEX_PLUGIN_NAME
-        / version
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # Allocation is rechecked under the existing cache publication lock. A
-    # competing different artifact must rerun rather than share a generation.
+@contextmanager
+def _codex_publication_lock(parent: Path):
+    if os.name == "nt":
+        from wiki_platform import file_lock
+        with file_lock((parent / ".control.lock").absolute(), blocking=True):
+            yield
+        return
     import fcntl
-    fd = os.open(target.parent / ".publish.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-    staged = None
+    fd = os.open(parent / ".publish.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o022:
             raise PermissionError("unsafe Codex cache publication lock")
         fcntl.flock(fd, fcntl.LOCK_EX)
-        staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cache-staging-"))
-        _build_codex_cache_payload(source_root, staged, target)
-        exists = os.path.lexists(target)
-        if exists:
-            state, reason = _compare_payload_trees(staged, target)
-            if state != PAYLOAD_SYNCHRONIZED:
-                raise RuntimeError(f"Codex cache identity mismatch at {target}: {reason}; stop sessions using this cache and move this exact directory aside before retrying")
-        generations = _codex_cache_generations(codex_home)
-        latest = max(generations, default=0)
-        generation = _CODEX_GENERATION.fullmatch(version)
-        if (not generation or int(generation[1]) != latest + (not exists)
-                or exists and generations[latest][0] != version):
-            raise RuntimeError("Codex cache generation changed; preserve existing versions and rerun installation")
-        if not exists:
-            os.rename(staged, target)
+        yield
     finally:
+        os.close(fd)
+
+
+def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
+    _python_cmd()
+    _reject_real_install_root_under_test(codex_home)
+    version = _codex_plugin_version(source_root)
+    target = codex_home / "plugins/cache" / CODEX_PLUGIN_MARKETPLACE / CODEX_PLUGIN_NAME / version
+    _owned_directory(target.parent)
+    with _codex_publication_lock(target.parent):
+        staged = _staging_directory(target.parent, ".cache-staging-")
         try:
-            if staged is not None and staged.exists():
-                shutil.rmtree(staged)
+            _build_codex_cache_payload(source_root, staged, target)
+            exists = _lexists(target)
+            if exists:
+                state, reason = _compare_payload_trees(staged, target)
+                if state != PAYLOAD_SYNCHRONIZED:
+                    raise RuntimeError(f"Codex cache identity mismatch at {target}: {reason}; stop sessions using this cache and move this exact directory aside before retrying")
+            generations = _codex_cache_generations(codex_home)
+            latest = max(generations, default=0)
+            generation = _CODEX_GENERATION.fullmatch(version)
+            if (not generation or int(generation[1]) != latest + (not exists)
+                    or exists and generations[latest][0] != version):
+                raise RuntimeError("Codex cache generation changed; preserve existing versions and rerun installation")
+            if not exists:
+                if os.name == "nt":
+                    from wiki_platform import metadata_rename_directory
+                    metadata_rename_directory(staged, target)
+                else:
+                    os.rename(staged, target)
         finally:
-            os.close(fd)
-    # Keep prior version directories intact. Already-running Codex sessions
-    # retain the absolute hook commands from the cache version they loaded;
-    # deleting that directory mid-session breaks SessionStart and
-    # UserPromptSubmit until the process restarts. Codex can select the new
-    # cachebuster on the next thread while existing sessions finish safely.
+            if _lexists(staged):
+                _remove_owned_tree(staged)
+    # Previous version paths remain valid for already-running sessions.
     return target
 
 
@@ -2067,9 +2367,9 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
     )
     stale_reasons: list[str] = []
     for legacy in legacy_paths:
-        if os.path.lexists(legacy):
+        if _lexists(legacy):
             try:
-                info = os.lstat(legacy)
+                info = os.lstat(_io_path(legacy))
                 if stat.S_ISLNK(info.st_mode):
                     return PAYLOAD_ERROR, f"unsafe legacy path: {legacy}"
                 if stat.S_ISDIR(info.st_mode):
@@ -2077,7 +2377,9 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
                     if legacy_state == PAYLOAD_ERROR:
                         return PAYLOAD_ERROR, f"unsafe legacy path {legacy}: {legacy_reason}"
                 elif stat.S_ISREG(info.st_mode):
-                    if (
+                    if os.name == "nt":
+                        _read_text(legacy)
+                    elif (
                         info.st_uid != os.getuid()
                         or info.st_nlink != 1
                         or stat.S_IMODE(info.st_mode) not in {0o600, 0o644, 0o755}
@@ -2104,7 +2406,7 @@ def _codex_payload_state(config_path: str | Path | None = None) -> tuple[str, st
                 stale_reasons.append(f"Codex mirror: {reason}")
 
             expected_market_root = expected_root / "market-root"
-            expected_market_root.mkdir(mode=0o700)
+            _owned_directory(expected_market_root)
             _write_codex_marketplace(expected_market_root, version=version)
             expected_marketplace = expected_market_root / ".agents" / "plugins"
             state, reason = _compare_payload_trees(expected_marketplace, marketplace)
@@ -2152,7 +2454,9 @@ def install_codex(*, dry_run: bool, force: bool,
 def _install_codex(*, dry_run: bool, force: bool,
                    config_path: str) -> InstallResult:
     steps: list[str] = []
-    if not shutil.which("codex"):
+    if os.name == "nt":
+        _install_step("Codex native CLI resolution", steps, lambda: host_command("codex"))
+    elif not _host_available("codex"):
         return InstallResult("codex", False, "codex CLI not found in PATH", steps)
     _python_cmd()
     try:
@@ -2170,6 +2474,8 @@ def _install_codex(*, dry_run: bool, force: bool,
             return InstallResult("codex", False, f"codex --version failed: {err}", steps)
         version = out.strip().split()[-1]
         pin = _read_codex_pin()
+        if os.name == "nt" and _version_tuple(version) < (0, 167, 2):
+            return InstallResult("codex", False, "Native Windows installation requires Codex 0.167.2 or newer", steps)
         if pin and _version_tuple(version) < _version_tuple(pin):
             return InstallResult("codex", False,
                                  f"codex {version} < pin {pin} (see {CODEX_VERSION_PIN_FILE})",
@@ -2246,7 +2552,7 @@ def _install_codex(*, dry_run: bool, force: bool,
                 cached = None
                 steps.append(f"runtime smoke: skipped — no cache entry ({exc})")
             if cached is not None:
-                if not (cached / "scripts").is_dir():
+                if not _is_dir(cached / "scripts"):
                     steps.append(
                         f"runtime smoke: skipped — no Codex plugin cache entry at {cached}"
                     )
@@ -2390,7 +2696,9 @@ def _install_codex(*, dry_run: bool, force: bool,
 def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     steps: list[str] = []
     previous_selection = _claude_selection_identity() if not dry_run else None
-    if not shutil.which("claude"):
+    if os.name == "nt":
+        _install_step("Claude native CLI resolution", steps, lambda: host_command("claude"))
+    elif not _host_available("claude"):
         return InstallResult("claude", False, "claude CLI not found in PATH", steps)
     _python_cmd()
     # Step 1: version
@@ -2400,6 +2708,9 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     else:
         if rc != 0:
             return InstallResult("claude", False, f"claude --version failed: {err}", steps)
+        match = re.search(r"\b(\d+\.\d+\.\d+)\b", out)
+        if os.name == "nt" and (not match or _version_tuple(match[1]) < (2, 1, 295)):
+            return InstallResult("claude", False, "Native Windows installation requires Claude Code 2.1.295 or newer", steps)
         steps.append(f"claude {out.strip()}")
     claude_install_root = Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
     installed_plugin_root = claude_install_root / "plugin"
@@ -2460,7 +2771,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     if dry_run:
         steps.append(f"would sync plugin payload to {claude_install_root} (.git excluded)")
     else:
-        installed_plugin_root = sync_claude_payload(claude_install_root)
+        installed_plugin_root = _install_step("Claude payload sync", steps, lambda: sync_claude_payload(claude_install_root))
         steps.append(f"synced plugin payload to {claude_install_root} (.git excluded)")
         # Older payloads may retain source modes; normalize before the smoke
         # imports anything out of this tree.
@@ -2542,8 +2853,10 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
 
     # Step 4: MCP server registration
     installed_mcp_server = installed_plugin_root / "mcp" / "harness_server.py"
+    server_argv = owned_python_argv(_python_cmd(), installed_mcp_server)
     if dry_run:
-        steps.append(f"would run: claude mcp add harness -- {shlex.quote(_python_cmd())} -E -s -B {shlex.quote(str(installed_mcp_server))} "
+        rendered = subprocess.list2cmdline(server_argv) if os.name == "nt" else shlex.join(server_argv)
+        steps.append(f"would run: claude mcp add harness -- {rendered} "
                      f"(env: HARNESS_PLUGIN_ROOT={installed_plugin_root}, "
                      f"CLAUDE_PLUGIN_ROOT={installed_plugin_root}, "
                      "HARNESS_RUNTIME=claude, PYTHONDONTWRITEBYTECODE=1)")
@@ -2560,7 +2873,7 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
         "-e", "PYTHONDONTWRITEBYTECODE=1",
     ]
     _run(["claude", "mcp", "remove", "harness"], dry_run)
-    cmd = ["claude", "mcp", "add", "harness"] + env_args + ["--", _python_cmd(), "-E", "-s", "-B", str(installed_mcp_server)]
+    cmd = ["claude", "mcp", "add", "harness"] + env_args + ["--", *server_argv]
     rc, out, err = _run(cmd, dry_run)
     combined = (out + err).lower()
     if rc != 0 and "already" not in combined and "exists" not in combined:
@@ -2574,6 +2887,9 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
 
 
 def main() -> int:
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(
         description="Unified install entry point for harness (Codex + Claude, parallel).",
     )
@@ -2600,12 +2916,12 @@ def main() -> int:
     explicit_runtime = args.codex_only or args.claude_only
     tasks: list[tuple[str, callable]] = []
     skipped: list[str] = []
-    if not args.claude_only and (explicit_runtime or shutil.which("codex")):
+    if not args.claude_only and (explicit_runtime or _host_available("codex")):
         tasks.append(("codex", lambda: install_codex(
             dry_run=args.dry_run, force=args.force, config_path=args.config_path)))
     elif not args.claude_only:
         skipped.append("codex (codex CLI not found in PATH)")
-    if not args.codex_only and (explicit_runtime or shutil.which("claude")):
+    if not args.codex_only and (explicit_runtime or _host_available("claude")):
         tasks.append(("claude", lambda: install_claude(
             dry_run=args.dry_run, force=args.force)))
     elif not args.codex_only:
@@ -2617,7 +2933,7 @@ def main() -> int:
         return 2
 
     # Select before either worker can prune, chmod, copy, or register anything.
-    if any(shutil.which(name) for name, _ in tasks):
+    if any(_host_available(name) for name, _ in tasks):
         try:
             _python_cmd()
         except MisePythonError as error:

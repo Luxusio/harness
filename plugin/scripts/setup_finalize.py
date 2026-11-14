@@ -621,7 +621,7 @@ def validate_structure(
     lint = plugin_root / "scripts/contract_lint.py"
     if contract.is_file() and lint.is_file():
         result = subprocess.run(
-            [sys.executable, str(lint), "--path", str(contract), "--repo-root", str(repo), "--quick"],
+            [sys.executable, "-E", "-s", "-B", str(lint), "--path", str(contract), "--repo-root", str(repo), "--quick"],
             capture_output=True,
             text=True,
         )

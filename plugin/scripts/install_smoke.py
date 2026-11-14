@@ -22,6 +22,14 @@ HOOK_SCRIPT_REFERENCE = re.compile(r"scripts/([A-Za-z0-9_]+)\.py")
 DEFAULT_TIMEOUT = 60.0
 
 
+def _io_path(path):
+    """Keep extended Win32 spelling at local filesystem I/O boundaries."""
+    value = os.path.abspath(path)
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+
+
 def _hook_modules(plugin_root: str) -> list[str]:
     """Module names for the hook scripts this installed tree registers.
 
@@ -33,26 +41,32 @@ def _hook_modules(plugin_root: str) -> list[str]:
     scripts_dir = os.path.join(plugin_root, "scripts")
     hooks_json = os.path.join(plugin_root, "hooks", "hooks.json")
     try:
-        with open(hooks_json, "r", encoding="utf-8") as handle:
+        with open(_io_path(hooks_json), "r", encoding="utf-8") as handle:
             names.update(HOOK_SCRIPT_REFERENCE.findall(handle.read()))
     except OSError:
         pass
     try:
         names.update(
             entry[: -len(".py")]
-            for entry in os.listdir(scripts_dir)
+            for entry in os.listdir(_io_path(scripts_dir))
             if entry.startswith("hook_") and entry.endswith(".py")
         )
     except OSError:
         pass
     return sorted(
         name for name in names
-        if os.path.isfile(os.path.join(scripts_dir, name + ".py"))
+        if os.path.isfile(_io_path(os.path.join(scripts_dir, name + ".py")))
     )
 
 
 def _run(argv: list[str], *, cwd: str, env: dict, stdin: str = "",
          timeout: float) -> subprocess.CompletedProcess:
+    if os.name == "nt":
+        from wiki_platform import run_bounded
+        result = run_bounded(argv, cwd=cwd, env=env, timeout=timeout, limit=4 * 1024 * 1024,
+                             capture_stderr=True, input_bytes=stdin.encode("utf-8"))
+        return subprocess.CompletedProcess(argv, result.returncode, result.stdout.decode("utf-8", errors="replace"),
+                                           result.stderr.decode("utf-8", errors="replace"))
     return subprocess.run(
         argv, input=stdin, capture_output=True, text=True,
         cwd=cwd, env=env, timeout=timeout,
@@ -125,6 +139,8 @@ def _refusal_cause(plugin_root: str) -> list[str]:
     and actionable; the `__pycache__` wording stays as the fallback, which is
     what it always was — a known cause, not an observed one.
     """
+    if os.name == "nt":
+        return ["        cause: installed-source import failed; inspect the preceding Native error (ACL and source checks remain required)"]
     writable = _world_writable_sources(plugin_root)
     if not writable:
         return [
@@ -158,11 +174,18 @@ def _import_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
     )
     with tempfile.TemporaryDirectory(prefix="harness-smoke-import-") as tmp:
         try:
+            argv = [_runtime_python(), "-I", "-B", "-c", program]
+            if os.name == "nt":
+                from native_cli import owned_python_argv
+                argv = owned_python_argv(_runtime_python(), os.path.abspath(__file__),
+                                         ["--plugin-root", plugin_root, "--import-probe-worker",
+                                          *(argument for name in modules for argument in ("--import-module", name))],
+                                         import_roots=[plugin_root])
             result = _run(
-                [_runtime_python(), "-c", program], cwd=tmp,
+                argv, cwd=tmp,
                 env=_probe_env(plugin_root, "install-smoke"), timeout=timeout,
             )
-        except subprocess.SubprocessError as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             return False, [f"FAIL import: probe did not complete: {exc}"]
     if result.returncode != 0:
         detail = (result.stdout + result.stderr).strip().splitlines()
@@ -173,6 +196,20 @@ def _import_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
             *_refusal_cause(plugin_root),
         ]
     return True, [f"ok import: {len(modules)} hook modules ({', '.join(modules)})"]
+
+
+def _import_probe_worker(plugin_root, modules):
+    import importlib
+    sys.path.insert(0, os.path.join(plugin_root, "scripts"))
+    if not modules:
+        return 1
+    for name in modules:
+        try:
+            importlib.import_module(name)
+        except BaseException as exc:
+            print(f"{name}: {type(exc).__name__}: {exc}")
+            return 1
+    return 0
 
 
 def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
@@ -192,7 +229,7 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
         import harness_server
         import wbs
         os.environ["HARNESS_RUNTIME"] = (
-            "codex" if Path(plugin_root, ".codex-plugin/plugin.json").is_file() else "claude"
+            "codex" if os.path.isfile(_io_path(Path(plugin_root, ".codex-plugin/plugin.json"))) else "claude"
         )
         sid = _lib.new_uuid7() if os.environ["HARNESS_RUNTIME"] == "codex" else "install-smoke-" + uuid.uuid4().hex
         if os.environ["HARNESS_RUNTIME"] == "codex":
@@ -216,7 +253,11 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
                 payload = json.dumps({"cwd": str(repo), "session_id": sid, "tool_name": "wbs",
                                       "arguments": {"action": "open", "wbs_id": "install_smoke"},
                                       "tool_response": opened})
-                result = _run([_runtime_python(), hook], cwd=str(repo), env=dict(os.environ),
+                argv = [_runtime_python(), "-E", "-s", "-B", hook]
+                if os.name == "nt":
+                    from native_cli import owned_python_argv
+                    argv = owned_python_argv(_runtime_python(), hook)
+                result = _run(argv, cwd=str(repo), env=dict(os.environ),
                               stdin=payload, timeout=timeout)
                 if result.returncode:
                     raise RuntimeError("installed PostToolUse binding failed: " + result.stderr[-500:])
@@ -226,7 +267,7 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
                 raise RuntimeError("installed runtime lost exact session/task/run focus")
             nodes = [{"id": "A", "title": "Installed runtime reads actual source", "weight": 1,
                       "inputs": {"source": ["source.txt"]},
-                      "check": [_runtime_python(), "-c",
+                      "check": [_runtime_python(), "-I", "-B", "-c",
                                 "from pathlib import Path; assert Path('source.txt').read_text().strip() == 'ok'"]}]
             plan = "# Installation smoke\n```wbs\n" + json.dumps(nodes) + "\n```\n"
             call("plan", plan=plan)
@@ -258,15 +299,30 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
 
 def _wbs_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
     server = os.path.join(plugin_root, "mcp", "harness_server.py")
-    if not os.path.isfile(server):
+    if not os.path.isfile(_io_path(server)):
         return False, [f"FAIL WBS: installed tree has no {server}"]
     env = _probe_env(plugin_root, "isolated-install-fixture")
     with tempfile.TemporaryDirectory(prefix="harness-wbs-probe-") as scratch:
         env["TMPDIR"] = scratch
+        if os.name == "nt":
+            from wiki_platform import run_bounded
+            from native_cli import owned_python_argv
+            try:
+                argv = owned_python_argv(_runtime_python(), os.path.abspath(__file__), [
+                    "--plugin-root", plugin_root, "--wbs-probe-worker", "--timeout", str(timeout),
+                ], import_roots=[plugin_root])
+                result = run_bounded(argv, cwd=scratch, env=env, timeout=timeout, limit=1024 * 1024,
+                                     capture_stderr=True)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                return False, [f"FAIL WBS: isolated installed fixture did not complete: {exc}"]
+            if result.returncode:
+                details = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip().splitlines()[-3:]
+                return False, ["FAIL WBS: installed task/source fixture failed", *[line[:500] for line in details]]
+            return True, ["ok WBS: installed task/session ownership, source scope and actual checks through close"]
         proc = None
         try:
             proc = subprocess.Popen([
-                _runtime_python(), os.path.abspath(__file__), "--plugin-root", plugin_root,
+                _runtime_python(), "-E", "-s", "-B", os.path.abspath(__file__), "--plugin-root", plugin_root,
                 "--wbs-probe-worker", "--timeout", str(timeout),
             ], cwd=plugin_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                text=True, start_new_session=True)
@@ -291,7 +347,7 @@ def smoke_installed_runtime(
 ) -> tuple[bool, list[str]]:
     """Return (ok, report lines) for one installed plugin root."""
     plugin_root = os.path.abspath(os.path.expanduser(str(plugin_root)))
-    if not os.path.isdir(os.path.join(plugin_root, "scripts")):
+    if not os.path.isdir(_io_path(os.path.join(plugin_root, "scripts"))):
         return False, [f"FAIL smoke: {plugin_root} is not an installed plugin root"]
     lines: list[str] = []
     ok = True
@@ -303,16 +359,24 @@ def smoke_installed_runtime(
 
 
 def main() -> int:
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         description="Smoke-test an installed harness runtime tree",
     )
     parser.add_argument("--plugin-root", required=True,
                         help="Installed plugin root (…/harness-dev/plugin)")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
-    parser.add_argument("--wbs-probe-worker", action="store_true", help=argparse.SUPPRESS)
+    workers = parser.add_mutually_exclusive_group()
+    workers.add_argument("--wbs-probe-worker", action="store_true", help=argparse.SUPPRESS)
+    workers.add_argument("--import-probe-worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--import-module", action="append", default=[], help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.wbs_probe_worker:
         return _wbs_probe_worker(os.path.abspath(args.plugin_root), args.timeout)
+    if args.import_probe_worker:
+        return _import_probe_worker(os.path.abspath(args.plugin_root), args.import_module)
     ok, lines = smoke_installed_runtime(args.plugin_root, timeout=args.timeout)
     for line in lines:
         print(line)

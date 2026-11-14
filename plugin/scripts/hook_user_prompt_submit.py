@@ -75,8 +75,12 @@ def main() -> int:
     try:
         if remaining <= 0:
             raise subprocess.TimeoutExpired("prompt_memory.py", 0)
+        argv = [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "prompt_memory.py")]
+        if os.name == "nt":
+            from native_cli import owned_python_argv
+            argv = owned_python_argv(sys.executable, os.path.join(SCRIPTS_DIR, "prompt_memory.py"))
         proc = subprocess.run(
-            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "prompt_memory.py")],
+            argv,
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

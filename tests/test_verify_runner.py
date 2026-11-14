@@ -19,14 +19,15 @@ spec.loader.exec_module(verify_runner)
 
 
 def test_parallel_runner_preserves_manifest_order_and_passes():
+    commands = ["python3 -c 'print(\"first\")'", "python3 -c 'print(\"second\")'"]
+    if os.name == "nt":
+        commands = [subprocess.list2cmdline([sys.executable, "-c", f"print({value!r})"])
+                    for value in ("first", "second")]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / ".git").mkdir()
         payload = verify_runner.run(
-            [
-                "python3 -c 'print(\"first\")'",
-                "python3 -c 'print(\"second\")'",
-            ],
+            commands,
             root,
             parallel=True,
             max_workers=2,
@@ -39,6 +40,11 @@ def test_parallel_runner_preserves_manifest_order_and_passes():
     assert "second" in payload["commands"][1]["stdout"]
 
 
+def _cwd_check_command():
+    return (subprocess.list2cmdline([sys.executable, "-c", "from pathlib import Path;print(Path.cwd())"])
+            if os.name == "nt" else "pwd -P")
+
+
 def _main_with_in_tree_worktree(tmp: str) -> tuple[Path, Path]:
     """A main checkout (``.git`` dir) holding a linked worktree (``.git`` gitfile)
     under ``.claude/worktrees``, each with its own manifest verify_commands."""
@@ -47,10 +53,11 @@ def _main_with_in_tree_worktree(tmp: str) -> tuple[Path, Path]:
     (main / ".git" / "worktrees" / "lead").mkdir(parents=True)
     wt.mkdir(parents=True)
     (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'lead'}\n", encoding="utf-8")
-    for root, command in ((main, "echo main-checkout"), (wt, "pwd -P")):
+    for root, command in ((main, "echo main-checkout"), (wt, _cwd_check_command())):
         manifest = root / "doc" / "harness" / "manifest.yaml"
         manifest.parent.mkdir(parents=True)
-        manifest.write_text(f"verify_commands:\n  - {command}\n", encoding="utf-8")
+        rendered = json.dumps(command) if os.name == "nt" else command
+        manifest.write_text(f"verify_commands:\n  - {rendered}\n", encoding="utf-8")
     return main, wt
 
 
@@ -72,19 +79,20 @@ def test_runner_from_worktree_runs_the_worktree_manifest_in_the_worktree():
         )
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
-    assert [r["command"] for r in payload["commands"]] == ["pwd -P"]
+    assert [r["command"] for r in payload["commands"]] == [_cwd_check_command()]
     assert payload["commands"][0]["stdout"].strip() == str(wt)
 
 
 def test_parallel_runner_aggregates_failure():
+    commands = ["python3 -c 'print(\"ok\")'", "python3 -c 'raise SystemExit(7)'"]
+    if os.name == "nt":
+        commands = [subprocess.list2cmdline([sys.executable, "-c", code])
+                    for code in ("print('ok')", "raise SystemExit(7)")]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / ".git").mkdir()
         payload = verify_runner.run(
-            [
-                "python3 -c 'print(\"ok\")'",
-                "python3 -c 'raise SystemExit(7)'",
-            ],
+            commands,
             root,
             parallel=True,
             max_workers=2,

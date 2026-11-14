@@ -1,6 +1,7 @@
 """Every owned installed command pins the selected interpreter and identity."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shlex
 import sys
@@ -44,10 +45,15 @@ def test_codex_commands_and_toml_escape_selected_python(installer, monkeypatch):
     root = r'C:\Users\Name With Spaces\harness'
     block = tomllib.loads(installer._mcp_block(root))["mcp_servers"]["harness"]
     assert block["command"] == selected
-    assert block["args"] == ["-E", "-s", "-B", root + "/mcp/harness_server.py"]
+    if os.name == "nt":
+        assert block["args"][:3] == ["-I", "-B", "-c"]
+        assert str(Path(root) / "mcp/harness_server.py") in block["args"]
+    else:
+        assert block["args"] == ["-E", "-s", "-B", root + "/mcp/harness_server.py"]
     assert block["env"]["HARNESS_PLUGIN_ROOT"] == root
     mcp = installer._codex_mcp_config(Path("/plugin"))["mcpServers"]["harness"]
-    assert mcp["command"] == selected and mcp["args"][:3] == ["-E", "-s", "-B"]
+    assert mcp["command"] == selected
+    assert mcp["args"][:3] == (["-I", "-B", "-c"] if os.name == "nt" else ["-E", "-s", "-B"])
     for command in hook_commands(installer._codex_hooks_config(Path("/plugin"))):
         assert shlex.split(command)[1:5] == [selected, "-E", "-s", "-B"]
 
@@ -59,16 +65,25 @@ def test_claude_projection_preserves_metadata_source_and_effective_identity(inst
     second = installer.sync_claude_payload(tmp_path / "second")
     mcp = json.loads((first / ".mcp.json").read_text())["mcpServers"]["harness"]
     assert mcp["command"] == installer._python_cmd()
-    assert mcp["args"] == ["-E", "-s", "-B", "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
+    if os.name == "nt":
+        assert mcp["args"][:3] == ["-I", "-B", "-c"]
+        assert "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py" in mcp["args"]
+    else:
+        assert mcp["args"] == ["-E", "-s", "-B", "${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
     old_hooks = json.loads(before["hooks/hooks.json"])
     hooks = json.loads((first / "hooks/hooks.json").read_text())
     for name, groups in hooks["hooks"].items():
         for old_group, group in zip(old_hooks["hooks"][name], groups):
             assert {k: v for k, v in group.items() if k != "hooks"} == {k: v for k, v in old_group.items() if k != "hooks"}
             for old, hook in zip(old_group["hooks"], group["hooks"]):
-                assert {k: v for k, v in hook.items() if k != "command"} == {k: v for k, v in old.items() if k != "command"}
-                assert hook["command"].endswith("|| true")
-                assert shlex.split(hook["command"])[1:5] == [installer._python_cmd(), "-E", "-s", "-B"]
+                owned = {"command", "args", "onFailure"} if os.name == "nt" else {"command"}
+                assert {k: v for k, v in hook.items() if k not in owned} == {k: v for k, v in old.items() if k not in owned}
+                if os.name == "nt":
+                    assert hook["command"] == installer._python_cmd()
+                    assert hook["args"][:3] == ["-I", "-B", "-c"] and hook["onFailure"] == "continue"
+                else:
+                    assert hook["command"].endswith("|| true")
+                    assert shlex.split(hook["command"])[1:5] == [installer._python_cmd(), "-E", "-s", "-B"]
                 assert "mise_python.py" not in hook["command"]
     version = lambda root: json.loads((root / ".claude-plugin/plugin.json").read_text())["version"]
     assert version(first) == version(second)
@@ -142,7 +157,8 @@ def test_smoke_and_claude_cli_registration_use_selected_python(installer, monkey
     calls = []
     monkeypatch.setattr(installer.subprocess, "run", lambda argv, **k: calls.append(argv) or installer.subprocess.CompletedProcess(argv, 0, "done", ""))
     assert installer._smoke_installed_runtime(tmp_path)[0]
-    assert calls[0][:4] == [installer._python_cmd(), "-E", "-s", "-B"]
+    flags = ["-I", "-B", "-c"] if os.name == "nt" else ["-E", "-s", "-B"]
+    assert calls[0][:4] == [installer._python_cmd(), *flags]
     monkeypatch.setattr(installer.shutil, "which", lambda *a: "/fake/claude")
     monkeypatch.setattr(installer, "_run", lambda argv, dry: calls.append(argv) or (0, "claude 1.0", ""))
     monkeypatch.setattr(installer, "sync_claude_payload", lambda *a: tmp_path / "plugin")
@@ -151,7 +167,7 @@ def test_smoke_and_claude_cli_registration_use_selected_python(installer, monkey
     assert result.ok
     command = next(argv for argv in calls if argv[:4] == ["claude", "mcp", "add", "harness"])
     index = command.index("--")
-    assert command[index + 1:index + 5] == [installer._python_cmd(), "-E", "-s", "-B"]
+    assert command[index + 1:index + 5] == [installer._python_cmd(), *flags]
 
 
 def test_wiki_yaml_selection_precedes_writes_and_changes_identity(monkeypatch, tmp_path):
@@ -169,7 +185,11 @@ def test_wiki_yaml_selection_precedes_writes_and_changes_identity(monkeypatch, t
     assert module.prepare(target) == first
     transport = json.loads((first / "plugin/.mcp.json").read_text())["mcpServers"]["atlassian"]
     assert transport["command"] == "/managed/mise/python-one"
-    assert transport["args"] == ["-I", "-B", str(first / "plugin/scripts/launch.py")]
+    if os.name == "nt":
+        assert transport["args"][:3] == ["-I", "-B", "-c"]
+        assert str(first / "plugin/scripts/launch.py") in transport["args"]
+    else:
+        assert transport["args"] == ["-I", "-B", str(first / "plugin/scripts/launch.py")]
     monkeypatch.setattr(module, "select_python", lambda **k: "/managed/mise/python-two")
     assert module.prepare(target) != first
 

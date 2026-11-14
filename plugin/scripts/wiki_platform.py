@@ -381,12 +381,18 @@ def same_file(left, right):
         return False
 
 
-def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False):
+def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, capture_stderr=False,
+                input_bytes=None):
     """Run a private helper with bounded bytes and complete owned-tree cleanup."""
     if timeout <= 0 or type(limit) is not int or limit < 0:
         raise ValueError("Positive timeout and nonnegative byte limit required")
+    if type(capture_stderr) is not bool:
+        raise ValueError("Separate stderr capture must be a boolean")
     if os.name == "nt":
-        return _native.run_bounded(argv, cwd=cwd, env=env, timeout=timeout, limit=limit)
+        return _native.run_bounded(argv, cwd=cwd, env=env, timeout=timeout, limit=limit,
+                                   capture_stderr=capture_stderr, input_bytes=input_bytes)
+    if capture_stderr or input_bytes is not None:
+        raise NotImplementedError("Private-helper stderr capture and input require Windows")
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                start_new_session=True)
@@ -440,9 +446,10 @@ def native_executable(command, *, cwd, env):
     return _native.native_executable(command, cwd=cwd, env=env)
 
 
-def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None):
-    """Run a native verification command with bounded merged partial output."""
+def execute_bounded(argv, *, cwd, env, timeout, limit, cancelled=None, input_bytes=None, capture_stderr=False):
+    """Run a native command with a combined budget and optional separate stderr."""
     if os.name != "nt":
         raise NotImplementedError("Native verification execution requires Windows")
     return _native.execute_bounded(argv, cwd=cwd, env=env, timeout=timeout,
-                                   limit=limit, cancelled=cancelled, input_bytes=input_bytes)
+                                   limit=limit, cancelled=cancelled, input_bytes=input_bytes,
+                                   capture_stderr=capture_stderr)

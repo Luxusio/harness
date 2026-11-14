@@ -7,7 +7,14 @@ import sys
 def main():
     root = Path(__file__).resolve().parents[1]
     helpers = root / 'scripts'
-    if not (helpers / 'personal_feedback.py').is_file():
+    probe = helpers / 'personal_feedback.py'
+    if os.name == 'nt':
+        value = str(probe)
+        value = '\\\\?\\UNC\\' + value[2:] if value.startswith('\\\\') else '\\\\?\\' + value
+        present = os.path.isfile(value)
+    else:
+        present = probe.is_file()
+    if not present:
         helpers = root.parent / 'plugin/scripts'
     # Explicit trusted code roots are required because installed hosts use -I.
     # Keep consuming cwd for project selection.
@@ -20,7 +27,11 @@ def main():
         from mise_python import select_python, MisePythonError
         try:
             interpreter = select_python(require_yaml=True, _requested_version='3.12')
-            os.execv(interpreter, [interpreter, '-I', '-B', str(Path(__file__).resolve()), *sys.argv[2:]])
+            argv = [interpreter, '-I', '-B', str(Path(__file__).resolve()), *sys.argv[2:]]
+            if os.name == 'nt' and helpers == root / 'scripts':
+                from native_cli import owned_python_argv
+                argv = owned_python_argv(interpreter, Path(__file__).resolve(), sys.argv[2:])
+            os.execv(interpreter, argv)
         except MisePythonError as error:
             print(str(error), file=sys.stderr)
             return 1

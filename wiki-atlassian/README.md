@@ -272,6 +272,10 @@ python install.py --runtime codex
 python install.py --runtime claude
 ```
 
+These commands also run in native Windows PowerShell. The selected host CLI
+must be installed on PATH; its native executable or packaged Node entrypoint
+is invoked directly, without executing an npm batch shim through a shell.
+
 The installer prepares a versioned standalone payload and registers its local
 marketplace through the selected host CLI. It preserves existing plugin trees;
 the installed MCP configuration resolves the Python interpreter and private

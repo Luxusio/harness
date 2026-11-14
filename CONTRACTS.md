@@ -192,8 +192,10 @@ edits are lost.
 
 **Title:** Hooks must fail-safe.
 **When:** Any hook command in `plugin/hooks/hooks.json`.
-**Enforced by:** Convention: every hook ends with `|| true` and has
-`timeout ≤ 10`.
+**Enforced by:** Every hook has `timeout ≤ 10` and fails safely through
+POSIX `|| true` or the actual native host equivalent (Claude exec hooks use
+`onFailure: "continue"`; Codex Windows commands return success after preserving
+hook output). Explicit denial JSON remains effective.
 **On violation:** hard-block at review — a new hook without fail-safe is
 rejected.
 **Why:** A flaky hook that blocks the main session is worse than a missing

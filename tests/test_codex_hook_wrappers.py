@@ -302,7 +302,13 @@ class TestCodexHookWrappers(unittest.TestCase):
         calls: list[str] = []
 
         def fake_run(*args, **kwargs):
-            calls.append(Path(args[0][4]).name)
+            entry = SCRIPTS / "prewrite_gate.py"
+            if os.name == "nt":
+                from native_cli import owned_python_argv
+                self.assertEqual(args[0], owned_python_argv(sys.executable, entry))
+            else:
+                self.assertEqual(args[0], [sys.executable, "-E", "-s", "-B", str(entry)])
+            calls.append(entry.name)
             self.assertEqual(kwargs["timeout"], mod.CHILD_TIMEOUT_SECONDS)
             return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
 
@@ -692,9 +698,12 @@ def test_generated_pretool_command_keeps_real_source_denial_with_poisoned_python
     install = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = install
     spec.loader.exec_module(install)
-    command = install._codex_hooks_config(REPO_ROOT / "plugin")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assignment, *argv = shlex.split(command)
-    assert assignment == "PYTHONDONTWRITEBYTECODE=1"
+    hook = install._codex_hooks_config(REPO_ROOT / "plugin")["hooks"]["PreToolUse"][0]["hooks"][0]
+    if os.name == "nt":
+        argv = [os.environ["COMSPEC"], "/d", "/s", "/c", hook.get("commandWindows", hook["command"])]
+    else:
+        assignment, *argv = shlex.split(hook["command"])
+        assert assignment == "PYTHONDONTWRITEBYTECODE=1"
     repo = tmp_path / "consumer"
     (repo / ".git").mkdir(parents=True)
     manifest = repo / "doc/harness/manifest.yaml"
@@ -720,8 +729,16 @@ def test_generated_pretool_command_keeps_real_source_denial_with_poisoned_python
 def test_session_start_only_runs_recovery_and_project_format_from_payload_cwd(tmp_path):
     mod = _load("hook_session_start")
     calls = []
+    expected = {}
+    for name in ("verification_gap_check.py", "project_format_check.py"):
+        if os.name == "nt":
+            from native_cli import owned_python_argv
+            command = owned_python_argv(sys.executable, SCRIPTS / name)
+        else:
+            command = [sys.executable, "-E", "-s", "-B", str(SCRIPTS / name)]
+        expected[tuple(command)] = name
     def run(args, **kwargs):
-        calls.append((Path(args[4]).name, kwargs["cwd"]))
+        calls.append((expected[tuple(args)], kwargs["cwd"]))
         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
     with mock.patch.object(mod.subprocess, "run", side_effect=run), \
          mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": str(tmp_path)}))):

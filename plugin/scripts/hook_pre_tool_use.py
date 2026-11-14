@@ -45,8 +45,12 @@ def _run(script: str, payload: bytes) -> tuple[bytes, bool]:
     A timeout, a spawn failure, or any other error returns ``(b"", False)``.
     """
     try:
+        argv = [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, script)]
+        if os.name == "nt":
+            from native_cli import owned_python_argv
+            argv = owned_python_argv(sys.executable, os.path.join(SCRIPTS_DIR, script))
         proc = subprocess.run(
-            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, script)],
+            argv,
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

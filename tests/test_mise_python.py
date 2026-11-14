@@ -22,6 +22,26 @@ sys.path.insert(0, str(ROOT / "plugin/scripts"))
 import mise_python
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires actual native Windows command lookup")
+def test_native_context_does_not_select_a_caller_directory_mise_shadow(tmp_path, monkeypatch):
+    from _wiki_windows import ensure_private_directory
+
+    candidates = [Path(directory) / "mise.exe" for directory in os.environ.get("PATH", "").split(os.pathsep)
+                  if Path(directory).is_absolute()]
+    actual = next((candidate for candidate in candidates if candidate.is_file()), None)
+    assert actual is not None, "actual mise.exe must be present in the Native fixture PATH"
+    caller = ensure_private_directory(tmp_path / "ordinary checkout 한글 with spaces")
+    shadow = caller / "mise.exe"
+    # A benign known binary is sufficient: this test resolves context only,
+    # and never executes either the shadow or a modeled mise provider.
+    shutil.copyfile(sys.executable, shadow)
+    monkeypatch.chdir(caller)
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
+    _, resolved, _, _, _ = mise_python._context()
+    assert Path(resolved).samefile(actual)
+    assert not Path(resolved).samefile(shadow)
+
+
 @pytest.fixture
 def provider(tmp_path, monkeypatch):
     """Literal mise/probe process results; never a native runtime claim."""

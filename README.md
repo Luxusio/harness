@@ -40,6 +40,12 @@ the installer itself is launched from a project virtual environment. It never
 records the checkout's Python path. Wiki-atlassian also needs PyYAML in the
 selected mise interpreter. Missing prerequisites fail without installing them.
 
+Native Windows uses the same installer: `python install.py --claude-only` or
+`python install.py --codex-only`. Install the native host CLI on PATH; Bash,
+WSL and administrator-created symlinks are not required. Installed commands
+use the selected mise Python, even after the source checkout is removed.
+Windows installation requires Claude Code 2.1.295+ or Codex 0.167.2+.
+
 For Codex commands, see [README.codex.md](README.codex.md#install--3-commands).
 
 Run these commands in Claude Code:
@@ -211,6 +217,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `batch_finish.py` | Integration helper (wrapped by `batch_state.py finish` for managed pools) for one closed lead: checks (returned commit is the branch tip, no merge commit, lead worktree clean, main checkout clean and on a branch), rebases in the lead worktree, fast-forwards the main checkout, harvests through `batch_harvest.py`, unlocks only a locked worktree, then plain `git worktree remove` and `git branch -d`; selected state-managed S1 delegates its sole guarded single-force removal to `batch_harvest.py`; `--resume` for a lead resolved by hand in the integration WBS; status `integrated`/`kept`/`conflict`/`ff-refused` as exit 0/3/4/5 (`error`, exit 1, on an unexpected failure) | stdout (JSON) |
 | `batch_harvest.py` | `harness:batch` coordinator step: copies an integrated (rebased and fast-forwarded) lead worktree's gitignored WBS evidence and learnings into the main checkout before `git worktree remove`; refuses unregistered, not-yet-integrated, or detached-HEAD (mid-rebase) worktrees, links, non-regular files, and archive collisions. Also owns guarded S1 disposal after durable archive, identity/content and preserved-object proof; ordinary removal stays no-force | `doc/harness/archive/batch/`, `doc/harness/learnings.jsonl` |
 | `install_smoke.py` | Drives an installed runtime tree once — imports registered hook modules and checks the receipt-free public WBS lifecycle; run by `install.py` after each sync and on the default run's SYNCHRONIZED skip path | stdout / exit status |
+| `native_cli.py` | Internal native host resolver and Windows source loader; preserves canonical entrypoint paths without shell shims or an extra process | Python API |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `document_destination.py` | Select local or configured external business-document policy without network calls | Project common YAML |
 | `personal_feedback.py` | Inspect a private improvement inbox, check access, or send stdin once with independent authentication | User-home settings; explicit native comment |

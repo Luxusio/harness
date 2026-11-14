@@ -27,7 +27,8 @@ Exit code:
   1   Hard drift (markers broken, fields missing, duplicate ids)
 
 Stdlib only. The exit code is advisory; should this ever be wired to a hook,
-C-12 requires the command to end in `|| true`.
+C-12 requires POSIX `|| true` or the native host fail-safe equivalent;
+explicit denial JSON remains effective.
 """
 from __future__ import annotations
 

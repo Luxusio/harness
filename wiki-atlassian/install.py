@@ -21,9 +21,10 @@ sys.path.insert(0, str(HELPERS))
 from wiki_platform import (atomic_write, ensure_private_directory, file_lock, run_bounded,
                            safe_read, safe_metadata_read, trusted_metadata_directory)
 from mise_python import select_python
+from native_cli import host_command, owned_python_argv
 
 PAYLOAD_DIRS = ('.claude-plugin', '.codex-plugin', 'skills', 'agents', 'scripts', 'wiki_atlassian')
-SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py', 'mise_python.py')
+SHARED_HELPERS = ('personal_feedback.py', 'document_destination.py', 'wiki_platform.py', '_wiki_windows.py', 'mise_python.py', 'native_cli.py')
 VERSION = re.compile(r'0\.2\.0\+h[0-9a-f]{16}')
 LEGACY_SOURCE = re.compile(r'\./packages/(0\.1\.0\+h[0-9a-f]{16})/plugin')
 LEGACY_MAX_ENTRIES, LEGACY_MAX_BYTES = 1024, 128 * 1024 * 1024
@@ -38,7 +39,45 @@ def marketplace_bytes(relative):
         'plugins': [{'name': 'wiki-atlassian', 'source': relative}]}, indent=2) + '\n').encode('utf-8')
 
 
+def _io_path(path):
+    value = os.path.abspath(path)
+    if os.name != 'nt':
+        return value
+    if value.startswith(("\\\\?\\", "\\\\.\\")) or '..' in Path(path).parts:
+        raise ValueError('Canonical ordinary paths required')
+    return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+
+
+def _raise_walk(error):
+    raise error
+
+
 def _source_files():
+    if os.name == 'nt':
+        from wiki_platform import source_snapshot, trusted_source_directory
+        result = {}
+        for name in PAYLOAD_DIRS:
+            directory = ROOT / name
+            with trusted_source_directory(directory):
+                for base, dirs, files in os.walk(_io_path(directory), followlinks=False, onerror=_raise_walk):
+                    logical = directory / os.path.relpath(base, _io_path(directory))
+                    dirs[:] = [part for part in dirs if part != '__pycache__']
+                    for part in dirs:
+                        with trusted_source_directory(logical / part):
+                            pass
+                    for part in files:
+                        if not part.endswith(('.pyc', '.pyo')):
+                            path = logical / part
+                            result[path.relative_to(ROOT).as_posix()] = source_snapshot(path, 16 * 1024 * 1024)[0]
+        required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
+                    'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references', 'cursors', 'policy')
+        if any('wiki_atlassian/' + name + '.py' not in result for name in required):
+            raise ValueError('Python wiki source is incomplete; preserve the current installation')
+        for name in ('.mcp.json', 'PROVENANCE.md', 'README.md', 'pyproject.toml'):
+            result[name] = source_snapshot(ROOT / name, 1024 * 1024)[0]
+        for name in SHARED_HELPERS:
+            result['scripts/' + name] = source_snapshot(HELPERS / name, 1024 * 1024)[0]
+        return result
     result = {}
     required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
                 'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references', 'cursors', 'policy')
@@ -68,6 +107,22 @@ def _source_files():
 
 
 def _inventory(root, private=True, *, legacy=False):
+    if os.name == 'nt':
+        from wiki_platform import metadata_tree_inventory, safe_metadata_snapshot
+        if private:
+            ensure_private_directory(root)
+        rows = metadata_tree_inventory(root, max_entries=LEGACY_MAX_ENTRIES if legacy else 100000,
+                                       max_bytes=LEGACY_MAX_BYTES if legacy else 256 * 1024 * 1024)
+        result = {}
+        for name, item in rows.items():
+            if item['kind'] != 'file':
+                continue
+            limit = 64 * 1024 * 1024 if legacy and name == 'plugin/lib/wiki-atlassian.jar' else 16 * 1024 * 1024
+            content, _ = safe_metadata_snapshot(Path(root) / name, limit)
+            if hashlib.sha256(content).hexdigest() != item['sha256']:
+                raise ValueError('Payload changed during inventory')
+            result[name] = content
+        return result
     def refuse_partial(error):
         raise error
 
@@ -122,9 +177,11 @@ def prepare(data_dir):
     transport = json.loads(files['.mcp.json'])
     transport['mcpServers']['atlassian']['command'] = interpreter
     transport['mcpServers']['atlassian']['args'] = ['-I', '-B', str(destination / 'plugin/scripts/launch.py')]
+    if os.name == 'nt':
+        transport['mcpServers']['atlassian']['args'] = owned_python_argv(interpreter, destination / 'plugin/scripts/launch.py')[1:]
     files['.mcp.json'] = (json.dumps(transport, indent=2) + '\n').encode('utf-8')
     with file_lock(parent / 'publish.lock', blocking=False):
-        if os.path.lexists(destination):
+        if os.path.lexists(_io_path(destination)):
             ensure_private_directory(destination)
             if _inventory(destination / 'plugin') != files:
                 raise ValueError('Existing immutable plugin payload differs; preserve it and inspect')
@@ -141,13 +198,27 @@ def prepare(data_dir):
             if _inventory(plugin) != files:
                 raise ValueError('Staged plugin payload changed; publication refused')
             # All handles owned by inventory/read have closed, including on Windows.
-            os.rename(stage, destination)
+            if os.name == 'nt':
+                from wiki_platform import metadata_rename_directory
+                metadata_rename_directory(stage, destination)
+            else:
+                os.rename(stage, destination)
             ensure_private_directory(destination)
             if _inventory(destination / 'plugin') != files:
                 raise ValueError('Published plugin payload changed; registration refused')
         finally:
-            if stage.exists():
-                shutil.rmtree(stage)
+            if os.path.lexists(_io_path(stage)):
+                if os.name == 'nt':
+                    from wiki_platform import metadata_tree_inventory, metadata_remove, metadata_remove_empty
+                    rows = metadata_tree_inventory(stage, max_entries=100000, max_bytes=256 * 1024 * 1024)
+                    for name, item in rows.items():
+                        if item['kind'] == 'file':
+                            metadata_remove(stage / name, expected_sha256=item['sha256'], max_bytes=256 * 1024 * 1024)
+                    for name in sorted((name for name, item in rows.items() if item['kind'] == 'dir'), key=lambda name: name.count('/'), reverse=True):
+                        metadata_remove_empty(stage / name)
+                    metadata_remove_empty(stage)
+                else:
+                    shutil.rmtree(stage)
     return destination
 
 
@@ -188,7 +259,11 @@ def marketplace(payload):
             # Never erase either payload. Restore only the exact selection we own.
             if safe_read(path, 65536, private=True) == marketplace_bytes('./versions/' + payload.name + '/plugin'):
                 if old is None:
-                    path.unlink()
+                    if os.name == 'nt':
+                        from wiki_platform import metadata_remove
+                        metadata_remove(path, expected_sha256=hashlib.sha256(marketplace_bytes('./versions/' + payload.name + '/plugin')).hexdigest(), max_bytes=65536)
+                    else:
+                        path.unlink()
                 else:
                     atomic_write(path, old)
             raise
@@ -244,33 +319,7 @@ def _legacy_selection(root, metadata, selected, version):
 
 
 def _host_command(runtime):
-    executable = shutil.which(runtime + '.exe') if os.name == 'nt' else None
-    executable = executable or shutil.which(runtime)
-    if executable is None:
-        raise ValueError(runtime.title() + ' CLI is unavailable')
-    path = Path(executable)
-    if os.name == 'nt' and path.suffix.lower() in ('.cmd', '.bat'):
-        # Do not interpolate user paths into cmd.exe. Resolve known npm layouts
-        # to a real native executable or a Node program with literal argv.
-        modules = path.parent / 'node_modules'
-        if runtime == 'codex':
-            targets = {'AMD64': 'x86_64-pc-windows-msvc', 'ARM64': 'aarch64-pc-windows-msvc'}
-            target = targets.get(os.environ.get('PROCESSOR_ARCHITECTURE', '').upper())
-            candidates = [modules / '@openai/codex/vendor' / str(target) / 'codex/codex.exe']
-            if target:
-                candidates.append(modules / ('@openai/codex-win32-' + ('arm64' if target.startswith('aarch64') else 'x64')) / 'vendor' / target / 'codex/codex.exe')
-            for candidate in candidates:
-                if candidate.is_file() and not candidate.is_symlink():
-                    safe_read(candidate, 256 * 1024 * 1024)
-                    return [str(candidate)]
-        elif runtime == 'claude':
-            script = modules / '@anthropic-ai/claude-code/cli.js'
-            node = shutil.which('node.exe')
-            if node and script.is_file() and not script.is_symlink():
-                safe_read(script, 64 * 1024 * 1024)
-                return [node, str(script)]
-        raise ValueError('Native host executable unavailable; install the native CLI or a supported npm layout without a shell wrapper')
-    return [str(path)]
+    return host_command(runtime)
 
 
 def _verify_selected(runtime, payload, command):
@@ -325,6 +374,9 @@ def _failure_reason(exc, generic):
 
 
 def main():
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', choices=('codex', 'claude'), action='append')
     parser.add_argument('--prepare-only', action='store_true')

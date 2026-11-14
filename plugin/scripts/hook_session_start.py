@@ -34,8 +34,12 @@ def _run(args: list[str], payload: bytes, *, deadline: float) -> bytes:
     if remaining <= 0:
         return b""
     try:
+        argv = [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, args[0]), *args[1:]]
+        if os.name == "nt":
+            from native_cli import owned_python_argv
+            argv = owned_python_argv(sys.executable, os.path.join(SCRIPTS_DIR, args[0]), args[1:])
         proc = subprocess.run(
-            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, args[0]), *args[1:]],
+            argv,
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

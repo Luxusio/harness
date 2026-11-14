@@ -167,13 +167,12 @@ def main() -> int:
         remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS
         if remaining > 0:
             try:
+                argv = [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "tool_routing.py"), "--goal-hint-worker"]
+                if os.name == "nt":
+                    from native_cli import owned_python_argv
+                    argv = owned_python_argv(sys.executable, os.path.join(SCRIPTS_DIR, "tool_routing.py"), ["--goal-hint-worker"])
                 proc = subprocess.run(
-                    [
-                        sys.executable,
-                        "-E", "-s", "-B",
-                        os.path.join(SCRIPTS_DIR, "tool_routing.py"),
-                        "--goal-hint-worker",
-                    ],
+                    argv,
                     input=payload,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
@@ -199,8 +198,12 @@ def main() -> int:
     if remaining <= 0:
         return 0
     try:
+        argv = [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "tool_routing.py")]
+        if os.name == "nt":
+            from native_cli import owned_python_argv
+            argv = owned_python_argv(sys.executable, os.path.join(SCRIPTS_DIR, "tool_routing.py"))
         proc = subprocess.run(
-            [sys.executable, "-E", "-s", "-B", os.path.join(SCRIPTS_DIR, "tool_routing.py")],
+            argv,
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

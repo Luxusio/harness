@@ -195,7 +195,7 @@ def test_private_payload_accepts_frozen_readonly_sources_without_modifying_them(
     for name in (".mcp.json", "PROVENANCE.md", "README.md", "pyproject.toml"):
         shutil.copyfile(PLUGIN / name, wiki / name)
     helpers = source / "plugin/scripts"; helpers.mkdir(parents=True)
-    for name in ("personal_feedback.py", "document_destination.py", "wiki_platform.py", "_wiki_windows.py", "mise_python.py"):
+    for name in module.SHARED_HELPERS:
         shutil.copyfile(ROOT / "plugin/scripts" / name, helpers / name)
     paths = [source, *source.rglob("*")]
     for path in paths:

@@ -10,6 +10,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 try:
@@ -685,6 +686,127 @@ def test_native_subprocess_utf8_bytes_and_shell_script_rejection(private):
     script.write_text("exit /b 0", encoding="ascii")
     with pytest.raises(ValueError):
         win.run_bounded([str(script)], cwd=private, env=dict(os.environ))
+
+
+def test_native_separate_capture_preserves_json_stdout_and_utf8_stderr(private):
+    from wiki_platform import execute_bounded
+
+    expected = dict(status="running", message="소식 中文 😀")
+    stdout = (json.dumps(expected, ensure_ascii=False) + "\n").encode("utf-8")
+    stderr = "경고: harmless PATH alias warning 한글\n".encode("utf-8")
+    code = f"import os;os.write(2,{stderr!r});os.write(1,{stdout!r})"
+    argv = [sys.executable, "-I", "-B", "-c", code]
+    separate = execute_bounded(argv, cwd=private, env=dict(os.environ), timeout=5,
+                               limit=4096, capture_stderr=True)
+    assert separate["returncode"] == 0 and not separate["error"], separate
+    assert separate["output"] == stdout and separate["stderr"] == stderr
+    assert json.loads(separate["output"]) == expected
+    merged = execute_bounded(argv, cwd=private, env=dict(os.environ), timeout=5, limit=4096)
+    assert merged["returncode"] == 0 and not merged["error"], merged
+    assert merged["output"] == stderr + stdout, "default merged-output contract changed"
+
+
+def test_native_private_helper_streams_and_publication_preserve_user_cwd_fence(private):
+    from wiki_platform import execute_bounded, native_executable, run_bounded
+
+    consumer = win.ensure_private_directory(private / "retained consumer")
+    staged = win.ensure_private_directory(private / "owned staged publication")
+    published = private / "owned published directory"
+    original = b"exact private publication bytes\x00\xff"
+    win.atomic_write(staged / "preserve.bin", original)
+    request = dict(message="private helper stdin 한글 😀")
+    raw = json.dumps(request, ensure_ascii=False).encode("utf-8")
+    warning = "private helper warning 中文\n".encode("utf-8")
+    code = (
+        "import json,os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);"
+        "from wiki_platform import metadata_rename_directory;"
+        "value=json.loads(sys.stdin.buffer.read());"
+        f"os.write(2,{warning!r})\n"
+        "try:\n metadata_rename_directory(Path(sys.argv[2]),Path(sys.argv[3]))\n"
+        "except OSError:\n print(json.dumps(dict(published=False)),flush=True);raise SystemExit(17)\n"
+        "print(json.dumps(dict(published=True,request=value),ensure_ascii=True),flush=True)\n")
+    command = [native_executable(sys.executable, cwd=consumer, env=dict(os.environ)),
+               "-I", "-B", "-c", code, str(SCRIPTS), str(staged), str(published)]
+    refused = execute_bounded(command, cwd=consumer, env=dict(os.environ), timeout=5,
+                              limit=4096, input_bytes=raw, capture_stderr=True)
+    assert refused["returncode"] == 17 and not refused["error"], refused
+    assert json.loads(refused["output"]) == dict(published=False)
+    assert refused["stderr"] == warning
+    assert win.safe_read(staged / "preserve.bin", 128, private=True) == original
+    assert not published.exists()
+    admitted = run_bounded(command, cwd=consumer, env=dict(os.environ), timeout=5,
+                            limit=4096, input_bytes=raw, capture_stderr=True)
+    assert admitted.returncode == 0
+    assert json.loads(admitted.stdout) == dict(published=True, request=request)
+    assert admitted.stderr == warning
+    assert not staged.exists()
+    assert win.safe_read(published / "preserve.bin", 128, private=True) == original
+
+
+def test_native_private_helper_rejects_incomplete_stdin_after_child_closes_it(private):
+    from wiki_platform import run_bounded
+
+    pidfile = private / "early stdin close.pid"
+    code = ("import os,pathlib,sys;"
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()),encoding='ascii');"
+            "os.close(0);os.write(1,b'closed stdin early\\n')")
+    started = time.monotonic()
+    with pytest.raises(subprocess.SubprocessError, match="stdin delivery failed") as error:
+        run_bounded([sys.executable, "-I", "-B", "-c", code, str(pidfile)], cwd=private,
+                    env=dict(os.environ), timeout=5, limit=4096, capture_stderr=True,
+                    input_bytes=b"x" * (2 * 1024 * 1024))
+    assert time.monotonic() - started < 6
+    assert isinstance(error.value.stdout, bytes) and isinstance(error.value.stderr, bytes)
+    _dead(int(pidfile.read_text(encoding="ascii")))
+
+
+@pytest.mark.parametrize("stdout_size,stderr_size", [(0, 513), (192, 192)])
+def test_native_separate_capture_enforces_one_combined_byte_budget(private, stdout_size, stderr_size):
+    from wiki_platform import execute_bounded
+
+    limit = 256
+    code = f"import os;os.write(1,b'o'*{stdout_size});os.write(2,b'e'*{stderr_size})"
+    result = execute_bounded([sys.executable, "-I", "-B", "-c", code], cwd=private,
+                             env=dict(os.environ), timeout=5, limit=limit, capture_stderr=True)
+    assert result["error"] == "output limit exceeded", result
+    assert isinstance(result["output"], bytes) and isinstance(result["stderr"], bytes)
+    assert 0 < len(result["output"]) + len(result["stderr"]) <= limit
+
+
+@pytest.mark.parametrize("failure", ["timeout", "cancel"])
+def test_native_separate_capture_reaps_active_stderr_writer_and_process_tree(private, failure):
+    from wiki_platform import execute_bounded
+
+    pidfile = private / "separate descendant pids.json"
+    prefix = "active descendant stderr 한글\n".encode("utf-8")
+    child = (f"import os,time;os.write(2,{prefix!r})\n"
+             "for _ in range(3000):\n os.write(2,b'.');time.sleep(0.02)\n")
+    code = ("import json,os,pathlib,subprocess,sys,time;"
+            "os.write(1,b'{\"started\":true}\\n');"
+            f"p=subprocess.Popen([sys.executable,'-I','-B','-c',{child!r}]);"
+            "pathlib.Path(sys.argv[1]).write_text(json.dumps([os.getpid(),p.pid]),encoding='ascii');"
+            "time.sleep(60)")
+    cancelled = threading.Event()
+    timer = threading.Timer(2, cancelled.set) if failure == "cancel" else None
+    if timer:
+        timer.start()
+    started = time.monotonic()
+    try:
+        result = execute_bounded([sys.executable, "-I", "-B", "-c", code, str(pidfile)],
+            cwd=private, env=dict(os.environ), timeout=10 if timer else 2, limit=64 * 1024,
+            capture_stderr=True, cancelled=cancelled.is_set if timer else None)
+        assert result["error"] == ("parent execution ended" if timer else "timeout"), result
+        assert time.monotonic() - started < 6, result
+        assert json.loads(result["output"]) == dict(started=True)
+        assert result["stderr"].startswith(prefix), "descendant stderr writer never reached the boundary"
+        pids = json.loads(pidfile.read_text(encoding="ascii"))
+        assert len(pids) == 2
+        for pid in pids:
+            _dead(pid)
+    finally:
+        if timer:
+            timer.cancel()
+            timer.join()
 
 
 def test_native_early_stdout_close_keeps_requested_execution_deadline(private):
