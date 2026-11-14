@@ -141,6 +141,35 @@ def test_native_systemroot_is_implicit_measured_and_other_environment_stays_scop
     assert json.loads(refreshed["output"])["SYSTEMROOT"] == changed
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Native context child environment validation")
+@pytest.mark.parametrize("count", [31, 32])
+def test_native_implicit_os_environment_preserves_declared_name_budget(tmp_path, monkeypatch, count):
+    names = ["HARNESS_TEST_ENV_%02d" % index for index in range(count)]
+    for name in names:
+        monkeypatch.setenv(name, "harmless boundary value")
+    item = job(tmp_path, "environment_budget",
+               f"import json,os\nprint(json.dumps({{name: os.environ[name] for name in {names!r}}}))\n")
+    item.update(environment=names, requires=["executable:" + sys.executable])
+    first = execute(tmp_path, [item])["commands"][0]
+    assert first["status"] == "PASS", first
+    assert json.loads(first["output"]) == dict.fromkeys(names, "harmless boundary value")
+    assert execute(tmp_path, [item], "reuse")["commands"][0]["reused"]
+    monkeypatch.setenv(names[-1], "changed harmless value")
+    refreshed = execute(tmp_path, [item], "declared-change")["commands"][0]
+    assert refreshed["status"] == "PASS" and not refreshed["reused"], refreshed
+    assert refreshed["context_fingerprint"] != first["context_fingerprint"]
+    assert json.loads(refreshed["output"])[names[-1]] == "changed harmless value"
+
+
+def test_declared_environment_over_budget_is_rejected_before_execution(tmp_path):
+    item = job(tmp_path, "environment_over_budget", "from pathlib import Path\nPath('command-started').touch()\n")
+    item["environment"] = ["HARNESS_TEST_ENV_%02d" % index for index in range(33)]
+    with pytest.raises(ValueError, match="invalid environment"):
+        execute(tmp_path, [item])
+    assert not (tmp_path / "command-started").exists()
+    assert not result_path(tmp_path).exists()
+
+
 def test_shared_producer_reuse_selective_changes_and_lost_artifact(tmp_path):
     jobs = shared(tmp_path)
     first = execute(tmp_path, jobs)
@@ -299,23 +328,39 @@ def test_producer_output_aggregate_budget_and_bad_old_output_repair(tmp_path, mo
 def test_output_observation_deadline_failure_releases_leases(tmp_path, monkeypatch, reuse):
     import verification_target as vt
     import install_verified
-    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('ran').touch()\nPath('built').write_text('valid')\n",
+    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('built').write_text('valid')\n",
                kind="producer", outputs=["built"], resources=["output-deadline:" + str(tmp_path)])
     if reuse:
         assert execute(tmp_path, [item])["status"] == "PASS"
     if os.name == "nt":
-        # Native owners have independent clocks. Use actual LockFileEx
-        # contention to prove the bounded wait releases its result ownership.
-        (tmp_path / "ran").unlink(missing_ok=True)
-        held = runner._lease({"resource:" + item["resources"][0]: True})
-        assert held is not None
-        try:
-            with pytest.raises(TimeoutError, match="job resource lease timeout"):
-                execute(tmp_path, [item], "expired", timeout=0.1)
-            assert (tmp_path / "built").exists() == reuse
-            assert not (tmp_path / "ran").exists()
-        finally:
-            runner._close_leases(held)
+        with monkeypatch.context() as patch:
+            marker = native_owner_fault(patch, tmp_path, """import verification_target as vt
+import install_verified
+_fixture_manifest, _fixture_read = vt._manifest, install_verified._read_payload_file
+_fixture_expired = []
+def _fixture_output_manifest(root, paths, **kwargs):
+ if kwargs.get('policy', {}).get('artifacts') == ['built']:
+  assert kwargs.get('_deadline') is not None
+  _fixture_expired[:] = [kwargs['_deadline'] + 1]
+ return _fixture_manifest(root, paths, **kwargs)
+def _fixture_output_read(root, name, **kwargs):
+ if name == 'built':
+  clock = vt.time.monotonic
+  try:
+   vt.time.monotonic = lambda: _fixture_expired[0]
+   Path(_fixture_fault_marker).write_text('output read deadline expired in child')
+   return _fixture_read(root, name, **kwargs)
+  finally:
+   vt.time.monotonic = clock
+ return _fixture_read(root, name, **kwargs)
+vt._manifest = _fixture_output_manifest
+install_verified._read_payload_file = _fixture_output_read
+""")
+            failed = execute(tmp_path, [item], "expired")["commands"][0]
+        assert marker.read_text() == 'output read deadline expired in child'
+        assert failed['status'] == 'FAIL' and not failed['reused']
+        assert 'time budget exceeded' in failed['error']
+        assert (tmp_path / "built").read_text() == "valid"
         assert execute(tmp_path, [item], "recovered")["status"] == "PASS"
         return
     original_manifest, original_read = vt._manifest, install_verified._read_payload_file

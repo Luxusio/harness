@@ -274,7 +274,7 @@ def test_changed_payload_and_equal_reinstall_never_replace_loaded_cache(project,
     for rows in hooks.values():
         for row in rows:
             for hook in row['hooks']:
-                command = hook['command']
+                command = hook['commandWindows'] if os.name == 'nt' else hook['command']
                 if os.name == 'nt':
                     command = base64.b64decode(command.split('-EncodedCommand ', 1)[1].strip('"')).decode('utf-16-le')
                 assert str(new) in command

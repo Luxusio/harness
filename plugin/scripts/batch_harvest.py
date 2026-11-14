@@ -129,7 +129,10 @@ def _refuse_non_regular_tree(root: str) -> None:
     """Refuse symlinks, FIFOs, sockets, and devices anywhere under ``root``."""
     if os.name == "nt":
         from wiki_platform import metadata_tree_inventory
-        metadata_tree_inventory(Path(root), max_entries=100000, max_bytes=8 * 1024 ** 3)
+        try:
+            metadata_tree_inventory(Path(root), max_entries=100000, max_bytes=8 * 1024 ** 3)
+        except (OSError, ValueError) as exc:
+            raise HarvestError(f"refusing unsafe WBS evidence: {root}: {exc}") from exc
         return
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         for name in dirnames + filenames:

@@ -36,7 +36,8 @@ def installer(monkeypatch, tmp_path):
 
 
 def hook_commands(config):
-    return [hook["command"] for groups in config["hooks"].values()
+    key = "commandWindows" if os.name == "nt" else "command"
+    return [hook[key] for groups in config["hooks"].values()
             for group in groups for hook in group["hooks"] if hook.get("type") == "command"]
 
 
@@ -173,7 +174,7 @@ def test_smoke_and_claude_cli_registration_use_selected_python(installer, monkey
     assert calls[0][:4] == [installer._python_cmd(), *flags]
     monkeypatch.setattr(installer.shutil, "which", lambda *a: "/fake/claude")
     monkeypatch.setattr(installer, "host_command", lambda runtime, **kwargs: ["modeled-" + runtime])
-    monkeypatch.setattr(installer, "_run", lambda argv, dry: calls.append(argv) or (0, "claude 1.0", ""))
+    monkeypatch.setattr(installer, "_run", lambda argv, dry: calls.append(argv) or (0, "claude 2.1.322", ""))
     monkeypatch.setattr(installer, "sync_claude_payload", lambda *a: tmp_path / "plugin")
     monkeypatch.setattr(installer, "_verify_claude_selected_cache", lambda *a: (True, "verified"))
     result = installer.install_claude(dry_run=False, force=True)

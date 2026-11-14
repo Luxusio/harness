@@ -52,7 +52,7 @@ def _bash_blocks(text):
     return re.findall(r"```bash\n(.*?)```", text, re.DOTALL)
 
 
-def _cli_example(develop, kind, binary, command_args="command"):
+def _cli_example(develop, kind, binary, command_args="command", executable=BASE_PYTHON):
     section = (develop / "runtime-smoke.md").read_text().split("**CLI projects", 1)[1]
     blocks = _bash_blocks(section)
     # Include the delivered helper itself, rather than a test-authored runner.
@@ -62,8 +62,8 @@ def _cli_example(develop, kind, binary, command_args="command"):
         token = "<documented_safe_args>"
     example = next(block for block in blocks if token in block and block not in definitions)
     replacements = {
-        "<build_command>": f"{shlex.quote(BASE_PYTHON)} -B {shlex.quote(str(binary))} build",
-        "<binary_path>": f"{shlex.quote(BASE_PYTHON)} -B {shlex.quote(str(binary))}",
+        "<build_command>": f"{shlex.quote(executable)} -B {shlex.quote(str(binary))} build",
+        "<binary_path>": f"{shlex.quote(executable)} -B {shlex.quote(str(binary))}",
         "<documented_safe_args>": command_args,
         "<command>": "command",
     }
@@ -72,7 +72,7 @@ def _cli_example(develop, kind, binary, command_args="command"):
     return "\n".join([*definitions, example])
 
 
-def _powershell_cli_example(develop, kind, binary, command_args):
+def _powershell_cli_example(develop, kind, binary, command_args, executable=BASE_PYTHON):
     section = (develop / "runtime-smoke.md").read_text().split("**CLI projects", 1)[1]
     blocks = re.findall(r"```powershell\n(.*?)```", section, re.DOTALL)
     definitions = [block for block in blocks if "function Invoke-SmokeCapture" in block]
@@ -84,9 +84,9 @@ def _powershell_cli_example(develop, kind, binary, command_args):
         return "'" + value.replace("'", "''") + "'"
     prefix = ", ".join(map(literal, ["-B", str(binary)]))
     replacements = {
-        "<build_executable>": literal(BASE_PYTHON),
+        "<build_executable>": literal(executable),
         "<build_arguments>": prefix + ", 'build'",
-        "<binary_executable>": literal(BASE_PYTHON),
+        "<binary_executable>": literal(executable),
         "<binary_arguments>": prefix,
         "<documented_safe_arguments>": ", ".join(map(literal, shlex.split(command_args))),
     }
@@ -106,6 +106,8 @@ def harmless_cli(tmp_path):
         "if '--dry-run' in sys.argv:\n"
         "    print('unsupported --dry-run', file=sys.stderr)\n"
         "    sys.exit(7)\n"
+        "if os.environ.get('STDERR_OUTPUT') == '1':\n"
+        "    print('harmless stderr', file=sys.stderr)\n"
         "for _ in range(int(os.environ.get('OUTPUT_LINES', '1'))):\n"
         "    print('harmless output ' + 'x' * 128)\n"
         "status = int(os.environ.get('COMMAND_STATUS', '0'))\n"
@@ -114,23 +116,30 @@ def harmless_cli(tmp_path):
     return binary, tmp_path / "calls.jsonl"
 
 
-def _run_cli(develop, harmless_cli, kind, *, status=0, lines=1, command_args="command", pipefail=False):
+def _run_cli(develop, harmless_cli, kind, *, status=0, lines=1, command_args="command",
+             pipefail=False, executable=BASE_PYTHON, successful_prelude=False, stderr=False):
     binary, log = harmless_cli
     if os.name == "nt":
         shell = shutil.which("pwsh") or shutil.which("powershell")
         if not shell:
             shell = str(Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe")
-        command = [shell, "-NoProfile", "-NonInteractive", "-Command",
-                   _powershell_cli_example(develop, kind, binary, command_args)]
+        script = _powershell_cli_example(develop, kind, binary, command_args, executable)
+        if successful_prelude:
+            script = "& '" + BASE_PYTHON.replace("'", "''") + "' -B -c 'raise SystemExit(0)'\n" + script
+        command = [shell, "-NoProfile", "-NonInteractive", "-Command", script]
     else:
+        script = _cli_example(develop, kind, binary, command_args, executable)
+        if successful_prelude:
+            script = shlex.quote(BASE_PYTHON) + " -B -c 'raise SystemExit(0)'\n" + script
         command = ["bash", "-e", "-u", *(["-o", "pipefail"] if pipefail else []),
-                   "-c", _cli_example(develop, kind, binary, command_args)]
+                   "-c", script]
     result = subprocess.run(
         command,
-        cwd=binary.parent, env=dict(os.environ, CALL_LOG=str(log), COMMAND_STATUS=str(status), OUTPUT_LINES=str(lines)),
+        cwd=binary.parent, env=dict(os.environ, CALL_LOG=str(log), COMMAND_STATUS=str(status),
+                                   OUTPUT_LINES=str(lines), STDERR_OUTPUT="1" if stderr else "0"),
         capture_output=True, text=True, timeout=15,
     )
-    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     return result, calls
 
 
@@ -152,6 +161,24 @@ def test_unsupported_dry_run_never_falls_back_to_live_command(delivered_develop,
     result, calls = _run_cli(delivered_develop, harmless_cli, "command", command_args="command --dry-run")
     assert result.returncode == 7, (result.stdout, result.stderr, calls)
     assert calls == [["command", "--dry-run"]]
+
+
+def test_delivered_cli_missing_executable_fails_after_prior_success(delivered_develop, harmless_cli):
+    binary, _ = harmless_cli
+    missing = binary.parent / "definitely missing smoke executable.exe"
+    assert not missing.exists()
+    result, calls = _run_cli(delivered_develop, harmless_cli, "help",
+                             executable=str(missing), successful_prelude=True)
+    assert result.returncode != 0, (result.stdout, result.stderr)
+    assert calls == []
+    assert missing.name in result.stdout + result.stderr
+
+
+def test_delivered_cli_success_preserves_stderr_capture(delivered_develop, harmless_cli):
+    result, calls = _run_cli(delivered_develop, harmless_cli, "command", stderr=True)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert calls == [["command"]]
+    assert "harmless stderr" in result.stdout
 
 
 def _issued_git_target(tmp_path, monkeypatch):

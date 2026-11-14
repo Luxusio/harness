@@ -149,7 +149,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
     with (
         mock.patch.object(install, "host_command", return_value=["modeled-claude"]),
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
-        mock.patch.object(install, "_run", return_value=(0, "claude 2.1.0\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "claude 2.1.322\n", "")),
         mock.patch.object(install, "sync_claude_payload", return_value=installed),
         mock.patch.object(
             install, "_smoke_installed_runtime", return_value=failure,
@@ -172,7 +172,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
         mock.patch.object(install, "host_command", return_value=["modeled-codex"]),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", tmp_path / "codex-harness"),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
-        mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "codex 0.167.2\n", "")),
         mock.patch.object(install, "sync_codex_payload", return_value=installed),
         mock.patch.object(install, "install_codex_plugin_cache", return_value=cached),
         mock.patch.object(
@@ -214,7 +214,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     with (
         mock.patch.object(install, "host_command", return_value=["modeled-claude"]),
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
-        mock.patch.object(install, "_run", return_value=(0, "claude 2.1.0\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "claude 2.1.322\n", "")),
         mock.patch.object(
             install, "_claude_payload_state",
             return_value=(install.PAYLOAD_SYNCHRONIZED, "identical"),
@@ -246,7 +246,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
         mock.patch.object(install, "_select_codex_plugin", return_value=(True, "native selection stubbed for smoke call-site test")),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_install_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
-        mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "codex 0.167.2\n", "")),
         mock.patch.object(
             install, "_codex_payload_state",
             return_value=(install.PAYLOAD_SYNCHRONIZED, "identical"),
@@ -281,7 +281,7 @@ def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path, selected_
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", side_effect=lambda cmd, dry: (
             (0, json.dumps({"installed": [{"pluginId": "harness@harness", "version": "9.9.9", "installed": True, "enabled": True}]}), "")
-            if cmd[1:3] == ["plugin", "list"] else (0, "codex 0.130.0\n", "")
+            if cmd[1:3] == ["plugin", "list"] else (0, "codex 0.167.2\n", "")
         )),
         mock.patch.object(
             install, "_codex_payload_state",

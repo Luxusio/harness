@@ -313,10 +313,10 @@ def test_native_imported_archive_conversion_preserves_inventory_under_root_locks
     import batch_state
     import goal_migration
     repo, td, _, _ = public(tmp_path)
-    legacy_control(td)
     archive = repo / 'doc/harness/archive/batch/WBS__imported'
     archive.mkdir(parents=True)
     (archive / 'WBS.control.json').write_bytes((td / 'WBS.control.json').read_bytes())
+    legacy_control(td)
     legacy_control(archive, closed=True)
     history = archive / 'RECEIPTS.jsonl'
     history.write_bytes(b'opaque imported history\x00\xff')

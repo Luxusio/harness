@@ -576,10 +576,12 @@ def test_refuses_symlink_inside_task_evidence(tmp_path: Path):
     wbs_dir = _write_task(worktree, "WBS__demo")
     secret = tmp_path / "secret.txt"
     secret.write_text("secret\n", encoding="utf-8")
+    secret_before = secret.read_bytes()
     create_symlink(wbs_dir / "leak", secret)
-    with _raises((mod.HarvestError, ValueError), match="non-regular entry|nonlinked disk object"):
+    with _raises(mod.HarvestError, match="non-regular entry|unsafe WBS evidence"):
         _harvest(str(repo), str(worktree), "WBS__demo")
     assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
+    assert secret.read_bytes() == secret_before
 
 
 def test_refuses_symlinked_evidence_parent(tmp_path: Path):

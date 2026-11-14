@@ -699,6 +699,138 @@ def test_native_project_doc_security_write_failure_preserves_both_documents(nati
     assert str(path) in str(error.value) and str(backups[0]) in str(error.value)
 
 
+def _native_project_doc_descriptor(native, path):
+    import ctypes
+    from ctypes import wintypes
+
+    handle = native._open(path, 0)
+    try:
+        native._security(handle, "metadata")
+        owner, dacl, descriptor = native.P(), native.P(), native.P()
+        code = native._GetSecurityInfo(handle, 1, 1 | 4, ctypes.byref(owner), None,
+                                       ctypes.byref(dacl), None, ctypes.byref(descriptor))
+        if code:
+            raise native._error(code)
+        try:
+            control, revision = wintypes.WORD(), wintypes.DWORD()
+            getter = native._bind(native.A, "GetSecurityDescriptorControl", [
+                native.P, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)])
+            native._check(getter(descriptor, ctypes.byref(control), ctypes.byref(revision)))
+            header = ctypes.cast(dacl, ctypes.POINTER(native.ACL)).contents
+            return native._sid_text(owner), ctypes.string_at(dacl, header.size), bool(control.value & 0x1000)
+        finally:
+            native._LocalFree(descriptor)
+    finally:
+        native._close(handle)
+
+
+@pytest.mark.parametrize("variant", ["revoke-world-read", "tighten-protection"])
+def test_native_project_doc_preserves_acl_tightening_immediately_before_real_replace(
+    native_project_doc, monkeypatch, variant,
+):
+    import ctypes
+    from ctypes import wintypes
+
+    module, native, root = native_project_doc
+    path = root / "AGENTS.md"
+    with native._private_attributes() as attributes:
+        handle = native._open(path, native.GENERIC_WRITE, create=native.CREATE_NEW, attributes=attributes)
+        native._close(handle)
+    path.write_bytes(b"# Synthetic original\r\n")
+    setter = native._bind(native.A, "SetFileSecurityW", [wintypes.LPCWSTR, wintypes.DWORD, native.P])
+
+    def set_acl(*, world_read, protected):
+        grants = "".join("(A;;FA;;;" + sid + ")" for sid in (native.USER_SID, "SY", "BA"))
+        sddl = "D:" + ("P" if protected else "") + grants + ("(A;;GR;;;WD)" if world_read else "")
+        descriptor = native.P()
+        native._check(native._ConvertStringSecurityDescriptor(sddl, 1, ctypes.byref(descriptor), None))
+        try:
+            native._check(setter(native._win32_path(path),
+                                  4 | (0x80000000 if protected else 0x20000000), descriptor))
+        finally:
+            native._LocalFree(descriptor)
+
+    set_acl(world_read=variant == "revoke-world-read", protected=variant == "revoke-world-read")
+    before = _native_project_doc_descriptor(native, path)
+    bind = native._bind
+    calls = 0
+    tightened = None
+
+    def binding(dll, name, *args):
+        real = bind(dll, name, *args)
+        if name != "ReplaceFileW":
+            return real
+
+        def before_real_replace(*arguments):
+            nonlocal calls, tightened
+            calls += 1
+            set_acl(world_read=False, protected=True)
+            tightened = _native_project_doc_descriptor(native, path)
+            assert tightened != before, "the actual fixture ACL tightening must occur"
+            return real(*arguments)
+
+        return before_real_replace
+
+    monkeypatch.setattr(native, "_bind", binding)
+    assert module.update_project_doc(root, "AGENTS.md", ensure_routing=False,
+                                     ensure_contract_import=True)
+
+    assert calls == 1
+    assert _native_project_doc_descriptor(native, path) == tightened
+    assert path.read_bytes() == b"# Synthetic original\r\n@CONTRACTS.md\r\n"
+    assert [entry.name for entry in root.iterdir()] == ["AGENTS.md"]
+
+
+def test_native_project_doc_protection_only_readback_mismatch_preserves_both_documents(
+    native_project_doc, monkeypatch,
+):
+    import ctypes
+    from ctypes import wintypes
+
+    module, native, root = native_project_doc
+    path = root / "AGENTS.md"
+    original = b"# User original\r\n"
+    path.write_bytes(original)
+    before = _native_project_doc_descriptor(native, path)
+    bind = native._bind
+    reads = 0
+    injected = False
+
+    def binding(dll, name, *args):
+        real = bind(dll, name, *args)
+        if name != "GetSecurityDescriptorControl":
+            return real
+
+        def inconsistent_protection(descriptor, control, revision):
+            nonlocal reads, injected
+            result = real(descriptor, control, revision)
+            reads += 1
+            if result and reads == 2:
+                value = ctypes.cast(control, ctypes.POINTER(wintypes.WORD))
+                value.contents.value ^= 0x1000
+                injected = True
+            return result
+
+        return inconsistent_protection
+
+    with monkeypatch.context() as patch:
+        patch.setattr(native, "_bind", binding)
+        with pytest.raises(module._ProjectDocExchangeIncomplete, match="manual recovery required") as error:
+            module.update_project_doc(root, "AGENTS.md", ensure_routing=False,
+                                      ensure_contract_import=True)
+        assert reads == 2 and injected, "the fault must alter the real target control readback only"
+        assert isinstance(error.value.__cause__, ValueError)
+        assert "DACL protection" in str(error.value.__cause__)
+
+    # Real owner/DACL/protection remain correct; only the selected API's
+    # protection response was inconsistent. It must still stop publication.
+    assert _native_project_doc_descriptor(native, path) == before
+    assert path.read_bytes() == b"# User original\r\n@CONTRACTS.md\r\n"
+    backups = list(root.glob(".AGENTS.md.*.displaced"))
+    assert len(backups) == 1 and backups[0].read_bytes() == original
+    assert str(path) in str(error.value) and str(backups[0]) in str(error.value)
+
+
 def test_source_git_roots_reject_shell_metacharacters(tmp_path):
     setup_finalize = load_setup_finalize("setup_finalize_shell_root_test")
     repo = tmp_path / "repo"

@@ -186,6 +186,7 @@ function Invoke-SmokeCapture {
   param([int]$Lines, [string]$Executable, [string[]]$Arguments)
   $smokeOutput = [System.IO.Path]::GetTempFileName()
   try {
+    $global:LASTEXITCODE = 1
     & $Executable @Arguments > $smokeOutput 2>&1
     $smokeStatus = $LASTEXITCODE
     Get-Content -LiteralPath $smokeOutput -TotalCount $Lines

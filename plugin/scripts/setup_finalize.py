@@ -917,7 +917,7 @@ class _ProjectDocExchangeIncomplete(RuntimeError):
 
 @contextmanager
 def _project_doc_native_security(original):
-    """Retain a validated owner/DACL and restore it only onto an owned handle."""
+    """Capture live displaced security and restore it onto an owned handle."""
     from ctypes import wintypes
     from wiki_platform import _native
 
@@ -956,6 +956,27 @@ def _project_doc_native_security(original):
                 raise _native._error(result)
             if _native._security(replacement, "metadata") != expected:
                 raise ValueError("project-document owner or DACL changed during publication")
+            checked_owner, checked_dacl, checked_descriptor = _native.P(), _native.P(), _native.P()
+            result = _native._GetSecurityInfo(replacement, 1, 1 | 4, ctypes.byref(checked_owner), None,
+                                              ctypes.byref(checked_dacl), None,
+                                              ctypes.byref(checked_descriptor))
+            if result:
+                raise _native._error(result)
+            try:
+                if not checked_owner.value or not checked_dacl.value:
+                    raise ValueError("project-document owner and DACL are required")
+                checked_acl = ctypes.cast(checked_dacl, ctypes.POINTER(_native.ACL)).contents
+                checked = (_native._sid_text(checked_owner), hashlib.sha256(
+                    ctypes.string_at(checked_dacl, checked_acl.size)).hexdigest())
+                checked_control, checked_revision = wintypes.WORD(), wintypes.DWORD()
+                _native._check(get_control(checked_descriptor, ctypes.byref(checked_control),
+                                           ctypes.byref(checked_revision)))
+                if checked != expected:
+                    raise ValueError("project-document owner or DACL changed during publication")
+                if bool(checked_control.value & 0x1000) != bool(control.value & 0x1000):
+                    raise ValueError("project-document DACL protection changed during publication")
+            finally:
+                _native._LocalFree(checked_descriptor)
 
         yield preserve
     finally:
@@ -992,21 +1013,24 @@ def _exchange_project_doc_native(left: str, right: str) -> None:
                     _native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE | _native.FILE_SHARE_DELETE))
                 handles.append(handle)
                 _native._metadata_stamp(handle)
-            with _project_doc_native_security(handles[1]) as preserve_security:
-                if not replace(_project_doc_disk_path(right), _project_doc_disk_path(left),
-                               _project_doc_disk_path(backup), 0, None, None):
-                    code = ctypes.get_last_error()
-                    # In particular, error 1177 can leave the displaced original
-                    # at backup with the destination absent. No blind cleanup.
-                    raise _ProjectDocExchangeIncomplete(
-                        f"native project-document exchange failed ({code}); files preserved at "
-                        f"{left}, {right}, {backup}; manual recovery required") from _native._error(code)
-                try:
+            if not replace(_project_doc_disk_path(right), _project_doc_disk_path(left),
+                           _project_doc_disk_path(backup), 0, None, None):
+                code = ctypes.get_last_error()
+                # In particular, error 1177 can leave the displaced original
+                # at backup with the destination absent. No blind cleanup.
+                raise _ProjectDocExchangeIncomplete(
+                    f"native project-document exchange failed ({code}); files preserved at "
+                    f"{left}, {right}, {backup}; manual recovery required") from _native._error(code)
+            try:
+                # The retained original now names the displaced object. Read
+                # its live security after publication so a last-moment user
+                # tightening is preserved rather than replaced by old grants.
+                with _project_doc_native_security(handles[1]) as preserve_security:
                     preserve_security(handles[0])
-                except BaseException as exc:
-                    raise _ProjectDocExchangeIncomplete(
-                        f"native project-document security preservation failed; files preserved at "
-                        f"{left}, {right}, {backup}; manual recovery required") from exc
+            except BaseException as exc:
+                raise _ProjectDocExchangeIncomplete(
+                    f"native project-document security preservation failed; files preserved at "
+                    f"{left}, {right}, {backup}; manual recovery required") from exc
             try:
                 displaced = _native._open(backup, _native.DELETE,
                                           share=_native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE)

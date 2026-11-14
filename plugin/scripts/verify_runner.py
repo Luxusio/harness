@@ -31,6 +31,7 @@ MAX_RESULT_BYTES = 16 * 1024 * 1024
 _SCOPED_CONTEXT_CODE = "import verification_target as vt\nprint(json.dumps(vt._context(value, root)))"
 _SCOPED_EXECUTE_CODE = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
 _SCOPED_REQUEST_BYTES = 2 * 1024 * 1024
+_NATIVE_BASE_ENVIRONMENT = frozenset({"PATH", "SYSTEMROOT"})
 
 
 _NATIVE_EXECUTION_OWNER = False
@@ -390,7 +391,16 @@ def _native_scoped_main(operation):
     root, value = Path(request['root']), request['value']
     if operation == '--native-scoped-context':
         import verification_target as vt
-        result = vt._context(vt._spec(value), root)
+        names = value.get('environment', [])
+        if (not isinstance(names, list) or len(names) > 34
+                or any(not isinstance(name, str) for name in names)):
+            raise ValueError('invalid Native scoped environment')
+        # Fixed OS names are measured too, but do not consume the caller's
+        # existing 32-name public specification budget.
+        spec = vt._spec(dict(value, environment=[name for name in names
+                                                if name not in _NATIVE_BASE_ENVIRONMENT]))
+        spec['environment'] = sorted(set(names))
+        result = vt._context(spec, root)
     else:
         if (set(value) != {'argv', 'timeout', 'log_path'}
                 or not isinstance(value['argv'], list) or not 0 < len(value['argv']) <= 128
@@ -691,7 +701,7 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                           state="executor_error", status="FAIL", returncode=None, reused=False)
             try:
                 available = set(capabilities) | {"platform:" + sys.platform}
-                base_environment = {"PATH", "SYSTEMROOT"} if os.name == 'nt' else {"PATH"}
+                base_environment = _NATIVE_BASE_ENVIRONMENT if os.name == 'nt' else {"PATH"}
                 if os.name == 'nt':
                     from wiki_platform import native_executable
                     env = {key: os.environ[key] for key in set(job["spec"]["environment"]) | base_environment
