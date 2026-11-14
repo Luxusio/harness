@@ -51,6 +51,15 @@ actual QA, or explicitly selected document acceptance requirements.
   product review/QA or block PR readiness. A current explicit acceptance
   dependency on document publication still remains unfinished; never claim
   that pending documentation, native acceptance, or deployment succeeded.
+- Before implementation, establish the authorized behavior, its source
+  provenance and acceptance criteria. Normally publish the selected REQ first.
+  If external publication alone is unavailable or unconfirmed, retain the
+  known intent, source references and `sync_pending` disposition in the existing
+  PLAN and continue authorized product work unless publication is an explicit
+  prerequisite. This execution intent is not a substitute local business
+  document or a claim that new behavior was accepted. Unclear intent or a
+  publication prerequisite still stops the dependent work; never invent a REQ,
+  retry an unknown write, or create a local copy of remote business documents.
 - Automatic installation is conditional on this work's actual payload changes,
   including committed changes. Document work does not repair unrelated runtime
   drift. Explicit manual installation remains available and fully validated.
@@ -87,6 +96,15 @@ the same declaration can promote authorized executable work to `development`.
 `review-document` selects the existing `critic-document` method. No independent
 role target is needed for self-checked prose; any declared independent role still
 uses its applicable source view. WBS checks remain measured and owner-published.
+For an external or unavailable document destination, the PLAN owner may record
+the standalone metadata line `REQ: sync_pending` after establishing authorized
+intent, provenance, acceptance and the next synchronization action. Like a
+versioned native reference, it satisfies only the source gate's reference-intent
+presence check; it does not prove a remote document exists, confer source
+ownership, satisfy a publication dependency or authorize WBS completion. A valid
+existing native reference remains a reference when its connection is unavailable.
+Missing, malformed or quoted/example metadata does not establish this intent.
+Local destinations retain their existing durable REQ reference requirement.
 Choose explicit verification inputs for the actual deliverable and necessary
 references when they become known. Document/planning verification does not fall
 back to hashing the whole checkout. A pure document repository can explicitly

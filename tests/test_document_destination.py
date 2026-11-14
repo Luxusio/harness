@@ -336,7 +336,7 @@ def test_external_req_gate_uses_explicit_repo_root(tmp_path, monkeypatch):
     assert _wbs_has_req_reference(str(wbs), str(repo))
     assert _wbs_has_req_reference(str(wbs))  # infer repo from canonical WBS location
     write_config(repo, config(site="broken"))
-    assert not _wbs_has_req_reference(str(wbs), str(repo))
+    assert _wbs_has_req_reference(str(wbs), str(repo))  # reference presence survives an unavailable connection
 
 
 @pytest.mark.parametrize("present", [False, True])

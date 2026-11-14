@@ -531,6 +531,8 @@ class Replica:
             return self._error(error)
 
     def _search(self, data, manifest):
+        if self.settings.page_only and 'cursor' in data:
+            raise RemoteError('invalid_cursor', 'Exact-page search has at most one result and no continuation')
         query = data['query'].strip()
         limit, snippet = data.get('limit', 10), data.get('snippetLength', 400)
         if (not 1 <= len(query) <= 200 or type(limit) is not int or not 1 <= limit <= 25

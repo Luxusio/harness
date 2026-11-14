@@ -11,8 +11,11 @@ This test pins the new behavior: the gate must follow the back-link.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -107,3 +110,103 @@ def test_back_link_scan_skips_wbs_dir_tree(tmp_path):
     )
     # No REQ outside the tasks tree — only the decoy inside.
     assert _wbs_has_req_reference(str(this_task), str(repo)) is False
+
+
+def _wiki_manifest(repo, mode):
+    manifest = {"version": 7, "type": "library", "workflow": {"document_review": "self"},
+                "capabilities": {"strict_compliance_requires_delegation": True}}
+    if mode != "local":
+        manifest["wiki"] = {"backend": "atlassian", "enabled": True,
+                            "site": "https://fixture.invalid" if mode == "external" else "invalid",
+                            "spaces": [{"key": "TEAM"}]}
+    (repo / "doc/harness/manifest.yaml").write_text(json.dumps(manifest))
+
+
+@pytest.mark.parametrize("mode", ["external", "unavailable"])
+@pytest.mark.parametrize("metadata,expected", [
+    ("REQ: sync_pending\n", True), ("REQ: confluence:123@4\n", True),
+    ("REQ: sync_pending_extra\n", False), ("REQ: sync_pending extra\n", False),
+    ("Example REQ: sync_pending\n", False), ("> REQ: sync_pending\n", False),
+    ("    REQ: sync_pending\n", False), ("REQ: confluence:123@0\n", False),
+    ("```text\nREQ: sync_pending\n```\n", False),
+    ("~~~~example\nREQ: sync_pending\n~~~~\n", False),
+    ("```text\nREQ: confluence:123@4\n```\n", False), ("", False),
+])
+def test_external_reference_intent_is_explicit_bounded_metadata(tmp_path, monkeypatch, mode, metadata, expected):
+    repo = tmp_path / "repo"
+    td = _make_wbs_dir(repo, "WBS__example")
+    _wiki_manifest(repo, mode)
+    monkeypatch.setenv("ATLASSIAN_BASE_URL", "https://fixture.invalid")
+    monkeypatch.setenv("ATLASSIAN_EMAIL", "fixture@example.invalid")
+    monkeypatch.setenv("ATLASSIAN_API_TOKEN", "fixture-token")
+    (td / "PLAN.md").write_text("# Plan\n" + metadata)
+    assert _wbs_has_req_reference(str(td), str(repo)) is expected
+
+
+@pytest.mark.parametrize("kind", ["missing", "oversized", "invalid_utf8", "symlink"])
+def test_external_reference_does_not_accept_unsafe_plan(tmp_path, kind):
+    repo = tmp_path / "repo"
+    td = _make_wbs_dir(repo, "WBS__example")
+    _wiki_manifest(repo, "unavailable")
+    path = td / "PLAN.md"
+    if kind == "oversized":
+        path.write_text("REQ: sync_pending\n" + "x" * (1024 * 1024))
+    elif kind == "invalid_utf8":
+        path.write_bytes(b"REQ: sync_pending\n\xff")
+    elif kind == "symlink":
+        target = repo / "other.md"
+        target.write_text("REQ: sync_pending\n")
+        path.symlink_to(target)
+    assert not _wbs_has_req_reference(str(td), str(repo))
+
+
+@pytest.mark.parametrize("mode,metadata,assignment,allowed", [
+    ("external", "REQ: sync_pending", "current", True),
+    ("unavailable", "REQ: sync_pending", "current", True),
+    ("unavailable", "REQ: confluence:123@4", "current", True),
+    ("local", "REQ: sync_pending", "current", False),
+    ("external", "REQ: sync_pending extra", "current", False),
+    ("unavailable", "```text\nREQ: sync_pending\n```", "current", False),
+    ("unavailable", "", "current", False),
+    ("unavailable", "REQ: sync_pending", "missing", False),
+    ("unavailable", "REQ: sync_pending", "outside", False),
+    ("unavailable", "REQ: sync_pending", "stale", False),
+])
+def test_actual_prewrite_pending_reference_preserves_source_assignment(
+        tmp_path, mode, metadata, assignment, allowed):
+    from conftest import invoke_hook, parse_decision
+    from test_harness_mcp_server import _write_marker_fixture
+    from test_managed_wbs import host_snapshot
+    from test_wbs import node
+    from test_wbs_input_policy import policy_plan, public
+    repo, td, call, _ = public(tmp_path)
+    _wiki_manifest(repo, mode)
+    text = ("# Approved feature\nSource: current user request to implement this feature.\n"
+            "Acceptance: feature has the requested observable behavior.\n"
+            "Document next action: publish the selected REQ when the service returns.\n"
+            + metadata + "\n" + policy_plan([node()], {"source": ["src.txt"]}))
+    assert not call("plan", plan=text).get("isError")
+    path = "web/pages/feature.tsx"
+    if assignment != "missing":
+        ownership = "other.py" if assignment == "outside" else path
+        prepared = call("dispatch", operation="prepare", ownership={"A": [ownership]}, host=host_snapshot())
+        assert not prepared.get("isError"), prepared
+    sid = "req-pending-hook"
+    _write_marker_fixture(str(repo), str(td), sid)
+    if assignment == "stale":
+        marker = repo / "doc/harness/wbs/.active_sessions" / (sid + ".json")
+        value = json.loads(marker.read_text())
+        from _lib import new_uuid7
+        value["run_id"] = new_uuid7()
+        marker.write_text(json.dumps(value))
+    before = (td / "WBS.control.json").read_bytes()
+    result = invoke_hook(str(SCRIPTS / "prewrite_gate.py"), "Write", {"file_path": str(repo / path)},
+        cwd=str(repo), env_extra={"HARNESS_SESSION_ID": sid, "HARNESS_SKIP_PREWRITE": "0",
+            "ATLASSIAN_BASE_URL": "https://fixture.invalid", "ATLASSIAN_EMAIL": "fixture@example.invalid",
+            "ATLASSIAN_API_TOKEN": "fixture-token"})
+    assert result.returncode == 0, result.stderr
+    decision, reason = parse_decision(result.stdout)
+    assert (decision != "deny") is allowed, (result.stdout, result.stderr)
+    if not allowed and assignment in {"missing", "outside"}:
+        assert "wbs-execution-assignment" in reason
+    assert (td / "WBS.control.json").read_bytes() == before

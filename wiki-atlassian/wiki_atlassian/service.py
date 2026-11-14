@@ -193,8 +193,19 @@ class WikiService:
                     require(self.remote.require_scope(self.settings, node.id) == node, 'scope_metadata_changed')
                     return result
                 if operation == 'list_document_versions':
+                    from .cursors import decode_cursor, encode_cursor
+                    page_id = document_id(data['document'], self.settings)
+                    limit = data.get('limit', 20)
+                    binding = ['versions', self.identity, self.settings.credential_fingerprint, page_id, limit]
+                    native = None
+                    if 'cursor' in data:
+                        state = decode_cursor(data['cursor'], binding, key=self.settings.cursor_key)
+                        require(set(state) == {'native'} and isinstance(state['native'], str), 'invalid_cursor')
+                        native = state['native']
                     node = self._node(data['document'])
-                    batch = self.remote.list_versions(node.id, data.get('limit', 20), data.get('cursor'), self.settings)
+                    batch = self.remote.list_versions(node.id, limit, native, self.settings)
+                    if 'cursor' in batch:
+                        batch['cursor'] = encode_cursor(binding, {'native': batch['cursor']}, key=self.settings.cursor_key)
                     require(self.remote.require_scope(self.settings, node.id) == node, 'scope_metadata_changed')
                     return {**{k: v for k, v in batch.items() if k != 'results'}, 'status': 'listed',
                             'document': node.id, 'versions': batch['results']}
@@ -401,8 +412,8 @@ class WikiService:
             require(not expanded or ref is None)
             format = data.get('format', 'markdown')
             require(format in ('storage', 'markdown'))
-            binding = [self.identity, page_id, None if ref is None else list(ref[:2]), limit, format, expanded, replies if expanded else 0]
-            state = decode_cursor(data['cursor'], binding) if 'cursor' in data else {}
+            binding = [self.identity, self.settings.credential_fingerprint, page_id, None if ref is None else list(ref[:2]), limit, format, expanded, replies if expanded else 0]
+            state = decode_cursor(data['cursor'], binding, key=self.settings.cursor_key) if 'cursor' in data else {}
             kind = ref[0] if ref else state.get('kind', 'footer')
             require(kind in ('footer', 'inline'))
             selected = self.remote.comment_detail(page_id, ref[1], ref[0], ref[2][1], node, self.settings) if ref else None
@@ -412,12 +423,12 @@ class WikiService:
                 projected = self._comment_row(row, {**data, 'format': format}, page_id)
                 if expanded:
                     children = self.remote.list_comments(page_id, kind, row['id'], replies, None, self.settings)
-                    reply_binding = [self.identity, page_id, [kind, row['id']], replies, format, False, 0]
+                    reply_binding = [self.identity, self.settings.credential_fingerprint, page_id, [kind, row['id']], replies, format, False, 0]
                     projected['replies'] = dict(target=f"{kind}:{row['id']}", limit=replies, format=format,
                         comments=[self._comment_row(child, {**data, 'format': format}, page_id) for child in children['results']],
                         hasMore=bool(children.get('cursor')), complete=not children.get('cursor'))
                     if children.get('cursor'):
-                        projected['replies']['cursor'] = encode_cursor(reply_binding, {'kind': kind, 'native': children['cursor']})
+                        projected['replies']['cursor'] = encode_cursor(reply_binding, {'kind': kind, 'native': children['cursor']}, key=self.settings.cursor_key)
                 rows.append(projected)
             native = batch.get('cursor')
             more = bool(native) or ref is None and kind == 'footer'
@@ -426,7 +437,7 @@ class WikiService:
             if selected:
                 result['comment'] = self._comment_row(selected, {**data, 'format': format}, page_id)
             if more:
-                result['cursor'] = encode_cursor(binding, {'kind': kind if native else 'inline', 'native': native})
+                result['cursor'] = encode_cursor(binding, {'kind': kind if native else 'inline', 'native': native}, key=self.settings.cursor_key)
             require(self.remote.require_scope(self.settings, page_id) == node, 'scope_metadata_changed')
             return result
         page = self.remote.page(page_id, node, self.settings, fresh_storage=True)

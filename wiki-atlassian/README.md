@@ -354,6 +354,8 @@ the page ID. Then use `get_document`, `list_comments` and
 `list_document_versions` with that connection. `document: "feedback"` and
 `target: "feedback"` name the configured page. Continued document reads retain
 the native version and offset; comments retain their returned cursor and target.
+Private comment and history continuations are signed for the selected page and
+account; altered, unsigned or cross-connection cursors are rejected.
 The page-only replica has a separate identity from a project subtree, shared by
 Claude and Codex and stable across token rotation; changed credentials require
 fresh authorization. No project configuration or credential copy is needed.

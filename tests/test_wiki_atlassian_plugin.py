@@ -34,7 +34,7 @@ pytestmark = pytest.mark.usefixtures("selected_installer_python")
 
 
 @contextmanager
-def private_inbox(tmp_path):
+def private_inbox(tmp_path, *, account=None):
     home = tmp_path / "private-home"; home.mkdir(mode=0o700)
     folder = home / ".config/harness"; folder.mkdir(parents=True, mode=0o700)
     folder.parent.chmod(0o700)
@@ -43,6 +43,7 @@ def private_inbox(tmp_path):
     cert.write_bytes((ROOT / "tests/fixtures/wiki-localhost/cert.pem").read_bytes())
     key.write_bytes((ROOT / "tests/fixtures/wiki-localhost/key.pem").read_bytes())
     calls = []
+    account = {"id": "private-account"} if account is None else account
     expected = "Basic " + base64.b64encode(b"private@example.invalid:private-mcp-fixture").decode()
     revision = {"number": 2, "authorId": "private-account", "createdAt": "2026-11-14T00:00:00Z", "message": "Fixture"}
     page = {"id": "790", "title": "Harness feedback", "status": "current", "spaceId": "123",
@@ -59,7 +60,7 @@ def private_inbox(tmp_path):
                 self.send_error(401); return
             path, query = urlsplit(self.path).path, parse_qs(urlsplit(self.path).query)
             if path == "/wiki/rest/api/user/current":
-                body = {"accountId": "private-account", "displayName": "Private fixture"}
+                body = {"accountId": account["id"], "displayName": "Private fixture"}
             elif path == "/wiki/api/v2/spaces/123":
                 body = {"id": "123", "key": "TEAM", "name": "Fixture space", "status": "current"}
             elif path == "/wiki/api/v2/pages/790/footer-comments":
@@ -275,6 +276,50 @@ def test_personal_connection_uses_common_packaged_mcp_and_private_identity_witho
         assert not (project / "doc").exists() and not list(other.iterdir())
         assert all(secret not in json.dumps([first, second, final, page]) for secret in (
             "private-mcp-fixture", "project-token-sentinel", "project@example.invalid", "project-import-poison"))
+
+
+def test_packaged_personal_comment_cursors_reject_forgery_and_other_contexts(tmp_path):
+    package, command = personal_payload(tmp_path)
+    project = tmp_path / "consumer"; project.mkdir()
+    account = {"id": "private-account"}
+    with private_inbox(tmp_path, account=account) as (home, _, settings, calls):
+        env = clean_environment(home, **settings)
+        _, first = personal_call(package, command, project, env, target="790", format="storage", limit=1)
+        assert first["comments"][0]["id"] == "900" and first["hasMore"]
+        cursor = first["cursor"]
+        encoded, _, signature = cursor.partition('.')
+        payload = json.loads(base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4)))
+        payload["state"] = {"kind": "inline", "native": None}
+        changed = base64.urlsafe_b64encode(json.dumps(payload, separators=(',', ':')).encode()).decode().rstrip('=')
+        changed += '.' + signature if signature else ''
+        bad_signature = encoded + '.' + ('0' if not signature or signature[0] != '0' else '1') + signature[1:]
+        for forged in (changed, encoded, bad_signature):
+            before = len(calls)
+            _, denied = personal_call(package, command, project, env,
+                target="790", format="storage", limit=1, cursor=forged)
+            assert denied["status"] == "error" and denied["code"] == "invalid_cursor", denied
+            assert denied.get("complete") is not True
+            assert not any("-comments" in path for _, path, _ in calls[before:]), "A forged continuation must not choose a native comment request"
+        _, denied = personal_call(package, command, project, env,
+            target="790", format="storage", limit=2, cursor=cursor)
+        assert denied["status"] == "error" and denied["code"] == "invalid_cursor", denied
+        before = len(calls)
+        replies = _calls(package / "scripts/launch.py", project, env, command=command, requests=[
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "list_comments", "arguments": {"connection": "project", "target": "790",
+                    "format": "storage", "limit": 1, "cursor": cursor}}}])
+        denied = json.loads(next(row["result"]["content"][0]["text"] for row in replies if row.get("id") == 3))
+        assert denied["status"] == "error" and denied["code"] == "connection_unavailable"
+        assert len(calls) == before, "A project call must not reuse a private continuation or private credentials"
+        account["id"] = "different-private-account"
+        _, denied = personal_call(package, command, project, env,
+            target="790", format="storage", limit=1, cursor=cursor)
+        assert denied["status"] == "error" and denied["code"] == "invalid_cursor", denied
+        account["id"] = "private-account"
+        _, continued = personal_call(package, command, project, env,
+            target="790", format="storage", limit=1, cursor=cursor)
+        assert continued["comments"][0]["id"] == "901" and continued["hasMore"]
+        assert all(method == "GET" for method, _, _ in calls)
 
 
 def test_packaged_personal_connection_does_not_admit_another_page_or_default_project(tmp_path):

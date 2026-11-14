@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import hmac
 import os
 from pathlib import Path
 import re
 
-from .models import Credentials, RemoteError, digest, native_id
+from .models import Credentials, RemoteError, compact_json, digest, native_id
 
 
 def home_directory(environment=None):
@@ -43,6 +45,9 @@ class SpaceSettings:
         self.poll_interval_seconds = self._config.get('pollIntervalSeconds', 300)
         self.watched_comment_pages = self._config.get('watchCommentPages', '').split(',') if self._config.get('watchCommentPages') else []
         self.credential_fingerprint = digest([self.site, credentials.email, credentials.api_token])
+        self.cursor_key = hmac.new(credentials.api_token.encode('utf-8'), compact_json([
+            'wiki-page-cursor-v1', self.site, credentials.email, self.root_page_id,
+            self._config.get('privateAccountId')]).encode('utf-8'), hashlib.sha256).digest() if self.page_only else None
 
     @property
     def config(self):

@@ -363,16 +363,27 @@ def _wbs_has_req_reference(wbs_dir: str, repo_root: str = "") -> bool:
         # Canonical location: <repo>/doc/harness/wbs/WBS__<id>.
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(wbs_dir))))
     destination = select_destination(cwd=repo_root)
-    if destination["mode"] == "unavailable":
-        return False
-    if destination["mode"] == "external":
-        # This is the same presence check as the local path branch below,
-        # never a claim that a remote document was read/reviewed or accepted.
+    if destination["mode"] in {"external", "unavailable"}:
+        # Owner-published intent/reference presence only, not a claim that
+        # publication, independent review or source assignment has succeeded.
         try:
-            with open(os.path.join(wbs_dir, "PLAN.md"), encoding="utf-8") as stream:
-                return re.search(r"(?m)^\s*REQ:\s*confluence:[1-9][0-9]*@[1-9][0-9]*(?=\s|$)", stream.read()) is not None
-        except OSError:
+            from _lib import _strict_regular_text_snapshot
+            text = _strict_regular_text_snapshot(os.path.join(wbs_dir, "PLAN.md"))["text"]
+        except (OSError, ValueError, RuntimeError, UnicodeError):
             return False
+        fence = None
+        for line in text.splitlines():
+            if fence is not None:
+                if re.fullmatch(r" {0,3}" + re.escape(fence[0]) + "{" + str(fence[1]) + r",}[ \t]*", line):
+                    fence = None
+                continue
+            opened = re.fullmatch(r" {0,3}(`{3,}|~{3,})[^\r\n]*", line)
+            if opened:
+                marker = opened.group(1)
+                fence = (marker[0], len(marker))
+            elif re.fullmatch(r" {0,3}REQ:[ \t]*(?:sync_pending|confluence:[1-9][0-9]*@[1-9][0-9]*(?:[ \t].*)?)[ \t]*", line):
+                return True
+        return False
     req_re = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
     # Scan WBS-local PLAN body for any REQ path string.
     for name in ("PLAN.md",):
@@ -951,7 +962,10 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         else:
             human = (f"{rel} requires a linked durable requirement at the configured document backend. "
                      "Read/update it with atlassian MCP and link REQ: confluence:<page-id>@<version> "
-                     "from PLAN. An unavailable backend does not authorize local fallback writes.")
+                     "from PLAN. If publication alone is pending, first ground approved intent, provenance "
+                     "and acceptance in the owning PLAN and record REQ: sync_pending plus the next sync action; "
+                     "explicit publication prerequisites still block dependent work. "
+                     "An unavailable backend does not authorize local fallback writes.")
         _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)
         return 0
 

@@ -90,6 +90,8 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "REQ-required even when additive" in body
         assert "PLAN.md acceptance criteria" in body
         assert "REQ reference is required before develop starts" in body
+        assert "develop's Durable Docs Preflight bounded external `REQ: sync_pending` exception" in body
+        assert "subject to the same develop Durable Docs Preflight publication exception" in body
         assert "blocking plan defect" in body
         assert "do not defer this to close" in body
         assert "selected document destination" in body
@@ -145,6 +147,22 @@ def test_development_document_review_respects_policy_and_keeps_sync_separate():
         assert "`sync_pending`" in body
         assert "acceptance dependency on publication still blocks completion" in body
         assert "repeat product QA merely to\nrepair document recording" in body
+
+
+def test_development_preflight_separates_known_intent_from_unavailable_publication():
+    for path in (CLAUDE_DEVELOP, CODEX_DEVELOP):
+        body = _text(path)
+        preflight = body.split("**Durable Docs Preflight:**", 1)[1].split("**User Feedback Event Review:**", 1)[0]
+        assert "establish approved behavior, source provenance and acceptance" in preflight
+        assert "external publication is unavailable or unconfirmed and intent is known" in preflight
+        assert "`REQ: sync_pending` and next synchronization action in the\nexisting PLAN" in preflight
+        assert "continue authorized work unless publication is an explicit\nprerequisite" in preflight
+        assert "not a local business-document copy or\nnew accepted scope" in preflight
+        assert "Never use local fallback writes or retry an unknown mutation" in preflight
+        assert "Unclear behavior/provenance or an explicit publication prerequisite still stops" in preflight
+        durable = next(line for line in body.splitlines() if "**3.6.1 Durable docs" in line)
+        assert "under Durable Docs Preflight, including its bounded `sync_pending` publication exception" in durable
+        assert "selected REQ docs must be written before source implementation" not in durable
 
 
 def test_qa_agents_read_durable_docs_by_type():
