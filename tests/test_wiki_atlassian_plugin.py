@@ -98,14 +98,23 @@ def private_inbox(tmp_path, *, account=None):
     auth = folder / "mise.local.toml"
     auth.write_text('[env]\nATLASSIAN_BASE_URL=' + json.dumps(site) + '\nATLASSIAN_EMAIL="private@example.invalid"\nATLASSIAN_API_TOKEN="private-mcp-fixture"\n'); auth.chmod(0o600)
     binary = tmp_path / "fixture-bin"; binary.mkdir()
-    if os.name == 'nt':
-        if not shutil.which('mise.exe'):
-            server.shutdown(); server.server_close(); thread.join(timeout=5)
-            pytest.skip('Native mise.exe is required for actual private authentication; no POSIX fixture substitutes for it')
-    else:
-        mise = binary / "mise"
-        mise.write_text("#!" + sys.executable + ' -I\nimport json,tomllib\nfrom pathlib import Path\np=Path.cwd()/"mise.local.toml"\nd=tomllib.loads(p.read_text())["env"]\nprint(json.dumps({k:{"value":v,"source":str(p)} for k,v in d.items()}))\n'); mise.chmod(0o700)
     try:
+        if os.name == 'nt':
+            mise = shutil.which('mise.exe')
+            if mise is None:
+                pytest.skip('Native mise.exe is required for actual private authentication; no POSIX fixture substitutes for it')
+            # Trust only this synthetic auth file, in the same disposable home
+            # used by the packaged credential child. Never trust the real user
+            # profile, a consuming project, ancestors or an entire directory.
+            trust_env = {k: v for k, v in clean_environment(home).items()
+                         if not k.upper().startswith(('MISE_', '__MISE_'))}
+            trust_env['MISE_YES'] = '0'
+            trusted = subprocess.run([mise, 'trust', '--yes', str(auth)], cwd=folder,
+                env=trust_env, stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+            assert trusted.returncode == 0, 'Native fixture mise trust failed for its disposable auth file'
+        else:
+            mise = binary / "mise"
+            mise.write_text("#!" + sys.executable + ' -I\nimport json,tomllib\nfrom pathlib import Path\np=Path.cwd()/"mise.local.toml"\nd=tomllib.loads(p.read_text())["env"]\nprint(json.dumps({k:{"value":v,"source":str(p)} for k,v in d.items()}))\n'); mise.chmod(0o700)
         yield home, auth, dict(SSL_CERT_FILE=str(cert), PATH=str(binary) + os.pathsep + os.environ["PATH"]), calls
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=5)
