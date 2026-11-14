@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shlex
 import stat
@@ -26,6 +27,7 @@ import batch_finish as finish_helper
 import batch_harvest
 import batch_preflight
 import batch_submodules
+from wiki_platform import metadata_probe
 from _lib import find_repo_root, read_wbs_control, wbs_control_status, resolve_registered_worktree, _trusted_git_env, _git_executable, uuid7_timestamp_ms
 
 LIMIT = 1024 * 1024
@@ -1151,10 +1153,13 @@ def execute(args, directory, records):
         require(bound(repo, candidate) == item['spawn_head'], 'bootstrap HEAD differs from reservation')
         for other in held(records, item):
             require(other.get('worktree') != worktree and other.get('branch') != args.branch, 'worktree/branch already owned')
-        require(not os.path.lexists(os.path.join(worktree, 'doc', 'harness', 'wbs', item['wbs_id'])), 'bootstrap started task before binding')
+        started = os.path.join(worktree, 'doc', 'harness', 'wbs', item['wbs_id'])
+        started_present = metadata_probe(Path(started).absolute()) is not None if os.name == 'nt' else os.path.lexists(started)
+        require(not started_present, 'bootstrap started task before binding')
         payload = retention_contract(batch_id, item)
         marker = os.path.join(worktree, finish_helper.RETENTION_MARKER)
-        if os.path.lexists(marker):
+        marker_present = metadata_probe(Path(marker).absolute()) is not None if os.name == 'nt' else os.path.lexists(marker)
+        if marker_present:
             require(not finish_helper.lead_status(worktree, payload), 'bootstrap modified source before binding')
         else:
             require(not finish_helper._status_lines(worktree), 'bootstrap modified source before binding')
@@ -1180,7 +1185,8 @@ def execute(args, directory, records):
                     'module preparation requires exact worker, worktree and branch; resume preserves worktree and branch')
         candidate = dict(item, worktree=worktree, branch=args.branch, worker_id=args.worker_id)
         marker = os.path.join(worktree, finish_helper.RETENTION_MARKER)
-        if os.path.lexists(marker):
+        marker_present = metadata_probe(Path(marker).absolute()) is not None if os.name == 'nt' else os.path.lexists(marker)
+        if marker_present:
             candidate['retention'] = retention_contract(batch_id, item)
             finish_helper.validate_retention(worktree, candidate['retention'])
         if item.get('resuming'):
@@ -1192,7 +1198,9 @@ def execute(args, directory, records):
         else:
             require(bound(repo, candidate) == item['spawn_head'], 'bootstrap HEAD differs from reservation')
             require(not finish_helper.lead_status(worktree, candidate.get('retention')), 'bootstrap modified source before binding')
-            require(not os.path.exists(os.path.join(worktree, 'doc', 'harness', 'wbs', item['wbs_id'])), 'bootstrap started task before binding')
+            started = os.path.join(worktree, 'doc', 'harness', 'wbs', item['wbs_id'])
+            started_present = metadata_probe(Path(started).absolute()) is not None if os.name == 'nt' else os.path.exists(started)
+            require(not started_present, 'bootstrap started task before binding')
         if item.get('submodules'):
             if item.get('resuming'):
                 batch_submodules.validate(repo, worktree, item['submodule_manifest'], 'resume')

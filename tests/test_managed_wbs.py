@@ -271,6 +271,57 @@ def host_snapshot(capacity=4, live=()):
                 spawn_available=True, continuation_available=True)
 
 
+@pytest.mark.parametrize('damage', ['wrong-marker', 'user-dirt', 'prestarted-control'])
+def test_deep_public_bind_refuses_changed_bootstrap_and_preserves_artifacts(tmp_path, monkeypatch, damage):
+    import json
+    if os.name == 'nt':
+        from wiki_platform import ensure_private_directory
+        while len(str(tmp_path).encode('utf-16-le')) // 2 < 180:
+            tmp_path = ensure_private_directory(tmp_path / 'deep-managed')
+    pool, call = setup_parent(tmp_path, monkeypatch)
+    prepared = call('dispatch', host=host_snapshot(), ownership={'A': ['a.py'], 'B': ['b.py']})
+    assert not prepared.get('isError'), prepared
+    pool.batch = prepared['structuredContent']['batch_id']
+    handoff = prepared['structuredContent']['handoffs'][0]
+    tree = Path(handoff['worktree'])
+    marker = tree / '.harness-batch-bootstrap'
+    started = tree / 'doc/harness/wbs' / handoff['wbs_id']
+    original_marker = _fixture_io(marker).read_bytes()
+    if os.name == 'nt':
+        assert len(str(marker).encode('utf-16-le')) // 2 > 260
+    if damage == 'wrong-marker':
+        payload = json.loads(original_marker)
+        payload['spawn_head'] = '0' * 40
+        _fixture_io(marker).write_text(json.dumps(payload))
+    elif damage == 'user-dirt':
+        dirt = tree / 'unowned-before-bind.txt'
+        _fixture_io(dirt).write_bytes(b'preserve unknown user bytes\x00\xff')
+    elif os.name == 'nt':
+        ensure_private_directory(started)
+    else:
+        started.mkdir(parents=True, mode=0o700)
+    before = _fixture_io(pool.state).read_bytes()
+    observed_marker = _fixture_io(marker).read_bytes()
+    refused = call('dispatch', operation='bind', slug=handoff['slug'], worker_id='worker-a')
+    assert refused.get('isError'), refused
+    assert _fixture_io(pool.state).read_bytes() == before
+    assert _fixture_io(marker).read_bytes() == observed_marker
+    if damage == 'wrong-marker':
+        assert 'retention marker' in refused['structuredContent']['error']
+        _fixture_io(marker).write_bytes(original_marker)
+    elif damage == 'user-dirt':
+        assert 'modified source' in refused['structuredContent']['error']
+        assert _fixture_io(dirt).read_bytes() == b'preserve unknown user bytes\x00\xff'
+        _fixture_io(dirt).unlink()
+    else:
+        assert 'started task' in refused['structuredContent']['error']
+        assert _fixture_io(started).is_dir()
+        _fixture_io(started).rmdir()
+    bound = call('dispatch', operation='bind', slug=handoff['slug'], worker_id='worker-a')
+    assert not bound.get('isError'), bound
+    assert _fixture_io(marker).read_bytes() == original_marker
+
+
 def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
     if os.name == 'nt':
         from wiki_platform import ensure_private_directory
