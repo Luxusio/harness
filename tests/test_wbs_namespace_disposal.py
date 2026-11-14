@@ -502,6 +502,8 @@ def test_disposal_uses_completed_ownership_journal_after_later_import(tmp_path, 
 def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, monkeypatch):
     import wbs_namespace_migration as migration
 
+    if os.name == 'nt':
+        tmp_path = tmp_path / ('retained epoch history ' + 'n' * 24)
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch, preexisting_epoch=True)
     current = next(iter(migration.journals(pool.repo)))[1]
     prefix = current['archive_prefix']
@@ -509,6 +511,7 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
     original_control = prefix + '/doc/harness/tasks/TASK__a/TASK.json'
     if os.name == 'nt':
         from wiki_platform import safe_metadata_snapshot
+        assert len(str(worktree / original_control).encode('utf-16-le')) // 2 > 260
         before = safe_metadata_snapshot(worktree / original_control, 16384)[0]
     else:
         before = (worktree / original_control).read_bytes()

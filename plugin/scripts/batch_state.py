@@ -740,7 +740,13 @@ def disposal_complete(repo, item):
     """A stored integrated flag cannot conceal surviving owned Git resources."""
     require(not os.path.lexists(item['worktree']), 'integrated worktree still exists')
     listing = finish_helper._git_out(repo, 'worktree', 'list', '--porcelain', '-z')
-    require('worktree ' + item['worktree'] not in listing.split('\0'), 'integrated worktree is still registered')
+    registered = 'worktree ' + item['worktree'] in listing.split('\0')
+    if os.name == 'nt':
+        registered = any(field.startswith('worktree ')
+                         and os.path.normcase(os.path.realpath(field[len('worktree '):]))
+                         == os.path.normcase(os.path.realpath(item['worktree']))
+                         for field in listing.split('\0'))
+    require(not registered, 'integrated worktree is still registered')
     result = finish_helper._git(repo, 'show-ref', '--verify', '--quiet', 'refs/heads/' + item['branch'])
     require(result.returncode == 1, 'integrated branch still exists or cannot be inspected')
 

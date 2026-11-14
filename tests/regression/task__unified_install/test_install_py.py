@@ -123,7 +123,9 @@ def _write_cli_fixture(path, version, *, log_env=None, marketplace="", failures=
         + "mirror = None\n"
         + "args = sys.argv[1:]\n"
         + "if options['log_env'] and os.environ.get(options['log_env']):\n"
-        + " with Path(os.environ[options['log_env']]).open('a', encoding='utf-8') as stream: stream.write(' '.join(args) + '\\n')\n"
+        + " with Path(os.environ[options['log_env']]).open('a', encoding='utf-8') as stream:\n"
+        + "  stream.write(' '.join(args) + '\\n')\n"
+        + "  if args[:2] == ['mcp', 'add']: stream.write('mcp argv: ' + json.dumps(args) + '\\n')\n"
         + "if args == ['--version']: print(options['version']); sys.exit(0)\n"
         + "for prefix, failure in options['failures'].items():\n"
         + " if args[:len(prefix.split())] == prefix.split(): print(failure[1], file=sys.stderr); sys.exit(failure[0])\n"
@@ -1790,7 +1792,7 @@ def test_dry_run_mentions_claude_install_root_when_claude_available(tmp_path):
     assert str(install_root) in r.stdout
 
 
-def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
+def test_claude_install_rehomes_stale_marketplace_source(tmp_path, selected_installer_python):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "claude.log"
@@ -1813,10 +1815,18 @@ def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
     assert "plugin marketplace remove harness" in lines
     assert f"plugin marketplace add {harness_dest}" in lines
     assert "plugin install harness@harness" in lines
-    assert any(
-        line.endswith(f"-E -s -B {harness_dest / 'plugin' / 'mcp' / 'harness_server.py'}")
-        for line in lines
-    )
+    module = _load_install_module()
+    plugin = harness_dest / "plugin"
+    registrations = [json.loads(line.removeprefix("mcp argv: "))
+                     for line in lines if line.startswith("mcp argv: ")]
+    assert registrations == [[
+        "mcp", "add", "harness",
+        "-e", f"HARNESS_PLUGIN_ROOT={plugin}",
+        "-e", f"CLAUDE_PLUGIN_ROOT={plugin}",
+        "-e", "HARNESS_RUNTIME=claude",
+        "-e", "PYTHONDONTWRITEBYTECODE=1", "--",
+        *module.owned_python_argv(selected_installer_python, plugin / "mcp/harness_server.py"),
+    ]]
     assert (harness_dest / "plugin" / "mcp" / "harness_server.py").is_file()
     assert not (harness_dest / ".git").exists()
 

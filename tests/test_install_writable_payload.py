@@ -210,7 +210,7 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
     with (
         mock.patch.object(install, "host_command", return_value=["claude"]),
         mock.patch.object(install, "_normalize_payload_modes", wraps=install._normalize_payload_modes) as normalize,
-        mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", return_value=(0, "claude 2.1.322\n", "")),
     ):
         result = install.install_claude(dry_run=False, force=False)
@@ -264,7 +264,7 @@ def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path)
         mock.patch.object(install, "host_command", return_value=["codex"]),
         mock.patch.object(install, "_normalize_payload_modes", wraps=install._normalize_payload_modes) as normalize,
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_root),
-        mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", return_value=(0, "codex 0.167.2\n", "")),
         mock.patch.object(install, "_select_codex_plugin", return_value=(True, "selection stubbed for permission call-site test")),
         mock.patch.object(

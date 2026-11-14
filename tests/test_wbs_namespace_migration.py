@@ -615,6 +615,7 @@ def test_new_only_linked_workspace_does_not_validate_unused_unsafe_common_root(t
     migration.require_complete(worker)
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX literal-link history; Native public reparse refusal and byte preservation are covered in test_wbs_namespace_disposal')
 def test_work_fixture_links_are_literal_history_never_opened_or_published(tmp_path, monkeypatch):
     root, old, _, _, migration, apply = fixtures(tmp_path, monkeypatch)
     outside = tmp_path / 'never-open-target'

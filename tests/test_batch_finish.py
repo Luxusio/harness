@@ -724,7 +724,7 @@ def test_resume_after_manual_conflict_resolution(tmp_path, monkeypatch):
 
     plain = lead.finish()
     assert plain["status"] == ("error" if lead.owner else "kept")
-    assert ("finish requires closed returned result" if lead.owner else "--resume") in plain["reason"]
+    assert ("unresolved integration requires targeted recovery" if lead.owner else "--resume") in plain["reason"]
     if lead.owner:
         lead.owner.call("recover", "--slug", lead.name, "--worker-stopped", "--recovery-commit", rebased)
     result = lead.finish(resume=True)
@@ -901,8 +901,15 @@ def test_real_post_merge_hook_timeout_reports_integrated_tip_without_cleanup(tmp
     lead.commit_files({"change.txt": "committed\n"})
     hook = main / ".git/hooks/post-merge"
     if os.name == "nt":
+        import shutil
+        # Git for Windows resolves a shebang's basename through PATH.
+        monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
+        assert os.path.samefile(shutil.which(Path(sys.executable).name), sys.executable)
         interpreter = sys.executable.replace("\\", "/")
-        hook.write_bytes(("#!" + interpreter + "\nimport time\ntime.sleep(0.5)\n").encode("utf-8"))
+        delivered = main / '.git/hook-timeout-ran'
+        hook.write_bytes(("#!" + interpreter + "\nimport time\nfrom pathlib import Path\n"
+                          + "Path(" + repr(str(delivered)) + ").write_bytes(b'delivered')\n"
+                          + "time.sleep(2)\n").encode("utf-8"))
     else:
         hook.write_bytes(b"#!/bin/sh\nexec sleep 0.5\n")
     hook.chmod(0o755)
@@ -912,13 +919,15 @@ def test_real_post_merge_hook_timeout_reports_integrated_tip_without_cleanup(tmp
     def shorten_merge_timeout(command, *args, **kwargs):
         nonlocal timeout_applied
         if "merge" in command and "--ff-only" in command:
-            kwargs["timeout"] = 0.2
+            kwargs["timeout"] = 1.0 if os.name == "nt" else 0.2
             timeout_applied = True
         return real_run(command, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", shorten_merge_timeout)
     result = lead.finish()
     assert timeout_applied
+    if os.name == "nt":
+        assert delivered.read_bytes() == b'delivered'
     assert _head(main) == lead.commit  # real Git advanced HEAD before the timeout
     assert result["status"] != "integrated", result
     assert result["integrated_tip"] == lead.commit, result

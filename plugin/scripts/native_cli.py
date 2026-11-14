@@ -101,8 +101,10 @@ def _run_owned_entry(import_roots, entrypoint, arguments):
     # platform primitives are imported from the tree actually being verified.
     selected = tuple(reversed(roots))
     sys.path[:0] = [*(str(root / "scripts") for root in selected), *map(str, selected), str(Path(entrypoint).parent)]
-    from wiki_platform import source_snapshot
-    snapshot = source_snapshot
+    # Imports execute owned code, so use its integrity/ownership policy rather
+    # than the intentionally permissive reader for ordinary project inputs.
+    from wiki_platform import safe_metadata_snapshot
+    snapshot = safe_metadata_snapshot
     loader = OwnedSourceLoader("__main__", entrypoint)
     code = loader.get_code("__main__")
     namespace = sys.modules["__main__"].__dict__

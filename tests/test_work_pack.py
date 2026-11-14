@@ -246,7 +246,7 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
     else:
         del item["checkpoint"]
         pool.state.write_text(json.dumps(state))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='still registered' if change == 'residual_registration' else None):
         route(pool, spec)
 
 
@@ -270,7 +270,10 @@ def mcp_integration(tmp_path, monkeypatch):
     integrated(pool)
     started = call("wbs_open", {"wbs_id": CHILD})
     assert not started.get("isError"), started
-    planned = call("write_plan", {"wbs_id": CHILD, "plan": '# Integration\n```wbs\n[{"id":"A","title":"Combined result","weight":1,"check":["true"]}]\n```\n',
+    plan = '# Integration\n```wbs\n' + json.dumps([
+        dict(id="A", title="Combined result", weight=1, check=[sys.executable, "-c", "pass"]),
+    ]) + '\n```\n'
+    planned = call("write_plan", {"wbs_id": CHILD, "plan": plan,
                                   "required_lenses": ["review-code", "qa-cli"]})
     assert not planned.get("isError"), planned
     import wbs

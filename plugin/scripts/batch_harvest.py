@@ -594,7 +594,15 @@ def _s1_content(worktree, wbs_id, source_entries, manifest, repo, *, ordinary_al
                 continue
             _s1_require(name != '.git', 'unexpected nested repository')
             _s1_require(rel in allowed, 'unknown ignored or untracked content: ' + rel)
-            mode = os.lstat(os.path.join(worktree, rel)).st_mode
+            target = os.path.join(worktree, rel)
+            if os.name == 'nt':
+                from wiki_platform import _native
+                # Keep ancestor names in custody while inspecting the leaf;
+                # only this private I/O spelling uses the extended path.
+                with _native._walk(Path(target).parent, owner_neutral=True):
+                    mode = os.lstat(_native._win32_path(target)).st_mode
+            else:
+                mode = os.lstat(target).st_mode
             _s1_require(stat.S_ISREG(mode) or rel in tracked and stat.S_ISLNK(mode), 'nonregular worktree content')
         count += len(dirs) + len(files)
         _s1_require(count <= 100000, 'worktree content inventory exceeds bound')
@@ -641,7 +649,7 @@ def _ordinary_bytes(path, limit=65536):
 def _ordinary_markers(worktree, wbs_id):
     from _lib import read_wbs_control, wbs_control_status, sanitize_session_id
     task_rel = 'doc/harness/wbs/' + wbs_id
-    source = os.path.join(worktree, task_rel)
+    source = os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id)
     control = read_wbs_control(source)
     if not control or wbs_control_status(source, control) != 'closed':
         return set()  # standalone legacy evidence can be archived, never infer marker ownership
@@ -1187,13 +1195,13 @@ def _thaw_namespace_history(repo, worktree, wbs_id):
                 planned.append((path, digest, probe['identity'], False))
             continue
         path = _s1_path(os.path.join(worktree, relative), True)
-        before = os.lstat(path)
         if os.name == "nt":
             from wiki_platform import metadata_probe
             probe = metadata_probe(Path(path))
             _s1_require(probe and probe['kind'] == 'dir', 'namespace history directory disappeared')
             planned.append((Path(path), None, probe['identity'], True))
             continue
+        before = os.lstat(path)
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             info = os.fstat(fd)

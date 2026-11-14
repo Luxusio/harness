@@ -107,7 +107,7 @@ def test_synchronized_default_run_refreshes_a_stale_plugin_cache(tmp_path, monke
     install.sync_claude_payload(install_root)
     calls: list = []
     with (
-        mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", side_effect=_fake_run(install_root, calls=calls)),
     ):
         result = install.install_claude(dry_run=False, force=False)
@@ -128,7 +128,7 @@ def test_synchronized_default_run_with_a_current_cache_stays_skipped(tmp_path, m
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     install.sync_claude_payload(install_root)
     with (
-        mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", side_effect=_fake_run(install_root, update=(0, CURRENT, ""))),
     ):
         result = install.install_claude(dry_run=False, force=False)
@@ -148,7 +148,7 @@ def test_synchronized_mirror_without_a_marketplace_falls_back_to_a_full_install(
     install.sync_claude_payload(install_root)
     calls: list = []
     with (
-        mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", side_effect=_fake_run(
             install_root, marketplace_update=(1, "", "marketplace not found"), calls=calls,
             listed=False,
@@ -172,7 +172,7 @@ def test_registered_install_ends_with_a_plugin_update(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     calls: list = []
     with (
-        mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", side_effect=_fake_run(install_root, calls=calls)),
     ):
         result = install.install_claude(dry_run=False, force=False)
@@ -211,7 +211,7 @@ def test_dry_run_lists_the_plugin_update_without_running_it(tmp_path, monkeypatc
         return 0, "", ""
 
     with (
-        mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(install, "_host_available", return_value=True),
         mock.patch.object(install, "_run", side_effect=run),
     ):
         result = install.install_claude(dry_run=True, force=False)
@@ -231,7 +231,7 @@ def test_healthy_mirror_does_not_certify_corrupt_selected_cache(tmp_path, monkey
     version = _manifest_version(root / "plugin")
     cache = tmp_path / "claude-config" / "plugins" / "cache" / "harness" / "harness" / version
     (cache / "scripts" / "_lib.py").write_text("raise RuntimeError('corrupt cache')\n")
-    with mock.patch.object(install.shutil, "which", return_value="/bin/claude"), mock.patch.object(install, "_run", side_effect=run):
+    with mock.patch.object(install, "_host_available", return_value=True), mock.patch.object(install, "_run", side_effect=run):
         result = install.install_claude(dry_run=False, force=False)
     assert not result.ok
     assert "selected cache" in result.summary and str(cache) in result.summary

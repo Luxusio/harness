@@ -662,10 +662,10 @@ def test_ambient_git_env_cannot_redirect_the_merged_check(tmp_path: Path, monkey
     _init_repo(decoy)
     worktree = tmp_path / "wt"
     _add_worktree(repo, worktree, "lead-env")
+    _write_task(worktree, "WBS__demo")
     (worktree / "src.txt").write_text("unmerged\n", encoding="utf-8")
     _git("add", "src.txt", cwd=worktree)
     _git("commit", "-q", "-m", "unmerged", cwd=worktree)
-    _write_task(worktree, "WBS__demo")
     # Pointing git at a decoy repository must not make an unmerged lead look merged.
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
     with _raises(mod.HarvestError):
