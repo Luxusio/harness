@@ -89,6 +89,71 @@ def test_native_private_acl_unicode_atomic_snapshot_and_bound(private):
     assert not list(private.glob(".wiki-*"))
 
 
+def test_native_deep_metadata_probe_names_and_exact_retirement(private):
+    from wiki_platform import metadata_probe, metadata_names, metadata_remove, metadata_remove_empty
+    root = private
+    while len(str(root).encode('utf-16-le')) // 2 <= 300:
+        root = win.ensure_private_directory(root / ("replica-control-한글-" + "long" * 10))
+    target = root / "manifest.json"
+    nested = win.ensure_private_directory(root / "retired-stage")
+    raw = b'{"current":"retained"}'
+    win.atomic_write(target, raw)
+    win.atomic_write(nested / "old.txt", b"old projection")
+    assert len(str(target).encode('utf-16-le')) // 2 > 260
+    assert metadata_probe(root / "missing") is None
+    info = metadata_probe(target)
+    directory = metadata_probe(root)
+    assert info["kind"] == "file" and info["size"] == len(raw) and info["identity"]
+    assert directory["kind"] == "dir" and directory["identity"]
+    assert metadata_probe(target) == info
+    assert set(metadata_names(root, max_entries=2)) == {"manifest.json", "retired-stage"}
+    assert metadata_names(nested, max_entries=1) == ["old.txt"]
+    with pytest.raises(ValueError):
+        metadata_names(root, max_entries=1)
+    with pytest.raises(ValueError):
+        metadata_remove(target, expected_sha256=hashlib.sha256(b"different").hexdigest(), max_bytes=len(raw))
+    assert win.safe_metadata_read(target, len(raw)) == raw
+    metadata_remove(nested / "old.txt", expected_sha256=hashlib.sha256(b"old projection").hexdigest())
+    assert metadata_names(nested, max_entries=0) == []
+    metadata_remove_empty(nested)
+    assert metadata_probe(nested) is None
+    assert metadata_probe(root)["identity"] == directory["identity"]
+    assert metadata_names(root, max_entries=1) == ["manifest.json"]
+    win.atomic_write(target, raw)
+    assert metadata_probe(target)["identity"] != info["identity"]
+    metadata_remove(target, expected_sha256=hashlib.sha256(raw).hexdigest(), max_bytes=len(raw))
+    assert metadata_probe(target) is None and metadata_names(root, max_entries=0) == []
+    metadata_remove_empty(root)
+    assert metadata_probe(root) is None
+
+
+def test_native_metadata_probe_and_names_refuse_actual_hardlinks_and_unsafe_acl(private):
+    from wiki_platform import metadata_probe, metadata_names
+    target, linked = private / "retained", private / "hardlink"
+    win.atomic_write(target, b"original")
+    os.link(target, linked)
+    try:
+        with pytest.raises(ValueError):
+            metadata_probe(target)
+    finally:
+        linked.unlink()
+    directory = win.ensure_private_directory(private / "unsafe-child")
+    try:
+        _acl(target, '(A;;GW;;;WD)')
+        with pytest.raises(ValueError):
+            metadata_probe(target)
+        _acl(directory, '(A;;GW;;;WD)')
+        with pytest.raises(ValueError):
+            metadata_names(directory, max_entries=1)
+        with pytest.raises(ValueError):
+            metadata_probe(directory / "missing")
+    finally:
+        _acl(target, '')
+        _acl(directory, '')
+    assert win.safe_metadata_read(target, 8) == b"original"
+    assert metadata_names(directory, max_entries=0) == []
+
+
 def test_native_atomic_temporary_crosses_legacy_path_boundary(private, monkeypatch):
     units = lambda value: len(str(value).encode("utf-16-le")) // 2
     prefix = "boundary 한글 😀-"

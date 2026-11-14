@@ -43,6 +43,86 @@ def test_private_helper_rejects_undelivered_input_and_reaps_timeout(tmp_path):
             cwd=tmp_path, env=dict(os.environ), input_bytes=b"x" * 1048576, timeout=.2)
 
 
+def test_metadata_probe_and_names_preserve_kind_identity_and_nonrecursive_bounds(tmp_path):
+    root = platform.ensure_private_directory(tmp_path / "metadata Unicode 한글")
+    assert platform.metadata_probe(root / "absent") is None
+    initial = platform.metadata_probe(root)
+    assert initial["kind"] == "dir" and type(initial["size"]) is int and initial["identity"]
+    assert platform.metadata_names(root, max_entries=0) == []
+    nested = platform.ensure_private_directory(root / "nested")
+    target = root / "source.txt"
+    raw = "original 한글".encode('utf-8')
+    platform.atomic_write(target, raw)
+    platform.atomic_write(nested / "nested-only.txt", b"not a direct child")
+    observed = platform.metadata_probe(target)
+    assert observed["kind"] == "file" and observed["size"] == len(raw) and observed["identity"]
+    assert platform.metadata_probe(target) == observed
+    assert platform.metadata_probe(root)["identity"] == initial["identity"]
+    assert set(platform.metadata_names(root, max_entries=2)) == {"source.txt", "nested"}
+    assert platform.metadata_names(nested, max_entries=1) == ["nested-only.txt"]
+    with pytest.raises(ValueError):
+        platform.metadata_names(root, max_entries=1)
+    with pytest.raises((ValueError, OSError)):
+        platform.metadata_names(target, max_entries=1)
+    with pytest.raises(FileNotFoundError):
+        platform.metadata_names(root / "absent", max_entries=1)
+    platform.atomic_write(target, raw)
+    assert platform.metadata_probe(target)["identity"] != observed["identity"]
+    assert platform.safe_metadata_read(target, len(raw)) == raw
+
+
+@pytest.mark.parametrize('maximum', [-1, True, 1.5, '1'])
+def test_metadata_names_rejects_invalid_budgets_without_mutating_storage(tmp_path, maximum):
+    root = platform.ensure_private_directory(tmp_path / "metadata")
+    platform.atomic_write(root / "retained", b"original")
+    with pytest.raises(ValueError):
+        platform.metadata_names(root, max_entries=maximum)
+    assert platform.safe_metadata_read(root / "retained", 8) == b"original"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX actual links, modes and FIFO; native handle/DACL cases are separate")
+def test_metadata_probe_and_names_refuse_links_special_files_and_unsafe_permissions(tmp_path):
+    root = platform.ensure_private_directory(tmp_path / "metadata")
+    target = root / "retained"
+    platform.atomic_write(target, b"original")
+    alias = root / "alias"
+    alias.symlink_to(target)
+    with pytest.raises((ValueError, OSError)):
+        platform.metadata_probe(alias)
+    linked = root / "hardlink"
+    os.link(target, linked)
+    with pytest.raises(ValueError):
+        platform.metadata_probe(target)
+    linked.unlink()
+    directory_alias = tmp_path / "directory-alias"
+    directory_alias.symlink_to(root, target_is_directory=True)
+    with pytest.raises((ValueError, OSError)):
+        platform.metadata_probe(directory_alias)
+    with pytest.raises((ValueError, OSError)):
+        platform.metadata_names(directory_alias, max_entries=10)
+    fifo = root / "fifo"
+    os.mkfifo(fifo)
+    started = time.monotonic()
+    with pytest.raises(ValueError):
+        platform.metadata_probe(fifo)
+    assert time.monotonic() - started < 1
+    target.chmod(0o666)
+    try:
+        with pytest.raises(ValueError):
+            platform.metadata_probe(target)
+    finally:
+        target.chmod(0o600)
+    root.chmod(0o777)
+    try:
+        with pytest.raises(ValueError):
+            platform.metadata_names(root, max_entries=10)
+        with pytest.raises(ValueError):
+            platform.metadata_probe(root / "missing")
+    finally:
+        root.chmod(0o700)
+    assert target.read_bytes() == b"original"
+
+
 def test_metadata_snapshot_binds_exact_bytes_and_file_identity(tmp_path):
     folder = platform.ensure_private_directory(tmp_path / "source Unicode 한글")
     target = folder / "source.py"

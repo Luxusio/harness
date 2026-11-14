@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import threading
@@ -19,7 +20,9 @@ import unicodedata
 from urllib.parse import urlsplit
 import uuid
 
-from wiki_platform import safe_metadata_read, trusted_metadata_directory, ensure_private_directory, atomic_write, file_lock
+from wiki_platform import (safe_metadata_read, trusted_metadata_directory, ensure_private_directory,
+                           atomic_write, file_lock, metadata_probe, metadata_names,
+                           metadata_remove, metadata_remove_empty)
 from . import changes
 from .models import Node, Page, RemoteError, compact_json, native_id
 from .references import native_page_url_id
@@ -248,8 +251,28 @@ class Replica:
             raise ValueError('Invalid replica metadata')
         return value
 
+    def _exists(self, path):
+        return metadata_probe(path) is not None
+
+    def _unlink(self, path, *, limit=BODY_LIMIT, expected=None, missing_ok=False):
+        if os.name != 'nt':
+            path.unlink(missing_ok=missing_ok)
+            return
+        try:
+            raw = safe_metadata_read(path, limit) if expected is None else expected
+            metadata_remove(path, expected_sha256=hashlib.sha256(raw).hexdigest(), max_bytes=limit)
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
+
+    def _rmdir(self, path):
+        if os.name == 'nt':
+            metadata_remove_empty(path)
+        else:
+            path.rmdir()
+
     def _write(self, path, text):
-        if not path.parent.exists():
+        if not self._exists(path.parent):
             ensure_private_directory(path.parent)
         atomic_write(path, text.encode('utf-8') if isinstance(text, str) else text)
 
@@ -339,19 +362,19 @@ class Replica:
         identity = self.settings.identity()
         try:
             with file_lock(self.control / 'sync.lock', shared=True):
-                if (self.control / 'transaction.json').exists():
+                if self._exists(self.control / 'transaction.json'):
                     raise RemoteError('replica_recovery_pending', 'Automatic synchronization must finish the interrupted publication')
                 manifest = self._manifest()
                 if manifest.get('credentialBinding') != self.settings.credential_fingerprint:
                     raise RemoteError('credential_reauthorization_pending', 'Wait for complete synchronization with the current credentials')
-                if self._denied or (self.control / changes.DENIAL).exists():
+                if self._denied or self._exists(self.control / changes.DENIAL):
                     raise RemoteError('root_scope_denied', 'Confirmed scope denial blocks this snapshot until fresh synchronization')
                 if manifest.get('inventoryComplete') is not True:
                     raise RemoteError('replica_incomplete', 'Wait for a complete inventory synchronization')
                 yield manifest
                 if self.settings.identity() != identity:
                     raise RemoteError('replica_unavailable', 'Connection changed during read')
-                if self._denied or (self.control / changes.DENIAL).exists():
+                if self._denied or self._exists(self.control / changes.DENIAL):
                     raise RemoteError('root_scope_denied', 'Confirmed scope denial blocks this snapshot')
         except FileNotFoundError:
             raise RemoteError('replica_missing', 'No local snapshot exists yet') from None
@@ -615,7 +638,10 @@ class Replica:
             scanned_pages += 1
             # Size is only a refusal hint. The platform reader still verifies
             # the actual file and enforces the remaining aggregate byte limit.
-            size = self._path(row['path']).stat(follow_symlinks=False).st_size
+            info = metadata_probe(self._path(row['path']))
+            if info is None:
+                raise RemoteError('replica_unavailable', 'A synchronized projection is missing')
+            size = info['size']
             if size > BODY_LIMIT:
                 raise RemoteError('replica_unavailable', 'Replica projection is oversized; wait for synchronization')
             if scanned_bytes + size > 64 * 1024 * 1024 or scanned_pages > 5000:
@@ -685,7 +711,7 @@ class Replica:
                 time.sleep(min(.025, remaining))
             except FileNotFoundError:
                 # A cold namespace has no admitted snapshot to revoke.
-                if not (self.control / 'manifest.json').exists():
+                if not self._exists(self.control / 'manifest.json'):
                     with self._state_lock:
                         if generation == self._denial_generation:
                             self._denial_pending = False
@@ -760,7 +786,7 @@ class Replica:
         if self.closed:
             return
         ensure_private_directory(self.settings.corpus_root)
-        if not self.control.exists():
+        if not self._exists(self.control):
             ensure_private_directory(self.control)
         with trusted_metadata_directory(self.control):
             pass
@@ -981,8 +1007,8 @@ class Replica:
                     self._recover(allow_credential_switch=True, on_published=on_published)
                     with self._state_lock:
                         if denial_generation == self._denial_generation and self._denial_token() == prior_denial:
-                            (self.control / changes.DENIAL).unlink(missing_ok=True)
-                        if denial_generation == self._denial_generation and not (self.control / changes.DENIAL).exists():
+                            self._unlink(self.control / changes.DENIAL, limit=65536, missing_ok=True)
+                        if denial_generation == self._denial_generation and not self._exists(self.control / changes.DENIAL):
                             self._denied, self._denial_pending = False, False
                 if full_pass:
                     state = self._checkpoint()
@@ -992,7 +1018,7 @@ class Replica:
                 return dict(status='synced_with_unavailable' if unavailable else 'synced', pages=len(next_pages),
                             changes=changed, unavailable=sorted(unavailable), manifest=str(self.control / 'manifest.json'))
             finally:
-                if not (self.control / 'transaction.json').exists():
+                if not self._exists(self.control / 'transaction.json'):
                     self._discard_stage(stage, list(paths.values()) + [old[i]['path'] for i in unavailable])
 
     def _validate_native(self, node):
@@ -1053,13 +1079,13 @@ class Replica:
     def _discard_stage(self, stage, relative_paths=()):
         # Delete only proven projection names, never recursively walk an untrusted
         # or replaced tree. Unknown contents remain recoverable and untouched.
-        if not stage.exists():
+        if not self._exists(stage):
             return
         with trusted_metadata_directory(stage):
-            identity = stage.stat(follow_symlinks=False)
+            identity = metadata_probe(stage)['identity']
             def unchanged():
-                current = stage.stat(follow_symlinks=False)
-                if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+                current = metadata_probe(stage)
+                if current is None or current['identity'] != identity:
                     raise ValueError('Stage directory identity changed')
             names = set(relative_paths)
             try:
@@ -1074,32 +1100,32 @@ class Replica:
             for relative in names:
                 path = self._path(relative, stage)
                 try:
-                    safe_metadata_read(path, BODY_LIMIT)
+                    raw = safe_metadata_read(path, BODY_LIMIT)
                 except FileNotFoundError:
                     continue
                 unchanged()
-                path.unlink()
+                self._unlink(path, expected=raw)
                 parent = path.parent
                 while parent != stage:
                     directories.add(parent)
                     parent = parent.parent
             try:
-                safe_metadata_read(stage / 'manifest.json', MANIFEST_LIMIT)
+                raw = safe_metadata_read(stage / 'manifest.json', MANIFEST_LIMIT)
             except FileNotFoundError:
                 pass
             else:
                 unchanged()
-                (stage / 'manifest.json').unlink()
+                self._unlink(stage / 'manifest.json', expected=raw, limit=MANIFEST_LIMIT)
             for directory in sorted(directories, key=lambda p: len(p.parts), reverse=True):
                 with trusted_metadata_directory(directory):
                     unchanged()
                 try:
-                    directory.rmdir()
+                    self._rmdir(directory)
                 except OSError:
                     pass
             unchanged()
         try:
-            stage.rmdir()
+            self._rmdir(stage)
         except OSError:
             pass
 
@@ -1110,7 +1136,10 @@ class Replica:
         for row in pages.values():
             relative = row['path']
             source = self._path(relative, stage) if workset is None or relative in workset else self._path(relative)
-            size = source.stat(follow_symlinks=False).st_size
+            info = metadata_probe(source)
+            if info is None:
+                raise RemoteError('replica_unavailable', 'A candidate projection is missing')
+            size = info['size']
             if size > BODY_LIMIT or size > remaining:
                 raise RemoteError('replica_body_limit', 'Candidate projections exceed the readable generation byte budget')
             raw = safe_metadata_read(source, min(BODY_LIMIT, remaining))
@@ -1118,7 +1147,7 @@ class Replica:
 
     def _recover(self, allow_credential_switch=False, on_published=None):
         journal_path = self.control / 'transaction.json'
-        if not journal_path.exists():
+        if not self._exists(journal_path):
             return
         transaction = self._read(journal_path)
         name = transaction['stage']
@@ -1158,10 +1187,24 @@ class Replica:
             if total > 64*1024*1024:
                 raise RemoteError('replica_body_limit', 'Staged projections exceed the publication budget')
             destination = self._path(relative)
+            pending_directory = False
+            for parent in PurePosixPath(relative).parents:
+                if _canonical(str(parent)) in obsolete_files:
+                    prior_parent = self._path(str(parent))
+                    info = metadata_probe(prior_parent)
+                    if info is not None and info['kind'] == 'file':
+                        # A proven former file will become this subtree after
+                        # its owned bytes are retired, before any child write.
+                        safe_metadata_read(prior_parent, BODY_LIMIT)
+                        pending_directory = True
+                        break
+            if pending_directory:
+                continue
+            destination_info = metadata_probe(destination)
             permitted_existing = False
-            if _canonical(relative) not in owned_canonical and destination.exists():
+            if _canonical(relative) not in owned_canonical and destination_info is not None:
                 if (_canonical(relative) in prior_directories and _canonical(relative) not in desired_directories
-                    and destination.is_dir()):
+                    and destination_info['kind'] == 'dir'):
                     # A proven former subtree becomes a file after its obsolete
                     # owned children are removed. Unknown contents are never removed.
                     with trusted_metadata_directory(destination):
@@ -1173,9 +1216,10 @@ class Replica:
                     permitted_existing = True
                 else:
                     raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
-            if destination.parent.exists():
+            parent_info = metadata_probe(destination.parent)
+            if parent_info is not None:
                 parent_relative = _canonical(str(PurePosixPath(relative).parent))
-                if parent_relative in obsolete_files and destination.parent.is_file():
+                if parent_relative in obsolete_files and parent_info['kind'] == 'file':
                     # A proven obsolete Markdown file will become this subtree.
                     # Verify it through the platform reader before deferring creation.
                     safe_metadata_read(destination.parent, BODY_LIMIT)
@@ -1186,11 +1230,10 @@ class Replica:
                     pass
                 if destination.parent not in directory_entries:
                     names = set()
-                    for sibling in destination.parent.iterdir():
-                        entry_count += 1
-                        if entry_count > 4*PAGE_LIMIT:
-                            raise RemoteError('replica_path_limit', 'Mirror directories exceed their entry budget')
-                        names.add(_canonical(sibling.name))
+                    entries = metadata_names(destination.parent, max_entries=4*PAGE_LIMIT-entry_count)
+                    entry_count += len(entries)
+                    for sibling in entries:
+                        names.add(_canonical(sibling))
                     directory_entries[destination.parent] = names
                 if (_canonical(destination.name) in directory_entries[destination.parent]
                     and _canonical(relative) not in owned_canonical and not permitted_existing):
@@ -1198,19 +1241,21 @@ class Replica:
         for row in prior.values():
             if row['path'] not in desired:
                 obsolete = self._path(row['path'])
-                if _canonical(row['path']) in desired_directories and obsolete.is_dir():
+                obsolete_info = metadata_probe(obsolete)
+                if (_canonical(row['path']) in desired_directories and obsolete_info is not None
+                    and obsolete_info['kind'] == 'dir'):
                     # An interrupted replay may already have replaced this old
                     # file with its desired directory. Keep that new subtree.
                     with trusted_metadata_directory(obsolete):
                         pass
                     continue
-                if obsolete.exists():
-                    safe_metadata_read(obsolete, BODY_LIMIT)
-                    obsolete.unlink()
+                if obsolete_info is not None:
+                    raw = safe_metadata_read(obsolete, BODY_LIMIT)
+                    self._unlink(obsolete, expected=raw)
                 parent = obsolete.parent
                 while parent != self.base / 'pages':
                     try:
-                        parent.rmdir()
+                        self._rmdir(parent)
                     except (OSError, ValueError):
                         break
                     parent = parent.parent
@@ -1227,14 +1272,14 @@ class Replica:
         if len(feed.encode('utf-8')) > 65536:
             raise RemoteError('replica_feed_limit', 'Notification feed exceeds its byte budget')
         self._write(self.control / 'changes.json', feed)
-        journal_path.unlink()
+        self._unlink(journal_path, limit=MANIFEST_LIMIT)
         if on_published is not None:
             on_published()
         self._discard_stage(stage)
 
     def publish_verified(self, page, before=None):
         """Publish one verified remote effect; this function never mutates the provider."""
-        if not (self.control / 'manifest.json').exists():
+        if not self._exists(self.control / 'manifest.json'):
             return
         identity = self.settings.identity()
         node = page.node
@@ -1245,7 +1290,7 @@ class Replica:
             previous = self._manifest()
             if previous.get('credentialBinding') != self.settings.credential_fingerprint:
                 raise RemoteError('credential_reauthorization_pending', 'Complete inventory admission is required')
-            if self._denied or (self.control / changes.DENIAL).exists():
+            if self._denied or self._exists(self.control / changes.DENIAL):
                 raise RemoteError('root_scope_denied', 'A fresh inventory is required after confirmed denial')
             with file_lock(self.control / 'notice-access.lock'):
                 self._recover()
@@ -1323,11 +1368,11 @@ class Replica:
                 self._check_projection_budget(stage, next['pages'], files)
                 self._metadata(self.control / 'transaction.json', dict(stage=stage.name, files=files))
                 with file_lock(self.control / 'notice-access.lock'):
-                    if (self.control / changes.DENIAL).exists():
+                    if self._exists(self.control / changes.DENIAL):
                         raise RemoteError('root_scope_denied', 'A current inventory is required before publication')
                     self._recover()
             finally:
-                if not (self.control / 'transaction.json').exists():
+                if not self._exists(self.control / 'transaction.json'):
                     self._discard_stage(stage, [rows[i]['path'] for i in changed])
 
     def poll_comments(self, page_ids=None, interval_seconds=None, *, _deadline=None):
@@ -1417,7 +1462,7 @@ class Replica:
         try:
             with file_lock(self.control / 'sync.lock'):
                 current = self._manifest()
-                if self._denied or (self.control / 'transaction.json').exists() or (self.control / changes.DENIAL).exists() or current.get('credentialBinding') != self.settings.credential_fingerprint:
+                if self._denied or self._exists(self.control / 'transaction.json') or self._exists(self.control / changes.DENIAL) or current.get('credentialBinding') != self.settings.credential_fingerprint:
                     return
                 pages = changes.admitted(current)
                 confirmed = {i: h for i, h in observed.items() if pages.get(i) == watched[i]}
@@ -1433,11 +1478,11 @@ class Replica:
                     self._check_projection_budget(stage, next['pages'], [])
                     self._metadata(self.control / 'transaction.json', dict(stage=stage.name, files=[]))
                     with file_lock(self.control / 'notice-access.lock'):
-                        if (self.control / changes.DENIAL).exists():
+                        if self._exists(self.control / changes.DENIAL):
                             return
                         self._recover()
                 finally:
-                    if not (self.control / 'transaction.json').exists():
+                    if not self._exists(self.control / 'transaction.json'):
                         self._discard_stage(stage)
         except BlockingIOError:
             return 'pending'

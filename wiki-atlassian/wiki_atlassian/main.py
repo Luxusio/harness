@@ -85,13 +85,15 @@ def execute_personal(operation, data, deadline):
                               page=dict(id=settings.root_page_id, url=selected['page']),
                               replica=replica.status())
             else:
+                service = WikiService(settings, remote, replica)
+                service.validate_selection(operation, data)
                 # Comments and history do not require a full document replica.
                 # Read/search synchronization reuses the existing version/interval
                 # rules, never traverses children or watches all comment bodies.
                 if operation in ('get_document', 'search_documents', 'document_relations'):
                     replica.synchronize()
                 started = True
-                result = WikiService(settings, remote, replica).execute(operation, data)
+                result = service.execute(operation, data)
             if credentials.api_token in compact_json(result):
                 raise RemoteError('private_content', 'The native response contains authentication material and was withheld')
             return result

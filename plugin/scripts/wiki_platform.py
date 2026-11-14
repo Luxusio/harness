@@ -183,6 +183,65 @@ def safe_metadata_snapshot(path, limit):
             return data, identity
 
 
+def metadata_probe(path):
+    """Inspect one owned metadata object; only genuine absence returns None."""
+    path = _absolute(path)
+    if os.name == "nt":
+        return _native.metadata_probe(path)
+    if not path.name:
+        raise ValueError("A named metadata object is required")
+    try:
+        with _parent(path, private=True) as (directory, name):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            try:
+                info = os.fstat(fd)
+                named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                for value in (info, named):
+                    if stat.S_ISDIR(value.st_mode):
+                        if value.st_uid != os.getuid() or value.st_mode & 0o022:
+                            raise ValueError("Unsafe metadata directory")
+                    else:
+                        _metadata_owner(value)
+                identity = (info.st_dev, info.st_ino)
+                if identity != (named.st_dev, named.st_ino):
+                    raise ValueError("Metadata name changed during inspection")
+                return dict(kind="dir" if stat.S_ISDIR(info.st_mode) else "file",
+                            size=info.st_size, identity=identity)
+            finally:
+                os.close(fd)
+    except FileNotFoundError:
+        return None
+
+
+def metadata_names(path, *, max_entries):
+    """List bounded literal child names without following or reading them."""
+    if type(max_entries) is not int or max_entries < 0:
+        raise ValueError("A nonnegative directory entry limit is required")
+    path = _absolute(path)
+    if os.name == "nt":
+        return _native.metadata_names(path, max_entries=max_entries)
+    if not path.name:
+        raise ValueError("A named metadata directory is required")
+    with _parent(path, private=True) as (directory, name):
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        try:
+            info = os.fstat(fd)
+            if info.st_uid != os.getuid() or info.st_mode & 0o022:
+                raise ValueError("Unsafe metadata directory")
+            names = []
+            with os.scandir(fd) as iterator:
+                for entry in iterator:
+                    if len(names) >= max_entries:
+                        raise ValueError("Metadata directory entry limit exceeded")
+                    names.append(entry.name)
+            current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                raise ValueError("Metadata directory name changed during listing")
+            return names
+        finally:
+            os.close(fd)
+
+
 def metadata_tree_inventory(root, *, max_entries, max_bytes, allow_control_lock=False):
     """Inspect a native Windows tree with retained file and directory custody."""
     if os.name != "nt":

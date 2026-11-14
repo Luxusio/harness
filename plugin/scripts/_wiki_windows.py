@@ -559,6 +559,39 @@ def safe_metadata_snapshot(path, limit):
             _close(handle)
 
 
+def metadata_probe(path):
+    """Inspect a retained, owned ordinary metadata object at any path depth."""
+    path = _path(path)
+    try:
+        with _walk(path.parent, secure=True, writing=True):
+            info = os.lstat(_win32_path(path))
+            directory = bool(info.st_file_attributes & FILE_ATTRIBUTE_DIRECTORY)
+            handle = _open(path, FILE_LIST_DIRECTORY if directory else GENERIC_READ,
+                           directory=directory, share=FILE_SHARE_READ)
+            try:
+                stamp = _metadata_stamp(handle)
+                return dict(kind="dir" if directory else "file", size=stamp[3], identity=stamp[:3])
+            finally:
+                _close(handle)
+    except FileNotFoundError:
+        return None
+
+
+def metadata_names(path, *, max_entries):
+    """List bounded names while native handles retain the private directory."""
+    if type(max_entries) is not int or max_entries < 0:
+        raise ValueError("A nonnegative directory entry limit is required")
+    path = _path(path)
+    with _walk(path, secure=True, writing=True):
+        names = []
+        with os.scandir(_win32_path(path)) as iterator:
+            for entry in iterator:
+                if len(names) >= max_entries:
+                    raise ValueError("Metadata directory entry limit exceeded")
+                names.append(entry.name)
+        return names
+
+
 def metadata_tree_inventory(root, *, max_entries, max_bytes, allow_control_lock=False):
     """Stream a bounded trusted tree while native handles retain every entry.
 

@@ -1,6 +1,7 @@
 """The private inbox uses common wiki operations with an exact-page boundary."""
 import base64
 import json
+import os
 
 import pytest
 
@@ -248,3 +249,36 @@ def test_exact_page_search_rejects_forged_continuation_instead_of_skipping_only_
     assert len(current['results']) == 1 and not current['truncated'] and 'nextCursor' not in current
     forged = replica.search(dict(query='Original', limit=1, cursor='invented-continuation'))
     assert forged['code'] == 'invalid_cursor'
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Actual native Windows cache publication beyond the legacy path boundary')
+def test_native_deep_personal_replica_publishes_reuses_and_retires_real_projections(native, tmp_path):
+    from wiki_platform import metadata_names, metadata_probe
+    state, remote, original = native
+    corpus = tmp_path
+    while len(str(corpus / 'confluence/DOC/.sync')) <= 300:
+        corpus /= 'private-corpus-' + 'x' * 48
+    settings = SpaceSettings({**original.config, 'pageOnly': True}, original.credentials, corpus)
+    replica = Replica(settings, remote)
+    assert len(str(replica.control)) > 300
+    replica.synchronize()
+    service = WikiService(settings, remote, replica)
+    current = service.execute('get_document', dict(document='10', format='storage'))
+    assert current['version'] == 1 and 'Original' in current['content']
+    assert replica.search(dict(query='Original', limit=1))['results'][0]['id'] == '10'
+    body_reads = sum('body-format' in query for method, _, query, _ in state.calls if method == 'GET')
+    replica.close()
+    replica = Replica(settings, remote)
+    replica.synchronize(authoritative_bodies=False)
+    service = WikiService(settings, remote, replica)
+    assert body_reads == sum('body-format' in query for method, _, query, _ in state.calls if method == 'GET')
+    old_projection = replica._path(replica._manifest()['pages']['10']['path'])
+    state.pages['10'].update(title='Renamed Root', version=dict(number=2, message='revised'),
+                             body=dict(storage=dict(value='<p>Revised</p>', representation='storage')))
+    replica.synchronize(authoritative_bodies=False)
+    revised = service.execute('get_document', dict(document='10', format='storage'))
+    assert revised['version'] == 2 and 'Revised' in revised['content']
+    assert replica.search(dict(query='Revised', limit=1))['results'][0]['version'] == 2
+    assert metadata_probe(old_projection) is None
+    assert metadata_probe(replica.control / 'transaction.json') is None
+    assert not any(name.startswith('stage-') for name in metadata_names(replica.control, max_entries=32))

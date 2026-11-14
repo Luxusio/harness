@@ -49,6 +49,14 @@ class WikiService:
     def unchanged(self):
         require(self.settings.identity() == self.identity, 'configuration_changed', 'Connection changed; reconnect and read the target again')
 
+    def validate_selection(self, operation, data):
+        """Reject an unselected page before optional replica work or native IO."""
+        require(not self.settings.page_only or operation != 'create_document' and 'parent' not in data,
+                'scope_outside_connection', 'The private connection covers its configured page; creating descendants or moving pages is unavailable')
+        if self.settings.page_only and operation in ('get_document', 'update_document', 'list_document_versions', 'document_relations'):
+            require(document_id(data.get('document'), self.settings) == self.settings.root_page_id,
+                    'scope_outside_connection', 'Access is limited to the configured page, not its descendants')
+
     def _node(self, value):
         return self.remote.require_scope(self.settings, document_id(value, self.settings))
 
@@ -165,11 +173,7 @@ class WikiService:
         effect = {'started': False, 'saved': False, 'reference': None}
         try:
             self.unchanged()
-            require(not self.settings.page_only or operation != 'create_document' and 'parent' not in data,
-                    'scope_outside_connection', 'The private connection covers its configured page; creating descendants or moving pages is unavailable')
-            if self.settings.page_only and operation in ('get_document', 'update_document', 'list_document_versions', 'document_relations'):
-                require(document_id(data.get('document'), self.settings) == self.settings.root_page_id,
-                        'scope_outside_connection', 'Access is limited to the configured page, not its descendants')
+            self.validate_selection(operation, data)
             with self.remote.operation(timeout=30 if operation in ('get_document', 'list_document_versions', 'list_comments') else 45):
                 if operation == 'search_documents':
                     return self.replica.search(data)
