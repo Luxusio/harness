@@ -410,7 +410,7 @@ Before `wbs(action="close")`, verify these are true:
 2. `wbs(action="verify")` reports PASS from current required WBS checks.
 3. Required independent review/QA and applicable UX results were awaited, and actual review PASS preceded actual QA.
 4. User corrections are reflected in PLAN.md or durable documentation.
-5. Durable docs are updated when the WBS changed user-visible behavior, external contracts, or reusable guidance.
+5. Durable docs are updated when the WBS changed user-visible behavior, external contracts, or reusable guidance; report unresolved publication as `sync_pending` and enforce any explicit document acceptance dependency under Phase 8.6.
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/run/worktree-completion.md`; after `wbs(action="close")`, complete its coordinator disposal before claiming overall completion. Batch leads return to the coordinator without self-removal. If already closed, finish outstanding disposal without repeating close or review solely for cleanup.
 
@@ -465,15 +465,20 @@ committed artifact. Deferred requires an `AskUserQuestion` decision and records
 ### Phase 8.6: durable docs
 Read the changed surfaces and PLAN document references. Update their documents at the selected destination. Preserve every reported `Known ceiling:` in the owning document or Phase 8.7 change summary; never invent a ceiling. Keep native references/versions or local paths as evidence. Call `wbs(action="verify")`.
 
-When the WBS changes REQ/GUIDE/ADR/POLICY documents at either destination OR the current WBS contains explicit durable user corrections,
-spawn the documentation-review subagent after
-durable docs. It verifies both durable docs consistency and durable doc quality, and
-runs the Retrospective REQ pass over the conversation to catch user-stated
-requirements that closed without becoming durable REQ docs. The WBS cannot
-close with unresolved durable-doc gaps; a changed REQ with vague or missing
-observable behavior is a FAIL, not a warning. Candidate REQs written by the
-Retrospective pass land with `status: candidate` frontmatter and do not block
-close on their own.
+For selected or changed REQ/GUIDE/ADR/POLICY documents or durable user corrections,
+use the effective `work_policy.document_review` from `wbs(action="context")`.
+Spawn the documentation-review subagent only for `independent` or a canonical
+`required_review_lenses` containing `review-document`; otherwise perform the
+relevant writer content checks. Both check consistency, observable behavior,
+source provenance and supplied user requirements without promoting candidates
+to accepted requirements. Explicit `review-document` remains required for its
+declared target even when this durable-doc phase has no changed document.
+Report unavailable or unconfirmed publication as `sync_pending`, separately
+from product review/QA, PR readiness, native acceptance and deployment. It does
+not invalidate applicable product results or block PR readiness by itself;
+an explicit current acceptance dependency on publication still blocks completion.
+Do not claim pending documents are synchronized or repeat product QA merely to
+repair document recording. Candidate REQs remain non-binding candidates.
 
 ### Phase 8.7: Distilled Change Doc
 One-paragraph summary of the WBS's user-visible behavior change. Persist at the selected document destination (local mode: `doc/changes/<date>-<slug>.md`). Required when a `Known ceiling:` was reported; otherwise optional if no user-visible change. Writer skill consumes this for release notes.

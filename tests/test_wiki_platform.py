@@ -19,6 +19,30 @@ sys.path.insert(0, str(SCRIPTS))
 import wiki_platform as platform
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX private stdin pump; Native Job stdin has its own regressions")
+def test_private_helper_stdin_pumps_while_stdout_is_backpressured(tmp_path):
+    payload = "한글😀".encode() * 100000
+    code = ("import hashlib,sys;sys.stdout.buffer.write(b'x'*262144);sys.stdout.buffer.flush();"
+            "data=sys.stdin.buffer.read();sys.stdout.buffer.write(hashlib.sha256(data).hexdigest().encode())")
+    result = platform.run_bounded([sys.executable, "-I", "-B", "-c", code], cwd=tmp_path,
+        env=dict(os.environ), input_bytes=payload, timeout=5, limit=262144 + 64)
+    assert result.returncode == 0
+    assert result.stdout == b"x" * 262144 + hashlib.sha256(payload).hexdigest().encode()
+    empty = platform.run_bounded([sys.executable, "-I", "-B", "-c", "import sys;print(len(sys.stdin.buffer.read()))"],
+        cwd=tmp_path, env=dict(os.environ), input_bytes=b"", timeout=5)
+    assert empty.stdout == b"0\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pipe delivery error; Native Job stdin has its own regressions")
+def test_private_helper_rejects_undelivered_input_and_reaps_timeout(tmp_path):
+    with pytest.raises(BrokenPipeError):
+        platform.run_bounded([sys.executable, "-I", "-B", "-c", "import os,time;os.close(0);time.sleep(60)"],
+            cwd=tmp_path, env=dict(os.environ), input_bytes=b"x" * 1048576, timeout=5)
+    with pytest.raises(subprocess.TimeoutExpired):
+        platform.run_bounded([sys.executable, "-I", "-B", "-c", "import time;time.sleep(60)"],
+            cwd=tmp_path, env=dict(os.environ), input_bytes=b"x" * 1048576, timeout=.2)
+
+
 def test_metadata_snapshot_binds_exact_bytes_and_file_identity(tmp_path):
     folder = platform.ensure_private_directory(tmp_path / "source Unicode 한글")
     target = folder / "source.py"

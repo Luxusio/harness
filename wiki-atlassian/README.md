@@ -342,23 +342,32 @@ Linux tests and modeled owner descriptors do not establish native execution.
 ## Personal Harness improvement inbox
 
 When `~/.config/harness/feedback.yaml` exists, the same `atlassian` MCP also
-offers `read_personal_feedback(limit, cursor)`. It works without enabling a
-project wiki and reads only the page selected by that private setting, using
-the separate `~/.config/harness/mise.local.toml` authentication. Project
-credentials and Rovo are never fallbacks. No new token or project connection is
-needed when that existing private connection already works.
+uses its normal document, comment and history operations with
+`connection: "personal"`. This works without a project wiki. It uses only the
+configured page and its comments, with the separate
+`~/.config/harness/mise.local.toml` authentication. Descendants, page creation
+and page moves are outside this connection. Project credentials and Rovo are
+never fallbacks; an omitted connection still selects the project.
 
-The first read returns native storage content and a comment page. Follow returned
-`read`, `next` or `replies` cursors to expand bounded content. Cursors bind the
-private connection and observed scope; changed content or credentials may require
-starting without the old cursor. HTTP and body continuations are checked, not
-followed to arbitrary destinations. No background reading, acknowledgement,
-publication or local report storage occurs.
+Call `connection_status(connection: "personal")` to authenticate and discover
+the page ID. Then use `get_document`, `list_comments` and
+`list_document_versions` with that connection. `document: "feedback"` and
+`target: "feedback"` name the configured page. Continued document reads retain
+the native version and offset; comments retain their returned cursor and target.
+The page-only replica has a separate identity from a project subtree, shared by
+Claude and Codex and stable across token rotation; changed credentials require
+fresh authorization. No project configuration or credential copy is needed.
 
-The installed launcher uses its own Python invocation and the packaged canonical
-private helper directly. That Python needs PyYAML for configured private YAML; missing
-dependencies return unavailable and are not installed automatically. Start via
-the launcher, then reconnect the host after installation to expose the new tool.
+Explicitly requested publication uses `create_comment` on the same connection.
+The normal native version, author, scope and rich-content readback guards apply
+to comment and document updates. Reading does not authorize publication. An
+`unknown` write may already exist: inspect its returned reference or page before
+any new submission, and never retry it automatically. Requests travel through
+bounded stdin rather than command arguments or a Windows environment block.
+
+The installed Python needs PyYAML for private YAML. Missing dependencies return
+unavailable and are not installed automatically. Reconnect the host after
+installation to load the common tool schema.
 
 ## Replacing the early knowledge-confluence installation
 

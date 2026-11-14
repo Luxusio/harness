@@ -16,6 +16,11 @@ The requirements below are user-confirmed outcomes. The representation and
 implementation choices are derived necessities, not independently requested
 features. The private inbox's API-token reuse suggestion is not adopted here.
 
+The user's 2026-11-14 instruction, “전용 개선함 도구 통합 문서 게이트 수정 ㄱ”,
+also authorizes correcting the development document gate described below.
+It does not authorize weakening independent code review, security review,
+actual QA, or explicitly selected document acceptance requirements.
+
 ## Required behavior
 
 - Read-only questions, research discussions and reviews do not open a WBS.
@@ -36,6 +41,16 @@ features. The private inbox's API-token reuse suggestion is not adopted here.
   of declaration cannot erase already admitted development obligations.
 - Existing project YAML controls document review, development verification and
   automatic delivery preferences. Hooks, MCP and skills use the same policy.
+- Development document work follows that same document-review preference:
+  `self` uses relevant writer content checks; `independent` uses the document
+  critic for selected or changed durable documents. An explicitly required
+  `review-document` remains binding for its declared target. A code-only WBS
+  does not acquire a document-review obligation merely from this preference.
+- Report document synchronization as `sync_pending` when publication is
+  unavailable or unconfirmed. It does not by itself invalidate applicable
+  product review/QA or block PR readiness. A current explicit acceptance
+  dependency on document publication still remains unfinished; never claim
+  that pending documentation, native acceptance, or deployment succeeded.
 - Automatic installation is conditional on this work's actual payload changes,
   including committed changes. Document work does not repair unrelated runtime
   drift. Explicit manual installation remains available and fully validated.

@@ -230,6 +230,42 @@ def test_independent_document_policy_requires_only_document_review(tmp_path):
     assert (td / "WBS.control.json").read_bytes() == before
 
 
+@pytest.mark.parametrize("document_review", ["self", "independent"])
+def test_development_doc_preference_preserves_explicit_review_targets(tmp_path, document_review):
+    repo, _, call, _ = public(tmp_path)
+    set_workflow(repo, {"document_review": document_review})
+    text = policy_plan([node()], {"source": ["src.txt"]})
+    assert not call("plan", plan=text).get("isError")
+    context = call("context")["structuredContent"]["context"]
+    # A document preference alone cannot invent a document target for code-only work.
+    assert context["required_review_lenses"] == ["review-code"]
+    assert context["required_qa_lenses"] == ["qa-cli"]
+    assert not call("plan", plan=text, required_lenses=[
+        "review-code", "review-security", "review-document", "qa-cli"]).get("isError")
+    context = call("context")["structuredContent"]["context"]
+    assert context["required_review_lenses"] == ["review-code", "review-security", "review-document"]
+    assert context["required_qa_lenses"] == ["qa-cli"]
+
+
+def test_document_sync_pending_does_not_invalidate_unrelated_product_assertion(tmp_path):
+    from document_destination import policy
+    repo, td, call, opened = public(tmp_path)
+    text = policy_plan([node()], {"source": ["src.txt"]})
+    assert not call("plan", plan=text).get("isError")
+    assert call("check", node_id="A")["structuredContent"]["passed"]
+    before = wbs.read_state(str(td))["checks"]
+    (repo / "doc/harness/manifest.yaml").write_text(json.dumps({
+        "version": 7, "workflow": {"document_review": "self"},
+        "wiki": {"backend": "atlassian", "enabled": True, "site": "invalid"}}))
+    selected = policy({}, cwd=repo)
+    assert selected["mode"] == "unavailable" and "sync_pending" in selected["policy"]
+    verified = call("verify")["structuredContent"]
+    assert verified["runtime_verdict"] == "PASS"
+    assert verified["progress"]["percentage"] == 100
+    state = wbs.read_state(str(td))
+    assert state["checks"] == before and state["run_id"] == opened["run_id"]
+
+
 def test_promotion_keeps_run_and_history_but_not_document_completion_credit(tmp_path):
     repo, td, call, opened = document_fixture(tmp_path)
     assert call("check", node_id="A")["structuredContent"]["passed"]

@@ -18,8 +18,9 @@ def home_directory(environment=None):
     return home
 
 
-def corpus_path(data_home, credentials, key, root=None):
-    return Path(data_home) / digest([credentials.base_url.rstrip('/'), credentials.email, root or '*', key])
+def corpus_path(data_home, credentials, key, root=None, *, page_only=False):
+    identity = [credentials.base_url.rstrip('/'), credentials.email, root or '*', key]
+    return Path(data_home) / digest([*identity, 'page-only'] if page_only else identity)
 
 
 class SpaceSettings:
@@ -36,6 +37,9 @@ class SpaceSettings:
         if self.root_page_id is not None:
             native_id(self.root_page_id)
         self.whole_space = self.root_page_id is None
+        self.page_only = self._config.get('pageOnly', False)
+        if type(self.page_only) is not bool or self.page_only and self.whole_space:
+            raise ValueError('Exact-page settings require a root page')
         self.poll_interval_seconds = self._config.get('pollIntervalSeconds', 300)
         self.watched_comment_pages = self._config.get('watchCommentPages', '').split(',') if self._config.get('watchCommentPages') else []
         self.credential_fingerprint = digest([self.site, credentials.email, credentials.api_token])
@@ -45,7 +49,7 @@ class SpaceSettings:
         return copy.deepcopy(self._config)
 
     def identity(self):
-        return digest(self._config)
+        return digest([self._config, self.credential_fingerprint]) if self.page_only else digest(self._config)
 
     def read(self):
         return self.config
@@ -53,6 +57,19 @@ class SpaceSettings:
     def prepare_corpus(self):
         from wiki_platform import ensure_private_directory
         ensure_private_directory(self.corpus_root)
+
+
+def personal_settings(selected, credentials, remote, data_home):
+    """Resolve only the privately selected page and its actual native space."""
+    from document_destination import _origin
+    if _origin(selected['site']) != _origin(credentials.base_url):
+        raise RemoteError('connection_unavailable', 'Private authentication origin differs from the configured page')
+    account = remote.current_user()
+    node = remote.scope_node(native_id(selected['page_id']))
+    space = remote.space(node.space_id)
+    value = dict(enabled=True, site=credentials.base_url, space=space['key'], spaceId=space['id'],
+                 rootPageId=node.id, pageOnly=True, privateAccountId=account['accountId'])
+    return SpaceSettings(value, credentials, corpus_path(data_home, credentials, space['key'], node.id, page_only=True))
 
 
 class Project:

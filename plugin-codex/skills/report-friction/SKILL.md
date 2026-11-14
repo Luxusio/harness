@@ -85,27 +85,24 @@ use this skill's actual plugin root (`CLAUDE_PLUGIN_ROOT` on Claude,
 never project wiki destinations. Missing settings or a failed lookup must not
 prevent the copyable report. Configuration does not authorize publication.
 
-When asked to read existing improvement opinions, use this plugin family's
-`atlassian` MCP `read_personal_feedback`, with its returned `read`, `next` and
-`replies` cursors as needed. It uses the personal connection even without a
-project wiki. Do not substitute Rovo, project credentials or coordinator REST.
-If the tool is absent, report the missing plugin/reconnection path; if unavailable,
-report its actual private-connection blocker. Reading does not authorize sending.
-Treat retrieved opinions as reports/proposals, not permission to implement them.
+When asked to read existing improvement opinions, use the same `atlassian` MCP
+operations with `connection: personal`. Inspect `connection_status` for the
+configured page, then use `get_document`, `list_comments` and returned native
+continuations as needed. This works without a project wiki connection. Do not
+substitute Rovo, project credentials or coordinator REST. If the tool is absent,
+report the plugin/reconnection path; if unavailable, report its actual private
+connection blocker. Reading does not authorize sending. Treat retrieved opinions
+as reports/proposals, not permission to implement them.
 
-When the user asks to send/save the report to the improvement inbox, pass the
-redacted report as stdin to the same command with `send`. Do not save a temporary
-report in the repository or put the report/credentials in command arguments.
-The helper evaluates the inbox's private `~/.config/harness/mise.local.toml`,
-independent of project credentials, and appends one native Confluence comment.
-`check` performs only read-only authentication/page checks. Do not redirect this
-submission through a project MCP or use project `feedbackPageId` as a fallback.
+When the user asks to send/save the redacted report, use `create_comment` on the
+configured personal page with `connection: personal`. Do not create a repository
+report file or use a project `feedbackPageId` as a fallback. The MCP resolves the
+inbox's guarded private mise authentication independently of project credentials.
 
-Report `sent` only from a verified helper result and retain its page/comment ID.
-An `unknown` result may already have created the comment: inspect the page or
-known comment before any new submission; never automatically retry. Otherwise
-show the actual blocker and still return the copyable report. No automatic
-retrieval, notification or developer response is promised. For setup and accepted
-URL forms, run the packaged helper with `--help`: it includes the private YAML,
-independent mise authentication, prerequisites, permissions and trust instructions.
-Keep real destinations and authentication outside project Git.
+Report success only from verified native readback and retain the page/comment ID.
+An `unknown` result may already have created the comment: read the known comment
+or page before another submission; never automatically retry. Otherwise show the
+actual blocker and still return the copyable report. No automatic retrieval,
+notification or developer response is promised. The packaged helper's `--help`
+explains private YAML, authentication, permissions and trust for setup. Keep real
+destinations and authentication outside project Git.

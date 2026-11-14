@@ -500,6 +500,8 @@ class Remote:
 
     def ancestry(self, settings, id):
         native_id(id)
+        _need(not settings.page_only or id == settings.root_page_id,
+              'scope_outside_connection', 'Access is limited to the configured page, not its descendants')
         observed = []
         current = id
         while current is not None:
@@ -707,6 +709,14 @@ class Remote:
             result.append(row)
         return result
 
+    def space(self, id):
+        """Resolve the exact space of an already selected native page."""
+        raw = self._request('GET', self._endpoint('/wiki/api/v2/spaces/' + native_id(id)))[1]
+        key = raw.get('key')
+        _need(raw.get('id') == id and isinstance(key, str) and re.fullmatch('~?[A-Za-z0-9_-]{1,200}', key)
+              and raw.get('status', 'current') == 'current', 'scope_metadata_changed', 'Selected native space identity is unavailable')
+        return {'id': id, 'key': key}
+
     def current_user(self):
         raw = self._request('GET', self._endpoint('/wiki/rest/api/user/current'))[1]
         _need(raw.get('type', 'known') == 'known', 'account_unavailable', 'Authenticated Confluence account is unavailable')
@@ -770,6 +780,8 @@ class Remote:
                 return self.whole_space_inventory(settings)[0]
             else:
                 root = self.require_scope(settings, settings.root_page_id)
+                if settings.page_only:
+                    return [root]
                 nodes, pending = [root], [(root, 0)]
                 while pending:
                     parent, depth = pending.pop(0)

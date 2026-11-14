@@ -19,7 +19,7 @@ def native_page_url_id(value, origin, space=None, allow_api=False):
                 or (uri.scheme, uri.hostname, uri.port) != (expected.scheme, expected.hostname, expected.port)
                 or uri.username is not None or uri.password is not None or uri.port == 0):
             raise ValueError()
-        page = re.fullmatch(r'/wiki/spaces/([A-Za-z0-9_-]+)/pages/([1-9][0-9]*)(?:/([^/]*))?', uri.path)
+        page = re.fullmatch(r'/wiki/spaces/(~?[A-Za-z0-9_-]+)/pages/([1-9][0-9]*)(?:/([^/]*))?', uri.path)
         api = re.fullmatch(r'/wiki/api/v2/pages/([1-9][0-9]*)(?:/([^/]*))?', uri.path) if allow_api else None
         if page is None and api is None:
             raise ValueError()

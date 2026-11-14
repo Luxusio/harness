@@ -9,6 +9,7 @@ import subprocess
 import base64
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 import ssl
 import sys
 import threading
@@ -43,26 +44,42 @@ def private_inbox(tmp_path):
     key.write_bytes((ROOT / "tests/fixtures/wiki-localhost/key.pem").read_bytes())
     calls = []
     expected = "Basic " + base64.b64encode(b"private@example.invalid:private-mcp-fixture").decode()
+    revision = {"number": 2, "authorId": "private-account", "createdAt": "2026-11-14T00:00:00Z", "message": "Fixture"}
+    page = {"id": "790", "title": "Harness feedback", "status": "current", "spaceId": "123",
+            "parentId": None, "version": revision,
+            "body": {"storage": {"representation": "storage", "value": "<h2>Improvement inbox</h2>"}}}
+    def comment(id, text):
+        return {"id": id, "status": "current", "pageId": "790", "version": {
+            "number": 1, "authorId": "private-account", "createdAt": "2026-11-14T00:00:00Z"},
+            "body": {"storage": {"representation": "storage", "value": "<p>" + text + "</p>"}}}
     class Native(BaseHTTPRequestHandler):
         def do_GET(self):
             calls.append((self.command, self.path, self.headers.get("Authorization")))
             if self.headers.get("Authorization") != expected:
                 self.send_error(401); return
-            if self.path == "/wiki/rest/api/user/current":
-                body = {"accountId": "private-account"}
-            elif self.path.startswith("/wiki/api/v2/pages/790/footer-comments?"):
-                subsequent = "cursor=" in self.path
-                body = {"results": [{"id": "901" if subsequent else "900", "status": "current", "pageId": "790",
-                    "version": {"number": 1}, "body": {"storage": {"representation": "storage",
-                    "value": "<p>Second opinion</p>" if subsequent else "<p>Reuse compatible tokens</p>"}}}]}
-            elif self.path.startswith("/wiki/api/v2/pages/790"):
-                body = {"id": "790", "title": "Harness feedback", "status": "current", "version": {"number": 2},
-                    "body": {"storage": {"representation": "storage", "value": "<h2>Improvement inbox</h2>"}}}
+            path, query = urlsplit(self.path).path, parse_qs(urlsplit(self.path).query)
+            if path == "/wiki/rest/api/user/current":
+                body = {"accountId": "private-account", "displayName": "Private fixture"}
+            elif path == "/wiki/api/v2/spaces/123":
+                body = {"id": "123", "key": "TEAM", "name": "Fixture space", "status": "current"}
+            elif path == "/wiki/api/v2/pages/790/footer-comments":
+                subsequent = "cursor" in query
+                body = {"results": [comment("901", "Second opinion") if subsequent else comment("900", "Reuse compatible tokens")]}
+            elif path == "/wiki/api/v2/pages/790/inline-comments":
+                body = {"results": []}
+            elif path == "/wiki/api/v2/pages/790/versions/2":
+                body = revision
+            elif path == "/wiki/api/v2/pages/790/versions":
+                body = {"results": [revision]}
+            elif path == "/wiki/api/v2/pages/790":
+                body = page
+            elif path in ("/wiki/api/v2/footer-comments/900", "/wiki/api/v2/footer-comments/901"):
+                body = comment(path.rsplit("/", 1)[1], "Reuse compatible tokens" if path.endswith("/900") else "Second opinion")
             else:
                 self.send_error(404); return
             self.send_response(200)
-            if "/footer-comments?" in self.path and "cursor=" not in self.path:
-                self.send_header("Link", '</wiki/api/v2/pages/790/footer-comments?cursor=next%2Bcursor&limit=1>; rel="next"')
+            if path == "/wiki/api/v2/pages/790/footer-comments" and "cursor" not in query:
+                self.send_header("Link", '</wiki/api/v2/pages/790/footer-comments?cursor=next%2Bcursor&limit=1&body-format=storage>; rel="next"')
             self.send_header("Content-Type", "application/json"); self.end_headers()
             self.wfile.write(json.dumps(body).encode())
         def do_POST(self):
@@ -215,17 +232,18 @@ def test_private_payload_accepts_frozen_readonly_sources_without_modifying_them(
                 path.chmod(0o700)
 
 
-def feedback_call(package, command, cwd, env, **arguments):
+def personal_call(package, command, cwd, env, operation="list_comments", **arguments):
+    arguments = {"connection": "personal", **arguments}
     replies = _calls(package / "scripts/launch.py", cwd, env, command=command, requests=[
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-            "name": "read_personal_feedback", "arguments": arguments}}])
+            "name": operation, "arguments": arguments}}])
     tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
     reply = next(row["result"] for row in replies if row.get("id") == 3)
     assert not reply.get("isError"), reply
     return tools, json.loads(reply["content"][0]["text"])
 
 
-def test_personal_feedback_uses_packaged_mcp_and_private_identity_without_project_wiki(tmp_path):
+def test_personal_connection_uses_common_packaged_mcp_and_private_identity_without_project_wiki(tmp_path):
     package, command = personal_payload(tmp_path)
     project = tmp_path / "consumer"; project.mkdir()
     with private_inbox(tmp_path) as (home, _, settings, calls):
@@ -234,22 +252,49 @@ def test_personal_feedback_uses_packaged_mcp_and_private_identity_without_projec
             HTTP_PROXY="http://127.0.0.1:9", HTTPS_PROXY="http://127.0.0.1:9",
             PYTHONPATH=str(project), PYTHONHOME=str(project))
         (project / "personal_feedback.py").write_text("raise RuntimeError('project-import-poison')")
-        tools, first = feedback_call(package, command, project, env, limit=1)
-        assert [t["name"] for t in tools] == ["read_personal_feedback"]
-        assert tools[0]["annotations"]["readOnlyHint"] is True
-        assert tools[0]["annotations"]["destructiveHint"] is False
-        assert set(tools[0]["inputSchema"]["properties"]) == {"limit", "cursor"}
-        assert first["status"] == "read" and first["page"]["id"] == "790"
-        assert "Reuse compatible tokens" in first["comments"][0]["body"]["value"]
-        assert not first["complete"]
+        tools, first = personal_call(package, command, project, env, target="790", format="storage", limit=1)
+        names = {tool["name"] for tool in tools}
+        assert {"get_document", "list_comments", "create_comment", "update_comment", "connection_status"} <= names
+        assert "read_personal_feedback" not in names
+        assert all("connection" in tool["inputSchema"]["properties"] for tool in tools)
+        assert first["status"] == "listed" and first["target"] == "790"
+        assert first["connection"] == "personal"
+        assert "Reuse compatible tokens" in first["comments"][0]["body"]
+        assert first["hasMore"] and not first["complete"]
         other = tmp_path / "other-consumer"; other.mkdir()
-        _, second = feedback_call(package, command, other, env, limit=1, **first["next"])
-        assert second["status"] == "read" and second["comments"][0]["id"] == "901" and second["complete"]
+        _, second = personal_call(package, command, other, env, target="790", format="storage", limit=1, cursor=first["cursor"])
+        assert second["status"] == "listed" and second["comments"][0]["id"] == "901"
+        assert second["hasMore"] and not second["complete"]
+        _, final = personal_call(package, command, other, env, target="790", format="storage", limit=1, cursor=second["cursor"])
+        assert final["comments"] == [] and not final["hasMore"] and final["complete"]
+        _, page = personal_call(package, command, other, env, operation="get_document", document="790", format="storage", length=12)
+        assert page["id"] == "790" and page["version"] == 2 and page["connection"] == "personal"
+        assert page["content"] == "<h2>Improvement inbox</h2>"[:12] and page["truncated"]
         assert all(method == "GET" for method, _, _ in calls)
         assert all(authorization == calls[0][2] for _, _, authorization in calls)
         assert not (project / "doc").exists() and not list(other.iterdir())
-        assert all(secret not in json.dumps(first) + json.dumps(second) for secret in (
+        assert all(secret not in json.dumps([first, second, final, page]) for secret in (
             "private-mcp-fixture", "project-token-sentinel", "project@example.invalid", "project-import-poison"))
+
+
+def test_packaged_personal_connection_does_not_admit_another_page_or_default_project(tmp_path):
+    package, command = personal_payload(tmp_path)
+    project = tmp_path / "consumer"; project.mkdir()
+    with private_inbox(tmp_path) as (home, _, settings, calls):
+        env = clean_environment(home, **settings)
+        _, denied = personal_call(package, command, project, env, operation="get_document", document="791")
+        assert denied["status"] == "error" and denied["code"] == "scope_outside_connection"
+        assert not any("/pages/791" in path for _, path, _ in calls)
+        before = len(calls)
+        replies = _calls(package / "scripts/launch.py", project, env, command=command, requests=[
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "get_document", "arguments": {"document": "790"}}},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                "name": "read_personal_feedback", "arguments": {}}}])
+        project_reply = next(row["result"] for row in replies if row.get("id") == 3)
+        assert json.loads(project_reply["content"][0]["text"])["status"] == "error"
+        assert next(row["error"]["code"] for row in replies if row.get("id") == 4) == -32602
+        assert len(calls) == before, "Missing project connection must not authenticate via the private inbox"
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX nested process-group cleanup; Windows native Job lifetime has its own suite')
@@ -267,14 +312,14 @@ def test_private_read_timeout_and_server_termination_reap_nested_mise(tmp_path, 
         mise.chmod(0o700)
         env = clean_environment(home, **settings)
         argv = command if cancel else [sys.executable, '-I', '-B', '-c',
-            "import sys,json;sys.path[:0]=sys.argv[1:3];from wiki_atlassian.main import read_personal;print(json.dumps(read_personal({},timeout=3)))",
+            "import sys,json;sys.path[:0]=sys.argv[1:3];from wiki_atlassian.main import personal_operation;print(json.dumps(personal_operation('connection_status',{},timeout=3)))",
             str(package), str(package / 'scripts')]
         try:
             child = subprocess.Popen(argv, cwd=project, env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if cancel:
                 child.stdin.write(json.dumps(dict(jsonrpc='2.0', id=1, method='tools/call',
-                    params=dict(name='read_personal_feedback', arguments={}))) + '\n')
+                    params=dict(name='connection_status', arguments={'connection':'personal'}))) + '\n')
                 child.stdin.flush()
             deadline = time.monotonic() + 5
             while not pidfile.exists() and time.monotonic() < deadline:
@@ -285,7 +330,9 @@ def test_private_read_timeout_and_server_termination_reap_nested_mise(tmp_path, 
                 child.terminate()
             output, error = child.communicate(timeout=6)
             if not cancel:
-                assert child.returncode == 0 and json.loads(output)['status'] == 'unavailable', error
+                assert child.returncode == 0, error
+                outcome = json.loads(output)
+                assert outcome['status'] in ('error', 'unavailable') and outcome['code'] == 'connection_unavailable', outcome
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline:
                 try:
@@ -320,8 +367,12 @@ def test_packaged_personal_mcp_never_borrows_project_authentication(tmp_path, fa
             auth.write_text(auth.read_text().replace("127.0.0.1", "other.invalid"))
         env = clean_environment(home, **settings, ATLASSIAN_BASE_URL="https://project.invalid",
             ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token-sentinel")
-        tools, result = feedback_call(package, command, project, env)
-        assert tools and result["status"] == "unavailable" and calls == []
+        tools, result = personal_call(package, command, project, env, operation="connection_status")
+        assert tools and calls == []
+        if fault == "unsafe-settings":
+            assert result["status"] == "unavailable"
+        else:
+            assert result["status"] == "error" and result["code"] == "connection_unavailable"
         assert "project-token-sentinel" not in json.dumps(result)
 
 
@@ -332,9 +383,10 @@ def test_private_inbox_remains_readable_when_unrelated_project_wiki_is_invalid(t
     with private_inbox(tmp_path) as (home, _, settings, calls):
         env = clean_environment(home, **settings, ATLASSIAN_BASE_URL="https://different-project.invalid",
             ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token-sentinel")
-        tools, result = feedback_call(package, command, project, env, limit=1)
-        assert {t["name"] for t in tools} == {"read_personal_feedback", "connection_status"}
-        assert result["status"] == "read" and result["page"]["id"] == "790"
+        tools, result = personal_call(package, command, project, env, target="790", format="storage", limit=1)
+        assert {"list_comments", "get_document", "connection_status"} <= {t["name"] for t in tools}
+        assert "read_personal_feedback" not in {t["name"] for t in tools}
+        assert result["status"] == "listed" and result["target"] == "790"
         assert all(method == "GET" for method, _, _ in calls)
 
 
@@ -527,7 +579,7 @@ def test_common_manifest_nesting_boundary_matches_harness(tmp_path, nesting, acc
 def test_multiple_spaces_and_optional_roots_expose_one_toolset_before_native_resolution(tmp_path):
     write_connection(tmp_path, spaces=[{"key": "TEAM"}, {"key": "DEV", "rootPageId": "456"}])
     replies = _calls(_runtime(), tmp_path, enabled_environment(tmp_path / "home"), requests=[
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "connection_status", "arguments": {}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "connection_status", "arguments": {"connection": "project"}}},
     ])
     tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
     assert len(tools) == 10
@@ -539,6 +591,7 @@ def test_multiple_spaces_and_optional_roots_expose_one_toolset_before_native_res
     assert "parent" not in create["inputSchema"].get("required", [])
     content = next(row["result"]["content"][0]["text"] for row in replies if row.get("id") == 3)
     status = json.loads(content)
+    assert status["connection"] == "project"
     assert status["enabled"] is True and status["ready"] is False
     assert [(space["key"], space["wholeSpace"]) for space in status["spaces"]] == [("TEAM", True), ("DEV", False)]
     assert status["spaces"][1]["rootPageId"] == "456"

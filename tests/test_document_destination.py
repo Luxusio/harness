@@ -100,6 +100,13 @@ def test_disabled_can_omit_connection_and_auth(tmp_path):
     assert destination.select_destination({}, cwd=tmp_path)["mode"] == "local"
 
 
+def test_local_guidance_defers_document_review_to_effective_wbs_policy(tmp_path):
+    selected = destination.policy({}, cwd=tmp_path)
+    assert selected["mode"] == "local"
+    assert "effective WBS policy for document review" in selected["policy"]
+    assert "independent document review" not in selected["policy"]
+
+
 def test_multiple_spaces_and_optional_root_are_public_choices_without_native_ids(tmp_path):
     spaces = [{"key": "TEAM"}, {"key": "DEV", "rootPageId": "456", "memoryPageId": "789",
                                 "feedbackPageId": "790", "watchCommentPages": "456,789"}]
@@ -220,7 +227,12 @@ def test_unsafe_config_file_is_unavailable(tmp_path, kind):
     dict(ATLASSIAN_BASE_URL="https://example.invalid/path"), dict(ATLASSIAN_BASE_URL="https://private@example.invalid")])
 def test_auth_origin_pin_and_missing_credentials_are_pending(tmp_path, changes):
     write_config(tmp_path)
-    assert destination.policy(connection(**changes), cwd=tmp_path)["mode"] == "unavailable"
+    selected = destination.policy(connection(**changes), cwd=tmp_path)
+    assert selected["mode"] == "unavailable"
+    assert "sync_pending" in selected["policy"]
+    assert "does not by itself invalidate applicable product results or block PR readiness" in selected["policy"]
+    assert "explicit current acceptance dependency on publication remains unfinished" in selected["policy"]
+    assert "local fallback" in selected["policy"]
 
 
 def test_required_fields_and_valid_boundaries(tmp_path):

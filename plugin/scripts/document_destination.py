@@ -229,11 +229,11 @@ def select_destination(environment=None, cwd=None):
 def policy(environment=None, cwd=None):
     selected = select_destination(environment, cwd=cwd)
     if selected["mode"] == "local":
-        guidance = "Business-document references are repository doc/<area>/<TYPE>__<name>.md paths. Read/write selected requirements before source implementation; local req_scaffold.py may help. Keep source provenance and independent document review."
+        guidance = "Business-document references are repository doc/<area>/<TYPE>__<name>.md paths. Read/write selected requirements before source implementation; local req_scaffold.py may help. Keep source provenance and use the effective WBS policy for document review."
     elif selected["mode"] == "external":
         guidance = "Business-document references are native document IDs/URLs with observed versions from atlassian MCP; use REQ: confluence:<page-id>@<version> in PLAN for requirement presence checks. Use that MCP for requirements, guidance, decisions, knowledge and reusable runbooks; provide original evidence to reviewers/QA. Do not create duplicate business-knowledge files in the repository. Repository product documentation, source assets, runtime instructions and WBS controls remain repository-owned. A failed/unavailable MCP does not authorize local fallback writes."
     else:
-        guidance = "Business-document writes and required documentation completion are pending until the configured connection is usable. Continue independent product work where possible; retain actual unresolved documentation blockers. Do not infer that an invalid connection means local mode."
+        guidance = "Business-document synchronization is sync_pending until the configured connection is usable and publication is confirmed. Report it separately from product review/QA, PR readiness and deployment; it does not by itself invalidate applicable product results or block PR readiness. An explicit current acceptance dependency on publication remains unfinished. Do not infer that an invalid connection means local mode or write a local fallback."
     return {**selected, "policy": guidance}
 
 

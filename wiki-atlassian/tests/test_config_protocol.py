@@ -15,7 +15,7 @@ except ModuleNotFoundError as error:
 from wiki_atlassian.config import Credentials, Project, SpaceSettings, corpus_path
 from wiki_atlassian.models import digest
 from wiki_atlassian.protocol import Server
-from wiki_atlassian.tools import PERSONAL_TOOL, SCHEMAS, WIKI_TOOLS, validate_arguments
+from wiki_atlassian.tools import SCHEMAS, WIKI_TOOLS, validate_arguments
 
 
 def project_value():
@@ -79,7 +79,7 @@ def test_shared_settings_keep_private_origin_pin_and_nested_repository_boundary(
 
 
 def test_public_tool_names_and_strict_types_are_preserved():
-    assert set(SCHEMAS) == {'connection_status', 'read_personal_feedback', 'search_documents', 'document_relations',
+    assert set(SCHEMAS) == {'connection_status', 'search_documents', 'document_relations',
         'get_document', 'create_document', 'update_document', 'list_comments', 'create_comment', 'update_comment', 'list_document_versions'}
     for tool in SCHEMAS.values():
         assert tool['inputSchema']['additionalProperties'] is False
@@ -94,22 +94,22 @@ def test_inert_private_and_invalid_project_expose_truthful_surfaces():
     def tools(server):
         return server.handle({'id': 1, 'method': 'tools/list'})['result']['tools']
     assert tools(Server()) == []
-    private = Server(personal=lambda args: {'status': 'unconfigured'})
-    assert tools(private) == [PERSONAL_TOOL]
-    combined = Server(personal=lambda args: {'status': 'read'}, project_unavailable=True)
-    assert [tool['name'] for tool in tools(combined)] == ['connection_status', 'read_personal_feedback']
-    unavailable = combined.handle({'id': 2, 'method': 'tools/call', 'params': {'name': 'connection_status'}})
+    private = Server(personal=lambda operation, args: {'status': 'unconfigured'})
+    assert tools(private) == WIKI_TOOLS
+    combined = Server(personal=lambda operation, args: {'status': 'read'}, project_unavailable=True)
+    assert tools(combined) == WIKI_TOOLS
+    unavailable = combined.handle({'id': 2, 'method': 'tools/call', 'params': {'name': 'connection_status', 'arguments': {'connection': 'project'}}})
     assert json.loads(unavailable['result']['content'][0]['text'])['code'] == 'connection_unavailable'
-    assert combined.handle({'id': 3, 'method': 'tools/call', 'params': {'name': 'read_personal_feedback', 'arguments': {'limit': True}}})['error']['code'] == -32602
+    assert combined.handle({'id': 3, 'method': 'tools/call', 'params': {'name': 'list_comments', 'arguments': {'target': '42', 'connection': 'personal', 'limit': True}}})['error']['code'] == -32602
 
 
 def test_actual_stdio_keeps_unicode_and_rejects_oversize_without_echoing_body(monkeypatch):
     import wiki_atlassian.protocol as protocol
     monkeypatch.setattr(protocol, 'MAX_LINE', 256)
     requests = [b'{invalid}\n', b'X' * 300 + b'\n', json.dumps({'id': 1, 'method': 'initialize'}).encode() + b'\n',
-                json.dumps({'id': 2, 'method': 'tools/call', 'params': {'name': 'read_personal_feedback', 'arguments': {}}}).encode() + b'\n']
+                json.dumps({'id': 2, 'method': 'tools/call', 'params': {'name': 'get_document', 'arguments': {'document': '42', 'connection': 'personal'}}}).encode() + b'\n']
     reader, writer = io.BytesIO(b''.join(requests)), io.BytesIO()
-    Server(personal=lambda args: {'status': 'read', 'document': '설정😀'}).run(reader, writer)
+    Server(personal=lambda operation, args: {'status': 'read', 'document': '설정😀'}).run(reader, writer)
     rows = [json.loads(line) for line in writer.getvalue().splitlines()]
     assert [row.get('error', {}).get('code') for row in rows[:2]] == [-32700, -32700]
     assert rows[2]['result']['serverInfo']['name'] == 'atlassian'
@@ -118,9 +118,9 @@ def test_actual_stdio_keeps_unicode_and_rejects_oversize_without_echoing_body(mo
 
 
 def test_private_tool_exceptions_do_not_echo_credentials():
-    def unsafe(args):
+    def unsafe(operation, args):
         raise OSError('secret-do-not-print')
-    value = Server(personal=unsafe).handle({'id': 1, 'method': 'tools/call', 'params': {'name': 'read_personal_feedback'}})
+    value = Server(personal=unsafe).handle({'id': 1, 'method': 'tools/call', 'params': {'name': 'get_document', 'arguments': {'document': '42', 'connection': 'personal'}}})
     assert value['result']['isError']
     assert 'secret-do-not-print' not in json.dumps(value)
 
@@ -142,39 +142,29 @@ def test_overflowing_numeric_rpc_id_is_refused_before_dispatch_and_stream_surviv
     assert rows[1]['id'] == 2 and rows[1]['result'] == {}
 
 
-@pytest.mark.parametrize('slow', [False, True])
-def test_private_read_has_an_owned_process_deadline_and_keeps_stdio_usable(tmp_path, monkeypatch, slow):
-    import personal_feedback
-    import time
-    from wiki_atlassian.main import read_personal
-    helper = tmp_path / 'personal_feedback.py'
-    helper.write_text("import os,sys,time\ndef perform(action,request,deadline=None):\n"
-                      " if request['limit']==2: time.sleep(10)\n"
-                      " assert '_HARNESS_PRIVATE_READ_REQUEST' not in os.environ\n"
-                      " assert request['cursor'] not in repr(sys.argv)\n"
-                      " return dict(status='read',request=request)\n")
-    monkeypatch.setattr(personal_feedback, '__file__', str(helper))
-    values = dict(limit=2 if slow else 1, cursor='private-continuation-😀')
-    started = time.monotonic()
-    server = Server(personal=lambda data: read_personal(data, timeout=.5 if slow else 5))
-    response = server.handle(dict(id=1, method='tools/call',
-        params=dict(name='read_personal_feedback', arguments=values)))
-    result = json.loads(response['result']['content'][0]['text'])
-    assert result['status'] == ('unavailable' if slow else 'read')
-    if slow:
-        assert time.monotonic() - started < 2
-    else:
-        assert result['request'] == values
-    assert server.handle(dict(id=2, method='ping'))['result'] == {}
+@pytest.mark.parametrize('operation,status', [('get_document', 'unavailable'), ('create_comment', 'unknown')])
+def test_private_process_failure_does_not_misreport_write_completion(monkeypatch, operation, status):
+    import subprocess
+    import wiki_platform
+    from wiki_atlassian.main import personal_operation
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired('private-worker', 1)
+    monkeypatch.setattr(wiki_platform, 'run_bounded', timeout)
+    result = personal_operation(operation, {'document': '42'}, timeout=1)
+    assert result['status'] == status
+    assert 'private-worker' not in json.dumps(result)
 
 
-def test_private_process_transports_large_unicode_as_utf8(tmp_path, monkeypatch):
-    import personal_feedback
-    from wiki_atlassian.main import read_personal
-    helper = tmp_path / 'personal_feedback.py'
-    helper.write_text("def perform(action,request,deadline=None):\n"
-                      " return dict(status='read',comments=[dict(body='가'*11900) for _ in range(25)])\n")
-    monkeypatch.setattr(personal_feedback, '__file__', str(helper))
-    result = read_personal(dict(limit=25), timeout=5)
-    assert result['status'] == 'read' and len(result['comments']) == 25
-    assert result['comments'][-1]['body'] == '가' * 11900
+def test_private_process_uses_utf8_stdin_not_native_argv_or_environment(monkeypatch):
+    import subprocess
+    import wiki_platform
+    from wiki_atlassian.main import personal_operation
+    content = '가😀' * 20000
+    def run(command, **kwargs):
+        request = json.loads(kwargs['input_bytes'].decode('utf-8'))
+        assert request['arguments']['text'] == content
+        assert content not in repr(command) and content not in repr(kwargs['env'])
+        assert kwargs['graceful'] is True and '--personal-operation' in command
+        return subprocess.CompletedProcess(command, 0, b'{"status":"created"}', b'')
+    monkeypatch.setattr(wiki_platform, 'run_bounded', run)
+    assert personal_operation('create_comment', dict(target='42', text=content))['status'] == 'created'

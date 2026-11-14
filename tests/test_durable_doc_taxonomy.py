@@ -134,6 +134,19 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "doc/product/" not in body
 
 
+def test_development_document_review_respects_policy_and_keeps_sync_separate():
+    for path in (CLAUDE_DEVELOP, CODEX_DEVELOP):
+        body = _text(path).split("### Phase 8.6: durable docs", 1)[1].split("### Phase 8.7:", 1)[0]
+        assert "effective `work_policy.document_review`" in body
+        assert "only for `independent`" in body
+        assert "`required_review_lenses` containing `review-document`" in body
+        assert "otherwise perform the\nrelevant writer content checks" in body
+        assert "Explicit `review-document` remains required" in body
+        assert "`sync_pending`" in body
+        assert "acceptance dependency on publication still blocks completion" in body
+        assert "repeat product QA merely to\nrepair document recording" in body
+
+
 def test_qa_agents_read_durable_docs_by_type():
     for path in (QA_BROWSER, QA_API):
         body = _text(path)

@@ -282,9 +282,12 @@ class Replica:
                 or manifest['homePageId'] != (self.settings.root_page_id or '')
                 or manifest.get('wholeSpace', False) != self.settings.whole_space
                 or manifest.get('knowledgeRootPageId') != self.settings.root_page_id
+                or manifest.get('pageOnly', False) != self.settings.page_only
                 or manifest.get('structurePolicy') != 'knowledge'):
                 raise ValueError('Replica identity changed')
             pages = manifest['pages']
+            if self.settings.page_only and set(pages) - {self.settings.root_page_id}:
+                raise ValueError('Exact-page replica contains an unselected document')
             if not isinstance(pages, dict) or len(pages) > PAGE_LIMIT:
                 raise ValueError('Invalid replica page bound')
             for id, row in pages.items():
@@ -949,6 +952,8 @@ class Replica:
                                 structurePolicy='knowledge')
                 if self.settings.root_page_id is not None:
                     manifest['knowledgeRootPageId'] = self.settings.root_page_id
+                if self.settings.page_only:
+                    manifest['pageOnly'] = True
                 manifest.update(explicitPages=[i for i in previous.get('explicitPages', []) if i in next_pages],
                                 inventoryComplete=True, credentialBinding=self.settings.credential_fingerprint,
                                 cursor=previous['cursor'] if unavailable and 'cursor' in previous else _now(),

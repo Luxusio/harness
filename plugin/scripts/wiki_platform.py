@@ -391,9 +391,12 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
     if os.name == "nt":
         return _native.run_bounded(argv, cwd=cwd, env=env, timeout=timeout, limit=limit,
                                    capture_stderr=capture_stderr, input_bytes=input_bytes)
-    if capture_stderr or input_bytes is not None:
-        raise NotImplementedError("Private-helper stderr capture and input require Windows")
-    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+    if capture_stderr:
+        raise NotImplementedError("Private-helper stderr capture requires Windows")
+    if input_bytes is not None and not isinstance(input_bytes, bytes):
+        raise ValueError("Private helper input must be bytes")
+    process = subprocess.Popen(argv, cwd=cwd, env=env,
+                               stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                start_new_session=True)
     try:
@@ -402,6 +405,13 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
         leader_exited = False
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
+            pending = memoryview(input_bytes or b"")
+            if process.stdin is not None:
+                if pending:
+                    os.set_blocking(process.stdin.fileno(), False)
+                    selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+                else:
+                    process.stdin.close()
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -413,6 +423,16 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
                     except ProcessLookupError:
                         pass
                 for key, _ in selector.select(min(remaining, 0.05)):
+                    if key.data == "stdin":
+                        try:
+                            written = os.write(key.fileobj.fileno(), pending[:65536])
+                        except BlockingIOError:
+                            continue
+                        pending = pending[written:]
+                        if not pending:
+                            selector.unregister(key.fileobj)
+                            key.fileobj.close()
+                        continue
                     chunk = os.read(key.fileobj.fileno(), min(65536, limit + 1 - len(output)))
                     if not chunk:
                         selector.unregister(key.fileobj)
@@ -437,6 +457,8 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
             pass
         process.wait()
         process.stdout.close()
+        if process.stdin is not None:
+            process.stdin.close()
 
 
 def native_executable(command, *, cwd, env):

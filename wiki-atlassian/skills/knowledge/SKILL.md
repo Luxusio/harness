@@ -8,6 +8,14 @@ read projection managed automatically; do not edit corpus files or create
 competing repository copies. Runtime instructions, source README/API assets and
 Harness execution evidence remain repository-owned.
 
+The default connection is the project. For the separately configured personal
+Harness inbox, use the same document/comment/history tools with
+`connection: "personal"`; `connection_status` with that selector discovers its
+page ID. That connection covers only the selected page and its comments, not
+descendants. Never substitute one connection's credentials for another or infer
+permission to publish from successful authentication. An uncertain write must
+be inspected through the same connection before any new submission.
+
 Search for relevant documents, inspect the returned passages and expand the
 necessary sections or source documents. Distinguish missing results from absent
 knowledge; respect freshness, truncation and unavailable scope. Historical and

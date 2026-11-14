@@ -8,7 +8,7 @@ import sys
 
 from . import __version__
 from .models import RemoteError, compact_json
-from .tools import PERSONAL_TOOL, WIKI_TOOLS, validate_arguments
+from .tools import WIKI_TOOLS, validate_arguments
 
 
 MAX_LINE = 1024 * 1024
@@ -19,7 +19,8 @@ class Server:
     def __init__(self, documents=None, personal=None, project_unavailable=False):
         self.documents, self.personal = documents, personal
         self.project_unavailable = project_unavailable
-        self.tools = ([*WIKI_TOOLS] if documents is not None else [WIKI_TOOLS[0]] if project_unavailable else []) + ([PERSONAL_TOOL] if personal is not None else [])
+        self.tools = ([*WIKI_TOOLS] if documents is not None or personal is not None
+                      else [WIKI_TOOLS[0]] if project_unavailable else [])
 
     @staticmethod
     def error(id, code, message):
@@ -48,9 +49,9 @@ class Server:
         if method == 'initialize':
             instructions = ('Use atlassian MCP for the configured spaces. Shared replicas synchronize automatically; '
                             'do not edit replicas. Select an explicit space or native parent for new documents. '
-                            'Use read_personal_feedback for the separate privately configured Harness inbox when available.')
-            if self.project_unavailable:
-                instructions = 'Project wiki is unavailable. The separate private inbox remains readable; never borrow project credentials.'
+                            'Use the same tools with connection: personal for the separate privately configured page. '
+                            'Discover its page ID with connection_status(connection: personal). Personal access covers that exact page and its comments, never descendants. '
+                            'Omitting connection selects project; unavailable connections never borrow credentials.')
             return self.result(id, {'protocolVersion': '2024-11-05', 'serverInfo': {'name': 'atlassian', 'version': __version__},
                                     'capabilities': {'tools': {}}, 'instructions': instructions})
         if method == 'ping':
@@ -68,17 +69,31 @@ class Server:
             return self.error(id, -32602, 'Tool arguments do not match the declared schema')
         try:
             with contextlib.redirect_stdout(sys.stderr):
-                if name == 'read_personal_feedback':
-                    value = self.personal(args)
-                elif self.project_unavailable:
-                    value = {'status': 'error', 'code': 'connection_unavailable', 'message': 'Correct project configuration/authentication separately from the private inbox'}
+                connection = args.pop('connection', None)
+                if name == 'connection_status' and connection is None:
+                    value = {'connections': {
+                        'project': self.documents.execute(name, args) if self.documents is not None else {
+                            'configured': False, 'status': 'unavailable' if self.project_unavailable else 'unconfigured'},
+                        'personal': {'configured': self.personal is not None, 'authentication': 'not_checked'}}}
                 else:
-                    value = self.documents.execute(name, args)
+                    connection = connection or 'project'
+                    if connection == 'personal' and self.personal is not None:
+                        value = self.personal(name, args)
+                    elif connection == 'project' and self.documents is not None:
+                        value = self.documents.execute(name, args)
+                    else:
+                        value = {'status': 'error', 'code': 'connection_unavailable',
+                                 'message': 'The selected connection is unavailable; inspect its own settings and authentication. No fallback was used.'}
+                    value = {**value, 'connection': connection}
             encoded = compact_json(value)
             if len(encoded.encode('utf-8')) > MAX_OUTPUT:
                 raise ValueError('Output exceeds protocol budget')
             return self.result(id, {'content': [{'type': 'text', 'text': encoded}]})
         except Exception:
+            if name in ('create_document', 'update_document', 'create_comment', 'update_comment'):
+                value = {'status': 'unknown', 'code': 'unknown_outcome', 'operation': name,
+                         'next': 'Inspect native content/history using the same connection. Do not repeat the write.'}
+                return self.result(id, {'content': [{'type': 'text', 'text': compact_json(value)}]})
             return self.result(id, {'content': [{'type': 'text', 'text': 'Tool execution unavailable; inspect connection status and private settings without exposing secrets'}], 'isError': True})
 
     def run(self, reader=None, writer=None):

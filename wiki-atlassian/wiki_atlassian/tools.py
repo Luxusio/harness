@@ -19,11 +19,12 @@ META = {'metadata': field(B, 'Include detailed native metadata', False)}
 BODY = {**META, 'includeBody': field(B, 'Include bounded saved native content', False)}
 
 
-def tool(name, description, properties, required=(), private=False):
+def tool(name, description, properties, required=()):
     schema = {'name': name, 'description': description, 'inputSchema': {
-        'type': 'object', 'properties': properties, 'required': list(required), 'additionalProperties': False}}
-    if private:
-        schema['annotations'] = {'readOnlyHint': True, 'destructiveHint': False, 'idempotentHint': True}
+        'type': 'object', 'properties': {**properties, 'connection': {
+            'type': 'string', 'enum': ['project', 'personal'],
+            'description': 'Project is the default. Select personal explicitly for the independently configured private page; no credential fallback.'}},
+        'required': list(required), 'additionalProperties': False}}
     return schema
 
 
@@ -55,10 +56,7 @@ WIKI_TOOLS = [
     tool('list_document_versions', 'Read bounded actual native history under current registered access.', {
         'document': field(S), 'limit': field(I, default=20), 'cursor': field(S), **SPACE}, ['document']),
 ]
-PERSONAL_TOOL = tool('read_personal_feedback',
-    'Read the independently configured private Harness improvement inbox; never borrow project credentials.',
-    {'limit': field(I, default=10), 'cursor': field(S)}, private=True)
-SCHEMAS = {item['name']: item for item in [*WIKI_TOOLS, PERSONAL_TOOL]}
+SCHEMAS = {item['name']: item for item in WIKI_TOOLS}
 
 
 def validate_arguments(name, arguments):
@@ -73,6 +71,8 @@ def validate_arguments(name, arguments):
     for key, value in arguments.items():
         if type(value) is not types[schema['properties'][key]['type']]:
             raise RemoteError('invalid_request', 'Tool arguments must have their declared JSON types; omit unused fields')
+        if 'enum' in schema['properties'][key] and value not in schema['properties'][key]['enum']:
+            raise RemoteError('invalid_request', 'Select a declared connection')
     for key, spec in schema['properties'].items():
         if key not in result and 'default' in spec:
             result[key] = spec['default']
