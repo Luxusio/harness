@@ -63,16 +63,19 @@ def safe(path, directory=False):
     if os.name == "nt":
         from pathlib import Path
         from wiki_platform import trusted_metadata_directory, _native
-        if directory:
-            with trusted_metadata_directory(Path(path).absolute()):
-                return
-        target = Path(path).absolute()
-        with _native._walk(target.parent, secure=True):
-            handle = _native._open(target, 0)
-            try:
-                _native._security(handle, "metadata")
-            finally:
-                _native._close(handle)
+        try:
+            if directory:
+                with trusted_metadata_directory(Path(path).absolute()):
+                    return
+            target = Path(path).absolute()
+            with _native._walk(target.parent, secure=True):
+                handle = _native._open(target, 0)
+                try:
+                    _native._security(handle, "metadata")
+                finally:
+                    _native._close(handle)
+        except (OSError, ValueError) as exc:
+            raise Refusal(f'unsafe metadata path: {path}: {exc}') from exc
         return
     info = os.lstat(path)
     require((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
@@ -1087,7 +1090,10 @@ def execute(args, directory, records):
         ready = [item for item in data['requests'] if item['status'] == 'queued'
                  and all(by_slug[dep]['status'] == 'integrated' for dep in item['depends_on'])
                  and not any(overlap(ownership(item), ownership(x)) for x in held(records, item))]
-        ordered = independent_order(ready, ownership)
+        # The subset planner consumes logical '/' keys; physical ownership
+        # remains unchanged for commonpath authorization and durable state.
+        ordered = independent_order(ready, lambda item: [
+            os.path.normcase(path).replace(os.sep, '/') for path in ownership(item)])
         ordered += [item for item in data['requests'] if item not in ordered]
         for item in ordered:
             if item['status'] != 'queued':

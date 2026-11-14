@@ -2201,6 +2201,21 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
         install_root / ".codex-plugin",
         install_root / "marketplace.json",
     )
+    if os.name == "nt":
+        from wiki_platform import metadata_tree_inventory, safe_metadata_snapshot
+        # Refuse unsafe legacy cleanup before replacing the current payload.
+        # Inspect names without following aliases; no legacy bytes are changed.
+        for legacy_path in legacy_paths:
+            if not _lexists(legacy_path):
+                continue
+            info = os.lstat(_io_path(legacy_path))
+            if info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise PermissionError(f"unsafe Native legacy payload reparse point: {legacy_path}; previous payload preserved")
+            if stat.S_ISDIR(info.st_mode):
+                metadata_tree_inventory(legacy_path.absolute(), max_entries=PAYLOAD_MAX_ENTRIES,
+                                        max_bytes=PAYLOAD_MAX_BYTES)
+            else:
+                safe_metadata_snapshot(legacy_path.absolute(), PAYLOAD_MAX_BYTES)
     codex_plugin_root = install_root / "plugins" / "harness"
     _owned_directory(codex_plugin_root.parent)
     staged = _staging_directory(codex_plugin_root.parent, ".harness-staging-")

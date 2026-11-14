@@ -54,9 +54,15 @@ def provider(tmp_path, monkeypatch):
     mise = tmp_path / "mise"
     mise.touch()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("MISE_DATA_DIR", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("MISE_DATA_DIR", str(home / ".local/share/mise"))
+    for setting in mise_python._STORAGE - {"MISE_DATA_DIR"}:
+        monkeypatch.delenv(setting, raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setattr(mise_python.shutil, "which", lambda *args, **kwargs: str(mise))
+    # Model the actual Native discovery boundary, not a pretend PE executable.
+    import wiki_platform
+    monkeypatch.setattr(wiki_platform, "native_executable", lambda *args, **kwargs: str(mise))
     mise_python._cache.clear()
     calls = []
     probe = dict(executable=str(executable), prefix=str(install), base_prefix=str(install),
@@ -114,6 +120,8 @@ def test_cache_tracks_home_and_legitimate_storage(provider, monkeypatch, tmp_pat
     other = tmp_path / "other"
     other.mkdir()
     monkeypatch.setenv(setting, str(other))
+    if setting == "HOME":
+        monkeypatch.setenv("USERPROFILE", str(other))
     if setting == "MISE_DATA_DIR":
         with pytest.raises(mise_python.MisePythonError):
             mise_python.select_python()
@@ -128,6 +136,10 @@ def test_invalid_selection_is_fixed_redacted_and_never_cached(provider, monkeypa
     _, install, executable, calls, probe, run = provider
     if failure == "missing-mise":
         monkeypatch.setattr(mise_python.shutil, "which", lambda *a, **k: None)
+        import wiki_platform
+        def missing(*args, **kwargs):
+            raise FileNotFoundError("modeled missing mise")
+        monkeypatch.setattr(wiki_platform, "native_executable", missing)
     if failure == "venv":
         probe["prefix"] = str(install.parent)
     if failure == "old":
@@ -167,6 +179,7 @@ def test_invalid_selection_is_fixed_redacted_and_never_cached(provider, monkeypa
 def test_relative_home_cannot_select_using_the_consumer_directory(provider, monkeypatch):
     _, _, _, calls, _, _ = provider
     monkeypatch.setenv("HOME", "relative-consumer-home")
+    monkeypatch.setenv("USERPROFILE", "relative-consumer-home")
     with pytest.raises(mise_python.MisePythonError):
         mise_python.select_python()
     assert not calls
@@ -264,7 +277,7 @@ def _raw_plugin(tmp_path):
     plugin = tmp_path / "plugin with spaces"
     scripts = plugin / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("mise_python.py", "wiki_platform.py", "_wiki_windows.py"):
+    for name in ("mise_python.py", "native_cli.py", "wiki_platform.py", "_wiki_windows.py"):
         shutil.copyfile(ROOT / "plugin/scripts" / name, scripts / name)
     product = scripts / "wiki_change_notice.py"
     product.write_text("import os,sys,json\nprint(json.dumps(dict(executable=sys.executable,args=sys.argv[1:],cwd=os.getcwd(),value=os.environ['FORWARDED'],stdin=sys.stdin.read())))\n")
@@ -339,7 +352,7 @@ def _wiki_raw_layout(tmp_path, layout):
     shutil.copyfile(ROOT / "wiki-atlassian/scripts/launch.py", scripts / "launch.py")
     helpers = tmp_path / "plugin/scripts" if layout == "source" else scripts
     helpers.mkdir(parents=True, exist_ok=True)
-    for name in ("mise_python.py", "wiki_platform.py", "_wiki_windows.py"):
+    for name in ("mise_python.py", "native_cli.py", "wiki_platform.py", "_wiki_windows.py"):
         shutil.copyfile(ROOT / "plugin/scripts" / name, helpers / name)
     if layout == "prepared":
         (helpers / "personal_feedback.py").write_text("# prepared helper layout marker\n")

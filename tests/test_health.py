@@ -38,15 +38,16 @@ def configure(repo, manifest):
 
 
 def sentinel_command(name, status=0):
-    return f"{shlex.quote(sys.executable)} sentinel.py {name} {status}"
+    argv = [sys.executable, "sentinel.py", name, str(status)]
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
 
 
 @pytest.mark.parametrize("fallback", [False, True])
 def test_dry_run_lists_checks_without_executing_then_manual_run_executes(tmp_path, fallback):
     command = sentinel_command("executed")
     manifest = (
-        f'test_command: "{command}"\n' if fallback else
-        f'health_components:\n  - name: sentinel\n    command: "{command}"\n    weight: 2\n'
+        f"test_command: '{command}'\n" if fallback else
+        f"health_components:\n  - name: sentinel\n    command: '{command}'\n    weight: 2\n"
         'test_command: "touch fallback-must-not-run"\n'
     )
     configure(tmp_path, manifest)
@@ -72,8 +73,8 @@ def test_dry_run_lists_checks_without_executing_then_manual_run_executes(tmp_pat
 def test_manual_run_scores_failed_component_with_existing_success_exit(tmp_path):
     configure(tmp_path, (
         'health_components:\n'
-        f'  - name: good\n    command: "{sentinel_command("good")}"\n    weight: 1\n'
-        f'  - name: bad\n    command: "{sentinel_command("bad", 7)}"\n    weight: 3\n'
+        f"  - name: good\n    command: '{sentinel_command('good')}'\n    weight: 1\n"
+        f"  - name: bad\n    command: '{sentinel_command('bad', 7)}'\n    weight: 3\n"
     ))
     measured = invoke(tmp_path)
     assert measured.returncode == 0, measured.stderr

@@ -43,6 +43,8 @@ def _load_install_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    # These cache tests mock _run and its protocol, including CLI resolution.
+    module.host_command = lambda runtime, **kwargs: [runtime]
     return module
 
 
@@ -71,7 +73,7 @@ def _fake_run(install_root: Path, *, update=(0, REFRESHED, ""), marketplace_upda
             if not listed:
                 return 0, "No marketplaces configured\n", ""
             return 0, f"harness Source: Directory ({install_root})\n", ""
-        return 0, "claude 2.1.0\n", ""
+        return 0, "claude 2.1.322\n", ""
     return run
 
 
@@ -290,10 +292,20 @@ def test_selected_cache_rejects_missing_stale_ambiguous_and_unsafe_entries(tmp_p
         elif change == "duplicate":
             data["plugins"]["harness@harness"].append(dict(entry))
         else:
-            (Path(entry["installPath"]) / "scripts" / "_lib.py").chmod(0o666)
+            unsafe = Path(entry["installPath"]) / "scripts" / "_lib.py"
+            if os.name == "nt":
+                from test_wiki_windows_native import _acl
+                _acl(unsafe, "(A;;GW;;;WD)")
+                expected = "unsafe access"
+            else:
+                unsafe.chmod(0o666)
         registry.write_text(json.dumps(data))
-        ok, reason = install._verify_claude_selected_cache(mirror, [])
-        assert not ok and expected in reason, reason
+        try:
+            ok, reason = install._verify_claude_selected_cache(mirror, [])
+            assert not ok and expected in reason, reason
+        finally:
+            if change == "mode" and os.name == "nt":
+                _acl(unsafe, "")
 
 
 def test_forced_current_cache_needs_no_restart_but_first_install_does(tmp_path, monkeypatch):
@@ -313,7 +325,15 @@ def test_unavailable_cli_cannot_claim_cache_verified(tmp_path, monkeypatch):
     install = _load_install_module()
     monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "mirror"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
-    with mock.patch.object(install.shutil, "which", return_value=None), mock.patch.object(install, "_verify_claude_selected_cache") as probe:
-        result = install.install_claude(dry_run=False, force=False)
-    assert not result.ok and result.summary == "claude CLI not found in PATH"
+    with (
+        mock.patch.object(install.shutil, "which", return_value=None),
+        mock.patch.object(install, "host_command", side_effect=ValueError("Claude CLI is unavailable")),
+        mock.patch.object(install, "_verify_claude_selected_cache") as probe,
+    ):
+        if os.name == "nt":
+            with pytest.raises(install._InstallStepError, match="Claude native CLI resolution.*unavailable"):
+                install.install_claude(dry_run=False, force=False)
+        else:
+            result = install.install_claude(dry_run=False, force=False)
+            assert not result.ok and result.summary == "claude CLI not found in PATH"
     probe.assert_not_called()

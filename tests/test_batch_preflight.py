@@ -7,6 +7,9 @@ status settings) cannot change what the preflight sees.
 from __future__ import annotations
 
 import hashlib
+import ctypes
+from contextlib import contextmanager
+import stat
 import importlib.util
 import json
 import os
@@ -634,16 +637,53 @@ def test_no_configured_fsmonitor_is_launched(monkeypatch, tmp_path):
     assert sorted(p.name for p in tmp_path.glob("fsmonitor-ran-*")) == []
 
 
-def _fixture_read_access(path, readable):
-    """Deny/restore fixture reads through the host's actual permission system."""
+@contextmanager
+def _unreadable_fixture(path):
+    """Real fixture denial with an already-authorized handle for safe cleanup."""
     if os.name != "nt":
-        path.chmod(0o755 if readable and path.is_dir() else 0o644 if readable else 0)
+        mode = stat.S_IMODE(path.stat().st_mode)
+        path.chmod(0)
+        try:
+            yield
+        finally:
+            path.chmod(mode)
         return
-    from wiki_platform import _native
-    executable = Path(os.environ["SystemRoot"]) / "System32/icacls.exe"
-    operation = ["/remove:d", "*" + _native.USER_SID] if readable else ["/deny", "*" + _native.USER_SID + ":(RX)"]
-    result = subprocess.run([str(executable), str(path), *operation], capture_output=True, timeout=15)
-    assert result.returncode == 0, result.stderr.decode("mbcs", errors="replace")
+    from wiki_platform import _native as win
+    from ctypes import wintypes as W
+    # READ_CONTROL is part of generic read, so denying RX also blocks a later
+    # icacls read-modify-write. Retain WRITE_DAC before denial and restore the
+    # exact original DACL through that handle instead of reopening the path.
+    handle = win._open(path, 0x40000, directory=path.is_dir(),
+                       share=win.FILE_SHARE_READ | win.FILE_SHARE_WRITE | win.FILE_SHARE_DELETE)
+    descriptor, dacl = win.P(), win.P()
+    set_security = win._bind(win.A, "SetSecurityInfo",
+                            [W.HANDLE, ctypes.c_int, W.DWORD, win.P, win.P, win.P, win.P], W.DWORD)
+    get_control = win._bind(win.A, "GetSecurityDescriptorControl",
+                           [win.P, ctypes.POINTER(W.WORD), ctypes.POINTER(W.DWORD)])
+    applied = False
+    try:
+        result = win._GetSecurityInfo(handle, 1, 4, None, None, ctypes.byref(dacl), None, ctypes.byref(descriptor))
+        if result:
+            raise win._error(result)
+        control, revision = W.WORD(), W.DWORD()
+        win._check(get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)))
+        executable = Path(os.environ["SystemRoot"]) / "System32/icacls.exe"
+        applied = True
+        result = subprocess.run([str(executable), str(path), "/deny", "*" + win.USER_SID + ":(RX)"],
+                                capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr.decode("mbcs", errors="replace")
+        yield
+    finally:
+        try:
+            if applied:
+                protection = 0x80000000 if control.value & 0x1000 else 0x20000000
+                result = set_security(handle, 1, 4 | protection, None, None, dacl, None)
+                if result:
+                    raise win._error(result)
+        finally:
+            if descriptor.value:
+                win._LocalFree(descriptor)
+            win._close(handle)
 
 
 def test_unreadable_directory_fails_closed(monkeypatch, tmp_path):
@@ -652,12 +692,9 @@ def test_unreadable_directory_fails_closed(monkeypatch, tmp_path):
     main = _repo(tmp_path / "main", {"README.md": "r\n", ".gitignore": "secret/\n"})
     _repo(main / "secret/hidden", {"important.txt": "x\n"})
     (main / "secret/hidden/uncommitted.txt").write_text("work\n", encoding="utf-8")
-    _fixture_read_access(main / "secret", False)
-    try:
+    with _unreadable_fixture(main / "secret"):
         scan = mod.preflight(str(main), {})
         scoped = mod.preflight(str(main), {"a": ["secret/hidden/important.txt"]})
-    finally:
-        _fixture_read_access(main / "secret", True)
     assert scan["verdict"] == "refuse"
     assert [r for r in scan["refusals"] if "cannot scan" in r], scan["refusals"]
     assert scoped["verdict"] == "refuse"
@@ -679,8 +716,7 @@ def test_unreadable_gitmodules_refuses(monkeypatch, tmp_path):
         tmp_path / "main",
         {"README.md": "r\n", ".gitmodules": '[submodule "d"]\n\tpath = vendor/d\n\turl = ./x\n'},
     )
-    _fixture_read_access(main / ".gitmodules", False)
-    try:
+    with _unreadable_fixture(main / ".gitmodules"):
         report = mod.preflight(str(main), {"a": ["vendor/d/x"]})
         # The .gitmodules read itself refuses, independent of the status check
         # (git status also flags the chmod, so the report alone cannot show it).
@@ -688,8 +724,6 @@ def test_unreadable_gitmodules_refuses(monkeypatch, tmp_path):
 
         with pytest.raises(mod.PreflightError, match=r"\.gitmodules"):
             mod._gitmodules_paths(os.path.realpath(main))
-    finally:
-        _fixture_read_access(main / ".gitmodules", True)
     assert report["verdict"] == "refuse"
     assert [r for r in report["refusals"] if ".gitmodules" in r], report["refusals"]
 
@@ -716,11 +750,8 @@ def test_untraversable_populated_submodule_refuses(monkeypatch, tmp_path):
     main = _with_submodule(tmp_path)
     (main / "libs/sub/s.txt").write_text("changed\n", encoding="utf-8")
     (main / "libs/sub/wip.txt").write_text("uncommitted\n", encoding="utf-8")
-    _fixture_read_access(main / "libs/sub", False)
-    try:
+    with _unreadable_fixture(main / "libs/sub"):
         report = mod.preflight(str(main), {})
-    finally:
-        _fixture_read_access(main / "libs/sub", True)
     assert report["verdict"] == "refuse", report
     assert [r for r in report["refusals"] if "libs/sub" in r], report["refusals"]
 
@@ -738,11 +769,8 @@ def test_unreadable_directory_inside_a_nested_repo_refuses(monkeypatch, tmp_path
     _git("add", "private/keep.txt", cwd=svc)
     _git("commit", "-q", "-m", "private", cwd=svc)
     (svc / "private/new.txt").write_text("uncommitted\n", encoding="utf-8")
-    _fixture_read_access(svc / "private", False)
-    try:
+    with _unreadable_fixture(svc / "private"):
         report = mod.preflight(str(main), {})
-    finally:
-        _fixture_read_access(svc / "private", True)
     assert report["verdict"] == "refuse", report
     [refusal] = [
         r for r in report["refusals"]
@@ -780,11 +808,8 @@ def test_unreadable_tracked_directory_refuses(monkeypatch, tmp_path):
     main = _repo(tmp_path / "main", {"src/a.py": "a\n", ".gitignore": "src/vendor/\n"})
     _repo(main / "src/vendor/lib")
     (main / "src/vendor/lib/dirty.txt").write_text("uncommitted\n", encoding="utf-8")
-    _fixture_read_access(main / "src", False)
-    try:
+    with _unreadable_fixture(main / "src"):
         report = mod.preflight(str(main), {})
-    finally:
-        _fixture_read_access(main / "src", True)
     assert report["verdict"] == "refuse", report
     assert [r for r in report["refusals"] if "could not read part of" in r], report["refusals"]
 
@@ -1054,11 +1079,8 @@ def test_managed_discovery_refuses_unreadable_owned_history(monkeypatch, tmp_pat
     main = _repo(tmp_path / "main", {"owned/code.py": "pass\n", ".gitignore": "owned/.hidden/\n"})
     hidden = main / "owned/.hidden"
     hidden.mkdir()
-    _fixture_read_access(hidden, False)
-    try:
+    with _unreadable_fixture(hidden):
         report = mod.preflight(str(main), {"a": ["owned"]}, dirty_scopes=[str(main / "owned")])
-    finally:
-        _fixture_read_access(hidden, True)
     assert report["verdict"] == "refuse", report
     assert any("could not read part of" in item or "cannot scan" in item for item in report["refusals"])
 

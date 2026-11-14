@@ -84,6 +84,12 @@ def test_every_prose_version_mirror_matches_manifest_version():
 def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
     """QA finding: CRLF, quoted, and keyless manifests were reported as current."""
     import subprocess
+    import shutil
+    import pytest
+
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("the documented Bash version-check snippet requires Bash")
 
     current = load_setup_finalize().MANIFEST_VERSION
     previous = current - 1
@@ -112,7 +118,7 @@ def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
                 (root / "doc/harness").mkdir(parents=True)
                 (root / "doc/harness/manifest.yaml").write_bytes(manifest)
             result = subprocess.run(
-                ["bash", "-c", f'_ROOT="{root}"\n{block}'],
+                [bash, "-c", f'_ROOT="{root}"\n{block}'],
                 capture_output=True, text=True, timeout=10,
             )
             assert result.stdout.strip() == expected, (rel, manifest, result.stdout, result.stderr)

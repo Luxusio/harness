@@ -46,6 +46,26 @@ def close_imported_fixture(repo, name):
     path.write_text(json.dumps(control))
 
 
+def _harvest_for_proof(pool, worktree, monkeypatch):
+    """Reach the Native archive through its actual owning batch transaction."""
+    import batch_harvest
+    if os.name != 'nt':
+        return batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    import batch_finish
+    import batch_state
+    reached = []
+    def retain_for_inventory(*args, **kwargs):
+        reached.append(True)
+        raise batch_finish.Outcome('kept', 'fixture pauses after durable harvest for removal inventory')
+    with monkeypatch.context() as pause:
+        pause.setattr(batch_finish, '_cleanup', retain_for_inventory)
+        assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+    assert reached
+    item = json.loads(pool.state.read_text())['requests'][0]
+    assert item['checkpoint']['stage'] == 'harvested'
+    return item['checkpoint']['harvest']
+
+
 def stopped_legacy_lead(tmp_path, monkeypatch, *, frozen=False, checkpoint=False, large=False, historical_link=None,
                         preexisting_epoch=False):
     import wbs_namespace_migration as migration
@@ -127,7 +147,13 @@ def test_migrated_stopped_lead_finishes_without_losing_legacy_bytes(tmp_path, mo
     assert (recovery / 'doc/harness/checkpoints/TASK__a.md').read_text().startswith('# Checkpoint — TASK__a\n')
     if frozen:
         source = recovery / 'doc/harness/tasks/TASK__a/work/verification-targets/0123456789abcdef/source/source.rs'
-        assert source.read_text() == 'reviewed source\n' and source.stat().st_mode & 0o777 == 0o400
+        if os.name == 'nt':
+            from wiki_platform import safe_metadata_snapshot
+            raw, stamp = safe_metadata_snapshot(source, 16384)
+            assert raw.replace(b'\r\n', b'\n') == b'reviewed source\n'
+            assert stamp[4] & 1
+        else:
+            assert source.read_text() == 'reviewed source\n' and source.stat().st_mode & 0o777 == 0o400
 
 
 @pytest.mark.parametrize('mutation', ['unknown', 'changed', 'symlink'])
@@ -154,7 +180,7 @@ def test_durable_history_copy_cannot_be_overwritten_on_retry(tmp_path, monkeypat
 
     pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch)
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
-    batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    _harvest_for_proof(pool, worktree, monkeypatch)
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     copy = recovery / 'doc/harness/tasks/TASK__a/historical-review.bin'
@@ -169,10 +195,11 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     import batch_harvest
     import batch_state
 
-    pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch, large=True, historical_link='directory')
+    pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch, large=True,
+                                           historical_link=None if os.name == 'nt' else 'directory')
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
     tip = _git('rev-parse', 'HEAD', cwd=pool.repo)
-    harvested = batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    harvested = _harvest_for_proof(pool, worktree, monkeypatch)
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     relative = 'doc/harness/tasks/TASK__a/historical-review.bin'
     expected = (worktree / relative).read_bytes()
@@ -185,9 +212,10 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     residue = worktree / relative
     residue.parent.mkdir(parents=True)
     residue.write_bytes(expected)
-    link = residue.parent / 'work/link-to-external'
-    link.parent.mkdir()
-    create_symlink(link, tmp_path / 'outside-sentinel', target_is_directory=True)
+    if os.name != 'nt':
+        link = residue.parent / 'work/link-to-external'
+        link.parent.mkdir()
+        create_symlink(link, tmp_path / 'outside-sentinel', target_is_directory=True)
     precious = residue.parent / 'unrecorded.bin'
     precious.write_bytes(b'keep unknown residue')
     with pytest.raises(batch_harvest.HarvestError, match='unpreserved'):
@@ -198,10 +226,14 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     assert not worktree.exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     assert (recovery / relative).read_bytes() == expected
-    assert (tmp_path / 'outside-sentinel/precious.bin').read_bytes() == b'outside bytes must survive'
+    if os.name != 'nt':
+        assert (tmp_path / 'outside-sentinel/precious.bin').read_bytes() == b'outside bytes must survive'
 
 
-def test_migrated_selected_module_lead_preserves_history_before_disposal(tmp_path, monkeypatch):
+@pytest.mark.parametrize('historical_link', [False, True])
+def test_migrated_selected_module_lead_preserves_history_before_disposal(tmp_path, monkeypatch, historical_link):
+    if os.name == 'nt' and historical_link:
+        pytest.skip('Native migration preserves and refuses historical reparse payloads; regular history remains covered')
     from test_batch_state import _s1_pool, _s1_request, _s1_complete
     import wbs_namespace_migration as migration
 
@@ -216,9 +248,10 @@ def test_migrated_selected_module_lead_preserves_history_before_disposal(tmp_pat
     (current / 'review.bin').write_bytes(b'Original module review\x00\xff')
     outside = tmp_path / 'outside-module-sentinel'
     outside.write_bytes(b'preserve external module sentinel')
-    link = current / 'work/module-link'
-    link.parent.mkdir()
-    create_symlink(link, outside)
+    if historical_link:
+        link = current / 'work/module-link'
+        link.parent.mkdir()
+        create_symlink(link, outside)
     old = worktree / 'doc/harness/tasks/TASK__a'
     old.parent.mkdir(parents=True)
     current.rename(old)
@@ -231,11 +264,13 @@ def test_migrated_selected_module_lead_preserves_history_before_disposal(tmp_pat
     assert _git('rev-parse', 'HEAD', cwd=pool.repo / 'libs/module0') == module_tip
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     assert (recovery / 'doc/harness/tasks/TASK__a/review.bin').read_bytes() == b'Original module review\x00\xff'
-    assert (recovery / 'doc/harness/tasks/TASK__a/work/module-link').read_bytes() == os.fsencode(outside)
+    if historical_link:
+        assert (recovery / 'doc/harness/tasks/TASK__a/work/module-link').read_bytes() == os.fsencode(outside)
     assert outside.read_bytes() == b'preserve external module sentinel'
 
 
 @pytest.mark.parametrize('kind', ['file', 'directory'])
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX literal-link migration; Native reparse payloads are explicitly refused and preserved')
 def test_declared_historical_links_preserve_lexical_descriptors_without_touching_targets(tmp_path, monkeypatch, kind):
     pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch, historical_link=kind)
     target = tmp_path / 'outside-sentinel'
@@ -246,11 +281,17 @@ def test_declared_historical_links_preserve_lexical_descriptors_without_touching
     assert result['status'] == 'integrated' and not worktree.exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     saved = recovery / 'doc/harness/tasks/TASK__a/work/link-to-external'
-    assert saved.is_file() and not saved.is_symlink() and saved.read_bytes() == raw_target
-    assert saved.stat().st_mode & 0o777 == 0o600
+    if os.name == 'nt':
+        from wiki_platform import safe_metadata_snapshot
+        raw, stamp = safe_metadata_snapshot(saved, 16384)
+        assert raw == raw_target and not stamp[4] & 1
+    else:
+        assert saved.is_file() and not saved.is_symlink() and saved.read_bytes() == raw_target
+        assert saved.stat().st_mode & 0o777 == 0o600
     assert sentinel.read_bytes() == b'outside bytes must survive'
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX imported link descriptor; Native migration refuses reparse payload before import')
 def test_changed_historical_link_keeps_worktree_and_external_targets(tmp_path, monkeypatch):
     pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch, historical_link='file')
     other = tmp_path / 'other-sentinel'
@@ -265,7 +306,8 @@ def test_changed_historical_link_keeps_worktree_and_external_targets(tmp_path, m
 
 
 def test_link_in_current_wbs_is_not_a_historical_disposal_exception(tmp_path, monkeypatch):
-    pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch, historical_link='file')
+    pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch,
+                                         historical_link=None if os.name == 'nt' else 'file')
     current = worktree / 'doc/harness/wbs/WBS__a/work/current-link'
     create_symlink(current, tmp_path / 'outside-sentinel')
     result = pool.cli('finish', '--slug', 'a', ok=False)
@@ -273,13 +315,14 @@ def test_link_in_current_wbs_is_not_a_historical_disposal_exception(tmp_path, mo
     assert (tmp_path / 'outside-sentinel').read_bytes() == b'outside bytes must survive'
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX imported link proof; actual Native no-follow migration refusal is tested below')
 def test_historical_link_proof_never_opens_its_external_target(tmp_path, monkeypatch):
     import builtins
     import batch_harvest
 
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch, historical_link='directory')
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
-    batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    _harvest_for_proof(pool, worktree, monkeypatch)
     target = str(tmp_path / 'outside-sentinel')
     actual_open, actual_os_open, actual_scandir = builtins.open, os.open, os.scandir
 
@@ -312,6 +355,47 @@ def test_historical_link_proof_never_opens_its_external_target(tmp_path, monkeyp
     assert (tmp_path / 'outside-sentinel/precious.bin').read_bytes() == b'outside bytes must survive'
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual Native reparse refusal and public migration entrypoint')
+@pytest.mark.parametrize('kind', ['file', 'directory'])
+def test_native_public_migration_refuses_reparse_history_without_following_or_losing_bytes(tmp_path, monkeypatch, kind):
+    from test_harness_mcp_server import HarnessMcpServerTests
+    import _wiki_windows as win
+    pool = Pool(tmp_path, monkeypatch)
+    seed_legacy_outcome(pool.repo, 'reparse')
+    old = pool.repo / 'doc/harness/tasks/TASK__reparse'
+    target = tmp_path / 'outside-target'
+    if kind == 'directory':
+        from test_windows_core_runtime import _junction
+        target.mkdir()
+        sentinel = target / 'precious.bin'
+        sentinel.write_bytes(b'keep external bytes\x00\xff')
+        _junction(old / 'external-link', target)
+    else:
+        sentinel = target
+        sentinel.write_bytes(b'keep external bytes\x00\xff')
+        create_symlink(old / 'external-link', target)
+    link = old / 'external-link'
+    original = {name: (old / name).read_bytes() for name in ('TASK.json', 'PLAN.md')}
+    literal = os.readlink(link)
+    actual_open = win._CreateFile
+    attempted = []
+    outside = os.path.normcase(str(target))
+    def no_follow(path, *args):
+        selected = os.path.normcase(str(path)).removeprefix('\\\\?\\')
+        assert selected != outside and not selected.startswith(outside + os.sep), 'external target was opened'
+        attempted.append(selected)
+        return actual_open(path, *args)
+    with monkeypatch.context() as boundary:
+        boundary.setattr(win, '_CreateFile', no_follow)
+        result = HarnessMcpServerTests()._call_in_repo(str(pool.repo), 'wbs', dict(action='migrate', apply=True))
+    assert result.get('isError'), result
+    assert attempted and os.readlink(link) == literal
+    assert all((old / name).read_bytes() == raw for name, raw in original.items())
+    assert sentinel.read_bytes() == b'keep external bytes\x00\xff'
+    assert not (pool.repo / 'doc/harness/wbs/WBS__reparse/WBS.control.json').exists()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX linkat fallback crash window; Native write-through recovery publication has dedicated coverage')
 def test_process_loss_after_fallback_recovery_publication_resumes_exact_pair(tmp_path, monkeypatch):
     import hashlib
     import subprocess
@@ -320,7 +404,7 @@ def test_process_loss_after_fallback_recovery_publication_resumes_exact_pair(tmp
 
     pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch)
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
-    batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    _harvest_for_proof(pool, worktree, monkeypatch)
     destination = ('doc/harness/archive/worktree-recovery/WBS__a/' + RUN + '/namespace-history/'
                    'doc/harness/archive/wbs-namespace-migration/original/doc/harness/tasks/TASK__a/TASK.json')
     reserved = '.namespace-' + hashlib.sha256(destination.encode()).hexdigest()[:32]
@@ -356,7 +440,7 @@ def test_unrelated_recovery_hardlinks_are_not_publication_aliases(tmp_path, monk
 
     pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch)
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
-    batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    _harvest_for_proof(pool, worktree, monkeypatch)
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     destination = ('doc/harness/archive/worktree-recovery/WBS__a/' + RUN +
                    '/namespace-history/doc/harness/tasks/TASK__a/historical-review.bin')
@@ -366,7 +450,8 @@ def test_unrelated_recovery_hardlinks_are_not_publication_aliases(tmp_path, monk
     stage = copy.with_name('.namespace-' + hashlib.sha256(destination.encode()).hexdigest()[:32])
     if impostor_stage:
         stage.write_bytes(b'not the reserved file inode')
-    with pytest.raises(batch_harvest.HarvestError, match='unaccounted namespace recovery publication links'):
+    with pytest.raises((batch_harvest.HarvestError, ValueError), match=(
+            'nonlinked disk object' if os.name == 'nt' else 'unaccounted namespace recovery publication links')):
         batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     assert copy.exists() and unrelated.exists() and copy.stat().st_nlink == 2
     assert (old / 'historical-review.bin').read_bytes() == copy.read_bytes() == b'Original TASK__a review\x00\xff'
@@ -405,9 +490,14 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
     result = pool.cli('finish', '--slug', 'a')
     assert result['status'] == 'integrated' and not worktree.exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
-    assert (recovery / original_control).read_bytes() == before
+    if os.name == 'nt':
+        from wiki_platform import safe_metadata_snapshot
+        assert safe_metadata_snapshot(recovery / original_control, 16384)[0] == before
+    else:
+        assert (recovery / original_control).read_bytes() == before
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX file-fsync/linkat publication; Native publisher uses retained writer and NTFS write-through rename')
 def test_complete_orphan_recovery_stage_syncs_held_file_before_publication(tmp_path, monkeypatch):
     import hashlib
     import stat
@@ -416,7 +506,7 @@ def test_complete_orphan_recovery_stage_syncs_held_file_before_publication(tmp_p
 
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch)
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
-    batch_harvest.harvest(str(pool.repo), str(worktree), 'WBS__a')
+    _harvest_for_proof(pool, worktree, monkeypatch)
     relative = (namespace.ARCHIVE + '/original/doc/harness/tasks/TASK__a/TASK.json')
     destination = ('doc/harness/archive/worktree-recovery/WBS__a/' + RUN + '/namespace-history/' + relative)
     published = pool.repo / destination
@@ -459,6 +549,7 @@ def test_complete_orphan_recovery_stage_syncs_held_file_before_publication(tmp_p
     assert published.read_bytes() == raw and published.stat().st_nlink == 1 and not staged.exists()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX directory-fsync durability; Native exact-content publisher reuse is verified separately')
 def test_visible_recovery_destination_syncs_held_file_and_parent_before_reuse(tmp_path, monkeypatch):
     import hashlib
     import batch_harvest
@@ -505,3 +596,35 @@ def test_visible_recovery_destination_syncs_held_file_and_parent_before_reuse(tm
             dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=0o600))
     assert events == ['file-sync', 'parent-sync']
     assert published.read_bytes() == source.read_bytes() == raw and published.stat().st_nlink == 1
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires real NTFS write-through publisher and retained Native metadata handles')
+def test_native_history_publication_reuses_exact_content_and_refuses_changed_copy(tmp_path, monkeypatch):
+    import hashlib
+    import batch_harvest
+    import wiki_platform
+    repo, worktree = tmp_path / 'repo', tmp_path / 'worker'
+    repo.mkdir()
+    worktree.mkdir()
+    raw = b'authentic Native historical bytes\x00\xff'
+    source = worktree / 'source.bin'
+    source.write_bytes(raw)
+    relative = 'doc/harness/archive/worktree-recovery/WBS__fixture/run/namespace-history/source.bin'
+    expected = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=0o600)
+    actual = wiki_platform.metadata_copy
+    results = []
+    def publication(*args, **kwargs):
+        result = actual(*args, **kwargs)
+        results.append(result)
+        return result
+    monkeypatch.setattr(wiki_platform, 'metadata_copy', publication)
+    for _ in range(2):
+        batch_harvest._preserve_namespace_file(str(repo), str(worktree), 'source.bin', relative, expected)
+    assert results == ['published', 'reused']
+    copy = repo / relative
+    assert copy.read_bytes() == source.read_bytes() == raw
+    copy.write_bytes(b'unrelated changed historical bytes')
+    with pytest.raises(ValueError):
+        batch_harvest._preserve_namespace_file(str(repo), str(worktree), 'source.bin', relative, expected)
+    assert copy.read_bytes() == b'unrelated changed historical bytes'
+    assert source.read_bytes() == raw

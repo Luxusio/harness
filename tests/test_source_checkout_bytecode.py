@@ -56,6 +56,9 @@ def _checkout_copy(root: Path, *, prune: bool) -> Path:
     _load_install_module()._copytree_clean(
         Path(REPO_ROOT) / "plugin" / "scripts", root / "plugin" / "scripts",
     )
+    # The copied real conftest resolves the actual Windows token profile through
+    # install.py, independently of test-controlled HOME values.
+    shutil.copyfile(Path(REPO_ROOT) / "install.py", root / "install.py")
     conftest = (Path(REPO_ROOT) / "tests" / "conftest.py").read_text(encoding="utf-8")
     assert PRUNE_CALL in conftest
     if not prune:

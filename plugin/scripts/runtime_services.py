@@ -443,10 +443,11 @@ class _NativeService:
                 startup.StartupInfo.hStdInput = stdin
                 startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = output
                 startup.lpAttributeList = attribute_list
+                from native_cli import owned_python_argv
                 executable = str(Path(sys.executable).absolute())
-                command = _win.C.create_unicode_buffer(subprocess.list2cmdline(
-                    [executable, "-E", "-s", "-B", str(Path(__file__).absolute()),
-                     "--native-service-host", name, acl, str(ready), str(service["command"])]))
+                host_argv = owned_python_argv(executable, Path(__file__).absolute(),
+                    ["--native-service-host", name, acl, str(ready), str(service["command"])])
+                command = _win.C.create_unicode_buffer(subprocess.list2cmdline(host_argv))
                 env = _service_env(service)
                 environment = _win.C.create_unicode_buffer("\x00".join(
                     f"{k}={v}" for k, v in sorted(env.items(), key=lambda item: item[0].upper())) + "\x00\x00")

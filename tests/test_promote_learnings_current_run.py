@@ -238,6 +238,28 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
             before = self._bytes(ledger)
             task_path = os.path.join(root, "doc", "harness", "wbs", "WBS__current")
             displaced = task_path + "-original"
+            if os.name == "nt":
+                original_status = self.module.wbs_control_status
+                attempted = False
+
+                def status_after_blocked_swap(wbs_dir, control):
+                    nonlocal attempted
+                    attempted = True
+                    with self.assertRaises(OSError) as denied:
+                        os.rename(task_path, displaced)
+                    self.assertIn(denied.exception.winerror, (5, 32))
+                    return original_status(wbs_dir, control)
+
+                with mock.patch.object(self.module, "wbs_control_status", side_effect=status_after_blocked_swap):
+                    result, output, _ = self._run(
+                        root, threshold=1, wbs_id="WBS__current", run_id=run_id
+                    )
+                self.assertTrue(attempted)
+                self.assertFalse(os.path.exists(displaced))
+                self.assertEqual(result, 2)
+                self.assertNotIn("Tier 2 candidate", output)
+                self.assertEqual(self._bytes(ledger), before)
+                return
             original_transaction = self.module.wbs_control_transaction_fd
             swapped = False
 
@@ -305,7 +327,7 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
             harness = os.path.join(root, "doc", "harness")
             os.makedirs(harness)
             outside = os.path.join(root, "outside.jsonl")
-            with open(outside, "w", encoding="utf-8") as stream:
+            with open(outside, "w", encoding="utf-8", newline="") as stream:
                 stream.write("outside\n")
             create_symlink(os.path.join(harness, "learnings.jsonl"), outside)
             result, _, _ = self._run(root, threshold=1)

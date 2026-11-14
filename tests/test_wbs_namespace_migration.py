@@ -3,6 +3,7 @@
 from test_symlink_fixture import create_symlink
 import hashlib
 import json
+import os
 from pathlib import Path
 
 try:
@@ -117,8 +118,9 @@ def test_interrupted_copy_resumes_same_run_without_overwriting_drift(tmp_path, m
             raise OSError('injected interruption')
         return original(*args, **kwargs)
     monkeypatch.setattr(migration, '_copy', interrupt)
-    with pytest.raises(ValueError, match='unsafe storage path'):
+    with pytest.raises((ValueError, OSError), match='unsafe storage path|injected interruption'):
         apply()
+    assert count == 2, 'the copy interruption must reach the selected backend'
     assert (old / 'TASK.json').exists()
     with pytest.raises(ValueError, match='interrupted migration'):
         migration.require_complete(root)
@@ -403,11 +405,23 @@ def test_required_unsafe_local_ignore_reports_exact_path_and_preserves_control(t
     root, old, _, _, migration, apply = fixtures(tmp_path, monkeypatch)
     import subprocess
     subprocess.run(['git', '-C', str(root), 'init', '-q'], check=True)
-    (root / '.git').chmod(0o777)
-    with pytest.raises(ValueError, match='unsafe Git-local ignore path') as error:
-        apply()
-    assert str(root / '.git/info/exclude') in str(error.value)
-    assert (old / 'TASK.json').exists() and not (root / migration.MANIFEST).exists()
+    directory = root / '.git'
+    if os.name == 'nt':
+        from test_wiki_windows_native import _acl
+        _acl(directory, '(A;;GA;;;WD)')
+    else:
+        directory.chmod(0o777)
+    before = (old / 'TASK.json').read_bytes()
+    try:
+        with pytest.raises(ValueError, match='unsafe Git-local ignore path') as error:
+            apply()
+        assert str(root / '.git/info/exclude') in str(error.value)
+        assert (old / 'TASK.json').read_bytes() == before and not (root / migration.MANIFEST).exists()
+    finally:
+        if os.name == 'nt':
+            _acl(directory, '')
+        else:
+            directory.chmod(0o700)
 
 
 def test_hint_temp_and_stale_closed_markers_are_history_not_live_references(tmp_path, monkeypatch):
@@ -470,6 +484,21 @@ def test_payload_siblings_share_one_pinned_directory_chain(tmp_path, monkeypatch
     directory.mkdir(parents=True)
     for i in range(80):
         (directory / f'{i:03}.txt').write_text(str(i))
+    if os.name == 'nt':
+        import _wiki_windows as native
+        actual = native._open
+        opened = []
+        def recording(path, access, **kwargs):
+            if kwargs.get('directory'):
+                opened.append(Path(path))
+            return actual(path, access, **kwargs)
+        monkeypatch.setattr(native, '_open', recording)
+        result = migration._tree(root, 'doc/harness/tasks/TASK__example')
+        assert len(result) == 85
+        assert opened.count(directory) == 1
+        assert len(opened) == len(set(opened)), 'each native directory is retained once'
+        assert result['work/deep/siblings/079.txt']['sha256'] == hashlib.sha256(b'79').hexdigest()
+        return
     actual = migration.os.open
     opened = []
     def recording(path, flags, *args, **kwargs):
@@ -487,6 +516,26 @@ def test_pinned_payload_directory_rebinding_is_rejected(tmp_path, monkeypatch):
     directory = old / 'work/deep'
     directory.mkdir(parents=True)
     (directory / 'a.txt').write_text('original')
+    if os.name == 'nt':
+        import _wiki_windows as native
+        actual = native._ReadFile
+        target = native.metadata_probe(directory / 'a.txt')['identity']
+        attempts = []
+        def replacing(*args):
+            result = actual(*args)
+            if result and native._identity(args[0]) == target and not attempts:
+                with pytest.raises(PermissionError) as refused:
+                    directory.rename(old / 'work/retained-original')
+                assert refused.value.winerror == 32
+                attempts.append('blocked')
+            return result
+        monkeypatch.setattr(native, '_ReadFile', replacing)
+        result = migration._tree(root, 'doc/harness/tasks/TASK__example')
+        assert attempts == ['blocked']
+        assert result['work/deep/a.txt']['sha256'] == hashlib.sha256(b'original').hexdigest()
+        assert (directory / 'a.txt').read_bytes() == b'original'
+        assert not (old / 'work/retained-original').exists()
+        return
     actual = migration._hash_at
     changed = False
     def replacing(parent, name, relative, **kwargs):
@@ -605,6 +654,7 @@ def test_authority_symlinks_still_refuse_even_when_target_is_plain_file(tmp_path
 
 
 @pytest.mark.parametrize('kind', ['copy', 'replacement', 'original-archive'])
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX v9fs linkat recovery; native retained-handle publication is tested separately')
 def test_interrupted_v9fs_hardlink_publication_normalizes_only_exact_stage_pair(tmp_path, monkeypatch, kind):
     root, old, control, _, migration, apply = fixtures(tmp_path, monkeypatch)
     if kind == 'replacement':
@@ -858,6 +908,7 @@ def test_public_retry_after_goal_conflict_uses_exact_completed_namespace_custody
     assert not current.exists()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX orphan-stage fd recovery; native authenticated publication is tested separately')
 def test_complete_orphan_stage_is_file_synced_before_publication(tmp_path, monkeypatch):
     root, old, _, _, migration, _ = fixtures(tmp_path, monkeypatch)
     import stat
@@ -896,6 +947,7 @@ def test_complete_orphan_stage_is_file_synced_before_publication(tmp_path, monke
 
 
 @pytest.mark.parametrize('paired', [False, True])
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX file/directory fsync recovery; native authenticated publication is tested separately')
 def test_visible_destination_retry_syncs_held_file_and_parent_before_custody(tmp_path, monkeypatch, paired):
     root, old, _, _, migration, _ = fixtures(tmp_path, monkeypatch)
     import stat
@@ -937,3 +989,87 @@ def test_visible_destination_retry_syncs_held_file_and_parent_before_custody(tmp
     assert visible_opens == [destination.name], 'retry must hash the held destination descriptor'
     assert destination.stat().st_nlink == 1 and not stage.exists()
     assert destination.read_bytes() == source.read_bytes()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual native retained-handle publication')
+@pytest.mark.parametrize('stage', ['flush', 'rename', 'published'])
+def test_native_interrupted_publication_preserves_history_and_resumes(tmp_path, monkeypatch, stage):
+    root, old, control, _, migration, apply = fixtures(tmp_path, monkeypatch)
+    import _wiki_windows as native
+    history = old / 'evidence.bin'
+    history.write_bytes(b'opaque preserved history\x00\xff')
+    before = (old / 'TASK.json').read_bytes()
+    actual_publish = native._publish_metadata
+    fired = []
+    def publishing(path, *args, **kwargs):
+        if Path(path).name != 'WBS.control.json' or fired:
+            return actual_publish(path, *args, **kwargs)
+        if stage == 'published':
+            result = actual_publish(path, *args, **kwargs)
+            fired.append(stage)
+            raise OSError('interrupted native publication')
+        actual = native._FlushFileBuffers if stage == 'flush' else native._SetFileInformation
+        def interrupt(*call_args):
+            if stage == 'flush' or call_args[1] == native.FileRenameInfoEx:
+                fired.append(stage)
+                raise OSError('interrupted native publication')
+            return actual(*call_args)
+        with monkeypatch.context() as patch:
+            patch.setattr(native, '_FlushFileBuffers' if stage == 'flush' else '_SetFileInformation', interrupt)
+            return actual_publish(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(native, '_publish_metadata', publishing)
+        with pytest.raises(OSError, match='interrupted native publication'):
+            apply()
+    assert fired == [stage]
+    assert (old / 'TASK.json').read_bytes() == before
+    assert history.read_bytes() == b'opaque preserved history\x00\xff'
+    assert json.loads((root / migration.MANIFEST).read_text())['status'] == 'prepared'
+    assert apply()['status'] == 'complete'
+    destination = root / 'doc/harness/wbs/WBS__example'
+    assert json.loads((destination / 'WBS.control.json').read_text()) == control
+    assert (destination / 'evidence.bin').read_bytes() == history.read_bytes()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual native authenticated copy and write-through rename')
+def test_native_copy_flushes_before_publication_and_reuses_only_authenticated_journal(tmp_path, monkeypatch):
+    root, old, _, _, migration, _ = fixtures(tmp_path, monkeypatch)
+    import _wiki_windows as native
+    source = old / 'work/source.bin'
+    source.parent.mkdir()
+    raw = b'private native publication\x00\xff'
+    source.write_bytes(raw)
+    source.chmod(0o444)
+    relative = source.relative_to(root).as_posix()
+    expected = migration._hash_file(root, relative)
+    destination = 'doc/harness/wbs/WBS__example/work/source.bin'
+    journal = migration._plan(root)
+    actual_flush, actual_set, actual_open = native._FlushFileBuffers, native._SetFileInformation, native._open
+    events, write_through = [], []
+    def flushing(handle):
+        events.append('flush')
+        return actual_flush(handle)
+    def setting(handle, kind, *args):
+        if kind == native.FileRenameInfoEx:
+            assert events and events[-1] == 'flush'
+            events.append('rename')
+        return actual_set(handle, kind, *args)
+    def opening(path, access, **kwargs):
+        if kwargs.get('create') == native.CREATE_NEW:
+            write_through.append(kwargs.get('write_through'))
+        return actual_open(path, access, **kwargs)
+    monkeypatch.setattr(native, '_FlushFileBuffers', flushing)
+    monkeypatch.setattr(native, '_SetFileInformation', setting)
+    monkeypatch.setattr(native, '_open', opening)
+    with pytest.raises(ValueError, match='authenticated prepared journal'):
+        migration._copy(root, relative, destination, expected)
+    assert not events and not (root / destination).exists()
+    migration._copy(root, relative, destination, expected, journal=journal)
+    assert events == ['flush', 'flush', 'rename'] and write_through == [True]
+    assert (root / destination).read_bytes() == raw == source.read_bytes()
+    events.clear()
+    migration._copy(root, relative, destination, expected, journal=journal)
+    assert not events, 'a journal-bound matching Native retry verifies bytes without mutating a readonly file'
+    with pytest.raises(ValueError, match='authenticated prepared journal'):
+        migration._copy(root, relative, destination, expected)
+    assert (root / destination).read_bytes() == raw

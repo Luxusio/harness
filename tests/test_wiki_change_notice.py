@@ -227,12 +227,16 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
     for runtime, config in (("codex", codex), ("claude", claude)):
         entry = config["hooks"]["PostToolUse"][-1]
         assert re.fullmatch(entry["matcher"], "Read")
-        command = entry["hooks"][0]["command"]
+        hook_record = entry["hooks"][0]
+        command = hook_record["command"]
+        if "args" in hook_record:
+            command = [value.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT / "plugin"))
+                       for value in [command, *hook_record["args"]]]
         result = subprocess.run(
-            ["sh", "-c", command], cwd=repo,
+            command, shell=isinstance(command, str), cwd=repo,
             env=dict(env, CLAUDE_PLUGIN_ROOT=str(ROOT / "plugin")),
             input=json.dumps({"cwd": str(repo), "session_id": "command-session", "tool_name": "Read"}),
-            text=True, capture_output=True, timeout=10,
+            text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         assert result.returncode == 0, result.stderr
         response = json.loads(result.stdout)["hookSpecificOutput"]

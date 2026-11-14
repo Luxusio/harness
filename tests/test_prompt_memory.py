@@ -344,6 +344,7 @@ class TestPromptMemory(unittest.TestCase):
             base = _build_scratch_repo(Path(tmp))
             outside = Path(tmp) / "outside"
             outside.mkdir(mode=0o700)
+            original_mode = outside.stat().st_mode & 0o777
             override = Path(tmp) / "override"
             create_symlink(override, outside, target_is_directory=True)
             r = _invoke(
@@ -358,7 +359,7 @@ class TestPromptMemory(unittest.TestCase):
             outside_mode = outside.stat().st_mode & 0o777
         self.assertEqual(r.returncode, 0)
         self.assertEqual(outside_files, [])
-        self.assertEqual(outside_mode, 0o700)
+        self.assertEqual(outside_mode, original_mode)
 
     def test_claude_goal_prompt_routes_to_native_goal_mcp_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:

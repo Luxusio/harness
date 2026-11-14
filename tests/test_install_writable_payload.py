@@ -82,6 +82,7 @@ def _run_smoke(plugin_root: Path) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX write-bit normalization; native ACL rejection is tested below")
 def test_normalize_payload_modes_clears_group_and_other_write(tmp_path):
     install = _load_install_module()
     plugin_root = _copy_payload(tmp_path)
@@ -125,9 +126,13 @@ def test_normalize_payload_modes_skips_symlinks(tmp_path):
     os.chmod(outside, 0o666)
     create_symlink(root / "link", outside)
 
-    install._normalize_payload_modes(root)
-
-    assert stat.S_IMODE(os.lstat(outside).st_mode) == 0o666
+    if os.name == "nt":
+        with pytest.raises(PermissionError, match="unsafe Windows payload ACL or object"):
+            install._normalize_payload_modes(root)
+    else:
+        install._normalize_payload_modes(root)
+        assert stat.S_IMODE(os.lstat(outside).st_mode) == 0o666
+    assert outside.read_text() == "keep me\n"
 
 
 def test_smoke_names_writable_modes_and_normalization_restores_the_tree(tmp_path):
@@ -137,6 +142,27 @@ def test_smoke_names_writable_modes_and_normalization_restores_the_tree(tmp_path
 
     healthy = _run_smoke(plugin_root)
     assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+
+    if os.name == "nt":
+        from test_wiki_windows_native import _acl
+        victim = plugin_root / "scripts" / "_lib.py"
+        try:
+            _acl(victim, "(A;;GW;;;WD)")
+            broken = _run_smoke(plugin_root)
+            output = broken.stdout + broken.stderr
+            assert broken.returncode != 0, output
+            assert "ACL and source checks remain required" in output, output
+            assert "stale __pycache__ is the known cause" not in output, output
+            # Native normalization validates custody; it never rewrites an
+            # untrusted ACL into acceptance.
+            with pytest.raises(PermissionError, match="unsafe access"):
+                install._normalize_payload_modes(plugin_root)
+        finally:
+            _acl(victim, "")
+        assert install._normalize_payload_modes(plugin_root) == []
+        repaired = _run_smoke(plugin_root)
+        assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+        return
 
     for parent, dirnames, filenames in os.walk(plugin_root):
         for name in [*dirnames, *filenames]:
@@ -182,21 +208,29 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
     os.chmod(victim, 0o777)
 
     with (
+        mock.patch.object(install, "host_command", return_value=["claude"]),
+        mock.patch.object(install, "_normalize_payload_modes", wraps=install._normalize_payload_modes) as normalize,
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
-        mock.patch.object(install, "_run", return_value=(0, "claude 2.1.0\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "claude 2.1.322\n", "")),
     ):
         result = install.install_claude(dry_run=False, force=False)
 
     assert result.ok, result.summary + "\n" + "\n".join(result.steps)
-    assert any("cleared group/other-write bits" in step for step in result.steps)
+    assert mock.call(install_root) in normalize.call_args_list
+    if os.name == "nt":
+        state, _inventory, reason = install._tree_inventory(plugin_root)
+        assert state == install.PAYLOAD_SYNCHRONIZED, reason
+    else:
+        assert any("cleared group/other-write bits" in step for step in result.steps)
     # Normalization runs before the staleness decision, so whichever branch the
     # comparison then takes, no world-writable module survives the run — and
     # the runtime smoke inside `install_claude` is what proves the resulting
     # tree can perform actual task operations.
-    assert not stat.S_IMODE(os.lstat(victim).st_mode) & 0o022, (
-        "the install left a world-writable module the import guards refuse"
-    )
-    assert not any(mode & 0o022 for mode in _modes(plugin_root))
+    if os.name != "nt":
+        assert not stat.S_IMODE(os.lstat(victim).st_mode) & 0o022, (
+            "the install left a world-writable module the import guards refuse"
+        )
+        assert not any(mode & 0o022 for mode in _modes(plugin_root))
     assert "runtime smoke: ok import" in " ".join(result.steps) or any(
         "ok import" in step for step in result.steps
     ), result.steps
@@ -227,9 +261,11 @@ def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path)
     (metadata / 'plugin.json').write_text('{"name":"harness","version":"0.1.0"}')
 
     with (
+        mock.patch.object(install, "host_command", return_value=["codex"]),
+        mock.patch.object(install, "_normalize_payload_modes", wraps=install._normalize_payload_modes) as normalize,
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
-        mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "codex 0.167.2\n", "")),
         mock.patch.object(install, "_select_codex_plugin", return_value=(True, "selection stubbed for permission call-site test")),
         mock.patch.object(
             install, "_codex_payload_state",
@@ -243,12 +279,19 @@ def test_codex_install_normalizes_both_payload_roots_when_synchronized(tmp_path)
 
     assert result.ok, result.summary + "\n" + "\n".join(result.steps)
     sync.assert_not_called()
+    assert mock.call(codex_root) in normalize.call_args_list
+    assert mock.call(codex_home / "plugins/cache" / install.CODEX_PLUGIN_MARKETPLACE) in normalize.call_args_list
     for module_file in victims:
-        assert not stat.S_IMODE(os.lstat(module_file).st_mode) & 0o022, (
-            f"the skip path left {module_file} world-writable"
-        )
+        if os.name == "nt":
+            state, _inventory, reason = install._tree_inventory(module_file.parent)
+            assert state == install.PAYLOAD_SYNCHRONIZED, reason
+        else:
+            assert not stat.S_IMODE(os.lstat(module_file).st_mode) & 0o022, (
+                f"the skip path left {module_file} world-writable"
+            )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode diagnosis; native ACL smoke diagnosis is tested above")
 def test_smoke_keeps_the_stale_cache_wording_when_modes_are_clean(tmp_path):
     """The fallback stays put: this is the cause when nothing is writable."""
     sys.path.insert(0, str(SMOKE_SCRIPT.parent))

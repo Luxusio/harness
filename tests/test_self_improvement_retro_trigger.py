@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,24 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 RETRO = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RETRO)
+
+
+def _foreign_write(path, enabled=True):
+    if os.name != "nt":
+        path.chmod(0o777 if path.is_dir() else 0o666)
+        return
+    import ctypes as C
+    from ctypes import wintypes as W
+    import _wiki_windows as win
+    descriptor = win.P()
+    grant = "(A;;GW;;;WD)" if enabled else ""
+    sddl = f"O:{win.USER_SID}D:P(A;;FA;;;{win.USER_SID})(A;;FA;;;SY)(A;;FA;;;BA){grant}"
+    win._check(win._ConvertStringSecurityDescriptor(sddl, 1, C.byref(descriptor), None))
+    setter = win._bind(win.A, "SetFileSecurityW", [W.LPCWSTR, W.DWORD, win.P])
+    try:
+        win._check(setter(str(path), 4 | 0x80000000, descriptor))
+    finally:
+        win._LocalFree(descriptor)
 
 
 def _write_task(
@@ -128,7 +147,9 @@ class TestRetroTriggerThreshold(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             now = datetime.now(timezone.utc).timestamp()
             valid = _write_task(d, "valid", now)
-            _write_task(d, "bad`\n- injected", now)
+            # NTFS forbids newlines in file names. The renderer's separate
+            # adversarial-text test still exercises the newline payload.
+            _write_task(d, "bad`-injected" if os.name == "nt" else "bad`\n- injected", now)
             _write_task(d, "bad name", now)
 
             tasks = RETRO.verified_closed_wbs_since(d, 0)
@@ -151,7 +172,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             now = datetime.now(timezone.utc).timestamp()
             unsafe = _write_task(d, "unsafe", now)
-            unsafe.joinpath("WBS.control.json").chmod(0o666)
+            _foreign_write(unsafe.joinpath("WBS.control.json"))
 
             outside = Path(d, "outside")
             outside.mkdir()
@@ -172,7 +193,21 @@ class TestRetroTriggerThreshold(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             _write_task(d, "closed", datetime.now(timezone.utc).timestamp())
             tasks_root = Path(d, "doc", "harness", "wbs")
-            tasks_root.chmod(0o777)
+            _foreign_write(tasks_root)
+            self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
+
+    def test_foreign_writable_control_is_excluded_without_link_privilege(self):
+        with tempfile.TemporaryDirectory() as d:
+            task = _write_task(d, "unsafe", datetime.now(timezone.utc).timestamp())
+            self.assertEqual(RETRO.count_verified_closes_since(d, 0), 1)
+            _foreign_write(task / "WBS.control.json")
+            self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
+
+    def test_foreign_writable_tasks_root_is_rejected_without_link_privilege(self):
+        with tempfile.TemporaryDirectory() as d:
+            _write_task(d, "closed", datetime.now(timezone.utc).timestamp())
+            self.assertEqual(RETRO.count_verified_closes_since(d, 0), 1)
+            _foreign_write(Path(d, "doc/harness/wbs"))
             self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
 
     def test_tasks_root_rebound_during_enumeration_rejects_partial_count(self):
@@ -180,6 +215,24 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             _write_task(d, "closed", datetime.now(timezone.utc).timestamp())
             tasks_root = Path(d, "doc", "harness", "wbs")
             displaced = tasks_root.with_name("tasks-displaced")
+            if os.name == "nt":
+                original_check = RETRO._verified_close_publication
+                attempted = False
+
+                def blocked_rebind(path):
+                    nonlocal attempted
+                    attempted = True
+                    with self.assertRaises(OSError) as denied:
+                        tasks_root.rename(displaced)
+                    self.assertIn(denied.exception.winerror, (5, 32))
+                    return original_check(path)
+
+                with mock.patch.object(RETRO, "_verified_close_publication", side_effect=blocked_rebind):
+                    self.assertEqual(RETRO.count_verified_closes_since(d, 0), 1)
+                self.assertTrue(attempted)
+                self.assertTrue(tasks_root.is_dir())
+                self.assertFalse(displaced.exists())
+                return
             original_check = RETRO._verified_close_publication_fd
             rebound = False
 
@@ -201,6 +254,16 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             now = datetime.now(timezone.utc).timestamp()
             original = _write_task(d, "target", now, state="open")
             displaced = original.with_name("WBS__target-original")
+            if os.name == "nt":
+                from wiki_platform import trusted_metadata_directory
+                with trusted_metadata_directory(original):
+                    with self.assertRaises(OSError) as denied:
+                        original.rename(displaced)
+                    self.assertIn(denied.exception.winerror, (5, 32))
+                    self.assertIsNone(RETRO._verified_close_publication(str(original)))
+                self.assertTrue(original.is_dir())
+                self.assertFalse(displaced.exists())
+                return
             flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
             task_fd = os.open(original, flags)
             try:
@@ -297,6 +360,7 @@ class TestFirstFireBanner(unittest.TestCase):
             content = f.read()
         self.assertIn("promote_learnings.py", content)
 
+    @unittest.skipUnless(shutil.which("bash"), "the documented Bash condition requires Bash")
     def test_retro_threshold_shell_condition_executes_and_honors_disable(self):
         path = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
         with open(path, encoding="utf-8") as stream:
@@ -379,7 +443,7 @@ class TestRetroSafeIO(unittest.TestCase):
             target.write_text("KEEP\n", encoding="utf-8")
             create_symlink(retros.joinpath("2026-09-01.md"), target)
 
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(ValueError if os.name == "nt" else RuntimeError):
                 RETRO._save_report(repo, "replacement\n", "2026-09-01")
 
             self.assertEqual(target.read_text(encoding="utf-8"), "KEEP\n")

@@ -1,6 +1,7 @@
 """Real linked-checkout task publication and locking guards."""
 import json
 import subprocess
+from pathlib import Path
 from unittest import mock
 
 LEAD = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
@@ -45,7 +46,8 @@ def test_marker_writers_lock_session_before_wbs_control_in_deferred_routes(tmp_p
 
     @contextmanager
     def control(task):
-        assert any(str(task).startswith(root + "/") for root in held), (task, held)
+        assert any(Path(task).is_relative_to(Path(root)) and Path(task) != Path(root)
+                   for root in held), (task, held)
         observed.append(str(task))
         with real_control(task):
             yield

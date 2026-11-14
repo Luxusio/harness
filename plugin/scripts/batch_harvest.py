@@ -316,7 +316,9 @@ def _read_learnings_rows(src: str) -> list:
         except FileNotFoundError:
             return []
         rows = []
-        for stripped in raw.decode("utf-8").splitlines():
+        # Preserve the row's literal CR byte. Disposal proves exact raw rows,
+        # so a Native CRLF source must not silently become LF-only history.
+        for stripped in raw.decode("utf-8").split('\n'):
             try:
                 if isinstance(json.loads(stripped), dict):
                     rows.append(stripped)
@@ -419,8 +421,13 @@ def _s1_git(root, *args):
     env = _trusted_git_env()
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT='0', GIT_NO_LAZY_FETCH='1', GIT_NO_REPLACE_OBJECTS='1', LC_ALL='C')
+    conversion = []
+    if os.name == 'nt':
+        from batch_submodules import _conversion_policy
+        for key, value in _conversion_policy(root).items():
+            conversion.extend(('-c', key + '=' + value))
     return subprocess.run(
-        [_git_executable(root, env), '--no-optional-locks', '-c', 'core.fsmonitor=false',
+        [_git_executable(root, env), '--no-optional-locks', *conversion, '-c', 'core.fsmonitor=false',
          '-c', 'core.hooksPath=' + os.devnull, '-c', 'submodule.recurse=false',
          '-c', 'protocol.allow=never', '-c', 'status.showUntrackedFiles=all', *args],
         cwd=root, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
@@ -1104,20 +1111,80 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
             **{relative: None for relative in directories}}
 
 
+def _prepare_native_file_disposal(path, expected_sha256, identity, *, readonly=False, directory=False):
+    """Prepare an exact archived file or typed directory, or restore its seal.
+
+    This is deliberately local to proved batch disposal. The shared metadata
+    publication API continues to forbid unsealing immutable history.
+    """
+    import ctypes
+    from wiki_platform import _native
+    path = Path(path)
+    with _native._walk(path.parent, secure=True, writing=True):
+        access = _native.FILE_LIST_DIRECTORY if directory else _native.GENERIC_READ
+        handle = _native._open(path, access | _native.FILE_WRITE_ATTRIBUTES, directory=directory,
+                               share=_native.FILE_SHARE_READ, write_through=True)
+        try:
+            before = _native._metadata_stamp(handle)
+            _s1_require(before[:3] == identity, 'disposable file identity changed')
+            if directory:
+                _s1_require(expected_sha256 is None, 'unexpected directory payload digest')
+            else:
+                _s1_require(before[3] <= 8 * 1024 ** 3, 'disposable file exceeds archive bound')
+                digest = hashlib.sha256()
+                for chunk in _native._file_chunks(handle, before[3]):
+                    digest.update(chunk)
+                _s1_require(digest.hexdigest() == expected_sha256 and _native._metadata_stamp(handle) == before,
+                            'disposable readonly file differs from preserved archive')
+            if bool(before[4] & 1) == readonly:
+                return False
+            basic = _native.BASIC_INFO()
+            basic.attributes = before[4] | 1 if readonly else before[4] & ~1 or 0x80
+            _native._check(_native._SetFileInformation(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic)))
+            after = _native._metadata_stamp(handle)
+            _s1_require(after[:4] == before[:4] and after[4] == basic.attributes and after[5:] == before[5:],
+                        'readonly file changed while preparing disposal')
+            named = _native._open(path, 0, directory=directory)
+            try:
+                _s1_require(_native._metadata_stamp(named) == after, 'disposable file name changed')
+            finally:
+                _native._close(named)
+            return True
+        finally:
+            _native._close(handle)
+
+
+def _restore_native_disposal_files(prepared):
+    """Reseal only this attempt's exact entries after a registered refusal."""
+    errors = []
+    for path, digest, identity, directory in reversed(prepared):
+        try:
+            _prepare_native_file_disposal(path, digest, identity, readonly=True, directory=directory)
+        except (Exception, KeyboardInterrupt) as exc:
+            errors.append(f'{path}: {type(exc).__name__}: {exc}')
+    return errors
+
+
 def _thaw_namespace_history(repo, worktree, wbs_id):
     """Only after complete removal proof, unseal already-preserved history."""
     entries = _ordinary_namespace_history(repo, worktree, wbs_id)
+    planned, prepared = [], []
     for relative, digest in entries.items():
         if digest is not None:
+            if os.name == 'nt' and isinstance(digest, str):
+                from wiki_platform import metadata_probe
+                path = Path(worktree) / relative
+                probe = metadata_probe(path)
+                _s1_require(probe and probe['kind'] == 'file', 'namespace history file disappeared')
+                planned.append((path, digest, probe['identity'], False))
             continue
         path = _s1_path(os.path.join(worktree, relative), True)
         before = os.lstat(path)
         if os.name == "nt":
-            from wiki_platform import trusted_metadata_directory
-            # NTFS directory readonly attributes do not control child deletion.
-            # Preserve them; the actual DELETE handle remains owner/DACL-bound.
-            with trusted_metadata_directory(Path(path)):
-                pass
+            from wiki_platform import metadata_probe
+            probe = metadata_probe(Path(path))
+            _s1_require(probe and probe['kind'] == 'dir', 'namespace history directory disappeared')
+            planned.append((Path(path), None, probe['identity'], True))
             continue
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -1127,6 +1194,16 @@ def _thaw_namespace_history(repo, worktree, wbs_id):
             os.fchmod(fd, stat.S_IMODE(info.st_mode) | stat.S_IWUSR)
         finally:
             os.close(fd)
+    try:
+        for path, digest, identity, directory in planned:
+            if _prepare_native_file_disposal(path, digest, identity, directory=directory):
+                prepared.append((path, digest, identity, directory))
+    except BaseException as exc:
+        errors = _restore_native_disposal_files(prepared)
+        if errors:
+            raise HarvestError(str(exc) + '; readonly restoration refused: ' + '; '.join(errors)) from exc
+        raise
+    return prepared
 
 
 def ordinary_removal_proof(repo, worktree, wbs_id, retention=None, checkpoint=None):
@@ -1178,8 +1255,7 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     """Only after full ordinary proof and durable archive, unseal typed copies."""
     if checkpoint is None:
         ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
-        _thaw_namespace_history(repo, worktree, wbs_id)
-        return
+        return _thaw_namespace_history(repo, worktree, wbs_id)
     # Admit only the registered checkout and safe paths before collecting
     # candidates. The complete byte inventory follows collection, before chmod.
     _verify_registered_worktree(repo, worktree)
@@ -1188,14 +1264,13 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     store = os.path.join(task, 'work/verification-targets')
     if not os.path.isdir(store):
         ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
-        _thaw_namespace_history(repo, worktree, wbs_id)
-        return
+        return _thaw_namespace_history(repo, worktree, wbs_id)
     _s1_path(store, True)
     archive_task = _s1_path(os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id), True)
     _s1_require(checkpoint.get('stage') == 'harvested'
                 and checkpoint.get('harvest', {}).get('archived') == archive_task,
                 'task archive differs from durable removal checkpoint')
-    directories = []
+    directories, native_files = [], []
     for token in os.listdir(store):
         if not re.fullmatch(r'[0-9a-f]{16}', token):
             continue
@@ -1210,11 +1285,24 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
                     and isinstance(record.get('run_id'), str) and bool(record['run_id'])
                     and isinstance(record.get('manifest'), list), 'invalid historical verification metadata')
         _spec(record.get('spec'))
+        if os.name == 'nt':
+            from wiki_platform import metadata_probe, metadata_tree_inventory
+            target = Path(task) / relative
+            native_files.append((target, hashlib.sha256(metadata).hexdigest(), metadata_probe(target)['identity'], False))
         for name in os.listdir(os.path.join(store, token)):
             if name != 'source' and not re.fullmatch(r'source-restored-[0-9a-f]{16}', name):
                 continue
             root = os.path.join(store, token, name)
             _s1_path(root, True)
+            if os.name == 'nt':
+                inventory = metadata_tree_inventory(Path(root), max_entries=100000, max_bytes=8 * 1024 ** 3)
+                native_files.append((Path(root), None, metadata_probe(Path(root))['identity'], True))
+                for rel, row in inventory.items():
+                    if row['readonly']:
+                        target = Path(root) / rel
+                        directory = row['kind'] == 'dir'
+                        native_files.append((target, None if directory else row['sha256'],
+                                             metadata_probe(target)['identity'], directory))
             for current, dirs, files in os.walk(root):
                 _s1_path(current, True)
                 info = os.lstat(current)
@@ -1237,14 +1325,26 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
             os.fchmod(fd, stat.S_IMODE(mode) | stat.S_IWUSR)
         finally:
             os.close(fd)
-    _thaw_namespace_history(repo, worktree, wbs_id)
+    prepared = _thaw_namespace_history(repo, worktree, wbs_id)
+    try:
+        for path, digest, identity, directory in native_files:
+            if _prepare_native_file_disposal(path, digest, identity, directory=directory):
+                prepared.append((path, digest, identity, directory))
+    except BaseException as exc:
+        errors = _restore_native_disposal_files(prepared)
+        if errors:
+            raise HarvestError(str(exc) + '; readonly restoration refused: ' + '; '.join(errors)) from exc
+        raise
+    return prepared
 
 
 def ordinary_unregistered(repo, worktree):
     """Absence of both registration and administrative back-pointers."""
     worktree = os.path.abspath(worktree)
     listing = _s1_git_text(repo, 'worktree', 'list', '--porcelain', '-z')
-    if any(field == 'worktree ' + worktree for field in listing.split('\0')):
+    if any(field.startswith('worktree ')
+           and os.path.normcase(os.path.realpath(field[len('worktree '):])) == os.path.normcase(os.path.realpath(worktree))
+           for field in listing.split('\0')):
         return False
     _s1_require(not os.path.lexists(os.path.join(worktree, '.git')), 'residue retains .git metadata')
     common = _s1_git_text(repo, 'rev-parse', '--git-common-dir')
@@ -1595,8 +1695,23 @@ def remove_s1_worktree(repo, worktree, wbs_id, manifest, checkpoint, git_runner=
                     'branch identity changed during removal proof')
     except (batch_submodules.SubmoduleError, OSError, ValueError, subprocess.SubprocessError) as exc:
         raise HarvestError('S1 removal proof refused: ' + str(exc)) from exc
-    _thaw_namespace_history(repo, worktree, wbs_id)
-    return (git_runner or _s1_git)(repo, 'worktree', 'remove', '--force', worktree)
+    prepared = _thaw_namespace_history(repo, worktree, wbs_id)
+    removed = None
+    try:
+        removed = (git_runner or _s1_git)(repo, 'worktree', 'remove', '--force', worktree)
+        return removed
+    finally:
+        if prepared and (removed is None or removed.returncode != 0):
+            failure = sys.exc_info()[1]
+            try:
+                registered = resolve_registered_worktree(repo, worktree)
+            except GitBindingError:
+                registered = False  # Unknown/unregistered residue is retained.
+            if registered:
+                errors = _restore_native_disposal_files(prepared)
+                if errors:
+                    detail = str(failure) if failure is not None else str(removed.stderr)
+                    raise HarvestError(detail + '; readonly restoration refused: ' + '; '.join(errors)) from failure
 
 
 def main() -> int:

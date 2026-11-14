@@ -215,13 +215,27 @@ def test_successful_check_also_stops_redirected_children(tmp_path):
     import os
     import time
     repo, td = baseline(tmp_path)
-    script = "import subprocess; from pathlib import Path; p=subprocess.Popen(['sleep','30'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid,flush=True)"
+    script = "import subprocess,sys; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid,flush=True)"
     item = node()
     item["check"] = [sys.executable, "-c", script]
     publish(td, [item])
     result = check(repo, td)
     assert result["passed"]
     pid = int(result["output"].strip())
+    if os.name == "nt":
+        import ctypes as C
+        from ctypes import wintypes as W
+        import _wiki_windows as win
+        opener = win._bind(win.K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
+        handle = opener(0x100000, False, pid)
+        if handle:
+            try:
+                assert win._WaitForSingleObject(handle, 2000) == 0, "assertion child survived verification"
+            finally:
+                win._close(handle)
+        else:
+            assert C.get_last_error() == 87  # Process no longer exists.
+        return
     # Reaped by the host init or left only as a zombie, never a live writer.
     for _ in range(20):
         path = Path("/proc", str(pid), "stat")
@@ -544,7 +558,7 @@ def test_successful_recheck_refreshes_log_without_progress_clock_reset(tmp_path)
     assert wbs.verify(str(td), str(repo), 'run', 'A', now=300)['passed']
     stored = wbs.read_state(str(td))
     result = stored['checks']['A']['result']
-    assert result['output'] == '2\n'
+    assert result['output'].splitlines() == ['2']
     assert wbs._log_available(result['output_log'], repo)['available']
     assert Path(result['output_log']['path']).read_text() == '2\n'
     assert stored['last_progress_at'] == 200

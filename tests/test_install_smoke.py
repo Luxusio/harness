@@ -106,8 +106,8 @@ def test_the_installer_runs_the_smoke_on_the_tree_it_installed(selected_installe
     assert all(step.startswith("runtime smoke: ") for step in steps), steps
 
 
-def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path, selected_installer_python):
-    """An import failure fails delivery; pruning repairs stale bytecode."""
+def test_stale_pyc_is_rejected_or_bypassed_and_pruning_preserves_sources(tmp_path, selected_installer_python):
+    """Native owned loaders read source; ordinary loaders detect stale bytecode."""
     install = _load("harness_install_for_smoke_test", INSTALL_PY)
     plugin_root = _installed_tree(tmp_path)
     pyc = _plant_stale_pyc(plugin_root / "scripts" / "prewrite_gate.py")
@@ -115,8 +115,13 @@ def test_a_stale_pyc_fails_the_install_and_the_prune_repairs_it(tmp_path, select
 
     ok, steps = install._smoke_installed_runtime(plugin_root)
     report = "\n".join(steps)
-    assert not ok, report
-    assert "FAIL import:" in report
+    if os.name == "nt":
+        # The Native owned-source loader deliberately never consumes .pyc.
+        assert ok, report
+        assert "ok import:" in report
+    else:
+        assert not ok, report
+        assert "FAIL import:" in report
     assert pyc.exists(), report
 
     steps = install._prune_bytecode_caches(plugin_root)
@@ -142,6 +147,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
 
     monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "claude-dest"))
     with (
+        mock.patch.object(install, "host_command", return_value=["modeled-claude"]),
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(install, "_run", return_value=(0, "claude 2.1.0\n", "")),
         mock.patch.object(install, "sync_claude_payload", return_value=installed),
@@ -163,6 +169,7 @@ def test_each_installer_drives_the_smoke_on_the_tree_it_just_installed(tmp_path,
         '{"name": "harness", "version": "9.9.9"}', encoding="utf-8",
     )
     with (
+        mock.patch.object(install, "host_command", return_value=["modeled-codex"]),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", tmp_path / "codex-harness"),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", return_value=(0, "codex 0.130.0\n", "")),
@@ -205,6 +212,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     }}))
     monkeypatch.setenv("HARNESS_DEST", str(claude_root))
     with (
+        mock.patch.object(install, "host_command", return_value=["modeled-claude"]),
         mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(install, "_run", return_value=(0, "claude 2.1.0\n", "")),
         mock.patch.object(
@@ -234,6 +242,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     (cached / '.codex-plugin').mkdir()
     (cached / '.codex-plugin/plugin.json').write_text('{"name":"harness","version":"9.9.9"}')
     with (
+        mock.patch.object(install, "host_command", return_value=["modeled-codex"]),
         mock.patch.object(install, "_select_codex_plugin", return_value=(True, "native selection stubbed for smoke call-site test")),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_install_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
@@ -267,6 +276,7 @@ def test_a_missing_codex_cache_entry_is_reported_not_assumed(tmp_path, selected_
         '{"name": "harness", "version": "9.9.9"}', encoding="utf-8",
     )
     with (
+        mock.patch.object(install, "host_command", return_value=["modeled-codex"]),
         mock.patch.object(install, "CODEX_INSTALL_ROOT", codex_install_root),
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
         mock.patch.object(install, "_run", side_effect=lambda cmd, dry: (

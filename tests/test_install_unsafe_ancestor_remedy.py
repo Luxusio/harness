@@ -45,7 +45,11 @@ install = _load_install_module()
 
 
 @pytest.fixture(autouse=True)
-def model_selected_runtime(selected_installer_python, monkeypatch):
+def model_selected_runtime(selected_installer_python, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    # Remedy tests mock the CLI protocol; native resolver coverage is separate.
+    monkeypatch.setattr(install, "host_command", lambda runtime, **kwargs: [runtime])
     monkeypatch.setattr(install, "select_python", lambda **kwargs: selected_installer_python)
 
 
@@ -55,6 +59,7 @@ def _remedy(component, uid, *, final=False, current_uid=1001, mode=0o777):
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_directory_you_own_gets_go_w():
     assert _remedy("/home/someone/.claude", 1001) == "chmod go-w /home/someone/.claude"
     assert _remedy("/data/mine", 1001) == "chmod go-w /data/mine"
@@ -68,6 +73,7 @@ def test_running_as_root_does_not_make_a_system_dir_yours():
         assert "HARNESS_DEST" in remedy
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_root_owned_config_dir_in_home_gets_chown_not_sticky():
     assert _remedy("/home/someone/.claude", 0) == CHOWN.format(c="/home/someone/.claude")
 
@@ -89,10 +95,12 @@ def test_another_users_directory_gets_no_command():
     assert "owned by uid 1234" in remedy and "chmod" not in remedy
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_paths_are_shell_quoted():
     assert _remedy("/home/someone/my dir", 1001) == "chmod go-w '/home/someone/my dir'"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_an_existing_payload_under_a_writable_ancestor_names_the_fix(tmp_path):
     shared = tmp_path / "shared"
     target = shared / "harness-dev"
@@ -107,6 +115,7 @@ def test_an_existing_payload_under_a_writable_ancestor_names_the_fix(tmp_path):
     assert install._repair_from_reason(reason) == f"chmod go-w {shared}"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_missing_payload_under_a_writable_intermediate_names_the_fix(tmp_path):
     """The writable existing component is refused before the missing part."""
     shared = tmp_path / "shared"
@@ -127,6 +136,7 @@ def _missing(ancestor, uid, mode, next_component, *, current_uid=1001):
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_missing_target_under_a_shared_sticky_dir_creates_the_next_dir():
     """Never chown or chmod a shared directory such as /tmp."""
     remedy = _missing("/tmp", 0, 0o1777, "/tmp/harness-root")
@@ -135,6 +145,7 @@ def test_a_missing_target_under_a_shared_sticky_dir_creates_the_next_dir():
     assert _missing("/tmp", 0, 0o1777, "/tmp/harness-root", current_uid=0) == remedy
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_missing_target_under_a_root_system_dir_creates_it_as_you():
     expected = 'sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/harness'
     assert _missing("/opt", 0, 0o755, "/opt/harness") == expected
@@ -147,6 +158,7 @@ def test_a_sticky_dir_owned_by_someone_else_gets_no_mkdir():
     assert "mkdir" not in remedy and "chmod" not in remedy
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_missing_target_under_a_root_config_dir_in_home_takes_it_over():
     assert _missing("/home/someone/.codex", 0, 0o755, "/home/someone/.codex/plugins") == (
         CHOWN.format(c="/home/someone/.codex")
@@ -158,6 +170,7 @@ def test_a_missing_target_under_another_users_dir_gets_no_command():
     assert "owned by uid 1234" in remedy and "mkdir" not in remedy
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_a_missing_target_under_tmp_names_the_next_dir_end_to_end():
     """The real branch: nearest existing ancestor /tmp, two levels missing."""
     info = os.stat("/tmp")
@@ -174,6 +187,7 @@ def test_a_missing_target_under_tmp_names_the_next_dir_end_to_end():
     assert "chown" not in repair and "chmod" not in repair
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership/mode remedy; native ACL refusal has no chmod/chown repair (test_install_writable_source_comparison)")
 def test_install_claude_carries_the_repair(tmp_path, monkeypatch):
     shared = tmp_path / "shared"
     shared.mkdir()
@@ -230,7 +244,7 @@ def test_install_codex_carries_the_repair(monkeypatch):
     monkeypatch.setattr(install, "_codex_payload_state", lambda _config: (install.PAYLOAD_ERROR, reason))
     with (
         mock.patch.object(install.shutil, "which", return_value="/bin/codex"),
-        mock.patch.object(install, "_run", return_value=(0, "codex-cli 9.9.9\n", "")),
+        mock.patch.object(install, "_run", return_value=(0, "codex 0.167.2\n", "")),
         mock.patch.object(install, "_prune_bytecode_caches", return_value=[]),
         mock.patch.object(install, "_normalize_payload_modes", return_value=[]),
     ):

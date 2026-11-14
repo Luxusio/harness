@@ -1,5 +1,6 @@
 """Adapt real managed ownership through the public owner, preserving intent."""
 import json
+import os
 from pathlib import Path
 
 try:
@@ -183,7 +184,8 @@ def test_same_path_changes_during_scope_grant_preserve_record(tmp_path, monkeypa
         def mutate_after_path_observation(*args, **kwargs):
             report = original_preflight(*args, **kwargs)
             if kind == "mode":
-                owned.chmod(owned.stat().st_mode ^ 0o100)
+                owned.chmod((0o400 if owned.stat().st_mode & 0o200 else 0o600)
+                            if os.name == "nt" else owned.stat().st_mode ^ 0o100)
             else:
                 owned.write_text("second dirty contents\n")
                 if kind == "index":

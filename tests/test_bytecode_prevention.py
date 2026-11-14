@@ -64,7 +64,7 @@ def test_hooks_never_write_bytecode_into_an_installed_tree():
         # C-12 stays intact: this change must not cost the harness fail-safety.
         assert command.rstrip().endswith("|| true"), command
 
-def test_every_process_that_imports_the_installed_tree_disables_bytecode():
+def test_every_process_that_imports_the_installed_tree_disables_bytecode(tmp_path):
     """`plugin/hooks/hooks.json` is not the whole surface, and checking only it
     was the first version's real defect.
 
@@ -75,8 +75,9 @@ def test_every_process_that_imports_the_installed_tree_disables_bytecode():
     `install.py` generates rather than reading from that file.
     """
     install = _load_install()
+    installed = tmp_path / "installed" / "plugin"
 
-    config = install._codex_hooks_config(Path("/installed/plugin"))
+    config = install._codex_hooks_config(installed)
     # Every generated Codex hook command, not merely one of them.
     commands = [
         hook["command"]
@@ -93,7 +94,7 @@ def test_every_process_that_imports_the_installed_tree_disables_bytecode():
     for command in commands:
         assert command.startswith("PYTHONDONTWRITEBYTECODE=1 "), command
 
-    codex_mcp = install._codex_mcp_config(Path("/installed/plugin"))
+    codex_mcp = install._codex_mcp_config(installed)
     env = codex_mcp["mcpServers"]["harness"]["env"]
     assert env.get("PYTHONDONTWRITEBYTECODE") == "1", env
 
@@ -106,7 +107,7 @@ def test_every_process_that_imports_the_installed_tree_disables_bytecode():
     # The TOML block is the registration Codex actually launches — missing it
     # while the JSON sibling had it is exactly how the first attempt at this
     # test passed while the live Codex MCP process kept writing bytecode.
-    block = tomllib.loads(install._mcp_block("/installed/plugin"))
+    block = tomllib.loads(install._mcp_block(str(installed)))
     assert block["mcp_servers"]["harness"]["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
 
     # The plugin's own MCP manifest. This is the launcher for the

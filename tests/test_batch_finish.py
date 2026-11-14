@@ -30,9 +30,11 @@ else:
 
 IGNORES = (
     "doc/harness/wbs/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n"
-    ".claude/worktrees/\n"
+    "doc/harness/runtime/\n.claude/worktrees/\n"
 )
 LOCK_REASON = "claude agent agent-x (pid 12345)"
+_NATIVE_LEADS = {}
+_NATIVE_OWNERS = {}
 
 
 def pytest_generate_tests(metafunc):
@@ -77,7 +79,7 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _main(tmp_path: Path, monkeypatch, name: str = "main") -> Path:
+def _main(tmp_path: Path, monkeypatch, name: str = "main", *, leads=()) -> Path:
     _isolate(monkeypatch, tmp_path)
     main = Path(os.path.realpath(tmp_path)) / name
     main.mkdir()
@@ -90,7 +92,46 @@ def _main(tmp_path: Path, monkeypatch, name: str = "main") -> Path:
     _write(main / ".gitignore", IGNORES)
     _git("add", "-A", cwd=main)
     _git("commit", "-q", "-m", "init", cwd=main)
+    _NATIVE_LEADS[str(main)] = leads
     return main
+
+
+class _NativeOwner:
+    """Use the real batch lifecycle for tests of Native finish/archive rules."""
+
+    def __init__(self, main, names):
+        self.main = Path(main)
+        self.batch = "fixture-finish"
+        requests = self.main.parent / "finish-requests.json"
+        requests.write_text(json.dumps([
+            dict(slug=name, request="Fixture " + name, scopes=[name + ".txt"], depends_on=[])
+            for name in names
+        ]), encoding="utf-8")
+        self.call("init", "--requests-file", requests, "--max-leads", "8")
+        claims = self.call("claim")["claims"]
+        self.claims = {item["slug"]: item for item in claims}
+
+    def call(self, *args):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT.with_name("batch_state.py")), "--repo", str(self.main),
+             "--batch-id", self.batch, *map(str, args)],
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, (args, result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    def returned(self, lead):
+        state = json.loads((self.main / "doc/harness/runtime/batches" / (self.batch + ".json")).read_text())
+        item = next(item for item in state["requests"] if item["slug"] == lead.name)
+        if item["status"] != "running":
+            return
+        control = json.loads((lead.worktree / "doc/harness/wbs" / lead.wbs_id / "WBS.control.json").read_text())
+        result = self.main.parent / (lead.name + "-result.json")
+        result.write_text(json.dumps(dict(verdict="closed", wbs_id=lead.wbs_id,
+            worktree=str(lead.worktree), branch=lead.branch, commit=lead.commit,
+            run_id=control["run_id"])), encoding="utf-8")
+        self.call("result", "--slug", lead.name, "--worker-id", "fixture-" + lead.name,
+                  "--result-file", result)
 
 
 class Lead:
@@ -100,10 +141,26 @@ class Lead:
         self.branch = f"worktree-{name}"
         self.wbs_id = f"WBS__{name}"
         self.worktree = main / ".claude/worktrees" / name
-        _git("worktree", "add", "-q", "-b", self.branch, str(self.worktree), cwd=main)
+        self.owner = None
+        if os.name == "nt":
+            key = str(main)
+            if key not in _NATIVE_OWNERS:
+                _NATIVE_OWNERS[key] = _NativeOwner(main, _NATIVE_LEADS.get(key) or [name])
+            self.owner = _NATIVE_OWNERS[key]
+        spawn = [] if self.owner is None else [self.owner.claims[name]["spawn_head"]]
+        _git("worktree", "add", "-q", "-b", self.branch, str(self.worktree), *spawn, cwd=main)
+        if self.owner is not None:
+            self.owner.call("bootstrap", "--slug", name, "--worktree", self.worktree,
+                            "--branch", self.branch)
+            self.owner.call("bind", "--slug", name, "--worker-id", "fixture-" + name,
+                            "--worktree", self.worktree, "--branch", self.branch)
         if lock:
             _git("worktree", "lock", "--reason", LOCK_REASON, str(self.worktree), cwd=main)
         _write(self.worktree / "doc/harness/wbs" / self.wbs_id / "PLAN.md", f"{name} plan\n")
+        if self.owner is not None:
+            from test_batch_state import task
+            task(self.worktree, name, closed=True)
+            _write(self.worktree / "doc/harness/wbs" / self.wbs_id / "PLAN.md", f"{name} plan\n")
         _write(
             self.worktree / "doc/harness/learnings.jsonl",
             json.dumps({"key": name, "insight": f"{name} learned"}) + "\n",
@@ -113,7 +170,7 @@ class Lead:
     def commit_files(self, files: dict, *, trailer: str | None = "own") -> str:
         for rel, text in files.items():
             _write(self.worktree / rel, text)
-        _git("add", "-A", cwd=self.worktree)
+        _git("add", "--", *files, cwd=self.worktree)
         args = ["commit", "-q", "-m", f"{self.name} work"]
         if trailer is not None:
             value = self.wbs_id if trailer == "own" else trailer
@@ -122,14 +179,48 @@ class Lead:
         self.commit = _git("rev-parse", "HEAD", cwd=self.worktree)
         return self.commit
 
-    def finish(self, *, commit: str | None = None, resume: bool = False) -> dict:
+    def finish(self, *, commit: str | None = None, resume: bool = False, checkpoint=None) -> dict:
         args = argparse.Namespace(
             worktree=str(self.worktree), branch=self.branch, wbs_id=self.wbs_id,
             commit=commit or self.commit, resume=resume,
         )
-        return mod.finish(str(self.main), args)
+        if self.owner is None:
+            return mod.finish(str(self.main), args, **({"checkpoint": checkpoint} if checkpoint else {}))
+        # The public Native entrypoint resolves the existing owner and uses its
+        # write-ahead checkpoints; fault injection still reaches this module.
+        try:
+            self.owner.returned(self)
+            if checkpoint is None:
+                return mod._finish_native_owned(str(self.main), args)
+            import copy
+            import batch_state
+            actual_finish = mod.finish
+
+            def observed_finish(repo, options, **kwargs):
+                durable = kwargs["checkpoint"]
+
+                def observed(stage, snapshot):
+                    record = durable(stage, copy.deepcopy(snapshot))
+                    if stage != "archive-pending":
+                        checkpoint(stage, snapshot)
+                    return record
+
+                kwargs["checkpoint"] = observed
+                return actual_finish(repo, options, **kwargs)
+
+            batch_state.finish_helper.finish = observed_finish
+            try:
+                return mod._finish_native_owned(str(self.main), args)
+            finally:
+                batch_state.finish_helper.finish = actual_finish
+        except Exception as exc:
+            result = mod._result(args, str(self.worktree))
+            result["reason"] = f"batch_finish failed: {type(exc).__name__}: {exc}"
+            return result
 
     def cli(self, *extra: str) -> subprocess.CompletedProcess:
+        if self.owner is not None:
+            self.owner.returned(self)
         return subprocess.run(
             [
                 sys.executable, str(SCRIPT), "--repo", str(self.main),
@@ -172,7 +263,7 @@ def _commit_on_main(main: Path, rel: str, text: str) -> str:
 
 
 def test_two_leads_integrate_in_order_on_a_linear_history(tmp_path, monkeypatch):
-    main = _main(tmp_path, monkeypatch)
+    main = _main(tmp_path, monkeypatch, leads=['a', 'b'])
     first, second = Lead(main, "a"), Lead(main, "b")
     first.commit_files({"a.txt": "a\n"})
     second.commit_files({"b.txt": "b\n"})
@@ -203,7 +294,7 @@ def test_two_leads_integrate_in_order_on_a_linear_history(tmp_path, monkeypatch)
 
 
 def test_trailer_is_reported_not_enforced(tmp_path, monkeypatch):
-    main = _main(tmp_path, monkeypatch)
+    main = _main(tmp_path, monkeypatch, leads=['bare', 'foreign', 'mixed', 'ok', 'empty'])
     bare, foreign = Lead(main, "bare"), Lead(main, "foreign")
     bare.commit_files({"bare.txt": "x\n"}, trailer=None)
     foreign.commit_files({"foreign.txt": "y\n"}, trailer="WBS__someone-else")
@@ -255,6 +346,8 @@ def test_a_dirty_lead_is_kept(tmp_path, monkeypatch):
     lead.commit_files({"d.txt": "d\n"})
     main_head = _commit_on_main(main, "other.txt", "o\n")
     for dirt in ("d.txt", "untracked.txt"):
+        if lead.owner is not None and dirt == "untracked.txt":
+            lead.owner.call("recover", "--slug", lead.name, "--worker-stopped")
         _write(lead.worktree / dirt, "uncommitted\n")
         result = lead.finish()
         assert result["status"] == "kept", result
@@ -270,14 +363,16 @@ def test_returned_commit_must_be_the_branch_tip(tmp_path, monkeypatch):
     returned = lead.commit_files({"m.txt": "1\n"})
     lead.commit_files({"m.txt": "2\n"})
     result = lead.finish(commit=returned)
-    assert result["status"] == "kept", result
-    assert "--resume" in result["reason"]
+    assert result["status"] == ("error" if lead.owner else "kept"), result
+    assert ("returned commit differs" if lead.owner else "--resume") in result["reason"]
     missing = lead.finish(commit="0" * 40)
-    assert missing["status"] == "kept" and "does not exist" in missing["reason"]
+    assert missing["status"] == ("error" if lead.owner else "kept")
+    assert ("returned commit differs" if lead.owner else "does not exist") in missing["reason"]
     assert lead.worktree.is_dir() and _tip(main, lead.branch) == lead.commit
 
 
 def test_unregistered_or_wrong_branch_worktree_is_kept(tmp_path, monkeypatch):
+    import pytest
     main = _main(tmp_path, monkeypatch)
     lead = Lead(main, "lost")
     lead.commit_files({"x.txt": "x\n"})
@@ -287,11 +382,21 @@ def test_unregistered_or_wrong_branch_worktree_is_kept(tmp_path, monkeypatch):
         worktree=str(plain), branch=lead.branch, wbs_id=lead.wbs_id,
         commit=lead.commit, resume=False,
     )
-    result = mod.finish(str(main), args)
-    assert result["status"] == "kept" and "registered" in result["reason"]
+    if lead.owner:
+        lead.owner.returned(lead)
+        with pytest.raises(mod.FinishError, match="one exact existing batch owner"):
+            mod._finish_native_owned(str(main), args)
+    else:
+        result = mod.finish(str(main), args)
+        assert result["status"] == "kept" and "registered" in result["reason"]
     args.worktree, args.branch = str(lead.worktree), "some-other-branch"
-    result = mod.finish(str(main), args)
-    assert result["status"] == "kept" and "checked out" in result["reason"]
+    if lead.owner:
+        with pytest.raises(mod.FinishError, match="one exact existing batch owner"):
+            mod._finish_native_owned(str(main), args)
+    else:
+        result = mod.finish(str(main), args)
+        assert result["status"] == "kept" and "checked out" in result["reason"]
+    assert lead.worktree.exists() and _tip(main, lead.branch) == lead.commit
 
 
 def test_dirty_main_checkout_is_ff_refused_before_any_change(tmp_path, monkeypatch):
@@ -301,7 +406,7 @@ def test_dirty_main_checkout_is_ff_refused_before_any_change(tmp_path, monkeypat
     main_head = _commit_on_main(main, "other.txt", "o\n")
     _write(main / "stray.txt", "stray\n")
     result = lead.finish()
-    assert result["status"] == "ff-refused", result
+    assert result["status"] == ("error" if lead.owner else "ff-refused"), result
     assert "main checkout is not clean" in result["reason"]
     _assert_untouched(lead, main_head)
 
@@ -315,8 +420,8 @@ def test_detached_main_head_is_ff_refused_before_any_change(tmp_path, monkeypatc
     main_head = _commit_on_main(main, "other.txt", "o\n")
     _git("checkout", "-q", "--detach", cwd=main)
     result = lead.finish()
-    assert result["status"] == "ff-refused", result
-    assert "detached HEAD" in result["reason"]
+    assert result["status"] == ("error" if lead.owner else "ff-refused"), result
+    assert ("detached or changed destination branch" if lead.owner else "detached HEAD") in result["reason"]
     _assert_untouched(lead, main_head)
     assert _git("branch", "--list", lead.branch, cwd=main) != ""
 
@@ -437,7 +542,9 @@ def test_ff_only_refusal_keeps_the_rebased_lead(tmp_path, monkeypatch):
 
     # The branch was rebased, so only --resume accepts it; it then lands.
     monkeypatch.setattr(mod, "_git", real_git)
-    assert lead.finish()["status"] == "kept"
+    assert lead.finish()["status"] == ("error" if lead.owner else "kept")
+    if lead.owner:
+        lead.owner.call("recover", "--slug", lead.name, "--worker-stopped")
     resumed = lead.finish(resume=True)
     assert resumed["status"] == "integrated", resumed
     assert (main / "l.txt").exists() and (main / "racing.txt").exists()
@@ -463,6 +570,8 @@ def test_harvest_refusal_keeps_the_worktree_with_the_integrated_tip(tmp_path, mo
     # Once the cause is fixed, a rerun finishes the already integrated lead.
     (main / "doc/harness/archive/batch/WBS__reused/PLAN.md").unlink()
     (main / "doc/harness/archive/batch/WBS__reused").rmdir()
+    if lead.owner:
+        lead.owner.call("recover", "--slug", lead.name, "--worker-stopped")
     rerun = lead.finish(resume=True)
     assert rerun["status"] == "integrated", rerun
     assert rerun["integrated_tip"] == lead.commit
@@ -497,7 +606,7 @@ def test_a_failure_after_the_fast_forward_keeps_the_integrated_tip(tmp_path, mon
 
 
 def test_unlock_only_when_locked(tmp_path, monkeypatch):
-    main = _main(tmp_path, monkeypatch)
+    main = _main(tmp_path, monkeypatch, leads=['free', 'held'])
     unlocked, locked = Lead(main, "free", lock=False), Lead(main, "held")
     unlocked.commit_files({"f.txt": "f\n"})
     locked.commit_files({"h.txt": "h\n"})
@@ -592,7 +701,10 @@ def test_resume_after_manual_conflict_resolution(tmp_path, monkeypatch):
     assert rebased != lead.commit
 
     plain = lead.finish()
-    assert plain["status"] == "kept" and "--resume" in plain["reason"]
+    assert plain["status"] == ("error" if lead.owner else "kept")
+    assert ("finish requires closed returned result" if lead.owner else "--resume") in plain["reason"]
+    if lead.owner:
+        lead.owner.call("recover", "--slug", lead.name, "--worker-stopped", "--recovery-commit", rebased)
     result = lead.finish(resume=True)
     assert result["status"] == "integrated", result
     assert result["returned_commit"] == lead.commit
@@ -606,7 +718,7 @@ def test_resume_after_manual_conflict_resolution(tmp_path, monkeypatch):
 
 
 def test_cli_prints_one_json_result_with_distinct_exit_codes(tmp_path, monkeypatch):
-    main = _main(tmp_path, monkeypatch)
+    main = _main(tmp_path, monkeypatch, leads=['clash', 'good'])
     clash = Lead(main, "clash")
     clash.commit_files({"shared.txt": "lead\n"})
     good = Lead(main, "good")
@@ -618,21 +730,27 @@ def test_cli_prints_one_json_result_with_distinct_exit_codes(tmp_path, monkeypat
     body = json.loads(integrated.stdout)
     assert body["status"] == "integrated"
     assert set(body) == set(mod._result(argparse.Namespace(
-        wbs_id="", branch="", commit="", resume=False), "")) | {"destination_ref"}
+        wbs_id="", branch="", commit="", resume=False), "")) | {"destination_ref"} | (
+            {"archive_publication"} if good.owner else set())
     assert body["destination_ref"] == "refs/heads/main"
 
     conflict = clash.cli()
     assert conflict.returncode == 4
     assert json.loads(conflict.stdout)["conflicted_paths"] == ["shared.txt"]
 
+    if clash.owner:
+        clash.owner.call("recover", "--slug", clash.name, "--worker-stopped")
     _write(clash.worktree / "wip.txt", "wip\n")
     kept = clash.cli()
     assert kept.returncode == 3 and json.loads(kept.stdout)["status"] == "kept"
     (clash.worktree / "wip.txt").unlink()
 
+    if clash.owner:
+        clash.owner.call("recover", "--slug", clash.name, "--worker-stopped")
     _write(main / "stray.txt", "x\n")
     refused = clash.cli()
-    assert refused.returncode == 5 and json.loads(refused.stdout)["status"] == "ff-refused"
+    assert refused.returncode == (1 if clash.owner else 5)
+    assert json.loads(refused.stdout)["status"] == ("error" if clash.owner else "ff-refused")
 
 
 def test_cli_usage_errors_exit_2_without_json(tmp_path, monkeypatch):
@@ -663,6 +781,8 @@ def test_unexpected_failure_reports_error_and_exit_1(tmp_path, monkeypatch, caps
     main = _main(tmp_path, monkeypatch)
     lead = Lead(main, "boom")
     lead.commit_files({"b.txt": "b\n"})
+    if lead.owner:
+        lead.owner.returned(lead)
 
     def boom(*_args, **_kwargs):
         raise ValueError("unexpected")
@@ -681,7 +801,7 @@ def test_unexpected_failure_reports_error_and_exit_1(tmp_path, monkeypatch, caps
 def test_an_identity_from_the_environment_reaches_the_rebase(tmp_path, monkeypatch):
     # Every GIT_* variable is dropped except the four identity ones: a
     # container or CI identity often comes only from the environment.
-    main = _main(tmp_path, monkeypatch)
+    main = _main(tmp_path, monkeypatch, leads=['one', 'two'])
     _git("config", "--unset", "user.name", cwd=main)
     _git("config", "--unset", "user.email", cwd=main)
     _git("config", "user.useConfigOnly", "true", cwd=main)
@@ -724,7 +844,7 @@ def test_hidden_untracked_files_refuse_before_integration(tmp_path, monkeypatch,
 
     result = lead.finish()
 
-    assert result["status"] == ("kept" if location == "lead" else "ff-refused"), result
+    assert result["status"] == ("kept" if location == "lead" else "error" if lead.owner else "ff-refused"), result
     _assert_untouched(lead, original)
     assert target.read_text() == "irreplaceable\n"
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
@@ -738,8 +858,8 @@ def test_hidden_untracked_file_created_after_harvest_survives_removal(tmp_path, 
     real_harvest = mod.batch_harvest.harvest
     target = lead.worktree / "late-untracked.txt"
 
-    def harvest_then_write(*args):
-        result = real_harvest(*args)
+    def harvest_then_write(*args, **kwargs):
+        result = real_harvest(*args, **kwargs)
         _write(target, "irreplaceable\n")
         return result
 
@@ -960,11 +1080,7 @@ def test_checkpoint_failure_stops_following_mutations_and_retains_source(
         if stage == checkpoint_stage:
             raise OSError("checkpoint persistence failed")
 
-    args = argparse.Namespace(
-        worktree=str(lead.worktree), branch=lead.branch, wbs_id=lead.wbs_id,
-        commit=lead.commit, resume=False,
-    )
-    result = mod.finish(str(main), args, checkpoint=checkpoint)
+    result = lead.finish(checkpoint=checkpoint)
 
     assert stages == ["rebase", "integrated", "harvested"][:stages.index(checkpoint_stage) + 1]
     assert result["status"] == "error", result
@@ -1000,11 +1116,7 @@ def test_checkpoint_receives_deep_copies_without_changing_successful_finish(tmp_
         if result["harvest"] is not None:
             result["harvest"].clear()
 
-    args = argparse.Namespace(
-        worktree=str(lead.worktree), branch=lead.branch, wbs_id=lead.wbs_id,
-        commit=lead.commit, resume=False,
-    )
-    result = mod.finish(str(main), args, checkpoint=checkpoint)
+    result = lead.finish(checkpoint=checkpoint)
     assert stages == ["rebase", "integrated", "harvested"]
     assert result["status"] == "integrated", result
     assert result["integrated_tip"] == _head(main) == lead.commit
@@ -1015,6 +1127,8 @@ def test_checkpoint_receives_deep_copies_without_changing_successful_finish(tmp_
 
 
 def _s1_finish_fixture(tmp_path, monkeypatch):
+    if os.name == "nt":
+        return _native_s1_finish_fixture(tmp_path, monkeypatch)
     import copy
     import test_batch_submodules as fixture
     import test_batch_state as state_fixture
@@ -1080,10 +1194,108 @@ def _s1_finish_fixture(tmp_path, monkeypatch):
 
 
 def _s1_finish(f, **overrides):
+    if "native_pool" in f:
+        return _native_s1_finish(f, overrides)
     options = dict(submodules=f["manifest"], persist_submodules=f["persist"],
                    checkpoint=f["checkpoint"], retention=f["retention"])
     options.update(overrides)
     return mod.finish(str(f["main"]), f["args"], **options)
+
+
+def _native_s1_finish_fixture(tmp_path, monkeypatch, *, bootstrap=True, lock=True, count=1,
+                              tracked_link=False, preexisting_tag=False):
+    """Bind and prepare S1 through the real owner; close only after setup."""
+    import test_batch_state as state_fixture
+    import test_batch_submodules as fixture
+    pool = state_fixture._s1_pool(tmp_path, monkeypatch, count)
+    main = pool.repo
+    path = "libs/module0"
+    _write(main / "file.txt", "initial\n")
+    _write(main / path / "file.txt", "initial\n")
+    fixture._commit(main / path, "fixture file")
+    if preexisting_tag:
+        fixture._git(main / path, "tag", "-a", "preexisting-annotated", "-m", "valuable preexisting annotation")
+    if tracked_link:
+        from test_symlink_fixture import create_symlink
+        external = tmp_path / "external"
+        external.mkdir()
+        (external / "precious").write_text("external data")
+        create_symlink(main / "external-link", external, target_is_directory=True)
+        _git("config", "core.symlinks", "true", cwd=main)
+    fixture._commit(main, "fixture outer file and topology")
+    pool.init([state_fixture._s1_request("lead", suffix="file.txt")])
+    claim = pool.claim()[0]
+    work = main / ".claude/worktrees/lead"
+    _git("worktree", "add", "-qb", "lead", str(work), claim["spawn_head"], cwd=main)
+    if tracked_link:
+        assert (work / "external-link").is_symlink()
+    if bootstrap:
+        pool.cli("bootstrap", "--slug", "lead", "--worktree", work, "--branch", "lead")
+    pool.cli("bind", "--slug", "lead", "--worker-id", "worker-lead",
+             "--worktree", work, "--branch", "lead")
+    if lock:
+        _git("worktree", "lock", "--reason", LOCK_REASON, str(work), cwd=main)
+    _write(work / path / "file.txt", "changed\n")
+    module_tip = fixture._commit(work / path, "module edit")
+    _git("add", "--", path, cwd=work)
+    _git("commit", "-qm", "module gitlink", cwd=work)
+    state = json.loads(pool.state.read_bytes())
+    item = state["requests"][0]
+
+    def owner_only(*args):
+        raise AssertionError("Native fixture callback is available only during the real finish owner")
+
+    return dict(main=main, work=work, path=path, manifest=item["submodule_manifest"],
+                module_tip=module_tip, state_path=pool.state, state=state, events=[],
+                persist=owner_only, checkpoint=owner_only, retention=item.get("retention"),
+                helper=fixture._helper(), native_pool=pool, native_returned=False,
+                args=argparse.Namespace(worktree=str(work), branch="lead", wbs_id="WBS__lead",
+                                        commit=_head(work), resume=False))
+
+
+def _native_s1_finish(f, overrides):
+    import copy
+    from types import SimpleNamespace
+    import batch_state
+    from test_batch_state import task
+    pool = f["native_pool"]
+    if not f["native_returned"]:
+        task(f["work"], "lead", closed=True)
+        pool.cli(*pool.result("lead", f["work"], "lead", "closed", "worker-lead"))
+        f["native_returned"] = True
+    actual_finish = mod.finish
+
+    def observed_finish(repo, args, **options):
+        durable_checkpoint = options["checkpoint"]
+        durable_manifest = options["persist_submodules"]
+        f["manifest"] = options["submodules"]
+
+        def checkpoint(stage, snapshot):
+            record = durable_checkpoint(stage, snapshot)
+            f["events"].append((stage, copy.deepcopy(record)))
+            return record
+
+        def persist(manifest):
+            durable_manifest(manifest)
+            f["events"].append(("manifest", copy.deepcopy(manifest)))
+
+        f.update(checkpoint=checkpoint, persist=persist)
+        options.update(checkpoint=overrides.get("checkpoint", checkpoint),
+                       persist_submodules=overrides.get("persist_submodules", persist))
+        return actual_finish(repo, args, **options)
+
+    try:
+        batch_state.finish_helper.finish = observed_finish
+        with batch_state.locked_records(str(pool.repo)) as (directory, records):
+            f["state"] = records[pool.batch]
+            return batch_state.execute(SimpleNamespace(repo=str(pool.repo), batch_id=pool.batch,
+                command="finish", slug="lead", resume=f["args"].resume), directory, records)
+    except (batch_state.Refusal, mod.batch_submodules.SubmoduleError) as exc:
+        result = mod._result(f["args"], str(f["work"]))
+        result["reason"] = str(exc)
+        return result
+    finally:
+        batch_state.finish_helper.finish = actual_finish
 
 
 def test_s1_finish_preserves_before_rebase_and_updates_before_checkpoint(tmp_path, monkeypatch):
@@ -1130,9 +1342,11 @@ def test_s1_finish_preserves_before_rebase_and_updates_before_checkpoint(tmp_pat
 
 
 def test_s1_finish_requires_both_durable_callbacks_before_mutation(tmp_path, monkeypatch):
-    f = _s1_finish_fixture(tmp_path, monkeypatch)
-    old = _head(f["main"])
     for missing in ("checkpoint", "persist_submodules"):
+        case = tmp_path / missing
+        case.mkdir()
+        f = _s1_finish_fixture(case, monkeypatch)
+        old = _head(f["main"])
         result = _s1_finish(f, **{missing: None})
         assert result["status"] != "integrated", result
         assert _head(f["main"]) == old and f["work"].exists()
@@ -1176,10 +1390,20 @@ def test_s1_finish_witness_refuses_changed_destination_and_unrelated_dirt(tmp_pa
     import copy
     f = _s1_finish_fixture(tmp_path, monkeypatch)
     helper, main, work = f["helper"], f["main"], f["work"]
-    helper.preserve(main, work, f["manifest"], f["persist"])
-    witness = helper.witness(main, work, f["manifest"], "refs/heads/main", _head(main), _head(work))
-    f["manifest"]["witness"] = witness
-    f["persist"](f["manifest"])
+    if "native_pool" in f:
+        def stop_after_witness(stage, snapshot):
+            record = f["checkpoint"](stage, snapshot)
+            if stage == "rebase":
+                raise OSError("fixture stops after the owner's durable witness")
+            return record
+
+        result = _s1_finish(f, checkpoint=stop_after_witness)
+        assert result["status"] == "error" and f["manifest"]["witness"]
+    else:
+        helper.preserve(main, work, f["manifest"], f["persist"])
+        witness = helper.witness(main, work, f["manifest"], "refs/heads/main", _head(main), _head(work))
+        f["manifest"]["witness"] = witness
+        f["persist"](f["manifest"])
     _git("merge", "--ff-only", "lead", cwd=main)
     f["args"].resume = True
     _git("checkout", "-qb", "foreign", cwd=main)
@@ -1238,8 +1462,13 @@ def test_s1_finish_stale_lead_checkout_retains_unproven_movement(tmp_path, monke
     module = f["work"] / f["path"]
     _git("reset", "--keep", f["manifest"]["modules"][0]["initial_gitlink"], cwd=module)
     old = _head(f["main"])
-    result = _s1_finish(f)
-    assert result["status"] != "integrated", result
+    if "native_pool" in f:
+        import pytest
+        with pytest.raises(AssertionError, match="module commit must be recorded in superproject gitlink"):
+            _s1_finish(f)
+    else:
+        result = _s1_finish(f)
+        assert result["status"] != "integrated", result
     assert _head(f["main"]) == old and f["work"].exists()
     assert _head(module) == f["manifest"]["modules"][0]["initial_gitlink"]
     assert _lock_reason(f["main"], f["work"]) == LOCK_REASON
@@ -1261,8 +1490,9 @@ def test_s1_finish_retains_actual_postrebase_stale_module_without_incoming_proof
     fixture._git(work, "commit", "-qm", "outer lead change", "--trailer", "Harness-WBS: WBS__lead")
     old_lead = _head(work)
     f["args"].commit = old_lead
-    f["state"]["requests"][0]["result"]["commit"] = old_lead
-    f["persist"](f["manifest"])
+    if "native_pool" not in f:
+        f["state"]["requests"][0]["result"]["commit"] = old_lead
+        f["persist"](f["manifest"])
     (main / selected / "file.txt").write_text("independent main module advance\n")
     incoming_module = fixture._commit(main / selected, "main module advance")
     fixture._git(main, "add", "--", selected)
@@ -1305,9 +1535,10 @@ def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_
     lead = Lead(main, 'partial-remove-error', lock=False)
     lead.commit_files({'change.txt': 'committed\n'})
     _git('merge', '--ff-only', lead.branch, cwd=main)
-    retention = dict(batch_id='fixture', slug='lead', spawn_head=lead.commit)
-    (lead.worktree / mod.RETENTION_MARKER).write_bytes(mod.retention_bytes(retention))
-    mod.batch_harvest.harvest(str(main), str(lead.worktree), lead.wbs_id)
+    if lead.owner is None:
+        retention = dict(batch_id='fixture', slug='lead', spawn_head=lead.commit)
+        (lead.worktree / mod.RETENTION_MARKER).write_bytes(mod.retention_bytes(retention))
+        mod.batch_harvest.harvest(str(main), str(lead.worktree), lead.wbs_id)
     real_git = mod._git
     def partial_remove(repo, *args):
         if args[:2] == ('worktree', 'remove'):
@@ -1318,13 +1549,19 @@ def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_
             return subprocess.CompletedProcess(args, 7, '', 'original Git removal detail')
         return real_git(repo, *args)
     monkeypatch.setattr(mod, '_git', partial_remove)
-    result = {'wbs_id': lead.wbs_id, 'cleanup': dict(unlocked=False, relocked=False, removed=False, branch_deleted=False)}
-    try:
-        mod._cleanup(str(main), str(lead.worktree), lead.branch, result, retention)
-        raise AssertionError('expected original removal refusal')
-    except mod.Outcome as exc:
-        assert exc.status == 'kept'
-        assert 'exit 7' in exc.reason and 'original Git removal detail' in exc.reason
-        assert 'partial residue and branch retained' in exc.reason
-        assert 'worktree kept' not in exc.reason
+    if lead.owner:
+        result = lead.finish()
+        assert result['status'] == 'kept', result
+        reason = result['reason']
+    else:
+        result = {'wbs_id': lead.wbs_id, 'cleanup': dict(unlocked=False, relocked=False, removed=False, branch_deleted=False)}
+        try:
+            mod._cleanup(str(main), str(lead.worktree), lead.branch, result, retention)
+            raise AssertionError('expected original removal refusal')
+        except mod.Outcome as exc:
+            assert exc.status == 'kept'
+            reason = exc.reason
+    assert 'exit 7' in reason and 'original Git removal detail' in reason
+    assert 'partial residue and branch retained' in reason
+    assert 'worktree kept' not in reason
     assert lead.worktree.exists() and _tip(main, lead.branch) == lead.commit

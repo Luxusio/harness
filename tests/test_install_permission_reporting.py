@@ -261,6 +261,7 @@ def test_permission_failure_names_stage_path_and_preserves_progress(tmp_path, mo
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--force", "--verbose", "--config-path", str(tmp_path / "config.toml")])
     monkeypatch.setattr(install, "CODEX_INSTALL_ROOT", tmp_path / "harness")
+    monkeypatch.setattr(install, "_host_available", lambda runtime: True)
     monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-codex"])
     monkeypatch.setattr(install, "_run", lambda *a, **k: (0, "codex 1.0.0", ""))
     monkeypatch.setattr(install, "sync_codex_payload", lambda: install.PLUGIN_CODEX_ROOT)
@@ -273,7 +274,8 @@ def test_permission_failure_names_stage_path_and_preserves_progress(tmp_path, mo
     assert install.main() == 1
     out = capsys.readouterr().out
     assert "Codex: FAILED" in out
-    assert "Codex " + stage in out and str(path) in out
+    assert "Codex " + stage in out
+    assert str(PermissionError(errno.EACCES, "Permission denied", str(path))) in out
     assert "codex 1.0.0 >= pin" in out  # Progress survives an unexpected exception.
 
 
@@ -281,6 +283,7 @@ def test_permission_failure_names_stage_path_and_preserves_progress(tmp_path, mo
 def test_compact_results_have_only_runtime_lines_and_failure_error(monkeypatch, capsys, failed):
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py"])
+    monkeypatch.setattr(install, "_host_available", lambda runtime: True)
     monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(install, "install_claude", lambda **k: install.InstallResult("claude", True, "done", ["private step"]))
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", not failed, "cache install: denied /test/path" if failed else "synchronized", ["private step"]))
@@ -294,6 +297,7 @@ def test_compact_results_have_only_runtime_lines_and_failure_error(monkeypatch, 
 def test_preview_is_not_reported_as_applied_success(monkeypatch, capsys):
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--dry-run"])
+    monkeypatch.setattr(install, "_host_available", lambda runtime: True)
     monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", True, "would install"))
     assert install.main() == 0
@@ -303,6 +307,7 @@ def test_preview_is_not_reported_as_applied_success(monkeypatch, capsys):
 def test_verbose_explicitly_shows_diagnostic_details(monkeypatch, capsys):
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--verbose"])
+    monkeypatch.setattr(install, "_host_available", lambda runtime: True)
     monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", False, "denied", ["completed phase"], repair="fix exact path"))
     assert install.main() == 1

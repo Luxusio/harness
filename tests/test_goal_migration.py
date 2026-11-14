@@ -15,6 +15,7 @@ from conftest import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 import _lib
 import goal_migration as migration
+from test_symlink_fixture import create_symlink
 
 
 def write(repo, relative, value):
@@ -350,15 +351,43 @@ def test_durable_commit_stages_retry_without_loss(tmp_path, monkeypatch, owner, 
     assert archived.read_bytes() == original
 
 
-def test_unrelated_symlink_not_traversed_but_referenced_child_refused(tmp_path, owner):
+@pytest.mark.parametrize('kind', ['symlink', pytest.param('junction', marks=pytest.mark.skipif(
+    os.name != 'nt', reason='requires an actual native Windows junction'))])
+def test_unrelated_symlink_not_traversed_but_referenced_child_refused(tmp_path, monkeypatch, owner, kind):
     row(tmp_path)
     tasks = tmp_path / "doc/harness/wbs"
     tasks.mkdir(parents=True)
-    (tasks / "WBS__unrelated").symlink_to(tmp_path / "outside", target_is_directory=True)
-    assert migration.preview(tmp_path)["status"] == "preview"
-    row(tmp_path, tasks=[dict(wbs_id="WBS__unrelated")])
-    with pytest.raises(ValueError, match="symlink"):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "WBS.json"
+    sentinel.write_bytes(b"unrelated target bytes\x00\xff")
+    link = tasks / "WBS__unrelated"
+    if kind == 'junction':
+        from test_windows_core_runtime import _junction
+        _junction(link, outside)
+    else:
+        create_symlink(link, outside, target_is_directory=True)
+    actual_read = migration._read
+    def no_unrelated_read(repo, relative, *args, **kwargs):
+        assert "WBS__unrelated/" not in relative
+        return actual_read(repo, relative, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(migration, "_read", no_unrelated_read)
+        if os.name == 'nt':
+            import _wiki_windows as native
+            actual_open = native._open
+            def no_target(path, *args, **kwargs):
+                assert not Path(path).is_relative_to(link)
+                assert not Path(path).is_relative_to(outside)
+                return actual_open(path, *args, **kwargs)
+            patch.setattr(native, '_open', no_target)
+        assert migration.preview(tmp_path)["status"] == "preview"
+    source = row(tmp_path, tasks=[dict(wbs_id="WBS__unrelated")])
+    original = source.read_bytes()
+    with pytest.raises(ValueError, match="symlink|nonlinked"):
         migration.apply(tmp_path)
+    assert sentinel.read_bytes() == b"unrelated target bytes\x00\xff"
+    assert source.read_bytes() == original and not (tmp_path / migration.MANIFEST).exists()
 
 
 def test_noncanonical_absolute_child_refused(tmp_path, owner):
@@ -558,7 +587,7 @@ def test_fd_io_refuses_writable_storage_directory(tmp_path, monkeypatch, operati
         assert source.read_bytes() == b"original"
     finally:
         if os.name == "nt":
-            _acl(source.parent)
+            _acl(source.parent, "")
         else:
             source.parent.chmod(0o700)
 

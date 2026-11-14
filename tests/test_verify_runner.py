@@ -56,7 +56,7 @@ def _main_with_in_tree_worktree(tmp: str) -> tuple[Path, Path]:
     for root, command in ((main, "echo main-checkout"), (wt, _cwd_check_command())):
         manifest = root / "doc" / "harness" / "manifest.yaml"
         manifest.parent.mkdir(parents=True)
-        rendered = json.dumps(command) if os.name == "nt" else command
+        rendered = command
         manifest.write_text(f"verify_commands:\n  - {rendered}\n", encoding="utf-8")
     return main, wt
 

@@ -86,8 +86,12 @@ def _change(work, path, text="changed\n"):
 
 
 def pytest_generate_tests(metafunc):
+    import pytest
+    posix_filename = pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain ':' or '*'")
     cases = {
-        "selected_name": ["libs/모듈", "libs/[module]*", ":(glob)module*"],
+        "selected_name": ["libs/모듈", "libs/[module]",
+                          pytest.param("libs/[module]*", marks=posix_filename),
+                          pytest.param(":(glob)module*", marks=posix_filename)],
         "bad_paths": [["../source0"], ["libs/module0/"], ["libs/./module0"],
                       ["libs/module0", "libs/module0"], ["missing"], ["file.txt"],
                       ["libs/module0/file.txt"], ["/tmp/foreign"]],
@@ -125,9 +129,12 @@ def test_selection_rejects_dirty_unpopulated_and_symlink(tmp_path, monkeypatch):
     with pytest.raises(helper.SubmoduleError):
         helper.selection(main, paths)
     module.rmdir()
+    source_file = tmp_path / "source0/file.txt"
+    before = source_file.read_bytes()
     create_symlink(module, tmp_path / "source0", target_is_directory=True)
     with pytest.raises(helper.SubmoduleError):
         helper.selection(main, paths)
+    assert module.is_symlink() and source_file.read_bytes() == before
 
 
 def test_selection_rejects_unsupported_object_stores(tmp_path, monkeypatch, store_kind):
@@ -439,7 +446,7 @@ def test_preserve_ref_inventory_limit_refuses_before_destination_writes(tmp_path
     tip = _git(module, "rev-parse", "HEAD")
     commands = "".join(f"create refs/heads/limit-{i} {tip}\n" for i in range(4097))
     result = subprocess.run(["git", "update-ref", "--stdin"], cwd=module,
-                            input=commands, text=True, capture_output=True)
+                            input=commands.encode("utf-8"), capture_output=True)
     assert result.returncode == 0, result.stderr
     destination = main / paths[0]
     before = _git(destination, "for-each-ref", "--format=%(refname) %(objectname)")
@@ -609,7 +616,7 @@ def test_preservation_fetch_failure_retains_source_and_retry_preserves_all_objec
     original = subprocess.run
     seen = []
     def fail_fetch(command, *args, **kwargs):
-        if command[0] == "git" and "fetch" in command:
+        if Path(command[0]).name.lower() in {"git", "git.exe"} and "fetch" in command:
             seen.append(command)
             return subprocess.CompletedProcess(command, 128, b"", b"injected local fetch failure")
         return original(command, *args, **kwargs)
@@ -655,7 +662,7 @@ def test_partial_pin_publication_retries_exactly_without_overwriting_published_r
         nonlocal durable
         durable = copy.deepcopy(item)
     def interrupt_second_pin(command, *args, **kwargs):
-        if command[0] == "git" and "update-ref" in command:
+        if Path(command[0]).name.lower() in {"git", "git.exe"} and "update-ref" in command:
             if published:
                 raise OSError("injected interruption after one durable pin")
             result = original(command, *args, **kwargs)
@@ -672,7 +679,7 @@ def test_partial_pin_publication_retries_exactly_without_overwriting_published_r
     ref, oid = published[0]
     assert _git(main / paths[0], "rev-parse", ref) == oid
     def disallow_rewrite(command, *args, **kwargs):
-        if command[0] == "git" and "update-ref" in command:
+        if Path(command[0]).name.lower() in {"git", "git.exe"} and "update-ref" in command:
             assert command[command.index("update-ref") + 1] != ref, "already durable pin must not be rewritten"
         return original(command, *args, **kwargs)
     with monkeypatch.context() as patch:
@@ -690,13 +697,15 @@ def test_owned_but_incomplete_clone_is_retained_without_retry_overwrite(tmp_path
     value = _manifest(helper, main, work, paths)
     durable = copy.deepcopy(value)
     original = subprocess.run
+    clone_attempted = []
     class ProcessDied(Exception):
         pass
     def persist(item):
         nonlocal durable
         durable = copy.deepcopy(item)
     def crash_clone(command, *args, **kwargs):
-        if command[0] == "git" and "clone" in command:
+        if Path(command[0]).name.lower() in {"git", "git.exe"} and "clone" in command:
+            clone_attempted.append(command)
             # A real clone creates the owned metadata; interruption precedes
             # named-branch checkout and completion publication.
             result = original(command, *args, **kwargs)
@@ -708,6 +717,7 @@ def test_owned_but_incomplete_clone_is_retained_without_retry_overwrite(tmp_path
         with pytest.raises(ProcessDied):
             helper.prepare(main, work, value, persist)
     assert durable["modules"][0]["phase"] == "owned"
+    assert len(clone_attempted) == 1
     gitdir = Path(durable["modules"][0]["private_gitdir"])
     precious = gitdir / "incomplete-clone-note"
     precious.write_bytes(b"never overwrite this interrupted clone")
@@ -764,7 +774,7 @@ def test_full_batch_state_limit_is_checked_before_any_preservation_effect(tmp_pa
     original = subprocess.run
     effects = []
     def observe(command, *args, **kwargs):
-        if command[0] == "git" and ("fetch" in command or "update-ref" in command):
+        if Path(command[0]).name.lower() in {"git", "git.exe"} and ("fetch" in command or "update-ref" in command):
             effects.append(command)
         return original(command, *args, **kwargs)
     def persist(item):

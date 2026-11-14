@@ -490,6 +490,10 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
             selected = root / name
             if log_directory == selected or selected in log_directory.parents or log_directory in selected.parents:
                 raise ValueError("diagnostic path overlaps selected inputs/outputs")
+    if os.name == 'nt' and (results_path.parent == root or results_path.parent in root.parents):
+        raise ValueError("Native verification needs a dedicated --results directory; use "
+                         "<source-root>/verification/group-results.json or a sibling output directory "
+                         "instead of placing the result file directly in the source root or its ancestors")
     # Serialize only callers writing this same result file; jobs in different
     # invocations share the resource/artifact leases below.
     keys = {}
@@ -687,9 +691,10 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                           state="executor_error", status="FAIL", returncode=None, reused=False)
             try:
                 available = set(capabilities) | {"platform:" + sys.platform}
+                base_environment = {"PATH", "SYSTEMROOT"} if os.name == 'nt' else {"PATH"}
                 if os.name == 'nt':
                     from wiki_platform import native_executable
-                    env = {key: os.environ[key] for key in set(job["spec"]["environment"]) | {"PATH"}
+                    env = {key: os.environ[key] for key in set(job["spec"]["environment"]) | base_environment
                            if key in os.environ}
                     def capability_available(capability):
                         if not capability.startswith("executable:"):
@@ -720,7 +725,7 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                     record.update(state="start_failed", error="executable unavailable")
                     return record
                 spec = dict(job["spec"])
-                spec["environment"] = sorted(set(spec["environment"]) | {"PATH"})
+                spec["environment"] = sorted(set(spec["environment"]) | base_environment)
                 spec["toolchains"] = sorted(set(spec["toolchains"]) | {executable})
                 argv = [executable, *job["argv"][1:]]
                 env = {key: os.environ[key] for key in spec["environment"] if key in os.environ}

@@ -46,7 +46,7 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
         "manifest=home/'harness/plugins/harness/.codex-plugin/plugin.json'\n"
         "version=json.loads(manifest.read_text())['version'] if manifest.exists() else None\n"
         "with log.open('a') as f:f.write(json.dumps({'argv':sys.argv[1:],'home':str(home),'config_exists':cfg.exists(),'version':version})+'\\n')\n"
-        "if sys.argv[1:]==['--version']:print('codex 0.130.0')\n"
+        "if sys.argv[1:]==['--version']:print('codex 0.167.2')\n"
         "if sys.argv[1:3]==['plugin','list']:\n"
         " versions=[p.name for p in (home/'plugins/cache/harness/harness').iterdir() if p.is_dir()]\n"
         " selected='local' if 'local' in versions else max(versions)\n"
@@ -70,7 +70,8 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
     cache = install._codex_cached_plugin_root(runtime, mirror)
     assert cache.is_dir()
     hooks = json.loads((cache / "hooks.json").read_text())["hooks"]
-    commands = [item["command"] for rows in hooks.values() for row in rows for item in row["hooks"]]
+    commands = [item["commandWindows"] if os.name == "nt" else item["command"]
+                for rows in hooks.values() for row in rows for item in row["hooks"]]
     if os.name == "nt":
         commands = [base64.b64decode(command.rsplit(" ", 1)[1]).decode("utf-16-le") for command in commands]
     assert all(str(cache) in command for command in commands)

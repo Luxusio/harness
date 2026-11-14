@@ -5,6 +5,7 @@ from test_symlink_fixture import create_symlink
 import importlib.util
 import hashlib
 import json
+import os
 import sys
 import threading
 import importlib.machinery
@@ -181,10 +182,17 @@ def test_control_writer_accepts_canonical_script_entrypoints():
         ROOT / "plugin/mcp/harness_server.py",
         ROOT / "plugin/scripts/codex_hook_registration.py",
     ):
+        arguments, payload = [], b""
+        if os.name == "nt" and script.name == "codex_hook_registration.py":
+            arguments = ["--native-operation", "authenticate"]
+            payload = json.dumps(dict(version=1, arguments=["invalid-session", "invalid-root"],
+                                      budget_seconds=1)).encode("utf-8")
         completed = subprocess.run(
-            [sys.executable, str(script)], input=b"", capture_output=True, timeout=10,
+            [sys.executable, str(script), *arguments], input=payload, capture_output=True, timeout=10,
         )
         assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+        if arguments:
+            assert json.loads(completed.stdout) == dict(value="", status={})
 
 def test_wbs_control_and_active_marker_mutators_require_runtime_owner(tmp_path):
     task = _task(tmp_path)
@@ -273,6 +281,10 @@ def test_wbs_directory_transaction_is_nested_serialized_and_control_is_mcp_owned
             original.mkdir()
     except RuntimeError as exc:
         assert "integrity" in str(exc)
+    except PermissionError as exc:
+        # Native retained directory handles deny replacement at the kernel.
+        assert os.name == "nt" and exc.winerror == 32
+        assert original.is_dir() and not displaced.exists()
     else:
         raise AssertionError("task-directory replacement must fail closed")
 

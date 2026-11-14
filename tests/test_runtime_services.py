@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import shlex
 import importlib.util
@@ -607,3 +608,63 @@ def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_pat
             module._stop_entry(recovered)
         if abandoned is not None:
             module._stop_entry(abandoned)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows owned-source closure beyond MAX_PATH")
+def test_native_deep_source_relaunches_owned_host_without_shortening_paths(tmp_path, monkeypatch):
+    module = _runtime_module(monkeypatch)
+    from native_cli import owned_python_argv
+
+    deep = tmp_path / "owned-source"
+    while len(str(deep / "plugin/scripts/runtime_services.py").encode("utf-16-le")) // 2 <= 340:
+        deep /= "native ordinary source component " + "x" * 32
+    scripts = module._platform.ensure_private_directory(deep / "plugin/scripts")
+    names = ("runtime_services.py", "native_cli.py", "wiki_platform.py", "_wiki_windows.py")
+    expected = {}
+    for name in names:
+        raw = module._platform.source_snapshot(SCRIPT.parent / name, 8 * 1024 * 1024)[0]
+        module._platform.atomic_write(scripts / name, raw)
+        expected[name] = hashlib.sha256(raw).hexdigest()
+    entry = scripts / "runtime_services.py"
+    assert len(str(entry).encode("utf-16-le")) // 2 > 340
+    assert not str(entry).startswith(("\\\\?\\", "\\\\.\\"))
+    consumer = module._platform.ensure_private_directory(tmp_path / "consumer")
+    marker = consumer / "executed.pid"
+    command = _command(sys.executable, "-c",
+                       "import os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(300)", marker)
+    manifest = consumer / "manifest.yaml"
+    manifest.write_text("runtime:\n  services:\n    - name: deep\n"
+                        f"      command: {command}\n      healthcheck: {_exists(marker)}\n"
+                        "      ready_timeout_sec: 8\n", encoding="utf-8")
+    runtime_dir = consumer / "runtime"
+
+    def run(action):
+        argv = owned_python_argv(sys.executable, entry,
+                                 ["--manifest", str(manifest), "--runtime-dir", str(runtime_dir), action])
+        assert str(entry) in argv and str(scripts / "native_cli.py") in argv
+        assert not any(arg.startswith(("\\\\?\\", "\\\\.\\")) for arg in argv)
+        return subprocess.run(argv, cwd=consumer, text=True, capture_output=True, timeout=25)
+
+    owner = None
+    try:
+        first = run("start")
+        assert first.returncode == 0 and "deep: started" in first.stdout, first.stdout + first.stderr
+        assert marker.exists() and int(marker.read_text()) > 0
+        owner = dict(module._load_state(runtime_dir)["services"]["deep"])
+        second = run("start")
+        assert second.returncode == 0 and "deep: running" in second.stdout, second.stdout + second.stderr
+        assert module._load_state(runtime_dir)["services"]["deep"]["windows_job"] == owner["windows_job"]
+        status = run("status")
+        assert status.returncode == 0 and "deep: running" in status.stdout, status.stdout + status.stderr
+        stopped = run("stop")
+        assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+        assert not module._entry_alive(owner)
+        assert not _native_process_alive(module, owner["pid"], owner["windows_created"])
+    finally:
+        if owner is None:
+            owner = module._load_state(runtime_dir).get("services", {}).get("deep")
+        if owner is not None:
+            module._stop_entry(owner)
+        assert {name: hashlib.sha256(module._platform.source_snapshot(scripts / name, 8 * 1024 * 1024)[0]).hexdigest()
+                for name in names} == expected
+        assert set(module._platform.metadata_names(scripts, max_entries=8)) == set(names)

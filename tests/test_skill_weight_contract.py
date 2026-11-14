@@ -43,7 +43,7 @@ def test_weight_lint_sees_the_codex_internal_skills_layout(tmp_path):
         skill.write_text(over_budget, encoding="utf-8")
 
     reported = {
-        str(path).split("/")[-3] for path, _n in lint.check_skill_weights(str(tmp_path))
+        Path(path).parts[-3] for path, _n in lint.check_skill_weights(str(tmp_path))
     }
     assert reported == {"skills", "internal-skills"}, reported
 
@@ -61,7 +61,7 @@ def test_compaction_does_not_add_prompt_reference_indirection():
         "plugin/skills/plan-eng-review/rubrics-threat-rollback.md",
     }
     actual = {
-        str(path.relative_to(ROOT))
+        path.relative_to(ROOT).as_posix()
         for base in (
             ROOT / "plugin/skills/plan-ceo-review",
             ROOT / "plugin/skills/plan-devex-review",

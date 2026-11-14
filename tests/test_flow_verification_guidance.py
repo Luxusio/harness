@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -21,6 +22,7 @@ import verification_target as targets
 
 
 REPO = Path(__file__).resolve().parents[1]
+BASE_PYTHON = str(Path(getattr(sys, "_base_executable", sys.executable)).resolve())
 
 
 @pytest.fixture(scope="module", params=["claude", "codex"])
@@ -60,8 +62,8 @@ def _cli_example(develop, kind, binary, command_args="command"):
         token = "<documented_safe_args>"
     example = next(block for block in blocks if token in block and block not in definitions)
     replacements = {
-        "<build_command>": f"{shlex.quote(str(binary))} build",
-        "<binary_path>": shlex.quote(str(binary)),
+        "<build_command>": f"{shlex.quote(BASE_PYTHON)} -B {shlex.quote(str(binary))} build",
+        "<binary_path>": f"{shlex.quote(BASE_PYTHON)} -B {shlex.quote(str(binary))}",
         "<documented_safe_args>": command_args,
         "<command>": "command",
     }
@@ -70,11 +72,33 @@ def _cli_example(develop, kind, binary, command_args="command"):
     return "\n".join([*definitions, example])
 
 
+def _powershell_cli_example(develop, kind, binary, command_args):
+    section = (develop / "runtime-smoke.md").read_text().split("**CLI projects", 1)[1]
+    blocks = re.findall(r"```powershell\n(.*?)```", section, re.DOTALL)
+    definitions = [block for block in blocks if "function Invoke-SmokeCapture" in block]
+    assert len(definitions) == 1
+    token = {"build": "<build_executable>", "help": "--help",
+             "command": "<documented_safe_arguments>"}[kind]
+    example = next(block for block in blocks if token in block and block not in definitions)
+    def literal(value):
+        return "'" + value.replace("'", "''") + "'"
+    prefix = ", ".join(map(literal, ["-B", str(binary)]))
+    replacements = {
+        "<build_executable>": literal(BASE_PYTHON),
+        "<build_arguments>": prefix + ", 'build'",
+        "<binary_executable>": literal(BASE_PYTHON),
+        "<binary_arguments>": prefix,
+        "<documented_safe_arguments>": ", ".join(map(literal, shlex.split(command_args))),
+    }
+    for placeholder, value in replacements.items():
+        example = example.replace(placeholder, value)
+    return "\n".join([*definitions, example])
+
+
 @pytest.fixture
 def harmless_cli(tmp_path):
-    binary = tmp_path / "harmless-cli"
+    binary = tmp_path / "harmless cli 'literal'.py"
     binary.write_text(
-        f"#!{sys.executable}\n"
         "import json, os, sys\n"
         "from pathlib import Path\n"
         "with Path(os.environ['CALL_LOG']).open('a') as log:\n"
@@ -87,14 +111,22 @@ def harmless_cli(tmp_path):
         "status = int(os.environ.get('COMMAND_STATUS', '0'))\n"
         "sys.exit(0 if '--version' in sys.argv else status)\n"
     )
-    binary.chmod(0o700)
     return binary, tmp_path / "calls.jsonl"
 
 
 def _run_cli(develop, harmless_cli, kind, *, status=0, lines=1, command_args="command", pipefail=False):
     binary, log = harmless_cli
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            shell = str(Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe")
+        command = [shell, "-NoProfile", "-NonInteractive", "-Command",
+                   _powershell_cli_example(develop, kind, binary, command_args)]
+    else:
+        command = ["bash", "-e", "-u", *(["-o", "pipefail"] if pipefail else []),
+                   "-c", _cli_example(develop, kind, binary, command_args)]
     result = subprocess.run(
-        ["bash", "-e", "-u", *(["-o", "pipefail"] if pipefail else []), "-c", _cli_example(develop, kind, binary, command_args)],
+        command,
         cwd=binary.parent, env=dict(os.environ, CALL_LOG=str(log), COMMAND_STATUS=str(status), OUTPUT_LINES=str(lines)),
         capture_output=True, text=True, timeout=15,
     )
@@ -164,7 +196,11 @@ def test_real_issued_target_still_blocks_relevant_drift_or_missing_target(tmp_pa
     elif drift == "context":
         monkeypatch.setenv("FLOW_GUIDANCE_CONTEXT", "changed")
     else:
-        (Path(target["snapshot_root"]).parent / "target.json").unlink()
+        metadata = Path(target["snapshot_root"]).parent / "target.json"
+        # The fixture deliberately removes issued metadata, which is sealed
+        # read-only. Windows requires clearing that file attribute first.
+        metadata.chmod(0o600)
+        metadata.unlink()
         with pytest.raises((OSError, ValueError)):
             targets.load_target(str(wbs_dir), target["token"])
     state = targets.applicability(str(wbs_dir), str(repo), measure=True)

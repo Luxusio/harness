@@ -6,6 +6,7 @@ import argparse
 import ctypes
 import errno
 import fnmatch
+import hashlib
 import os
 import re
 import secrets
@@ -13,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 SCRIPTS_DIR = str(Path(__file__).resolve().parent)
@@ -130,7 +132,7 @@ def safe_path(repo: Path, relative: str) -> Path:
     for part in parts:
         current = current / part
         if current.is_symlink():
-            raise ValueError(f"managed path contains symlink: {current.relative_to(repo)}")
+            raise ValueError(f"managed path contains symlink: {current.relative_to(repo).as_posix()}")
     return path
 
 
@@ -139,7 +141,7 @@ def atomic_write(path: Path, text: str, *, default_mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -230,7 +232,7 @@ def migrate_project_format(repo: Path) -> bool:
     version_original, version_mode = _leftover_snapshot(version_path)
     format_original, format_mode = _leftover_snapshot(format_path)
 
-    original = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else None
+    original = gitignore_path.read_bytes().decode("utf-8") if gitignore_path.is_file() else None
     manifest_original = manifest_path.read_bytes().decode("utf-8")  # keep CRLF for _strip_to_current
     gitignore_mode = stat.S_IMODE(gitignore_path.stat().st_mode) if gitignore_path.exists() else None
     manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode)
@@ -648,7 +650,7 @@ def operational_symlink_errors(repo: Path) -> list[str]:
             if not candidate.exists() and not candidate.is_symlink():
                 continue
             try:
-                relative = str(candidate.relative_to(repo))
+                relative = candidate.relative_to(repo).as_posix()
                 safe_path(repo, relative)
             except ValueError as exc:
                 errors.append(str(exc))
@@ -670,8 +672,23 @@ def _git_visible_path(repo: Path, rel: str) -> str | None:
     None when a symlinked parent leads outside the repository or loops: git
     never tracks or lists such a path, and check-ignore exits 128 for it.
     """
+    # Windows can report a missing child beneath a looping reparse point.
+    # Inspect existing ancestors first, so that false absence does not hide
+    # the actual WinError 1921 on the looping component itself.
+    parent = (repo / rel).parent
+    current = repo
+    for part in parent.relative_to(repo).parts:
+        current /= part
+        try:
+            current.stat()
+        except FileNotFoundError:
+            break
+        except OSError as exc:
+            if exc.errno == errno.ELOOP or os.name == "nt" and getattr(exc, "winerror", None) == 1921:
+                return None
+            raise
     try:
-        parent = (repo / rel).parent.resolve()
+        parent = parent.resolve()
         visible = parent.relative_to(repo.resolve()) / Path(rel).name
     except (OSError, RuntimeError, ValueError):  # RuntimeError: loop on Python <= 3.12
         return None
@@ -704,7 +721,7 @@ def effective_ignore_errors(repo: Path) -> list[str]:
         candidates = list(repo.glob(base)) if "*" in base else [repo / base]
         for candidate in candidates:
             if candidate.is_file() or candidate.is_symlink():
-                rel = str(candidate.relative_to(repo))
+                rel = candidate.relative_to(repo).as_posix()
                 seen = _git_visible_path(repo, rel) if ignore_only else rel
                 if seen is not None:
                     existing[seen] = rel if seen == rel else f"{rel} (git sees {seen})"
@@ -898,11 +915,58 @@ class _ProjectDocExchangeIncomplete(RuntimeError):
     """An OS publication may have moved files; preserve every remaining name."""
 
 
+@contextmanager
+def _project_doc_native_security(original):
+    """Retain a validated owner/DACL and restore it only onto an owned handle."""
+    from ctypes import wintypes
+    from wiki_platform import _native
+
+    expected = _native._security(original, "metadata")
+    owner, dacl, descriptor = _native.P(), _native.P(), _native.P()
+    code = _native._GetSecurityInfo(original, 1, 1 | 4, ctypes.byref(owner), None,
+                                    ctypes.byref(dacl), None, ctypes.byref(descriptor))
+    if code:
+        raise _native._error(code)
+    try:
+        if not owner.value or not dacl.value:
+            raise ValueError("project-document owner and DACL are required")
+        acl = ctypes.cast(dacl, ctypes.POINTER(_native.ACL)).contents
+        captured = (_native._sid_text(owner),
+                    hashlib.sha256(ctypes.string_at(dacl, acl.size)).hexdigest())
+        if captured != expected:
+            raise ValueError("project-document security changed while captured")
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        get_control = _native._bind(_native.A, "GetSecurityDescriptorControl", [
+            _native.P, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)])
+        _native._check(get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)))
+        set_security = _native._bind(_native.A, "SetSecurityInfo", [
+            wintypes.HANDLE, ctypes.c_int, wintypes.DWORD,
+            _native.P, _native.P, _native.P, _native.P], wintypes.DWORD)
+
+        def preserve(replacement):
+            # Keep inherited ACEs inherited. ReplaceFileW otherwise promotes
+            # copies to explicit grants, which survive later parent changes.
+            information = 4 | (0x80000000 if control.value & 0x1000 else 0x20000000)
+            current_owner = _native._security(replacement, "metadata")[0]
+            if current_owner != expected[0]:
+                information |= 1
+            result = set_security(replacement, 1, information,
+                                  owner if information & 1 else None, None, dacl, None)
+            if result:
+                raise _native._error(result)
+            if _native._security(replacement, "metadata") != expected:
+                raise ValueError("project-document owner or DACL changed during publication")
+
+        yield preserve
+    finally:
+        _native._LocalFree(descriptor)
+
+
 def _exchange_project_doc_native(left: str, right: str) -> None:
     """Replace atomically, retaining the displaced object for verified recovery.
 
-    ReplaceFileW preserves the destination ACL and keeps its old object at a
-    backup name. Move that exact backup handle to the vacated candidate name
+    ReplaceFileW keeps the old object at a backup name; restore and verify its
+    original owner/DACL on the retained candidate. Move the exact backup handle to the vacated candidate name
     to retain the existing exchange caller's identity/readback protocol. Never
     discard names on an uncertain OS result or overwrite a new candidate name.
     """
@@ -918,23 +982,31 @@ def _exchange_project_doc_native(left: str, right: str) -> None:
         wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p,
     ])
     with _native._walk(right.parent, secure=True, writing=True):
-        # Attribute-only retained handles authenticate both regular, nonlinked
-        # objects without conflicting with ReplaceFileW's exclusive data open.
+        # Security/attribute access retains regular, nonlinked objects without
+        # data access that conflicts with ReplaceFileW's exclusive data open.
         handles = []
         try:
             for path in (left, right):
-                handle = _native._open(path, 0, share=(
+                access = 0x40000 | 0x80000 if path == left else 0  # WRITE_DAC | WRITE_OWNER
+                handle = _native._open(path, access, share=(
                     _native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE | _native.FILE_SHARE_DELETE))
                 handles.append(handle)
                 _native._metadata_stamp(handle)
-            if not replace(_project_doc_disk_path(right), _project_doc_disk_path(left),
-                           _project_doc_disk_path(backup), 0, None, None):
-                code = ctypes.get_last_error()
-                # In particular, error 1177 can leave the displaced original
-                # at backup with the destination absent. No blind cleanup.
-                raise _ProjectDocExchangeIncomplete(
-                    f"native project-document exchange failed ({code}); files preserved at "
-                    f"{left}, {right}, {backup}; manual recovery required") from _native._error(code)
+            with _project_doc_native_security(handles[1]) as preserve_security:
+                if not replace(_project_doc_disk_path(right), _project_doc_disk_path(left),
+                               _project_doc_disk_path(backup), 0, None, None):
+                    code = ctypes.get_last_error()
+                    # In particular, error 1177 can leave the displaced original
+                    # at backup with the destination absent. No blind cleanup.
+                    raise _ProjectDocExchangeIncomplete(
+                        f"native project-document exchange failed ({code}); files preserved at "
+                        f"{left}, {right}, {backup}; manual recovery required") from _native._error(code)
+                try:
+                    preserve_security(handles[0])
+                except BaseException as exc:
+                    raise _ProjectDocExchangeIncomplete(
+                        f"native project-document security preservation failed; files preserved at "
+                        f"{left}, {right}, {backup}; manual recovery required") from exc
             try:
                 displaced = _native._open(backup, _native.DELETE,
                                           share=_native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE)
@@ -1178,7 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SETUP_ERROR: {exc}")
         return 1
 
-    gitignore_original = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else None
+    gitignore_original = gitignore_path.read_bytes().decode("utf-8") if gitignore_path.is_file() else None
     manifest_original = manifest_path.read_bytes().decode("utf-8") if manifest_path.is_file() else None
     gitignore_mode = stat.S_IMODE(gitignore_path.stat().st_mode) if gitignore_path.exists() else None
     manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode) if manifest_path.exists() else None

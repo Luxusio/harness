@@ -54,6 +54,10 @@ def pytest_generate_tests(metafunc):
     }
     for name, values in cases.items():
         if name in metafunc.fixturenames:
+            if name == 'literal_scope' and os.name == 'nt':
+                import pytest
+                values = [pytest.param(value, marks=pytest.mark.skip(reason='NTFS forbids literal * filenames; literal brackets and comma retain Native coverage'))
+                          if '*' in value else value for value in values]
             metafunc.parametrize(name, values)
 
 
@@ -316,7 +320,7 @@ def test_blocked_resume_preserves_exact_worktree_task_and_run(tmp_path, monkeypa
     assert pool.state.read_bytes() == state
     pool.cli("resume", "--slug", "a", ok=False)
     handoff = pool.cli("resume", "--slug", "a", "--worker-stopped")
-    assert str(worktree) in json.dumps(handoff)
+    assert handoff['handoff']['worktree'] == str(worktree)
     pool.cli("bind", "--slug", "a", "--worker-id", "replacement",
              "--worktree", worktree, "--branch", branch)
     pool.cli(*pool.result("a", worktree, branch), ok=False)
@@ -339,7 +343,7 @@ def test_abandon_retains_source_evidence_and_scope_across_batches(tmp_path, monk
     assert (directory / "WBS.control.json").read_bytes() == original
     assert (worktree / "a.txt").read_text() == "retained work\n"
     report = json.dumps(pool.cli("status"))
-    assert "abandon" in report and str(worktree) in report
+    assert "abandon" in report and json.dumps(str(worktree)) in report
     pool.cli("close")
     pool.batch = "next"
     pool.init([request("collision", "a.txt"), request("free")])
@@ -504,12 +508,19 @@ def test_writable_metadata_parent_refuses_mutation(tmp_path, monkeypatch):
     pool = Pool(tmp_path, monkeypatch)
     metadata = pool.repo / "doc/harness"
     original_mode = metadata.stat().st_mode & 0o777
-    metadata.chmod(0o777)
+    if os.name == 'nt':
+        from test_windows_core_runtime import _acl
+        _acl(metadata, '(A;;GW;;;WD)')
+    else:
+        metadata.chmod(0o777)
     try:
         pool.init(ok=False)
         assert not pool.state.exists()
     finally:
-        metadata.chmod(original_mode)
+        if os.name == 'nt':
+            _acl(metadata)
+        else:
+            metadata.chmod(original_mode)
 
 
 def test_stopped_running_worker_resume_pins_existing_run_without_fabricated_result(tmp_path, monkeypatch):
@@ -523,7 +534,7 @@ def test_stopped_running_worker_resume_pins_existing_run_without_fabricated_resu
     evidence = {p.name: p.read_bytes() for p in directory.iterdir()}
     pool.cli("resume", "--slug", "a", ok=False)
     handoff = pool.cli("resume", "--slug", "a", "--worker-stopped")
-    assert str(worktree) in json.dumps(handoff)
+    assert handoff['handoff']['worktree'] == str(worktree)
     assert RUN in json.dumps(handoff)
     pool.cli("bind", "--slug", "a", "--worker-id", "replacement",
              "--worktree", worktree, "--branch", branch)
@@ -626,12 +637,12 @@ def test_failed_resume_bootstrap_keeps_bound_reservation_for_stopped_retry(tmp_p
     evidence = (directory / "WBS.control.json").read_bytes()
     report = json.dumps(pool.cli("status"))
     assert pool.state.read_bytes() == before
-    assert str(worktree) in report and "resume" in report
+    assert json.dumps(str(worktree)) in report and "resume" in report
     assert "release" not in report
     pool.cli("release", "--slug", "a", "--worker-stopped", "--no-external-work", ok=False)
     pool.cli("resume", "--slug", "a", ok=False)
     handoff = pool.cli("resume", "--slug", "a", "--worker-stopped")
-    assert str(worktree) in json.dumps(handoff) and RUN in json.dumps(handoff)
+    assert handoff['handoff']['worktree'] == str(worktree) and handoff['handoff']['run_id'] == RUN
     pool.cli("bind", "--slug", "a", "--worker-id", "retry-worker",
              "--worktree", worktree, "--branch", branch)
     assert (directory / "WBS.control.json").read_bytes() == evidence
@@ -746,15 +757,27 @@ def test_zero_source_closed_task_retains_marker_until_durable_cleanup(tmp_path, 
         synced.add(path)
 
     def inspect_before_cleanup(*args, **kwargs):
-        required = {archive / "WBS.control.json", archive / "PLAN.md", archive,
-                    archive.parent, archive.parent.parent, archive.parent.parent.parent,
-                    pool.repo / "doc/harness/learnings.jsonl"}
+        required = ({'WBS.control.json', 'PLAN.md'} if os.name == 'nt' else
+                    {archive / "WBS.control.json", archive / "PLAN.md", archive,
+                     archive.parent, archive.parent.parent, archive.parent.parent.parent,
+                     pool.repo / "doc/harness/learnings.jsonl"})
         assert required <= synced, (required - synced, synced)
         assert marker.exists()
         cleaned.append(True)
         return original_cleanup(*args, **kwargs)
 
-    monkeypatch.setattr(os, "fsync", record_fsync)
+    if os.name == 'nt':
+        import wiki_platform
+        original_copy = wiki_platform.metadata_copy
+        def record_copy(source, destination, **kwargs):
+            value = original_copy(source, destination, **kwargs)
+            synced.add(Path(destination).name)
+            if sync_failure and Path(destination).name == 'WBS.control.json':
+                raise OSError('injected Native archive publication failure')
+            return value
+        monkeypatch.setattr(wiki_platform, 'metadata_copy', record_copy)
+    else:
+        monkeypatch.setattr(os, "fsync", record_fsync)
     monkeypatch.setattr(batch_finish, "_cleanup", inspect_before_cleanup)
     code = module.main(pool.argv("finish", "--slug", "a")[2:])
     output = capsys.readouterr().out
@@ -905,7 +928,9 @@ def test_native_remove_refusal_restores_retention_marker_then_retry_succeeds(tmp
     assert attempted and worktree.exists()
     assert marker.read_bytes() == marker_bytes
     assert (directory / "WBS.control.json").read_bytes() == evidence
-    assert str(worktree) in _git("worktree", "list", "--porcelain", cwd=pool.repo)
+    listing = _git("worktree", "list", "--porcelain", cwd=pool.repo)
+    assert any(line.startswith('worktree ') and os.path.realpath(line[9:]) == str(worktree)
+               for line in listing.splitlines())
     pool.cli("recover", "--slug", "a", "--worker-stopped")
     if worktree.exists():
         pool.cli("finish", "--slug", "a", "--resume")
@@ -1189,7 +1214,7 @@ def test_s1_resume_preserves_dirty_module_worker_handoff_and_identity(tmp_path, 
     _write(worktree / "libs/module0/code.txt", "uncommitted module work")
     pool.cli(*pool.result("a", worktree, branch))
     handoff = pool.cli("resume", "--slug", "a", "--worker-stopped")
-    assert str(worktree) in json.dumps(handoff)
+    assert handoff['handoff']['worktree'] == str(worktree)
     assert "worker-a" in json.dumps(handoff)
     assert "libs/module0" in json.dumps(handoff)
     pool.cli("bind", "--slug", "a", "--worker-id", s1_resume_worker, "--worktree", worktree, "--branch", branch)
@@ -1370,6 +1395,141 @@ def test_sealed_verification_source_disposal_preserves_archive(tmp_path, monkeyp
     assert not _git('branch', '--list', branch, cwd=pool.repo)
 
 
+def test_native_closed_batch_disposes_crlf_checkout_with_global_conversion_policy(tmp_path, monkeypatch):
+    import pytest
+    if os.name != 'nt':
+        pytest.skip('requires actual Native Windows text conversion and Git checkout')
+    pool = Pool(tmp_path, monkeypatch)
+    # Only this fixture's isolated Git home changes. The hardened proof must
+    # retain the effective built-in value without loading executable config.
+    (tmp_path / 'home/.gitconfig').write_text('[core]\n\tautocrlf = true\n', encoding='utf-8')
+    assert _git('config', '--get', 'core.autocrlf', cwd=pool.repo) == 'true'
+    assert not _git('config', '--local', '--get', 'core.autocrlf', cwd=pool.repo, check=False)
+    pool.init([request('a'), request('b')])
+    pool.claim()
+    first, _, _ = complete(pool)
+    second, _, _ = complete(pool, 'b', 'worker-b')
+    assert pool.cli('finish', '--slug', 'a')['status'] == 'integrated'
+    result = pool.cli('finish', '--slug', 'b')
+    assert result['status'] == 'integrated', result
+    assert not first.exists() and not second.exists()
+    assert (pool.repo / 'a.txt').read_text() == 'a\n'
+    assert (pool.repo / 'b.txt').read_text() == 'b\n'
+
+
+def test_registered_worktree_is_never_classified_as_partial_residue(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import batch_harvest
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    tree, _ = pool.bind()
+    assert not batch_harvest.ordinary_unregistered(str(pool.repo), str(tree))
+    assert (tree / '.git').is_file()
+
+
+def test_native_disposal_keeps_readonly_on_identity_or_content_mismatch(tmp_path, monkeypatch):
+    import pytest
+    if os.name != 'nt':
+        pytest.skip('requires real Native readonly attributes and retained file custody')
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import hashlib
+    import batch_harvest
+    from wiki_platform import metadata_set_readonly, safe_metadata_snapshot
+    path = tmp_path / 'retained source.bin'
+    raw = b'preserve exact reviewed bytes\x00\xff'
+    path.write_bytes(raw)
+    metadata_set_readonly(path, True)
+    before, stamp = safe_metadata_snapshot(path, 1024)
+    for digest, identity in ((hashlib.sha256(b'different').hexdigest(), stamp[:3]),
+                             (hashlib.sha256(raw).hexdigest(), (0, 0, 0))):
+        with pytest.raises(batch_harvest.HarvestError):
+            batch_harvest._prepare_native_file_disposal(path, digest, identity)
+        observed, after = safe_metadata_snapshot(path, 1024)
+        assert observed == before == raw and after == stamp and after[4] & 1
+    assert batch_harvest._prepare_native_file_disposal(path, hashlib.sha256(raw).hexdigest(), stamp[:3])
+    path.write_bytes(b'unpreserved writable source')
+    changed, writable = safe_metadata_snapshot(path, 1024)
+    with pytest.raises(batch_harvest.HarvestError):
+        batch_harvest._prepare_native_file_disposal(path, hashlib.sha256(raw).hexdigest(), writable[:3])
+    assert safe_metadata_snapshot(path, 1024) == (changed, writable)
+
+
+def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path, monkeypatch, capsys):
+    import pytest
+    if os.name != 'nt':
+        pytest.skip('requires real Native readonly attributes and Git refusal')
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import batch_state
+    import verification_target
+    from test_wbs import wbs, plan, node
+    from wiki_platform import safe_metadata_snapshot
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    tree, _, directory = complete(pool)
+    state = wbs.prepare(str(directory), plan([node()]), RUN, now=100)
+    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    target = verification_target.issue_target(str(directory), str(tree), dict(
+        inputs={'source': ['a.txt']}, commands=[], lenses=[], purpose='diagnostic'))
+    view = Path(target['snapshot_root'])
+    paths = (view / 'a.txt', view.parent / 'target.json')
+    before = {path: safe_metadata_snapshot(path, 1024 * 1024) for path in paths}
+    view_identity = (view.stat().st_dev, view.stat().st_ino)
+    assert view.stat().st_file_attributes & 1
+    actual = subprocess.run
+    attempted = []
+    def lock_at_removal(command, *args, **kwargs):
+        if 'worktree' in command and 'remove' in command:
+            attempted.append(True)
+            result = actual(['git', 'worktree', 'lock', '--reason', 'Native readonly refusal race', str(tree)],
+                            cwd=pool.repo, capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+        return actual(command, *args, **kwargs)
+    with monkeypatch.context() as boundary:
+        boundary.setattr(subprocess, 'run', lock_at_removal)
+        assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+    capsys.readouterr()
+    assert attempted and tree.exists()
+    for path in paths:
+        raw, stamp = safe_metadata_snapshot(path, 1024 * 1024)
+        assert raw == before[path][0] and stamp[:4] == before[path][1][:4] and stamp[4] & 1
+    assert (view.stat().st_dev, view.stat().st_ino) == view_identity and view.stat().st_file_attributes & 1
+    result = pool.cli('finish', '--slug', 'a', '--resume')
+    assert result['status'] == 'integrated' and not tree.exists()
+    archive = pool.repo / 'doc/harness/archive/batch/WBS__a'
+    for path in paths:
+        raw, stamp = safe_metadata_snapshot(archive / path.relative_to(directory), 1024 * 1024)
+        assert raw == before[path][0] and stamp[4] & 1
+    assert (archive / view.relative_to(directory)).stat().st_file_attributes & 1
+
+
+def test_native_finish_preserves_crlf_learning_rows_across_harvest_retry(tmp_path, monkeypatch, capsys):
+    import pytest
+    if os.name != 'nt':
+        pytest.skip('requires actual Native ledger publication with CRLF source bytes')
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import batch_finish
+    import batch_state
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    tree, _, _ = complete(pool)
+    raw = b'{"key":"Native row","insight":"preserve exact bytes"}\r\n'
+    (tree / 'doc/harness/learnings.jsonl').write_bytes(raw)
+    def pause(*args, **kwargs):
+        raise batch_finish.Outcome('kept', 'fixture pauses after actual durable harvest')
+    with monkeypatch.context() as boundary:
+        boundary.setattr(batch_finish, '_cleanup', pause)
+        assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+    capsys.readouterr()
+    ledger = pool.repo / 'doc/harness/learnings.jsonl'
+    assert ledger.read_bytes() == raw
+    result = pool.cli('finish', '--slug', 'a', '--resume')
+    assert result['status'] == 'integrated' and result['harvest']['learnings_appended'] == 0
+    assert ledger.read_bytes() == raw and not tree.exists()
+
+
 def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, capsys):
     monkeypatch.syspath_prepend(str(SCRIPT.parent))
     import batch_finish
@@ -1390,7 +1550,8 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
         # by an interrupted filesystem removal without editing Git metadata.
         _git('worktree', 'remove', str(worktree), cwd=pool.repo)
         _write(worktree / 'a.txt', 'a\n')
-        _write(directory / 'PLAN.md', original_task.decode())
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'PLAN.md').write_bytes(original_task)
         _write(ledger, lead_row)
         directory.chmod(0o500)
         raise OSError('simulated partial removal')
@@ -1407,6 +1568,8 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
     (cache / 'nested/fixture.pyc').write_bytes(b'\x00nested cache')
     for kind in ('unknown-file', 'unknown-dir', 'modified', 'exec-bit', 'symlink', 'fifo', 'archive',
                  'missing-row', 'malformed-row', 'cache-link', 'cache-git', 'cache-special', 'unknown-parent-cache'):
+        if os.name == 'nt' and kind in {'exec-bit', 'fifo', 'cache-special'}:
+            continue  # POSIX executable/FIFO cases; Native regular/link/cache guards remain exercised.
         path = worktree / 'valuable'
         if kind == 'unknown-file': path.write_text('keep me')
         elif kind == 'unknown-dir': path.mkdir()
@@ -1470,7 +1633,8 @@ def test_gitlink_residue_empty_placeholder_and_populated_refusal(tmp_path, monke
     plan_bytes = (directory / 'PLAN.md').read_bytes()
     def interrupted(repo, tree, name, result, *args, **kwargs):
         _git('worktree', 'remove', str(worktree), cwd=pool.repo)
-        _write(directory / 'PLAN.md', plan_bytes.decode())
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'PLAN.md').write_bytes(plan_bytes)
         (worktree / gitlink).mkdir(parents=True)
         (worktree / gitlink).chmod(0o500)
         directory.chmod(0o500)

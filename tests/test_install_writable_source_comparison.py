@@ -74,11 +74,15 @@ def test_a_world_writable_expected_tree_still_reaches_a_verdict(tmp_path):
     assert state in {install.PAYLOAD_SYNCHRONIZED, install.PAYLOAD_STALE}, (state, reason)
     assert "expected payload unavailable" not in reason
     # Normalization touched the installer's own copy only.
-    assert not any(
-        stat.S_IMODE(os.lstat(Path(p) / n).st_mode) & 0o022
-        for p, dirs, files in os.walk(expected)
-        for n in [*dirs, *files]
-    )
+    if os.name == "nt":
+        state, _inventory, reason = install._tree_inventory(expected)
+        assert state == install.PAYLOAD_SYNCHRONIZED, reason
+    else:
+        assert not any(
+            stat.S_IMODE(os.lstat(Path(p) / n).st_mode) & 0o022
+            for p, dirs, files in os.walk(expected)
+            for n in [*dirs, *files]
+        )
 
 
 def test_the_real_flow_converges_on_synchronized_from_a_777_source(tmp_path):
@@ -140,6 +144,7 @@ def test_no_writable_bit_from_the_source_reaches_an_inventory(tmp_path):
     assert recorded_modes and not any(mode & 0o022 for mode in recorded_modes)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode diagnosis; native ancestor ACL refusal is tested below")
 def test_a_rejected_path_component_is_named_with_its_mode(tmp_path):
     """AC4: name the component that was refused, not the path asked for."""
     install = _load_install_module()
@@ -156,6 +161,7 @@ def test_a_rejected_path_component_is_named_with_its_mode(tmp_path):
     assert str(payload) in reason, reason
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode diagnosis; native missing-target ACL refusal is tested below")
 def test_a_rejected_component_is_named_when_the_target_does_not_exist_yet(tmp_path):
     """AC4's other rejection site: the absent-target ancestor walk.
 
@@ -180,6 +186,7 @@ def test_a_rejected_component_is_named_when_the_target_does_not_exist_yet(tmp_pa
     assert str(missing) in reason, reason
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX chmod repair; native installer rejects unsafe ACLs without repair")
 def test_install_clears_a_writable_installer_created_ancestor(tmp_path, monkeypatch):
     """AC3: the default run must not stay stuck on a state `--force` cannot clear.
 
@@ -237,6 +244,7 @@ def test_install_clears_a_writable_installer_created_ancestor(tmp_path, monkeypa
     assert state == install.PAYLOAD_SYNCHRONIZED, (state, reason)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX chmod ownership boundary; native ACL refusal is tested below")
 def test_the_installer_does_not_chmod_what_it_does_not_exclusively_own(
     tmp_path, monkeypatch,
 ):
@@ -288,6 +296,7 @@ def test_the_installer_does_not_chmod_what_it_does_not_exclusively_own(
     assert str(cache) in reason and "0777" in reason, reason
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX copy2 mode inheritance; Windows chmod does not grant another account write access")
 def test_copytree_still_reproduces_the_original_hazard(tmp_path):
     """The premise, kept honest: `copy2` really does carry modes across.
 
@@ -301,3 +310,59 @@ def test_copytree_still_reproduces_the_original_hazard(tmp_path):
     shutil.copytree(source, destination)
 
     assert stat.S_IMODE(os.lstat(destination / "scripts" / "tool.py").st_mode) & 0o022
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows ACLs")
+@pytest.mark.parametrize("missing", [False, True])
+def test_native_inventory_refuses_unsafe_ancestor_without_changing_acl(tmp_path, missing):
+    from test_wiki_windows_native import _acl, win
+    install = _load_install_module()
+    ancestor = win.ensure_private_directory(tmp_path / "owned")
+    payload = ancestor / "plugins/harness"
+    if not missing:
+        _tree(payload)
+    try:
+        _acl(ancestor, "(A;;GW;;;WD)")
+        state, _inventory, reason = install._tree_inventory(payload)
+        assert state == install.PAYLOAD_ERROR and "unsafe access" in reason, reason
+        assert install._repair_from_reason(reason) is None
+        # A rejected inspection must leave the actual unsafe DACL in place.
+        with pytest.raises(ValueError, match="unsafe access"):
+            win.metadata_probe(ancestor)
+    finally:
+        _acl(ancestor, "")
+    state, _inventory, reason = install._tree_inventory(payload)
+    assert state == (install.PAYLOAD_STALE if missing else install.PAYLOAD_SYNCHRONIZED), reason
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows ACLs")
+@pytest.mark.parametrize("shared", [False, True])
+def test_native_install_refuses_unsafe_owned_or_shared_acl_without_repermissioning(tmp_path, monkeypatch, shared):
+    from test_wiki_windows_native import _acl, win
+    from unittest import mock
+    install = _load_install_module()
+    home = win.ensure_private_directory(tmp_path / "codex-home")
+    root = home / "harness"
+    _tree(root / "plugins/harness")
+    cache = _tree(home / "plugins/cache/harness/harness/0.1.0")
+    (cache / ".codex-plugin").mkdir()
+    (cache / ".codex-plugin/plugin.json").write_text('{"name":"harness","version":"0.1.0"}')
+    unsafe = home / "plugins/cache" if shared else root
+    monkeypatch.setattr(install, "CODEX_INSTALL_ROOT", root)
+    monkeypatch.setattr(install, "host_command", lambda runtime, **kwargs: [runtime])
+    monkeypatch.setattr(install, "_run", lambda *args: (0, "codex 0.167.2\n", ""))
+    try:
+        _acl(unsafe, "(A;;GW;;;WD)")
+        with mock.patch.object(install, "sync_codex_payload") as sync:
+            if shared:
+                result = install.install_codex(dry_run=False, force=False, config_path=str(home / "config.toml"))
+                assert not result.ok and "Codex cache inventory refused" in result.summary, result.summary
+                assert "unsafe access" in result.summary, result.summary
+            else:
+                with pytest.raises(PermissionError, match="unsafe Windows payload ACL or object"):
+                    install.install_codex(dry_run=False, force=False, config_path=str(home / "config.toml"))
+            sync.assert_not_called()
+        with pytest.raises(ValueError, match="unsafe access"):
+            win.metadata_probe(unsafe)
+    finally:
+        _acl(unsafe, "")

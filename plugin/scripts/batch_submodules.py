@@ -97,19 +97,22 @@ def _safe(path, *, exists=True):
     path = os.path.abspath(path)
     if os.name == "nt":
         from wiki_platform import _native
-        target = Path(path)
-        missing = []
-        while not os.path.lexists(target):
-            _require(not exists, 'missing path: ' + path)
-            missing.append(target.name)
-            target = target.parent
-        if target.is_dir():
-            with _native._walk(target, owner_neutral=True):
-                pass
-        else:
-            with _native._walk(target.parent, owner_neutral=True):
-                handle = _native._open(target, 0, owner_neutral=True, allow_hardlinks=True)
-                _native._close(handle)
+        try:
+            target = Path(path)
+            missing = []
+            while not os.path.lexists(target):
+                _require(not exists, 'missing path: ' + path)
+                missing.append(target.name)
+                target = target.parent
+            if target.is_dir():
+                with _native._walk(target, owner_neutral=True):
+                    pass
+            else:
+                with _native._walk(target.parent, owner_neutral=True):
+                    handle = _native._open(target, 0, owner_neutral=True, allow_hardlinks=True)
+                    _native._close(handle)
+        except (OSError, ValueError) as exc:
+            raise SubmoduleError('unsafe Native module path: ' + path) from exc
         return path
     _require(os.path.realpath(path) == path, 'symlink or noncanonical path')
     current = Path('/')

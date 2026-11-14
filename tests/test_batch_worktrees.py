@@ -372,7 +372,11 @@ def test_writable_creation_ancestor_refused_before_git_effect(tmp_path, monkeypa
     pool, spec = setup(tmp_path, monkeypatch)
     ancestor = pool.repo / component
     ancestor.mkdir(parents=True, exist_ok=True)
-    ancestor.chmod(0o775)
+    if os.name == 'nt':
+        from test_windows_core_runtime import _acl
+        _acl(ancestor, '(A;;GW;;;WD)')
+    else:
+        ancestor.chmod(0o775)
     before = _git('worktree', 'list', '--porcelain', cwd=pool.repo)
     with pytest.raises(batch.Refusal, match='unsafe metadata path'):
         call(pool, spec, available_slots=1)
@@ -523,7 +527,8 @@ def test_managed_dirty_original_preserves_index_and_bytes_through_disposal(tmp_p
     _write(pool.repo / 'shared.txt', 'staged user edit\n')
     _git('add', 'shared.txt', cwd=pool.repo)
     _write(pool.repo / 'shared.txt', 'unstaged user edit\n')
-    _write(pool.repo / 'notes\nlocal.txt', 'untracked user data\n')
+    note = pool.repo / ('notes 한글 local.txt' if os.name == 'nt' else 'notes\nlocal.txt')
+    _write(note, 'untracked user data\n')
     before_index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
     before_status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
     result = finish_result(pool, spec)
@@ -536,7 +541,7 @@ def test_managed_dirty_original_preserves_index_and_bytes_through_disposal(tmp_p
     assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == before_status
     assert (pool.repo / 'shared.txt').read_text() == 'unstaged user edit\n'
     assert _git('show', ':shared.txt', cwd=pool.repo) == 'staged user edit'
-    assert (pool.repo / 'notes\nlocal.txt').read_text() == 'untracked user data\n'
+    assert note.read_text() == 'untracked user data\n'
     assert not Path(result['worktree']).exists()
     assert not _git('branch', '--list', result['branch'], cwd=pool.repo)
 

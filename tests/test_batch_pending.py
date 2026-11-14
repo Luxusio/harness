@@ -62,6 +62,9 @@ def test_corrupt_or_unsafe_metadata_remains_visible(tmp_path, corrupt):
         other = tmp_path / 'other'
         path.rename(other)
         (create_symlink(path, other) if corrupt == 'symlink' else os.link(other, path))
+    elif os.name == 'nt':
+        from test_windows_core_runtime import _acl
+        _acl(path if corrupt == 'writable' else path.parent, '(A;;GW;;;WD)')
     elif corrupt == 'writable':
         path.chmod(0o666)
     else:
@@ -69,6 +72,8 @@ def test_corrupt_or_unsafe_metadata_remains_visible(tmp_path, corrupt):
     result = pending.pending(tmp_path)
     assert result['diagnostics'] == ['pending-worktree-discovery-unavailable']
     assert 'do not infer no pending work' in pending.render_prompt_block(tmp_path)
+    if os.name == 'nt' and corrupt in {'writable', 'parent'}:
+        _acl(path if corrupt == 'writable' else path.parent)
 
 
 def test_directory_budget_and_projection_budget(tmp_path):
@@ -130,8 +135,16 @@ def test_missing_safe_state_is_silent_but_unsafe_missing_leaf_is_visible(tmp_pat
     assert pending.pending(tmp_path) == dict(pools=[], diagnostics=[], truncated=False)
     directory = tmp_path / 'doc/harness/runtime'
     directory.mkdir(parents=True)
-    directory.chmod(0o777)
-    assert pending.pending(tmp_path)['diagnostics']
+    if os.name == 'nt':
+        from test_windows_core_runtime import _acl
+        _acl(directory, '(A;;GW;;;WD)')
+    else:
+        directory.chmod(0o777)
+    try:
+        assert pending.pending(tmp_path)['diagnostics']
+    finally:
+        if os.name == 'nt':
+            _acl(directory)
 
 
 def test_unbound_creation_intent_remains_discoverable_and_reserves_names(tmp_path):

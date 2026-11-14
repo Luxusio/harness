@@ -1,6 +1,7 @@
 """Public WBS worktree ownership, admission and completion with real Git."""
 
 from test_symlink_fixture import create_symlink
+import os
 from pathlib import Path
 
 try:
@@ -175,7 +176,7 @@ def test_public_dirty_original_survives_prepare_integrate_and_dispose(tmp_path, 
     shared.write_text('staged user version\n')
     _git('add', 'shared.txt', cwd=pool.repo)
     shared.write_text('unstaged user version\n')
-    note = pool.repo / 'local\nnotes.txt'
+    note = pool.repo / ('local 한글 notes.txt' if os.name == 'nt' else 'local\nnotes.txt')
     note.write_bytes(b'untracked user bytes\x00\xff')
     original_index = _git('ls-files', '--stage', '-z', cwd=pool.repo).split('\0')
     original_status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
@@ -228,7 +229,7 @@ def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, mon
     shared.write_text('staged unrelated\n')
     _git('add', 'shared.txt', cwd=pool.repo)
     shared.write_text('unstaged unrelated\n')
-    note = pool.repo / 'notes\nlocal.txt'
+    note = pool.repo / ('notes 한글 local.txt' if os.name == 'nt' else 'notes\nlocal.txt')
     note.write_bytes(b'untracked unrelated\x00\xff')
     status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
     index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
@@ -490,6 +491,8 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
     import wbs
     from test_codex_worktree_prewrite import check
     from test_prewrite_gate_dormant import _invoke_payload
+    if os.name == 'nt' and ancestor == 'writable-main':
+        pytest.skip('POSIX mode-only ancestor; Native physical foreign-write ancestor custody is tested separately')
     pool = Pool(tmp_path, monkeypatch)
     tree, directory, call = _linked_direct(pool)
     _admit_linked_direct(call)
@@ -497,6 +500,8 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
     original = pool.repo.stat()
     elevated = []
     if ancestor == 'foreign-main':
+        if os.name == 'nt':
+            pytest.skip('requires POSIX chown; actual Native foreign-write DACL rejection is covered separately')
         if os.getuid() != 0:
             sudo = shutil.which('sudo')
             if not sudo or subprocess.run([sudo, '-n', 'true'], capture_output=True).returncode:
@@ -543,6 +548,29 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
         pool.repo.chmod(original.st_mode & 0o7777)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual Native ancestor DACL enforcement')
+def test_native_linked_direct_refuses_foreign_write_ancestor_and_preserves_source(tmp_path, monkeypatch):
+    import wbs
+    from test_windows_core_runtime import _acl
+    from test_codex_worktree_prewrite import check
+    pool = Pool(tmp_path, monkeypatch)
+    tree, directory, call = _linked_direct(pool)
+    _admit_linked_direct(call)
+    source = tree / 'a.py'
+    source.write_bytes(b'uncommitted user bytes\x00\xff')
+    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    _acl(pool.repo, '(A;;GW;;;WD)')
+    try:
+        with pytest.raises((OSError, ValueError)):
+            wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')
+        assert check(tree, source).get('permissionDecision') == 'deny'
+        assert source.read_bytes() == b'uncommitted user bytes\x00\xff'
+        assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+    finally:
+        _acl(pool.repo)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX directory search mode; Native DACL authority rejection has dedicated coverage')
 def test_ordinary_linked_direct_rejects_inaccessible_batch_ancestor(tmp_path, monkeypatch):
     import os
     import wbs
@@ -593,7 +621,11 @@ def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypa
             create_symlink(batches, tmp_path / 'missing-batches', target_is_directory=True)
         else:
             batches.mkdir()
-            batches.parent.chmod(0o777)
+            if os.name == 'nt':
+                from test_windows_core_runtime import _acl
+                _acl(batches.parent, '(A;;GW;;;WD)')
+            else:
+                batches.parent.chmod(0o777)
         evidence = batches.parent if unsafe == 'writable-runtime' else batches
     content = (os.readlink(evidence) if evidence.is_symlink() else
                sorted(os.listdir(evidence)) if evidence.is_dir() else evidence.read_bytes())

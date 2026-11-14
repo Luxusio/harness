@@ -425,7 +425,7 @@ def _rebase(repo: str, worktree: str, main_head: str, result: dict, *, submodule
     raise Outcome("kept", f"the rebase onto {main_head} failed: {_detail(rebased)}{note}")
 
 
-def _removal_failure_note(repo: str, worktree: str, lock, cleanup: dict) -> str:
+def _removal_failure_note(repo: str, worktree: str, lock, cleanup: dict, prepared=()) -> str:
     """Restore a retained worktree's lock without hiding the removal failure."""
     try:
         listing = _git_out(repo, "worktree", "list", "--porcelain", "-z")
@@ -437,30 +437,40 @@ def _removal_failure_note(repo: str, worktree: str, lock, cleanup: dict) -> str:
         if not registered:
             cleanup["removed"] = not os.path.lexists(worktree)
             return "; worktree is no longer registered; " + ("partial residue and branch retained" if os.path.lexists(worktree) else "branch retained")
+        errors = batch_harvest._restore_native_disposal_files(prepared)
+        note = '; readonly restoration refused: ' + '; '.join(errors) if errors else ''
         if cleanup["unlocked"]:
             relock = ["worktree", "lock"] + (["--reason", lock] if lock else []) + [worktree]
             locked = _git(repo, *relock)
             cleanup["relocked"] = locked.returncode == 0
             if not cleanup["relocked"]:
-                return f"; it could not be locked again and is now unlocked: {_detail(locked)}"
+                return note + f"; it could not be locked again and is now unlocked: {_detail(locked)}"
     except (Exception, KeyboardInterrupt) as exc:
         return f"; could not confirm removal or restore the original lock: {type(exc).__name__}: {exc}"
-    return ""
+    return note
 
 
 def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None,
              submodules=None, proof=None) -> None:
     cleanup = result["cleanup"]
+    prepared = []
+    lock = _worktree_lock(repo, worktree)
     if submodules is None:
         try:
-            batch_harvest.thaw_verification_sources(repo, worktree, result['wbs_id'], retention, proof)
+            prepared = batch_harvest.thaw_verification_sources(repo, worktree, result['wbs_id'], retention, proof) or []
         except batch_harvest.HarvestError as exc:
             raise Outcome('kept', f'ordinary removal proof refused, worktree kept: {exc}') from exc
-    lock = _worktree_lock(repo, worktree)
     if lock is not None:
-        unlocked = _git(repo, "worktree", "unlock", worktree)
+        try:
+            unlocked = _git(repo, "worktree", "unlock", worktree)
+        except (Exception, KeyboardInterrupt) as exc:
+            errors = batch_harvest._restore_native_disposal_files(prepared)
+            note = '; readonly restoration refused: ' + '; '.join(errors) if errors else ''
+            raise FinishError(f'{type(exc).__name__}: {exc}{note}') from exc
         if unlocked.returncode != 0:
-            raise Outcome("kept", f"`git worktree unlock` failed: {_detail(unlocked)}")
+            errors = batch_harvest._restore_native_disposal_files(prepared)
+            note = '; readonly restoration refused: ' + '; '.join(errors) if errors else ''
+            raise Outcome("kept", f"`git worktree unlock` failed: {_detail(unlocked)}{note}")
         cleanup["unlocked"] = True
     try:
         if retention is not None:
@@ -493,14 +503,14 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
                     except OSError as restore_error:
                         cleanup['marker_restore_error'] = str(restore_error)
     except batch_harvest.HarvestError as exc:
-        note = _removal_failure_note(repo, worktree, lock, cleanup)
+        note = _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         raise Outcome("kept", f"S1 removal proof refused, worktree kept: {exc}{note}") from exc
     except (Exception, KeyboardInterrupt) as exc:
-        note = _removal_failure_note(repo, worktree, lock, cleanup)
+        note = _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         raise FinishError(f"{type(exc).__name__}: {exc}{note}") from exc
     if removed.returncode != 0:
         reason = f"`git worktree remove` failed (exit {removed.returncode}): {_detail(removed)}"
-        reason += _removal_failure_note(repo, worktree, lock, cleanup)
+        reason += _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         if cleanup.get('marker_restore_error'):
             reason += '; marker restoration failed: ' + cleanup['marker_restore_error']
         raise Outcome("kept", reason)

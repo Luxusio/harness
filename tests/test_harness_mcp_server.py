@@ -13,6 +13,7 @@ from types import FunctionType
 import unittest
 from pathlib import Path
 from unittest import mock
+from test_symlink_fixture import create_symlink
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVER_PATH = REPO_ROOT / "plugin" / "mcp" / "harness_server.py"
@@ -69,6 +70,14 @@ def initialize_fixture_project(repo_root):
     manifest = Path(repo_root) / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+
+
+def _marker_publication_backend():
+    """Inject at the real host's selected atomic publication boundary."""
+    if os.name == "nt":
+        import wiki_platform
+        return wiki_platform, "atomic_write"
+    return harness_lib.os, "replace"
 
 
 class HarnessMcpServerTests(unittest.TestCase):
@@ -396,7 +405,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 if not raced and Path(path).name == "WBS.control.json":
                     raced = True
                     wbs_dir.rename(displaced)
-                    wbs_dir.symlink_to(displaced, target_is_directory=True)
+                    create_symlink(wbs_dir, displaced, target_is_directory=True)
                 return real_atomic_write(path, text)
 
             with (
@@ -405,9 +414,17 @@ class HarnessMcpServerTests(unittest.TestCase):
                     harness_lib, "_atomic_text_write", side_effect=replace_wbs_dir,
                 ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "integrity"):
+                with self.assertRaises((RuntimeError, PermissionError)) as refused:
                     harness_server.handle_wbs_open({"wbs_id": "WBS__fresh-race"})
-
+            self.assertTrue(raced, "the replacement attack must be attempted")
+            if isinstance(refused.exception, PermissionError):
+                self.assertEqual(os.name, "nt")
+                self.assertEqual(refused.exception.winerror, 32)
+                self.assertTrue(wbs_dir.is_dir())
+                self.assertFalse(displaced.exists())
+            else:
+                self.assertIn("integrity", str(refused.exception))
+            self.assertFalse((wbs_dir / "WBS.control.json").exists())
             self.assertFalse((displaced / "WBS.control.json").exists())
 
     def test_task_selectors_accept_canonical_paths_and_reject_mismatch_or_symlink(self):
@@ -416,6 +433,15 @@ class HarnessMcpServerTests(unittest.TestCase):
             relative = task.relative_to(tmp).as_posix()
             self.assertEqual(
                 harness_server.canonical_wbs_dir(wbs_dir=relative, repo_root=tmp),
+                str(task),
+            )
+            native_relative = os.path.join("doc", "harness", "wbs", task.name)
+            self.assertEqual(
+                harness_server.canonical_wbs_dir(wbs_dir=native_relative, repo_root=tmp),
+                str(task),
+            )
+            self.assertEqual(
+                harness_server.canonical_wbs_dir(wbs_dir=task.as_posix(), repo_root=tmp),
                 str(task),
             )
             self.assertEqual(
@@ -428,10 +454,17 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_wbs_dir(
                     wbs_id="WBS__other", wbs_dir=str(task), repo_root=tmp
                 )
+            for invalid in (
+                "doc/harness/wbs/../wbs/" + task.name,
+                "doc/harness/wbs/./" + task.name,
+                "DOC/harness/wbs/" + task.name,
+            ):
+                with self.subTest(selector=invalid), self.assertRaises(ValueError):
+                    harness_server.canonical_wbs_dir(wbs_dir=invalid, repo_root=tmp)
             outside = Path(tmp) / "outside-target"
             outside.mkdir()
             alias = task.parent / "WBS__alias"
-            alias.symlink_to(outside, target_is_directory=True)
+            create_symlink(alias, outside, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "real directory"):
                 harness_server.canonical_wbs_dir(wbs_dir=str(alias), repo_root=tmp)
             for tool_args in (
@@ -1180,7 +1213,10 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertTrue(start.get("isError"))
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
-            self.assertFalse((wbs_dir / "REQUEST.md").is_symlink())
+            # Native custody can refuse the unsafe leaf before the POSIX
+            # create-only replacement path. Both must leave its target intact.
+            if os.name != "nt":
+                self.assertFalse((wbs_dir / "REQUEST.md").is_symlink())
             self.assertTrue((wbs_dir / "BLOCKED.md").is_symlink())
 
     def test_wbs_open_existing_task_refuses_unsafe_blocker_for_default_and_fresh(self):
@@ -1362,6 +1398,9 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._write_historical_receipts(str(wbs_dir))
             request = Path(tmp, "replacement.md")
             request.write_text("replacement\n", encoding="utf-8")
+            # Establish the normal transaction lock before comparing state.
+            with harness_server.wbs_control_transaction(str(wbs_dir)):
+                pass
 
             for extra in (
                 {"execution_mode": "micro"},
@@ -1496,18 +1535,19 @@ class HarnessMcpServerTests(unittest.TestCase):
             blocked.write_bytes(b"# BLOCKED\nexact blocker\n")
             control_before = (wbs_dir / "WBS.control.json").read_bytes()
             blocker_before = blocked.read_bytes()
-            real_replace = harness_lib.os.replace
+            backend, method = _marker_publication_backend()
+            real_replace = getattr(backend, method)
             marker_failed = False
 
             def fail_first_marker_replace(src, dst, *args, **kwargs):
                 nonlocal marker_failed
-                if not marker_failed and ".active_sessions" in str(dst):
+                if not marker_failed and ".active_sessions" in str(src if os.name == "nt" else dst):
                     marker_failed = True
                     raise OSError("marker unavailable")
                 return real_replace(src, dst, *args, **kwargs)
 
             with mock.patch.object(
-                harness_lib.os, "replace", side_effect=fail_first_marker_replace,
+                backend, method, side_effect=fail_first_marker_replace,
             ):
                 result = self._call_in_repo(
                     tmp, "wbs_open", {"wbs_id": wbs_dir.name},
@@ -1515,6 +1555,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
             self.assertTrue(result.get("isError"))
             self.assertIn("marker unavailable", result["structuredContent"]["error"])
+            self.assertTrue(marker_failed, "the selected publication backend must be exercised")
             self.assertEqual((wbs_dir / "WBS.control.json").read_bytes(), control_before)
             self.assertEqual(blocked.read_bytes(), blocker_before)
 
@@ -1745,14 +1786,15 @@ class HarnessMcpServerTests(unittest.TestCase):
                 prior_receipt = receipt.read_text(encoding="utf-8") if receipt.exists() else None
                 (Path(tmp) / ".git").mkdir()
                 prior_cwd = os.getcwd()
-                real_replace = harness_lib.os.replace
+                backend, method = _marker_publication_backend()
+                real_replace = getattr(backend, method)
 
                 def fail_marker_replace(src, dst, *args, **kwargs):
-                    if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                    if ".active_sessions" in str(src if os.name == "nt" else dst):
                         raise OSError("marker unavailable")
                     return real_replace(src, dst, *args, **kwargs)
 
-                with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker_replace):
+                with mock.patch.object(backend, method, side_effect=fail_marker_replace):
                     os.chdir(tmp)
                     try:
                         with self.assertRaisesRegex(OSError, "marker unavailable"):
@@ -1862,15 +1904,16 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "closed": False,
             })
             self._write_marker_fixture(tmp, str(wbs_dir))
-            real_replace = harness_lib.os.replace
+            backend, method = _marker_publication_backend()
+            real_replace = getattr(backend, method)
 
             def fail_marker(src, dst, *args, **kwargs):
-                if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                if ".active_sessions" in str(src if os.name == "nt" else dst):
                     raise OSError("resume marker interrupted")
                 return real_replace(src, dst, *args, **kwargs)
 
             prior_cwd = os.getcwd()
-            with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker):
+            with mock.patch.object(backend, method, side_effect=fail_marker):
                 os.chdir(tmp)
                 try:
                     with self.assertRaisesRegex(RuntimeError, "rollback was incomplete"):
@@ -1945,21 +1988,24 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
             wbs_dir = Path(tmp) / "doc/harness/wbs/WBS__marker-failure"
-            real_replace = harness_lib.os.replace
+            backend, method = _marker_publication_backend()
+            real_replace = getattr(backend, method)
 
             def fail_marker(src, dst, *args, **kwargs):
-                if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                if ".active_sessions" in str(src if os.name == "nt" else dst):
                     raise OSError("marker unavailable")
                 return real_replace(src, dst, *args, **kwargs)
 
             prior_cwd = os.getcwd()
-            with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker):
+            with mock.patch.object(backend, method, side_effect=fail_marker):
                 os.chdir(tmp)
-                with self.assertRaisesRegex(OSError, "marker unavailable"):
-                    harness_server.handle_wbs_open(
-                        {"wbs_id": "WBS__marker-failure"}
-                    )
-                os.chdir(prior_cwd)
+                try:
+                    with self.assertRaisesRegex(OSError, "marker unavailable"):
+                        harness_server.handle_wbs_open(
+                            {"wbs_id": "WBS__marker-failure"}
+                        )
+                finally:
+                    os.chdir(prior_cwd)
             self.assertFalse((wbs_dir / "TASK_BASELINE.json").exists())
             self.assertFalse((wbs_dir / "TASK_STATE.yaml").exists())
 

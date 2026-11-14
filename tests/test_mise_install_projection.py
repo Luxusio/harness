@@ -1,5 +1,6 @@
 """Every owned installed command pins the selected interpreter and identity."""
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -55,7 +56,13 @@ def test_codex_commands_and_toml_escape_selected_python(installer, monkeypatch):
     assert mcp["command"] == selected
     assert mcp["args"][:3] == (["-I", "-B", "-c"] if os.name == "nt" else ["-E", "-s", "-B"])
     for command in hook_commands(installer._codex_hooks_config(Path("/plugin"))):
-        assert shlex.split(command)[1:5] == [selected, "-E", "-s", "-B"]
+        if os.name == "nt":
+            program = base64.b64decode(command.split("-EncodedCommand ", 1)[1]).decode("utf-16-le")
+            assert "$s.FileName='" + selected.replace("'", "''") + "';" in program
+            assert "$s.Arguments='-I -B -c " in program
+            assert "exit 0" in program
+        else:
+            assert shlex.split(command)[1:5] == [selected, "-E", "-s", "-B"]
 
 
 def test_claude_projection_preserves_metadata_source_and_effective_identity(installer, tmp_path, monkeypatch):
@@ -111,6 +118,7 @@ def test_preflight_failure_precedes_any_installation_mutation(installer, monkeyp
         raise installer.MisePythonError("A valid installed mise base Python is required.") from None
     monkeypatch.setattr(installer, "select_python", refuse)
     monkeypatch.setattr(installer.shutil, "which", lambda *a, **k: "/fake/host")
+    monkeypatch.setattr(installer, "host_command", lambda runtime, **kwargs: ["modeled-" + runtime])
     for name in ("_prune_bytecode_caches", "_normalize_payload_modes", "_copytree_clean"):
         monkeypatch.setattr(installer, name, lambda *a, **k: pytest.fail("mutation before preflight"))
     target = tmp_path / "absent"
@@ -132,6 +140,7 @@ def test_preflight_failure_precedes_any_installation_mutation(installer, monkeyp
 def test_help_invalid_flags_and_no_host_need_no_mise(installer, monkeypatch, capsys, arguments, code):
     monkeypatch.setattr(installer, "select_python", lambda **k: pytest.fail("usage/no-host required mise"))
     monkeypatch.setattr(installer.shutil, "which", lambda *a, **k: None)
+    monkeypatch.setattr(installer, "_host_available", lambda runtime: False)
     monkeypatch.setattr(sys, "argv", ["install.py", *arguments])
     if arguments in (["--help"], ["--unknown"]):
         with pytest.raises(SystemExit) as captured:
@@ -144,6 +153,7 @@ def test_help_invalid_flags_and_no_host_need_no_mise(installer, monkeypatch, cap
 def test_main_resolves_before_dispatching_any_runtime(installer, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["install.py"])
     monkeypatch.setattr(installer.shutil, "which", lambda *a, **k: "/fake/host")
+    monkeypatch.setattr(installer, "_host_available", lambda runtime: True)
     def refuse(**kwargs):
         raise installer.MisePythonError("A valid installed mise base Python is required.") from None
     monkeypatch.setattr(installer, "select_python", refuse)
@@ -156,10 +166,13 @@ def test_main_resolves_before_dispatching_any_runtime(installer, monkeypatch, ca
 def test_smoke_and_claude_cli_registration_use_selected_python(installer, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(installer.subprocess, "run", lambda argv, **k: calls.append(argv) or installer.subprocess.CompletedProcess(argv, 0, "done", ""))
+    import wiki_platform
+    monkeypatch.setattr(wiki_platform, "run_bounded", lambda argv, **k: calls.append(argv) or installer.subprocess.CompletedProcess(argv, 0, b"done", b""))
     assert installer._smoke_installed_runtime(tmp_path)[0]
     flags = ["-I", "-B", "-c"] if os.name == "nt" else ["-E", "-s", "-B"]
     assert calls[0][:4] == [installer._python_cmd(), *flags]
     monkeypatch.setattr(installer.shutil, "which", lambda *a: "/fake/claude")
+    monkeypatch.setattr(installer, "host_command", lambda runtime, **kwargs: ["modeled-" + runtime])
     monkeypatch.setattr(installer, "_run", lambda argv, dry: calls.append(argv) or (0, "claude 1.0", ""))
     monkeypatch.setattr(installer, "sync_claude_payload", lambda *a: tmp_path / "plugin")
     monkeypatch.setattr(installer, "_verify_claude_selected_cache", lambda *a: (True, "verified"))

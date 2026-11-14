@@ -39,8 +39,8 @@ def _stand_in_tree(root: Path) -> Path:
     """An install-shaped tree: real files, plus bytecode the guard ignores."""
     scripts = root / "plugin" / "scripts"
     scripts.mkdir(parents=True)
-    (scripts / "background_hook.py").write_text("x = 1\n", encoding="utf-8")
-    (scripts / "_lib.py").write_text("y = 2\n", encoding="utf-8")
+    (scripts / "background_hook.py").write_bytes(b"x = 1\n")
+    (scripts / "_lib.py").write_bytes(b"y = 2\n")
     (scripts / "__pycache__").mkdir()
     (scripts / "__pycache__" / "_lib.cpython-312.pyc").write_bytes(b"\x00\x01")
     return scripts
@@ -203,7 +203,7 @@ def test_the_documented_snapshot_matches_the_fixture(tmp_path):
     tree = home / next(iter(sorted(documented)))
     scripts = tree / "plugin" / "scripts"
     scripts.mkdir(parents=True)
-    (scripts / "_lib.py").write_text("y = 2\n", encoding="utf-8")
+    (scripts / "_lib.py").write_bytes(b"y = 2\n")
     (scripts / "__pycache__").mkdir()
     (scripts / "__pycache__" / "_lib.cpython-312.pyc").write_bytes(b"\x00\x01")
 

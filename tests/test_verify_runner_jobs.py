@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -28,6 +29,15 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+@pytest.fixture(autouse=True)
+def native_lease_home(tmp_path, monkeypatch):
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        home = ensure_private_directory(tmp_path / "native-home")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+
+
 def job(root, name, code, *, kind="consumer", artifacts=(), outputs=(), resources=()):
     script = root / (name + ".py")
     script.write_text(code)
@@ -37,14 +47,98 @@ def job(root, name, code, *, kind="consumer", artifacts=(), outputs=(), resource
 
 def execute(root, jobs, generation="one", **kwargs):
     return runner.run_jobs(jobs, root, wbs_id=kwargs.pop("wbs_id", "task"), run_id=kwargs.pop("run_id", "run"),
-                           execution_generation=generation, results_path=root / "results.json",
+                           execution_generation=generation, results_path=result_path(root),
                            max_workers=2, timeout=kwargs.pop("timeout", 5), **kwargs)
+
+
+def result_path(root, name="results.json"):
+    directory = root / "verification"
+    directory.mkdir(exist_ok=True)
+    return directory / name
+
+
+def native_owner_fault(monkeypatch, root, setup):
+    """Inject a test fault in the genuine owned child entry, never its caller."""
+    import native_cli
+    marker = result_path(root).with_name("native-owner-fault-fired")
+    prefix = f"""import sys
+def _fixture_owner_trace(frame, event, argument):
+ if event == 'call' and frame.f_code.co_name == '_native_owner_main' and frame.f_code.co_filename.casefold() == {str(SCRIPTS / 'verify_runner.py')!r}.casefold():
+  assert frame.f_globals is vars(sys.modules['__main__'])
+  assert frame.f_code is frame.f_globals['_native_owner_main'].__code__
+  assert sys.argv[1:] == ['--native-job-owner']
+  sys.settrace(None)
+  frame.f_globals['_fixture_fault_marker'] = {str(marker)!r}
+  exec({setup!r}, frame.f_globals)
+ return _fixture_owner_trace
+sys.settrace(_fixture_owner_trace)
+"""
+    monkeypatch.setattr(native_cli, "_BOOTSTRAP", prefix + native_cli._BOOTSTRAP)
+    return marker
 
 
 def shared(root, artifact="built"):
     producer = job(root, "prepare", f"from pathlib import Path\nPath({artifact!r}).write_text('shared')\n", kind="producer", outputs=[artifact])
     consumers = [job(root, name, f"from pathlib import Path\nassert Path({artifact!r}).read_text() == 'shared'\nprint('consumed')\n", artifacts=[artifact]) for name in ("alpha", "beta")]
     return [producer, *consumers]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Native source-custody placement validation")
+@pytest.mark.parametrize("placement", ["source-root", "ancestor"])
+def test_native_results_require_dedicated_directory_before_execution(tmp_path, monkeypatch, placement):
+    from wiki_platform import ensure_private_directory
+    source = ensure_private_directory(tmp_path / "source" / "nested")
+    home = ensure_private_directory(tmp_path / "isolated-home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    item = job(source, "check", "from pathlib import Path\nPath('ran').touch()\n")
+    target = (source if placement == "source-root" else source.parent) / "results.json"
+    target.write_bytes(b"preserved prior result bytes")
+    identity = (target.stat().st_dev, target.stat().st_ino)
+    with pytest.raises(ValueError, match="dedicated --results directory"):
+        runner.run_jobs([item], source, wbs_id="task", run_id="run", execution_generation="one",
+                        results_path=target)
+    assert target.read_bytes() == b"preserved prior result bytes"
+    assert (target.stat().st_dev, target.stat().st_ino) == identity
+    assert not (source / "ran").exists()
+    assert not target.with_name(target.name + ".logs").exists()
+    assert not (home / ".cache" / "harness-verification-leases").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Native placement is covered by dedicated-directory validation")
+def test_posix_root_result_location_remains_supported(tmp_path):
+    item = job(tmp_path, "check", "print('root result remains supported')\n")
+    target = tmp_path / "results.json"
+    result = runner.run_jobs([item], tmp_path, wbs_id="task", run_id="run", execution_generation="one",
+                             results_path=target)
+    assert result["status"] == "PASS" and target.is_file()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Native base environment and scoped reuse")
+def test_native_systemroot_is_implicit_measured_and_other_environment_stays_scoped(tmp_path, monkeypatch):
+    systemroot = os.environ["SYSTEMROOT"]
+    assert Path(systemroot).is_dir()
+    monkeypatch.setenv("NATIVE_UNDECLARED_SECRET", "first private fixture value")
+    code = ("import json,os\nprint(json.dumps({name: os.environ.get(name) for name in "
+            "('SYSTEMROOT', 'PATH', 'NATIVE_UNDECLARED_SECRET', 'HOME', 'USERPROFILE', 'TEMP', 'TMP')}))\n")
+    item = job(tmp_path, "environment", code)
+    item["requires"] = ["executable:" + sys.executable]
+    first = execute(tmp_path, [item])["commands"][0]
+    assert first["status"] == "PASS", first
+    observed = json.loads(first["output"])
+    assert observed["SYSTEMROOT"] == systemroot and observed["PATH"] == os.environ["PATH"]
+    assert all(observed[name] is None for name in ('NATIVE_UNDECLARED_SECRET', 'HOME', 'USERPROFILE', 'TEMP', 'TMP'))
+    monkeypatch.setenv("NATIVE_UNDECLARED_SECRET", "changed private fixture value")
+    assert execute(tmp_path, [item], "undeclared-change")["commands"][0]["reused"]
+    # A real, valid case alias changes the measured environment without
+    # modifying the OS directory or executing a different toolchain image.
+    changed = systemroot.swapcase()
+    assert changed != systemroot and Path(changed).is_dir()
+    monkeypatch.setenv("SYSTEMROOT", changed)
+    refreshed = execute(tmp_path, [item], "base-environment-change")["commands"][0]
+    assert refreshed["status"] == "PASS" and not refreshed["reused"], refreshed
+    assert refreshed["context_fingerprint"] != first["context_fingerprint"]
+    assert json.loads(refreshed["output"])["SYSTEMROOT"] == changed
 
 
 def test_shared_producer_reuse_selective_changes_and_lost_artifact(tmp_path):
@@ -107,9 +201,14 @@ def test_streamed_input_budgets_refuse_commands_and_prior_success(tmp_path, monk
         item['inputs']['source_byte_limit'] = (tmp_path / 'check.py').stat().st_size + required.stat().st_size
     assert execute(tmp_path, [item])['status'] == 'PASS'
     (tmp_path / 'ran').unlink()
-    if category == 'artifact':
+    if category == 'artifact' and os.name != "nt":
         monkeypatch.setattr(wbs, 'MAX_ARTIFACT_BYTES', required.stat().st_size)
-    required.write_bytes(b'input changed')
+    if category == 'artifact' and os.name == "nt":
+        # The Native owner is another process: exercise its real byte bound.
+        with required.open('wb') as stream:
+            stream.truncate(wbs.MAX_ARTIFACT_BYTES + 1)
+    else:
+        required.write_bytes(b'input changed')
     result = execute(tmp_path, [item], 'over-budget')['commands'][0]
     assert result['status'] == 'FAIL' and result['state'] == 'executor_error'
     assert result['returncode'] is None and not result['reused']
@@ -137,7 +236,7 @@ def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     declaration.write_text(json.dumps(jobs))
     argv = [sys.executable, str(SCRIPTS / "verify_runner.py")]
     assert subprocess.run(argv + ["--help"], capture_output=True).returncode == 0
-    args = ["--jobs", str(declaration), "--root", str(view), "--results", str(tmp_path / "group-results.json"), "--wbs-id", "task", "--run-id", "run", "--generation", "one"]
+    args = ["--jobs", str(declaration), "--root", str(view), "--results", str(result_path(tmp_path, "group-results.json")), "--wbs-id", "task", "--run-id", "run", "--generation", "one"]
     proc = subprocess.run(argv + args, cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["schema"] == runner.SCHEMA
@@ -179,8 +278,10 @@ def test_producer_output_real_budget_blocks_consumer_and_reuse(tmp_path):
 
 def test_producer_output_aggregate_budget_and_bad_old_output_repair(tmp_path, monkeypatch):
     import wbs
-    monkeypatch.setattr(wbs, "MAX_ARTIFACT_BYTES", 8)
-    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('a').write_bytes(b'12345')\nPath('b').write_bytes(b'67890')\n",
+    if os.name != "nt":
+        monkeypatch.setattr(wbs, "MAX_ARTIFACT_BYTES", 8)
+    size = wbs.MAX_ARTIFACT_BYTES // 2 + 1
+    item = job(tmp_path, "prepare", f"from pathlib import Path\nfor name in ('a', 'b'):\n with Path(name).open('wb') as stream: stream.truncate({size})\n",
                kind="producer", outputs=["a", "b"], resources=["output-budget:" + str(tmp_path)])
     failed = execute(tmp_path, [item])["commands"][0]
     assert failed["status"] == "FAIL" and "artifact bytes" in failed["error"]
@@ -189,7 +290,8 @@ def test_producer_output_aggregate_budget_and_bad_old_output_repair(tmp_path, mo
     assert repaired["status"] == "PASS" and not repaired["reused"]
     assert execute(tmp_path, [item], "reuse")["commands"][0]["reused"]
     # Result, output and named resource ownership all released after failure.
-    (tmp_path / "a").write_bytes(b'oversized previous output')
+    with (tmp_path / "a").open('wb') as stream:
+        stream.truncate(wbs.MAX_ARTIFACT_BYTES + 1)
     assert execute(tmp_path, [item], "repair-again")["status"] == "PASS"
 
 
@@ -197,10 +299,25 @@ def test_producer_output_aggregate_budget_and_bad_old_output_repair(tmp_path, mo
 def test_output_observation_deadline_failure_releases_leases(tmp_path, monkeypatch, reuse):
     import verification_target as vt
     import install_verified
-    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('built').write_text('valid')\n",
+    item = job(tmp_path, "prepare", "from pathlib import Path\nPath('ran').touch()\nPath('built').write_text('valid')\n",
                kind="producer", outputs=["built"], resources=["output-deadline:" + str(tmp_path)])
     if reuse:
         assert execute(tmp_path, [item])["status"] == "PASS"
+    if os.name == "nt":
+        # Native owners have independent clocks. Use actual LockFileEx
+        # contention to prove the bounded wait releases its result ownership.
+        (tmp_path / "ran").unlink(missing_ok=True)
+        held = runner._lease({"resource:" + item["resources"][0]: True})
+        assert held is not None
+        try:
+            with pytest.raises(TimeoutError, match="job resource lease timeout"):
+                execute(tmp_path, [item], "expired", timeout=0.1)
+            assert (tmp_path / "built").exists() == reuse
+            assert not (tmp_path / "ran").exists()
+        finally:
+            runner._close_leases(held)
+        assert execute(tmp_path, [item], "recovered")["status"] == "PASS"
+        return
     original_manifest, original_read = vt._manifest, install_verified._read_payload_file
     expired = []
     def manifest(root, paths, **kwargs):
@@ -231,6 +348,23 @@ def test_producer_output_change_during_reuse_is_not_pass(tmp_path, monkeypatch):
     item = job(tmp_path, "prepare", "from pathlib import Path\nPath('built').write_text('original')\n",
                kind="producer", outputs=["built"])
     assert execute(tmp_path, [item])["status"] == "PASS"
+    if os.name == "nt":
+        marker = native_owner_fault(monkeypatch, tmp_path, """import verification_target as vt
+_fixture_manifest, _fixture_observations = vt._manifest, []
+def _fixture_changed_output(root, paths, **kwargs):
+ if kwargs.get('policy', {}).get('artifacts') == ['built']:
+  _fixture_observations.append(True)
+  if len(_fixture_observations) == 2:
+   (root / 'built').write_text('changed')
+   Path(_fixture_fault_marker).write_text('artifact changed in actual child')
+ return _fixture_manifest(root, paths, **kwargs)
+vt._manifest = _fixture_changed_output
+""")
+        failed = execute(tmp_path, [item], "changed")["commands"][0]
+        assert marker.read_text() == "artifact changed in actual child"
+        assert failed['status'] == 'FAIL' and not failed['reused']
+        assert 'outputs changed during reuse validation' in failed['error']
+        return
     original, observations = vt._manifest, []
     def manifest(root, paths, **kwargs):
         if kwargs.get('policy', {}).get('artifacts') == ['built']:
@@ -253,7 +387,7 @@ def test_producer_output_fifo_fails_without_blocking_or_retaining_leases(tmp_pat
     declaration = tmp_path / 'fifo-job.json'
     declaration.write_text(json.dumps([item]))
     argv = [sys.executable, str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
-            '--jobs', str(declaration), '--results', str(tmp_path / 'results.json'),
+            '--jobs', str(declaration), '--results', str(result_path(tmp_path)),
             '--wbs-id', 'task', '--run-id', 'run', '--generation', 'fifo', '--timeout', '5']
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=15)
     assert proc.returncode == 1, proc.stderr
@@ -291,7 +425,7 @@ def test_declarations_reject_before_execution(tmp_path, mutation):
         (tmp_path / "alpha.py").unlink()
         (tmp_path / "alpha.py").symlink_to(tmp_path / "beta.py")
     elif mutation == "result-overlap":
-        jobs[0]["outputs"] = ["results.json"]
+        jobs[0]["outputs"] = ["verification/results.json"]
     with pytest.raises(ValueError):
         execute(tmp_path, jobs)
     assert not (tmp_path / "built").is_file() or mutation == "symlink"
@@ -337,7 +471,7 @@ def test_environment_argv_outcome_and_corrupt_records(tmp_path, monkeypatch):
     item["outcome_id"] = "new-outcome"
     assert not execute(tmp_path, [item])["commands"][0]["reused"]
     for corrupt in ("{", '{"schema":"other"}', '{"commands":null}'):
-        (tmp_path / "results.json").write_text(corrupt)
+        (result_path(tmp_path)).write_text(corrupt)
         assert execute(tmp_path, [item])["status"] == "PASS"
 
 
@@ -362,7 +496,7 @@ def test_cross_process_named_leases_skip_waiters_and_release(tmp_path, ownership
         (tmp_path / "holder.py").write_text("from pathlib import Path\nimport time\nPath('built').write_text('partial')\nPath('ready').touch()\nwhile not Path('release').exists(): time.sleep(.01)\nPath('built').write_text('final')\n")
     declaration = tmp_path / "holder.json"
     declaration.write_text(json.dumps([holder]))
-    args = [sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "holder-result.json"), "--wbs-id", "other-task", "--run-id", "other-run", "--generation", "one", "--timeout", "10"]
+    args = [sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(result_path(tmp_path, "holder-result.json")), "--wbs-id", "other-task", "--run-id", "other-run", "--generation", "one", "--timeout", "10"]
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 8
@@ -426,12 +560,12 @@ def test_scoped_toolchain_probe_and_malformed_success_are_not_false_reuse(tmp_pa
     monkeypatch.setenv("UNDECLARED", "ambient-two")
     assert execute(tmp_path, [item])["commands"][0]["reused"]
     for target in ("envelope", "record"):
-        payload = json.loads((tmp_path / "results.json").read_text())
+        payload = json.loads((result_path(tmp_path)).read_text())
         if target == "envelope":
             payload.pop("execution_generation")
         else:
             payload["commands"][0]["execution_generation"] = None
-        (tmp_path / "results.json").write_text(json.dumps(payload))
+        (result_path(tmp_path)).write_text(json.dumps(payload))
         assert not execute(tmp_path, [item])["commands"][0]["reused"]
 
 
@@ -447,7 +581,7 @@ def test_producer_replacement_before_consumer_admission_is_not_accepted(tmp_path
         deadline = time.monotonic() + 10
         while True:
             try:
-                records = json.loads((tmp_path / "results.json").read_text())["commands"]
+                records = json.loads((result_path(tmp_path)).read_text())["commands"]
                 if records and records[0]["status"] == "PASS":
                     break
             except (OSError, ValueError):
@@ -455,10 +589,9 @@ def test_producer_replacement_before_consumer_admission_is_not_accepted(tmp_path
             assert time.monotonic() < deadline
             time.sleep(.01)
         other = job(tmp_path, "replace", "from pathlib import Path\nPath('built').write_text('replacement')\n", kind="producer", outputs=["built"])
-        assert runner.run_jobs([other], tmp_path, wbs_id="other", run_id="run", execution_generation="one", results_path=tmp_path / "other-results.json", timeout=5)["status"] == "PASS"
+        assert runner.run_jobs([other], tmp_path, wbs_id="other", run_id="run", execution_generation="one", results_path=result_path(tmp_path, "other-results.json"), timeout=5)["status"] == "PASS"
     finally:
-        for fd in held:
-            os.close(fd)
+        runner._close_leases(held)
         thread.join(timeout=10)
     assert not thread.is_alive()
     assert result[0]["commands"][1]["state"] == "executor_error"
@@ -480,7 +613,7 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
     declaration = tmp_path / "jobs.json"
     declaration.write_text(json.dumps([item]))
     argv = [sys.executable, "-B", str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path),
-            "--jobs", str(declaration), "--results", str(tmp_path / "result.json"),
+            "--jobs", str(declaration), "--results", str(result_path(tmp_path, "result.json")),
             "--wbs-id", "t", "--run-id", "r", "--generation", "g", "--timeout", "15"]
     if termination == "outer-timeout":
         prefix = "import sys,json;sys.path.insert(0," + repr(str(SCRIPTS)) + ");import wbs;"
@@ -517,7 +650,7 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
                 assert state.read_text().split()[2] == 'Z'
         (tmp_path / "release").touch()
         assert not (tmp_path / "finished").exists()
-        interrupted = json.loads((tmp_path / "result.json").read_text())
+        interrupted = json.loads((result_path(tmp_path, "result.json")).read_text())
         assert interrupted["status"] == "FAIL" and interrupted["successful"] == []
         assert interrupted["commands"][0]["returncode"] is None
     finally:
@@ -577,7 +710,7 @@ def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path,
         declaration = tmp_path / "jobs.json"
         declaration.write_text(json.dumps(jobs))
         arrivals, accepted, barrier_error = [], 0, None
-        with subprocess.Popen([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(tmp_path / "result.json"), "--wbs-id", "t", "--run-id", "r", "--generation", "g", "--max-workers", "2", "--timeout", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+        with subprocess.Popen([sys.executable, str(SCRIPTS / "verify_runner.py"), "--root", str(tmp_path), "--jobs", str(declaration), "--results", str(result_path(tmp_path, "result.json")), "--wbs-id", "t", "--run-id", "r", "--generation", "g", "--max-workers", "2", "--timeout", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
             try:
                 with ExitStack() as sockets:
                     connections = []
@@ -667,7 +800,7 @@ def test_full_diagnostics_preserve_early_failure_output_and_bounds(tmp_path, fai
     assert record['status'] == 'FAIL'
     reference = record['output_log']
     data = Path(reference['path']).read_bytes()
-    assert data.startswith(b'EARLY failure evidence\n') and len(data) <= 1048576
+    assert data.startswith(b'EARLY failure evidence' + os.linesep.encode()) and len(data) <= 1048576
     assert reference['bytes'] == len(data) and reference['available']
     assert reference['truncated'] == (failure == 'overflow')
     if failure == 'overflow':
@@ -677,7 +810,7 @@ def test_full_diagnostics_preserve_early_failure_output_and_bounds(tmp_path, fai
 @pytest.mark.parametrize('unsafe', ['symlink', 'source', 'output'])
 def test_diagnostic_destinations_reject_before_launch(tmp_path, unsafe):
     item = job(tmp_path, 'check', "from pathlib import Path\nPath('ran').touch()\n")
-    directory = tmp_path / 'results.json.logs'
+    directory = result_path(tmp_path).with_name('results.json.logs')
     if unsafe == 'symlink':
         elsewhere = tmp_path / 'elsewhere'
         elsewhere.mkdir()
@@ -685,10 +818,10 @@ def test_diagnostic_destinations_reject_before_launch(tmp_path, unsafe):
     elif unsafe == 'source':
         directory.mkdir()
         (directory / 'input').write_text('selected')
-        item['inputs']['source'].append(directory.name)
+        item['inputs']['source'].append(directory.relative_to(tmp_path).as_posix())
     else:
         item['kind'] = 'producer'
-        item['outputs'] = [directory.name]
+        item['outputs'] = [directory.relative_to(tmp_path).as_posix()]
     with pytest.raises(ValueError, match='diagnostic|symlink'):
         execute(tmp_path, [item])
     assert not (tmp_path / 'ran').exists()
@@ -716,7 +849,7 @@ def test_failed_diagnostics_survive_blocking_and_refresh_missing_log(tmp_path):
     assert path.read_text() == 'consumer failure\n'
     path.unlink()
     missed = execute(tmp_path, [consumer], 'miss', reuse_only=True)['commands'][0]
-    assert missed['last_execution']['output'] == 'consumer failure\n'
+    assert missed['last_execution']['output'] == 'consumer failure' + os.linesep
     assert missed['last_execution']['output_log']['available'] is False
     assert missed['status'] == 'FAIL' and missed['returncode'] is None
 
@@ -742,7 +875,7 @@ def test_log_slots_remain_bounded_across_jobs_and_runs(tmp_path):
 def test_invalid_current_results_cannot_be_repaired_by_success_copy(tmp_path, corruption):
     item = job(tmp_path, 'check', "print('valid execution')\n")
     assert execute(tmp_path, [item])['status'] == 'PASS'
-    path = tmp_path / 'results.json'
+    path = result_path(tmp_path)
     if corruption in ('returncode', 'commands', 'empty'):
         payload = json.loads(path.read_text())
         if corruption == 'returncode':
@@ -758,7 +891,7 @@ def test_invalid_current_results_cannot_be_repaired_by_success_copy(tmp_path, co
     if corruption in ('utf8', 'oversized'):
         original = path.read_bytes()
         for reuse_only in (True, False):
-            with pytest.raises(RuntimeError):
+            with pytest.raises(ValueError if os.name == "nt" else RuntimeError):
                 execute(tmp_path, [item], 'unreadable', reuse_only=reuse_only)
             assert path.read_bytes() == original
         declaration = tmp_path / 'jobs.json'
@@ -783,14 +916,14 @@ def test_retained_success_diagnostic_corruption_or_loss_stays_unavailable(tmp_pa
     (tmp_path / 'check.py').write_text("print('changed')\n")
     missed = execute(tmp_path, [item], 'miss', reuse_only=True)
     assert missed['status'] == 'FAIL' and not missed['successful'][0]['output_log']['available']
-    payload = json.loads((tmp_path / 'results.json').read_text())
+    payload = json.loads((result_path(tmp_path)).read_text())
     payload['successful'][0]['output_log'] = []
-    (tmp_path / 'results.json').write_text(json.dumps(payload))
+    (result_path(tmp_path)).write_text(json.dumps(payload))
     corrupted = execute(tmp_path, [item], 'malformed-log', reuse_only=True)
     assert corrupted['status'] == 'FAIL' and corrupted['successful'][0]['output_log'] == {'available': False}
     (tmp_path / 'check.py').write_text(original)
     reused = execute(tmp_path, [item], 'restored', reuse_only=True)['commands'][0]
-    assert reused['reused'] and reused['output'] == 'bounded summary\n'
+    assert reused['reused'] and reused['output'] == 'bounded summary' + os.linesep
     assert reused['output_log'] == {'available': False}
 
 
@@ -804,7 +937,7 @@ def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path
     declaration = tmp_path / 'jobs.json'
     declaration.write_text(json.dumps([item]))
     argv = [sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
-            '--jobs', str(declaration), '--results', str(tmp_path / 'results.json'),
+            '--jobs', str(declaration), '--results', str(result_path(tmp_path)),
             '--wbs-id', 'task', '--run-id', 'run', '--generation', 'interrupted', '--timeout', '8']
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
@@ -812,7 +945,7 @@ def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path
         while not (tmp_path / 'ready').exists():
             assert proc.poll() is None and time.monotonic() < deadline
             time.sleep(.01)
-        pending = json.loads((tmp_path / 'results.json').read_text())
+        pending = json.loads((result_path(tmp_path)).read_text())
         assert pending['status'] == 'FAIL' and pending['successful'] == []
         assert pending['commands'][0]['execution_pending']
         proc.kill()
@@ -834,13 +967,13 @@ def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path
 def test_malformed_unicode_log_reference_does_not_repeat_valid_command(tmp_path):
     item = job(tmp_path, 'check', "print('valid summary')\n")
     assert execute(tmp_path, [item])['status'] == 'PASS'
-    path = tmp_path / 'results.json'
+    path = result_path(tmp_path)
     payload = json.loads(path.read_text())
     payload['successful'][0]['output_log']['path'] = '\ud800'
     path.write_text(json.dumps(payload))
     record = execute(tmp_path, [item], 'malformed-unicode', reuse_only=True)['commands'][0]
     assert record['status'] == 'PASS' and record['reused']
-    assert record['output'] == 'valid summary\n' and record['output_log'] == {'available': False}
+    assert record['output'] == 'valid summary' + os.linesep and record['output_log'] == {'available': False}
 
 
 def test_retained_failure_survives_success_reuse_and_restart(tmp_path, monkeypatch):
@@ -862,7 +995,7 @@ def test_retained_failure_survives_success_reuse_and_restart(tmp_path, monkeypat
     assert execute(tmp_path, [item], 'reuse', reuse_only=True)['commands'][0]['reused']
     (tmp_path / 'jobs.json').write_text(json.dumps([item]))
     proc = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
-                           '--jobs', str(tmp_path / 'jobs.json'), '--results', str(tmp_path / 'results.json'),
+                           '--jobs', str(tmp_path / 'jobs.json'), '--results', str(result_path(tmp_path)),
                            '--wbs-id', 'task', '--run-id', 'run', '--generation', 'restart', '--reuse-only'],
                           capture_output=True, text=True, timeout=15)
     assert proc.returncode == 0, proc.stderr
@@ -882,14 +1015,18 @@ def test_retained_failure_budget_refuses_before_new_execution(tmp_path, monkeypa
     first = execute(tmp_path, [item])
     log = Path(first['failures'][0]['output_log']['path'])
     data = log.read_bytes()
-    if limit == 'count':
-        monkeypatch.setattr(runner, 'MAX_FAILURES', 1)
-    elif limit == 'bytes':
-        monkeypatch.setattr(runner, 'MAX_FAILURE_LOG_BYTES', 1048576 + len(data) - 1)
+    name, value = {'count': ('MAX_FAILURES', 1),
+                   'bytes': ('MAX_FAILURE_LOG_BYTES', 1048576 + len(data) - 1),
+                   'metadata': ('MAX_RESULT_BYTES', result_path(tmp_path).stat().st_size + 200)}[limit]
+    if os.name == "nt":
+        marker = native_owner_fault(monkeypatch, tmp_path,
+                                    f"{name} = {value}\nPath(_fixture_fault_marker).write_text('budget applied in child')\n")
     else:
-        monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', (tmp_path / 'results.json').stat().st_size + 200)
+        monkeypatch.setattr(runner, name, value)
     monkeypatch.setenv('CHECK_EXIT', '8')
     refused = execute(tmp_path, [item], 'refused')
+    if os.name == "nt":
+        assert marker.read_text() == 'budget applied in child'
     assert refused['status'] == 'FAIL' and 'budget' in refused['commands'][0]['error']
     assert refused['commands'][0]['returncode'] is None
     assert (tmp_path / 'executed').read_text() == '7'
@@ -912,14 +1049,14 @@ def test_retained_failure_keeps_retired_jobs_and_previous_runs(tmp_path):
 def test_retained_failure_imports_existing_version_one_fixed_slot(tmp_path):
     item = job(tmp_path, 'check', "print('original failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
-    stored = json.loads((tmp_path / 'results.json').read_text())
+    stored = json.loads((result_path(tmp_path)).read_text())
     row = stored['commands'][0]
-    fixed = tmp_path / 'results.json.logs' / (runner._digest('check') + '-attempt.log')
+    fixed = result_path(tmp_path).with_name('results.json.logs') / (runner._digest('check') + '-attempt.log')
     Path(row['output_log']['path']).rename(fixed)
     row['output_log']['path'] = str(fixed)
     row.pop('attempt_id')
     stored.pop('failures')
-    (tmp_path / 'results.json').write_text(json.dumps(stored))
+    (result_path(tmp_path)).write_text(json.dumps(stored))
     (tmp_path / 'check.py').write_text("print('new success')\n")
     second = execute(tmp_path, [item], 'new')
     assert second['status'] == 'PASS' and len(second['failures']) == 1
@@ -931,9 +1068,23 @@ def test_retained_failure_imports_existing_version_one_fixed_slot(tmp_path):
 def test_retained_failure_oversized_store_is_not_overwritten(tmp_path, monkeypatch):
     item = job(tmp_path, 'check', "print('authentic failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
-    result_file = tmp_path / 'results.json'
+    result_file = result_path(tmp_path)
     original = result_file.read_bytes()
     log = Path(first['failures'][0]['output_log']['path'])
+    if os.name == "nt":
+        with result_file.open('r+b') as stream:
+            stream.truncate(runner.MAX_RESULT_BYTES + 1)
+        with result_file.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        (tmp_path / 'check.py').write_text("from pathlib import Path\nPath('unexpected').touch()\n")
+        with pytest.raises((RuntimeError, ValueError), match='byte limit|size|large|budget'):
+            execute(tmp_path, [item], 'unreadable')
+        assert result_file.stat().st_size == runner.MAX_RESULT_BYTES + 1
+        with result_file.open('rb') as stream:
+            assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest
+        assert not (tmp_path / 'unexpected').exists()
+        assert log.read_text() == 'authentic failure\n'
+        return
     monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', len(original) - 1)
     with pytest.raises((RuntimeError, ValueError), match='(?:size|large|budget)'):
         execute(tmp_path, [item], 'unreadable')
@@ -943,7 +1094,7 @@ def test_retained_failure_oversized_store_is_not_overwritten(tmp_path, monkeypat
 
 def test_retired_task_result_store_is_not_reused_or_overwritten(tmp_path):
     item = job(tmp_path, 'check', "from pathlib import Path\nPath('executed').touch()\n")
-    path = tmp_path / 'results.json'
+    path = result_path(tmp_path)
     legacy = dict(schema=runner.SCHEMA, version=1, task_id='TASK__old', run_id='same-run',
                   failures=[dict(status='FAIL', returncode=7, output='authentic old failure')])
     path.write_text(json.dumps(legacy))
@@ -972,7 +1123,7 @@ def test_retained_failure_reserves_task_and_run_provenance_before_execution(tmp_
 def test_unreadable_result_preserves_failure_without_execution(tmp_path):
     item = job(tmp_path, 'check', "print('authentic failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
-    result_file = tmp_path / 'results.json'
+    result_file = result_path(tmp_path)
     original = result_file.read_bytes()
     log = Path(first['failures'][0]['output_log']['path'])
     (tmp_path / 'check.py').write_text("from pathlib import Path\nPath('executed').touch()\n")
@@ -991,10 +1142,10 @@ def test_unreadable_result_preserves_failure_without_execution(tmp_path):
 def test_retained_failure_imports_legacy_last_execution(tmp_path, pending, returncode, expected):
     item = job(tmp_path, 'check', "print('legacy failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
-    result_file = tmp_path / 'results.json'
+    result_file = result_path(tmp_path)
     stored = json.loads(result_file.read_text())
     record = stored['commands'][0]
-    fixed = tmp_path / 'results.json.logs' / (runner._digest('check') + '-attempt.log')
+    fixed = result_path(tmp_path).with_name('results.json.logs') / (runner._digest('check') + '-attempt.log')
     Path(record['output_log']['path']).rename(fixed)
     record['output_log']['path'] = str(fixed)
     diagnostic = {k: record[k] for k in ('execution_generation', 'state', 'returncode', 'error', 'output', 'output_log')}
@@ -1034,8 +1185,14 @@ def test_producer_manifest_budget_refuses_before_execution(tmp_path, monkeypatch
     outputs = ['/'.join(['d' * 200] * 8 + [f'{index:02d}' + 'f' * 200]) for index in range(32)]
     code = "from pathlib import Path\nPath('executed').touch()\nfor name in " + repr(outputs) + ":\n p=Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_text('built')\n"
     item = job(tmp_path, 'prepare', code, kind='producer', outputs=outputs)
-    monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', 230000)
+    if os.name == "nt":
+        marker = native_owner_fault(monkeypatch, tmp_path,
+                                    "MAX_RESULT_BYTES = 230000\nPath(_fixture_fault_marker).write_text('manifest budget applied in child')\n")
+    else:
+        monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', 230000)
     result = execute(tmp_path, [item])
+    if os.name == "nt":
+        assert marker.read_text() == 'manifest budget applied in child'
     assert result['status'] == 'FAIL' and result['commands'][0]['returncode'] is None
     assert 'budget' in result['commands'][0]['error']
     assert not (tmp_path / 'executed').exists()

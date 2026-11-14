@@ -66,6 +66,13 @@ def main() -> int:
             from document_destination import select_destination
             root = find_harness_root(cwd or os.getcwd())
             if root and is_harness_enabled_repo(root):
+                if os.name == "nt":
+                    # This banner reads stdin directly, rather than through
+                    # read_hook_input's native UTF-8 stream configuration.
+                    for stream in (sys.stdout, sys.stderr):
+                        configure = getattr(stream, "reconfigure", None)
+                        if callable(configure):
+                            configure(encoding="utf-8", errors="strict")
                 destination = select_destination(cwd=cwd or root)
                 reminder = (
                     "REQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes."

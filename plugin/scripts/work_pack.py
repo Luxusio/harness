@@ -73,7 +73,7 @@ def _integrated_proof(repo: str, data: dict, *, measure=True) -> None:
         batch.disposal_complete(repo, item)
         checkpoint = item.get("checkpoint", {})
         tip = checkpoint.get("integrated_tip")
-        archive = os.path.join(repo, "doc/harness/archive/batch", item["wbs_id"])
+        archive = os.path.join(repo, "doc", "harness", "archive", "batch", item["wbs_id"])
         batch.require(checkpoint.get("stage") == "harvested"
                       and isinstance(tip, str) and batch.finish_helper.COMMIT_RE.fullmatch(tip)
                       and checkpoint.get("branch_tip") == tip,

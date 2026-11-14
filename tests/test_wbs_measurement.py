@@ -18,7 +18,7 @@ except ModuleNotFoundError as error:
 from test_wbs import baseline, check, node, plan, progress, publish, wbs
 
 
-@pytest.mark.parametrize("kind", ["missing", "fifo", "symlink", "oversize"])
+@pytest.mark.parametrize("kind", ["missing", pytest.param("fifo", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX FIFO; Native nonregular/reparse refusal has dedicated tests")), "symlink", "oversize"])
 def test_unsafe_plan_refuses_progress_and_check_without_executing(tmp_path, kind):
     marker = tmp_path / "assertion-ran"
     assertion = dict(node(), check=[sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"])
@@ -101,12 +101,35 @@ def test_plan_snapshot_refuses_growth_and_replacement_at_real_read(tmp_path, mon
                     replacement.replace(target)
         return chunk
 
-    monkeypatch.setattr(_lib.os, "read", read)
+    if os.name == "nt":
+        import wiki_platform
+        native = wiki_platform._native
+        _, stamp = wiki_platform.safe_metadata_snapshot(target, 1024 * 1024)
+        original_chunks = native._file_chunks
+        def chunks(handle, *args, **kwargs):
+            nonlocal touched, observed
+            for chunk in original_chunks(handle, *args, **kwargs):
+                if native._identity(handle) == stamp[:3]:
+                    observed += len(chunk)
+                    if not touched:
+                        touched = True
+                        # Native retained readers can exclude the mutation itself.
+                        if mutation == "growth":
+                            with target.open("ab") as stream:
+                                stream.write(b" " * (1024 * 1024 + 1))
+                        else:
+                            replacement = td / "replacement"
+                            replacement.write_bytes(target.read_bytes())
+                            replacement.replace(target)
+                yield chunk
+        monkeypatch.setattr(native, "_file_chunks", chunks)
+    else:
+        monkeypatch.setattr(_lib.os, "read", read)
     if caller == "progress":
         result = progress(repo, td)
         assert result["status"] == "invalid" and result["percentage"] is None
     else:
-        with pytest.raises(RuntimeError, match="snapshot.*(size limit|identity changed)"):
+        with pytest.raises(RuntimeError, match="snapshot.*(size limit|identity changed|unavailable)"):
             check(repo, td)
     assert touched and observed <= 1024 * 1024 + 1
     assert (td / "WBS.json").read_bytes() == before
@@ -316,12 +339,14 @@ def test_malformed_inconclusive_marker_is_invalid(tmp_path):
 def test_file_growth_during_streaming_is_bounded(tmp_path, monkeypatch):
     repo, td = baseline(tmp_path)
     actual = wbs.hashlib.sha256
+    attempted = []
     class GrowingHash:
         def __init__(self):
             self.inner = actual()
         def update(self, chunk):
             self.inner.update(chunk)
             if chunk == b"ok":
+                attempted.append(True)
                 with (repo / "src.txt").open("ab") as stream:
                     stream.write(b"x" * 1024)
         def hexdigest(self):
@@ -330,7 +355,12 @@ def test_file_growth_during_streaming_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(wbs, "MAX_EVIDENCE_BYTES", 128)
     result = check(repo, td)
     assert result["execution"] == "not_run" and result["passed"] is None
-    assert "measurement budget" in result["measurement_error"]
+    assert attempted
+    if os.name == "nt":
+        assert "source measurement unavailable" in result["measurement_error"]
+        assert (repo / "src.txt").read_bytes() == b"ok"
+    else:
+        assert "measurement budget" in result["measurement_error"]
 
 
 def test_inconclusive_first_attempt_never_creates_passing_evidence(tmp_path, monkeypatch):

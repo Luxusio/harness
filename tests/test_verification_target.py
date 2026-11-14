@@ -13,6 +13,13 @@ from test_wbs_input_policy import public
 import verification_target as targets
 
 
+def _remove_frozen_fixture(path):
+    """Deliberately remove this test-owned sealed file, including Native readonly."""
+    if os.name == "nt":
+        path.chmod(0o600)
+    path.unlink()
+
+
 def specification(**extra):
     return dict(inputs={"source": ["src.txt"]}, commands=[[sys.executable, "-c", "print('verification')"]],
                 lenses=["review-code", "qa-cli"], **extra)
@@ -33,6 +40,19 @@ def test_owner_private_source_is_copied_without_changing_original_permissions(tm
 
     repo, td, _, _ = public(tmp_path)
     source = repo / "src.txt"
+    if os.name == "nt":
+        # Native source custody uses DACLs and readonly attributes, not Unix modes.
+        for readonly in (False, True):
+            source.chmod(0o400 if readonly else 0o600)
+            attributes = source.stat().st_file_attributes
+            target = targets.issue_target(str(td), str(repo), specification())
+            copied = Path(target["snapshot_root"]) / "src.txt"
+            assert copied.read_bytes() == source.read_bytes()
+            assert copied.stat().st_file_attributes & 1
+            assert source.stat().st_file_attributes == attributes
+            assert targets.applicability(str(td), str(repo), measure=True)["status"] == "applicable"
+        source.chmod(0o600)
+        return
     for mode in (0o600, 0o640, 0o400, 0o700, 0o750):
         source.chmod(mode)
         target = targets.issue_target(str(td), str(repo), specification())
@@ -76,7 +96,7 @@ def test_context_is_stored_only_and_missing_copy_does_not_change_current_inputs(
         assert targets.applicability(str(td), str(repo))["status"] == "unmeasured"
     path = Path(target["snapshot_root"]) / "src.txt"
     path.parent.chmod(0o700)
-    path.unlink()
+    _remove_frozen_fixture(path)
     status = targets.applicability(str(td), str(repo), measure=True)
     assert status["status"] == "applicable"
     assert status["targets"][0]["snapshot_available"] is False
@@ -141,7 +161,7 @@ def test_missing_history_does_not_prevent_independent_replacement(tmp_path):
     repo, td, _, _ = public(tmp_path)
     old = targets.issue_target(str(td), str(repo), specification())
     old_metadata = Path(old["snapshot_root"]).parent / "target.json"
-    old_metadata.unlink()
+    _remove_frozen_fixture(old_metadata)
     changed = dict(specification(), lenses=["qa-cli"], commands=[[sys.executable, "--version"]])
     replacement = targets.issue_target(str(td), str(repo), changed)
     assert replacement["token"] != old["token"]

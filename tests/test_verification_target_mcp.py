@@ -1,5 +1,6 @@
 """Public target issuance and honest lifecycle/applicability distinction."""
-from test_verification_target import specification
+from test_verification_target import specification, _remove_frozen_fixture
+from pathlib import Path
 from test_wbs_input_policy import public
 import verification_target as targets
 
@@ -10,7 +11,7 @@ def test_public_target_returns_persistent_frozen_view_and_context_does_not_measu
     assert not result.get("isError"), result
     target = result["structuredContent"]["target"]
     assert target["run_id"] == opened["run_id"]
-    assert "/work/verification-targets/" in target["snapshot_root"]
+    assert Path(target["snapshot_root"]).parent.parent == td / "work/verification-targets"
     context = call("context")["structuredContent"]["context"]
     assert context["verification_targets"]["status"] == "unmeasured"
     assert targets.applicability(str(td), str(repo), measure=True)["status"] == "applicable"
@@ -39,7 +40,7 @@ def test_authentic_lifecycle_selection_and_target_gate_reuse(tmp_path):
     # Missing copies are regenerable; present tampered bytes remain invalid.
     source = __import__("pathlib").Path(issued["snapshot_root"])
     source.chmod(0o700)
-    (source / "src.txt").unlink()
+    _remove_frozen_fixture(source / "src.txt")
     assert _verification_state(td)[0]
     restored = targets.ensure_snapshot(str(td), issued["token"], str(repo))
     assert restored["token"] == issued["token"] and restored["snapshot_root"] != str(source)
@@ -115,7 +116,7 @@ def test_retired_lens_missing_metadata_is_not_read_until_reintroduced(tmp_path, 
     old = call('target', target=dict(specification(), lenses=all_lenses))['structuredContent']['target']
     assert not call('plan', plan=plan, required_lenses=current).get('isError')
     assert not call('target', target=dict(specification(), lenses=current)).get('isError')
-    (Path(old['snapshot_root']).parent / 'target.json').unlink()
+    _remove_frozen_fixture(Path(old['snapshot_root']).parent / 'target.json')
     assert call('check', node_id='A')['structuredContent']['passed']
     real = targets.load_target
     def load(wbs_dir, token):

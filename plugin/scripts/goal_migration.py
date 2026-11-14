@@ -488,6 +488,11 @@ def _remove_empty(repo, relative):
             os.close(child)
 
 
+def _is_link(info):
+    return stat.S_ISLNK(info.st_mode) or (os.name == "nt"
+        and bool(info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT))
+
+
 def _entries(repo, relative):
     """Bounded no-follow directory enumeration; absent directory returns None."""
     if os.name == "nt":
@@ -499,9 +504,8 @@ def _entries(repo, relative):
                     for entry in iterator:
                         _require(len(entries) < 4096, "too many directory entries")
                         info = entry.stat(follow_symlinks=False)
-                        _require(not info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
-                                 and (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)),
-                                 "unsafe storage entry: " + entry.name)
+                        # Enumeration does not grant ownership of unrelated
+                        # entries. Selected reads retain their no-reparse guards.
                         entries.append((entry.name, info))
                 if directory.name == ".active_sessions":
                     # This exact runtime coordination file is not a marker.
@@ -759,7 +763,7 @@ def _collect(repo):
             if not name.startswith("WBS__"):
                 continue
             _require(IDENT.fullmatch(name), "invalid WBS directory")
-            if stat.S_ISLNK(info.st_mode):
+            if _is_link(info):
                 continue  # Unrelated symlink directories never enter migration ownership.
             if not stat.S_ISDIR(info.st_mode):
                 continue
@@ -1130,7 +1134,7 @@ def _control_changes(repo):
         with _control_workspace(repo, root) as source:
             references = pool_tasks | _control_bindings(source)
             for name, info in _entries(source, "doc/harness/wbs") or []:
-                if not name.startswith("WBS__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                if not name.startswith("WBS__") or _is_link(info) or not stat.S_ISDIR(info.st_mode):
                     continue
                 _require(IDENT.fullmatch(name), "invalid task identity")
                 path = "doc/harness/wbs/" + name + "/WBS.control.json"
@@ -1148,7 +1152,7 @@ def _control_changes(repo):
     # Archived controls are format consumers too; preserve every other archived byte.
     references = pool_tasks | _control_bindings(repo)
     for name, info in _entries(repo, "doc/harness/archive/batch") or []:
-        if not name.startswith("WBS__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        if not name.startswith("WBS__") or _is_link(info) or not stat.S_ISDIR(info.st_mode):
             continue
         path = "doc/harness/archive/batch/" + name + "/WBS.control.json"
         raw = _read(repo, path)
@@ -1333,7 +1337,7 @@ def _control_scope(repo):
             for parent in (["doc/harness/wbs", "doc/harness/archive/batch"]
                            if root == str(repo) else ["doc/harness/wbs"]):
                 for name, info in _entries(source, parent) or []:
-                    if not name.startswith("WBS__") or stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    if not name.startswith("WBS__") or _is_link(info) or not stat.S_ISDIR(info.st_mode):
                         continue
                     _require(IDENT.fullmatch(name), "invalid task identity")
                     directories.append((root, parent + "/" + name))
@@ -1363,8 +1367,14 @@ def _control_apply(repo):
         stack.enter_context(_file_lock(repo, "doc/harness/runtime/batches/.lock"))
         for root, directory in directories:
             with _control_workspace(repo, root) as source:
-                stack.enter_context(_locked_directory(source, _parts(directory),
-                                                     busy_message="Goal migration: WBS writer active: " + str(source / directory)))
+                if os.name == "nt" and directory.startswith("doc/harness/archive/batch/"):
+                    # Archive writers share the root batch lock held above.
+                    # Retain custody without adding a lock file to historical
+                    # bytes or conflicting with their authenticated inventory.
+                    stack.enter_context(_directory(source, _parts(directory)))
+                else:
+                    stack.enter_context(_locked_directory(source, _parts(directory),
+                                                         busy_message="Goal migration: WBS writer active: " + str(source / directory)))
         _require(scope == _control_scope(repo), "migration lock scope changed before preparation")
         current = _control_journal(repo)
         fresh = current is None

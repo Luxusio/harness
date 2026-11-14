@@ -179,7 +179,12 @@ def main(argv=None):
             raise ValueError()
         interpreter = select_python(require_yaml=relative == "scripts/launch.py", _requested_version="3.12")
         flags = ["-I", "-B"] if relative == "scripts/launch.py" else ["-E", "-s", "-B"]
-        os.execv(interpreter, [interpreter, *flags, str(entrypoint), *args[1:]])
+        command = [interpreter, *flags, str(entrypoint), *args[1:]]
+        if os.name == "nt":
+            # Windows execv joins arguments without CRT quoting. Wait for the
+            # literal-argv child with inherited stdio and propagate its status.
+            return subprocess.call(command)
+        os.execv(interpreter, command)
     except MisePythonError as error:
         print(str(error), file=sys.stderr)
     except (OSError, ValueError, RuntimeError):

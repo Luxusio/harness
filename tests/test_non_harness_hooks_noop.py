@@ -140,10 +140,10 @@ def _run_registered_hook(hook: dict, *, payload: str, cwd: Path, env: dict):
     if "args" in hook:
         argv = [value.replace("${CLAUDE_PLUGIN_ROOT}", env["CLAUDE_PLUGIN_ROOT"])
                 for value in [hook["command"], *hook["args"]]]
-        return subprocess.run(argv, input=payload, text=True, capture_output=True,
+        return subprocess.run(argv, input=payload, text=True, encoding="utf-8", capture_output=True,
                               cwd=cwd, env=env, timeout=12)
     return subprocess.run(hook["command"], shell=True, input=payload,
-                          text=True, capture_output=True, cwd=cwd, env=env, timeout=12)
+                          text=True, encoding="utf-8", capture_output=True, cwd=cwd, env=env, timeout=12)
 
 
 def test_registered_exec_hook_preserves_arguments_and_literal_plugin_root(tmp_path):
@@ -306,7 +306,8 @@ def test_registered_welcome_activates_in_initialized_non_git_project_subdirector
     cwd.mkdir()
     if alias:
         link = tmp_path / "alias"
-        link.symlink_to(root, target_is_directory=True)
+        from test_symlink_fixture import create_symlink
+        create_symlink(link, root, target_is_directory=True)
         cwd = link / "src"
     home = tmp_path / "home"
     home.mkdir()
@@ -316,6 +317,28 @@ def test_registered_welcome_activates_in_initialized_non_git_project_subdirector
     assert result.returncode == 0, result.stderr
     assert "harness — ready." in result.stdout
     assert "Project: enabled" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native banner owns UTF-8 redirected output")
+def test_native_welcome_uses_utf8_with_restrictive_redirected_encoding(tmp_path):
+    root = tmp_path / "enabled"
+    _enable(root)
+    home = tmp_path / "home"
+    home.mkdir()
+    code = (
+        "import runpy,sys; sys.stdout.reconfigure(encoding='cp1252'); "
+        "script=sys.argv[1]; sys.argv=[script,'--claude-banner']; "
+        "runpy.run_path(script,run_name='__main__')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code, str(SCRIPTS / "hook_session_start.py")],
+        input=json.dumps({"cwd": str(root)}).encode("utf-8"), capture_output=True,
+        cwd=tmp_path, env=_isolated_env(home), timeout=12,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    output = result.stdout.decode("utf-8", errors="strict")
+    assert "harness — ready." in output and "WBS open → plan" in output
+    assert "Project: enabled" in output
 
 
 @pytest.mark.parametrize("component", ["manifest", "control-directory"])

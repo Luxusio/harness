@@ -164,11 +164,19 @@ def test_document_only_repository_can_select_root_without_weakening_instruction_
         assert not work_policy.document_path(policy, path)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX execute bits; declared executable paths are checked on every host")
 def test_executable_markdown_cannot_be_edited_as_ordinary_prose(tmp_path):
     repo, td, _, _ = document_fixture(tmp_path)
     (repo / 'doc/common/note.md').chmod(0o755)
     with pytest.raises(ValueError, match='executable.*development'):
         wbs.require_source_assignment(str(repo), 'sample', 'doc/common/note.md')
+
+
+def test_declared_executable_markdown_cannot_be_edited_as_ordinary_prose(tmp_path):
+    repo, td, _, _ = document_fixture(tmp_path)
+    set_workflow(repo, {"executable_paths": ["doc/common/note.md"]})
+    with pytest.raises(ValueError, match="non-narrative.*development"):
+        wbs.require_source_assignment(str(repo), "sample", "doc/common/note.md")
 
 
 @pytest.mark.parametrize("kind,field", [("document", "document_verified"), ("plan", "planning_verified")])

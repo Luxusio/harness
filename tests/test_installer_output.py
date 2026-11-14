@@ -31,7 +31,8 @@ def installer():
 def run_main(installer, monkeypatch, capsys, results, *args, available=("codex", "claude")):
     calls = {}
     monkeypatch.setattr(sys, "argv", ["install.py", *args])
-    monkeypatch.setattr(installer.shutil, "which", lambda name: f"/bin/{name}" if name in available else None)
+    # Output policy consumes availability; native host resolution is tested separately.
+    monkeypatch.setattr(installer, "_host_available", lambda name: name in available)
     for runtime, result in results.items():
         def install(*, _runtime=runtime, _result=result, **kwargs):
             calls[_runtime] = kwargs

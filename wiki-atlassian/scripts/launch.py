@@ -2,6 +2,7 @@
 """Start the standalone document MCP; stdout belongs exclusively to JSON-RPC."""
 from pathlib import Path
 import os
+import subprocess
 import sys
 
 def main():
@@ -31,6 +32,10 @@ def main():
             if os.name == 'nt' and helpers == root / 'scripts':
                 from native_cli import owned_python_argv
                 argv = owned_python_argv(interpreter, Path(__file__).resolve(), sys.argv[2:])
+            if os.name == 'nt':
+                # subprocess quotes literal argv and waits with inherited MCP
+                # stdio; Windows execv loses spaces and returns asynchronously.
+                return subprocess.call(argv)
             os.execv(interpreter, argv)
         except MisePythonError as error:
             print(str(error), file=sys.stderr)

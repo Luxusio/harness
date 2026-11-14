@@ -544,7 +544,8 @@ def test_native_project_doc_exchange_preserves_both_file_identities(native_proje
     assert sorted(path.name for path in root.iterdir()) == ["AGENTS.md", "candidate.tmp"]
 
 
-def test_native_project_doc_update_preserves_deep_crlf_text_and_acl(native_project_doc):
+@pytest.mark.parametrize("protected_acl", [False, True])
+def test_native_project_doc_update_preserves_deep_crlf_text_and_acl(native_project_doc, protected_acl):
     module, native, root = native_project_doc
     repo = root
     while len(str(repo).encode("utf-16-le")) // 2 < 300:
@@ -553,12 +554,31 @@ def test_native_project_doc_update_preserves_deep_crlf_text_and_acl(native_proje
     path = repo / "AGENTS.md"
     disk = module._project_doc_disk_path(path)
     original = "# User project\r\nkeep 'quotes' & $literal\r\n## User tail\r\nunchanged\r\n"
+    if protected_acl:
+        with native._private_attributes() as attributes:
+            handle = native._open(path, native.GENERIC_WRITE, create=native.CREATE_NEW, attributes=attributes)
+            native._close(handle)
     Path(disk).write_bytes(original.encode("utf-8"))
 
     def acl():
+        import ctypes
+        from ctypes import wintypes
+
         handle = native._open(path, 0)
         try:
-            return native._security(handle, "metadata")
+            owner, dacl, descriptor = native.P(), native.P(), native.P()
+            code = native._GetSecurityInfo(handle, 1, 1 | 4, ctypes.byref(owner), None,
+                                           ctypes.byref(dacl), None, ctypes.byref(descriptor))
+            if code:
+                raise native._error(code)
+            try:
+                control, revision = wintypes.WORD(), wintypes.DWORD()
+                get_control = native._bind(native.A, "GetSecurityDescriptorControl", [
+                    native.P, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)])
+                native._check(get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)))
+                return native._security(handle, "metadata"), bool(control.value & 0x1000)
+            finally:
+                native._LocalFree(descriptor)
         finally:
             native._close(handle)
 
@@ -648,6 +668,35 @@ def test_native_project_doc_hardlink_is_refused_without_touching_user_text(nativ
 
     assert path.read_bytes() == original.read_bytes() == b"# User original\r\n"
     assert not list(root.glob(".AGENTS.md.*"))
+
+
+def test_native_project_doc_security_write_failure_preserves_both_documents(native_project_doc, monkeypatch):
+    module, native, root = native_project_doc
+    path = root / "AGENTS.md"
+    original = b"# User original\r\n"
+    path.write_bytes(original)
+    bind = native._bind
+    injected = False
+
+    def failing_security_bind(dll, name, *args):
+        if name == "SetSecurityInfo":
+            def denied(*arguments):
+                nonlocal injected
+                injected = True
+                return 5
+            return denied
+        return bind(dll, name, *args)
+
+    monkeypatch.setattr(native, "_bind", failing_security_bind)
+    with pytest.raises(module._ProjectDocExchangeIncomplete, match="manual recovery required") as error:
+        module.update_project_doc(root, "AGENTS.md", ensure_routing=False,
+                                  ensure_contract_import=True)
+
+    assert injected, "the failure must reach the selected native security writer after real replacement"
+    assert path.read_bytes() == b"# User original\r\n@CONTRACTS.md\r\n"
+    backups = list(root.glob(".AGENTS.md.*.displaced"))
+    assert len(backups) == 1 and backups[0].read_bytes() == original
+    assert str(path) in str(error.value) and str(backups[0]) in str(error.value)
 
 
 def test_source_git_roots_reject_shell_metacharacters(tmp_path):
@@ -1075,13 +1124,67 @@ def test_check_is_read_only_and_atomic_write_preserves_modes(tmp_path):
     assert not (repo / ".gitignore").exists()
 
     (repo / ".gitignore").write_text("# user\n")
-    os.chmod(repo / ".gitignore", 0o644)
-    os.chmod(repo / "doc/harness/manifest.yaml", 0o640)
+    paths = (repo / ".gitignore", repo / "doc/harness/manifest.yaml")
+    if os.name == "nt":
+        from wiki_platform import _native
+
+        def native_state(path):
+            handle = _native._open(path, 0)
+            try:
+                return _native._security(handle, "metadata"), bool(_native._info(handle).attributes & 1)
+            finally:
+                _native._close(handle)
+
+        before = [native_state(path) for path in paths]
+    else:
+        os.chmod(paths[0], 0o644)
+        os.chmod(paths[1], 0o640)
     result = run(repo, plugin_root)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert stat.S_IMODE((repo / ".gitignore").stat().st_mode) == 0o644
-    assert stat.S_IMODE((repo / "doc/harness/manifest.yaml").stat().st_mode) == 0o640
+    if os.name == "nt":
+        assert [native_state(path) for path in paths] == before
+    else:
+        assert stat.S_IMODE(paths[0].stat().st_mode) == 0o644
+        assert stat.S_IMODE(paths[1].stat().st_mode) == 0o640
     assert not (repo / "doc/harness/.version").exists()
+
+
+@pytest.mark.parametrize("text", ["one\ntwo\n", "one\r\ntwo\r\n", "one\r\ntwo\nthree\r"])
+def test_atomic_write_preserves_supplied_line_ending_bytes(tmp_path, text):
+    module = load_setup_finalize("setup_finalize_atomic_newline_test")
+    path = tmp_path / "manifest.yaml"
+    path.write_bytes(b"previous\r\n")
+
+    module.atomic_write(path, text)
+
+    assert path.read_bytes() == text.encode("utf-8")
+
+
+@pytest.mark.parametrize("operation", ["migrate", "gitignore_only"])
+def test_gitignore_rollback_preserves_exact_crlf_snapshot(tmp_path, monkeypatch, operation):
+    module = load_setup_finalize("setup_finalize_gitignore_crlf_rollback_test")
+    repo = basic_repo(tmp_path, "version: 6\nname: demo\n")
+    path = repo / ".gitignore"
+    original = b"# User original\r\ncustom.log\r\n"
+    path.write_bytes(original)
+    injected = False
+
+    def post_write_failure(subject):
+        nonlocal injected
+        assert subject == repo
+        assert path.read_bytes() != original, "the real write must happen before the injected refusal"
+        injected = True
+        return ["injected post-write refusal"]
+
+    monkeypatch.setattr(module, "effective_ignore_errors", post_write_failure)
+    if operation == "migrate":
+        with pytest.raises(ValueError, match="injected post-write refusal"):
+            module.migrate_project_format(repo)
+    else:
+        assert module.main(["--repo", str(repo), "--gitignore-only"]) == 1
+
+    assert injected
+    assert path.read_bytes() == original
 
 
 def test_check_rejects_pending_contract_migration_without_writing(tmp_path):
@@ -1584,11 +1687,12 @@ def test_symlinked_worktrees_dir_fails_until_the_symlink_is_ignored(tmp_path):
     assert "/.claude/worktrees" in (repo / ".gitignore").read_text(encoding="utf-8").splitlines()
 
 
-def test_in_repo_symlinked_claude_dir_is_checked_where_git_sees_it(tmp_path):
+def test_in_repo_symlinked_claude_dir_is_checked_where_git_sees_it(tmp_path, make_symlink):
     # A symlink resolving inside the repository moves the worktrees git lists.
     repo = basic_repo(tmp_path / "ignore", "version: 6\nname: demo\n")
     (repo / "config/claude").mkdir(parents=True)
-    (repo / ".claude").symlink_to("config/claude", target_is_directory=True)
+    make_symlink(repo / ".claude", Path("config") / "claude", target_is_directory=True)
+    assert (repo / ".claude").is_dir(), "the fixture must create a kernel-readable directory symlink"
 
     result = migrate_cli(repo)
 
@@ -1608,7 +1712,8 @@ def test_in_repo_symlinked_claude_dir_is_checked_where_git_sees_it(tmp_path):
     # A worktree tracked at the real path fails without stamping.
     tracked = committed_repo(tmp_path / "tracked", "version: 6\nname: demo\n")
     (tracked / "config/claude").mkdir(parents=True)
-    (tracked / ".claude").symlink_to("config/claude", target_is_directory=True)
+    make_symlink(tracked / ".claude", Path("config") / "claude", target_is_directory=True)
+    assert (tracked / ".claude").is_dir()
     git(tracked, "worktree", "add", "-q", "--detach", str(tracked / "config/claude/worktrees/lead"), "HEAD")
     git(tracked, "add", "config/claude/worktrees/lead")
     (tracked / ".gitignore").write_text("/config/claude/worktrees/\n", encoding="utf-8")
@@ -1621,11 +1726,12 @@ def test_in_repo_symlinked_claude_dir_is_checked_where_git_sees_it(tmp_path):
     assert (tracked / ".gitignore").read_text(encoding="utf-8") == "/config/claude/worktrees/\n"
 
 
-def test_in_repo_symlinked_worktrees_dir_needs_both_the_link_and_target_ignored(tmp_path):
+def test_in_repo_symlinked_worktrees_dir_needs_both_the_link_and_target_ignored(tmp_path, make_symlink):
     repo = basic_repo(tmp_path, "version: 6\nname: demo\n")
     (repo / "wt").mkdir()
     (repo / ".claude").mkdir()
-    (repo / ".claude/worktrees").symlink_to("../wt", target_is_directory=True)
+    make_symlink(repo / ".claude/worktrees", Path("..") / "wt", target_is_directory=True)
+    assert (repo / ".claude/worktrees").is_dir(), "the fixture must create a kernel-readable directory symlink"
 
     result = migrate_cli(repo)
 
@@ -1640,9 +1746,9 @@ def test_in_repo_symlinked_worktrees_dir_needs_both_the_link_and_target_ignored(
     assert "version: 7\n" in (repo / "doc/harness/manifest.yaml").read_text(encoding="utf-8")
 
 
-def test_looping_claude_symlink_does_not_crash_the_migration(tmp_path, monkeypatch):
+def test_looping_claude_symlink_does_not_crash_the_migration(tmp_path, monkeypatch, make_symlink):
     repo = basic_repo(tmp_path, "version: 6\nname: demo\n")
-    (repo / ".claude").symlink_to(".claude")
+    make_symlink(repo / ".claude", ".claude", target_is_directory=True)
 
     result = migrate_cli(repo)
 
@@ -1655,3 +1761,24 @@ def test_looping_claude_symlink_does_not_crash_the_migration(tmp_path, monkeypat
     monkeypatch.setattr(Path, "resolve", lambda self, strict=False: Path(os.path.abspath(self)))
     assert module._git_visible_path(repo, ".claude/worktrees/__harness_probe__") is None
     assert module._git_visible_path(repo, "doc/harness/wbs/x") == "doc/harness/wbs/x"
+
+
+def test_git_visible_path_does_not_hide_unrelated_ancestor_access_errors(tmp_path, monkeypatch):
+    module = load_setup_finalize("setup_finalize_visible_access_failure_test")
+    repo = tmp_path / "repo"
+    ancestor = repo / ".claude"
+    ancestor.mkdir(parents=True)
+    real_stat = Path.stat
+    injected = False
+
+    def denied(subject, *args, **kwargs):
+        nonlocal injected
+        if subject == ancestor:
+            injected = True
+            raise PermissionError("ancestor access denied")
+        return real_stat(subject, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    with pytest.raises(PermissionError, match="ancestor access denied"):
+        module._git_visible_path(repo, ".claude/worktrees/__harness_probe__")
+    assert injected

@@ -28,6 +28,37 @@ def test_explicit_siblings_reuse_one_parent_chain_and_detect_rebinding(tmp_path,
     source.mkdir()
     for n in range(40):
         (source / f"{n:02}.txt").write_text("input")
+    policy = dict(source=[f"source/{n:02}.txt" for n in range(40)])
+    if os.name == "nt":
+        from contextlib import contextmanager
+        import wiki_platform
+        actual_directory = wiki_platform.trusted_source_directory
+        actual_snapshot = wiki_platform.source_snapshot
+        directories, attempts = [], []
+        @contextmanager
+        def directory(path):
+            directories.append(Path(path))
+            with actual_directory(path) as held:
+                yield held
+        def snapshot(path, *args, **kwargs):
+            if Path(path).name == "38.txt" and not attempts:
+                with pytest.raises(PermissionError) as refused:
+                    source.rename(repo / "saved-source")
+                assert refused.value.winerror == 32
+                attempts.append("blocked")
+            return actual_snapshot(path, *args, **kwargs)
+        monkeypatch.setattr(wiki_platform, "trusted_source_directory", directory)
+        monkeypatch.setattr(wiki_platform, "source_snapshot", snapshot)
+        old = wbs.fingerprint(repo, policy)
+        assert directories == [source] and attempts == ["blocked"]
+        assert not (repo / "saved-source").exists()
+        assert all(path.read_bytes() == b"input" for path in source.iterdir())
+        source.rename(repo / "saved-source")  # Custody is released after measurement.
+        source.mkdir()
+        for n in range(40):
+            (source / f"{n:02}.txt").write_text("replacement")
+        assert old != wbs.fingerprint(repo, policy)
+        return
     actual = os.open
     directories = []
     def opening(path, flags, *args, **kwargs):
@@ -35,7 +66,6 @@ def test_explicit_siblings_reuse_one_parent_chain_and_detect_rebinding(tmp_path,
             directories.append(os.fspath(path))
         return actual(path, flags, *args, **kwargs)
     monkeypatch.setattr(os, "open", opening)
-    policy = dict(source=[f"source/{n:02}.txt" for n in range(40)])
     wbs.fingerprint(repo, policy)
     assert len(directories) == 2  # checkout plus source, independent of sibling count
     old = wbs.fingerprint(repo, policy)

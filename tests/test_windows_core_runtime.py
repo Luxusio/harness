@@ -116,6 +116,18 @@ def _project(private):
     return repo
 
 
+def _inprocess_project_context(repo, monkeypatch):
+    """Parse this fixture's real hook input and restore any earlier hook state."""
+    import io
+    import _lib
+
+    monkeypatch.setattr(_lib, "_LAST_HOOK_INPUT", _lib._LAST_HOOK_INPUT)
+    monkeypatch.setattr(_lib, "_HOOK_INPUT_REJECTED", _lib._HOOK_INPUT_REJECTED)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(dict(cwd=str(repo), session_id=SID))))
+    assert _lib.read_hook_input()["cwd"] == str(repo)
+    assert _lib.find_repo_root() == str(repo)
+
+
 def _gate_process(repo, target):
     env = _environment()
     env["HARNESS_RUNTIME"] = "codex"
@@ -362,6 +374,7 @@ def test_native_canonical_control_writer_rejects_foreign_globals(private, monkey
 
     repo = _project(private)
     monkeypatch.chdir(repo)
+    _inprocess_project_context(repo, monkeypatch)
     owner = harness_server.handle_wbs_open
     clone = FunctionType(owner.__code__, dict(owner.__globals__), owner.__name__, owner.__defaults__, owner.__closure__)
     clone.__kwdefaults__ = owner.__kwdefaults__
@@ -544,6 +557,7 @@ def test_native_old_control_migration_retries_prepared_publication_without_retar
     # only the publication fault is injected, with no authority/root bypass.
     with monkeypatch.context() as fault:
         fault.chdir(repo)
+        _inprocess_project_context(repo, fault)
         for key in ("HARNESS_RUNTIME", "HARNESS_SESSION_ID", "CLAUDE_SESSION_ID"):
             fault.setenv(key, _environment()[key])
         fault.setattr(goal_migration, "_control_write", interrupt)
@@ -1209,9 +1223,10 @@ def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(p
     item = dict(job_id="path-git", outcome_id="A", kind="consumer", argv=["git", "--version"],
                 inputs=dict(source=["source.py"]), outputs=[], resources=[], requires=["executable:git"],
                 environment=["PATH", "PYTHONHOME", "HOME", "USERPROFILE", "SYSTEMROOT", "PYTHONDONTWRITEBYTECODE"])
+    results = win.ensure_private_directory(repo / "verification")
     scheduled = verify_runner.run_jobs(
         [item], repo, wbs_id="WBS__shadow-fixture", run_id="shadow-fixture-run",
-        execution_generation="one", results_path=repo / "shadow-results.json", max_workers=1, timeout=20,
+        execution_generation="one", results_path=results / "shadow-results.json", max_workers=1, timeout=20,
     )
     assert scheduled["status"] == "PASS", scheduled
     record = scheduled["commands"][0]
@@ -1251,9 +1266,10 @@ def test_native_public_runner_ignores_declared_python_startup_code_in_trusted_he
     item = dict(job_id="startup-git", outcome_id="A", kind="consumer", argv=argv,
                 inputs=dict(source=["source.py"]), outputs=[], resources=[], requires=["executable:git"],
                 environment=["PATH", "PYTHONPATH", "HOME", "USERPROFILE", "SYSTEMROOT", "PYTHONDONTWRITEBYTECODE"])
+    results = win.ensure_private_directory(repo / "verification")
     scheduled = verify_runner.run_jobs(
         [item], repo, wbs_id="WBS__startup-fixture", run_id="startup-fixture-run",
-        execution_generation="one", results_path=repo / "startup-results.json", max_workers=1, timeout=20,
+        execution_generation="one", results_path=results / "startup-results.json", max_workers=1, timeout=20,
     )
     record = scheduled["commands"][0]
     assert scheduled["status"] == "FAIL", scheduled
@@ -1404,13 +1420,14 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
     item = dict(job_id="owner", outcome_id="A", kind="producer",
                 argv=[sys.executable, "-B", script.name], inputs=dict(source=[script.name]),
                 outputs=["old-command-finished"], resources=[resource])
+    results = win.ensure_private_directory(private / "verification")
 
     def argv(job, label):
         declaration = private / (label + "-jobs.json")
         declaration.write_text(json.dumps([job]), encoding="utf-8")
         return [sys.executable, "-B", str(SCRIPTS / "verify_runner.py"),
                 "--root", str(private), "--jobs", str(declaration),
-                "--results", str(private / (label + "-result.json")),
+                "--results", str(results / (label + "-result.json")),
                 "--wbs-id", "WBS__native-fixture", "--run-id", "native-fixture-run",
                 "--generation", label, "--timeout", "20"]
 
@@ -1426,7 +1443,7 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
             owner_output = owner.communicate(timeout=10)
         (private / "owner-process.stdout").write_bytes(owner_output[0])
         (private / "owner-process.stderr").write_bytes(owner_output[1])
-        advisory = private / "owner-result.json"
+        advisory = results / "owner-result.json"
         return ("stdout:\n" + owner_output[0].decode("utf-8", errors="replace")
                 + "\nstderr:\n" + owner_output[1].decode("utf-8", errors="replace")
                 + "\nadvisory result:\n" + (advisory.read_bytes().decode("utf-8", errors="replace") if advisory.exists() else "not published"))
@@ -1469,7 +1486,7 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
             _dead(pid)
         (private / "release-old-command").touch()
         assert not (private / "old-command-finished").exists()
-        interrupted = json.loads((private / "owner-result.json").read_text())
+        interrupted = json.loads((results / "owner-result.json").read_text())
         assert interrupted["status"] == "FAIL" and interrupted["successful"] == []
         assert interrupted["commands"][0]["returncode"] is None
     finally:

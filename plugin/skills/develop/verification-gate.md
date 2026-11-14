@@ -124,7 +124,7 @@ successful roles are reused when their applicable inputs remain unchanged.
 
 Run the highest available verification tier without asking the user to opt in.
 For shared preparation, use `verify_runner.py --jobs <group.json> --root <exact
-source-view> --results <wbs-work/group-results.json> --wbs-id <WBS> --run-id
+source-view> --results <wbs-work/verification/group-results.json> --wbs-id <WBS> --run-id
 <run> --generation <generation>`. One group has at most one producer and its
 read-only consumers; independent groups use separate result files and can run
 concurrently. Declare source/artifact inputs, argv, environment, toolchains,

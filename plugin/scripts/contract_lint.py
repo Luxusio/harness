@@ -377,7 +377,7 @@ def _durable_docs(repo_root: str) -> list[str]:
     if names is not None:
         return [name for name in names if name.startswith("doc/") and name.endswith(".md")]
     return sorted(
-        os.path.relpath(os.path.join(parent, name), repo_root)
+        os.path.relpath(os.path.join(parent, name), repo_root).replace(os.sep, "/")
         for parent, filenames in _walk_sources(repo_root)
         for name in filenames if name.endswith(".md")
         and os.path.relpath(os.path.join(parent, name), repo_root).startswith("doc" + os.sep)

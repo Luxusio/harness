@@ -19,13 +19,20 @@ def _load_session_start_entries() -> list[dict]:
     return sessions[0]["hooks"]
 
 
-def test_session_start_banner_executes_cleanly():
-    entries = _load_session_start_entries()
-    banner_cmd = entries[0]["command"]
+def test_session_start_banner_executes_cleanly(selected_installer_python):
+    from test_install_writable_source_comparison import _load_install_module
+
+    install = _load_install_module()
+    config = json.loads(install._claude_runtime_projection()["hooks/hooks.json"])
+    banner = config["hooks"]["SessionStart"][0]["hooks"][0]
+    banner_cmd = banner["command"]
+    if "args" in banner:
+        banner_cmd = [value.replace("${CLAUDE_PLUGIN_ROOT}", str(REPO / "plugin"))
+                      for value in [banner_cmd, *banner["args"]]]
     result = subprocess.run(
-        ["bash", "-c", banner_cmd],
+        banner_cmd, shell=isinstance(banner_cmd, str),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         cwd=REPO,
         input=json.dumps({"cwd": str(REPO)}),
         env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(REPO / "plugin")},

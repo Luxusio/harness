@@ -269,10 +269,10 @@ def test_live_rows_are_dropped_and_everything_else_is_kept():
 
 def test_appended_rows_after_growth(tmp_path):
     ledger = tmp_path / "learnings.jsonl"
-    ledger.write_text(_lines(*HISTORY), encoding="utf-8")
+    ledger.write_text(_lines(*HISTORY), encoding="utf-8", newline="")
     before = conftest._ledger_snapshot(str(ledger))
     assert before == _lines(*HISTORY).encode()
-    with ledger.open("a", encoding="utf-8") as f:
+    with ledger.open("a", encoding="utf-8", newline="") as f:
         f.write(_lines(SUITE_ROW, SUITE_ROW))
     # Two identical rows are two rows.
     assert conftest._ledger_rows_appended(str(ledger), before) == [json.dumps(SUITE_ROW)] * 2
@@ -292,11 +292,11 @@ def test_a_partial_line_is_counted_once_it_is_whole(tmp_path):
     """A writer mid-append at either end must not produce a fragment row."""
     ledger = tmp_path / "learnings.jsonl"
     whole = json.dumps(SUITE_ROW)
-    ledger.write_text(_lines(*HISTORY) + whole[:10], encoding="utf-8")
+    ledger.write_text(_lines(*HISTORY) + whole[:10], encoding="utf-8", newline="")
     before = conftest._ledger_snapshot(str(ledger))
     assert before == _lines(*HISTORY).encode()
     assert conftest._ledger_rows_appended(str(ledger), before) == []
-    with ledger.open("a", encoding="utf-8") as f:
+    with ledger.open("a", encoding="utf-8", newline="") as f:
         f.write(whole[10:] + "\n")
     assert conftest._ledger_rows_appended(str(ledger), before) == [whole]
 

@@ -11,6 +11,10 @@ Tests:
 from __future__ import annotations
 
 import importlib.util
+import base64
+import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -67,11 +71,21 @@ def test_codex_plugin_manifest_points_at_plugin_local_hooks(tmp_path):
     assert runtime_root != plugin_root
     hooks = module.json.loads(hooks_path.read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
-    assert str(runtime_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
+    session_hook = hooks["SessionStart"][0]["hooks"][0]
+    expected_argv = module.owned_python_argv(
+        module._python_cmd(), runtime_root / "scripts/hook_session_start.py")
+    if os.name == "nt":
+        program = base64.b64decode(session_hook["commandWindows"].rsplit(" ", 1)[1]).decode("utf-16-le")
+        literal = lambda value: "'" + value.replace("'", "''") + "'"
+        assert "$s.FileName=" + literal(expected_argv[0]) + ";" in program
+        assert "$s.Arguments=" + literal(subprocess.list2cmdline(expected_argv[1:])) + ";" in program
+    else:
+        assert shlex.split(session_hook["command"]) == ["PYTHONDONTWRITEBYTECODE=1", *expected_argv]
     assert "hook_session_start.sh" not in hooks_path.read_text()
     mcp = module.json.loads((install_root / "plugins" / "harness" / ".mcp.json").read_text())
     assert mcp["mcpServers"]["harness"]["command"] == module._python_cmd()
-    assert mcp["mcpServers"]["harness"]["args"] == ["-E", "-s", "-B", str(runtime_root / "mcp" / "harness_server.py")]
+    assert mcp["mcpServers"]["harness"]["args"] == module.owned_python_argv(
+        module._python_cmd(), runtime_root / "mcp/harness_server.py")[1:]
     assert mcp["mcpServers"]["harness"]["env"]["HARNESS_PLUGIN_ROOT"] == str(runtime_root)
 
 

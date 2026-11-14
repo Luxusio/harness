@@ -173,6 +173,10 @@ class _TmpRepoCase(unittest.TestCase):
         self.base = Path(os.path.realpath(self._tmp))
         self.repo = _make_repo(self.base)
         stack = contextlib.ExitStack()
+        with mock.patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            import _lib
+        stack.enter_context(mock.patch.object(_lib, "_LAST_HOOK_INPUT", {}))
+        stack.enter_context(mock.patch.object(_lib, "_HOOK_INPUT_REJECTED", False))
         stack.enter_context(_escapes_unset())
         self.addCleanup(stack.close)
         self.addCleanup(shutil.rmtree, self._tmp, True)

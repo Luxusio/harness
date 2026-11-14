@@ -102,7 +102,8 @@ def test_migration_rejects_subdirectory_and_non_git_root(tmp_path):
 def test_reminder_names_absolute_git_root_for_nested_session(tmp_path):
     root = repo(tmp_path)
     message = load_check().reminder(root)
-    assert f"--repo {root}" in message
+    import shlex
+    assert f"--repo {shlex.quote(str(root))}" in message
     assert "--repo ." not in message
 
 

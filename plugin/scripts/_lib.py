@@ -652,7 +652,7 @@ def _native_append_learning_lines(repo_root, rows, *, unique=False):
             expected = before
         except FileNotFoundError:
             before, expected = b"", None
-        existing = set(before.decode("utf-8").splitlines()) if unique else set()
+        existing = set(before.decode("utf-8").split("\n")) if unique else set()
         added = []
         for row in rows:
             if not unique or row not in existing:
@@ -1758,7 +1758,7 @@ def canonical_wbs_dir(wbs_id=None, slug=None, wbs_dir=None,
             raise ValueError("invalid wbs_dir; control characters are not allowed")
         candidate = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(repo_root, raw))
         expected_form = canonical if os.path.isabs(raw) else os.path.relpath(canonical, repo_root)
-        if raw != expected_form:
+        if (raw.replace("/", os.sep) if os.name == "nt" else raw) != expected_form:
             raise ValueError(
                 f"invalid wbs_dir; expected exact canonical path {os.path.relpath(canonical, repo_root)} "
                 "or its absolute path without traversal or aliases"

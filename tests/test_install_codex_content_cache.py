@@ -2,6 +2,7 @@
 
 from test_symlink_fixture import create_symlink
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,9 @@ def project(tmp_path, monkeypatch):
     install = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = install
     spec.loader.exec_module(install)
+    # Cache transactions mock the CLI protocol; host executable selection has
+    # its own native integration coverage in test_windows_install.py.
+    monkeypatch.setattr(install, 'host_command', lambda runtime, **kwargs: [runtime])
     source = tmp_path / 'source'
     install._copytree_clean(install.PLUGIN_CODEX_ROOT, source / 'plugin-codex')
     install._copytree_clean(install.PLUGIN_ROOT, source / 'plugin')
@@ -78,7 +82,9 @@ def test_native_selection_verifies_published_version_and_preserves_prior_cache(p
         for relative in ('.mcp.json', 'hooks.json'):
             assert (mirror / relative).read_bytes() == (cache / relative).read_bytes()
         command = json.loads((cache / '.mcp.json').read_text())['mcpServers']['harness']
-        assert command['args'][-1] == str(cache / 'mcp/harness_server.py')
+        assert command['args'] == install.owned_python_argv(
+            install._python_cmd(), cache / 'mcp/harness_server.py')[1:]
+        assert str(cache / 'mcp/harness_server.py') in command['args']
         assert install._select_codex_plugin(mirror, home)[0]
         assert inventory(cache) == before
 
@@ -88,7 +94,8 @@ def test_identity_is_root_independent_repeatable_and_source_preserving(project, 
     manifest = source / 'plugin-codex/.codex-plugin/plugin.json'
     original, mode = manifest.read_bytes(), manifest.stat().st_mode
     first = install.sync_codex_payload(tmp_path / 'one')
-    second = install.sync_codex_payload(tmp_path / 'other root with \' and " quotes')
+    second_name = "other root with ' quotes and 한글" if os.name == 'nt' else 'other root with \' and " quotes'
+    second = install.sync_codex_payload(tmp_path / second_name)
     version = install._codex_plugin_version(first)
     assert version == install._codex_plugin_version(second)
     assert install._stamp_codex_plugin_version(first) == version
@@ -252,6 +259,10 @@ def test_changed_payload_and_equal_reinstall_never_replace_loaded_cache(project,
         return call
     monkeypatch.setattr(install.os, 'rename', guarded(rename))
     monkeypatch.setattr(install.os, 'replace', guarded(replace))
+    if os.name == 'nt':
+        import wiki_platform
+        monkeypatch.setattr(wiki_platform, 'metadata_rename_directory',
+                            guarded(wiki_platform.metadata_rename_directory))
     assert install.install_codex_plugin_cache(mirror, home) == old
     with (source / 'plugin/scripts/_lib.py').open('a') as stream:
         stream.write('\n# new payload\n')
@@ -259,8 +270,17 @@ def test_changed_payload_and_equal_reinstall_never_replace_loaded_cache(project,
     new = install.install_codex_plugin_cache(mirror, home)
     assert new != old and inventory(old) == original
     assert new.name == install._codex_plugin_version(mirror)
-    assert str(new) in (new / 'hooks.json').read_text()
-    assert str(new) in (new / '.mcp.json').read_text()
+    hooks = json.loads((new / 'hooks.json').read_text())['hooks']
+    for rows in hooks.values():
+        for row in rows:
+            for hook in row['hooks']:
+                command = hook['command']
+                if os.name == 'nt':
+                    command = base64.b64decode(command.split('-EncodedCommand ', 1)[1].strip('"')).decode('utf-16-le')
+                assert str(new) in command
+    mcp = json.loads((new / '.mcp.json').read_text())['mcpServers']['harness']
+    assert str(new / 'mcp/harness_server.py') in mcp['args']
+    assert mcp['env']['HARNESS_PLUGIN_ROOT'] == str(new)
     assert json.loads((new / '.codex-plugin/plugin.json').read_text())['version'] == new.name
 
 
@@ -302,7 +322,11 @@ def test_failed_publication_preserves_prior_cache_and_cleans_stage(project, tmp_
     mirror = install.sync_codex_payload(root)
     def denied(*args, **kwargs):
         raise PermissionError('new cache publication denied')
-    monkeypatch.setattr(install.os, 'rename', denied)
+    if os.name == 'nt':
+        import wiki_platform
+        monkeypatch.setattr(wiki_platform, 'metadata_rename_directory', denied)
+    else:
+        monkeypatch.setattr(install.os, 'rename', denied)
     with pytest.raises(PermissionError, match='publication denied'):
         install.install_codex_plugin_cache(mirror, home)
     assert inventory(old) == original
@@ -313,20 +337,28 @@ def test_concurrent_identical_publications_share_one_cache(project, tmp_path, mo
     install, _ = project
     mirror = install.sync_codex_payload(tmp_path / 'mirror')
     home = tmp_path / 'runtime'
-    rename = os.rename
+    if os.name == 'nt':
+        import wiki_platform
+        rename = wiki_platform.metadata_rename_directory
+    else:
+        rename = os.rename
     publications = []
     def publish(src, dst):
         assert not os.path.lexists(dst), 'must not replace another publication'
         publications.append(str(dst))
         return rename(src, dst)
-    monkeypatch.setattr(install.os, 'rename', publish)
+    if os.name == 'nt':
+        monkeypatch.setattr(wiki_platform, 'metadata_rename_directory', publish)
+    else:
+        monkeypatch.setattr(install.os, 'rename', publish)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: install.install_codex_plugin_cache(mirror, home), range(2)))
     assert results[0] == results[1] and publications == [str(results[0])]
     assert not list(results[0].parent.glob('.cache-staging-*'))
 
 
-@pytest.mark.parametrize('change', ['mode', 'empty-directory'])
+@pytest.mark.parametrize('change', [pytest.param('mode', marks=pytest.mark.skipif(
+    os.name == 'nt', reason='POSIX mode identity; Windows identity uses source custody and ACLs')), 'empty-directory'])
 def test_identity_matches_compared_topology_and_modes(project, tmp_path, change):
     install, source = project
     root, home = tmp_path / 'mirror', tmp_path / 'runtime'

@@ -103,15 +103,20 @@ def test_claude_hook_configuration_binds_successful_content_result(tmp_path, mon
     path = main / 'doc/harness/wbs/.active_sessions' / (SID + '.json')
     path.unlink()
     tool = 'mcp__plugin_harness_harness__wbs'
-    config = json.loads((ROOT / 'plugin/hooks/hooks.json').read_text())
+    from test_mise_install_projection import load
+    from test_non_harness_hooks_noop import _run_registered_hook
+    installer = load("install.py", "exact_focus_hook_installer")
+    config = json.loads(installer._claude_runtime_projection()["hooks/hooks.json"])
     import re
     binding_hooks = [hook for entry in config['hooks']['PostToolUse']
                      if re.search(entry['matcher'], tool)
                      for hook in entry['hooks']
-                     if 'scripts/hook_post_tool_use.py' in hook['command']]
+                     if any('scripts/hook_post_tool_use.py' in value for value in
+                            [hook['command'], *hook.get('args', [])])]
     assert len(binding_hooks) == 1
     hook = binding_hooks[0]
-    assert hook['timeout'] <= 10 and hook['command'].endswith('|| true')
+    assert hook['timeout'] <= 10
+    assert hook.get('onFailure') == 'continue' if os.name == 'nt' else hook['command'].endswith('|| true')
     env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(ROOT / 'plugin'), HARNESS_RUNTIME='claude')
     for key in ('CODEX_THREAD_ID', 'HARNESS_SESSION_ID', 'CLAUDE_SESSION_ID'):
         env.pop(key, None)
@@ -131,9 +136,7 @@ def test_claude_hook_configuration_binds_successful_content_result(tmp_path, mon
     payload = dict(cwd=str(main), session_id=SID, tool_name=tool,
                    tool_input=dict(action='open', wbs_id=task.name),
                    tool_response=dict(content=response['content']))
-    command = hook['command'].removesuffix(' || true')
-    p = subprocess.run(command, input=json.dumps(payload), shell=True, text=True,
-                       capture_output=True, cwd=main, env=env, timeout=10)
+    p = _run_registered_hook(hook, payload=json.dumps(payload), cwd=main, env=env)
     assert p.returncode == 0 and not p.stderr, p.stderr
     assert path.is_file(), p.stdout
     assert json.loads(path.read_text())['run_id'] == marker['run_id']
@@ -141,8 +144,7 @@ def test_claude_hook_configuration_binds_successful_content_result(tmp_path, mon
     assert not (path.parent.parent / '.active').exists()
     payload['tool_response']['isError'] = True
     path.unlink()
-    p = subprocess.run(command, input=json.dumps(payload), shell=True, text=True,
-                       capture_output=True, cwd=main, env=env, timeout=10)
+    p = _run_registered_hook(hook, payload=json.dumps(payload), cwd=main, env=env)
     assert p.returncode == 0 and not path.exists()
 
 

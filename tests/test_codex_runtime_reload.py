@@ -413,6 +413,7 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
     manifest.parent.mkdir(parents=True)
     manifest.write_text('{"name":"harness","version":"9.9.9"}')
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", config.parent / "harness")
+    monkeypatch.setattr(module, "_host_available", lambda runtime: True)
     monkeypatch.setattr(module, "host_command", lambda *a, **k: ["fixture-codex"])
     monkeypatch.setattr(module, "_normalize_payload_modes", lambda root: [])
     monkeypatch.setattr(module, "_prune_bytecode_caches", lambda root: [])
@@ -430,7 +431,7 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
 
     def cli(command, dry):
         if command == ["codex", "--version"]:
-            return 0, "codex 0.158.0", ""
+            return 0, "codex 0.167.2", ""
         if command == ["codex", "app-server", "daemon", "version"]:
             return 1, "", error
         if command == ["codex", "plugin", "list", "--json", "--marketplace", "harness"]:

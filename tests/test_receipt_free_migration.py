@@ -2,6 +2,7 @@
 
 from test_symlink_fixture import create_symlink
 import json
+import os
 
 try:
     import pytest
@@ -125,7 +126,7 @@ def test_malformed_pre_uuid7_history_refuses_before_writes(tmp_path, mutation, a
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get("isError"), result
-        assert str(historical / "WBS.control.json") in str(result)
+        assert str(historical / "WBS.control.json") in result["structuredContent"]["error"]
         assert (td / "WBS.control.json").read_bytes() == before
         assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
 
@@ -152,7 +153,7 @@ def test_active_pre_uuid7_history_refuses_before_writes(tmp_path, binding, archi
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get("isError"), result
-        assert str(historical / "WBS.control.json") in str(result)
+        assert str(historical / "WBS.control.json") in result["structuredContent"]["error"]
         assert (td / "WBS.control.json").read_bytes() == before
         assert not (repo / goal_migration.CONTROL_MANIFEST).exists()
 
@@ -170,7 +171,7 @@ def test_pool_referenced_pre_uuid7_history_refuses_before_writes(tmp_path, monke
     for apply in (False, True):
         result = migrate(pool.repo, apply=apply)
         assert result.get("isError"), result
-        assert str(td / "WBS.control.json") in str(result)
+        assert str(td / "WBS.control.json") in result["structuredContent"]["error"]
         assert (td / "WBS.control.json").read_bytes() == control
         assert pool.state.read_bytes() == state
         assert not (pool.repo / goal_migration.CONTROL_MANIFEST).exists()
@@ -196,7 +197,7 @@ def test_prepared_migration_rechecks_historical_bindings_before_retry(tmp_path, 
     for apply in (False, True):
         result = migrate(repo, apply=apply)
         assert result.get("isError"), result
-        assert str(historical / "WBS.control.json") in str(result)
+        assert str(historical / "WBS.control.json") in result["structuredContent"]["error"]
         assert (td / "WBS.control.json").read_bytes() == before
         assert journal.read_bytes() == journal_before
 
@@ -302,6 +303,81 @@ def test_archive_wbs_conversion_updates_existing_pool_hash_without_rewriting_his
     assert json.loads((archive / "WBS.control.json").read_text())["closed"] is True
     assert (archive / "RECEIPTS.jsonl").read_bytes() == history
     pool.cli("status")
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual native archive custody and root writer locks')
+@pytest.mark.parametrize('existing_lock', [False, True])
+def test_native_imported_archive_conversion_preserves_inventory_under_root_locks(tmp_path, monkeypatch, existing_lock):
+    from contextlib import contextmanager
+    import hashlib
+    import batch_state
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    legacy_control(td)
+    archive = repo / 'doc/harness/archive/batch/WBS__imported'
+    archive.mkdir(parents=True)
+    (archive / 'WBS.control.json').write_bytes((td / 'WBS.control.json').read_bytes())
+    legacy_control(archive, closed=True)
+    history = archive / 'RECEIPTS.jsonl'
+    history.write_bytes(b'opaque imported history\x00\xff')
+    lock = archive / '.control.lock'
+    if existing_lock:
+        lock.write_bytes(b'')
+    before = batch_state._fingerprint_entries(str(archive))
+    original = history.read_bytes()
+    actual_lock, actual_directory = goal_migration._file_lock, goal_migration._directory
+    actual_live_lock, actual_write = goal_migration._locked_directory, goal_migration._control_write
+    held_locks, retained, live, mutations = [], [], [], []
+    @contextmanager
+    def root_lock(root, relative):
+        with actual_lock(root, relative):
+            held_locks.append(relative)
+            try:
+                yield
+            finally:
+                held_locks.remove(relative)
+    @contextmanager
+    def directory(root, parts, **kwargs):
+        with actual_directory(root, parts, **kwargs) as held:
+            target = root.joinpath(*parts)
+            retained.append(target)
+            try:
+                yield held
+            finally:
+                retained.remove(target)
+    @contextmanager
+    def live_lock(root, parts, **kwargs):
+        assert not '/'.join(parts).startswith('doc/harness/archive/batch/')
+        with actual_live_lock(root, parts, **kwargs) as held:
+            live.append(root.joinpath(*parts))
+            try:
+                yield held
+            finally:
+                live.pop()
+    def writing(root, entry, *args):
+        assert goal_migration.CONTROL_ARCHIVE + '/.lock' in held_locks
+        assert 'doc/harness/runtime/batches/.lock' in held_locks
+        assert archive in retained and td in live
+        with pytest.raises(batch_state.Busy):
+            batch_state.acquire_lock(str(repo / 'doc/harness/runtime/batches'))
+        mutations.append(entry['path'])
+        return actual_write(root, entry, *args)
+    monkeypatch.setattr(goal_migration, '_file_lock', root_lock)
+    monkeypatch.setattr(goal_migration, '_directory', directory)
+    monkeypatch.setattr(goal_migration, '_locked_directory', live_lock)
+    monkeypatch.setattr(goal_migration, '_control_write', writing)
+    result = migrate(repo, apply=True)
+    assert not result.get('isError'), result
+    assert 'doc/harness/archive/batch/WBS__imported/WBS.control.json' in mutations
+    assert lock.exists() is existing_lock
+    if existing_lock:
+        assert lock.read_bytes() == b''
+    after = batch_state._fingerprint_entries(str(archive))
+    expected = dict(before, **{'WBS.control.json': hashlib.sha256((archive / 'WBS.control.json').read_bytes()).hexdigest()})
+    assert after == expected and history.read_bytes() == original
+    fingerprint = batch_state.fingerprint(str(archive))
+    assert not migrate(repo, apply=True).get('isError')
+    assert batch_state.fingerprint(str(archive)) == fingerprint
 
 
 def test_preexisting_archive_drift_is_rejected_before_any_conversion(tmp_path, monkeypatch):
@@ -700,6 +776,7 @@ def test_completed_control_migration_preserves_unreferenced_archived_task(tmp_pa
 
 @pytest.mark.parametrize('sync_failure', [False, True])
 @pytest.mark.parametrize('default', [False, True])
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX hardlink/directory-fsync recovery; native archive retry and link refusal are tested separately')
 def test_legacy_focus_retry_normalizes_archive_durably_before_retiring(tmp_path, monkeypatch, sync_failure, default):
     import errno
     import os
@@ -751,4 +828,46 @@ def test_legacy_focus_retry_normalizes_archive_durably_before_retiring(tmp_path,
         assert not result.get('isError'), result
         assert synced and retired and not source.exists()
     assert not stage.exists() and archive.stat().st_nlink == 1
+    assert archive.read_bytes() == preserved
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual native metadata archive custody')
+@pytest.mark.parametrize('linked_archive', [False, True])
+@pytest.mark.parametrize('default', [False, True])
+def test_native_legacy_focus_retry_preserves_archive_and_refuses_hardlinked_history(tmp_path, monkeypatch, linked_archive, default):
+    import goal_migration
+    repo, td, _, _ = public(tmp_path)
+    source_path = goal_migration.LEGACY_DEFAULT_MARKER_PATH if default else goal_migration.LEGACY_FOCUS_PATH
+    archive_path = goal_migration.LEGACY_DEFAULT_MARKER_ARCHIVE if default else goal_migration.LEGACY_FOCUS_ARCHIVE
+    source = default_marker(td) if default else repo / source_path
+    if not default:
+        source.write_bytes(b'opaque retired focus\x00\xff\n')
+    original = source.read_bytes()
+    actual_retire = goal_migration._retire
+    fired = []
+    def interrupt(root, relative, expected):
+        if relative == source_path:
+            fired.append(relative)
+            raise OSError('interrupted native archive retirement')
+        return actual_retire(root, relative, expected)
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_migration, '_retire', interrupt)
+        result = migrate(repo, apply=True)
+        assert result.get('isError'), result
+    assert fired == [source_path]
+    archive = repo / archive_path
+    preserved = archive.read_bytes()
+    assert source.read_bytes() == original == preserved
+    stage = archive.with_name(goal_migration._publication_stage(archive.name))
+    if linked_archive:
+        os.link(archive, stage)
+    result = migrate(repo, apply=True)
+    if linked_archive:
+        assert result.get('isError'), result
+        assert 'nonlinked' in result['structuredContent']['error']
+        assert source.read_bytes() == original
+        assert stage.read_bytes() == preserved and archive.stat().st_nlink == 2
+    else:
+        assert not result.get('isError'), result
+        assert not source.exists() and archive.stat().st_nlink == 1
     assert archive.read_bytes() == preserved

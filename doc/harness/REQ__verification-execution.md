@@ -41,7 +41,9 @@ before launch. Producers cannot consume their own outputs. Required common,
 build and lockfile inputs belong in the declared scopes; review owns adequacy.
 
 Commands execute from the exact `--root`, including a frozen view without
-`.git`. They receive only declared environment names plus `PATH`; declare
+`.git`. They receive only declared environment names plus `PATH` and, on
+Windows, the host's `SYSTEMROOT` required by native operating-system facilities.
+These implicit bootstrap values are included in measured context. Declare
 `HOME`, locale, display, proxy or other necessary values explicitly. Environment
 values are hashed in context rather than stored. Command output and argv are
 diagnostic data and may themselves contain sensitive text. The resolved command
@@ -103,14 +105,27 @@ the reusable contract. These are cooperative trusted commands, not a sandbox.
 
 ```sh
 python3 plugin/scripts/verify_runner.py --root /exact/source-view \
-  --jobs /WBS/work/group.json --results /WBS/work/group-results.json \
+  --jobs /WBS/work/group.json --results /WBS/work/verification/group-results.json \
   --wbs-id WBS__example --run-id current-run --generation generation-2 \
   --max-workers 4 --timeout 60
 ```
 
 The same invocation against a restored source root, using the same declared
 relative inputs and result file, validates/reuses that group's existing results.
-This allows substantive QA and a later outcome assertion to consult the same
+
+Derived Native Windows placement constraint, measured 2026-11-14: keep the
+results file in a dedicated output directory. Its immediate parent must not
+be the command's source working directory or any ancestor of that directory.
+Native source custody prevents directory reparse conversion; actual Windows
+tests show that replacing a file directly in a retained directory conflicts
+with that protection, while publication in a separate child or sibling output
+directory succeeds. Reject the incompatible placement before user commands,
+leases or result publication, with an actionable `--results` location error.
+Preserve the existing source-custody sharing flags, parallel command execution,
+failure history and one canonical result store. Do not retry around custody or
+create a second store. Dedicated result directories are also portable on POSIX.
+
+Scoped result reuse allows substantive QA and a later outcome assertion to consult the same
 execution rather than rerun unchanged product commands for bookkeeping.
 `--reuse-only` validates the same scoped successful job records but never runs
 their argv on a miss; the job returns `executor_error` with no exit code and an

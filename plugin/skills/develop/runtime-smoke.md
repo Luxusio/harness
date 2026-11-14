@@ -176,4 +176,48 @@ Steps:
 4. **Report CLI smoke results:** summarize commands tested, passed count, and
    any failing command/exit code in the phase result.
 
+On native Windows, use the equivalent PowerShell helper and literal argument
+arrays. Supply the actual executable separately from its arguments; for a Python
+script this means the selected Python executable and an array containing the
+script path and safe arguments. Capture all output before limiting its display.
+
+```powershell
+function Invoke-SmokeCapture {
+  param([int]$Lines, [string]$Executable, [string[]]$Arguments)
+  $smokeOutput = [System.IO.Path]::GetTempFileName()
+  try {
+    & $Executable @Arguments > $smokeOutput 2>&1
+    $smokeStatus = $LASTEXITCODE
+    Get-Content -LiteralPath $smokeOutput -TotalCount $Lines
+    $global:LASTEXITCODE = $smokeStatus
+  } finally {
+    Remove-Item -LiteralPath $smokeOutput -Force
+  }
+}
+```
+
+Build check, when required:
+
+```powershell
+Invoke-SmokeCapture -Lines 5 -Executable <build_executable> -Arguments @(<build_arguments>)
+exit $LASTEXITCODE
+```
+
+Help/version check; failed help stops before version:
+
+```powershell
+Invoke-SmokeCapture -Lines 10 -Executable <binary_executable> -Arguments (@(<binary_arguments>) + @('--help'))
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-SmokeCapture -Lines 10 -Executable <binary_executable> -Arguments (@(<binary_arguments>) + @('--version'))
+exit $LASTEXITCODE
+```
+
+Documented safe command, with the same disposable-resource and no-live-fallback
+requirements as above:
+
+```powershell
+Invoke-SmokeCapture -Lines 20 -Executable <binary_executable> -Arguments (@(<binary_arguments>) + @(<documented_safe_arguments>))
+exit $LASTEXITCODE
+```
+
 Report: "Runtime smoke: PASS (<type>: <N> checks)" or "Runtime smoke: FAIL (<details>)".
