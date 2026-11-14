@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import ctypes
 import errno
 import hashlib
@@ -18,7 +18,7 @@ import sys
 import tempfile
 import threading
 from types import SimpleNamespace
-from unittest import TestCase, skipUnless
+from unittest import TestCase, skipUnless, SkipTest
 from unittest import mock
 
 
@@ -347,7 +347,6 @@ def test_dangling_control_endpoint_defers_without_removing_link(tmp_path, monkey
     assert endpoint.readlink() == target
 
 
-@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_failed_discovery_reports_diagnostic_and_present_endpoint(
     tmp_path, monkeypatch, stdout, stderr, expected, endpoint_kind, make_symlink,
 ):
@@ -355,9 +354,12 @@ def test_failed_discovery_reports_diagnostic_and_present_endpoint(
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     endpoint = tmp_path / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir()
-    with tempfile.TemporaryDirectory(prefix="hc-", dir="/tmp") as socket_dir, \
-            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+    with ExitStack() as stack:
         if endpoint_kind == "socket":
+            if os.name == "nt":
+                raise SkipTest("Unix endpoint diagnostics; Native file endpoint and new-session deferral remain exercised")
+            socket_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="hc-", dir="/tmp"))
+            server = stack.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
             # The control link can be long under xdist; the Unix socket cannot.
             native_socket = Path(socket_dir) / "s"
             server.bind(str(native_socket))

@@ -58,6 +58,11 @@ def isolated_installer_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
 
 
+def _is_cli_fixture(path):
+    with path.open("rb") as stream:
+        return stream.read(32).startswith(b"# Harness CLI protocol fixture\n")
+
+
 def _load_install_module():
     spec = importlib.util.spec_from_file_location("harness_install_py", INSTALL_PY)
     assert spec and spec.loader
@@ -70,7 +75,7 @@ def _load_install_module():
         selected_env = os.environ if env is None else env
         for directory in selected_env.get("PATH", "").split(os.pathsep):
             fixture = Path(directory) / runtime
-            if fixture.is_file() and fixture.read_bytes().startswith(b"# Harness CLI protocol fixture\n"):
+            if fixture.is_file() and _is_cli_fixture(fixture):
                 return [str(Path(getattr(sys, "_base_executable", sys.executable)).resolve()), "-B", str(fixture)]
         return resolve_host(runtime, cwd=cwd, env=env)
 
@@ -78,7 +83,7 @@ def _load_install_module():
     def run_fixture(command, dry):
         if not dry and command and command[0] in {"codex", "claude"}:
             argv = fixture_host(command[0])
-            if len(argv) == 3 and Path(argv[2]).is_file() and Path(argv[2]).read_bytes().startswith(b"# Harness CLI protocol fixture\n"):
+            if len(argv) == 3 and _is_cli_fixture(Path(argv[2])):
                 env = os.environ.copy()
                 if command[0] == "codex" and module._CODEX_RUNTIME_HOME.get() is not None:
                     env["CODEX_HOME"] = str(module._CODEX_RUNTIME_HOME.get())
