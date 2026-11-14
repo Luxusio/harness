@@ -207,8 +207,11 @@ owned process-tree cleanup. Do not signal an unverified or reused PID.
 
 Updating an existing project document must preserve unrelated user text and
 line endings, detect concurrent replacement or content changes, and preserve
-the displaced original for guarded rollback. A second writer's edit must not
-be overwritten during recovery. Windows must execute this real publication
+the displaced original for recovery. Restore automatically only when an atomic
+conditional operation can prove that no second writer is overwritten. Otherwise
+preserve the current document and displaced file, report their paths, and
+require explicit recovery; a pathname identity check followed by replacement
+does not prove that condition. Windows must execute this real publication
 path rather than depend on Linux exchange-rename support.
 
 Tests must use the selected platform's real publication, locking and security

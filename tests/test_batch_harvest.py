@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+import unittest
 from pathlib import Path
 
 
@@ -467,7 +468,7 @@ def test_refuses_symlink_inside_task_evidence(tmp_path: Path):
     assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
 
 
-def test_refuses_symlinked_evidence_parent_and_fifo(tmp_path: Path):
+def test_refuses_symlinked_evidence_parent(tmp_path: Path):
     repo = _main_repo(tmp_path)
     worktree = _merged_lead(repo, tmp_path)
     outside = tmp_path / "outside-tasks"
@@ -476,7 +477,12 @@ def test_refuses_symlinked_evidence_parent_and_fifo(tmp_path: Path):
     with _raises(mod.HarvestError, match="symlink"):
         mod.harvest(str(repo), str(worktree), "WBS__demo")
 
-    worktree2 = _merged_lead(repo, tmp_path, "lead-y")
+
+
+@unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO boundary; native reparse coverage is separate")
+def test_refuses_fifo_in_evidence(tmp_path: Path):
+    repo = _main_repo(tmp_path)
+    worktree2 = _merged_lead(repo, tmp_path)
     wbs_dir = _write_task(worktree2, "WBS__demo")
     os.mkfifo(wbs_dir / "pipe")
     with _raises(mod.HarvestError, match="non-regular entry"):

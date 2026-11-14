@@ -456,3 +456,73 @@ def test_native_changed_creation_time_refuses_without_killing_original_tree(tmp_
         if entry:
             entry["windows_created"] -= 1
             module._stop_entry(entry)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual controller death around Windows ResumeThread")
+@pytest.mark.parametrize("crash_stage", ["before-resume", "after-resume"])
+def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_path, monkeypatch, crash_stage):
+    module = _runtime_module(monkeypatch)
+    marker = tmp_path / "executed.txt"
+    service = tmp_path / "service.py"
+    service.write_text(
+        "import pathlib,sys,time\npathlib.Path(sys.argv[1]).write_text('executed')\ntime.sleep(300)\n")
+    manifest = tmp_path / "manifest.yaml"
+    # No healthcheck is intentional: default readiness must not turn a
+    # controller's abandoned, possibly suspended Job into a running service.
+    manifest.write_text(
+        "runtime:\n  services:\n    - name: startup\n"
+        f"      command: {_command(sys.executable, service, marker)}\n")
+    controller = tmp_path / "crashing controller.py"
+    controller.write_text(
+        "import os,sys\n"
+        "sys.path.insert(0,sys.argv[1])\n"
+        "import runtime_services as runtime\n"
+        "resume=runtime._win._ResumeThread\n"
+        "def crash(thread):\n"
+        "    if sys.argv[2]=='after-resume':\n"
+        "        assert resume(thread)!=0xFFFFFFFF\n"
+        "    os._exit(91)\n"
+        "runtime._win._ResumeThread=crash\n"
+        "runtime.main(sys.argv[3:])\n")
+    runtime_dir = tmp_path / "runtime"
+    abandoned = recovered = None
+    try:
+        crashed = subprocess.run(
+            [sys.executable, "-I", "-B", str(controller), str(SCRIPT.parent), crash_stage,
+             "--manifest", str(manifest), "--runtime-dir", str(runtime_dir), "start"],
+            text=True, capture_output=True, timeout=20)
+        assert crashed.returncode == 91, crashed.stdout + crashed.stderr
+        saved = module._load_state(runtime_dir)
+        abandoned = dict(saved["services"]["startup"])
+        assert abandoned["status"] == "starting" and abandoned["health"] == "pending"
+        assert module._entry_alive(abandoned), "fixture must leave an actual persistent owned Job"
+        if crash_stage == "before-resume":
+            assert not marker.exists(), "suspended command unexpectedly executed"
+        before_status = (runtime_dir / "services.json").read_bytes()
+        status = _run(tmp_path, "status")
+        assert status.returncode == 1, status.stdout + status.stderr
+        assert "startup: starting" in status.stdout and "health=fail" in status.stdout
+        assert "startup not confirmed" in status.stdout
+        assert (runtime_dir / "services.json").read_bytes() == before_status
+        assert module._entry_alive(abandoned), "status must preserve the unfinished owned Job"
+        if crash_stage == "before-resume":
+            assert not marker.exists()
+
+        restarted = _run(tmp_path, "start")
+        assert restarted.returncode == 0, restarted.stdout + restarted.stderr
+        assert "startup: started" in restarted.stdout and "startup: running" not in restarted.stdout
+        recovered = module._load_state(runtime_dir)["services"]["startup"]
+        assert recovered["windows_job"] != abandoned["windows_job"]
+        assert recovered["status"] == "running" and recovered["health"] == "pass"
+        assert not module._entry_alive(abandoned), "recovery must retire the entire abandoned owned Job"
+        assert module._entry_alive(recovered)
+        deadline = time.monotonic() + 8
+        while not marker.exists():
+            assert time.monotonic() < deadline, "recovered service command never executed"
+            time.sleep(0.05)
+        assert marker.read_text() == "executed"
+    finally:
+        if recovered is not None:
+            module._stop_entry(recovered)
+        if abandoned is not None:
+            module._stop_entry(abandoned)

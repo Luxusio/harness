@@ -68,6 +68,9 @@ original process creation time before allowing the service to run. Status and
 restart reuse that owned tree, including children surviving the original
 shell; shutdown never signals a reused foreign PID. A legacy PID-only Windows
 entry requires explicit recovery instead of automatic process adoption.
+An interrupted Windows startup remains unfinished even if its Job is alive.
+The next start retires that verified owned tree before starting a new one;
+status cannot turn unfinished startup into readiness from liveness alone.
 QA agents use this state as evidence for live
 HTTP/browser verification. A service that stays unhealthy becomes a visible
 `BLOCKED_ENV` reason rather than a silent downgrade to unit or mock tests.

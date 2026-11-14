@@ -899,7 +899,7 @@ class _ProjectDocExchangeIncomplete(RuntimeError):
 
 
 def _exchange_project_doc_native(left: str, right: str) -> None:
-    """Replace atomically, retaining the displaced object for guarded rollback.
+    """Replace atomically, retaining the displaced object for verified recovery.
 
     ReplaceFileW preserves the destination ACL and keeps its old object at a
     backup name. Move that exact backup handle to the vacated candidate name
@@ -934,7 +934,7 @@ def _exchange_project_doc_native(left: str, right: str) -> None:
                 # at backup with the destination absent. No blind cleanup.
                 raise _ProjectDocExchangeIncomplete(
                     f"native project-document exchange failed ({code}); files preserved at "
-                    f"{left}, {right}, {backup}") from _native._error(code)
+                    f"{left}, {right}, {backup}; manual recovery required") from _native._error(code)
             try:
                 displaced = _native._open(backup, _native.DELETE,
                                           share=_native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE)
@@ -956,7 +956,7 @@ def _exchange_project_doc_native(left: str, right: str) -> None:
             except BaseException as exc:
                 raise _ProjectDocExchangeIncomplete(
                     f"native project-document exchange incomplete; files preserved at "
-                    f"{left}, {right}, {backup}") from exc
+                    f"{left}, {right}, {backup}; manual recovery required") from exc
         finally:
             for handle in reversed(handles):
                 _native._close(handle)
@@ -1002,7 +1002,7 @@ def _same_file_identity(path: Path, expected: os.stat_result) -> bool:
     try:
         if os.name == "nt":
             # Reauthenticate ACL/link custody and reject same-object user edits
-            # before allowing rollback or retirement of the displaced file.
+            # before allowing retirement of the displaced file.
             _, current = _project_doc_text(path)
             if (current is None or current.st_size != expected.st_size
                     or current.st_mtime_ns != expected.st_mtime_ns):
@@ -1029,7 +1029,7 @@ def update_project_doc(
     path = safe_path(repo, project_doc)
     if os.name == "nt":
         from wiki_platform import _native
-        # Retain every ancestor through publication, readback, rollback and
+        # Retain every ancestor through publication, readback, preservation and
         # cleanup. Ordinary public paths remain unchanged outside disk calls.
         with _native._walk(path.parent, secure=True, writing=True):
             return _update_project_doc(path, ensure_routing=ensure_routing,
@@ -1068,7 +1068,6 @@ def _update_project_doc(path: Path, *, ensure_routing: bool, ensure_contract_imp
     )
     tmp = str(path.parent / Path(tmp).name)
     exchanged = False
-    preserve_tmp = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(candidate)
@@ -1101,56 +1100,34 @@ def _update_project_doc(path: Path, *, ensure_routing: bool, ensure_contract_imp
             candidate_stat = os.lstat(_project_doc_disk_path(tmp))
             _exchange_project_doc(tmp, str(path))
             exchanged = True
-            try:
-                displaced_text, displaced_stat = _project_doc_text(Path(tmp))
-                if not _same_project_doc_snapshot(
-                    displaced_text, displaced_stat, original, before
-                ):
-                    raise ValueError(
-                        "runtime project document changed during setup"
-                    )
-            except BaseException:
-                if not _same_file_identity(path, candidate_stat):
-                    preserve_tmp = True
-                    raise RuntimeError(
-                        f"runtime project document changed again during rollback; "
-                        f"original preserved at {tmp}"
-                    )
-                try:
-                    _exchange_project_doc(tmp, str(path))
-                    exchanged = False
-                except OSError as rollback_exc:
-                    preserve_tmp = True
-                    raise RuntimeError(
-                        f"runtime project document changed and rollback failed; "
-                        f"original preserved at {tmp}"
-                    ) from rollback_exc
-                raise
+            displaced_text, displaced_stat = _project_doc_text(Path(tmp))
+            if not _same_project_doc_snapshot(
+                displaced_text, displaced_stat, original, before
+            ):
+                raise ValueError("runtime project document changed during setup")
             if not _same_file_identity(path, candidate_stat):
-                preserve_tmp = True
-                raise RuntimeError(
-                    f"runtime project document changed after atomic exchange; "
-                    f"original preserved at {tmp}"
-                )
+                raise ValueError("runtime project document changed after atomic exchange")
             os.unlink(_project_doc_disk_path(tmp))
             exchanged = False
     except BaseException as exc:
+        if exchanged:
+            # This observation is diagnostic only: neither renameat2 nor
+            # ReplaceFileW conditionally replaces an expected file identity.
+            # A writer can replace path immediately after a successful check.
+            # Never exchange again or delete the displaced document on failure.
+            current = ("candidate identity observed" if _same_file_identity(path, candidate_stat)
+                       else "current path changed")
+            raise RuntimeError(
+                f"runtime project document verification failed after publication ({current}); "
+                f"current document preserved at {path}; displaced document preserved at {tmp}; "
+                "manual recovery required"
+            ) from exc
         if isinstance(exc, _ProjectDocExchangeIncomplete):
-            preserve_tmp = True
-        if exchanged and not preserve_tmp:
-            if not _same_file_identity(path, candidate_stat):
-                preserve_tmp = True
-            else:
-                try:
-                    _exchange_project_doc(tmp, str(path))
-                    exchanged = False
-                except OSError:
-                    preserve_tmp = True
-        if not preserve_tmp:
-            try:
-                os.unlink(_project_doc_disk_path(tmp))
-            except FileNotFoundError:
-                pass
+            raise
+        try:
+            os.unlink(_project_doc_disk_path(tmp))
+        except FileNotFoundError:
+            pass
         raise
     return True
 

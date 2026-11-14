@@ -420,12 +420,18 @@ def test_manifest_components_cannot_be_symlinks(tmp_path, component):
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
 
 
-def test_symlink_and_nonregular_git_markers_are_unavailable(tmp_path):
+def test_symlink_git_markers_are_unavailable(tmp_path):
     project = write_config(tmp_path / "project")
     target = tmp_path / "gitdir"; target.mkdir()
     marker = project / ".git"; create_symlink(marker, target, target_is_directory=True)
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
-    marker.unlink(); os.mkfifo(marker)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO boundary; native reparse coverage is separate")
+def test_fifo_git_markers_are_unavailable(tmp_path):
+    project = write_config(tmp_path / "project")
+    marker = project / ".git"
+    os.mkfifo(marker)
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
 
 

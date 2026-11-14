@@ -747,13 +747,19 @@ def start_services(args: argparse.Namespace) -> int:
         entry = state["services"].setdefault(name, {})
         pid = int(entry.get("pid") or 0)
         if _entry_alive(entry):
-            ok, detail = _health_ok(service)
-            if ok:
-                entry.update({"status": "running", "health": "pass", "health_detail": detail, "updated_at": _now()})
-                _append_log(runtime_dir, name, f"reuse healthy pid={pid}: {detail}")
-                print(f"{name}: running pid={pid} ({detail})")
-                continue
-            _append_log(runtime_dir, name, f"existing pid unhealthy, restarting pid={pid}: {detail}")
+            if os.name == "nt" and entry.get("status") != "running":
+                # A controller can die after durable ownership publication but
+                # before ResumeThread. Even a passing/no-op healthcheck cannot
+                # establish that this owned Job ever left its suspended state.
+                _append_log(runtime_dir, name, f"recover unfinished startup, restarting owned pid={pid}")
+            else:
+                ok, detail = _health_ok(service)
+                if ok:
+                    entry.update({"status": "running", "health": "pass", "health_detail": detail, "updated_at": _now()})
+                    _append_log(runtime_dir, name, f"reuse healthy pid={pid}: {detail}")
+                    print(f"{name}: running pid={pid} ({detail})")
+                    continue
+                _append_log(runtime_dir, name, f"existing pid unhealthy, restarting pid={pid}: {detail}")
             _stop_entry(entry)
 
         if not _preflight_service(service, runtime_dir, entry):
@@ -809,8 +815,12 @@ def status_services(args: argparse.Namespace) -> int:
         entry = state.get("services", {}).get(name, {})
         pid = int(entry.get("pid") or 0)
         alive = _entry_alive(entry)
-        ok, detail = _health_ok(service) if alive else (False, "not running")
-        status = "running" if alive and ok else "blocked" if entry.get("status") == "blocked" else "stopped"
+        if os.name == "nt" and alive and entry.get("status") != "running":
+            status = "starting" if entry.get("status") == "starting" else "unfinished"
+            ok, detail = False, "startup not confirmed; run start to recover the owned unfinished Job"
+        else:
+            ok, detail = _health_ok(service) if alive else (False, "not running")
+            status = "running" if alive and ok else "blocked" if entry.get("status") == "blocked" else "stopped"
         print(f"{name}: {status} pid={pid or '-'} health={'pass' if ok else 'fail'} detail={detail}")
         if status != "running":
             exit_code = 1

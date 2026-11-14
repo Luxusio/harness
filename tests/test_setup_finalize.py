@@ -306,7 +306,7 @@ def test_project_doc_update_aborts_on_same_inode_concurrent_edit(tmp_path):
     )
 
 
-def test_project_doc_atomic_exchange_restores_concurrent_replacement(tmp_path):
+def test_project_doc_atomic_exchange_preserves_concurrent_replacement_for_recovery(tmp_path):
     setup_finalize = load_setup_finalize("setup_finalize_exchange_race_test")
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -330,14 +330,18 @@ def test_project_doc_atomic_exchange_restores_concurrent_replacement(tmp_path):
                 repo, "AGENTS.md",
                 ensure_routing=False, ensure_contract_import=True,
             )
-        except ValueError as exc:
-            assert "changed during setup" in str(exc)
+        except RuntimeError as exc:
+            assert "manual recovery required" in str(exc)
+            assert str(project_doc) in str(exc)
         else:
             raise AssertionError("concurrent replacement must abort")
-    assert project_doc.read_text(encoding="utf-8") == "# Concurrent replacement\n"
+    assert project_doc.read_text(encoding="utf-8") == "# Existing\n@CONTRACTS.md\n"
+    preserved = list(repo.glob(".AGENTS.md.*.tmp"))
+    assert len(preserved) == 1
+    assert preserved[0].read_text(encoding="utf-8") == "# Concurrent replacement\n"
 
 
-def test_project_doc_exchange_read_failure_rolls_back_original(tmp_path):
+def test_project_doc_exchange_read_failure_preserves_original_for_recovery(tmp_path):
     setup_finalize = load_setup_finalize("setup_finalize_exchange_read_test")
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -358,16 +362,20 @@ def test_project_doc_exchange_read_failure_rolls_back_original(tmp_path):
                 repo, "AGENTS.md",
                 ensure_routing=False, ensure_contract_import=True,
             )
-        except OSError as exc:
-            assert "displaced read failure" in str(exc)
+        except RuntimeError as exc:
+            assert "manual recovery required" in str(exc)
+            assert isinstance(exc.__cause__, OSError)
+            assert "displaced read failure" in str(exc.__cause__)
         else:
             raise AssertionError("displaced read failure must abort")
-    assert project_doc.read_text(encoding="utf-8") == "# Original\n"
-    assert not list(repo.glob(".AGENTS.md.*.tmp"))
+    assert project_doc.read_text(encoding="utf-8") == "# Original\n@CONTRACTS.md\n"
+    preserved = list(repo.glob(".AGENTS.md.*.tmp"))
+    assert len(preserved) == 1
+    assert preserved[0].read_text(encoding="utf-8") == "# Original\n"
 
 
-def test_project_doc_rollback_failure_preserves_displaced_original(tmp_path):
-    setup_finalize = load_setup_finalize("setup_finalize_rollback_failure_test")
+def test_project_doc_readback_mismatch_never_attempts_unconditional_rollback(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_readback_mismatch_test")
     repo = tmp_path / "repo"
     repo.mkdir()
     project_doc = repo / "AGENTS.md"
@@ -375,12 +383,12 @@ def test_project_doc_rollback_failure_preserves_displaced_original(tmp_path):
     real_exchange = setup_finalize._exchange_project_doc
     exchanges = 0
 
-    def failing_rollback(left, right):
+    def initial_exchange_only(left, right):
         nonlocal exchanges
         exchanges += 1
         if exchanges == 1:
             return real_exchange(left, right)
-        raise OSError("simulated rollback failure")
+        raise AssertionError("a pathname identity check cannot authorize a rollback exchange")
 
     real_reader = setup_finalize._project_doc_text
 
@@ -391,7 +399,7 @@ def test_project_doc_rollback_failure_preserves_displaced_original(tmp_path):
         return text, info
 
     with mock.patch.object(
-        setup_finalize, "_exchange_project_doc", side_effect=failing_rollback
+        setup_finalize, "_exchange_project_doc", side_effect=initial_exchange_only
     ), mock.patch.object(
         setup_finalize, "_project_doc_text", side_effect=mismatched_displaced_reader
     ):
@@ -401,15 +409,18 @@ def test_project_doc_rollback_failure_preserves_displaced_original(tmp_path):
                 ensure_routing=False, ensure_contract_import=True,
             )
         except RuntimeError as exc:
-            assert "original preserved at" in str(exc)
+            assert "displaced document preserved at" in str(exc)
+            assert "manual recovery required" in str(exc)
         else:
-            raise AssertionError("rollback failure must fail closed")
+            raise AssertionError("readback mismatch must fail closed")
+    assert exchanges == 1
+    assert project_doc.read_text(encoding="utf-8") == "# Original\n@CONTRACTS.md\n"
     preserved = list(repo.glob(".AGENTS.md.*.tmp"))
     assert len(preserved) == 1
     assert preserved[0].read_text(encoding="utf-8") == "# Original\n"
 
 
-def test_project_doc_rollback_preserves_second_concurrent_replacement(tmp_path):
+def test_project_doc_readback_failure_preserves_second_concurrent_replacement(tmp_path):
     setup_finalize = load_setup_finalize("setup_finalize_second_race_test")
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -435,13 +446,69 @@ def test_project_doc_rollback_preserves_second_concurrent_replacement(tmp_path):
                 ensure_routing=False, ensure_contract_import=True,
             )
         except RuntimeError as exc:
-            assert "original preserved at" in str(exc)
+            assert "displaced document preserved at" in str(exc)
         else:
             raise AssertionError("a second replacement must be preserved")
     assert project_doc.read_text(encoding="utf-8") == "# Second writer\n"
     preserved = list(repo.glob(".AGENTS.md.*.tmp"))
     assert len(preserved) == 1
     assert preserved[0].read_text(encoding="utf-8") == "# Original\n"
+
+
+def _assert_project_doc_replacement_after_identity_check_is_preserved(module, repo, monkeypatch):
+    repo.mkdir(exist_ok=True)
+    path = repo / "AGENTS.md"
+    original = "# Original 한글\r\n".encode("utf-8")
+    second_writer = "# Second writer must survive 中文\r\n".encode("utf-8")
+    path.write_bytes(original)
+    reader = module._project_doc_text
+    same_identity = module._same_file_identity
+    exchange = module._exchange_project_doc
+    replaced = False
+    exchanges = 0
+
+    def displaced_read_failure(subject):
+        if Path(subject) != path:
+            raise OSError("displaced-read failure after exchange")
+        return reader(subject)
+
+    def replacement_after_successful_guard(subject, expected):
+        nonlocal replaced
+        matches = same_identity(subject, expected)
+        if matches and not replaced:
+            replacement = repo / "second-writer.md"
+            replacement.write_bytes(second_writer)
+            # Execute the actual replacement after observing the real True
+            # identity result, before the caller receives that stale result.
+            os.replace(replacement, path)
+            replaced = True
+        return matches
+
+    def counted_exchange(left, right):
+        nonlocal exchanges
+        exchanges += 1
+        return exchange(left, right)
+
+    monkeypatch.setattr(module, "_project_doc_text", displaced_read_failure)
+    monkeypatch.setattr(module, "_same_file_identity", replacement_after_successful_guard)
+    monkeypatch.setattr(module, "_exchange_project_doc", counted_exchange)
+    with pytest.raises(RuntimeError, match="manual recovery required") as failure:
+        module.update_project_doc(repo, "AGENTS.md", ensure_routing=False,
+                                  ensure_contract_import=True)
+
+    assert replaced, "the real replacement must execute after the successful identity check"
+    assert exchanges == 1, "a stale pathname observation must never authorize a rollback exchange"
+    assert path.read_bytes() == second_writer
+    preserved = list(repo.glob(".AGENTS.md.*.tmp"))
+    assert len(preserved) == 1
+    assert preserved[0].read_bytes() == original
+    assert str(path) in str(failure.value) and str(preserved[0]) in str(failure.value)
+    assert isinstance(failure.value.__cause__, OSError)
+
+
+def test_project_doc_real_replacement_after_identity_guard_never_loses_second_writer(tmp_path, monkeypatch):
+    module = load_setup_finalize("setup_finalize_after_guard_race_test")
+    _assert_project_doc_replacement_after_identity_check_is_preserved(module, tmp_path / "repo", monkeypatch)
 
 
 @pytest.fixture
@@ -452,6 +519,13 @@ def native_project_doc(tmp_path):
     root = _native.ensure_private_directory(tmp_path / "setup native 한글 'quoted' & literal")
     module = load_setup_finalize("setup_finalize_native_project_doc_test")
     return module, _native, root
+
+
+def test_native_project_doc_real_replacement_after_identity_guard_preserves_both_documents(
+    native_project_doc, monkeypatch,
+):
+    module, _, root = native_project_doc
+    _assert_project_doc_replacement_after_identity_check_is_preserved(module, root, monkeypatch)
 
 
 def test_native_project_doc_exchange_preserves_both_file_identities(native_project_doc):
