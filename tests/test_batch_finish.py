@@ -67,7 +67,7 @@ def _isolate(monkeypatch, tmp_path: Path) -> None:
 def _git(*args, cwd, env=None, check=True) -> str:
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", *paths, *args], cwd=cwd, capture_output=True, text=True, check=False,
+        ["git", *paths, *_fixture_git_location(cwd), *args], cwd=cwd, capture_output=True, text=True, check=False,
         env={**os.environ, **(env or {})},
     )
     if check:
@@ -81,6 +81,19 @@ def _fixture_io(path: Path) -> Path:
         from _wiki_windows import _win32_path
         return Path(_win32_path(path))
     return Path(path)
+
+
+def _fixture_git_location(root: Path) -> list[str]:
+    """Keep Native Gitfile discovery bound to its actual target and cwd."""
+    if os.name != "nt":
+        return []
+    pointer = _fixture_io(Path(root) / ".git")
+    if not pointer.is_file():
+        return []
+    binding = pointer.read_text(encoding="utf-8").strip()
+    assert binding.startswith("gitdir: "), binding
+    gitdir = os.path.abspath(os.path.join(root, binding[len("gitdir: "):]))
+    return ["--git-dir=" + os.path.relpath(gitdir, root)]
 
 
 def _write(path: Path, text: str) -> None:

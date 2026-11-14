@@ -122,13 +122,19 @@ def _paths(repo, policy, *, _deadline=None):
         _require(relative not in policy['artifacts'] or stat.S_ISREG(info.st_mode),
                  'required artifact must be a regular file: ' + relative)
         if stat.S_ISDIR(info.st_mode):
-            _require(path == Path(repo) or not (disk_path / ".git").exists(), "nested checkout unsupported; select its concrete inputs: " + relative)
-            for child in disk_path.iterdir():
-                _require(_deadline is None or time.monotonic() < _deadline, "input measurement time budget exceeded")
-                listing_bytes += len(os.fsencode(child.name)) + 1
-                _require(listing_bytes <= wbs.MAX_LISTING_BYTES, 'input listing byte budget exceeded')
-                pending.append(path / child.name)
-                _require(len(found) + len(pending) <= wbs.MAX_EVIDENCE_ENTRIES, "input entry budget exceeded")
+            with ExitStack() as listing:
+                if os.name == "nt":
+                    from wiki_platform import trusted_source_directory
+                    listing.enter_context(trusted_source_directory(path))
+                _require(path == Path(repo) or not (disk_path / ".git").exists(), "nested checkout unsupported; select its concrete inputs: " + relative)
+                children = (listing.enter_context(os.scandir(disk_path))
+                            if os.name == "nt" else disk_path.iterdir())
+                for child in children:
+                    _require(_deadline is None or time.monotonic() < _deadline, "input measurement time budget exceeded")
+                    listing_bytes += len(os.fsencode(child.name)) + 1
+                    _require(listing_bytes <= wbs.MAX_LISTING_BYTES, 'input listing byte budget exceeded')
+                    pending.append(path / child.name)
+                    _require(len(found) + len(pending) <= wbs.MAX_EVIDENCE_ENTRIES, "input entry budget exceeded")
         else:
             _require(stat.S_ISREG(info.st_mode), "nonregular input unsupported: " + relative)
             found.add(relative)

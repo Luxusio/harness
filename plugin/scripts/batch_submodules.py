@@ -34,18 +34,20 @@ def _require(condition, message):
         raise SubmoduleError(message)
 
 
-def _conversion_policy(root):
+def _conversion_policy(root, *, gitdir=None):
     """Read only safe effective conversion values, never execute configured tools."""
     from wiki_platform import run_bounded
     env = _trusted_git_env()
     env.update(GIT_TERMINAL_PROMPT='0', LC_ALL='C')
+    location = (['--git-dir=' + os.path.relpath(gitdir, root)]
+                if os.name == 'nt' and gitdir is not None else [])
     policy = {}
     for key, default, allowed in (
             ('core.autocrlf', 'false', {'false', 'true', 'input'}),
             ('core.eol', 'native', {'lf', 'crlf', 'native'})):
         try:
             result = run_bounded(
-                [_git_executable(root, env), '--no-pager', '--no-optional-locks', 'config', '--includes',
+                [_git_executable(root, env), '--no-pager', '--no-optional-locks', *location, 'config', '--includes',
                  '--null', '--type=bool-or-str', '--get', key],
                 cwd=root, env=env, timeout=10, limit=32)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -75,7 +77,7 @@ def _git(root, *args, allow=False, gitdir=None):
                GIT_TERMINAL_PROMPT='0', GIT_NO_LAZY_FETCH='1', GIT_NO_REPLACE_OBJECTS='1', LC_ALL='C')
     conversion = []
     if os.name == 'nt':
-        for key, value in _conversion_policy(root).items():
+        for key, value in _conversion_policy(root, gitdir=gitdir).items():
             conversion.extend(('-c', key + '=' + value))
     location = (['--git-dir=' + os.path.relpath(gitdir, root)]
                 if os.name == 'nt' and gitdir is not None else [])
@@ -157,16 +159,27 @@ def _metadata(root):
     else:
         embedded = os.path.isdir(gitfile)
     _identity(gitfile, embedded)
-    _require(os.path.normcase(os.path.abspath(_git(root, 'rev-parse', '--show-toplevel'))) == os.path.normcase(root), 'foreign checkout binding')
-    gd = os.path.abspath(_git(root, 'rev-parse', '--absolute-git-dir'))
+    actual_gitdir = None
+    if os.name == 'nt':
+        if embedded:
+            actual_gitdir = gitfile
+        else:
+            from wiki_platform import safe_metadata_snapshot
+            raw, _ = safe_metadata_snapshot(gitfile, MAX_MANIFEST_BYTES)
+            pointer = raw.decode('utf-8').strip()
+            _require(pointer.startswith('gitdir: '), 'invalid module Git pointer')
+            actual_gitdir = os.path.abspath(os.path.join(root, pointer[len('gitdir: '):]))
+        _safe(actual_gitdir)
+    _require(os.path.normcase(os.path.abspath(_git(root, 'rev-parse', '--show-toplevel', gitdir=actual_gitdir))) == os.path.normcase(root), 'foreign checkout binding')
+    gd = os.path.abspath(_git(root, 'rev-parse', '--absolute-git-dir', gitdir=actual_gitdir))
     _safe(gd)
-    common = os.path.abspath(os.path.join(root, _git(root, 'rev-parse', '--git-common-dir')))
+    common = os.path.abspath(os.path.join(root, _git(root, 'rev-parse', '--git-common-dir', gitdir=actual_gitdir)))
     _require(common == gd, 'module linked worktrees are unsupported')
     return gd, {'gitdir': _identity(gd, True), 'gitfile': _identity(gitfile, embedded)}
 
 
 def _supported(root, gd):
-    _require(_git(root, 'rev-parse', '--is-shallow-repository') == 'false', 'shallow module unsupported')
+    _require(_git(root, 'rev-parse', '--is-shallow-repository', gitdir=gd) == 'false', 'shallow module unsupported')
     if os.name == 'nt':
         from wiki_platform import _native
         for relative in ('objects/info/alternates', 'objects/info/http-alternates'):
@@ -178,8 +191,8 @@ def _supported(root, gd):
     else:
         _require(not os.path.lexists(os.path.join(gd, 'objects/info/alternates'))
                  and not os.path.lexists(os.path.join(gd, 'objects/info/http-alternates')), 'alternate object stores unsupported')
-    _require(not _git(root, 'for-each-ref', '--format=%(refname)', 'refs/replace/'), 'replacement refs unsupported')
-    configured = _git(root, 'config', '--local', '--get-regexp', r'(^extensions\.partialclone$|^remote\..*\.promisor$|^remote\..*\.partialclonefilter$)', allow=True)
+    _require(not _git(root, 'for-each-ref', '--format=%(refname)', 'refs/replace/', gitdir=gd), 'replacement refs unsupported')
+    configured = _git(root, 'config', '--local', '--get-regexp', r'(^extensions\.partialclone$|^remote\..*\.promisor$|^remote\..*\.partialclonefilter$)', allow=True, gitdir=gd)
     _require(configured.returncode == 1, 'promisor or partial clone configuration unsupported')
     if os.name == 'nt':
         try:
@@ -189,8 +202,8 @@ def _supported(root, gd):
             pass
     else:
         _require(not list(Path(gd, 'objects/pack').glob('*.promisor')), 'promisor objects unsupported')
-    _require(not _git(root, 'ls-files', '--stage').startswith('160000 ')
-             and '\n160000 ' not in _git(root, 'ls-files', '--stage'), 'recursive submodules unsupported')
+    _require(not _git(root, 'ls-files', '--stage', gitdir=gd).startswith('160000 ')
+             and '\n160000 ' not in _git(root, 'ls-files', '--stage', gitdir=gd), 'recursive submodules unsupported')
     if os.name == 'nt':
         try:
             os.lstat(_native._win32_path(os.path.join(root, '.gitmodules')))
@@ -215,18 +228,18 @@ def _supported(root, gd):
         _require(count <= 100000, 'module content inventory exceeds bound')
 
 
-def reject_hidden_index_flags(root):
+def reject_hidden_index_flags(root, *, gitdir=None):
     """Refuse index flags which can hide unique working-tree bytes from Git."""
-    entries = _git(root, '--literal-pathspecs', 'ls-files', '-v', '-z').split('\0')
+    entries = _git(root, '--literal-pathspecs', 'ls-files', '-v', '-z', gitdir=gitdir).split('\0')
     _require(not any(entry and (entry[0] == 'S' or entry[0].islower()) for entry in entries),
              'assume-unchanged or skip-worktree index flags must be cleared before S1 work')
 
 
-def _clean(root, ignored=False):
-    reject_hidden_index_flags(root)
-    _require(not _git(root, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'), 'module checkout is dirty')
+def _clean(root, ignored=False, *, gitdir=None):
+    reject_hidden_index_flags(root, gitdir=gitdir)
+    _require(not _git(root, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none', gitdir=gitdir), 'module checkout is dirty')
     if ignored:
-        _require(not _git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'), 'unknown ignored module content')
+        _require(not _git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', gitdir=gitdir), 'unknown ignored module content')
 
 
 def _tree(root, commit):
@@ -248,7 +261,7 @@ def _tree(root, commit):
 def _closure(root, objects, *, gitdir=None):
     for oid in objects:
         _require(isinstance(oid, str) and OID.fullmatch(oid), 'invalid object identity')
-        _git(root, 'cat-file', '-e', oid)
+        _git(root, 'cat-file', '-e', oid, gitdir=gitdir)
     if objects:
         # fsck checks the entire local object store, including non-commit refs.
         _git(root, 'fsck', '--full', '--no-dangling', '--no-reflogs', *sorted(objects), gitdir=gitdir)
@@ -275,8 +288,8 @@ def selection(repo, paths):
         embedded = gd == os.path.join(root, '.git')
         _require(embedded or os.path.commonpath((gd, modules_dir)) == modules_dir, 'foreign main module gitdir')
         _supported(root, gd)
-        _clean(root)
-        _require(_git(root, 'rev-parse', 'HEAD') == links[path], 'main module differs from recorded gitlink')
+        _clean(root, gitdir=gd)
+        _require(_git(root, 'rev-parse', 'HEAD', gitdir=gd) == links[path], 'main module differs from recorded gitlink')
         index = _git(repo, '--literal-pathspecs', 'ls-files', '--stage', '-z', '--', path)
         _require(index == f'160000 {links[path]} 0\t{path}\0', 'module index differs from committed gitlink')
         _closure(root, {links[path]}, gitdir=gd)
@@ -496,13 +509,13 @@ def _native_remove_tree(path, inventory):
 
 def _native_clone_proof(repo, root, gd, m):
     actual, ident = _metadata(root)
-    _require(actual == gd and _git(root, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + m['branch']
-             and _git(root, 'rev-parse', 'HEAD') == m['initial_gitlink']
-             and os.path.normcase(os.path.abspath(_git(root, 'config', '--local', '--get', 'remote.origin.url')))
+    _require(actual == gd and _git(root, 'symbolic-ref', '-q', 'HEAD', gitdir=gd) == 'refs/heads/' + m['branch']
+             and _git(root, 'rev-parse', 'HEAD', gitdir=gd) == m['initial_gitlink']
+             and os.path.normcase(os.path.abspath(_git(root, 'config', '--local', '--get', 'remote.origin.url', gitdir=gd)))
                  == os.path.normcase(os.path.join(repo, m['path'])),
              'incomplete or foreign private clone retained: ' + root)
     _supported(root, gd)
-    _clean(root, True)
+    _clean(root, True, gitdir=gd)
     _closure(root, {m['initial_gitlink']}, gitdir=gd)
     return ident
 
@@ -567,10 +580,10 @@ def _prepare_native(repo, worktree, value, m, persist):
                  'publication stage without completed clone retained: ' + parent)
         ensure_private_directory(clone)
         source = os.path.join(repo, m['path'])
-        conversion = _conversion_policy(source)
-        algorithm = _git(source, 'rev-parse', '--show-object-format')
+        conversion = _conversion_policy(source, gitdir=m['main_gitdir'])
+        algorithm = _git(source, 'rev-parse', '--show-object-format', gitdir=m['main_gitdir'])
         _require(algorithm in {'sha1', 'sha256'}, 'unsupported module object format')
-        source_head = _git(source, 'symbolic-ref', '-q', 'HEAD', allow=True)
+        source_head = _git(source, 'symbolic-ref', '-q', 'HEAD', allow=True, gitdir=m['main_gitdir'])
         _require(source_head.returncode in (0, 1), 'cannot inspect source default branch')
         head = os.fsdecode(source_head.stdout).strip() if source_head.returncode == 0 else None
         _require(head is None or head.startswith('refs/heads/'), 'invalid source default branch')
@@ -689,10 +702,10 @@ def _validate_private(worktree, m, clean=False, ignored=False):
     root = os.path.join(worktree, m['path'])
     gd, ident = _metadata(root)
     _require(gd == m['private_gitdir'] and ident == m['private_identity'] and _identity(os.path.dirname(gd), True) == m['private_parent_identity'], 'private module metadata replaced')
-    _require(_git(root, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + m['branch'], 'module development branch changed or detached')
+    _require(_git(root, 'symbolic-ref', '-q', 'HEAD', gitdir=gd) == 'refs/heads/' + m['branch'], 'module development branch changed or detached')
     _supported(root, gd)
     if clean:
-        _clean(root, ignored)
+        _clean(root, ignored, gitdir=gd)
 
 
 def _history(worktree, value):
@@ -723,16 +736,16 @@ def validate(repo, worktree, value, phase='resume'):
         _history(worktree, value)
         links, _ = _tree(worktree, 'HEAD')
         for m in value['modules']:
-            _require(_git(os.path.join(worktree, m['path']), 'rev-parse', 'HEAD') == links[m['path']], 'module commit must be recorded in superproject gitlink')
+            _require(_git(os.path.join(worktree, m['path']), 'rev-parse', 'HEAD', gitdir=m['private_gitdir']) == links[m['path']], 'module commit must be recorded in superproject gitlink')
 
 
 def _inventory(worktree, m, history):
     root = os.path.join(worktree, m['path'])
     refs = {}
-    for line in _git(root, 'for-each-ref', '--format=%(refname) %(objectname)').splitlines():
+    for line in _git(root, 'for-each-ref', '--format=%(refname) %(objectname)', gitdir=m['private_gitdir']).splitlines():
         name, oid = line.split(' ')
         refs[name] = oid
-    reflog_objects = set(_git(root, 'reflog', 'show', '--all', '--format=%H').splitlines())
+    reflog_objects = set(_git(root, 'reflog', 'show', '--all', '--format=%H', gitdir=m['private_gitdir']).splitlines())
     logs = Path(m['private_gitdir'], 'logs')
     if os.name == 'nt':
         from wiki_platform import _native, metadata_probe, safe_metadata_snapshot
@@ -796,14 +809,14 @@ def preserve(repo, worktree, value, persist):
         objects = set(pins)
         root, main = os.path.join(worktree, m['path']), os.path.join(repo, m['path'])
         for oid, ref in pins.items():
-            previous = _git(main, 'rev-parse', '--verify', '--quiet', ref, allow=True)
+            previous = _git(main, 'rev-parse', '--verify', '--quiet', ref, allow=True, gitdir=m['main_gitdir'])
             if previous.returncode == 0:
                 _require(os.fsdecode(previous.stdout).strip() == oid, 'preservation pin collision')
             else:
                 _require(previous.returncode == 1, 'cannot inspect preservation pin')
                 _git(main, 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', root, oid,
                      gitdir=m['main_gitdir'])
-                _git(main, 'update-ref', ref, oid, '0' * len(oid))
+                _git(main, 'update-ref', ref, oid, '0' * len(oid), gitdir=m['main_gitdir'])
         _closure(main, objects, gitdir=m['main_gitdir'])
         _require(_inventory(worktree, m, history) == inv, 'module inventory changed during preservation')
     return value
@@ -816,7 +829,7 @@ def _proof(repo, worktree, value):
         _require(_inventory(worktree, m, history) == m['inventory'], 'module refs or reflogs changed after preservation')
         main = os.path.join(repo, m['path'])
         for oid, ref in m['pins'].items():
-            _require(_git(main, 'show-ref', '--verify', '--hash', ref) == oid, 'preservation pin missing or changed')
+            _require(_git(main, 'show-ref', '--verify', '--hash', ref, gitdir=m['main_gitdir']) == oid, 'preservation pin missing or changed')
         _closure(main, set(m['pins']), gitdir=m['main_gitdir'])
 
 
@@ -843,8 +856,9 @@ def witness(repo, worktree, value, destination_ref, old_tip, target_tip, target=
     entries = []
     for m in value['modules']:
         module = os.path.join(root, m['path'])
-        _clean(module)
-        old = _git(module, 'rev-parse', 'HEAD')
+        gitdir = m['private_gitdir'] if target == 'lead' else m['main_gitdir']
+        _clean(module, gitdir=gitdir)
+        old = _git(module, 'rev-parse', 'HEAD', gitdir=gitdir)
         _require(links[m['path']] in m['pins'], 'target gitlink not preserved')
         entries.append(dict(path=m['path'], old_head=old, target_head=links[m['path']]))
     w = dict(destination_ref=destination_ref, old_tip=old_tip, target_tip=target_tip, worktree=value['worktree'], target=target, modules=entries)
@@ -865,10 +879,11 @@ def reconcile_checkout(repo, value, w, target='main'):
     current = _git(root, 'rev-parse', 'HEAD')
     _require(current in (w['old_tip'], w['target_tip']), 'destination advanced beyond witness')
     if current == w['old_tip'] and current != w['target_tip']:
-        for entry in w['modules']:
+        for m, entry in zip(value['modules'], w['modules']):
             module = os.path.join(root, entry['path'])
-            _clean(module)
-            _require(_git(module, 'rev-parse', 'HEAD') == entry['old_head'], 'pre-integration checkout moved')
+            gitdir = m['private_gitdir'] if target == 'lead' else m['main_gitdir']
+            _clean(module, gitdir=gitdir)
+            _require(_git(module, 'rev-parse', 'HEAD', gitdir=gitdir) == entry['old_head'], 'pre-integration checkout moved')
         return
     links, gm = _tree(root, current)
     _require(set(links) == set(value['topology']) and gm == value['gitmodules_oid'], 'landed topology differs')
@@ -881,20 +896,20 @@ def reconcile_checkout(repo, value, w, target='main'):
             _require(entry[:2] == ' M' and entry[3:] in selected, 'unrelated destination dirt')
     for m, entry in zip(value['modules'], w['modules']):
         module = os.path.join(root, m['path'])
-        _clean(module)
+        gitdir = m['private_gitdir'] if target == 'lead' else m['main_gitdir']
+        _clean(module, gitdir=gitdir)
         _require(links[m['path']] == entry['target_head'], 'witness gitlink mismatch')
-        head = _git(module, 'rev-parse', 'HEAD')
+        head = _git(module, 'rev-parse', 'HEAD', gitdir=gitdir)
         _require(head in (entry['old_head'], entry['target_head']), 'foreign module checkout movement')
         _require(m['pins'] and entry['target_head'] in m['pins'], 'missing preserved target proof')
-        gitdir = m['private_gitdir'] if target == 'lead' else m['main_gitdir']
         _closure(module, {entry['target_head']}, gitdir=gitdir)
         if head != entry['target_head']:
             if target == 'lead':
-                _require(_git(module, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + m['branch'], 'lead module branch changed')
-                _git(module, 'reset', '--keep', entry['target_head'])
+                _require(_git(module, 'symbolic-ref', '-q', 'HEAD', gitdir=gitdir) == 'refs/heads/' + m['branch'], 'lead module branch changed')
+                _git(module, 'reset', '--keep', entry['target_head'], gitdir=gitdir)
             else:
-                _git(module, 'checkout', '--detach', entry['target_head'])
-        _clean(module)
+                _git(module, 'checkout', '--detach', entry['target_head'], gitdir=gitdir)
+        _clean(module, gitdir=gitdir)
 
 
 def _disposable_metadata(worktree, m):
@@ -915,7 +930,7 @@ def _disposable_metadata(worktree, m):
     root = os.path.join(worktree, m['path'])
     inv = m['inventory']
     _require(inv is not None and m['pins'] is not None, 'missing metadata preservation intent')
-    config = _git(root, 'config', '--local', '--null', '--list')
+    config = _git(root, 'config', '--local', '--null', '--list', gitdir=gd)
     for entry in filter(None, config.split('\0')):
         key, sep, value = entry.partition('\n')
         _require(sep, 'unreadable private Git configuration')
@@ -935,8 +950,8 @@ def _disposable_metadata(worktree, m):
                 value == 'origin' if kind == 'remote' else value.startswith('refs/heads/'))
         _require(allowed, 'unsupported private Git configuration retained')
     _closure(root, set(m['pins']), gitdir=gd)
-    reachable = set(_git(root, 'rev-list', '--objects', '--no-object-names', *sorted(m['pins'])).splitlines())
-    all_objects = set(_git(root, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname)').splitlines())
+    reachable = set(_git(root, 'rev-list', '--objects', '--no-object-names', *sorted(m['pins']), gitdir=gd).splitlines())
+    all_objects = set(_git(root, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname)', gitdir=gd).splitlines())
     _require(all_objects <= reachable, 'unpreserved private Git objects retained')
     count = 0
     files = []
@@ -998,7 +1013,7 @@ def _disposable_metadata(worktree, m):
             _require(not any(line.lstrip().startswith(('#', ';')) for line in text.splitlines()),
                      'unproven private config comments retained')
         elif rel == 'COMMIT_EDITMSG':
-            _require(text.strip('\n') == _git(root, 'log', '-1', '--format=%B'), 'unproven commit-message contents retained')
+            _require(text.strip('\n') == _git(root, 'log', '-1', '--format=%B', gitdir=gd), 'unproven commit-message contents retained')
         elif rel == 'ORIG_HEAD':
             _require(text.strip() in m['pins'], 'unpreserved original HEAD retained')
         elif rel in inv['refs']:
@@ -1013,7 +1028,7 @@ def _disposable_metadata(worktree, m):
                 if line.startswith('#'):
                     _require(line.startswith('# pack-refs with: ') and all(word in {'peeled','fully-peeled','sorted'} for word in line[18:].split()), 'unknown packed-ref comment')
                 elif line.startswith('^'):
-                    _require(last is not None and line[1:] == _git(root, 'rev-parse', last + '^{}'), 'unproven peeled ref')
+                    _require(last is not None and line[1:] == _git(root, 'rev-parse', last + '^{}', gitdir=gd), 'unproven peeled ref')
                 else:
                     oid, sep, ref = line.partition(' ')
                     _require(sep and inv['refs'].get(ref) == oid, 'unproven packed reference')
@@ -1059,6 +1074,6 @@ def preserved_proof(repo, value):
         _supported(main, gd)
         _require(m['inventory'] is not None and m['pins'] is not None, 'missing preserved inventory')
         for oid, ref in m['pins'].items():
-            _require(_git(main, 'show-ref', '--verify', '--hash', ref) == oid, 'preservation pin missing or changed')
+            _require(_git(main, 'show-ref', '--verify', '--hash', ref, gitdir=m['main_gitdir']) == oid, 'preservation pin missing or changed')
         _closure(main, set(m['pins']), gitdir=m['main_gitdir'])
     return {'version': 1, 'preserved': True}

@@ -233,9 +233,10 @@ def test_native_tree_entries_streams_exact_bytes_and_propagates_inventory_failur
 
 
 def _git(*args, cwd):
+    from test_batch_finish import _fixture_git_location
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", *paths, *args], cwd=cwd, capture_output=True, text=True, check=False,
+        ["git", *paths, *_fixture_git_location(cwd), *args], cwd=cwd, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, f"git {args} failed: {result.stderr}"
     return result.stdout.strip()
@@ -492,6 +493,7 @@ def test_two_leads_rebased_and_fast_forwarded_are_harvested_and_removed(tmp_path
 
 
 def test_rebase_conflict_abort_restores_the_lead_and_leaves_main(tmp_path: Path):
+    from test_batch_finish import _fixture_git_location
     repo = _main_repo(tmp_path)
     _ignore_task_evidence(repo)
     first, second = tmp_path / "wt1", tmp_path / "wt2"
@@ -505,7 +507,7 @@ def test_rebase_conflict_abort_restores_the_lead_and_leaves_main(tmp_path: Path)
 
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     conflict = subprocess.run(
-        ["git", *paths, "rebase", "-q", "--no-autostash", main_head],
+        ["git", *paths, *_fixture_git_location(second), "rebase", "-q", "--no-autostash", main_head],
         cwd=second, capture_output=True, text=True, check=False,
     )
     assert conflict.returncode != 0
@@ -522,6 +524,7 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
     """A stopped rebase detaches the worktree HEAD at the main HEAD, which
     passes the ancestor check; harvest must refuse it. The integration WBS
     then resolves, continues, fast-forwards, harvests, and removes."""
+    from test_batch_finish import _fixture_git_location
     repo = _main_repo(tmp_path)
     _ignore_task_evidence(repo)
     first, second = tmp_path / "wt1", tmp_path / "wt2"
@@ -535,7 +538,7 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
 
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     stopped = subprocess.run(
-        ["git", *paths, "rebase", "-q", "--no-autostash", main_head],
+        ["git", *paths, *_fixture_git_location(second), "rebase", "-q", "--no-autostash", main_head],
         cwd=second, capture_output=True, text=True, check=False,
     )
     assert stopped.returncode != 0
@@ -548,7 +551,7 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
     (second / "shared.txt").write_text("from lead 1\nfrom lead 2\n", encoding="utf-8")
     _git("add", "shared.txt", cwd=second)
     env = {**os.environ, "GIT_EDITOR": "true"}
-    subprocess.run(["git", *paths, "rebase", "--continue"], cwd=second, env=env,
+    subprocess.run(["git", *paths, *_fixture_git_location(second), "rebase", "--continue"], cwd=second, env=env,
                    capture_output=True, check=True)
     _git("merge", "-q", "--ff-only", "lead-2", cwd=repo)
     _harvest(str(repo), str(second), "WBS__lead2")
@@ -766,9 +769,10 @@ def test_s1_guarded_removal_uses_single_force_and_preserves_objects(tmp_path, mo
     main, work, path, manifest, checkpoint, _, _, tip = _s1_removal_fixture(tmp_path, monkeypatch)
     calls = []
     def runner(repo, *args):
+        from test_batch_finish import _fixture_git_location
         calls.append(args)
         paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
-        return subprocess.run(["git", *paths, *map(str, args)], cwd=repo, capture_output=True, text=True)
+        return subprocess.run(["git", *paths, *_fixture_git_location(repo), *map(str, args)], cwd=repo, capture_output=True, text=True)
     result = mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint, git_runner=runner)
     assert result.returncode == 0, result.stderr
     assert calls == [("worktree", "remove", "--force", str(work))]

@@ -760,5 +760,5 @@ def test_installer_uses_user_home_when_xdg_location_is_supplied(tmp_path, monkey
     market = Path(capsys.readouterr().out.strip())
     assert market == home / ".local/share/wiki-atlassian/marketplace"
     item = json.loads((market / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))["plugins"][0]
-    assert (market / item["source"] / "skills/setup/SKILL.md").is_file()
+    assert Path(module._io_path(market / item["source"] / "skills/setup/SKILL.md")).is_file()
     assert not override.exists()

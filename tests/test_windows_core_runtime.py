@@ -418,6 +418,37 @@ def test_native_canonical_control_writer_rejects_foreign_globals(private, monkey
     assert not target.exists()
 
 
+def test_native_verification_inputs_reject_junction_before_directory_listing(private, monkeypatch):
+    import verification_target
+
+    repo = _project(private)
+    external = win.ensure_private_directory(private / "outside selected inputs")
+    sentinel = external / "must-not-enumerate.txt"
+    win.atomic_write(sentinel, b"preserve outside bytes")
+    junction = repo / "selected-junction"
+    _junction(junction, external)
+    observed = []
+    guarded = {os.path.normcase(os.path.normpath(str(path)))
+               for path in (junction, external, _disk(junction), _disk(external))}
+
+    def observe(function):
+        def wrapped(path):
+            if os.path.normcase(os.path.normpath(str(path))) in guarded:
+                observed.append(str(path))
+            return function(path)
+        return wrapped
+
+    monkeypatch.setattr(os, "listdir", observe(os.listdir))
+    monkeypatch.setattr(os, "scandir", observe(os.scandir))
+    try:
+        with pytest.raises((ValueError, OSError, RuntimeError)):
+            verification_target._paths(repo, wbs.input_policy(dict(source=["selected-junction"])))
+        assert observed == [], "input listing must reject the actual junction before entering it"
+        assert _disk(sentinel).read_bytes() == b"preserve outside bytes"
+    finally:
+        os.rmdir(win._win32_path(junction))
+
+
 def test_native_reparse_wbs_parent_and_source_fail_closed(private):
     repo = _project(private)
     external = win.ensure_private_directory(private / "external target")
@@ -1272,7 +1303,10 @@ def test_native_trusted_git_environment_clones_and_rebases_deep_paths_without_pe
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     global_config = home / ".gitconfig"
-    global_bytes = b"[core]\n\tlongpaths = false\n[fixture]\n\tmarker = preserved\n"
+    # Git 2.54 can cache an explicit global longpaths=false before command
+    # overrides are loaded. Exercise the reported default-profile condition;
+    # preserve this profile and the explicit repository-local false values.
+    global_bytes = b"[fixture]\n\tmarker = preserved\n"
     win.atomic_write(global_config, global_bytes)
     source = win.ensure_private_directory(private / "original repository")
     setup_env = _environment()

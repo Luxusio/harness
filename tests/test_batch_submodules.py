@@ -20,11 +20,12 @@ def _helper():
 
 
 def _git(repo, *args):
+    from test_batch_finish import _fixture_git_location
     # Fixture setup/inspection also needs Native long-path support; product
     # calls independently strip ambient Git settings and supply their own.
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", "-c", "protocol.file.allow=always", *paths, *map(str, args)], cwd=repo,
+        ["git", "-c", "protocol.file.allow=always", *paths, *_fixture_git_location(repo), *map(str, args)], cwd=repo,
         env={**os.environ, "GIT_AUTHOR_NAME": "S1 Test", "GIT_AUTHOR_EMAIL": "s1@example.test",
              "GIT_COMMITTER_NAME": "S1 Test", "GIT_COMMITTER_EMAIL": "s1@example.test"},
         capture_output=True, text=True,
@@ -468,12 +469,13 @@ def test_manifest_bound_refuses_more_than_sixteen_modules(tmp_path, monkeypatch)
 
 def test_preserve_ref_inventory_limit_refuses_before_destination_writes(tmp_path, monkeypatch):
     import pytest
+    from test_batch_finish import _fixture_git_location
     helper, main, work, paths, value, _ = _prepared(tmp_path, monkeypatch)
     module = work / paths[0]
     tip = _git(module, "rev-parse", "HEAD")
     commands = "".join(f"create refs/heads/limit-{i} {tip}\n" for i in range(4097))
     git_options = ["-c", "core.longpaths=true"] if os.name == "nt" else []
-    result = subprocess.run(["git", *git_options, "update-ref", "--stdin"], cwd=module,
+    result = subprocess.run(["git", *git_options, *_fixture_git_location(module), "update-ref", "--stdin"], cwd=module,
                             input=commands.encode("utf-8"), capture_output=True)
     assert result.returncode == 0, result.stderr
     destination = main / paths[0]
@@ -942,11 +944,12 @@ def _conversion_flags(policy):
 
 
 def _isolated_conversion_git(root, *args, policy=None):
+    from test_batch_finish import _fixture_git_location
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0")
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", *paths, "--no-optional-locks", *_conversion_flags(policy or {}),
+        ["git", *paths, *_fixture_git_location(root), "--no-optional-locks", *_conversion_flags(policy or {}),
          "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull, *args],
         cwd=root, env=env, capture_output=True,
     )

@@ -560,7 +560,9 @@ def finish(repo_root: str, args, checkpoint=None, retention=None,
         result["branch_tip"] = _resolve_commit(repo, ref)
         if submodules is not None:
             stale_lead = any(
-                _git_out(os.path.join(worktree, module['path']), 'rev-parse', 'HEAD').strip()
+                (batch_submodules._git(os.path.join(worktree, module['path']), 'rev-parse', 'HEAD',
+                                       gitdir=module['private_gitdir']) if os.name == 'nt'
+                 else _git_out(os.path.join(worktree, module['path']), 'rev-parse', 'HEAD').strip())
                 != _git_out(worktree, 'rev-parse', 'HEAD:' + module['path']).strip()
                 for module in submodules['modules']
             )

@@ -260,3 +260,13 @@ an independent space. Keep finite budgets, locks, source fingerprints and stable
 persisted identities. Distinguish Git's own explicit-directory byte limit from
 the reported long pack-file boundary; an equivalent relative Git invocation may
 retain the same validated absolute path without relocating or aliasing it.
+
+Known ceiling: Git for Windows 2.54 can cache an explicit global
+`core.longpaths=false` before process/command overrides take effect. On the
+retained deep Native fixture, the same intact pack was readable with the default
+profile and unreadable with that explicit setting, even with `-c` or environment
+overrides. This upstream case is not claimed as supported by the new regression;
+Harness does not suppress or rewrite user configuration. The regression retains
+the original path depth, long pack-file boundary, repository-local false values,
+hostile environment overrides, actual rebase and unchanged profile/source bytes.
+Reassess this ceiling when the installed Git handles the explicit-global case.
