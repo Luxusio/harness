@@ -35,6 +35,14 @@ def require(ok, message):
         raise ValueError('WBS namespace migration: ' + message)
 
 
+def _present(path):
+    """Inspect migration metadata without treating Native path errors as absence."""
+    if os.name == "nt":
+        from wiki_platform import metadata_probe
+        return metadata_probe(Path(path).absolute()) is not None
+    return os.path.lexists(path)
+
+
 def _new_id(value):
     require(isinstance(value, str) and OLD_ID.fullmatch(value), 'invalid retired execution identity')
     return 'WBS__' + value[6:]
@@ -263,6 +271,9 @@ def _change_workspace(repo, change):
 
 def _has_git(repo):
     metadata = Path(repo) / '.git'
+    if os.name == 'nt':
+        from wiki_platform import _native
+        metadata = Path(_native._win32_path(metadata))
     # Setup also supports manifest-only projects and an empty .git boundary
     # sentinel. Ignore scaffolding must not launch Git for those placeholders.
     return metadata.is_file() or metadata.is_dir() and os.path.lexists(metadata / 'HEAD')
@@ -367,9 +378,9 @@ def _live_binding(repo, binding, roots):
         path = OLD_ROOT + '/' + binding['task_id']
         raw = storage._read(source, path + '/TASK.json', 16384)
         control = storage._migration_control(storage._control_json(raw, source / path / 'TASK.json')) if raw else {}
-        blocked = os.path.lexists(source / path / 'BLOCKED.md')
-        if control and not control['closed'] and not blocked and binding.get('run_id') == control['run_id']:
-            return root
+        if control and not control['closed'] and binding.get('run_id') == control['run_id']:
+            if not _present(source / path / 'BLOCKED.md'):
+                return root
     return None
 
 
@@ -662,7 +673,7 @@ def _batch_references(repo, roots, required=(), *, archive_prefix=None):
                         continue
                     directory = namespace + '/' + name
                     path = directory + '/' + filename
-                    raw = storage._read(source, path, 16384) if os.path.lexists(source / path) else None
+                    raw = storage._read(source, path, 16384)
                     control = storage._migration_control(storage._control_json(raw, source / path)) if raw is not None else {}
                     required_owner = (root, 'TASK__' + name[len(prefix):]) in references
                     if control and control['closed'] and not required_owner:
@@ -674,7 +685,7 @@ def _batch_references(repo, roots, required=(), *, archive_prefix=None):
                         if archived_control is not None:
                             continue  # Missing retired control must not revive old intent.
                     state_path = directory + '/WBS.json'
-                    raw_state = storage._read(source, state_path) if os.path.lexists(source / state_path) else None
+                    raw_state = storage._read(source, state_path)
                     if raw_state is None:
                         continue
                     state = storage._json(raw_state)
@@ -721,21 +732,35 @@ def _already_imported(repo, root, directory):
 
 def _plan(repo, *, archive_prefix=None):
     prefix = archive_prefix or ARCHIVE + '/original'
+    if os.name == 'nt':
+        from wiki_platform import _native
     from _lib import _validate_wbs_control, resolve_registered_worktree
     discovered = _project_roots(repo)
     roots = set(discovered)
     require(len(roots) <= 256, 'worktree discovery budget exceeded')
     # workspace_roots deliberately skips unavailable/uninitialized checkouts;
     # migration must distinguish those from an empty registry.
-    registry = storage._entries(repo, '.git/worktrees') if os.path.lexists(repo / '.git/worktrees') else []
+    registry_path = repo / '.git/worktrees'
+    if os.name == 'nt':
+        # A local linked checkout has a .git file. Probe the literal registry
+        # name before selecting storage; unused Git metadata stays untouched.
+        try:
+            os.lstat(_native._win32_path(registry_path))
+        except (FileNotFoundError, NotADirectoryError):
+            registry = []
+        else:
+            registry = storage._entries(repo, '.git/worktrees')
+    else:
+        registry = storage._entries(repo, '.git/worktrees') if os.path.lexists(registry_path) else []
     for name, _ in registry or []:
         raw = storage._read(repo, '.git/worktrees/' + name + '/gitdir', 4096)
         require(raw is not None, 'registered worktree discovery unavailable: ' + name)
         target = Path(os.fsdecode(raw).strip()).parent
-        require(target.is_absolute() and target.is_dir(), 'registered worktree unavailable: ' + str(target))
+        disk_target = Path(_native._win32_path(target)) if os.name == 'nt' else target
+        require(target.is_absolute() and disk_target.is_dir(), 'registered worktree unavailable: ' + str(target))
         if str(target) not in roots:
-            require(not os.path.lexists(target / OLD_ROOT) and not os.path.lexists(target / NEW_ROOT), 'registered execution workspace omitted; restore its own Harness manifest: ' + str(target))
-    pools = []
+            require(not _present(target / OLD_ROOT) and not _present(target / NEW_ROOT), 'registered execution workspace omitted; restore its own Harness manifest: ' + str(target))
+    pools, recovery_pools, current_references = [], [], set()
     for name, _ in storage._entries(repo, 'doc/harness/runtime/batches') or []:
         if name == '.lock':
             continue
@@ -744,18 +769,54 @@ def _plan(repo, *, archive_prefix=None):
         raw = storage._read(repo, relative)
         value = storage._json(raw)
         if 'owner_task_id' not in value and not any('task_id' in item for item in value.get('requests', [])):
+            # A previous completed import may have converted a pool while a
+            # deep legacy control was falsely considered absent. Recover only
+            # the exact stopped, still-owned generation through explicit import.
+            selected = False
+            for item in value.get('requests', []):
+                if not isinstance(item, dict):
+                    continue
+                worktree, wbs_id = item.get('worktree'), item.get('wbs_id')
+                if (item.get('status') in ('queued', 'integrated', 'abandoned')
+                        or not isinstance(worktree, str) or worktree not in roots
+                        or not isinstance(wbs_id, str) or not re.fullmatch(r'WBS__[A-Za-z0-9_.-]{1,180}', wbs_id)):
+                    continue
+                old_id = 'TASK__' + item['wbs_id'][5:]
+                with storage._control_workspace(repo, worktree) as source:
+                    current = storage._read(source, NEW_ROOT + '/' + item['wbs_id'] + '/WBS.control.json', 16384)
+                    if current is not None:
+                        continue  # Existing current authority is never replaced by history.
+                    path = OLD_ROOT + '/' + old_id + '/TASK.json'
+                    original = storage._read(source, path, 16384)
+                    if original is None:
+                        continue
+                    require(_common_git_root(repo) == repo, 'local-only project migration cannot change external pool workspaces')
+                    require(resolve_registered_worktree(str(repo), worktree) == worktree, 'unregistered pool worktree')
+                    import batch_state
+                    batch_state.validate(value, str(repo), Path(relative).stem)
+                    control = storage._migration_control(storage._control_json(original, source / path))
+                    require(item['status'] not in ('running', 'reserved'),
+                            'stop and return or explicitly recover worker before migration: ' + item['wbs_id'])
+                    require(control and control['run_id'] == item.get('run_id')
+                            and control['closed'] == item.get('closed'),
+                            'current pool and retained control generation differ: ' + item['wbs_id'])
+                current_references.add((worktree, old_id))
+                selected = True
+            if selected:
+                recovery_pools.append((relative, raw))
             continue
         require(isinstance(value.get('requests'), list), 'invalid retired pool')
         for item in value['requests']:
             require(item.get('status') not in ('running', 'reserved'),
                     'stop and return or explicitly recover worker before migration: ' + str(item.get('task_id')))
             worktree = item.get('worktree')
-            if worktree and os.path.isdir(worktree):
+            disk_worktree = _native._win32_path(worktree) if os.name == 'nt' and worktree else worktree
+            if worktree and os.path.isdir(disk_worktree):
                 require(_common_git_root(repo) == repo, 'local-only project migration cannot change external pool workspaces')
                 require(resolve_registered_worktree(str(repo), worktree) == worktree, 'unregistered pool worktree')
                 roots.add(worktree)
         pools.append((relative, raw, value))
-    trees, mappings, retained, references = [], {}, [], set()
+    trees, mappings, retained, references = [], {}, [], set(current_references)
     for path, _, pool in pools:
         if pool.get('owner_task_id') and _pool_needs_owner(repo, pool):
             references.add((str(repo), pool['owner_task_id']))
@@ -795,7 +856,7 @@ def _plan(repo, *, archive_prefix=None):
                     continue
                 require(stat.S_ISDIR(info.st_mode), 'unsafe retired root: ' + name)
                 directory = OLD_ROOT + '/' + name
-                raw = storage._read(source, directory + '/TASK.json', 16384) if os.path.lexists(source / directory / 'TASK.json') else None
+                raw = storage._read(source, directory + '/TASK.json', 16384)
                 if raw is None:
                     if (root, name) in references and _already_imported(repo, root, directory):
                         retained.append(str(source / directory))
@@ -804,7 +865,7 @@ def _plan(repo, *, archive_prefix=None):
                     if (root, name) in references and intent is not None:
                         _require_intent(storage._json(intent), str(source / directory))
                         new = NEW_ROOT + '/' + _new_id(name)
-                        require(not os.path.lexists(source / new), 'destination already exists: ' + str(source / new))
+                        require(not _present(source / new), 'destination already exists: ' + str(source / new))
                         mappings[str(source / directory)] = str(source / new)
                         trees.append(dict(root=root, source=directory, destination=new, entries=_tree(source, directory), replacement={}))
                     else:
@@ -822,7 +883,7 @@ def _plan(repo, *, archive_prefix=None):
                     retired_controls.append((root, directory + '/TASK.json', raw))
                     continue
                 new = NEW_ROOT + '/' + _new_id(name)
-                require(not os.path.lexists(source / new), 'destination already exists: ' + str(source / new))
+                require(not _present(source / new), 'destination already exists: ' + str(source / new))
                 mappings[str(source / directory)] = str(source / new)
                 replacement = {} if control == data else {'WBS.control.json': _encoded(control)}
                 trees.append(dict(root=root, source=directory, destination=new, entries=_tree(source, directory), replacement=replacement))
@@ -840,7 +901,7 @@ def _plan(repo, *, archive_prefix=None):
             if archive in mappings:
                 continue
             new = 'doc/harness/archive/batch/' + _new_id(item['task_id'])
-            require(not os.path.lexists(repo / new), 'archive destination already exists')
+            require(not _present(repo / new), 'archive destination already exists')
             mappings[archive] = str(repo / new)
             original = storage._json(storage._read(repo, old + '/TASK.json', 16384))
             control = storage._migration_control(original)
@@ -873,7 +934,9 @@ def _plan(repo, *, archive_prefix=None):
                 dest = 'WBS.control.json' if name == 'TASK.json' else name
                 entries[dest] = None if row.get('directory') else hashlib.sha256(base64.b64decode(tree['replacement'][dest])).hexdigest() if dest in tree['replacement'] else row['sha256']
             archive_hashes[str(repo / tree['destination'])] = 'sha256:' + hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
-    changes = []
+    changes = [dict(root=str(repo), source=path, destination=path,
+                    before=base64.b64encode(raw).decode(), after=base64.b64encode(raw).decode())
+               for path, raw in recovery_pools]
     for root, path, raw in retired_controls:
         changes.append(dict(root=root, source=path, destination=prefix + '/' + path, before=base64.b64encode(raw).decode(), after=base64.b64encode(raw).decode()))
     for path, raw, _ in retired_pools:
@@ -884,7 +947,7 @@ def _plan(repo, *, archive_prefix=None):
         else:
             after = _marker_transform(value, mappings, roots)
             destination = path.replace(OLD_ROOT, NEW_ROOT, 1)
-            require(not os.path.lexists(Path(root) / destination), 'session marker destination already exists: ' + str(Path(root) / destination))
+            require(not _present(Path(root) / destination), 'session marker destination already exists: ' + str(Path(root) / destination))
             changes.append(dict(root=root, source=path, destination=destination, before=base64.b64encode(raw).decode(), after=_encoded(after)))
     for root in sorted(roots):
         with storage._control_workspace(repo, root) as source:
@@ -1110,7 +1173,7 @@ def apply(repo):
                             stack.enter_context(storage._locked_directory(
                                 source, storage._parts(directory + '/' + name),
                                 busy_message='WBS namespace migration: execution writer active; stop it before migration'))
-        if os.path.lexists(repo / 'doc/harness/runtime/batches'):
+        if _present(repo / 'doc/harness/runtime/batches'):
             stack.enter_context(storage._file_lock(repo, 'doc/harness/runtime/batches/.lock'))
         if current is None or current['status'] == 'complete':
             require(journal == _plan(repo, archive_prefix=_archive_prefix(journal)), 'migration inputs changed during admission')
@@ -1130,7 +1193,11 @@ def apply(repo):
             storage._write(repo, MANIFEST, storage._encode(journal), expected=storage._hash(before))
         planned_paths = _planned_runtime_paths(repo, journal)
         for change in journal['changes']:
-            if change['source'] == '.git/info/exclude':
+            if (change['source'] == '.git/info/exclude' or
+                    change['source'].startswith('doc/harness/runtime/batches/')
+                    and change['source'] == change['destination'] and change['before'] == change['after']):
+                # Bind a recovery to unchanged current pool bytes while its
+                # existing owner lock is held, before publishing any authority.
                 _publish_change(repo, change)
         for root in roots:
             _require_runtime_ignored(Path(root), planned_paths.get(root, ()))
@@ -1206,8 +1273,8 @@ def apply(repo):
 
 
 def _require_committed(repo):
-    if os.path.lexists(repo / MANIFEST):
-        raw = storage._read_publication(repo, MANIFEST, MAX_MANIFEST)
+    raw = storage._read_publication(repo, MANIFEST, MAX_MANIFEST)
+    if raw is not None:
         journal = storage._json(raw)
         require(isinstance(journal, dict) and journal.get('version') == 1 and journal.get('status') == 'complete', 'interrupted migration; resume wbs(action="migrate", apply=true)')
 
@@ -1219,7 +1286,11 @@ def require_complete(repo):
     # A lead must not escape a partially committed common-repository import.
     # Read Git's small gitfile only when this checkout has retired state; no
     # source hashing, subprocess or extra persistent index is involved.
-    if (repo / '.git').is_file():
+    gitfile_path = repo / '.git'
+    if os.name == 'nt':
+        from wiki_platform import _native
+        gitfile_path = Path(_native._win32_path(gitfile_path))
+    if gitfile_path.is_file():
         from _lib import _read_regular_text_file
         gitfile = _read_regular_text_file(str(repo / '.git'), max_size=4096)
         if gitfile and gitfile.startswith('gitdir: '):
@@ -1228,13 +1299,13 @@ def require_complete(repo):
             if gitdir.parent.name == 'worktrees' and gitdir.parent.parent.name == '.git':
                 common = gitdir.parents[2]
                 from _lib import is_harness_enabled_repo
-                if os.path.lexists(common / MANIFEST) and is_harness_enabled_repo(str(common)):
+                if _present(common / MANIFEST) and is_harness_enabled_repo(str(common)):
                     from _lib import resolve_registered_worktree
                     require(resolve_registered_worktree(str(common), str(repo)) == str(repo), 'unregistered migration checkout')
                     _require_committed(common)
-    if not os.path.lexists(repo / OLD_ROOT):
+    if not _present(repo / OLD_ROOT):
         return
     for name, _ in storage._entries(repo, OLD_ROOT) or []:
         if OLD_ID.fullmatch(name):
-            require(not os.path.lexists(repo / OLD_ROOT / name / 'TASK.json'),
+            require(not _present(repo / OLD_ROOT / name / 'TASK.json'),
                     'retired execution controls exist; use wbs(action="migrate") preview/apply')

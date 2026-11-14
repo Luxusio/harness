@@ -1084,3 +1084,79 @@ def test_native_copy_flushes_before_publication_and_reuses_only_authenticated_jo
     with pytest.raises(ValueError, match='authenticated prepared journal'):
         migration._copy(root, relative, destination, expected)
     assert (root / destination).read_bytes() == raw
+
+
+@pytest.mark.parametrize("control_case", ["recover", "wrong-run", "already-current"])
+def test_explicit_rerun_recovers_completed_import_with_converted_pool(tmp_path, monkeypatch, control_case):
+    from test_batch_state import Pool, complete
+    from test_harness_mcp_server import HarnessMcpServerTests
+    import _lib
+    import wbs_namespace_migration as migration
+
+    pool = Pool(tmp_path, monkeypatch)
+    pool.init()
+    pool.claim()
+    worktree, _, current = complete(pool)
+    old = worktree / 'doc/harness/tasks/TASK__a'
+    _fixture_io(old.parent).mkdir(parents=True, exist_ok=True)
+    _fixture_io(current).rename(_fixture_io(old))
+    _fixture_io(old / 'WBS.control.json').rename(_fixture_io(old / 'TASK.json'))
+    control = _fixture_io(old / 'TASK.json').read_bytes()
+    original_run = json.loads(control)['run_id']
+    payload = b'original historical review\x00\xff'
+    _fixture_io(old / 'review.bin').write_bytes(payload)
+    if control_case == 'wrong-run':
+        changed = dict(json.loads(control), run_id=_lib.new_uuid7())
+        control = json.dumps(changed).encode()
+        _fixture_io(old / 'TASK.json').write_bytes(control)
+    elif control_case == 'already-current':
+        _fixture_io(current).mkdir(parents=True)
+        _fixture_io(current / 'WBS.control.json').write_bytes(control)
+
+    # Model the observed damaged completed state, not the Native path bug:
+    # the unchanged current pool owns WBS__a, but its old control was retained.
+    journal = dict(version=1, status='complete', trees=[], changes=[], retained=[str(old)],
+                   archive_prefix=migration.ARCHIVE + '/original')
+    journal_path = pool.repo / migration.MANIFEST
+    _fixture_io(journal_path.parent).mkdir(parents=True, exist_ok=True)
+    original_journal = migration.storage._encode(journal)
+    _fixture_io(journal_path).write_bytes(original_journal)
+    original_pool = _fixture_io(pool.state).read_bytes()
+    digest = hashlib.sha256(original_journal).hexdigest()
+    server = HarnessMcpServerTests()
+    call = lambda **extra: server._call_in_repo(str(pool.repo), 'wbs', dict(action='migrate', **extra))
+    preview = call()
+    if control_case == 'wrong-run':
+        assert preview.get('isError') and 'generation differ' in str(preview), preview
+        result = call(apply=True)
+        assert result.get('isError') and 'generation differ' in str(result), result
+        assert _fixture_io(old / 'TASK.json').read_bytes() == control
+        assert not _fixture_io(current / 'WBS.control.json').exists()
+        assert _fixture_io(journal_path).read_bytes() == original_journal
+        assert _fixture_io(pool.state).read_bytes() == original_pool
+        return
+
+    assert not preview.get('isError'), preview
+    assert preview['structuredContent']['namespace_migration']['status'] == 'prepared'
+    result = call(apply=True)
+    assert not result.get('isError'), result
+    assert _fixture_io(current / 'WBS.control.json').read_bytes() == control
+    assert json.loads(control)['run_id'] == original_run
+    assert _fixture_io(pool.state).read_bytes() == original_pool
+    prefix = migration.ARCHIVE + '/epochs/' + digest + '/original'
+    archived = worktree / prefix / 'doc/harness/tasks/TASK__a/TASK.json'
+    assert _fixture_io(archived).read_bytes() == control
+    historical = pool.repo / migration.HISTORY / (digest + '.json')
+    assert _fixture_io(historical).read_bytes() == original_journal
+    assert not _fixture_io(old / 'TASK.json').exists()
+    if control_case == 'recover':
+        assert _fixture_io(current / 'review.bin').read_bytes() == payload
+    else:
+        assert not _fixture_io(current / 'review.bin').exists()
+        assert _fixture_io(old / 'review.bin').read_bytes() == payload
+    completed = _fixture_io(journal_path).read_bytes()
+    repeated = call(apply=True)
+    assert not repeated.get('isError'), repeated
+    assert _fixture_io(journal_path).read_bytes() == completed
+    assert _fixture_io(current / 'WBS.control.json').read_bytes() == control
+    assert _fixture_io(pool.state).read_bytes() == original_pool

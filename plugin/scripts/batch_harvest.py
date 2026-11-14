@@ -1903,6 +1903,7 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint, *, register
     _s1_require(_ordinary_namespace_history(repo, worktree, wbs_id, control_dir=archive, preserve=False) == namespace,
                 'namespace preservation changed during residue proof')
     if os.name == 'nt':
+        from wiki_platform import _native
         with _native_ordinary_custody(worktree) as held:
             _s1_require(inventory() == expected, 'residue changed before captured retirement')
             _s1_require(_tree_entries(archive) == archived, 'archive changed before captured retirement')
