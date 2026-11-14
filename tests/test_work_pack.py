@@ -15,6 +15,16 @@ GOAL = "GOAL__parallel"
 CHILD = "WBS__integration"
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def request(*args, **kwargs):
     from test_batch_state import request as batch_request
     return batch_request(*args, **kwargs)
@@ -135,7 +145,7 @@ def test_integrated_pack_requires_archive_and_destination_proof(tmp_path, monkey
     assert route(pool, spec)["route"] == "integration"
     work_pack.require_integrated(str(pool.repo), CHILD, spec)
     archive = pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md"
-    archive.write_text("changed archived evidence")
+    _fixture_io(archive).write_text("changed archived evidence")
     with pytest.raises(ValueError, match="archive fingerprint"):
         route(pool, spec)
 
@@ -157,7 +167,7 @@ def test_stored_queries_skip_archive_hash_but_authority_still_refuses_tampering(
     for action in ("context", "next", "open"):
         result = call("wbs", dict(action=action, wbs_id=CHILD))
         assert not result.get("isError"), result
-    text = (td / "PLAN.md").read_text()
+    text = (_fixture_io(td / "PLAN.md")).read_text()
     assert not call("wbs", dict(action="plan", wbs_id=CHILD, plan=text)).get("isError")
     spec = state["batch_history"][0]["batch"]
     stored = work_pack.route(str(pool.repo), CHILD, spec, measure=False)
@@ -165,9 +175,9 @@ def test_stored_queries_skip_archive_hash_but_authority_still_refuses_tampering(
     # Also cover an active pack, independent of the historical projection.
     active = dict(state, batch=spec, batch_history=[])
     assert wbs.wbs_progress(str(td), str(pool.repo), state["run_id"], measure=False, _state=active)["integration"]["proof_fresh"] is False
-    (td / "WBS.json").write_text(wbs.encode_state(active))
+    (_fixture_io(td / "WBS.json")).write_text(wbs.encode_state(active))
     assert wbs.work_pack(str(td), str(pool.repo), state["run_id"], host=host_snapshot())["route"] == "integration"
-    (pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md").write_text("tampered archived content")
+    (_fixture_io(pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md")).write_text("tampered archived content")
     assert work_pack.route(str(pool.repo), CHILD, spec, measure=False)["route"] == "integration"
     monkeypatch.setattr(batch_state, "fingerprint", actual)
     with pytest.raises(ValueError, match="archive fingerprint"):
@@ -175,7 +185,7 @@ def test_stored_queries_skip_archive_hash_but_authority_still_refuses_tampering(
     with pytest.raises(ValueError, match="archive fingerprint"):
         wbs.require_integrated_for_wbs(str(pool.repo), CHILD)
     archive = pool.repo / "doc/harness/archive/batch/WBS__a"
-    archive.rename(archive.with_name("moved"))
+    _fixture_io(archive).rename(_fixture_io(archive.with_name("moved")))
     with pytest.raises(ValueError, match="missing"):
         work_pack.route(str(pool.repo), CHILD, spec, measure=False)
 
@@ -207,9 +217,9 @@ def test_abandoned_closed_pack_stays_unfinished(tmp_path, monkeypatch):
 def test_halted_pool_routes_recovery(tmp_path, monkeypatch):
     pool, spec = pack(tmp_path, monkeypatch)
     pool.init(requests(), owner=CHILD)
-    state = json.loads(pool.state.read_text())
+    state = json.loads(_fixture_io(pool.state).read_text())
     state["halted"] = True
-    pool.state.write_text(json.dumps(state))
+    _fixture_io(pool.state).write_text(json.dumps(state))
     assert "Recover" in route(pool, spec)["next_action"]
 
 
@@ -218,7 +228,7 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
     from test_batch_state import _git
     pool, spec = pack(tmp_path, monkeypatch)
     integrated(pool)
-    state = json.loads(pool.state.read_text())
+    state = json.loads(_fixture_io(pool.state).read_text())
     item = state["requests"][0]
     if change == "ancestry":
         _git("reset", "--hard", state["initial_head"], cwd=pool.repo)
@@ -227,16 +237,16 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
     elif change == "archive_symlink":
         archive = pool.repo / "doc/harness/archive/batch/WBS__a"
         target = archive.with_name("moved")
-        archive.rename(target)
+        _fixture_io(archive).rename(_fixture_io(target))
         create_symlink(archive, target, target_is_directory=True)
     elif change == "run":
         item["run_id"] = item["checkpoint"]["run_id"] = "0198c349-5800-7000-8000-000000000002"
-        pool.state.write_text(json.dumps(state))
+        _fixture_io(pool.state).write_text(json.dumps(state))
     elif change == "harvest":
         item["checkpoint"]["harvest"] = None
-        pool.state.write_text(json.dumps(state))
+        _fixture_io(pool.state).write_text(json.dumps(state))
     elif change == "residual_path":
-        Path(item["worktree"]).mkdir()
+        _fixture_io(Path(item["worktree"])).mkdir()
     elif change == "residual_ref":
         _git("branch", item["branch"], cwd=pool.repo)
     elif change == "residual_registration":
@@ -245,7 +255,7 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
         shutil.rmtree(item["worktree"])
     else:
         del item["checkpoint"]
-        pool.state.write_text(json.dumps(state))
+        _fixture_io(pool.state).write_text(json.dumps(state))
     with pytest.raises(ValueError, match='still registered' if change == 'residual_registration' else None):
         route(pool, spec)
 
@@ -358,7 +368,7 @@ def test_prewrite_stored_custody_preserves_assignment(tmp_path, monkeypatch):
         current = dict(state)
         if active:
             current.update(batch=spec, batch_history=[])
-        (directory / "WBS.json").write_text(wbs.encode_state(current))
+        (_fixture_io(directory / "WBS.json")).write_text(wbs.encode_state(current))
         assert check(pool.repo, pool.repo / "owned.py") == {}
         denied = check(pool.repo, pool.repo / "unowned.py")
         assert denied["permissionDecision"] == "deny"
@@ -366,12 +376,12 @@ def test_prewrite_stored_custody_preserves_assignment(tmp_path, monkeypatch):
     assert observed == ["owned.py", "unowned.py"] * 2
     # Stored structure remains mandatory even without reading archive bytes.
     archive = pool.repo / "doc/harness/archive/batch/WBS__a"
-    archive.rename(archive.with_name("moved"))
+    _fixture_io(archive).rename(_fixture_io(archive.with_name("moved")))
     denied = check(pool.repo, pool.repo / "owned.py")
     assert denied["permissionDecision"] == "deny"
     assert "wbs-work-pack" in denied["permissionDecisionReason"]
     assert observed == ["owned.py", "unowned.py"] * 2
-    archive.with_name("moved").rename(archive)
+    _fixture_io(archive.with_name("moved")).rename(_fixture_io(archive))
     monkeypatch.setattr(work_pack.batch, "fingerprint", original)
     damage_pack_proof(pool, "tampered")
     with pytest.raises(ValueError, match="archive fingerprint"):
@@ -402,12 +412,12 @@ def test_outcome_checks_preserve_source_proof_but_final_verify_remeasures_custod
 def test_mcp_close_refuses_damaged_pack_without_closing_child(tmp_path, monkeypatch, proof):
     pool, call, directory = mcp_integration(tmp_path, monkeypatch)
     goal_file = directory / "WBS.json"
-    before = (directory / "WBS.control.json").read_bytes(), goal_file.read_bytes()
+    before = (_fixture_io(directory / "WBS.control.json")).read_bytes(), _fixture_io(goal_file).read_bytes()
     damage_pack_proof(pool, proof)
     closed = call("wbs_close", {"wbs_id": CHILD})
     assert closed.get("isError"), closed
     assert "work pack" in closed["structuredContent"]["error"] or "work-pack" in closed["structuredContent"]["error"]
-    assert ((directory / "WBS.control.json").read_bytes(), goal_file.read_bytes()) == before
+    assert ((_fixture_io(directory / "WBS.control.json")).read_bytes(), _fixture_io(goal_file).read_bytes()) == before
 
 
 

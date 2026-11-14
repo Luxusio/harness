@@ -200,7 +200,7 @@ def test_claude_install_normalizes_modes_even_when_synchronized(tmp_path, monkey
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
     version = json.loads((plugin_root / ".claude-plugin/plugin.json").read_text())["version"]
     selected = config / "plugins/cache/harness/harness" / version
-    shutil.copytree(plugin_root, selected)
+    shutil.copytree(install._io_path(plugin_root), install._io_path(selected))
     (config / "plugins/installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
         "harness@harness": [{"scope": "user", "version": version, "installPath": str(selected)}]
     }}))

@@ -16,6 +16,16 @@ from test_batch_state import Pool, request, task, _git, RUN
 from conftest import SCRIPTS_DIR
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 @pytest.fixture(autouse=True)
 def scripts_path(monkeypatch):
     monkeypatch.syspath_prepend(SCRIPTS_DIR)
@@ -99,12 +109,12 @@ def stopped_legacy_lead(tmp_path, monkeypatch, *, frozen=False, checkpoint=False
         create_symlink(link, external, target_is_directory=historical_link == 'directory')
     if frozen:
         snapshot = current / 'work/verification-targets/0123456789abcdef/source'
-        snapshot.mkdir(parents=True)
-        (snapshot.parent / 'target.json').write_text(json.dumps(dict(token='0123456789abcdef', run_id=RUN,
+        _fixture_io(snapshot).mkdir(parents=True)
+        _fixture_io(snapshot.parent / 'target.json').write_text(json.dumps(dict(token='0123456789abcdef', run_id=RUN,
             manifest=[], spec=dict(inputs={'source': ['a.txt']}, lenses=['qa-cli']))))
-        (snapshot / 'source.rs').write_text('reviewed source\n')
-        (snapshot / 'source.rs').chmod(0o400)
-        snapshot.chmod(0o500)
+        _fixture_io(snapshot / 'source.rs').write_text('reviewed source\n')
+        _fixture_io(snapshot / 'source.rs').chmod(0o400)
+        _fixture_io(snapshot).chmod(0o500)
     pool.cli(*pool.result('a', worktree, branch, 'closed', 'actual-worker', run_id=RUN))
     old = worktree / 'doc/harness/tasks/TASK__a'
     old.parent.mkdir(parents=True, exist_ok=True)
@@ -125,13 +135,13 @@ def stopped_legacy_lead(tmp_path, monkeypatch, *, frozen=False, checkpoint=False
 @pytest.mark.parametrize('frozen', [False, True])
 def test_migrated_stopped_lead_finishes_without_losing_legacy_bytes(tmp_path, monkeypatch, frozen):
     pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch, frozen=frozen, checkpoint=True)
-    before = (old / 'historical-review.bin').read_bytes()
+    before = (_fixture_io(old / 'historical-review.bin')).read_bytes()
     result = pool.cli('finish', '--slug', 'a')
     assert result['status'] == 'integrated' and result['cleanup']['removed'] and result['cleanup']['branch_deleted']
-    assert not worktree.exists()
+    assert not _fixture_io(worktree).exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
-    assert (recovery / 'doc/harness/tasks/TASK__a/historical-review.bin').read_bytes() == before
-    assert (recovery / 'doc/harness/tasks/TASK__a/PLAN.md').read_text() == '# Fixture task\n'
+    assert (_fixture_io(recovery / 'doc/harness/tasks/TASK__a/historical-review.bin')).read_bytes() == before
+    assert (_fixture_io(recovery / 'doc/harness/tasks/TASK__a/PLAN.md')).read_text() == '# Fixture task\n'
     original_control = recovery / 'doc/harness/archive/wbs-namespace-migration/original/doc/harness/tasks/TASK__a/TASK.json'
     if os.name == 'nt':
         from wiki_platform import safe_metadata_snapshot
@@ -143,8 +153,8 @@ def test_migrated_stopped_lead_finishes_without_losing_legacy_bytes(tmp_path, mo
         assert json.loads(raw) == expected
         assert raw == json.dumps(expected).encode('utf-8')
     else:
-        assert original_control.is_file()
-    assert (recovery / 'doc/harness/checkpoints/TASK__a.md').read_text().startswith('# Checkpoint — TASK__a\n')
+        assert _fixture_io(original_control).is_file()
+    assert (_fixture_io(recovery / 'doc/harness/checkpoints/TASK__a.md')).read_text().startswith('# Checkpoint — TASK__a\n')
     if frozen:
         source = recovery / 'doc/harness/tasks/TASK__a/work/verification-targets/0123456789abcdef/source/source.rs'
         if os.name == 'nt':
@@ -153,7 +163,7 @@ def test_migrated_stopped_lead_finishes_without_losing_legacy_bytes(tmp_path, mo
             assert raw.replace(b'\r\n', b'\n') == b'reviewed source\n'
             assert stamp[4] & 1
         else:
-            assert source.read_text() == 'reviewed source\n' and source.stat().st_mode & 0o777 == 0o400
+            assert _fixture_io(source).read_text() == 'reviewed source\n' and _fixture_io(source).stat().st_mode & 0o777 == 0o400
 
 
 @pytest.mark.parametrize('mutation', ['unknown', 'changed', 'symlink'])
@@ -184,12 +194,12 @@ def test_durable_history_copy_cannot_be_overwritten_on_retry(tmp_path, monkeypat
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     copy = recovery / 'doc/harness/tasks/TASK__a/historical-review.bin'
-    copy.write_bytes(b'existing different historical bytes')
+    _fixture_io(copy).write_bytes(b'existing different historical bytes')
     reason = 'Metadata source size changed or exceeds budget' if os.name == 'nt' else 'copy changed'
     with pytest.raises(batch_harvest.HarvestError, match=reason):
         batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
-    assert copy.read_bytes() == b'existing different historical bytes'
-    assert (old / 'historical-review.bin').read_bytes() == b'Original TASK__a review\x00\xff'
+    assert _fixture_io(copy).read_bytes() == b'existing different historical bytes'
+    assert (_fixture_io(old / 'historical-review.bin')).read_bytes() == b'Original TASK__a review\x00\xff'
 
 
 def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monkeypatch):
@@ -199,7 +209,7 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     fixture_root = tmp_path
     if os.name == 'nt':
         fixture_root = tmp_path / ('retained namespace ' + 'n' * 24)
-        fixture_root.mkdir()
+        _fixture_io(fixture_root).mkdir()
     pool, worktree, old = stopped_legacy_lead(fixture_root, monkeypatch, large=True,
                                            historical_link=None if os.name == 'nt' else 'directory')
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
@@ -207,7 +217,7 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     harvested = _harvest_for_proof(pool, worktree, monkeypatch)
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     relative = 'doc/harness/tasks/TASK__a/historical-review.bin'
-    expected = (worktree / relative).read_bytes()
+    expected = (_fixture_io(worktree / relative)).read_bytes()
     proof = dict(stage='harvested', integrated_tip=tip, harvest=harvested,
                  archive_fingerprint=batch_state.fingerprint(harvested['archived']))
     preserved_entries = batch_harvest._tree_entries(harvested['archived'])
@@ -223,28 +233,28 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     # Model native interruption: only a subset of old history survived after
     # Git unregistered the worktree. Custody must use the existing main copy.
     residue = worktree / relative
-    residue.parent.mkdir(parents=True)
-    residue.write_bytes(expected)
+    _fixture_io(residue.parent).mkdir(parents=True)
+    _fixture_io(residue).write_bytes(expected)
     if os.name != 'nt':
         link = residue.parent / 'work/link-to-external'
-        link.parent.mkdir()
+        _fixture_io(link.parent).mkdir()
         create_symlink(link, tmp_path / 'outside-sentinel', target_is_directory=True)
     precious = residue.parent / 'unrecorded.bin'
-    precious.write_bytes(b'keep unknown residue')
+    _fixture_io(precious).write_bytes(b'keep unknown residue')
     with pytest.raises(batch_harvest.HarvestError, match='unpreserved'):
         batch_harvest.remove_ordinary_residue(str(pool.repo), str(worktree), 'WBS__a', tip, proof)
-    assert precious.read_bytes() == b'keep unknown residue'
-    precious.unlink()
+    assert _fixture_io(precious).read_bytes() == b'keep unknown residue'
+    _fixture_io(precious).unlink()
     batch_harvest.remove_ordinary_residue(str(pool.repo), str(worktree), 'WBS__a', tip, proof)
-    assert not worktree.exists()
+    assert not _fixture_io(worktree).exists()
     assert batch_harvest._tree_entries(harvested['archived']) == preserved_entries
     if os.name == 'nt':
         assert safe_metadata_snapshot(original_control, 16384)[0] == original_bytes
         assert safe_metadata_snapshot(recovery / relative, len(expected))[0] == expected
     else:
-        assert (recovery / relative).read_bytes() == expected
+        assert (_fixture_io(recovery / relative)).read_bytes() == expected
     if os.name != 'nt':
-        assert (tmp_path / 'outside-sentinel/precious.bin').read_bytes() == b'outside bytes must survive'
+        assert (_fixture_io(tmp_path / 'outside-sentinel/precious.bin')).read_bytes() == b'outside bytes must survive'
 
 
 @pytest.mark.parametrize('historical_link', [False, True])
@@ -256,34 +266,34 @@ def test_migrated_selected_module_lead_preserves_history_before_disposal(tmp_pat
 
     pool = _s1_pool(tmp_path, monkeypatch)
     ignore = pool.repo / '.gitignore'
-    ignore.write_text(ignore.read_text() + 'doc/harness/tasks/\n')
+    _fixture_io(ignore).write_text(_fixture_io(ignore).read_text() + 'doc/harness/tasks/\n')
     _git('add', '.gitignore', cwd=pool.repo)
     _git('commit', '-qm', 'historical operational ignores', cwd=pool.repo)
     pool.init([_s1_request()])
     pool.claim()
     worktree, branch, current, module_tip = _s1_complete(pool)
-    (current / 'review.bin').write_bytes(b'Original module review\x00\xff')
+    (_fixture_io(current / 'review.bin')).write_bytes(b'Original module review\x00\xff')
     outside = tmp_path / 'outside-module-sentinel'
-    outside.write_bytes(b'preserve external module sentinel')
+    _fixture_io(outside).write_bytes(b'preserve external module sentinel')
     if historical_link:
         link = current / 'work/module-link'
-        link.parent.mkdir()
+        _fixture_io(link.parent).mkdir()
         create_symlink(link, outside)
     old = worktree / 'doc/harness/tasks/TASK__a'
-    old.parent.mkdir(parents=True)
-    current.rename(old)
-    (old / 'WBS.control.json').rename(old / 'TASK.json')
-    pool.state.write_text(json.dumps(retire_pool_identity(json.loads(pool.state.read_text()))))
+    _fixture_io(old.parent).mkdir(parents=True)
+    _fixture_io(current).rename(_fixture_io(old))
+    (_fixture_io(old / 'WBS.control.json')).rename(_fixture_io(old / 'TASK.json'))
+    _fixture_io(pool.state).write_text(json.dumps(retire_pool_identity(json.loads(_fixture_io(pool.state).read_text()))))
     assert migration.apply.__wrapped__(pool.repo)['status'] == 'complete'
     result = pool.cli('finish', '--slug', 'a')
-    assert result['status'] == 'integrated' and not worktree.exists()
+    assert result['status'] == 'integrated' and not _fixture_io(worktree).exists()
     assert not _git('branch', '--list', branch, cwd=pool.repo)
     assert _git('rev-parse', 'HEAD', cwd=pool.repo / 'libs/module0') == module_tip
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
-    assert (recovery / 'doc/harness/tasks/TASK__a/review.bin').read_bytes() == b'Original module review\x00\xff'
+    assert (_fixture_io(recovery / 'doc/harness/tasks/TASK__a/review.bin')).read_bytes() == b'Original module review\x00\xff'
     if historical_link:
-        assert (recovery / 'doc/harness/tasks/TASK__a/work/module-link').read_bytes() == os.fsencode(outside)
-    assert outside.read_bytes() == b'preserve external module sentinel'
+        assert (_fixture_io(recovery / 'doc/harness/tasks/TASK__a/work/module-link')).read_bytes() == os.fsencode(outside)
+    assert _fixture_io(outside).read_bytes() == b'preserve external module sentinel'
 
 
 @pytest.mark.parametrize('kind', ['file', 'directory'])
@@ -467,36 +477,36 @@ def test_unrelated_recovery_hardlinks_are_not_publication_aliases(tmp_path, monk
                    '/namespace-history/doc/harness/tasks/TASK__a/historical-review.bin')
     copy = pool.repo / destination
     unrelated = copy.with_name('unrelated-history-link')
-    os.link(copy, unrelated)
+    os.link(_fixture_io(copy), _fixture_io(unrelated))
     stage = copy.with_name('.namespace-' + hashlib.sha256(destination.encode()).hexdigest()[:32])
     if impostor_stage:
-        stage.write_bytes(b'not the reserved file inode')
+        _fixture_io(stage).write_bytes(b'not the reserved file inode')
     with pytest.raises((batch_harvest.HarvestError, ValueError), match=(
             'nonlinked disk object' if os.name == 'nt' else 'unaccounted namespace recovery publication links')):
         batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
-    assert copy.exists() and unrelated.exists() and copy.stat().st_nlink == 2
-    assert (old / 'historical-review.bin').read_bytes() == copy.read_bytes() == b'Original TASK__a review\x00\xff'
+    assert _fixture_io(copy).exists() and _fixture_io(unrelated).exists() and _fixture_io(copy).stat().st_nlink == 2
+    assert (_fixture_io(old / 'historical-review.bin')).read_bytes() == _fixture_io(copy).read_bytes() == b'Original TASK__a review\x00\xff'
     if impostor_stage:
-        assert stage.read_bytes() == b'not the reserved file inode'
+        assert _fixture_io(stage).read_bytes() == b'not the reserved file inode'
 
 
 def test_disposal_uses_completed_ownership_journal_after_later_import(tmp_path, monkeypatch):
     import wbs_namespace_migration as migration
 
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch)
-    original_manifest = (pool.repo / migration.MANIFEST).read_bytes()
+    original_manifest = (_fixture_io(pool.repo / migration.MANIFEST)).read_bytes()
     seed_legacy_outcome(pool.repo, 'later')
     assert migration.apply.__wrapped__(pool.repo)['status'] == 'complete'
     close_imported_fixture(pool.repo, 'later')
     records = list(migration.journals(pool.repo))
     assert len(records) == 2
-    assert any(relative != migration.MANIFEST and (pool.repo / relative).read_bytes() == original_manifest
+    assert any(relative != migration.MANIFEST and (_fixture_io(pool.repo / relative)).read_bytes() == original_manifest
                for relative, _ in records)
     assert not any(tree['root'] == str(worktree) for tree in records[0][1]['trees'])
     result = pool.cli('finish', '--slug', 'a')
-    assert result['status'] == 'integrated' and not worktree.exists()
+    assert result['status'] == 'integrated' and not _fixture_io(worktree).exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
-    assert (recovery / 'doc/harness/tasks/TASK__a/historical-review.bin').read_bytes() == b'Original TASK__a review\x00\xff'
+    assert (_fixture_io(recovery / 'doc/harness/tasks/TASK__a/historical-review.bin')).read_bytes() == b'Original TASK__a review\x00\xff'
 
 
 def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, monkeypatch):
@@ -504,7 +514,7 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
 
     if os.name == 'nt':
         tmp_path = tmp_path / ('retained epoch history ' + 'n' * 24)
-        tmp_path.mkdir()
+        _fixture_io(tmp_path).mkdir()
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch, preexisting_epoch=True)
     current = next(iter(migration.journals(pool.repo)))[1]
     prefix = current['archive_prefix']
@@ -516,16 +526,16 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
         before = safe_metadata_snapshot(worktree / original_control, 16384)[0]
         _git('config', '--local', 'core.longpaths', 'false', cwd=pool.repo)
     else:
-        before = (worktree / original_control).read_bytes()
+        before = (_fixture_io(worktree / original_control)).read_bytes()
     result = pool.cli('finish', '--slug', 'a')
-    assert result['status'] == 'integrated' and not worktree.exists()
+    assert result['status'] == 'integrated' and not _fixture_io(worktree).exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     if os.name == 'nt':
         from wiki_platform import safe_metadata_snapshot
         assert _git('config', '--local', '--get', 'core.longpaths', cwd=pool.repo) == 'false'
         assert safe_metadata_snapshot(recovery / original_control, 16384)[0] == before
     else:
-        assert (recovery / original_control).read_bytes() == before
+        assert (_fixture_io(recovery / original_control)).read_bytes() == before
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX file-fsync/linkat publication; Native publisher uses retained writer and NTFS write-through rename')

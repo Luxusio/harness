@@ -65,8 +65,9 @@ def _isolate(monkeypatch, tmp_path: Path) -> None:
 
 
 def _git(*args, cwd, env=None, check=True) -> str:
+    paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False,
+        ["git", *paths, *args], cwd=cwd, capture_output=True, text=True, check=False,
         env={**os.environ, **(env or {})},
     )
     if check:
@@ -74,7 +75,16 @@ def _git(*args, cwd, env=None, check=True) -> str:
     return result.stdout.strip()
 
 
+def _fixture_io(path: Path) -> Path:
+    """Use Native wide spelling only for direct I/O on disposable fixtures."""
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def _write(path: Path, text: str) -> None:
+    path = _fixture_io(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 

@@ -732,16 +732,20 @@ def _diagnostic_path(path, repo, policy=None):
     input_policy({"source": [path.relative_to(path.anchor).as_posix()]})
     require(len(str(path).encode()) <= 2048, "diagnostic path too long")
     require(not _is_protected_artifact(str(path), repo_root=str(repo)), "protected diagnostic path")
-    for part in (path, *path.parents):
-        require(not part.is_symlink(), "symlink diagnostic path")
-    require(not path.exists() or path.is_file(), "diagnostic path must be a regular file")
     if os.name == "nt":
         from wiki_platform import _native
+        disk_path = Path(_native._win32_path(path))
+    else:
+        disk_path = path
+    for part in (disk_path, *disk_path.parents):
+        require(not part.is_symlink(), "symlink diagnostic path")
+    require(not disk_path.exists() or disk_path.is_file(), "diagnostic path must be a regular file")
+    if os.name == "nt":
         existing = path.parent
-        while not os.path.lexists(existing):
+        while not os.path.lexists(_native._win32_path(existing)):
             existing = existing.parent
         with _native._walk(existing, owner_neutral=True):
-            if os.path.lexists(path):
+            if os.path.lexists(_native._win32_path(path)):
                 with _native._walk(path.parent, owner_neutral=True):
                     handle = _native._open(path, 0, owner_neutral=True, allow_hardlinks=True)
                     _native._close(handle)
@@ -772,8 +776,12 @@ def _log_available(reference, repo):
     try:
         path = _diagnostic_path(reference["path"], repo)
         import hashlib
-        with path.open("rb") as stream:
-            data = stream.read(1024 * 1024 + 1)
+        if os.name == "nt":
+            from wiki_platform import safe_metadata_snapshot
+            data, _ = safe_metadata_snapshot(path, 1024 * 1024)
+        else:
+            with path.open("rb") as stream:
+                data = stream.read(1024 * 1024 + 1)
         reference["available"] = (len(data) == reference["bytes"] <= 1024 * 1024
                                   and hashlib.sha256(data).hexdigest() == reference["sha256"])
     except (OSError, ValueError, KeyError, TypeError):
@@ -790,16 +798,20 @@ def _execution_output(code, failure, output, *, retain, binary, log_path, repo):
                          truncated=failure == "output limit exceeded", available=False)
         try:
             _diagnostic_path(log_path, repo)
-            import tempfile
-            fd, temporary = tempfile.mkstemp(prefix=".diagnostic-", dir=log_path.parent)
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(output)
-                _diagnostic_path(log_path, repo)
-                os.replace(temporary, log_path)
-                reference["available"] = True
-            finally:
-                Path(temporary).unlink(missing_ok=True)
+            if os.name == "nt":
+                from wiki_platform import atomic_write
+                atomic_write(log_path, bytes(output))
+            else:
+                import tempfile
+                fd, temporary = tempfile.mkstemp(prefix=".diagnostic-", dir=log_path.parent)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(output)
+                    _diagnostic_path(log_path, repo)
+                    os.replace(temporary, log_path)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+            reference["available"] = True
         except (OSError, ValueError):
             pass
         result["output_log"] = reference
@@ -810,7 +822,11 @@ def _execute(argv, repo, timeout, *, env=None, output_limit=1024 * 1024, retain=
     """Bound time and captured output, terminating the entire assertion group."""
     if log_path is not None:
         log_path = _diagnostic_path(log_path, repo)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            from wiki_platform import ensure_private_directory
+            ensure_private_directory(log_path.parent)
+        else:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
         _diagnostic_path(log_path, repo)
     if os.name == "nt":
         from wiki_platform import execute_bounded

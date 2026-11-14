@@ -5,6 +5,16 @@ from test_wbs_input_policy import public
 import verification_target as targets
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def test_public_target_returns_persistent_frozen_view_and_context_does_not_measure(tmp_path):
     repo, td, call, opened = public(tmp_path)
     result = call("target", target=specification())
@@ -35,17 +45,17 @@ def test_authentic_lifecycle_selection_and_target_gate_reuse(tmp_path):
     assert verdict["runtime_verdict"] == "PASS", verdict
     assert verdict["verification_targets"]["status"] == "applicable"
     assert _verification_state(td)[0]
-    (repo / "documentation.md").write_text("unrelated doc change")
+    (_fixture_io(repo / "documentation.md")).write_text("unrelated doc change")
     assert call("verify")["structuredContent"]["runtime_verdict"] == "PASS"
     # Missing copies are regenerable; present tampered bytes remain invalid.
     source = __import__("pathlib").Path(issued["snapshot_root"])
-    source.chmod(0o700)
+    _fixture_io(source).chmod(0o700)
     _remove_frozen_fixture(source / "src.txt")
     assert _verification_state(td)[0]
     restored = targets.ensure_snapshot(str(td), issued["token"], str(repo))
     assert restored["token"] == issued["token"] and restored["snapshot_root"] != str(source)
     assert _verification_state(td)[0]
-    (repo / "src.txt").write_text("changed execution source")
+    (_fixture_io(repo / "src.txt")).write_text("changed execution source")
     blocked = call("verify")["structuredContent"]
     assert blocked["runtime_verdict"] == "PENDING"
     assert "applicable verification target inputs" in blocked["missing_for_close"]
@@ -83,8 +93,8 @@ def test_retired_lens_uses_current_obligations_and_reintroduction(tmp_path):
     assert not call('plan', plan=plan, required_lenses=all_lenses).get('isError')
     old = call('target', target=dict(specification(), lenses=all_lenses))['structuredContent']['target']
     metadata = Path(old['snapshot_root']).parent / 'target.json'
-    original = metadata.read_bytes()
-    (repo / 'src.txt').write_text('changed')
+    original = _fixture_io(metadata).read_bytes()
+    (_fixture_io(repo / 'src.txt')).write_text('changed')
     assert not call('plan', plan=plan, required_lenses=current).get('isError')
     latest = call('target', target=dict(specification(), lenses=current))
     assert not latest.get('isError'), latest
@@ -93,14 +103,14 @@ def test_retired_lens_uses_current_obligations_and_reintroduction(tmp_path):
     assert verified['runtime_verdict'] == 'PASS', verified
     assert verified['verification_targets']['missing_lenses'] == []
     assert {r['token'] for r in verified['verification_targets']['targets']} == {latest['structuredContent']['target']['token']}
-    assert metadata.read_bytes() == original
+    assert _fixture_io(metadata).read_bytes() == original
     assert not call('plan', plan=plan, required_lenses=all_lenses).get('isError')
     reintroduced = call('verify')['structuredContent']
     assert reintroduced['runtime_verdict'] == 'PENDING'
     assert reintroduced['verification_targets']['missing_lenses'] == ['review-security']
     assert not call('target', target=dict(specification(), lenses=['review-security'])).get('isError')
     assert call('verify')['structuredContent']['runtime_verdict'] == 'PASS'
-    assert metadata.read_bytes() == original
+    assert _fixture_io(metadata).read_bytes() == original
 
 
 def test_retired_lens_missing_metadata_is_not_read_until_reintroduced(tmp_path, monkeypatch):

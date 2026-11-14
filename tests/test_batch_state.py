@@ -916,7 +916,7 @@ def test_native_remove_refusal_restores_retention_marker_then_retry_succeeds(tmp
             attempted.append(True)
             # A real native removal refusal caused by a lock appearing at
             # the final boundary, after managed cleanup unlinked its marker.
-            locked = original_run(["git", "worktree", "lock", "--reason", "native removal race",
+            locked = original_run(["git", "-c", "core.longpaths=true", "worktree", "lock", "--reason", "native removal race",
                                    str(worktree)], cwd=pool.repo, capture_output=True, text=True)
             assert locked.returncode == 0, locked.stderr
         return original_run(command, *args, **kwargs)
@@ -1193,14 +1193,15 @@ def test_s1_bind_persists_reservation_before_prepare_and_retries_exact_identity(
     item = json.loads(pool.state.read_text())["requests"][0]
     assert item["status"] == "reserved"
     private = Path(item["submodule_manifest"]["modules"][0]["private_gitdir"])
-    inode = private.stat().st_ino
+    from test_batch_finish import _fixture_io
+    inode = _fixture_io(private).stat().st_ino
     pool.cli("bind", "--slug", "a", "--worker-id", "foreign", "--worktree", worktree, "--branch", branch, ok=False)
     monkeypatch.setattr(batch_submodules, "prepare", original)
     pool.cli("bind", "--slug", "a", "--worker-id", "worker-a", "--worktree", worktree, "--branch", branch)
     item = json.loads(pool.state.read_text())["requests"][0]
     assert item["status"] == "running"
     assert all(m["phase"] == "prepared" for m in item["submodule_manifest"]["modules"])
-    assert private.stat().st_ino == inode
+    assert _fixture_io(private).stat().st_ino == inode
 
 
 def test_s1_resume_preserves_dirty_module_worker_handoff_and_identity(tmp_path, monkeypatch, s1_resume_worker):
@@ -1482,7 +1483,7 @@ def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path,
     def lock_at_removal(command, *args, **kwargs):
         if 'worktree' in command and 'remove' in command:
             attempted.append(True)
-            result = actual(['git', 'worktree', 'lock', '--reason', 'Native readonly refusal race', str(tree)],
+            result = actual(['git', '-c', 'core.longpaths=true', 'worktree', 'lock', '--reason', 'Native readonly refusal race', str(tree)],
                             cwd=pool.repo, capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
         return actual(command, *args, **kwargs)

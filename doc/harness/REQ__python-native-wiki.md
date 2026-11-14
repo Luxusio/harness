@@ -250,3 +250,13 @@ protections; actual affected review and execution must precede completion.
 Acceptance includes the full root suite at the reported temporary-path depth
 with a genuine venv and matching Git version, plus short-path controls. Scoped
 retakes alone cannot establish that the reported full-suite failures are fixed.
+
+The actual full Native follow-up exposes additional path-boundary gaps. Existing
+snapshot creation/restoration, retained diagnostic publication/readback and pool
+or notice-marker presence must use the supported Native filesystem primitives.
+Only genuine absence may mean missing; access, ownership or unsafe-path failures
+must retain conservative refusal, without advancing a notice cursor or blocking
+an independent space. Keep finite budgets, locks, source fingerprints and stable
+persisted identities. Distinguish Git's own explicit-directory byte limit from
+the reported long pack-file boundary; an equivalent relative Git invocation may
+retain the same validated absolute path without relocating or aliasing it.

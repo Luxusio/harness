@@ -313,8 +313,14 @@ def _native_session(tmp_path, monkeypatch, cwd):
     home = tmp_path / "codex"
     created = datetime.fromtimestamp(lib.uuid7_timestamp_ms(sid) / 1000).astimezone()
     path = home / "sessions" / f"{created:%Y/%m/%d}" / f"rollout-test-{sid}.jsonl"
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({
+    if os.name == "nt":
+        from _wiki_windows import ensure_private_directory, _win32_path
+        ensure_private_directory(path.parent)
+        disk_path = Path(_win32_path(path))
+    else:
+        path.parent.mkdir(parents=True)
+        disk_path = path
+    disk_path.write_text(json.dumps({
         "type": "session_meta", "payload": {"id": sid, "cwd": str(cwd)},
     }) + "\n", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(home))

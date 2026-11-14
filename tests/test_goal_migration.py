@@ -18,6 +18,16 @@ import goal_migration as migration
 from test_symlink_fixture import create_symlink
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def write(repo, relative, value):
     path = repo / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,11 +242,11 @@ def test_initialized_pool_import_is_unbaselined_not_new_admission(tmp_path, monk
     result = migration.apply(pool.repo)
     assert not result["blockers"]
     state_path = pool.repo / "doc/harness/wbs/WBS__integration/WBS.json"
-    state = json.loads(state_path.read_text())
+    state = json.loads(_fixture_io(state_path).read_text())
     assert state == dict(version=1, nodes=[], checks={}, run_id="", started_at=0, last_progress_at=0,
                          pack_only=True, batch=dict(wbs_id="WBS__integration", **value))
-    assert not state_path.with_name("WBS.control.json").exists()
-    assert json.loads(pool.state.read_text())["batch_id"] == value["batch_id"]
+    assert not _fixture_io(state_path.with_name("WBS.control.json")).exists()
+    assert json.loads(_fixture_io(pool.state).read_text())["batch_id"] == value["batch_id"]
 
 
 def test_wbs_metadata_only_preserves_evidence_and_opaque_pool(tmp_path, owner):
@@ -1239,10 +1249,10 @@ def test_failed_write_cleanup_requires_original_descriptor_proof(tmp_path, monke
 def test_public_wbs_migration_uses_its_isolated_root_without_hook_bypass(tmp_path):
     from test_harness_mcp_server import HarnessMcpServerTests
     from test_codex_hook_wrappers import _load
-    (tmp_path / ".git").mkdir()
+    (_fixture_io(tmp_path / ".git")).mkdir()
     write(tmp_path, "doc/harness/manifest.yaml", b"version: 7\nproject:\n  type: library\n")
     source = row(tmp_path, goal="GOAL__isolated-v9fs-fixture")
-    original = source.read_bytes()
+    original = _fixture_io(source).read_bytes()
     _load("_lib")
     server = HarnessMcpServerTests()
     preview = server._call_in_repo(str(tmp_path), "wbs", dict(action="migrate"))
@@ -1250,14 +1260,14 @@ def test_public_wbs_migration_uses_its_isolated_root_without_hook_bypass(tmp_pat
     report = preview["structuredContent"]
     expected_sources = {migration.GOALS + "/" + source.name, migration.GOALS + "/current.json"}
     assert report["status"] == "preview" and set(report["sources"]) == expected_sources
-    assert not (tmp_path / migration.ARCHIVE).exists()
+    assert not (_fixture_io(tmp_path / migration.ARCHIVE)).exists()
     assert len(report["destinations"]) == 1 and not report["blockers"]
     refused = server._call_in_repo(str(tmp_path), "wbs", dict(action="migrate", apply="true"))
-    assert refused.get("isError") and source.read_bytes() == original
+    assert refused.get("isError") and _fixture_io(source).read_bytes() == original
     applied = server._call_in_repo(str(tmp_path), "wbs", dict(action="migrate", apply=True))
     assert not applied.get("isError"), applied
-    assert applied["structuredContent"]["status"] == "complete" and not source.exists()
-    assert (tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name).read_bytes() == original
+    assert applied["structuredContent"]["status"] == "complete" and not _fixture_io(source).exists()
+    assert (_fixture_io(tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name)).read_bytes() == original
     assert not list(tmp_path.rglob("WBS.control.json")) and not list(tmp_path.rglob(".migration-*"))
 
 
@@ -1272,13 +1282,13 @@ def test_completed_migration_allows_live_pool_and_wbs_evolution(tmp_path, monkey
     archived = tree_snapshot(pool.repo / migration.ARCHIVE)
     assert pool.claim()
     state_path = pool.repo / 'doc/harness/wbs/WBS__integration/WBS.json'
-    state = json.loads(state_path.read_text())
+    state = json.loads(_fixture_io(state_path).read_text())
     state['last_progress_at'] = 123
-    state_path.write_text(json.dumps(state))
-    live = (pool.state.read_bytes(), state_path.read_bytes())
+    _fixture_io(state_path).write_text(json.dumps(state))
+    live = (_fixture_io(pool.state).read_bytes(), _fixture_io(state_path).read_bytes())
     for operation in (migration.preview, migration.apply):
         assert operation(pool.repo)['status'] == 'complete'
-        assert (pool.state.read_bytes(), state_path.read_bytes()) == live
+        assert (_fixture_io(pool.state).read_bytes(), _fixture_io(state_path).read_bytes()) == live
         assert tree_snapshot(pool.repo / migration.ARCHIVE) == archived
 
 

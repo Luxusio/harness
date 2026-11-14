@@ -48,6 +48,14 @@ CODEX_PLUGIN_VERSION = json.loads(
 pytestmark = pytest.mark.usefixtures("selected_installer_python")
 
 
+def _disk(path):
+    """Keep ordinary fixture identities; widen only Python filesystem I/O."""
+    value = os.path.abspath(path)
+    if os.name == "nt" and not value.startswith("\\\\?\\"):
+        value = "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+    return Path(value)
+
+
 @pytest.fixture(autouse=True)
 def isolated_installer_home(tmp_path, monkeypatch):
     """Default install surfaces belong to this fixture, never the host user."""
@@ -119,6 +127,11 @@ def _write_cli_fixture(path, version, *, log_env=None, marketplace="", failures=
     path.write_text(
         "# Harness CLI protocol fixture\n"
         "import json, os, shutil, sys\nfrom pathlib import Path\n"
+        "def disk(path):\n"
+        " value=os.path.abspath(path)\n"
+        " if os.name == 'nt':\n"
+        "  value='\\\\\\\\?\\\\UNC\\\\'+value[2:] if value.startswith('\\\\\\\\') else '\\\\\\\\?\\\\'+value\n"
+        " return Path(value)\n"
         + "options = " + repr(options) + "\n"
         + "mirror = None\n"
         + "args = sys.argv[1:]\n"
@@ -137,7 +150,7 @@ def _write_cli_fixture(path, version, *, log_env=None, marketplace="", failures=
         + "if args[:2] == ['plugin', 'update'] and os.environ.get('HARNESS_DEST'):\n"
         + " root=Path(os.environ['HARNESS_DEST'])/'plugin'; version=json.loads((root/'.claude-plugin/plugin.json').read_text())['version']\n"
         + " config=Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home()/'.claude'))); cache=config/'plugins/cache/harness/harness'/version\n"
-        + " shutil.copytree(root,cache,dirs_exist_ok=True)\n"
+        + " shutil.copytree(disk(root),disk(cache),dirs_exist_ok=True)\n"
         + " (config/'plugins/installed_plugins.json').write_text(json.dumps({'version':2,'plugins':{'harness@harness':[{'scope':'user','version':version,'installPath':str(cache)}]}}))\n",
         encoding="utf-8", newline="\n",
     )
@@ -475,10 +488,10 @@ def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
     assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
 
     old_cache = cache.parent / "2.3.0+codex.20260929030000.hffffffffffffffff"
-    old_cache.mkdir()
-    (old_cache / '.codex-plugin').mkdir()
-    (old_cache / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=old_cache.name)))
-    (old_cache / "left-for-live-session").write_text("old\n")
+    _disk(old_cache).mkdir()
+    _disk(old_cache / '.codex-plugin').mkdir()
+    _disk(old_cache / '.codex-plugin/plugin.json').write_text(json.dumps(dict(name='harness', version=old_cache.name)))
+    _disk(old_cache / "left-for-live-session").write_text("old\n")
     assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
 
     marketplace_extra = install_root / ".agents/plugins/unowned-extra"
@@ -488,7 +501,7 @@ def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
     assert not marketplace_extra.exists()
     assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
 
-    (cache / "scripts/hook_session_start.py").write_text("stale\n")
+    _disk(cache / "scripts/hook_session_start.py").write_text("stale\n")
     state, reason = module._codex_payload_state(config_path)
     assert state == module.PAYLOAD_STALE
     assert "current cache" in reason
@@ -1238,15 +1251,15 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert re.fullmatch(r"harness\.g[0-9]{20}\.h[0-9a-f]{16}", cached.name)
     assert cached == codex_home / "plugins" / "cache" / "harness" / "harness" / module._codex_plugin_version(source_root)
     assert (stale_suffix / "stale.txt").read_text() == "old"
-    assert (cached / "hooks.json").is_file()
-    assert (cached / ".mcp.json").is_file()
-    assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
-    assert not (cached / "scripts" / "review-log").is_file()
-    assert not (cached / "scripts" / "review-read").is_file()
-    assert (cached / "mcp" / "harness_server.py").is_file()
-    assert (cached / "scripts" / "_lib.py").is_file()
-    assert (cached / "agents" / "defect-hunter.md").is_file()
-    assert not (cached / "scripts" / "background_registry.py").exists()
+    assert _disk(cached / "hooks.json").is_file()
+    assert _disk(cached / ".mcp.json").is_file()
+    assert _disk(cached / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert not _disk(cached / "scripts" / "review-log").is_file()
+    assert not _disk(cached / "scripts" / "review-read").is_file()
+    assert _disk(cached / "mcp" / "harness_server.py").is_file()
+    assert _disk(cached / "scripts" / "_lib.py").is_file()
+    assert _disk(cached / "agents" / "defect-hunter.md").is_file()
+    assert not _disk(cached / "scripts" / "background_registry.py").exists()
     shared_rels = (
         "internal-skills/develop/fix-first-pattern.md",
         "internal-skills/develop/runtime-smoke.md",
@@ -1263,26 +1276,26 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
         "internal-skills/run/self-improvement.md",
     )
     for rel in shared_rels:
-        assert (cached / rel).is_file(), rel
+        assert _disk(cached / rel).is_file(), rel
     for rel in shared_rels:
         shared = cached / rel
-        text = shared.read_text(encoding="utf-8")
+        text = _disk(shared).read_text(encoding="utf-8")
         assert "${CLAUDE_PLUGIN_ROOT}" not in text, shared
         assert "`plugin/skills/develop/" not in text, shared
         assert "`plugin/skills/plan-" not in text, shared
         assert "`plugin/agents/" not in text, shared
         for suffix in re.findall(r"\$\{HARNESS_PLUGIN_ROOT\}(/[A-Za-z0-9_./-]+)", text):
-            assert (cached / suffix.lstrip("/")).exists(), (shared, suffix)
-    assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
-    assert (cached / "skills" / "setup" / "verify-report.md").is_file()
-    assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()
-    assert not (cached / "skills" / "setup" / "templates" / "CONTRACTS.local.md").exists()
-    installed_hooks = json.loads((cached / "hooks.json").read_text())["hooks"]
+            assert _disk(cached / suffix.lstrip("/")).exists(), (shared, suffix)
+    assert _disk(cached / "skills" / "setup" / "bootstrap.md").is_file()
+    assert _disk(cached / "skills" / "setup" / "verify-report.md").is_file()
+    assert _disk(cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()
+    assert not _disk(cached / "skills" / "setup" / "templates" / "CONTRACTS.local.md").exists()
+    installed_hooks = json.loads(_disk(cached / "hooks.json").read_text())["hooks"]
     prewrite = installed_hooks["PreToolUse"][0]["hooks"][0]
     command = (base64.b64decode(prewrite["commandWindows"].rsplit(" ", 1)[1]).decode("utf-16-le")
                if os.name == "nt" else prewrite["command"])
     assert str(cached / "scripts" / "hook_pre_tool_use.py") in command
-    installed_mcp = json.loads((cached / ".mcp.json").read_text())["mcpServers"]["harness"]
+    installed_mcp = json.loads(_disk(cached / ".mcp.json").read_text())["mcpServers"]["harness"]
     assert str(cached / "mcp" / "harness_server.py") in installed_mcp["args"]
 
 
@@ -1434,17 +1447,17 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
         / "harness"
         / module._codex_plugin_version(codex_install_root / "plugins" / "harness")
     )
-    assert (cached / ".codex-plugin" / "plugin.json").is_file()
-    assert (cached / "hooks.json").is_file()
-    assert (cached / ".mcp.json").is_file()
-    assert (cached / "skills" / "run" / "SKILL.md").is_file()
-    assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
-    assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
-    assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
-    assert not (cached / "scripts" / "review-log").is_file()
-    assert not (cached / "scripts" / "review-read").is_file()
-    assert (cached / "agents" / "defect-hunter.md").is_file()
-    assert (cached / "mcp" / "harness_server.py").is_file()
+    assert _disk(cached / ".codex-plugin" / "plugin.json").is_file()
+    assert _disk(cached / "hooks.json").is_file()
+    assert _disk(cached / ".mcp.json").is_file()
+    assert _disk(cached / "skills" / "run" / "SKILL.md").is_file()
+    assert _disk(cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
+    assert _disk(cached / "internal-skills" / "run" / "SKILL.md").is_file()
+    assert _disk(cached / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert not _disk(cached / "scripts" / "review-log").is_file()
+    assert not _disk(cached / "scripts" / "review-read").is_file()
+    assert _disk(cached / "agents" / "defect-hunter.md").is_file()
+    assert _disk(cached / "mcp" / "harness_server.py").is_file()
     parsed = tomllib.loads(config_path.read_text())
     assert parsed["plugins"]["harness@harness"]["enabled"] is True
     assert parsed["marketplaces"]["harness"]["source"] == str(codex_install_root)
@@ -1734,15 +1747,15 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
         / "harness"
         / module._codex_plugin_version(source_root)
     )
-    assert (cached / ".codex-plugin" / "plugin.json").is_file()
-    assert (cached / ".mcp.json").is_file()
-    assert (cached / "hooks.json").is_file()
-    assert (cached / "skills" / "run" / "SKILL.md").is_file()
-    assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
-    assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
-    assert (cached / "scripts" / "_lib.py").is_file()
-    assert not (cached / "scripts" / "background_registry.py").exists()
-    assert not (cached / "stale.txt").exists()
+    assert _disk(cached / ".codex-plugin" / "plugin.json").is_file()
+    assert _disk(cached / ".mcp.json").is_file()
+    assert _disk(cached / "hooks.json").is_file()
+    assert _disk(cached / "skills" / "run" / "SKILL.md").is_file()
+    assert _disk(cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
+    assert _disk(cached / "internal-skills" / "run" / "SKILL.md").is_file()
+    assert _disk(cached / "scripts" / "_lib.py").is_file()
+    assert not _disk(cached / "scripts" / "background_registry.py").exists()
+    assert not _disk(cached / "stale.txt").exists()
     assert (stale / "stale.txt").read_text() == "old"
 
 

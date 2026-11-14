@@ -233,8 +233,9 @@ def test_native_tree_entries_streams_exact_bytes_and_propagates_inventory_failur
 
 
 def _git(*args, cwd):
+    paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False,
+        ["git", *paths, *args], cwd=cwd, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, f"git {args} failed: {result.stderr}"
     return result.stdout.strip()
@@ -417,10 +418,8 @@ def test_refuses_unmerged_branch(tmp_path: Path):
     _add_worktree(repo, worktree, "lead-1")
     _write_task(worktree, "WBS__demo")
     (worktree / "src.txt").write_text("unmerged change\n", encoding="utf-8")
-    subprocess.run(["git", "add", "src.txt"], cwd=worktree, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "unmerged lead work"], cwd=worktree, check=True,
-    )
+    _git("add", "src.txt", cwd=worktree)
+    _git("commit", "-q", "-m", "unmerged lead work", cwd=worktree)
     # Deliberately do not merge lead-1 into the main checkout's HEAD.
 
     with _raises(mod.HarvestError, match="not merged"):
@@ -504,8 +503,9 @@ def test_rebase_conflict_abort_restores_the_lead_and_leaves_main(tmp_path: Path)
     main_head = _git("rev-parse", "HEAD", cwd=repo)
     lead_tip = _git("rev-parse", "HEAD", cwd=second)
 
+    paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     conflict = subprocess.run(
-        ["git", "rebase", "-q", "--no-autostash", main_head],
+        ["git", *paths, "rebase", "-q", "--no-autostash", main_head],
         cwd=second, capture_output=True, text=True, check=False,
     )
     assert conflict.returncode != 0
@@ -533,8 +533,9 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
     _rebase_and_fast_forward(repo, first, "lead-1")
     main_head = _git("rev-parse", "HEAD", cwd=repo)
 
+    paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     stopped = subprocess.run(
-        ["git", "rebase", "-q", "--no-autostash", main_head],
+        ["git", *paths, "rebase", "-q", "--no-autostash", main_head],
         cwd=second, capture_output=True, text=True, check=False,
     )
     assert stopped.returncode != 0
@@ -547,7 +548,7 @@ def test_rebase_stopped_at_a_conflict_is_refused_then_continued_and_integrated(t
     (second / "shared.txt").write_text("from lead 1\nfrom lead 2\n", encoding="utf-8")
     _git("add", "shared.txt", cwd=second)
     env = {**os.environ, "GIT_EDITOR": "true"}
-    subprocess.run(["git", "rebase", "--continue"], cwd=second, env=env,
+    subprocess.run(["git", *paths, "rebase", "--continue"], cwd=second, env=env,
                    capture_output=True, check=True)
     _git("merge", "-q", "--ff-only", "lead-2", cwd=repo)
     _harvest(str(repo), str(second), "WBS__lead2")
@@ -766,7 +767,8 @@ def test_s1_guarded_removal_uses_single_force_and_preserves_objects(tmp_path, mo
     calls = []
     def runner(repo, *args):
         calls.append(args)
-        return subprocess.run(["git", *map(str, args)], cwd=repo, capture_output=True, text=True)
+        paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
+        return subprocess.run(["git", *paths, *map(str, args)], cwd=repo, capture_output=True, text=True)
     result = mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint, git_runner=runner)
     assert result.returncode == 0, result.stderr
     assert calls == [("worktree", "remove", "--force", str(work))]
@@ -1159,21 +1161,22 @@ def test_ordinary_snapshots_refuse_foreign_malformed_and_unsafe_inputs(tmp_path)
 
 
 def test_ordinary_snapshot_collisions_and_sidecar_links_never_overwrite(tmp_path):
+    from test_batch_finish import _fixture_io
     repo, work, task, diagnostics, checkpoint, sidecar = _ordinary_snapshot_fixture(tmp_path)
-    sidecar.mkdir(parents=True)
+    _fixture_io(sidecar).mkdir(parents=True)
     destination = sidecar / 'watcher-diagnostics.json'
-    destination.write_bytes(b'previous irreplaceable snapshot')
+    _fixture_io(destination).write_bytes(b'previous irreplaceable snapshot')
     with _raises(mod.HarvestError, match='collision'):
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
-    assert destination.read_bytes() == b'previous irreplaceable snapshot'
-    destination.unlink()
+    assert _fixture_io(destination).read_bytes() == b'previous irreplaceable snapshot'
+    _fixture_io(destination).unlink()
     outside = tmp_path / 'outside'
     outside.write_bytes(diagnostics.read_bytes())
-    create_symlink(destination, outside)
+    create_symlink(_fixture_io(destination), outside)
     with _raises(mod.HarvestError):
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
-    destination.unlink()
-    os.link(outside, destination)
+    _fixture_io(destination).unlink()
+    os.link(_fixture_io(outside), _fixture_io(destination))
     with _raises(mod.HarvestError):
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
     assert work.exists() and checkpoint.exists()

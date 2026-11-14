@@ -471,7 +471,8 @@ def test_native_deep_owned_entry_retains_canonical_public_wbs_writer(native_inst
     shutil.copytree(_extended(fixture.source / "plugin"), _extended(deep), copy_function=shutil.copyfile)
     entry = deep / "mcp/harness_server.py"
     assert units(entry) > 260
-    _run(["git", "init", "-q", str(fixture.consumer)], cwd=fixture.private, env=fixture.env, timeout=10)
+    _run(["git", "-c", "core.longpaths=true", "init", "-q", str(fixture.consumer)],
+         cwd=fixture.private, env=fixture.env, timeout=10)
     manifest = fixture.consumer / "doc/harness/manifest.yaml"
     win.ensure_private_directory(manifest.parent)
     platform.atomic_write(manifest, b"version: 5\ntype: library\nstrict_compliance_requires_delegation: true\n")

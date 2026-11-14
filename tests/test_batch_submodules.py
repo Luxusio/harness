@@ -92,6 +92,7 @@ def pytest_generate_tests(metafunc):
     import pytest
     posix_filename = pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain ':' or '*'")
     cases = {
+        "source_head": ["attached", "detached"],
         "selected_name": ["libs/모듈", "libs/[module]",
                           pytest.param("libs/[module]*", marks=posix_filename),
                           pytest.param(":(glob)module*", marks=posix_filename)],
@@ -158,10 +159,21 @@ def test_selection_rejects_unsupported_object_stores(tmp_path, monkeypatch, stor
         helper.selection(main, paths)
 
 
-def test_preparation_is_private_named_and_does_not_change_shared_config(tmp_path, monkeypatch):
+def test_preparation_is_private_named_and_does_not_change_shared_config(tmp_path, monkeypatch, source_head):
+    from test_batch_finish import _fixture_io
     main, work, paths = _setup(tmp_path, monkeypatch)
     helper = _helper()
-    configs = [main / ".git/config", Path(_git(main / paths[0], "rev-parse", "--absolute-git-dir")) / "config"]
+    source = main / paths[0]
+    default_branch = _git(source, "symbolic-ref", "HEAD")
+    _git(source, "branch", "other-source-head")
+    if source_head == "detached":
+        _git(source, "checkout", "--detach", "-q")
+        _git(source, "commit", "--amend", "-qm", "selected detached commit")
+        assert _git(source, "for-each-ref", "--contains", "HEAD", "--format=%(refname)") == ""
+        _commit(main, "select detached module commit")
+        _git(work, "rebase", "main")
+    refs = _git(source, "for-each-ref", "--format=%(refname) %(objectname)")
+    configs = [main / ".git/config", Path(_git(source, "rev-parse", "--absolute-git-dir")) / "config"]
     before = {p: p.read_bytes() for p in configs}
     value = _manifest(helper, main, work, paths)
     snapshots = []
@@ -170,16 +182,28 @@ def test_preparation_is_private_named_and_does_not_change_shared_config(tmp_path
     assert snapshots[0] != snapshots[-1]
     module = work / paths[0]
     assert _git(module, "symbolic-ref", "--short", "HEAD")
-    assert _git(module, "rev-parse", "HEAD") == _git(main / paths[0], "rev-parse", "HEAD")
+    assert _git(module, "rev-parse", "HEAD") == _git(source, "rev-parse", "HEAD")
+    assert _git(module, "cat-file", "-t", "HEAD") == "commit"
+    assert _git(module, "rev-list", "--objects", "HEAD")
+    for row in _git(source, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/").splitlines():
+        ref, oid = row.split()
+        assert _git(module, "rev-parse", ref.replace("refs/heads/", "refs/remotes/origin/", 1)) == oid
+    if source_head == "attached":
+        assert _git(module, "rev-parse", default_branch) == _git(source, "rev-parse", default_branch)
+        assert _git(module, "symbolic-ref", "refs/remotes/origin/HEAD") == default_branch.replace(
+            "refs/heads/", "refs/remotes/origin/", 1)
+        assert _git(source, "symbolic-ref", "HEAD") == default_branch
+    else:
+        assert _git(source, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    assert _git(source, "for-each-ref", "--format=%(refname) %(objectname)") == refs
     private = Path(_git(module, "rev-parse", "--absolute-git-dir"))
     admin = Path(_git(work, "rev-parse", "--absolute-git-dir"))
     assert private.is_relative_to(admin)
-    assert not (private / "objects/info/alternates").exists()
-    source_objects = Path(_git(main / paths[0], "rev-parse", "--absolute-git-dir")) / "objects"
-    for obj in (private / "objects").rglob("*"):
-        peer = source_objects / obj.relative_to(private / "objects")
-        if obj.is_file() and peer.is_file():
-            assert (obj.stat().st_dev, obj.stat().st_ino) != (peer.stat().st_dev, peer.stat().st_ino)
+    assert not _fixture_io(private / "objects/info/alternates").exists()
+    source_objects = Path(_git(source, "rev-parse", "--absolute-git-dir")) / "objects"
+    inventories = [{(p.stat().st_dev, p.stat().st_ino) for p in _fixture_io(directory).rglob("*") if p.is_file()}
+                   for directory in (private / "objects", source_objects)]
+    assert all(inventories) and inventories[0].isdisjoint(inventories[1])
     assert {p: p.read_bytes() for p in configs} == before
     stable = copy.deepcopy(value)
     helper.prepare(main, work, value, lambda _: None)
@@ -448,7 +472,8 @@ def test_preserve_ref_inventory_limit_refuses_before_destination_writes(tmp_path
     module = work / paths[0]
     tip = _git(module, "rev-parse", "HEAD")
     commands = "".join(f"create refs/heads/limit-{i} {tip}\n" for i in range(4097))
-    result = subprocess.run(["git", "update-ref", "--stdin"], cwd=module,
+    git_options = ["-c", "core.longpaths=true"] if os.name == "nt" else []
+    result = subprocess.run(["git", *git_options, "update-ref", "--stdin"], cwd=module,
                             input=commands.encode("utf-8"), capture_output=True)
     assert result.returncode == 0, result.stderr
     destination = main / paths[0]
@@ -695,22 +720,25 @@ def test_partial_pin_publication_retries_exactly_without_overwriting_published_r
 
 def test_owned_but_incomplete_clone_is_retained_without_retry_overwrite(tmp_path, monkeypatch):
     import pytest
+    from test_batch_finish import _fixture_io
     main, work, paths = _setup(tmp_path, monkeypatch)
     helper = _helper()
     value = _manifest(helper, main, work, paths)
     durable = copy.deepcopy(value)
     original = subprocess.run
-    clone_attempted = []
+    creation_attempted = []
     class ProcessDied(Exception):
         pass
     def persist(item):
         nonlocal durable
         durable = copy.deepcopy(item)
     def crash_clone(command, *args, **kwargs):
-        if Path(command[0]).name.lower() in {"git", "git.exe"} and "clone" in command:
-            clone_attempted.append(command)
-            # A real clone creates the owned metadata; interruption precedes
-            # named-branch checkout and completion publication.
+        creation = "init" if os.name == "nt" else "clone"
+        if (Path(command[0]).name.lower() in {"git", "git.exe"}
+                and creation in command and "--separate-git-dir" in command):
+            creation_attempted.append((command, kwargs.get("cwd", main)))
+            # Real metadata creation completes. Native interruption precedes
+            # transport fetch; POSIX interruption precedes branch checkout.
             result = original(command, *args, **kwargs)
             assert result.returncode == 0, result.stderr
             raise ProcessDied
@@ -720,33 +748,35 @@ def test_owned_but_incomplete_clone_is_retained_without_retry_overwrite(tmp_path
         with pytest.raises(ProcessDied):
             helper.prepare(main, work, value, persist)
     assert durable["modules"][0]["phase"] == "owned"
-    assert len(clone_attempted) == 1
-    command = clone_attempted[0]
-    gitdir = Path(command[command.index("--separate-git-dir") + 1])
-    clone_worktree = Path(command[-1])
+    assert len(creation_attempted) == 1
+    command, cwd = creation_attempted[0]
+    gitdir = Path(os.path.abspath(os.path.join(cwd, command[command.index("--separate-git-dir") + 1])))
+    clone_worktree = Path(os.path.abspath(os.path.join(cwd, command[-1])))
     recorded = Path(durable["modules"][0]["private_gitdir"])
     if os.name == "nt":
         assert gitdir == recorded.parent / "clone" / "git"
         assert clone_worktree == recorded.parent / "clone" / "worktree"
-        assert not recorded.exists()
+        assert not _fixture_io(recorded).exists()
     else:
         assert gitdir == recorded and clone_worktree == work / paths[0]
-    assert gitdir.is_dir() and clone_worktree.is_dir()
-    precious = gitdir / "incomplete-clone-note"
+    assert _fixture_io(gitdir).is_dir() and _fixture_io(clone_worktree).is_dir()
+    precious = _fixture_io(gitdir / "incomplete-clone-note")
     precious.write_bytes(b"never overwrite this interrupted clone")
-    identity = (gitdir.stat().st_dev, gitdir.stat().st_ino)
-    gitfile = (clone_worktree / ".git").read_bytes()
+    identity = (_fixture_io(gitdir).stat().st_dev, _fixture_io(gitdir).stat().st_ino)
+    gitfile = _fixture_io(clone_worktree / ".git").read_bytes()
     def refuse_clone_retry(command, *args, **kwargs):
-        assert not (Path(command[0]).name.lower() in {"git", "git.exe"} and "clone" in command), "incomplete clone must not be retried"
+        forbidden = {"init", "clone", "fetch", "checkout"} if os.name == "nt" else {"clone"}
+        assert not (Path(command[0]).name.lower() in {"git", "git.exe"}
+                    and forbidden.intersection(command)), "incomplete clone must not be retried or overwritten"
         return original(command, *args, **kwargs)
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, "run", refuse_clone_retry)
         with pytest.raises(helper.SubmoduleError):
             helper.prepare(main, work, durable, lambda _: None)
     assert durable["modules"][0]["phase"] == "owned"
-    assert (gitdir.stat().st_dev, gitdir.stat().st_ino) == identity
+    assert (_fixture_io(gitdir).stat().st_dev, _fixture_io(gitdir).stat().st_ino) == identity
     assert precious.read_bytes() == b"never overwrite this interrupted clone"
-    assert (clone_worktree / ".git").read_bytes() == gitfile
+    assert _fixture_io(clone_worktree / ".git").read_bytes() == gitfile
 
 
 def test_removal_refuses_unknown_private_parent_sibling_without_discard(tmp_path, monkeypatch):
@@ -876,6 +906,7 @@ def test_preexisting_annotated_tag_survives_independent_clone_and_normal_disposa
     value = _manifest(helper, main, work, paths)
     helper.prepare(main, work, value, lambda _: None)
     module = work / paths[0]
+    assert _git(module, "for-each-ref", "--format=%(refname)", "refs/tags/") == ""
     tip = _change(work, paths[0])
     helper.preserve(main, work, value, lambda _: None)
     helper.removal_proof(main, work, value)
@@ -913,8 +944,9 @@ def _conversion_flags(policy):
 def _isolated_conversion_git(root, *args, policy=None):
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0")
+    paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", "--no-optional-locks", *_conversion_flags(policy or {}),
+        ["git", *paths, "--no-optional-locks", *_conversion_flags(policy or {}),
          "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull, *args],
         cwd=root, env=env, capture_output=True,
     )

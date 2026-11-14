@@ -84,7 +84,8 @@ def test_intent_without_witness_never_adopts_foreign_resource(tmp_path, monkeypa
     elif foreign == 'branch':
         _git('branch', intent['branch'], cwd=pool.repo)
     else:
-        _git('worktree', 'add', '-qb', intent['branch'], intent['worktree'], cwd=pool.repo)
+        target = os.path.relpath(intent['worktree'], pool.repo) if os.name == 'nt' else intent['worktree']
+        _git('worktree', 'add', '-qb', intent['branch'], target, cwd=pool.repo)
     monkeypatch.setattr(managed, '_save', original)
     with pytest.raises((RuntimeError, OSError)):
         call(pool, spec, available_slots=0)

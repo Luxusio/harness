@@ -69,7 +69,7 @@ def _conversion_policy(root):
     return policy
 
 
-def _git(root, *args, allow=False):
+def _git(root, *args, allow=False, gitdir=None):
     env = _trusted_git_env()
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT='0', GIT_NO_LAZY_FETCH='1', GIT_NO_REPLACE_OBJECTS='1', LC_ALL='C')
@@ -77,11 +77,13 @@ def _git(root, *args, allow=False):
     if os.name == 'nt':
         for key, value in _conversion_policy(root).items():
             conversion.extend(('-c', key + '=' + value))
+    location = (['--git-dir=' + os.path.relpath(gitdir, root)]
+                if os.name == 'nt' and gitdir is not None else [])
     command = [_git_executable(root, env), '--no-optional-locks', *conversion, '-c', 'core.fsmonitor=false',
                '-c', 'core.hooksPath=' + os.devnull, '-c', 'submodule.recurse=false',
                '-c', 'fetch.recurseSubmodules=false', '-c', 'protocol.allow=never',
                '-c', 'protocol.file.allow=always', '-c', 'maintenance.auto=false',
-               '-c', 'gc.auto=0', '-c', 'pack.writeReverseIndex=false', '-c', 'core.fsync=all', '-c', 'core.fsyncMethod=fsync', *args]
+               '-c', 'gc.auto=0', '-c', 'pack.writeReverseIndex=false', '-c', 'core.fsync=all', '-c', 'core.fsyncMethod=fsync', *location, *args]
     try:
         result = subprocess.run(command, cwd=root, env=env, capture_output=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -99,12 +101,14 @@ def _safe(path, *, exists=True):
         from wiki_platform import _native
         try:
             target = Path(path)
-            missing = []
-            while not os.path.lexists(target):
-                _require(not exists, 'missing path: ' + path)
-                missing.append(target.name)
-                target = target.parent
-            if target.is_dir():
+            while True:
+                try:
+                    info = os.lstat(_native._win32_path(target))
+                    break
+                except FileNotFoundError:
+                    _require(not exists, 'missing path: ' + path)
+                    target = target.parent
+            if stat.S_ISDIR(info.st_mode):
                 with _native._walk(target, owner_neutral=True):
                     pass
             else:
@@ -129,7 +133,11 @@ def _safe(path, *, exists=True):
 
 def _identity(path, directory=False):
     _safe(path)
-    info = os.lstat(path)
+    if os.name == 'nt':
+        from wiki_platform import _native
+        info = os.lstat(_native._win32_path(path))
+    else:
+        info = os.lstat(path)
     _require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode), 'unsafe metadata type')
     return [info.st_dev, info.st_ino]
 
@@ -143,33 +151,63 @@ def _rel(value):
 def _metadata(root):
     root = _safe(root)
     gitfile = os.path.join(root, '.git')
-    _identity(gitfile, os.path.isdir(gitfile))
+    if os.name == 'nt':
+        from wiki_platform import _native
+        embedded = os.path.isdir(_native._win32_path(gitfile))
+    else:
+        embedded = os.path.isdir(gitfile)
+    _identity(gitfile, embedded)
     _require(os.path.normcase(os.path.abspath(_git(root, 'rev-parse', '--show-toplevel'))) == os.path.normcase(root), 'foreign checkout binding')
     gd = os.path.abspath(_git(root, 'rev-parse', '--absolute-git-dir'))
     _safe(gd)
     common = os.path.abspath(os.path.join(root, _git(root, 'rev-parse', '--git-common-dir')))
     _require(common == gd, 'module linked worktrees are unsupported')
-    return gd, {'gitdir': _identity(gd, True), 'gitfile': _identity(gitfile, os.path.isdir(gitfile))}
+    return gd, {'gitdir': _identity(gd, True), 'gitfile': _identity(gitfile, embedded)}
 
 
 def _supported(root, gd):
     _require(_git(root, 'rev-parse', '--is-shallow-repository') == 'false', 'shallow module unsupported')
-    _require(not os.path.lexists(os.path.join(gd, 'objects/info/alternates'))
-             and not os.path.lexists(os.path.join(gd, 'objects/info/http-alternates')), 'alternate object stores unsupported')
+    if os.name == 'nt':
+        from wiki_platform import _native
+        for relative in ('objects/info/alternates', 'objects/info/http-alternates'):
+            try:
+                os.lstat(_native._win32_path(os.path.join(gd, relative)))
+            except FileNotFoundError:
+                continue
+            raise SubmoduleError('alternate object stores unsupported')
+    else:
+        _require(not os.path.lexists(os.path.join(gd, 'objects/info/alternates'))
+                 and not os.path.lexists(os.path.join(gd, 'objects/info/http-alternates')), 'alternate object stores unsupported')
     _require(not _git(root, 'for-each-ref', '--format=%(refname)', 'refs/replace/'), 'replacement refs unsupported')
     configured = _git(root, 'config', '--local', '--get-regexp', r'(^extensions\.partialclone$|^remote\..*\.promisor$|^remote\..*\.partialclonefilter$)', allow=True)
     _require(configured.returncode == 1, 'promisor or partial clone configuration unsupported')
-    _require(not list(Path(gd, 'objects/pack').glob('*.promisor')), 'promisor objects unsupported')
+    if os.name == 'nt':
+        try:
+            with os.scandir(_native._win32_path(os.path.join(gd, 'objects/pack'))) as entries:
+                _require(not any(entry.name.endswith('.promisor') for entry in entries), 'promisor objects unsupported')
+        except FileNotFoundError:
+            pass
+    else:
+        _require(not list(Path(gd, 'objects/pack').glob('*.promisor')), 'promisor objects unsupported')
     _require(not _git(root, 'ls-files', '--stage').startswith('160000 ')
              and '\n160000 ' not in _git(root, 'ls-files', '--stage'), 'recursive submodules unsupported')
-    _require(not os.path.lexists(os.path.join(root, '.gitmodules')), 'recursive module declarations unsupported')
+    if os.name == 'nt':
+        try:
+            os.lstat(_native._win32_path(os.path.join(root, '.gitmodules')))
+        except FileNotFoundError:
+            pass
+        else:
+            raise SubmoduleError('recursive module declarations unsupported')
+    else:
+        _require(not os.path.lexists(os.path.join(root, '.gitmodules')), 'recursive module declarations unsupported')
     # Walk actual content, including ignored directories. Git status alone hides
     # nested repositories, and forced removal would otherwise discard them.
     def fail(exc):
         raise SubmoduleError('cannot inspect module content') from exc
     count = 0
-    for current, dirs, files in os.walk(root, followlinks=False, onerror=fail):
-        if current == root:
+    walk_root = _native._win32_path(root) if os.name == 'nt' else root
+    for current, dirs, files in os.walk(walk_root, followlinks=False, onerror=fail):
+        if current == walk_root:
             dirs[:] = [d for d in dirs if d != '.git']
         else:
             _require('.git' not in dirs and '.git' not in files, 'nested repository unsupported')
@@ -207,13 +245,13 @@ def _tree(root, commit):
     return links, gm
 
 
-def _closure(root, objects):
+def _closure(root, objects, *, gitdir=None):
     for oid in objects:
         _require(isinstance(oid, str) and OID.fullmatch(oid), 'invalid object identity')
         _git(root, 'cat-file', '-e', oid)
     if objects:
         # fsck checks the entire local object store, including non-commit refs.
-        _git(root, 'fsck', '--full', '--no-dangling', '--no-reflogs', *sorted(objects))
+        _git(root, 'fsck', '--full', '--no-dangling', '--no-reflogs', *sorted(objects), gitdir=gitdir)
 
 
 def selection(repo, paths):
@@ -234,14 +272,14 @@ def selection(repo, paths):
         root = os.path.normpath(os.path.join(repo, path))
         gd, ident = _metadata(root)
         modules_dir = os.path.join(repo, '.git', 'modules')
-        embedded = gd == os.path.join(root, '.git') and os.path.isdir(gd)
+        embedded = gd == os.path.join(root, '.git')
         _require(embedded or os.path.commonpath((gd, modules_dir)) == modules_dir, 'foreign main module gitdir')
         _supported(root, gd)
         _clean(root)
         _require(_git(root, 'rev-parse', 'HEAD') == links[path], 'main module differs from recorded gitlink')
         index = _git(repo, '--literal-pathspecs', 'ls-files', '--stage', '-z', '--', path)
         _require(index == f'160000 {links[path]} 0\t{path}\0', 'module index differs from committed gitlink')
-        _closure(root, {links[path]})
+        _closure(root, {links[path]}, gitdir=gd)
         result.append(dict(path=path, initial_gitlink=links[path], main_gitdir=gd, main_identity=ident))
     return result
 
@@ -254,7 +292,13 @@ def _admin(repo, worktree):
     _identity(gd, True)
     back = Path(gd, 'gitdir')
     _identity(str(back))
-    _require(os.path.normcase(os.path.abspath(back.read_text(encoding='utf-8' if os.name == 'nt' else None).strip())) == os.path.normcase(os.path.join(worktree, '.git')), 'worktree registration backpointer mismatch')
+    if os.name == 'nt':
+        from wiki_platform import safe_metadata_snapshot
+        raw, _ = safe_metadata_snapshot(back, MAX_MANIFEST_BYTES)
+        backlink = raw.decode('utf-8')
+    else:
+        backlink = back.read_text()
+    _require(os.path.normcase(os.path.abspath(backlink.strip())) == os.path.normcase(os.path.join(worktree, '.git')), 'worktree registration backpointer mismatch')
     _require(os.path.abspath(os.path.join(worktree, _git(worktree, 'rev-parse', '--git-common-dir'))) == os.path.join(repo, '.git'), 'foreign common Git directory')
     return gd
 
@@ -459,34 +503,37 @@ def _native_clone_proof(repo, root, gd, m):
              'incomplete or foreign private clone retained: ' + root)
     _supported(root, gd)
     _clean(root, True)
-    _closure(root, {m['initial_gitlink']})
+    _closure(root, {m['initial_gitlink']}, gitdir=gd)
     return ident
 
 
 def _prepare_native(repo, worktree, value, m, persist):
     """Publish flushed private copies; the existing owned checkpoint admits replay."""
     from wiki_platform import (ensure_private_directory, metadata_remove_empty,
-                               metadata_rename_directory, safe_metadata_snapshot)
+                               metadata_names, metadata_probe, metadata_rename_directory,
+                               safe_metadata_snapshot)
     root, gd = os.path.join(worktree, m['path']), m['private_gitdir']
     parent = os.path.dirname(gd)
     clone = os.path.join(parent, 'clone')
     clone_root, clone_gd = os.path.join(clone, 'worktree'), os.path.join(clone, 'git')
     git_stage, root_stage = os.path.join(parent, 'publish-git'), os.path.join(parent, 'publish-worktree')
     if m['phase'] == 'intent':
-        _require(not os.path.lexists(parent) and (not os.path.lexists(root)
-                 or os.path.isdir(root) and not os.listdir(root)), 'unknown partial module preparation retained')
+        root_info = metadata_probe(root)
+        _require(metadata_probe(parent) is None and (root_info is None
+                 or root_info['kind'] == 'dir' and not metadata_names(root, max_entries=100000)),
+                 'unknown partial module preparation retained')
         ensure_private_directory(parent)
         m['private_parent_identity'] = _identity(parent, True)
         m['private_identity'] = {'gitdir': [0, 0], 'gitfile': [0, 0]}
         m['phase'] = 'owned'
         persist(value)
     _require(_identity(parent, True) == m['private_parent_identity'], 'private preparation container replaced')
-    _require(set(os.listdir(parent)) <= {'clone', 'publish-git', 'publish-worktree', 'git'},
+    _require(set(metadata_names(parent, max_entries=5)) <= {'clone', 'publish-git', 'publish-worktree', 'git'},
              'unknown private preparation content retained: ' + parent)
     final_worktree = root.replace('\\', '/').replace('"', '\\"')
     config_suffix = ('\n[core]\n\tworktree = "' + final_worktree + '"\n').encode('utf-8')
     gitfile = ('gitdir: ' + gd.replace('\\', '/') + '\n').encode('utf-8')
-    if os.path.lexists(gd) and os.path.lexists(os.path.join(root, '.git')):
+    if metadata_probe(gd) is not None and metadata_probe(os.path.join(root, '.git')) is not None:
         ident = _native_clone_proof(repo, root, gd, m)
         git_inventory, root_inventory = _native_inventory(gd), _native_inventory(root)
         config, _ = safe_metadata_snapshot(os.path.join(gd, 'config'), MAX_MANIFEST_BYTES)
@@ -494,10 +541,10 @@ def _prepare_native(repo, worktree, value, m, persist):
         _require(config.endswith(config_suffix) and actual_gitfile == gitfile,
                  'private final binding changed')
         for stage, inventory in ((git_stage, git_inventory), (root_stage, root_inventory)):
-            if os.path.lexists(stage):
+            if metadata_probe(stage) is not None:
                 _native_remove_tree(stage, inventory)
-        if os.path.lexists(clone):
-            _require(set(os.listdir(clone)) <= {'git', 'worktree'},
+        if metadata_probe(clone) is not None:
+            _require(set(metadata_names(clone, max_entries=3)) <= {'git', 'worktree'},
                      'unknown private clone content retained: ' + clone)
             # Reverse only the two exact binding changes. This proves each
             # remaining source byte survives in the published clone, even if
@@ -508,26 +555,50 @@ def _prepare_native(repo, worktree, value, m, persist):
             for path, inventory, name, data in originals:
                 expected = copy.deepcopy(inventory)
                 expected[name].update(size=len(data), sha256=hashlib.sha256(data).hexdigest(), readonly=False)
-                if os.path.lexists(path):
+                if metadata_probe(path) is not None:
                     _native_remove_tree(path, expected)
             metadata_remove_empty(clone)
         m['private_identity'] = ident
         m['phase'] = 'prepared'
         persist(value)
         return
-    if not os.path.lexists(clone) and not os.path.lexists(gd):
-        _require(not os.path.lexists(git_stage) and not os.path.lexists(root_stage),
+    if metadata_probe(clone) is None and metadata_probe(gd) is None:
+        _require(metadata_probe(git_stage) is None and metadata_probe(root_stage) is None,
                  'publication stage without completed clone retained: ' + parent)
         ensure_private_directory(clone)
-        conversion = [arg for key, setting in _conversion_policy(os.path.join(repo, m['path'])).items()
-                      for arg in ('--config', key + '=' + setting)]
-        _git(repo, 'clone', '--template=', '--no-local', '--no-hardlinks', '--no-checkout', '--no-tags',
-             *conversion, '--separate-git-dir', clone_gd, '--', os.path.join(repo, m['path']), clone_root)
-        _git(clone_root, 'checkout', '-b', m['branch'], m['initial_gitlink'])
-    if os.path.lexists(clone):
+        source = os.path.join(repo, m['path'])
+        conversion = _conversion_policy(source)
+        algorithm = _git(source, 'rev-parse', '--show-object-format')
+        _require(algorithm in {'sha1', 'sha256'}, 'unsupported module object format')
+        source_head = _git(source, 'symbolic-ref', '-q', 'HEAD', allow=True)
+        _require(source_head.returncode in (0, 1), 'cannot inspect source default branch')
+        head = os.fsdecode(source_head.stdout).strip() if source_head.returncode == 0 else None
+        _require(head is None or head.startswith('refs/heads/'), 'invalid source default branch')
+        # clone canonicalizes GIT_DIR before spawning index-pack. Initialize
+        # the same owned stage, then transfer objects with its relative gitdir;
+        # fetch uses upload-pack without local copies, hardlinks or alternates.
+        _git(repo, 'init', '--template=', '--object-format=' + algorithm,
+             '--separate-git-dir', clone_gd, clone_root)
+        settings = {'remote.origin.url': source,
+                    'remote.origin.fetch': '+refs/heads/*:refs/remotes/origin/*',
+                    'remote.origin.tagopt': '--no-tags', **conversion}
+        for key, setting in settings.items():
+            _git(clone_root, 'config', '--local', key, setting, gitdir=clone_gd)
+        _git(clone_root, 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules',
+             'origin', '+refs/heads/*:refs/remotes/origin/*', m['initial_gitlink'], gitdir=clone_gd)
+        if head is not None:
+            remote_head = 'refs/remotes/origin/' + head[len('refs/heads/'):]
+            tip = _git(clone_root, 'rev-parse', '--verify', remote_head, gitdir=clone_gd)
+            _git(clone_root, 'update-ref', head, tip, gitdir=clone_gd)
+            _git(clone_root, 'symbolic-ref', 'refs/remotes/origin/HEAD', remote_head, gitdir=clone_gd)
+            for key, setting in (('remote', 'origin'), ('merge', head)):
+                _git(clone_root, 'config', '--local', 'branch.' + head[len('refs/heads/'):] + '.' + key,
+                     setting, gitdir=clone_gd)
+        _git(clone_root, 'checkout', '-b', m['branch'], m['initial_gitlink'], gitdir=clone_gd)
+    if metadata_probe(clone) is not None:
         # Partial Git output is never erased or restarted. The owner must
         # inspect the retained clone path if this completed-clone proof fails.
-        _require(set(os.listdir(clone)) == {'git', 'worktree'},
+        _require(set(metadata_names(clone, max_entries=3)) == {'git', 'worktree'},
                  'incomplete private clone retained for owner inspection: ' + clone)
         _native_clone_proof(repo, clone_root, clone_gd, m)
         git_inventory, root_inventory = _native_inventory(clone_gd), _native_inventory(clone_root)
@@ -539,13 +610,13 @@ def _prepare_native(repo, worktree, value, m, persist):
             expected = copy.deepcopy(inventory)
             for name, data in overrides.items():
                 expected[name].update(size=len(data), sha256=hashlib.sha256(data).hexdigest(), readonly=False)
-            if os.path.lexists(final) and (final != root or os.listdir(root)):
+            if metadata_probe(final) is not None and (final != root or metadata_names(root, max_entries=100000)):
                 _require(_native_inventory(final) == expected, 'foreign private publication retained: ' + final)
-                if os.path.lexists(stage):
+                if metadata_probe(stage) is not None:
                     _native_remove_tree(stage, expected)
             else:
                 _native_copy_tree(source, stage, inventory, overrides)
-                if final == root and os.path.lexists(root):
+                if final == root and metadata_probe(root) is not None:
                     metadata_remove_empty(root)
                 metadata_rename_directory(stage, final)
         ident = _native_clone_proof(repo, root, gd, m)
@@ -555,7 +626,7 @@ def _prepare_native(repo, worktree, value, m, persist):
         _native_remove_tree(clone_gd, git_inventory)
         metadata_remove_empty(clone)
     else:
-        _require(not os.path.lexists(git_stage) and not os.path.lexists(root_stage),
+        _require(metadata_probe(git_stage) is None and metadata_probe(root_stage) is None,
                  'publication stage without completed clone retained: ' + parent)
         ident = _native_clone_proof(repo, root, gd, m)
     m['private_identity'] = ident
@@ -663,15 +734,29 @@ def _inventory(worktree, m, history):
         refs[name] = oid
     reflog_objects = set(_git(root, 'reflog', 'show', '--all', '--format=%H').splitlines())
     logs = Path(m['private_gitdir'], 'logs')
-    if logs.exists():
-        for current, dirs, files in os.walk(logs, followlinks=False):
+    if os.name == 'nt':
+        from wiki_platform import _native, metadata_probe, safe_metadata_snapshot
+        present = metadata_probe(logs) is not None
+        walk_root = _native._win32_path(logs)
+    else:
+        present, walk_root = logs.exists(), logs
+    def unreadable(exc):
+        raise SubmoduleError('cannot inspect private reflogs') from exc
+    if present:
+        for current, dirs, files in os.walk(walk_root, followlinks=False, onerror=unreadable):
+            directory = os.path.normpath(os.path.join(logs, os.path.relpath(current, walk_root)))
             for name in dirs:
-                _safe(os.path.join(current, name))
+                _safe(os.path.join(directory, name))
             for name in files:
-                logfile = os.path.join(current, name)
+                logfile = os.path.normpath(os.path.join(directory, name))
                 _identity(logfile)
-                _require(os.path.getsize(logfile) <= MAX_MANIFEST_BYTES, 'reflog exceeds bound')
-                for line in Path(logfile).read_text(encoding='utf-8' if os.name == 'nt' else None).splitlines():
+                if os.name == 'nt':
+                    raw, _ = safe_metadata_snapshot(logfile, MAX_MANIFEST_BYTES)
+                    text = raw.decode('utf-8')
+                else:
+                    _require(os.path.getsize(logfile) <= MAX_MANIFEST_BYTES, 'reflog exceeds bound')
+                    text = Path(logfile).read_text()
+                for line in text.splitlines():
                     fields = line.split(' ', 2)
                     _require(len(fields) == 3 and all(OID.fullmatch(o) for o in fields[:2]), 'malformed reflog')
                     reflog_objects.update(o for o in fields[:2] if set(o) != {'0'})
@@ -696,7 +781,7 @@ def preserve(repo, worktree, value, persist):
         objects = set(inv['refs'].values()) | set(inv['reflogs']) | set(inv['gitlinks'])
         m['inventory'] = inv
         m['pins'] = {oid: _pin(value, m, oid) for oid in sorted(objects)}
-        _closure(os.path.join(worktree, m['path']), objects)
+        _closure(os.path.join(worktree, m['path']), objects, gitdir=m['private_gitdir'])
     # Check the complete multi-module payload, including long pin names,
     # before fetching any objects or publishing any reference.
     validate_manifest(proposed)
@@ -716,9 +801,10 @@ def preserve(repo, worktree, value, persist):
                 _require(os.fsdecode(previous.stdout).strip() == oid, 'preservation pin collision')
             else:
                 _require(previous.returncode == 1, 'cannot inspect preservation pin')
-                _git(main, 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', root, oid)
+                _git(main, 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', root, oid,
+                     gitdir=m['main_gitdir'])
                 _git(main, 'update-ref', ref, oid, '0' * len(oid))
-        _closure(main, objects)
+        _closure(main, objects, gitdir=m['main_gitdir'])
         _require(_inventory(worktree, m, history) == inv, 'module inventory changed during preservation')
     return value
 
@@ -731,7 +817,7 @@ def _proof(repo, worktree, value):
         main = os.path.join(repo, m['path'])
         for oid, ref in m['pins'].items():
             _require(_git(main, 'show-ref', '--verify', '--hash', ref) == oid, 'preservation pin missing or changed')
-        _closure(main, set(m['pins']))
+        _closure(main, set(m['pins']), gitdir=m['main_gitdir'])
 
 
 def _validate_witness(value, w):
@@ -800,7 +886,8 @@ def reconcile_checkout(repo, value, w, target='main'):
         head = _git(module, 'rev-parse', 'HEAD')
         _require(head in (entry['old_head'], entry['target_head']), 'foreign module checkout movement')
         _require(m['pins'] and entry['target_head'] in m['pins'], 'missing preserved target proof')
-        _closure(module, {entry['target_head']})
+        gitdir = m['private_gitdir'] if target == 'lead' else m['main_gitdir']
+        _closure(module, {entry['target_head']}, gitdir=gitdir)
         if head != entry['target_head']:
             if target == 'lead':
                 _require(_git(module, 'symbolic-ref', '-q', 'HEAD') == 'refs/heads/' + m['branch'], 'lead module branch changed')
@@ -819,7 +906,12 @@ def _disposable_metadata(worktree, m):
     """
     gd = m['private_gitdir']
     parent = os.path.dirname(gd)
-    _require(os.listdir(parent) == ['git'], 'unknown private metadata container content')
+    if os.name == 'nt':
+        from wiki_platform import metadata_names, safe_metadata_snapshot
+        names = metadata_names(parent, max_entries=2)
+    else:
+        names = os.listdir(parent)
+    _require(names == ['git'], 'unknown private metadata container content')
     root = os.path.join(worktree, m['path'])
     inv = m['inventory']
     _require(inv is not None and m['pins'] is not None, 'missing metadata preservation intent')
@@ -836,12 +928,13 @@ def _disposable_metadata(worktree, m):
             allowed = allowed or key == 'core.autocrlf' and value in {'false', 'true', 'input'}
             allowed = allowed or key == 'core.eol' and value in {'lf', 'crlf', 'native'}
             allowed = allowed or key == 'core.worktree' and os.path.normcase(os.path.abspath(value)) == os.path.normcase(root)
+            allowed = allowed or key == 'extensions.objectformat' and value == ('sha256' if len(m['initial_gitlink']) == 64 else 'sha1')
         if key.startswith('branch.') and key.endswith(('.remote', '.merge')):
             branch, kind = key[7:].rsplit('.', 1)
             allowed = 'refs/heads/' + branch in inv['refs'] and (
                 value == 'origin' if kind == 'remote' else value.startswith('refs/heads/'))
         _require(allowed, 'unsupported private Git configuration retained')
-    _closure(root, set(m['pins']))
+    _closure(root, set(m['pins']), gitdir=gd)
     reachable = set(_git(root, 'rev-list', '--objects', '--no-object-names', *sorted(m['pins'])).splitlines())
     all_objects = set(_git(root, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname)').splitlines())
     _require(all_objects <= reachable, 'unpreserved private Git objects retained')
@@ -849,15 +942,20 @@ def _disposable_metadata(worktree, m):
     files = []
     def unreadable(exc):
         raise SubmoduleError('cannot inspect private Git metadata') from exc
-    for current, dirs, names in os.walk(gd, followlinks=False, onerror=unreadable):
+    if os.name == 'nt':
+        from wiki_platform import _native
+        walk_root = _native._win32_path(gd)
+    else:
+        walk_root = gd
+    for current, dirs, names in os.walk(walk_root, followlinks=False, onerror=unreadable):
         count += len(dirs) + len(names)
         _require(count <= 100000, 'private metadata inventory exceeds bound')
         for name in dirs + names:
-            path = os.path.join(current, name)
-            info = os.lstat(path)
+            rel = os.path.relpath(os.path.join(current, name), walk_root).replace(os.sep, '/')
+            path = os.path.join(gd, *rel.split('/'))
+            info = os.lstat(_native._win32_path(path) if os.name == 'nt' else path)
             _require(not stat.S_ISLNK(info.st_mode) and (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)),
                      'unsafe private metadata entry')
-            rel = os.path.relpath(path, gd).replace(os.sep, '/')
             if stat.S_ISDIR(info.st_mode):
                 native = rel in {'objects', 'objects/info', 'objects/pack', 'refs', 'logs'}
                 native = native or bool(re.fullmatch(r'objects/[0-9a-f]{2}', rel))
@@ -875,9 +973,10 @@ def _disposable_metadata(worktree, m):
         if re.fullmatch(r'objects/pack/pack-[0-9a-f]{40}(?:[0-9a-f]{24})?\.(pack|idx)', rel):
             index = path.rsplit('.', 1)[0] + '.idx'
             _identity(index)
-            _git(root, 'verify-pack', index)
+            _git(root, 'verify-pack', index, gitdir=gd)
             continue
-        _require(os.path.getsize(path) <= MAX_MANIFEST_BYTES, 'private metadata file exceeds bound')
+        _require(os.path.getsize(_native._win32_path(path) if os.name == 'nt' else path) <= MAX_MANIFEST_BYTES,
+                 'private metadata file exceeds bound')
         if rel == 'index':
             # Git clean-status checks parse the binary index and compare it
             # with HEAD; its bytes must never be decoded as text.
@@ -886,7 +985,11 @@ def _disposable_metadata(worktree, m):
         known_text = known_text or rel in inv['refs'] or rel.startswith('logs/') and rel[5:] in inv['refs']
         _require(known_text, 'unknown private metadata file retained: ' + rel)
         try:
-            text = Path(path).read_text(encoding='utf-8' if os.name == 'nt' else None)
+            if os.name == 'nt':
+                raw, _ = safe_metadata_snapshot(path, MAX_MANIFEST_BYTES)
+                text = raw.decode('utf-8')
+            else:
+                text = Path(path).read_text()
         except (OSError, UnicodeError) as exc:
             raise SubmoduleError('unreadable private metadata retained: ' + rel) from exc
         if rel == 'HEAD':
@@ -928,13 +1031,20 @@ def removal_proof(repo, worktree, value):
     _proof(repo, worktree, value)
     modules_dir = os.path.join(value['admin_dir'], 'modules')
     expected = {os.path.basename(os.path.dirname(m['private_gitdir'])) for m in value['modules']}
-    _require(set(os.listdir(modules_dir)) == expected, 'unknown module administration content retained')
+    if os.name == 'nt':
+        from wiki_platform import metadata_names, metadata_probe
+        names = metadata_names(modules_dir, max_entries=MAX_MODULES + 1)
+    else:
+        names = os.listdir(modules_dir)
+    _require(set(names) == expected, 'unknown module administration content retained')
     for module in value['modules']:
         _disposable_metadata(worktree, module)
     selected = {m['path'] for m in value['modules']}
     for path in value['topology']:
         if path not in selected:
-            _require(not os.path.lexists(os.path.join(worktree, path, '.git')), 'unexpected initialized module')
+            gitfile = os.path.join(worktree, path, '.git')
+            present = metadata_probe(gitfile) is not None if os.name == 'nt' else os.path.lexists(gitfile)
+            _require(not present, 'unexpected initialized module')
     return {'version': 1, 'paths': sorted(selected), 'preserved': True}
 
 
@@ -950,5 +1060,5 @@ def preserved_proof(repo, value):
         _require(m['inventory'] is not None and m['pins'] is not None, 'missing preserved inventory')
         for oid, ref in m['pins'].items():
             _require(_git(main, 'show-ref', '--verify', '--hash', ref) == oid, 'preservation pin missing or changed')
-        _closure(main, set(m['pins']))
+        _closure(main, set(m['pins']), gitdir=m['main_gitdir'])
     return {'version': 1, 'preserved': True}

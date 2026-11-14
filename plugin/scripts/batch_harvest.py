@@ -117,7 +117,11 @@ def _refuse_links_below(worktree: str, *parts: str) -> str:
     for part in parts:
         path = os.path.join(path, part)
         try:
-            info = os.lstat(path)
+            if os.name == 'nt':
+                from wiki_platform import _native
+                info = os.lstat(_native._win32_path(path))
+            else:
+                info = os.lstat(path)
         except FileNotFoundError:
             return path
         if stat.S_ISLNK(info.st_mode):
@@ -223,7 +227,13 @@ def _archive_wbs(repo_root: str, worktree: str, wbs_id: str, *, publication=None
     if not WBS_ID_RE.match(wbs_id):
         raise HarvestError(f"invalid wbs_id: {wbs_id}")
     source_dir = _refuse_links_below(worktree, "doc", "harness", "wbs", wbs_id)
-    if not os.path.isdir(source_dir):
+    if os.name == 'nt':
+        from wiki_platform import metadata_probe
+        source_info = metadata_probe(source_dir)
+        source_present = source_info is not None and source_info['kind'] == 'dir'
+    else:
+        source_present = os.path.isdir(source_dir)
+    if not source_present:
         raise HarvestError(f"WBS directory not found in worktree: {source_dir}")
     # A lead's worktree is untrusted input: copy only plain files and dirs so a
     # planted link or FIFO can neither pull outside files in nor hang the copy.
@@ -234,18 +244,20 @@ def _archive_wbs(repo_root: str, worktree: str, wbs_id: str, *, publication=None
     if os.name == "nt":
         from wiki_platform import (trusted_metadata_directory, ensure_private_directory,
                                    metadata_tree_inventory, metadata_copy, metadata_rename_directory,
-                                   metadata_remove, metadata_remove_empty, metadata_set_readonly)
+                                   metadata_remove, metadata_remove_empty, metadata_set_readonly, _native)
         inventory_limit = dict(max_entries=100000, max_bytes=8 * 1024 ** 3)
         validate_native_publication(repo_root, worktree, wbs_id, publication)
         with trusted_metadata_directory(Path(source_dir)):
             original = metadata_tree_inventory(Path(source_dir), **inventory_limit)
             ensure_private_directory(Path(dest_root))
             with trusted_metadata_directory(Path(dest_root)):
-                if os.path.lexists(dest_dir):
+                if metadata_probe(dest_dir) is not None:
                     if metadata_tree_inventory(Path(dest_dir), **inventory_limit) == original:
                         return dest_dir
                     raise HarvestError(f"archive already holds different evidence for {wbs_id}: {dest_dir}; refusing to overwrite it")
-                stage = Path(tempfile.mkdtemp(dir=dest_root, prefix=f".{wbs_id}.tmp-"))
+                stage_name = os.path.basename(tempfile.mkdtemp(dir=_native._win32_path(dest_root),
+                                                            prefix=f".{wbs_id}.tmp-"))
+                stage = Path(dest_root) / stage_name
                 copied = {}
                 try:
                     with trusted_metadata_directory(stage):
@@ -731,7 +743,12 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
     control = read_wbs_control(task)
     candidates = [('doc/harness/.watcher-diagnostics.json', 'watcher-diagnostics.json'),
                   ('doc/harness/checkpoints/' + wbs_id + '.md', 'checkpoint.md')]
-    present = [(rel, name) for rel, name in candidates if os.path.lexists(os.path.join(worktree, rel))]
+    if os.name == 'nt':
+        from wiki_platform import metadata_probe
+        present = [(rel, name) for rel, name in candidates
+                   if metadata_probe(os.path.join(worktree, rel)) is not None]
+    else:
+        present = [(rel, name) for rel, name in candidates if os.path.lexists(os.path.join(worktree, rel))]
     if not present and preserve:
         return set()
     _s1_require(control and wbs_control_status(task, control) == 'closed',
@@ -742,13 +759,16 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
     root = os.path.join(repo, 'doc', 'harness', 'archive', 'worktree-recovery', wbs_id, run)
     if not preserve:
         present = [(rel, name) for rel, name in candidates
-                   if os.path.lexists(os.path.join(worktree, rel)) or os.path.lexists(os.path.join(root, name))]
+                   if ((metadata_probe(os.path.join(worktree, rel)) is not None
+                        or metadata_probe(os.path.join(root, name)) is not None) if os.name == 'nt'
+                       else (os.path.lexists(os.path.join(worktree, rel)) or os.path.lexists(os.path.join(root, name))))]
     if not present:
         return set()
     snapshots = []
     for rel, name in present:
         source = os.path.join(worktree, rel)
-        raw = _ordinary_bytes(source if os.path.lexists(source) else os.path.join(root, name))
+        source_present = metadata_probe(source) is not None if os.name == 'nt' else os.path.lexists(source)
+        raw = _ordinary_bytes(source if source_present else os.path.join(root, name))
         if name == 'watcher-diagnostics.json':
             def unique(pairs):
                 result = {}
@@ -790,7 +810,7 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
                       os.path.dirname(root), root):
         if os.name == "nt":
             from wiki_platform import ensure_private_directory, trusted_metadata_directory
-            if preserve and not os.path.lexists(directory):
+            if preserve:
                 ensure_private_directory(Path(directory))
             with trusted_metadata_directory(Path(directory)):
                 pass
@@ -809,7 +829,7 @@ def _ordinary_ancillary(repo, worktree, wbs_id, *, control_dir=None, preserve=Tr
         destination = os.path.join(root, name)
         if os.name == "nt":
             from wiki_platform import metadata_write
-            existing = _ordinary_bytes(destination) if os.path.lexists(destination) else None
+            existing = _ordinary_bytes(destination) if metadata_probe(destination) is not None else None
             _s1_require(existing is None or existing == raw, 'ancillary snapshot collision; refusing overwrite: ' + destination)
             _s1_require(preserve or existing == raw, 'ancillary snapshot was not preserved before partial removal: ' + rel)
             if preserve:

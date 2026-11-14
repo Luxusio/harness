@@ -13,11 +13,21 @@ from test_wbs_input_policy import public
 import verification_target as targets
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def _remove_frozen_fixture(path):
     """Deliberately remove this test-owned sealed file, including Native readonly."""
     if os.name == "nt":
-        path.chmod(0o600)
-    path.unlink()
+        _fixture_io(path).chmod(0o600)
+    _fixture_io(path).unlink()
 
 
 def specification(**extra):
@@ -43,31 +53,31 @@ def test_owner_private_source_is_copied_without_changing_original_permissions(tm
     if os.name == "nt":
         # Native source custody uses DACLs and readonly attributes, not Unix modes.
         for readonly in (False, True):
-            source.chmod(0o400 if readonly else 0o600)
-            attributes = source.stat().st_file_attributes
+            _fixture_io(source).chmod(0o400 if readonly else 0o600)
+            attributes = _fixture_io(source).stat().st_file_attributes
             target = targets.issue_target(str(td), str(repo), specification())
             copied = Path(target["snapshot_root"]) / "src.txt"
-            assert copied.read_bytes() == source.read_bytes()
-            assert copied.stat().st_file_attributes & 1
-            assert source.stat().st_file_attributes == attributes
+            assert _fixture_io(copied).read_bytes() == _fixture_io(source).read_bytes()
+            assert _fixture_io(copied).stat().st_file_attributes & 1
+            assert _fixture_io(source).stat().st_file_attributes == attributes
             assert targets.applicability(str(td), str(repo), measure=True)["status"] == "applicable"
-        source.chmod(0o600)
+        _fixture_io(source).chmod(0o600)
         return
     for mode in (0o600, 0o640, 0o400, 0o700, 0o750):
-        source.chmod(mode)
+        _fixture_io(source).chmod(mode)
         target = targets.issue_target(str(td), str(repo), specification())
         copied = Path(target["snapshot_root"]) / "src.txt"
-        assert copied.read_bytes() == source.read_bytes()
-        assert copied.stat().st_mode & 0o777 == (0o555 if mode & 0o100 else 0o444)
-        assert source.stat().st_mode & 0o777 == mode
+        assert _fixture_io(copied).read_bytes() == _fixture_io(source).read_bytes()
+        assert _fixture_io(copied).stat().st_mode & 0o777 == (0o555 if mode & 0o100 else 0o444)
+        assert _fixture_io(source).stat().st_mode & 0o777 == mode
         assert _read_payload_file(repo, "src.txt") is None  # installer stays strict
         assert targets.applicability(str(td), str(repo), measure=True)["targets"][0]["status"] == "applicable"
     for mode in (0o660, 0o666, 0o4600, 0o0410):
-        source.chmod(mode)
+        _fixture_io(source).chmod(mode)
         with unittest.TestCase().assertRaisesRegex(ValueError, "unsafe ownership/mode"):
             targets.issue_target(str(td), str(repo), specification())
-        assert source.stat().st_mode & 0o7777 == mode
-    source.chmod(0o600)
+        assert _fixture_io(source).stat().st_mode & 0o7777 == mode
+    _fixture_io(source).chmod(0o600)
 
 
 def test_private_source_view_survives_aba_and_content_restoration(tmp_path):
@@ -95,14 +105,14 @@ def test_context_is_stored_only_and_missing_copy_does_not_change_current_inputs(
         patch.setattr(targets, "_manifest", lambda *a, **k: (_ for _ in ()).throw(AssertionError("read source")))
         assert targets.applicability(str(td), str(repo))["status"] == "unmeasured"
     path = Path(target["snapshot_root"]) / "src.txt"
-    path.parent.chmod(0o700)
+    _fixture_io(path.parent).chmod(0o700)
     _remove_frozen_fixture(path)
     status = targets.applicability(str(td), str(repo), measure=True)
     assert status["status"] == "applicable"
     assert status["targets"][0]["snapshot_available"] is False
     restored = targets.ensure_snapshot(str(td), target["token"], str(repo))
     assert restored["snapshot_root"] != target["snapshot_root"]
-    assert (Path(restored["snapshot_root"]) / "src.txt").read_text() == "ok"
+    assert (_fixture_io(Path(restored["snapshot_root"]) / "src.txt")).read_text() == "ok"
     assert targets.applicability(str(td), str(repo), measure=True)["status"] == "applicable"
 
 
@@ -177,8 +187,8 @@ def test_runtime_outputs_are_writable_without_mutating_frozen_inputs(tmp_path):
     original = specification()
     first = targets.issue_target(str(td), str(repo), original, output_dirs=["doc/harness/wbs"])
     root = Path(first["snapshot_root"])
-    (root / "doc/harness/wbs/.active.fixture.lock").write_text("runtime-only")
-    assert (root / "src.txt").stat().st_mode & 0o222 == 0
+    (_fixture_io(root / "doc/harness/wbs/.active.fixture.lock")).write_text("runtime-only")
+    assert (_fixture_io(root / "src.txt")).stat().st_mode & 0o222 == 0
     assert targets.issue_target(str(td), str(repo), original, output_dirs=["doc/harness/wbs"])["token"] == first["token"]
     assert targets.applicability(str(td), str(repo), measure=True)["targets"][0]["status"] == "applicable"
     with unittest.TestCase().assertRaisesRegex(ValueError, "overlaps selected input"):

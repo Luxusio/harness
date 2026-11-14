@@ -38,6 +38,14 @@ except ModuleNotFoundError:
 pytestmark = pytest.mark.usefixtures("selected_installer_python")
 
 
+def _disk(path):
+    """Keep ordinary fixture identities; widen only Python filesystem I/O."""
+    value = os.path.abspath(path)
+    if os.name == "nt" and not value.startswith("\\\\?\\"):
+        value = "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+    return Path(value)
+
+
 def _load_install_module():
     spec = importlib.util.spec_from_file_location("harness_install_cache", REPO_ROOT / "install.py")
     module = importlib.util.module_from_spec(spec)
@@ -58,8 +66,8 @@ def _fake_run(install_root: Path, *, update=(0, REFRESHED, ""), marketplace_upda
                 config = Path(os.environ["CLAUDE_CONFIG_DIR"])
                 version = _manifest_version(install_root / "plugin")
                 cache = config / "plugins" / "cache" / "harness" / "harness" / version
-                if not cache.exists():
-                    shutil.copytree(install_root / "plugin", cache)
+                if not _disk(cache).exists():
+                    shutil.copytree(_disk(install_root / "plugin"), _disk(cache))
                 registry = config / "plugins" / "installed_plugins.json"
                 registry.write_text(json.dumps({"version": 2, "plugins": {"harness@harness": [
                     {"scope": "user", "installPath": str(cache), "version": version}
@@ -78,7 +86,7 @@ def _fake_run(install_root: Path, *, update=(0, REFRESHED, ""), marketplace_upda
 
 
 def _manifest_version(plugin_root: Path) -> str:
-    return json.loads((plugin_root / ".claude-plugin" / "plugin.json").read_text())["version"]
+    return json.loads(_disk(plugin_root / ".claude-plugin" / "plugin.json").read_text())["version"]
 
 
 def test_mirror_version_is_a_deterministic_payload_hash(tmp_path):
@@ -230,7 +238,7 @@ def test_healthy_mirror_does_not_certify_corrupt_selected_cache(tmp_path, monkey
     run(UPDATE, False)
     version = _manifest_version(root / "plugin")
     cache = tmp_path / "claude-config" / "plugins" / "cache" / "harness" / "harness" / version
-    (cache / "scripts" / "_lib.py").write_text("raise RuntimeError('corrupt cache')\n")
+    _disk(cache / "scripts" / "_lib.py").write_text("raise RuntimeError('corrupt cache')\n")
     with mock.patch.object(install, "_host_available", return_value=True), mock.patch.object(install, "_run", side_effect=run):
         result = install.install_claude(dry_run=False, force=False)
     assert not result.ok
@@ -250,7 +258,7 @@ def test_selected_cache_accepts_claude_normalized_build_metadata_component(tmp_p
     entry = data["plugins"]["harness@harness"][0]
     exact = Path(entry["installPath"])
     normalized = exact.with_name(entry["version"].replace("+", "-"))
-    exact.rename(normalized)
+    _disk(exact).rename(_disk(normalized))
     entry["installPath"] = str(normalized)
     registry.write_text(json.dumps(data))
     steps = []
@@ -259,7 +267,7 @@ def test_selected_cache_accepts_claude_normalized_build_metadata_component(tmp_p
     assert any(str(normalized) in step for step in steps)
     assert any("ok WBS:" in step for step in steps), steps
     # Directory normalization cannot turn a corrupt selected payload into PASS.
-    (normalized / "scripts/_lib.py").write_text("corrupt selected cache\n")
+    _disk(normalized / "scripts/_lib.py").write_text("corrupt selected cache\n")
     ok, reason = install._verify_claude_selected_cache(mirror, [])
     assert not ok and "STALE" in reason, reason
 

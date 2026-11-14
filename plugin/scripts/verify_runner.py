@@ -217,20 +217,25 @@ def _file_path(root, name):
     if name == ".":
         raise ValueError("output/artifact must name a file")
     path = root / name
-    for part in (path, *path.parents):
-        if part.is_symlink():
-            raise ValueError("symlink output/artifact: " + name)
-        if part == root:
-            break
-    if path.exists() and not path.is_file():
-        raise ValueError("output/artifact must be a regular file: " + name)
     if os.name == "nt":
         from wiki_platform import _native
+        disk_path = Path(_native._win32_path(path))
+        disk_root = Path(_native._win32_path(root))
+    else:
+        disk_path, disk_root = path, root
+    for part in (disk_path, *disk_path.parents):
+        if part.is_symlink():
+            raise ValueError("symlink output/artifact: " + name)
+        if part == disk_root:
+            break
+    if disk_path.exists() and not disk_path.is_file():
+        raise ValueError("output/artifact must be a regular file: " + name)
+    if os.name == "nt":
         existing = path.parent
-        while not os.path.lexists(existing):
+        while not os.path.lexists(_native._win32_path(existing)):
             existing = existing.parent
         with _native._walk(existing, owner_neutral=True):
-            if os.path.lexists(path):
+            if os.path.lexists(_native._win32_path(path)):
                 with _native._walk(path.parent, owner_neutral=True):
                     handle = _native._open(path, 0, owner_neutral=True, allow_hardlinks=True)
                     _native._close(handle)
@@ -827,7 +832,13 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                     if reference and reference.get("available"):
                         destination = log_paths[job["job_id"]]["success"]
                         wbs._diagnostic_path(destination, root)
-                        os.replace(log_paths[job["job_id"]]["attempt"], destination)
+                        if os.name == "nt":
+                            from wiki_platform import _native, trusted_metadata_directory
+                            with trusted_metadata_directory(log_directory):
+                                os.replace(_native._win32_path(log_paths[job["job_id"]]["attempt"]),
+                                           _native._win32_path(destination))
+                        else:
+                            os.replace(log_paths[job["job_id"]]["attempt"], destination)
                         record["output_log"] = dict(reference, path=str(destination))
                     record.update(artifact_fingerprint=_digest(output_manifest), artifact_manifest=output_manifest, status="PASS")
                 return record
@@ -886,12 +897,22 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
         retained = {r.get("output_log", {}).get("path") for r in [*records.values(), *successful.values()]}
         retained.update(r.get("last_execution", {}).get("output_log", {}).get("path") for r in records.values())
         retained.update(r.get('output_log', {}).get('path') for r in failures)
-        if log_directory.is_dir():
-            for path in log_directory.iterdir():
+        if os.name == "nt":
+            from wiki_platform import _native, trusted_metadata_directory
+            disk_logs = Path(_native._win32_path(log_directory))
+        else:
+            disk_logs = log_directory
+        if disk_logs.is_dir():
+            for child in disk_logs.iterdir():
+                path = log_directory / child.name
                 if re.fullmatch(r"[0-9a-f]{64}-(?:[0-9a-f]{16}-)?(success|attempt)\.log", path.name) and str(path) not in retained:
                     try:
                         wbs._diagnostic_path(path, root)
-                        path.unlink(missing_ok=True)
+                        if os.name == "nt":
+                            with trusted_metadata_directory(log_directory):
+                                Path(_native._win32_path(path)).unlink(missing_ok=True)
+                        else:
+                            path.unlink(missing_ok=True)
                     except (OSError, ValueError):
                         pass
         return payload

@@ -14,6 +14,14 @@ import re
 import batch_state as batch
 
 
+def _present(path):
+    if os.name == "nt":
+        from pathlib import Path
+        from wiki_platform import metadata_probe
+        return metadata_probe(Path(path).absolute()) is not None
+    return os.path.lexists(path)
+
+
 def _spec(wbs_id: str, requests: list, *, batch_id=None) -> dict:
     if not isinstance(wbs_id, str) or not re.fullmatch(r"WBS__[A-Za-z0-9_.-]{1,180}", wbs_id):
         raise ValueError("owning WBS execution identity required")
@@ -41,10 +49,10 @@ def make_spec(repo_root: str, wbs_id: str, requests: list) -> dict:
         directory = os.path.join(repo, "doc/harness/runtime/batches")
         records = {}
         ancestor = directory
-        while not os.path.lexists(ancestor):
+        while not _present(ancestor):
             ancestor = os.path.dirname(ancestor)
         batch.parents(ancestor)
-        if os.path.lexists(directory):
+        if _present(directory):
             records = batch.load_all(directory, repo)
         existing = records.get(spec["batch_id"])
         if existing is not None:
@@ -116,15 +124,15 @@ an existing pool keeps its reservation, recovery, and cleanup ownership.
         path = os.path.join(directory, expected["batch_id"] + ".json")
         result = {**copy.deepcopy(expected), "route": "batch", "batch_state": "missing",
                   "next_action": "Initialize this exact batch intake with --owner-wbs-id " + wbs_id + ", then dispatch ready reservations through batch_state."}
-        if not os.path.lexists(directory):
+        if not _present(directory):
             # Validate existing ancestors even when this is the first pool.
             existing = directory
-            while not os.path.lexists(existing):
+            while not _present(existing):
                 existing = os.path.dirname(existing)
             batch.parents(existing)
             return result
         batch.parents(directory)
-        if not os.path.lexists(path):
+        if not _present(path):
             return result
         data = batch.validate(batch.read_json(path), repo, expected["batch_id"])
         return inspect_pool(repo, wbs_id, expected, data, measure=measure)

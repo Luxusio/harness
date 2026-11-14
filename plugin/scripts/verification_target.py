@@ -5,6 +5,7 @@ invocation's declared target, not arbitrary tool reads or hostile same-UID code.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -111,17 +112,22 @@ def _paths(repo, policy, *, _deadline=None):
                  "required input is denied: " + relative)
         if path.name == ".git":
             continue
-        info = path.lstat()
+        if os.name == "nt":
+            from wiki_platform import _native
+            disk_path = Path(_native._win32_path(path))
+        else:
+            disk_path = path
+        info = disk_path.lstat()
         _require(not stat.S_ISLNK(info.st_mode), "symlink input unsupported: " + relative)
         _require(relative not in policy['artifacts'] or stat.S_ISREG(info.st_mode),
                  'required artifact must be a regular file: ' + relative)
         if stat.S_ISDIR(info.st_mode):
-            _require(path == Path(repo) or not (path / ".git").exists(), "nested checkout unsupported; select its concrete inputs: " + relative)
-            for child in path.iterdir():
+            _require(path == Path(repo) or not (disk_path / ".git").exists(), "nested checkout unsupported; select its concrete inputs: " + relative)
+            for child in disk_path.iterdir():
                 _require(_deadline is None or time.monotonic() < _deadline, "input measurement time budget exceeded")
                 listing_bytes += len(os.fsencode(child.name)) + 1
                 _require(listing_bytes <= wbs.MAX_LISTING_BYTES, 'input listing byte budget exceeded')
-                pending.append(child)
+                pending.append(path / child.name)
                 _require(len(found) + len(pending) <= wbs.MAX_EVIDENCE_ENTRIES, "input entry budget exceeded")
         else:
             _require(stat.S_ISREG(info.st_mode), "nonregular input unsupported: " + relative)
@@ -148,14 +154,30 @@ def _manifest(repo, paths, *, destination=None, readonly=False, policy=None, _de
                      f'input measurement budget exceeded ({category} bytes; input {relative}; used {total[category]}; limit {limit})')
         budget()
         if policy is not None:
-            _require((Path(repo) / relative).lstat().st_size <= limit - total[category],
+            source = Path(repo) / relative
+            if os.name == "nt":
+                from wiki_platform import _native
+                source = Path(_native._win32_path(source))
+            _require(source.lstat().st_size <= limit - total[category],
                      f'input measurement budget exceeded ({category} bytes; input {relative}; limit {limit})')
         digest = hashlib.sha256()
         output = None
+        custody = ExitStack()
         if destination is not None:
             target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            output = target.open("xb")
+            if os.name == "nt":
+                from wiki_platform import ensure_private_directory, trusted_metadata_directory, _native
+                ensure_private_directory(target.parent)
+                custody.enter_context(trusted_metadata_directory(target.parent))
+                disk_target = Path(_native._win32_path(target))
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                disk_target = target
+            try:
+                output = disk_target.open("xb")
+            except BaseException:
+                custody.close()
+                raise
         def consume(chunk):
             total[category] += len(chunk)
             budget()
@@ -165,13 +187,20 @@ def _manifest(repo, paths, *, destination=None, readonly=False, policy=None, _de
         try:
             record = _read_payload_file(Path(repo), relative, consume=consume, readonly=readonly, source_input=True)
         finally:
-            if output is not None:
-                output.close()
+            try:
+                if output is not None:
+                    output.close()
+            finally:
+                custody.close()
         _require(record is not None, "input changed or unsafe ownership/mode: " + relative)
         info = record[1]
         mode = 0o555 if info.st_mode & 0o111 else 0o444
         if destination is not None:
-            os.chmod(destination / relative, mode)
+            if os.name == "nt":
+                from wiki_platform import metadata_set_readonly
+                metadata_set_readonly(destination / relative, True)
+            else:
+                os.chmod(destination / relative, mode)
         rows.append([relative, bool(info.st_mode & 0o111), info.st_size, digest.hexdigest()])
     return rows
 
@@ -190,7 +219,11 @@ def _write_private(path, data):
     text = json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n"
     _require(len(text.encode()) <= 1024 * 1024, "target metadata exceeds 1 MiB; refine verification scope")
     _atomic_text_write(str(path), text)
-    os.chmod(path, 0o444)
+    if os.name == "nt":
+        from wiki_platform import metadata_set_readonly
+        metadata_set_readonly(path, True)
+    else:
+        os.chmod(path, 0o444)
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -221,22 +254,42 @@ def _output_paths(output_dirs, manifest, policy):
     return sorted(set(result))
 
 
+def _mkdir_snapshot(path):
+    """Exclusively create one owned snapshot directory, preserving nonce collisions."""
+    if os.name == "nt":
+        from wiki_platform import _native, trusted_metadata_directory
+        with trusted_metadata_directory(path.parent), _native._private_attributes(directory=True) as attributes:
+            _native._check(_native._CreateDirectory(_native._win32_path(path), _native.C.byref(attributes)))
+        with trusted_metadata_directory(path):
+            pass
+    else:
+        path.mkdir(mode=0o700)
+
+
 def _seal_view(root, output_dirs=()):
     for output in output_dirs:
         cursor = root
         for part in Path(output).parts:
             cursor = cursor / part
-            cursor.mkdir(mode=0o700, exist_ok=True)
-            info = cursor.lstat()
             if os.name == "nt":
-                from wiki_platform import trusted_metadata_directory
-                with trusted_metadata_directory(cursor):
-                    pass
+                from wiki_platform import ensure_private_directory
+                ensure_private_directory(cursor)
             else:
+                cursor.mkdir(mode=0o700, exist_ok=True)
+                info = cursor.lstat()
                 _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid(), "unsafe runtime output directory")
-    for directory, _, _ in os.walk(root, topdown=False):
-        relative = Path(directory).relative_to(root).as_posix()
-        os.chmod(directory, 0o700 if any(wbs.covers(p, relative) for p in output_dirs) else 0o500)
+    if os.name == "nt":
+        from wiki_platform import _native, metadata_set_readonly
+        disk_root = Path(_native._win32_path(root))
+    else:
+        disk_root = root
+    for directory, _, _ in os.walk(disk_root, topdown=False):
+        relative = Path(directory).relative_to(disk_root).as_posix()
+        writable = any(wbs.covers(p, relative) for p in output_dirs)
+        if os.name == "nt":
+            metadata_set_readonly(root / relative, not writable, directory=True)
+        else:
+            os.chmod(directory, 0o700 if writable else 0o500)
 
 
 def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
@@ -277,15 +330,15 @@ def issue_target(wbs_dir, repo, spec, *, output_dirs=()):
     for part in ("work", "verification-targets", token, "source"):
         current = current / part
         try:
-            current.mkdir(mode=0o700)
+            _mkdir_snapshot(current)
         except FileExistsError:
             _require(part != token, "snapshot nonce already exists; preserve existing data")
-            info = current.lstat()
             if os.name == "nt":
                 from wiki_platform import trusted_metadata_directory
                 with trusted_metadata_directory(current):
                     pass
             else:
+                info = current.lstat()
                 _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022, "unsafe snapshot storage: " + str(current))
     try:
         manifest = _manifest(repo, paths, destination=root)
@@ -344,11 +397,20 @@ def _outputs_ready(root, output_dirs):
         for part in Path(output).parts:
             cursor = cursor / part
             try:
-                if not stat.S_ISDIR(cursor.lstat().st_mode):
+                if os.name == "nt":
+                    from wiki_platform import metadata_probe
+                    info = metadata_probe(cursor)
+                    if info is None or info["kind"] != "dir":
+                        return False
+                elif not stat.S_ISDIR(cursor.lstat().st_mode):
                     return False
             except FileNotFoundError:
                 return False
-        if not os.access(cursor, os.W_OK):
+        disk_cursor = cursor
+        if os.name == "nt":
+            from wiki_platform import _native
+            disk_cursor = _native._win32_path(cursor)
+        if not os.access(disk_cursor, os.W_OK):
             return False
     return True
 
@@ -368,13 +430,18 @@ def ensure_snapshot(wbs_dir, token, repo=None, *, output_dirs=()):
     paths = [row[0] for row in record["manifest"]]
     output_dirs = _output_paths(output_dirs, record["manifest"], record["spec"]["inputs"])
     ready_outputs = _outputs_ready(root, output_dirs)
-    if all((root / name).exists() for name in paths) and ready_outputs:
+    if os.name == "nt":
+        from wiki_platform import metadata_probe
+        present = all(metadata_probe(root / name) is not None for name in paths)
+    else:
+        present = all((root / name).exists() for name in paths)
+    if present and ready_outputs:
         _require(_manifest(root, paths, readonly=True) == record["manifest"], "frozen snapshot changed; preserve evidence and investigate")
         return record
     _require(repo is not None, "snapshot missing; restore identical inputs then issue this target again")
     _require(_manifest(repo, _paths(Path(repo), record["spec"]["inputs"])) == record["manifest"] and _context(record["spec"], repo) == record["context"], "snapshot cannot be restored from changed inputs")
     root = root.parent / ("source-restored-" + secrets.token_hex(8))
-    root.mkdir(mode=0o700)
+    _mkdir_snapshot(root)
     _require(_manifest(repo, paths, destination=root) == record["manifest"], "inputs changed during snapshot restoration")
     _seal_view(root, output_dirs)
     return dict(record, snapshot_root=str(root))
@@ -413,8 +480,15 @@ def _input_rows(wbs_dir, repo, index, *, measure):
                 paths = [r[0] for r in record["manifest"]]
                 # Copies are regenerable. Validate every present byte, while
                 # current declared inputs/context determine applicability.
-                present = [path for path in paths if os.path.lexists(root / path)]
-                row["snapshot_available"] = root.is_dir() and len(present) == len(paths)
+                if os.name == "nt":
+                    from wiki_platform import metadata_probe
+                    present = [path for path in paths if metadata_probe(root / path) is not None]
+                    root_info = metadata_probe(root)
+                    available = root_info is not None and root_info["kind"] == "dir"
+                else:
+                    present = [path for path in paths if os.path.lexists(root / path)]
+                    available = root.is_dir()
+                row["snapshot_available"] = available and len(present) == len(paths)
                 expected_present = [entry for entry in record["manifest"] if entry[0] in present]
                 _require(_manifest(root, present, readonly=True) == expected_present,
                          "frozen snapshot changed; preserve the view and investigate")

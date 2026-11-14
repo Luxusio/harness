@@ -13,17 +13,27 @@ SID = 'a1b2c3d4-5e6f-7890-abcd-ef1234567890'
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def _task(root, *, maintenance=False):
     from test_prewrite_gate_dormant import _write_task_state
     import wbs
     task = Path(_write_task_state(str(root / 'doc/harness/wbs'), 'exact', 'open'))
-    run = json.loads((task / 'WBS.control.json').read_text())['run_id']
+    run = json.loads((_fixture_io(task / 'WBS.control.json')).read_text())['run_id']
     plan = '# Exact fixture\n```wbs\n' + json.dumps([dict(id='A', title='Exact source', weight=1)]) + '\n```\n'
-    (task / 'PLAN.md').write_text(plan)
+    (_fixture_io(task / 'PLAN.md')).write_text(plan)
     if maintenance:
         (task / 'MAINTENANCE').touch()
     state = wbs.prepare(str(task), plan, run)
-    (task / 'WBS.json').write_text(wbs.encode_state(state))
+    (_fixture_io(task / 'WBS.json')).write_text(wbs.encode_state(state))
     # Prepare the existing owner state for this gate fixture; admission itself
     # has separate public-entrypoint tests. No gate policy is mocked here.
     host = dict(capacity=3, live_agents=[dict(id='fixture', role='coordinator')],
@@ -34,8 +44,8 @@ def _task(root, *, maintenance=False):
     marker = dict(session_id=SID, wbs_dir=str(task), wbs_id=task.name,
                   run_id=run, updated='2026-10-28T00:00:00Z')
     sessions = root / 'doc/harness/wbs/.active_sessions'
-    sessions.mkdir(exist_ok=True)
-    (sessions / (SID + '.json')).write_text(json.dumps(marker))
+    _fixture_io(sessions).mkdir(exist_ok=True)
+    (_fixture_io(sessions / (SID + '.json'))).write_text(json.dumps(marker))
     return task, marker
 
 

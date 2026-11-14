@@ -10,6 +10,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin/scripts"))
 import wbs
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def node(key="A", weight=10, **extra):
     return dict(id=key, title="Result " + key, weight=weight,
                 check=[sys.executable, "-c", "from pathlib import Path; assert Path('src.txt').read_text() == 'ok'"], **extra)
@@ -352,7 +362,7 @@ def test_public_dispatch_performs_parent_handoff_without_another_lifecycle(tmp_p
     assert call("context", wbs_id=root)["structuredContent"]["context"]["status"] == "blocked"
     assert call("open", wbs_id=root).get("isError")
     assert call("next", wbs_id=root)["structuredContent"]["ready"] == []
-    assert not (pool.repo / "doc/harness/goals/current.json").exists()
+    assert not (_fixture_io(pool.repo / "doc/harness/goals/current.json")).exists()
 
 
 def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, monkeypatch):
@@ -382,7 +392,7 @@ def test_standalone_parent_waits_for_real_isolated_pool_integration(tmp_path, mo
         slug, worker = request["slug"], "worker-" + str(index)
         worktree, branch = pool.bind(slug, worker)
         assert worktree != pool.repo
-        (worktree / request["scopes"][0]).write_text("done")
+        (_fixture_io(worktree / request["scopes"][0])).write_text("done")
         _git("add", "-A", cwd=worktree)
         _git("commit", "-qm", slug, "--trailer", "Harness-WBS: WBS__" + slug, cwd=worktree)
         task(worktree, slug, closed=True)
@@ -527,7 +537,7 @@ def test_assertion_full_log_survives_compact_wbs_publication(tmp_path):
     reference = result['output_log']
     assert reference['available'] and not reference['truncated']
     assert Path(reference['path']).is_relative_to(td / 'work')
-    assert Path(reference['path']).read_text().startswith('EARLY assertion diagnostic\n')
+    assert _fixture_io(Path(reference['path'])).read_text().startswith('EARLY assertion diagnostic\n')
     stored = wbs.read_state(str(td))['checks']['A']['result']
     assert stored['output_log'] == reference and len(stored['output']) <= 4000
     # Fixed leaf slots bound storage across later attempts.
@@ -550,28 +560,28 @@ def test_assertion_diagnostic_symlink_never_launches(tmp_path):
 def test_successful_recheck_refreshes_log_without_progress_clock_reset(tmp_path):
     command = [sys.executable, '-c', "from pathlib import Path; p=Path('counter'); n=int(p.read_text())+1 if p.exists() else 1; p.write_text(str(n)); print(n)"]
     repo, td = baseline(tmp_path, [dict(id='A', title='Current diagnostic', weight=1, check=command)])
-    text = (td / 'PLAN.md').read_text() + '```wbs-inputs\n' + json.dumps({'source': ['src.txt']}) + '\n```\n'
+    text = (_fixture_io(td / 'PLAN.md')).read_text() + '```wbs-inputs\n' + json.dumps({'source': ['src.txt']}) + '\n```\n'
     state = wbs.prepare(str(td), text, 'run', now=100)
-    (td / 'PLAN.md').write_text(text)
-    (td / 'WBS.json').write_text(json.dumps(state))
+    (_fixture_io(td / 'PLAN.md')).write_text(text)
+    (_fixture_io(td / 'WBS.json')).write_text(json.dumps(state))
     assert wbs.verify(str(td), str(repo), 'run', 'A', now=200)['passed']
     assert wbs.verify(str(td), str(repo), 'run', 'A', now=300)['passed']
     stored = wbs.read_state(str(td))
     result = stored['checks']['A']['result']
     assert result['output'].splitlines() == ['2']
     assert wbs._log_available(result['output_log'], repo)['available']
-    assert Path(result['output_log']['path']).read_text() == '2\n'
+    assert _fixture_io(Path(result['output_log']['path'])).read_text() == '2\n'
     assert stored['last_progress_at'] == 200
 
 
 def test_implicit_source_policies_still_execute_with_diagnostics(tmp_path):
     for index, policy in enumerate(({'artifacts': ['src.txt']}, {'exclude': ['unrelated']})):
         directory = tmp_path / str(index)
-        directory.mkdir()
+        _fixture_io(directory).mkdir()
         repo, td = baseline(directory)
-        text = (td / 'PLAN.md').read_text() + '```wbs-inputs\n' + json.dumps(policy) + '\n```\n'
+        text = (_fixture_io(td / 'PLAN.md')).read_text() + '```wbs-inputs\n' + json.dumps(policy) + '\n```\n'
         state = wbs.prepare(str(td), text, 'run')
-        (td / 'PLAN.md').write_text(text)
-        (td / 'WBS.json').write_text(json.dumps(state))
+        (_fixture_io(td / 'PLAN.md')).write_text(text)
+        (_fixture_io(td / 'WBS.json')).write_text(json.dumps(state))
         result = wbs.verify(str(td), str(repo), 'run', 'A')
         assert result['passed'] and result['output_log']['available']

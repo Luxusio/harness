@@ -625,7 +625,7 @@ def test_native_project_doc_backup_name_conflict_preserves_every_writer(native_p
     backups = list(root.glob(".AGENTS.md.*.displaced"))
     candidates = list(root.glob(".AGENTS.md.*.tmp"))
     assert len(backups) == len(candidates) == 1
-    assert backups[0].read_bytes() == b"# Original\r\n"
+    assert Path(module._project_doc_disk_path(backups[0])).read_bytes() == b"# Original\r\n"
     assert candidates[0].read_bytes() == b"# Concurrent candidate-name writer\r\n"
 
 
@@ -697,7 +697,7 @@ def test_native_project_doc_security_write_failure_preserves_both_documents(nati
     assert injected, "the failure must reach the selected native security writer after real replacement"
     assert path.read_bytes() == b"# User original\r\n@CONTRACTS.md\r\n"
     backups = list(root.glob(".AGENTS.md.*.displaced"))
-    assert len(backups) == 1 and backups[0].read_bytes() == original
+    assert len(backups) == 1 and Path(module._project_doc_disk_path(backups[0])).read_bytes() == original
     assert str(path) in str(error.value) and str(backups[0]) in str(error.value)
 
 
@@ -829,7 +829,7 @@ def test_native_project_doc_protection_only_readback_mismatch_preserves_both_doc
     assert _native_project_doc_descriptor(native, path) == before
     assert path.read_bytes() == b"# User original\r\n@CONTRACTS.md\r\n"
     backups = list(root.glob(".AGENTS.md.*.displaced"))
-    assert len(backups) == 1 and backups[0].read_bytes() == original
+    assert len(backups) == 1 and Path(module._project_doc_disk_path(backups[0])).read_bytes() == original
     assert str(path) in str(error.value) and str(backups[0]) in str(error.value)
 
 

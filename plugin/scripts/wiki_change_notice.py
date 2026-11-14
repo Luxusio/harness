@@ -15,7 +15,7 @@ if os.name != "nt":
     import fcntl
 
 from document_destination import select_destination
-from wiki_platform import atomic_write, file_lock, file_lock_at, safe_metadata_read, trusted_metadata_directory
+from wiki_platform import atomic_write, file_lock, file_lock_at, metadata_probe, safe_metadata_read, trusted_metadata_directory
 
 MAX_BYTES = 64 * 1024
 MAX_SESSIONS = 128
@@ -106,7 +106,7 @@ def _read(directory, name, default=None):
 
 def _present(directory, name):
     if os.name == "nt":
-        return os.path.lexists(directory / name)
+        return metadata_probe(directory / name) is not None
     try:
         os.stat(name, dir_fd=directory, follow_symlinks=False)
         return True

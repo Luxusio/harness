@@ -65,6 +65,11 @@ def _junction(link, target):
     assert made.returncode == 0, made.stderr.decode("mbcs", errors="replace")
 
 
+def _disk(path):
+    """Use Native wide spelling only at this fixture's direct I/O boundary."""
+    return Path(win._win32_path(path))
+
+
 def _environment():
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("GIT_") and key not in {
@@ -438,17 +443,17 @@ def _legacy_migration_fixture(repo):
     import _lib
 
     old = repo / "doc/harness/tasks/TASK__native"
-    old.mkdir(parents=True)
+    _disk(old).mkdir(parents=True)
     control = dict(run_id=_lib.new_uuid7(), execution_mode="standard",
                    required_lenses=["review-code", "qa-cli"], closed=False)
     original_control = json.dumps(control).encode()
-    (old / "TASK.json").write_bytes(original_control)
+    (_disk(old / "TASK.json")).write_bytes(original_control)
     state = dict(version=1, run_id=control["run_id"],
                  nodes=[dict(id="A", title="Preserved historical outcome", weight=1)],
                  checks={}, started_at=1, last_progress_at=1)
-    (old / "WBS.json").write_text(json.dumps(state), encoding="utf-8")
-    (old / "PLAN.md").write_text("# Historical native fixture\n", encoding="utf-8")
-    return old, control, original_control, (old / "WBS.json").read_bytes()
+    (_disk(old / "WBS.json")).write_text(json.dumps(state), encoding="utf-8")
+    (_disk(old / "PLAN.md")).write_text("# Historical native fixture\n", encoding="utf-8")
+    return old, control, original_control, (_disk(old / "WBS.json")).read_bytes()
 
 
 def test_native_public_migration_preserves_history_after_collision_refusal(private):
@@ -459,55 +464,55 @@ def test_native_public_migration_preserves_history_after_collision_refusal(priva
     historical = {name: b"opaque historical bytes\x00\xff " + name.encode()
                   for name in ("RECEIPTS.jsonl", "REVIEWS.jsonl", "artifact.bin")}
     for name, data in historical.items():
-        (old / name).write_bytes(data)
+        (_disk(old / name)).write_bytes(data)
     readonly_parent = old / "work/source"
-    readonly_parent.mkdir(parents=True)
+    _disk(readonly_parent).mkdir(parents=True)
     readonly = readonly_parent / "readonly historical artifact.bin"
-    readonly.write_bytes(b"preserve read-only source bytes\x00\xff")
-    readonly.chmod(0o444)
-    readonly_parent.chmod(0o555)
-    assert readonly.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-    assert readonly_parent.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    _disk(readonly).write_bytes(b"preserve read-only source bytes\x00\xff")
+    _disk(readonly).chmod(0o444)
+    _disk(readonly_parent).chmod(0o555)
+    assert _disk(readonly).stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert _disk(readonly_parent).stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
     nested_lock = old / "work/.control.lock"
-    nested_lock.write_bytes(b"nested literal historical lock evidence\x00\xff")
+    _disk(nested_lock).write_bytes(b"nested literal historical lock evidence\x00\xff")
     preview = _public(repo, "migrate")
     assert not preview.get("isError"), preview
-    assert (old / "TASK.json").read_bytes() == original_control
-    assert not (repo / migration.MANIFEST).exists()
+    assert (_disk(old / "TASK.json")).read_bytes() == original_control
+    assert not (_disk(repo / migration.MANIFEST)).exists()
 
     new = repo / "doc/harness/wbs/WBS__native"
-    new.mkdir(parents=True)
+    _disk(new).mkdir(parents=True)
     collision = new / "precious-user-file"
-    collision.write_bytes(b"preserve unrelated destination")
+    _disk(collision).write_bytes(b"preserve unrelated destination")
     refused = _public(repo, "migrate", apply=True)
     assert refused.get("isError"), refused
-    assert collision.read_bytes() == b"preserve unrelated destination"
-    assert (old / "TASK.json").read_bytes() == original_control
-    assert (old / "WBS.json").read_bytes() == original_state
-    assert not (repo / migration.MANIFEST).exists()
-    collision.unlink()
-    new.rmdir()
+    assert _disk(collision).read_bytes() == b"preserve unrelated destination"
+    assert (_disk(old / "TASK.json")).read_bytes() == original_control
+    assert (_disk(old / "WBS.json")).read_bytes() == original_state
+    assert not (_disk(repo / migration.MANIFEST)).exists()
+    _disk(collision).unlink()
+    _disk(new).rmdir()
 
     applied = _public(repo, "migrate", apply=True)
     assert not applied.get("isError"), applied
-    assert json.loads((new / "WBS.control.json").read_bytes()) == control
-    assert (new / "WBS.json").read_bytes() == original_state
+    assert json.loads((_disk(new / "WBS.control.json")).read_bytes()) == control
+    assert (_disk(new / "WBS.json")).read_bytes() == original_state
     for name, data in historical.items():
-        assert (old / name).read_bytes() == data == (new / name).read_bytes()
+        assert (_disk(old / name)).read_bytes() == data == (_disk(new / name)).read_bytes()
     copied_readonly = new / readonly.relative_to(old)
-    assert copied_readonly.read_bytes() == readonly.read_bytes() == b"preserve read-only source bytes\x00\xff"
-    assert copied_readonly.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-    assert copied_readonly.parent.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-    assert (new / "work/.control.lock").read_bytes() == nested_lock.read_bytes()
+    assert _disk(copied_readonly).read_bytes() == _disk(readonly).read_bytes() == b"preserve read-only source bytes\x00\xff"
+    assert _disk(copied_readonly).stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert _disk(copied_readonly.parent).stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert (_disk(new / "work/.control.lock")).read_bytes() == _disk(nested_lock).read_bytes()
     archive = repo / migration.ARCHIVE / "original/doc/harness/tasks/TASK__native/TASK.json"
-    assert archive.read_bytes() == original_control
-    assert not (old / "TASK.json").exists()
-    journal = (repo / migration.MANIFEST).read_bytes()
-    published_control = (new / "WBS.control.json").read_bytes()
+    assert _disk(archive).read_bytes() == original_control
+    assert not (_disk(old / "TASK.json")).exists()
+    journal = (_disk(repo / migration.MANIFEST)).read_bytes()
+    published_control = (_disk(new / "WBS.control.json")).read_bytes()
     repeated = _public(repo, "migrate", apply=True)
     assert not repeated.get("isError"), repeated
-    assert (repo / migration.MANIFEST).read_bytes() == journal
-    assert (new / "WBS.control.json").read_bytes() == published_control
+    assert (_disk(repo / migration.MANIFEST)).read_bytes() == journal
+    assert (_disk(new / "WBS.control.json")).read_bytes() == published_control
 
 
 @pytest.mark.parametrize("unsafe", ["nonempty", "hardlink", "junction"])
@@ -966,10 +971,10 @@ def _synthetic_native_session(private, monkeypatch):
     created = datetime.fromtimestamp(_lib.uuid7_timestamp_ms(sid) / 1000).astimezone()
     home = win.ensure_private_directory(private / "synthetic codex home")
     parent = home / "sessions" / f"{created:%Y/%m/%d}"
-    parent.mkdir(parents=True)
+    _disk(parent).mkdir(parents=True)
     path = parent / f"rollout-fixture-{sid}.jsonl"
     metadata = (json.dumps(dict(type="session_meta", payload=dict(id=sid, cwd=str(cwd)))) + "\n").encode()
-    path.write_bytes(metadata)
+    _disk(path).write_bytes(metadata)
     monkeypatch.setenv("CODEX_HOME", str(home))
     monkeypatch.setenv("CODEX_THREAD_ID", sid)
     return registration, cwd, sid, path, metadata
@@ -978,16 +983,16 @@ def _synthetic_native_session(private, monkeypatch):
 def test_native_codex_first_metadata_authenticates_while_append_handle_is_open(private, monkeypatch):
     registration, cwd, sid, path, metadata = _synthetic_native_session(private, monkeypatch)
     # Real Codex grows the log; its entire size is not the first-line budget.
-    with path.open("ab") as writer:
+    with _disk(path).open("ab") as writer:
         event = b'{"type":"event_msg"}\n'
         writer.write(event * (registration.NATIVE_METADATA_MAX_BYTES // len(event) + 1))
         writer.flush()
-        assert path.stat().st_size > registration.NATIVE_METADATA_MAX_BYTES
+        assert _disk(path).stat().st_size > registration.NATIVE_METADATA_MAX_BYTES
         assert registration.authenticate_native_session(sid, str(cwd)) == str(cwd)
         writer.write(b'{"type":"event_msg","payload":"later"}\n')
         writer.flush()
         assert registration.authenticate_native_session(sid, str(cwd)) == str(cwd)
-    assert path.read_bytes().startswith(metadata)
+    assert _disk(path).read_bytes().startswith(metadata)
 
 
 def test_native_interrupted_cross_workspace_fence_denies_both_sources_without_rewriting_old_binding(
@@ -1015,7 +1020,7 @@ def test_native_interrupted_cross_workspace_fence_denies_both_sources_without_re
         assert not assigned.get("isError"), assigned
         directories.append(root / "doc/harness/wbs/WBS__native")
     main_task, linked_task = directories
-    controls = {path: (path / "WBS.control.json").read_bytes() for path in directories}
+    controls = {path: (_disk(path / "WBS.control.json")).read_bytes() for path in directories}
 
     # Existing fixture helper creates owned synthetic session metadata only;
     # this does not use or claim integration with an official host session.
@@ -1028,7 +1033,7 @@ def test_native_interrupted_cross_workspace_fence_denies_both_sources_without_re
     assert _lib.resolve_session_wbs_binding(str(linked), sid)["wbs_dir"] == str(linked_task)
     assert exact_gate(main, linked / "source.py", sid) == {}
     old_marker = linked / "doc/harness/wbs/.active_sessions" / (sid + ".json")
-    original_marker = old_marker.read_bytes()
+    original_marker = _disk(old_marker).read_bytes()
     # A real NTFS reader permits reads/writes but denies DELETE sharing. The
     # first main fence can publish; atomic replacement of this old marker fails.
     reader = win._open(old_marker, win.GENERIC_READ,
@@ -1039,35 +1044,35 @@ def test_native_interrupted_cross_workspace_fence_denies_both_sources_without_re
             json.loads(controls[main_task])["run_id"], status_out=status,
         )
         assert len(_lib.read_active_session_marker(str(main), sid)["conflicts"]) == 2
-        assert old_marker.read_bytes() == original_marker
+        assert _disk(old_marker).read_bytes() == original_marker
         for root in (main, linked):
             assert not _lib.resolve_session_wbs_binding(str(root), sid)
             denied = exact_gate(main, root / "source.py", sid)
             assert denied.get("permissionDecision") == "deny", denied
-        assert {path: (path / "WBS.control.json").read_bytes() for path in directories} == controls
+        assert {path: (_disk(path / "WBS.control.json")).read_bytes() for path in directories} == controls
     finally:
         win._close(reader)
-    assert old_marker.read_bytes() == original_marker
+    assert _disk(old_marker).read_bytes() == original_marker
 
 
 @pytest.mark.parametrize("unsafe", ["wrong-id", "wrong-cwd", "missing-newline", "oversize", "hardlink", "foreign-write"])
 def test_native_codex_metadata_never_authenticates_invalid_authority(private, monkeypatch, unsafe):
     registration, cwd, sid, path, metadata = _synthetic_native_session(private, monkeypatch)
     if unsafe == "wrong-id":
-        path.write_bytes(metadata.replace(sid.encode(), b"00000000-0000-7000-8000-000000000000"))
+        _disk(path).write_bytes(metadata.replace(sid.encode(), b"00000000-0000-7000-8000-000000000000"))
     elif unsafe == "wrong-cwd":
-        path.write_text(json.dumps(dict(type="session_meta", payload=dict(id=sid, cwd=str(private)))) + "\n", encoding="utf-8")
+        _disk(path).write_text(json.dumps(dict(type="session_meta", payload=dict(id=sid, cwd=str(private)))) + "\n", encoding="utf-8")
     elif unsafe == "missing-newline":
-        path.write_bytes(metadata.rstrip(b"\n"))
+        _disk(path).write_bytes(metadata.rstrip(b"\n"))
     elif unsafe == "oversize":
-        path.write_bytes(b" " * (registration.NATIVE_METADATA_MAX_BYTES + 1) + metadata)
+        _disk(path).write_bytes(b" " * (registration.NATIVE_METADATA_MAX_BYTES + 1) + metadata)
     elif unsafe == "hardlink":
-        os.link(path, private / "session alias")
+        os.link(_disk(path), _disk(private / "session alias"))
     else:
         _acl(path, "(A;;GW;;;WD)")
-    before = path.read_bytes()
+    before = _disk(path).read_bytes()
     assert not registration.authenticate_native_session(sid, str(cwd))
-    assert path.read_bytes() == before
+    assert _disk(path).read_bytes() == before
 
 
 def _dead(pid):
@@ -1291,10 +1296,11 @@ def test_native_trusted_git_environment_clones_and_rebases_deep_paths_without_pe
     # reported failure instead crosses MAX_PATH at the pack .keep file inside
     # a supported gitdir. Retain that actual boundary and the original basetemp.
     dirname = "retained-git"
-    padding = max(0, 220 - len(str(private).encode("utf-16-le")) // 2 - 1 - len(dirname))
+    # Git's PATH_MAX - 40 guard counts UTF-8 bytes, rather than Win32 UTF-16.
+    padding = max(0, 210 - len(str(private).encode("utf-8")) - 1 - len(dirname))
     gitdir = private / (dirname + "x" * padding)
     checkout = private / "deep git checkout"
-    assert len(str(gitdir).encode("utf-16-le")) // 2 < 260
+    assert len(str(gitdir).encode("utf-8")) <= 220
     assert len(str(gitdir / "objects/pack" / ("pack-" + "0" * 40 + ".keep")).encode("utf-16-le")) // 2 > 260
 
     decoy = win.ensure_private_directory(private / "unrelated ambient overrides")

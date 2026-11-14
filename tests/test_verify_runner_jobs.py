@@ -31,6 +31,16 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 @pytest.fixture(autouse=True)
 def native_lease_home(tmp_path, monkeypatch):
     if os.name == "nt":
@@ -796,21 +806,21 @@ def test_repeated_reuse_and_reuse_only_misses_preserve_origin_and_diagnostics(tm
     first = execute(tmp_path, [item])['commands'][0]
     reference = first['output_log']
     log = Path(reference['path'])
-    assert log.read_text().startswith('EARLY diagnostic\n')
+    assert _fixture_io(log).read_text().startswith('EARLY diagnostic\n')
     assert 'EARLY' not in first['output']
     for generation in ('two', 'three'):
         current = execute(tmp_path, [item], generation, reuse_only=True)['commands'][0]
         assert current['reused'] and current['origin_generation'] == 'one'
         assert current['output'] == first['output'] and current['output_log'] == reference
-    (tmp_path / 'check.py').write_text("raise AssertionError('must not execute B')\n")
+    (_fixture_io(tmp_path / 'check.py')).write_text("raise AssertionError('must not execute B')\n")
     missed = execute(tmp_path, [item], 'B', reuse_only=True)
     assert missed['status'] == 'FAIL' and missed['commands'][0]['returncode'] is None
     assert missed['successful'][0]['origin_generation'] == 'one'
-    assert log.read_text().startswith('EARLY diagnostic\n')
-    (tmp_path / 'check.py').write_text(original)
+    assert _fixture_io(log).read_text().startswith('EARLY diagnostic\n')
+    (_fixture_io(tmp_path / 'check.py')).write_text(original)
     restored = execute(tmp_path, [item], 'A', reuse_only=True)['commands'][0]
     assert restored['reused'] and restored['output_log'] == reference
-    log.unlink()
+    _fixture_io(log).unlink()
     missing = execute(tmp_path, [item], 'missing-log', reuse_only=True)['commands'][0]
     assert missing['reused'] and missing['output'] == first['output']
     assert missing['output_log']['available'] is False
@@ -824,15 +834,15 @@ def test_actual_failure_invalidates_matching_prior_success(tmp_path):
     (tmp_path / 'fail').touch()
     # Lost artifact forces actual execution with identical input/context; the
     # failing attempt recreates the original output bytes before returning 7.
-    (tmp_path / "built").unlink()
+    (_fixture_io(tmp_path / "built")).unlink()
     failed = execute(tmp_path, [item], 'failed')
     assert failed['commands'][0]['state'] == 'command_failure' and failed['successful'] == []
-    assert 'actual attempt' in Path(failed['commands'][0]['output_log']['path']).read_text()
+    assert 'actual attempt' in _fixture_io(Path(failed['commands'][0]['output_log']['path'])).read_text()
     missed = execute(tmp_path, [item], 'later', reuse_only=True)
     assert missed['status'] == 'FAIL' and not missed['commands'][0]['reused']
     evidence = missed['commands'][0]['last_execution']
     assert evidence['returncode'] == 7 and evidence['execution_generation'] == 'failed'
-    assert Path(evidence['output_log']['path']).read_text().startswith('actual attempt')
+    assert _fixture_io(Path(evidence['output_log']['path'])).read_text().startswith('actual attempt')
     again = execute(tmp_path, [item], 'later-again', reuse_only=True)
     assert again['commands'][0]['last_execution'] == evidence
 
@@ -846,7 +856,7 @@ def test_full_diagnostics_preserve_early_failure_output_and_bounds(tmp_path, fai
     record = execute(tmp_path, [item], timeout=0.3 if failure == 'timeout' else 5)['commands'][0]
     assert record['status'] == 'FAIL'
     reference = record['output_log']
-    data = Path(reference['path']).read_bytes()
+    data = _fixture_io(Path(reference['path'])).read_bytes()
     assert data.startswith(b'EARLY failure evidence' + os.linesep.encode()) and len(data) <= 1048576
     assert reference['bytes'] == len(data) and reference['available']
     assert reference['truncated'] == (failure == 'overflow')
@@ -882,7 +892,7 @@ def test_prior_log_cannot_become_selected_source_or_artifact(tmp_path):
         item['inputs'].setdefault(category, []).append(path.relative_to(tmp_path).as_posix())
         with pytest.raises(ValueError, match='diagnostic path overlaps'):
             execute(tmp_path, [item], 'selected-log')
-        assert path.read_text() == 'old log\n' and not (tmp_path / 'ran').exists()
+        assert _fixture_io(path).read_text() == 'old log\n' and not (_fixture_io(tmp_path / 'ran')).exists()
 
 
 def test_failed_diagnostics_survive_blocking_and_refresh_missing_log(tmp_path):
@@ -893,8 +903,8 @@ def test_failed_diagnostics_survive_blocking_and_refresh_missing_log(tmp_path):
     blocked = execute(tmp_path, [producer, consumer], 'blocked')['commands'][1]
     assert blocked['state'] == 'blocked_dependency' and blocked['returncode'] is None
     assert blocked['last_execution']['returncode'] == 7
-    assert path.read_text() == 'consumer failure\n'
-    path.unlink()
+    assert _fixture_io(path).read_text() == 'consumer failure\n'
+    _fixture_io(path).unlink()
     missed = execute(tmp_path, [consumer], 'miss', reuse_only=True)['commands'][0]
     assert missed['last_execution']['output'] == 'consumer failure' + os.linesep
     assert missed['last_execution']['output_log']['available'] is False
@@ -906,16 +916,16 @@ def test_log_slots_remain_bounded_across_jobs_and_runs(tmp_path):
         item = job(tmp_path, 'job' + str(index), "print('bounded')\n")
         result = execute(tmp_path, [item], str(index), run_id='run' + str(index))
         current = Path(result['commands'][0]['output_log']['path'])
-        assert current.read_text() == 'bounded\n'
+        assert _fixture_io(current).read_text() == 'bounded\n'
         assert list(current.parent.glob('*.log')) == [current]
     # A leftover managed slot from an interrupted publication is reclaimed;
     # unrelated files in that directory are outside the managed naming scheme.
     leftover = current.parent / ('0' * 64 + '-attempt.log')
-    leftover.write_text('interrupted')
+    _fixture_io(leftover).write_text('interrupted')
     unrelated = current.parent / 'notes.txt'
-    unrelated.write_text('foreign')
+    _fixture_io(unrelated).write_text('foreign')
     execute(tmp_path, [item], 'last', run_id='run3')
-    assert not leftover.exists() and unrelated.read_text() == 'foreign'
+    assert not _fixture_io(leftover).exists() and _fixture_io(unrelated).read_text() == 'foreign'
 
 
 @pytest.mark.parametrize('corruption', ['returncode', 'commands', 'empty', 'utf8', 'oversized'])
@@ -959,16 +969,16 @@ def test_retained_success_diagnostic_corruption_or_loss_stays_unavailable(tmp_pa
     original = "print('bounded summary')\n"
     item = job(tmp_path, 'check', original)
     record = execute(tmp_path, [item])['commands'][0]
-    Path(record['output_log']['path']).unlink()
-    (tmp_path / 'check.py').write_text("print('changed')\n")
+    _fixture_io(Path(record['output_log']['path'])).unlink()
+    (_fixture_io(tmp_path / 'check.py')).write_text("print('changed')\n")
     missed = execute(tmp_path, [item], 'miss', reuse_only=True)
     assert missed['status'] == 'FAIL' and not missed['successful'][0]['output_log']['available']
-    payload = json.loads((result_path(tmp_path)).read_text())
+    payload = json.loads((_fixture_io(result_path(tmp_path))).read_text())
     payload['successful'][0]['output_log'] = []
-    (result_path(tmp_path)).write_text(json.dumps(payload))
+    (_fixture_io(result_path(tmp_path))).write_text(json.dumps(payload))
     corrupted = execute(tmp_path, [item], 'malformed-log', reuse_only=True)
     assert corrupted['status'] == 'FAIL' and corrupted['successful'][0]['output_log'] == {'available': False}
-    (tmp_path / 'check.py').write_text(original)
+    (_fixture_io(tmp_path / 'check.py')).write_text(original)
     reused = execute(tmp_path, [item], 'restored', reuse_only=True)['commands'][0]
     assert reused['reused'] and reused['output'] == 'bounded summary' + os.linesep
     assert reused['output_log'] == {'available': False}
@@ -1034,14 +1044,14 @@ def test_retained_failure_survives_success_reuse_and_restart(tmp_path, monkeypat
         assert result['status'] == 'FAIL'
         row = result['commands'][0]
         path = Path(row['output_log']['path'])
-        saved.append((path, path.read_bytes()))
+        saved.append((path, _fixture_io(path).read_bytes()))
     assert len(result['failures']) == 2
     assert len({r['attempt_id'] for r in result['failures']}) == 2
     monkeypatch.setenv('CHECK_EXIT', '0')
     passed = execute(tmp_path, [item], 'success')
     assert passed['status'] == 'PASS' and len(passed['failures']) == 2
     assert execute(tmp_path, [item], 'reuse', reuse_only=True)['commands'][0]['reused']
-    (tmp_path / 'jobs.json').write_text(json.dumps([item]))
+    (_fixture_io(tmp_path / 'jobs.json')).write_text(json.dumps([item]))
     proc = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'verify_runner.py'), '--root', str(tmp_path),
                            '--jobs', str(tmp_path / 'jobs.json'), '--results', str(result_path(tmp_path)),
                            '--wbs-id', 'task', '--run-id', 'run', '--generation', 'restart', '--reuse-only'],
@@ -1051,7 +1061,7 @@ def test_retained_failure_survives_success_reuse_and_restart(tmp_path, monkeypat
     assert restored['commands'][0]['reused'] and len(restored['failures']) == 2
     assert [r['returncode'] for r in restored['failures']] == [7, 8]
     for path, data in saved:
-        assert path.read_bytes() == data and data.startswith(b'early-')
+        assert _fixture_io(path).read_bytes() == data and data.startswith(b'early-')
     assert all(r['output_log']['available'] for r in restored['failures'])
 
 
@@ -1062,10 +1072,10 @@ def test_retained_failure_budget_refuses_before_new_execution(tmp_path, monkeypa
     monkeypatch.setenv('CHECK_EXIT', '7')
     first = execute(tmp_path, [item])
     log = Path(first['failures'][0]['output_log']['path'])
-    data = log.read_bytes()
+    data = _fixture_io(log).read_bytes()
     name, value = {'count': ('MAX_FAILURES', 1),
                    'bytes': ('MAX_FAILURE_LOG_BYTES', 1048576 + len(data) - 1),
-                   'metadata': ('MAX_RESULT_BYTES', result_path(tmp_path).stat().st_size + 200)}[limit]
+                   'metadata': ('MAX_RESULT_BYTES', _fixture_io(result_path(tmp_path)).stat().st_size + 200)}[limit]
     if os.name == "nt":
         marker = native_owner_fault(monkeypatch, tmp_path,
                                     f"{name} = {value}\nPath(_fixture_fault_marker).write_text('budget applied in child')\n")
@@ -1074,15 +1084,15 @@ def test_retained_failure_budget_refuses_before_new_execution(tmp_path, monkeypa
     monkeypatch.setenv('CHECK_EXIT', '8')
     refused = execute(tmp_path, [item], 'refused')
     if os.name == "nt":
-        assert marker.read_text() == 'budget applied in child'
+        assert _fixture_io(marker).read_text() == 'budget applied in child'
         if limit == 'metadata':
-            assert result_path(tmp_path).stat().st_size <= value
+            assert _fixture_io(result_path(tmp_path)).stat().st_size <= value
             assert len(json.dumps(dict(ok=True, value=refused)).encode('utf-8')) > value
     assert refused['status'] == 'FAIL' and 'budget' in refused['commands'][0]['error']
     assert refused['commands'][0]['returncode'] is None
-    assert (tmp_path / 'executed').read_text() == '7'
+    assert (_fixture_io(tmp_path / 'executed')).read_text() == '7'
     assert len(refused['failures']) == 1 and refused['failures'][0]['returncode'] == 7
-    assert log.read_bytes() == data
+    assert _fixture_io(log).read_bytes() == data
 
 
 def test_retained_failure_keeps_retired_jobs_and_previous_runs(tmp_path):
@@ -1094,53 +1104,53 @@ def test_retained_failure_keeps_retired_jobs_and_previous_runs(tmp_path):
     assert changed['status'] == 'PASS' and not changed['commands'][0]['reused']
     assert len(changed['failures']) == 1
     assert changed['failures'][0]['job_id'] == 'old' and changed['failures'][0]['run_id'] == 'run'
-    assert Path(reference['path']).read_text() == 'old failure\n'
+    assert _fixture_io(Path(reference['path'])).read_text() == 'old failure\n'
 
 
 def test_retained_failure_imports_existing_version_one_fixed_slot(tmp_path):
     item = job(tmp_path, 'check', "print('original failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
-    stored = json.loads((result_path(tmp_path)).read_text())
+    stored = json.loads((_fixture_io(result_path(tmp_path))).read_text())
     row = stored['commands'][0]
     fixed = result_path(tmp_path).with_name('results.json.logs') / (runner._digest('check') + '-attempt.log')
-    Path(row['output_log']['path']).rename(fixed)
+    _fixture_io(Path(row['output_log']['path'])).rename(_fixture_io(fixed))
     row['output_log']['path'] = str(fixed)
     row.pop('attempt_id')
     stored.pop('failures')
-    (result_path(tmp_path)).write_text(json.dumps(stored))
-    (tmp_path / 'check.py').write_text("print('new success')\n")
+    (_fixture_io(result_path(tmp_path))).write_text(json.dumps(stored))
+    (_fixture_io(tmp_path / 'check.py')).write_text("print('new success')\n")
     second = execute(tmp_path, [item], 'new')
     assert second['status'] == 'PASS' and len(second['failures']) == 1
     assert second['failures'][0]['returncode'] == 7
     assert second['failures'][0]['output_log']['available']
-    assert fixed.read_text() == 'original failure\n'
+    assert _fixture_io(fixed).read_text() == 'original failure\n'
 
 
 def test_retained_failure_oversized_store_is_not_overwritten(tmp_path, monkeypatch):
     item = job(tmp_path, 'check', "print('authentic failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
     result_file = result_path(tmp_path)
-    original = result_file.read_bytes()
+    original = _fixture_io(result_file).read_bytes()
     log = Path(first['failures'][0]['output_log']['path'])
     if os.name == "nt":
-        with result_file.open('r+b') as stream:
+        with _fixture_io(result_file).open('r+b') as stream:
             stream.truncate(runner.MAX_RESULT_BYTES + 1)
-        with result_file.open('rb') as stream:
+        with _fixture_io(result_file).open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        (tmp_path / 'check.py').write_text("from pathlib import Path\nPath('unexpected').touch()\n")
+        (_fixture_io(tmp_path / 'check.py')).write_text("from pathlib import Path\nPath('unexpected').touch()\n")
         with pytest.raises((RuntimeError, ValueError), match='byte limit|size|large|budget'):
             execute(tmp_path, [item], 'unreadable')
-        assert result_file.stat().st_size == runner.MAX_RESULT_BYTES + 1
-        with result_file.open('rb') as stream:
+        assert _fixture_io(result_file).stat().st_size == runner.MAX_RESULT_BYTES + 1
+        with _fixture_io(result_file).open('rb') as stream:
             assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest
-        assert not (tmp_path / 'unexpected').exists()
-        assert log.read_text() == 'authentic failure\n'
+        assert not (_fixture_io(tmp_path / 'unexpected')).exists()
+        assert _fixture_io(log).read_text() == 'authentic failure\n'
         return
     monkeypatch.setattr(runner, 'MAX_RESULT_BYTES', len(original) - 1)
     with pytest.raises((RuntimeError, ValueError), match='(?:size|large|budget)'):
         execute(tmp_path, [item], 'unreadable')
-    assert result_file.read_bytes() == original
-    assert log.read_text() == 'authentic failure\n'
+    assert _fixture_io(result_file).read_bytes() == original
+    assert _fixture_io(log).read_text() == 'authentic failure\n'
 
 
 def test_retired_task_result_store_is_not_reused_or_overwritten(tmp_path):
@@ -1160,13 +1170,13 @@ def test_retained_failure_reserves_task_and_run_provenance_before_execution(tmp_
     item = job(tmp_path, 'check', "from pathlib import Path\nwith Path('executed').open('a') as f:f.write('x')\nprint('authentic failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
     path = Path(first['failures'][0]['output_log']['path'])
-    original = path.read_bytes()
+    original = _fixture_io(path).read_bytes()
     refused = execute(tmp_path, [item], 'large-provenance', wbs_id='t' * (9 * 1024 * 1024))
     assert refused['status'] == 'FAIL' and refused['commands'][0]['returncode'] is None
     assert 'budget' in refused['commands'][0]['error']
-    assert (tmp_path / 'executed').read_text() == 'x'
+    assert (_fixture_io(tmp_path / 'executed')).read_text() == 'x'
     assert len(refused['failures']) == 1 and refused['failures'][0]['returncode'] == 7
-    assert path.read_bytes() == original
+    assert _fixture_io(path).read_bytes() == original
 
 
 @pytest.mark.skipif(os.name != 'posix' or os.geteuid() == 0,
@@ -1194,10 +1204,10 @@ def test_retained_failure_imports_legacy_last_execution(tmp_path, pending, retur
     item = job(tmp_path, 'check', "print('legacy failure')\nraise SystemExit(7)\n")
     first = execute(tmp_path, [item])
     result_file = result_path(tmp_path)
-    stored = json.loads(result_file.read_text())
+    stored = json.loads(_fixture_io(result_file).read_text())
     record = stored['commands'][0]
     fixed = result_path(tmp_path).with_name('results.json.logs') / (runner._digest('check') + '-attempt.log')
-    Path(record['output_log']['path']).rename(fixed)
+    _fixture_io(Path(record['output_log']['path'])).rename(_fixture_io(fixed))
     record['output_log']['path'] = str(fixed)
     diagnostic = {k: record[k] for k in ('execution_generation', 'state', 'returncode', 'error', 'output', 'output_log')}
     diagnostic.update(returncode=returncode, execution_pending=pending)
@@ -1205,15 +1215,15 @@ def test_retained_failure_imports_legacy_last_execution(tmp_path, pending, retur
     record.pop('attempt_id')
     record.pop('output_log')
     stored.pop('failures')
-    result_file.write_text(json.dumps(stored))
-    (tmp_path / 'check.py').write_text("print('new success')\n")
+    _fixture_io(result_file).write_text(json.dumps(stored))
+    (_fixture_io(tmp_path / 'check.py')).write_text("print('new success')\n")
     second = execute(tmp_path, [item], 'new')
     assert second['status'] == 'PASS' and len(second['failures']) == expected
     if expected:
         row = second['failures'][0]
         assert row['returncode'] == 7 and row['wbs_id'] == 'task' and row['run_id'] == 'run'
         assert row['execution_generation'] == 'one'
-        assert row['output_log']['available'] and fixed.read_text() == 'legacy failure\n'
+        assert row['output_log']['available'] and _fixture_io(fixed).read_text() == 'legacy failure\n'
 
 
 def test_reuse_only_misses_do_not_duplicate_modern_failure_history(tmp_path):
@@ -1221,15 +1231,15 @@ def test_reuse_only_misses_do_not_duplicate_modern_failure_history(tmp_path):
     first = execute(tmp_path, [item])
     identity = first['failures'][0]['attempt_id']
     reference = first['failures'][0]['output_log']
-    original = Path(reference['path']).read_bytes()
+    original = _fixture_io(Path(reference['path'])).read_bytes()
     for index in range(4):
-        with (tmp_path / 'check.py').open('a') as stream:
+        with (_fixture_io(tmp_path / 'check.py')).open('a') as stream:
             stream.write(f'\n# changed input {index}\n')
         result = execute(tmp_path, [item], f'reuse-{index}', reuse_only=True)
         assert result['status'] == 'FAIL' and result['commands'][0]['returncode'] is None
         assert len(result['failures']) == 1
         assert result['failures'][0]['attempt_id'] == identity
-        assert Path(reference['path']).read_bytes() == original
+        assert _fixture_io(Path(reference['path'])).read_bytes() == original
 
 
 def test_producer_manifest_budget_refuses_before_execution(tmp_path, monkeypatch):

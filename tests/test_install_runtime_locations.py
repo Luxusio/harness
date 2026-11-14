@@ -68,8 +68,8 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
     assert config["hooks"]["state"]
     mirror = runtime / "harness" / "plugins" / "harness"
     cache = install._codex_cached_plugin_root(runtime, mirror)
-    assert cache.is_dir()
-    hooks = json.loads((cache / "hooks.json").read_text())["hooks"]
+    assert Path(install._io_path(cache)).is_dir()
+    hooks = json.loads(Path(install._io_path(cache / "hooks.json")).read_text())["hooks"]
     commands = [item["commandWindows"] if os.name == "nt" else item["command"]
                 for rows in hooks.values() for row in rows for item in row["hooks"]]
     if os.name == "nt":

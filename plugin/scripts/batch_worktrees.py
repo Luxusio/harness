@@ -103,8 +103,11 @@ def _prepare_one(repo, directory, records, data, item):
         if not branch:
             _create_branch(repo, intent)
         _branch_witness(repo, intent)
+        # Git passes this spelling to its checkout child's GIT_DIR. Keep the
+        # owned absolute identity, without imposing Git's explicit-path limit.
+        creation_path = os.path.relpath(intent['worktree'], repo) if os.name == 'nt' else intent['worktree']
         result = batch.finish_helper._git(repo, 'worktree', 'add', '--lock', '--reason', _reason(intent),
-                                          intent['worktree'], intent['branch'])
+                                          creation_path, intent['branch'])
         batch.require(result.returncode == 0, 'managed worktree creation failed: ' + result.stderr.strip())
     _witness(repo, item)  # matching HEAD alone never authorizes adoption
     _call(repo, {'batch_id': data['batch_id']}, directory, records, 'bootstrap', slug=item['slug'],

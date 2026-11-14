@@ -348,7 +348,7 @@ def test_two_spaces_deliver_labelled_notices_with_independent_shared_cursors(set
     assert _fixture_path(team / "harness-cursors.json").exists() and _fixture_path(dev / "harness-cursors.json").exists()
 
 
-@pytest.mark.parametrize("failure", ["malformed", "denied", "transaction", "wrong-credential", "busy"])
+@pytest.mark.parametrize("failure", ["malformed", "denied", "transaction", "unsafe-marker", "wrong-credential", "busy"])
 def test_unavailable_first_space_does_not_suppress_other_space_or_consume_its_feed(setup_wiki, failure):
     if os.name == "nt" and failure == "busy":
         pytest.skip("POSIX record-lock fixture; native suite covers consumer contention")
@@ -362,6 +362,9 @@ def test_unavailable_first_space_does_not_suppress_other_space_or_consume_its_fe
         _fixture_path(team / "notice-access-denied").touch()
     elif failure == "transaction":
         _fixture_path(team / "transaction.json").touch()
+    elif failure == "unsafe-marker":
+        _fixture_path(team / "notice-access-denied").touch()
+        os.link(_fixture_path(team / "notice-access-denied"), _fixture_path(team / "linked-denial"))
     elif failure == "wrong-credential":
         _fixture_path(team / "state.json").write_text('{"credentialBinding":"wrong"}')
     with _fixture_path(team / "sync.lock").open("r+b") as lock:
@@ -372,6 +375,14 @@ def test_unavailable_first_space_does_not_suppress_other_space_or_consume_its_fe
     assert "Space TEAM:" not in context
     assert not _fixture_path(team / "harness-cursors.json").exists()
     assert _fixture_path(dev / "harness-cursors.json").exists()
+    if failure in {"denied", "transaction", "unsafe-marker"}:
+        if failure == "unsafe-marker":
+            _fixture_path(team / "linked-denial").unlink()
+        marker = "transaction.json" if failure == "transaction" else "notice-access-denied"
+        _fixture_path(team / marker).unlink()
+        recovered = hook(repo, env)
+        assert "Space TEAM:" in recovered and "page 101" in recovered
+        assert "Space DEV:" not in recovered
 
 
 def test_notice_budget_is_fair_across_maximum_spaces_and_does_not_advance_undelivered_events(setup_wiki):

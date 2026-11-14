@@ -17,6 +17,16 @@ except ModuleNotFoundError as error:
 from conftest import SCRIPTS_DIR
 
 
+def _fixture_io(path):
+    """Use wide paths only for direct I/O on this test's disposable files."""
+    import os
+    from pathlib import Path
+    if os.name == "nt":
+        from _wiki_windows import _win32_path
+        return Path(_win32_path(path))
+    return Path(path)
+
+
 def fixtures(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(SCRIPTS_DIR)
     import _lib
@@ -142,27 +152,27 @@ def test_manifest_budget_refuses_before_copy(tmp_path, monkeypatch):
 def test_retired_focus_is_archived_without_becoming_session_authority(tmp_path, monkeypatch):
     root, old, _, _, migration, apply = fixtures(tmp_path, monkeypatch)
     focus = root / 'doc/harness/tasks/.active'
-    focus.write_bytes(b'opaque TASK__example\x00\xff')
+    _fixture_io(focus).write_bytes(b'opaque TASK__example\x00\xff')
     default = root / 'doc/harness/tasks/.active_sessions/default.json'
-    default.parent.mkdir()
-    default.write_text(json.dumps(dict(session_id='default', task_id=old.name)))
-    expected = default.read_bytes()
+    _fixture_io(default.parent).mkdir()
+    _fixture_io(default).write_text(json.dumps(dict(session_id='default', task_id=old.name)))
+    expected = _fixture_io(default).read_bytes()
     apply()
-    assert not focus.exists() and not default.exists()
-    assert not (root / 'doc/harness/wbs/.active_sessions/default.json').exists()
-    assert (root / migration.ARCHIVE / 'original/doc/harness/tasks/.active').read_bytes() == b'opaque TASK__example\x00\xff'
-    assert (root / migration.ARCHIVE / 'original/doc/harness/tasks/.active_sessions/default.json').read_bytes() == expected
+    assert not _fixture_io(focus).exists() and not _fixture_io(default).exists()
+    assert not (_fixture_io(root / 'doc/harness/wbs/.active_sessions/default.json')).exists()
+    assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/tasks/.active')).read_bytes() == b'opaque TASK__example\x00\xff'
+    assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/tasks/.active_sessions/default.json')).read_bytes() == expected
 
 
 def test_detached_closed_history_is_not_copied_or_reactivated(tmp_path, monkeypatch):
     root, old, control, _, migration, apply = fixtures(tmp_path, monkeypatch)
     control['closed'] = True
-    (old / 'TASK.json').write_text(json.dumps(control))
-    before = (old / 'TASK.json').read_bytes()
+    (_fixture_io(old / 'TASK.json')).write_text(json.dumps(control))
+    before = (_fixture_io(old / 'TASK.json')).read_bytes()
     assert apply()['retained_historical_roots'] == [str(old)]
-    assert not (old / 'TASK.json').exists()
-    assert (root / migration.ARCHIVE / 'original/doc/harness/tasks/TASK__example/TASK.json').read_bytes() == before
-    assert not (root / 'doc/harness/wbs/WBS__example').exists()
+    assert not (_fixture_io(old / 'TASK.json')).exists()
+    assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/tasks/TASK__example/TASK.json')).read_bytes() == before
+    assert not (_fixture_io(root / 'doc/harness/wbs/WBS__example')).exists()
     migration.require_complete(root)
 
 
@@ -427,21 +437,21 @@ def test_required_unsafe_local_ignore_reports_exact_path_and_preserves_control(t
 def test_hint_temp_and_stale_closed_markers_are_history_not_live_references(tmp_path, monkeypatch):
     root, old, control, _, migration, apply = fixtures(tmp_path, monkeypatch)
     control['closed'] = True
-    (old / 'TASK.json').write_text(json.dumps(control))
+    (_fixture_io(old / 'TASK.json')).write_text(json.dumps(control))
     directory = root / 'doc/harness/tasks/.active_sessions'
-    directory.mkdir()
+    _fixture_io(directory).mkdir()
     payloads = {'.session-hint': b'old-session\n', '.text.abc.tmp': b'partial json {', '.b1_any.tmp': b'\x00\xff'}
     payloads['old-session.json'] = json.dumps(dict(session_id='old-session', task_id=old.name, task_dir=str(old), run_id=control['run_id'])).encode()
     for name, raw in payloads.items():
-        (directory / name).write_bytes(raw)
+        (_fixture_io(directory / name)).write_bytes(raw)
     assert migration.preview(root)['retained_historical_roots'] == [str(old)]
     apply()
-    assert not (old / 'TASK.json').exists() and not (root / 'doc/harness/wbs/WBS__example').exists()
-    assert (root / migration.ARCHIVE / 'original/doc/harness/tasks/TASK__example/TASK.json').exists()
+    assert not (_fixture_io(old / 'TASK.json')).exists() and not (_fixture_io(root / 'doc/harness/wbs/WBS__example')).exists()
+    assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/tasks/TASK__example/TASK.json')).exists()
     for name, raw in payloads.items():
-        assert not (directory / name).exists()
-        assert not (root / 'doc/harness/wbs/.active_sessions' / name).exists()
-        assert (root / migration.ARCHIVE / 'original/doc/harness/tasks/.active_sessions' / name).read_bytes() == raw
+        assert not (_fixture_io(directory / name)).exists()
+        assert not (_fixture_io(root / 'doc/harness/wbs/.active_sessions' / name)).exists()
+        assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/tasks/.active_sessions' / name)).read_bytes() == raw
 
 
 def test_unresolved_overflow_fence_remains_a_fence(tmp_path, monkeypatch):
@@ -692,20 +702,20 @@ def test_disposed_closed_pool_does_not_hash_detached_closed_owner_work(tmp_path,
     import subprocess
     import batch_state
     subprocess.run(['git', '-C', str(root), 'init', '-q'], check=True)
-    (root / 'doc/harness/manifest.yaml').write_text('type: library\n')
-    (root / '.gitignore').write_text('/doc/harness/tasks/\n/doc/harness/runtime/\n/doc/harness/archive/\n')
+    (_fixture_io(root / 'doc/harness/manifest.yaml')).write_text('type: library\n')
+    (_fixture_io(root / '.gitignore')).write_text('/doc/harness/tasks/\n/doc/harness/runtime/\n/doc/harness/archive/\n')
     control['closed'] = not referenced
-    (old / 'TASK.json').write_text(json.dumps(control))
+    (_fixture_io(old / 'TASK.json')).write_text(json.dumps(control))
     if referenced:
         state['batch_history'] = [dict(batch=dict(task_id=old.name, batch_id='disposed-pool', requests=[dict(slug='lead', request='Delivered result', scopes=['src'], depends_on=[])]))]
-        (old / 'WBS.json').write_text(json.dumps(state))
+        (_fixture_io(old / 'WBS.json')).write_text(json.dumps(state))
     work = old / 'work/large-history'
-    work.mkdir(parents=True)
-    (work / 'unused-payload.bin').write_bytes(b'x' * (2 * 1024 * 1024))
+    _fixture_io(work).mkdir(parents=True)
+    (_fixture_io(work / 'unused-payload.bin')).write_bytes(b'x' * (2 * 1024 * 1024))
     archive = root / 'doc/harness/archive/batch/TASK__lead'
-    archive.mkdir(parents=True)
-    (archive / 'TASK.json').write_text(json.dumps(control))
-    (archive / 'WBS.json').write_text(json.dumps(state))
+    _fixture_io(archive).mkdir(parents=True)
+    (_fixture_io(archive / 'TASK.json')).write_text(json.dumps(control))
+    (_fixture_io(archive / 'WBS.json')).write_text(json.dumps(state))
     request = dict(slug='lead', request='Delivered result', scopes=['src'], depends_on=[],
                    resolved_scopes=[str(root / 'src')], task_id='TASK__lead', status='integrated',
                    worker_id='stopped-worker', worktree=str(root / 'removed-worker'), branch='removed-branch',
@@ -718,9 +728,9 @@ def test_disposed_closed_pool_does_not_hash_detached_closed_owner_work(tmp_path,
                 max_leads=2, destination_ref='refs/heads/main', status='closed', halted=False,
                 initial_head='a' * 40, created_at='then', updated_at='then', cap_source='user', requests=[request])
     path = root / 'doc/harness/runtime/batches/disposed-pool.json'
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(pool))
-    original_pool = path.read_bytes()
+    _fixture_io(path.parent).mkdir(parents=True)
+    _fixture_io(path).write_text(json.dumps(pool))
+    original_pool = _fixture_io(path).read_bytes()
     real_tree, real_fingerprint = migration._tree, batch_state.fingerprint
     def no_owner_payload(repo, relative):
         if not referenced:
@@ -734,15 +744,15 @@ def test_disposed_closed_pool_does_not_hash_detached_closed_owner_work(tmp_path,
     monkeypatch.setattr(batch_state, 'fingerprint', no_history_fingerprint)
     result = apply()
     if referenced:
-        assert (root / 'doc/harness/wbs/WBS__example').exists()
-        assert json.loads(path.read_text())['owner_wbs_id'] == 'WBS__example'
-        assert (root / 'doc/harness/archive/batch/WBS__lead/WBS.control.json').exists()
+        assert (_fixture_io(root / 'doc/harness/wbs/WBS__example')).exists()
+        assert json.loads(_fixture_io(path).read_text())['owner_wbs_id'] == 'WBS__example'
+        assert (_fixture_io(root / 'doc/harness/archive/batch/WBS__lead/WBS.control.json')).exists()
     else:
         assert str(old) in result['retained_historical_roots']
-        assert not (root / 'doc/harness/wbs/WBS__example').exists() and not path.exists()
-        assert (root / migration.ARCHIVE / 'original/doc/harness/runtime/batches/disposed-pool.json').read_bytes() == original_pool
-        assert not (root / 'doc/harness/archive/batch/WBS__lead').exists()
-    assert not (old / 'TASK.json').exists() and (work / 'unused-payload.bin').stat().st_size == 2 * 1024 * 1024
+        assert not (_fixture_io(root / 'doc/harness/wbs/WBS__example')).exists() and not _fixture_io(path).exists()
+        assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/runtime/batches/disposed-pool.json')).read_bytes() == original_pool
+        assert not (_fixture_io(root / 'doc/harness/archive/batch/WBS__lead')).exists()
+    assert not (_fixture_io(old / 'TASK.json')).exists() and (_fixture_io(work / 'unused-payload.bin')).stat().st_size == 2 * 1024 * 1024
 
 
 def test_normal_guard_does_not_decode_reappeared_legacy_control(tmp_path, monkeypatch):
@@ -826,22 +836,22 @@ def test_public_migrate_local_initialized_worktree_does_not_enable_common_projec
 def test_public_migrate_rolls_completed_journal_for_late_independent_publisher(tmp_path, monkeypatch):
     root, old, control, state, migration, _ = fixtures(tmp_path, monkeypatch)
     import _lib
-    (root / 'doc/harness/manifest.yaml').write_text('type: library\n')
+    (_fixture_io(root / 'doc/harness/manifest.yaml')).write_text('type: library\n')
     hint = root / 'doc/harness/tasks/.active_sessions/.session-hint'
-    hint.parent.mkdir()
-    hint.write_bytes(b'first old hint')
+    _fixture_io(hint.parent).mkdir()
+    _fixture_io(hint).write_bytes(b'first old hint')
     from test_harness_mcp_server import HarnessMcpServerTests
     server = HarnessMcpServerTests()
     first = server._call_in_repo(str(root), 'wbs', dict(action='migrate', apply=True))
     assert not first.get('isError'), first
-    original_journal = (root / migration.MANIFEST).read_bytes()
+    original_journal = (_fixture_io(root / migration.MANIFEST)).read_bytes()
     original_digest = hashlib.sha256(original_journal).hexdigest()
     late = old.with_name('TASK__late-independent')
-    late.mkdir()
+    _fixture_io(late).mkdir()
     late_control = dict(control, run_id=_lib.new_uuid7())
-    (late / 'TASK.json').write_text(json.dumps(late_control))
-    (late / 'WBS.json').write_text(json.dumps(dict(state, run_id=late_control['run_id'])))
-    hint.write_bytes(b'new old writer hint')
+    (_fixture_io(late / 'TASK.json')).write_text(json.dumps(late_control))
+    (_fixture_io(late / 'WBS.json')).write_text(json.dumps(dict(state, run_id=late_control['run_id'])))
+    _fixture_io(hint).write_bytes(b'new old writer hint')
     with pytest.raises(ValueError, match='retired execution controls'):
         migration.require_complete(root)
     preview = server._call_in_repo(str(root), 'wbs', dict(action='migrate'))
@@ -849,20 +859,20 @@ def test_public_migrate_rolls_completed_journal_for_late_independent_publisher(t
     result = server._call_in_repo(str(root), 'wbs', dict(action='migrate', apply=True))
     assert not result.get('isError'), result
     new = root / 'doc/harness/wbs/WBS__late-independent'
-    assert json.loads((new / 'WBS.control.json').read_text()) == late_control
-    assert json.loads((root / 'doc/harness/wbs/WBS__example/WBS.control.json').read_text()) == control
+    assert json.loads((_fixture_io(new / 'WBS.control.json')).read_text()) == late_control
+    assert json.loads((_fixture_io(root / 'doc/harness/wbs/WBS__example/WBS.control.json')).read_text()) == control
     records = list(migration.journals(root))
     assert records[0][0] == migration.MANIFEST and len(records) == 2
     historical = migration.HISTORY + '/' + original_digest + '.json'
-    assert records[1][0] == historical and (root / historical).read_bytes() == original_journal
+    assert records[1][0] == historical and (_fixture_io(root / historical)).read_bytes() == original_journal
     prefix = migration.ARCHIVE + '/epochs/' + original_digest + '/original'
     assert records[0][1]['archive_prefix'] == prefix
-    assert (root / prefix / 'doc/harness/tasks/.active_sessions/.session-hint').read_bytes() == b'new old writer hint'
-    assert (root / migration.ARCHIVE / 'original/doc/harness/tasks/.active_sessions/.session-hint').read_bytes() == b'first old hint'
+    assert (_fixture_io(root / prefix / 'doc/harness/tasks/.active_sessions/.session-hint')).read_bytes() == b'new old writer hint'
+    assert (_fixture_io(root / migration.ARCHIVE / 'original/doc/harness/tasks/.active_sessions/.session-hint')).read_bytes() == b'first old hint'
     migration.require_complete(root)
     # Historical corruption blocks history consumers, never becomes a normal
     # current-WBS reader or a reason to reinterpret old lifecycle evidence.
-    (root / historical).write_bytes(original_journal + b'\n')
+    (_fixture_io(root / historical)).write_bytes(original_journal + b'\n')
     with pytest.raises(ValueError, match='historical journal digest mismatch'):
         list(migration.journals(root))
     migration.require_complete(root)

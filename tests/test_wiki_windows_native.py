@@ -926,7 +926,11 @@ def test_native_project_selector_and_private_feedback_sources_are_independent(pr
 def test_native_notice_transaction_denial_credentials_and_cursor(private, fence):
     import wiki_change_notice as notice
 
-    project, env, control = _consumer_fixture(private)
+    profile = private
+    while len(str(profile).encode("utf-16-le")) // 2 < 160:
+        profile = win.ensure_private_directory(profile / "notice-profile-long")
+    project, env, control = _consumer_fixture(profile)
+    assert len(str(control / "harness-cursors.json").encode("utf-16-le")) // 2 > 260
     assert notice._control(env, {"site": env["ATLASSIAN_BASE_URL"]},
                            {"key": "TEAM", "rootPageId": "456"}) == control
     request = {"session_id": "native-session", "cwd": str(project)}
@@ -936,11 +940,11 @@ def test_native_notice_transaction_denial_credentials_and_cursor(private, fence)
         win.atomic_write(control / fence, b"")
         blocked = env
     assert notice.render_notice(request, "codex", blocked) == ""
-    assert not (control / "harness-cursors.json").exists()
+    assert win.metadata_probe(control / "harness-cursors.json") is None
     if fence != "credential":
-        (control / fence).unlink()
+        win.metadata_remove(control / fence, expected_sha256=hashlib.sha256(b"").hexdigest(), max_bytes=0)
     assert "page 101" in notice.render_notice(request, "codex", env)
-    assert (control / "harness-cursors.json").is_file()
+    assert win.metadata_probe(control / "harness-cursors.json")["kind"] == "file"
     assert notice.render_notice(request, "codex", env) == ""
 
 
@@ -956,7 +960,7 @@ def test_native_notice_observes_other_process_snapshot_lock(private):
     try:
         assert child.stdout.readline() == b"locked\r\n"
         assert notice.render_notice(request, "codex", env) == ""
-        assert not (control / "harness-cursors.json").exists()
+        assert win.metadata_probe(control / "harness-cursors.json") is None
     finally:
         child.communicate(timeout=5)
     assert "page 101" in notice.render_notice(request, "codex", env)

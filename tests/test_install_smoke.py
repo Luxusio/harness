@@ -206,7 +206,7 @@ def test_the_synchronized_skip_path_still_drives_the_smoke(tmp_path, monkeypatch
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
     version = json.loads((mirror / ".claude-plugin/plugin.json").read_text())["version"]
     selected = config / "plugins/cache/harness/harness" / version
-    shutil.copytree(mirror, selected)
+    shutil.copytree(install._io_path(mirror), install._io_path(selected))
     (config / "plugins/installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
         "harness@harness": [{"scope": "user", "version": version, "installPath": str(selected)}]
     }}))
