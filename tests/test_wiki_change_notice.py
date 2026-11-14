@@ -225,7 +225,7 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
     # This test executes hooks without copying an executable. Use the intact
     # test environment, where the declared YAML dependency is installed; a
     # fresh base Python need not have its venv's packages.
-    interpreter = str(Path(sys.executable).resolve())
+    interpreter = str(Path(sys.executable).absolute())
     subprocess.run([interpreter, "-I", "-B", "-c", "import yaml"],
                    check=True, capture_output=True, text=True, timeout=10)
     monkeypatch.setattr(install, "select_python", lambda **kwargs: interpreter)
