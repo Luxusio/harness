@@ -1,6 +1,8 @@
 """Exact authority is exercised through real prewrite and trusted result hooks."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 import os
 from pathlib import Path
@@ -161,7 +163,7 @@ def test_registered_invalid_main_and_sibling_keep_target_gates_and_c05(tmp_path,
             outside.write_bytes(original)
             manifest.unlink()
             if mutation == 'symlink':
-                manifest.symlink_to(outside)
+                create_symlink(manifest, outside)
             elif mutation == 'directory':
                 manifest.mkdir()
             for rel in ('engine.py', 'plugin/scripts/prewrite_gate.py'):

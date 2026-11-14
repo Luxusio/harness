@@ -1,6 +1,8 @@
 """Exercise project admission through the fresh public MCP stdio entrypoint."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 import os
 import subprocess
@@ -104,7 +106,7 @@ def test_public_open_supports_initialized_non_git_project_and_directory_alias(
     subdirectory.mkdir()
     if alias:
         link = tmp_path / "alias"
-        link.symlink_to(root, target_is_directory=True)
+        create_symlink(link, root, target_is_directory=True)
         subdirectory = link / "src"
     home = tmp_path / "home"
     home.mkdir()
@@ -123,9 +125,9 @@ def test_public_wbs_rejects_manifest_alias_without_writing_through_it(
     (project / "doc").mkdir(parents=True)
     if component == "manifest":
         (project / "doc/harness").mkdir()
-        (project / "doc/harness/manifest.yaml").symlink_to(original / "doc/harness/manifest.yaml")
+        create_symlink(project / "doc/harness/manifest.yaml", original / "doc/harness/manifest.yaml")
     else:
-        (project / "doc/harness").symlink_to(original / "doc/harness", target_is_directory=True)
+        create_symlink(project / "doc/harness", original / "doc/harness", target_is_directory=True)
     home = tmp_path / "home"
     home.mkdir()
     before = _tree(tmp_path)

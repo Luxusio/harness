@@ -1,4 +1,6 @@
 """Explicit namespace conversion preserves runs and real evidence bytes."""
+
+from test_symlink_fixture import create_symlink
 import hashlib
 import json
 from pathlib import Path
@@ -74,7 +76,7 @@ def test_public_apply_requires_canonical_mcp_owner(tmp_path, monkeypatch):
 def test_unsafe_input_refuses_before_publication(tmp_path, monkeypatch, kind):
     root, old, _, _, migration, apply = fixtures(tmp_path, monkeypatch)
     if kind == 'symlink':
-        (old / 'trap').symlink_to('/etc/passwd')
+        create_symlink(old / 'trap', '/etc/passwd')
     elif kind == 'collision':
         new = root / 'doc/harness/wbs/WBS__example'
         new.mkdir(parents=True)
@@ -571,7 +573,7 @@ def test_work_fixture_links_are_literal_history_never_opened_or_published(tmp_pa
     work = old / 'work'
     work.mkdir()
     link = work / 'harness-destcurrent'
-    link.symlink_to(outside)
+    create_symlink(link, outside)
     actual_open = migration.os.open
     def no_target(path, *args, **kwargs):
         assert path not in (str(outside), outside.name, bytes(outside)), 'historical target opened'
@@ -596,7 +598,7 @@ def test_authority_symlinks_still_refuse_even_when_target_is_plain_file(tmp_path
     path = old / name
     if path.exists():
         path.unlink()
-    path.symlink_to(target)
+    create_symlink(path, target)
     with pytest.raises((ValueError, OSError)):
         apply()
     assert path.is_symlink() and not (root / migration.MANIFEST).exists()

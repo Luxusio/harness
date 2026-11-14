@@ -1,4 +1,4 @@
-"""Linux CLI contracts for shared preparation, reuse and cooperative ownership."""
+"""CLI contracts for shared preparation, reuse and cooperative ownership."""
 from __future__ import annotations
 
 import importlib.util
@@ -126,7 +126,7 @@ def test_real_cli_explicit_frozen_root_help_and_invalid(tmp_path):
     producer_script = original / "prepare.py"
     producer_script.write_text("#!" + sys.executable + "\nimport sys\nif '--version' in sys.argv:\n print('prepare-v1')\n raise SystemExit(0)\n" + producer_script.read_text())
     producer_script.chmod(0o755)
-    jobs[0]["argv"] = ["./prepare.py"]
+    jobs[0]["argv"] = [sys.executable, "prepare.py"] if os.name == "nt" else ["./prepare.py"]
     view = tmp_path / "view"
     view.mkdir()
     vt._manifest(original, [p.name for p in original.glob("*.py")], destination=view)
@@ -245,7 +245,10 @@ def test_producer_output_change_during_reuse_is_not_pass(tmp_path, monkeypatch):
 
 
 def test_producer_output_fifo_fails_without_blocking_or_retaining_leases(tmp_path):
-    item = job(tmp_path, 'prepare', "import os\nos.mkfifo('built')\n",
+    # Windows has no filesystem FIFO. A directory exercises the same required
+    # regular-file output boundary without inventing an unsupported OS call.
+    code = "from pathlib import Path\nPath('built').mkdir()\n" if os.name == "nt" else "import os\nos.mkfifo('built')\n"
+    item = job(tmp_path, 'prepare', code,
                kind='producer', outputs=['built'], resources=['fifo:' + str(tmp_path)])
     declaration = tmp_path / 'fifo-job.json'
     declaration.write_text(json.dumps([item]))
@@ -257,7 +260,10 @@ def test_producer_output_fifo_fails_without_blocking_or_retaining_leases(tmp_pat
     failed = json.loads(proc.stdout)['commands'][0]
     assert failed['state'] == 'executor_error' and failed['status'] == 'FAIL'
     assert 'regular file' in failed['error']
-    (tmp_path / 'built').unlink()
+    if os.name == "nt":
+        (tmp_path / 'built').rmdir()
+    else:
+        (tmp_path / 'built').unlink()
     (tmp_path / 'prepare.py').write_text("from pathlib import Path\nPath('built').write_text('repaired')\n")
     assert execute(tmp_path, [item], 'repaired')['status'] == 'PASS'
 
@@ -410,6 +416,10 @@ def test_scoped_toolchain_probe_and_malformed_success_are_not_false_reuse(tmp_pa
     tool.write_text("#!" + sys.executable + "\nimport os\nprint(os.environ.get('UNDECLARED', 'scoped'))\n")
     tool.chmod(0o755)
     item = dict(job_id="tool", outcome_id="tool", kind="consumer", argv=["proxy"], inputs=dict(source=["proxy"]), toolchains=["proxy"])
+    if os.name == "nt":
+        # Native executables have no shebang dispatch. Keep the undeclared
+        # environment probe in the script and fingerprint the real interpreter.
+        item.update(argv=[sys.executable, "proxy"], toolchains=[sys.executable])
     monkeypatch.setenv("PATH", ".")
     monkeypatch.setenv("UNDECLARED", "ambient-one")
     assert execute(tmp_path, [item])["status"] == "PASS"
@@ -455,7 +465,8 @@ def test_producer_replacement_before_consumer_admission_is_not_accepted(tmp_path
     assert "prepared artifact changed" in result[0]["commands"][1]["error"]
 
 
-@pytest.mark.parametrize("termination", ["pid", "group", "outer-timeout", "interrupt"])
+@pytest.mark.parametrize("termination", ["pid", "outer-timeout"] if os.name == "nt"
+                         else ["pid", "group", "outer-timeout", "interrupt"])
 @pytest.mark.parametrize("closed_stdout", [False, True])
 def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, termination, closed_stdout):
     import signal
@@ -497,9 +508,13 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
             assert time.monotonic() < deadline
             time.sleep(.01)
         # Once the next owner is admitted, the old command cannot still write.
-        state = Path('/proc') / str(worker) / 'stat'
-        if state.exists():
-            assert state.read_text().split()[2] == 'Z'
+        if os.name == "nt":
+            from test_wiki_windows_native import _dead
+            _dead(worker)
+        else:
+            state = Path('/proc') / str(worker) / 'stat'
+            if state.exists():
+                assert state.read_text().split()[2] == 'Z'
         (tmp_path / "release").touch()
         assert not (tmp_path / "finished").exists()
         interrupted = json.loads((tmp_path / "result.json").read_text())
@@ -507,11 +522,13 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
         assert interrupted["commands"][0]["returncode"] is None
     finally:
         if held is not None:
-            for fd in held:
-                os.close(fd)
+            runner._close_leases(held)
         if proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGKILL)
-        if worker is not None:
+            if os.name == "nt":
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+        if worker is not None and os.name != "nt":
             try:
                 os.killpg(worker, signal.SIGKILL)
             except ProcessLookupError:
@@ -522,6 +539,16 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
 def test_closed_parent_lifeline_refuses_command_before_spawn(tmp_path, monkeypatch):
     import wbs
 
+    if os.name == "nt":
+        from wiki_platform import execute_bounded
+        # Native supervisors translate parent loss to this cancellation
+        # predicate; POSIX supervisors watch the inherited pipe below.
+        result = execute_bounded([sys.executable, '-c', "from pathlib import Path;Path('unexpected').touch()"],
+                                 cwd=tmp_path, env=dict(os.environ), timeout=1,
+                                 limit=1024, cancelled=lambda: True)
+        assert result['returncode'] is None and result['error'] == 'parent execution ended'
+        assert result['start_failed'] and not (tmp_path / 'unexpected').exists()
+        return
     reader, writer = os.pipe()
     os.close(writer)
     try:

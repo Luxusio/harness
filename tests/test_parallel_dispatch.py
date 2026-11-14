@@ -1,4 +1,6 @@
 """Admission tests use fresh host snapshots; the dispatcher owns no durable state."""
+
+from test_symlink_fixture import create_symlink
 import copy
 import importlib.util
 import json
@@ -151,12 +153,12 @@ def test_symlink_alias_collisions_and_escape(tmp_path):
     import pytest
 
     (tmp_path / 'src').mkdir()
-    (tmp_path / 'alias').symlink_to(tmp_path / 'src', target_is_directory=True)
+    create_symlink(tmp_path / 'alias', tmp_path / 'src', target_is_directory=True)
     data = snapshot()
     data['repo'] = str(tmp_path)
     data['acs'][1]['files'] = ['alias/AC-0.py']
     assert ids(dispatcher.schedule(data)) == ['AC-0', 'AC-2']
-    (tmp_path / 'outside').symlink_to(tmp_path.parent, target_is_directory=True)
+    create_symlink(tmp_path / 'outside', tmp_path.parent, target_is_directory=True)
     data['acs'][1]['files'] = ['outside/escaped.py']
     with pytest.raises(dispatcher.DispatchError, match='escapes repository'):
         dispatcher.schedule(data)

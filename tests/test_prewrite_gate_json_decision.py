@@ -5,6 +5,8 @@ Uses real subprocess invocation — no mocks.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 from contextlib import contextmanager
 import os
@@ -114,7 +116,7 @@ class TestDenyProtectedArtifact(unittest.TestCase):
         with _isolated_task("pr1-review-detail-alias") as (root, wbs_dir), \
              tempfile.TemporaryDirectory(dir=root) as alias_parent:
             alias = os.path.join(alias_parent, "task-alias")
-            os.symlink(wbs_dir, alias, target_is_directory=True)
+            create_symlink(alias, wbs_dir, target_is_directory=True)
             target = os.path.join(alias, "WBS.control.json")
             r = invoke_hook(GATE, "Write", {"file_path": target}, cwd=root)
         decision, reason = parse_decision(r.stdout)

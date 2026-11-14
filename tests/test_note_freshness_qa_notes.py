@@ -23,6 +23,8 @@ See doc/harness/REQ__qa-notes-carry-their-own-invalidation.md.
 
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import os
 import subprocess
 import sys
@@ -351,7 +353,7 @@ class MarkdownEvidencePreservationTests(unittest.TestCase):
         before = {path: path.read_bytes() for path in evidence}
         current = self.note(doc / "design" / "note.md")
         alias = doc / "evidence-alias.md"
-        alias.symlink_to(evidence[0])
+        create_symlink(alias, evidence[0])
         hits, opened, descended = self.scan_without_entering(doc, protected)
         self.assertEqual([Path(hit["path"]) for hit in hits], [current])
         self.assertIn(current, opened)
@@ -405,11 +407,11 @@ class MarkdownEvidencePreservationTests(unittest.TestCase):
         before = evidence.read_bytes()
         archive = doc / "harness" / "archive"
         archive.parent.mkdir(parents=True)
-        archive.symlink_to(storage, target_is_directory=True)
+        create_symlink(archive, storage, target_is_directory=True)
         alias = doc / "evidence-alias.md"
-        alias.symlink_to(evidence)
+        create_symlink(alias, evidence)
         manuals = self.tmp / "manuals"
-        manuals.symlink_to(storage, target_is_directory=True)
+        create_symlink(manuals, storage, target_is_directory=True)
         for start in (archive, archive / "nested", doc, self.tmp, manuals):
             hits, opened, _ = self.scan_without_entering(start, [storage])
             self.assertEqual((hits, opened), ([], []))
@@ -449,9 +451,9 @@ class MarkdownEvidencePreservationTests(unittest.TestCase):
         harness = self.tmp / "doc" / "harness"
         harness.mkdir(parents=True)
         (harness / "manifest.yaml").write_text("project: fixture\n")
-        (harness / "archive").symlink_to(storage, target_is_directory=True)
+        create_symlink(harness / "archive", storage, target_is_directory=True)
         alias = self.tmp / "manuals"
-        alias.symlink_to(storage, target_is_directory=True)
+        create_symlink(alias, storage, target_is_directory=True)
         for start in (alias, storage):
             proc = subprocess.run(
                 [sys.executable, str(SCRIPT), "--doc-root", str(start), "--paths", "src/example.py"],

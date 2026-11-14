@@ -1,4 +1,6 @@
 """Tests for promote_learnings.py hygiene audits (AC-009..AC-011)."""
+
+from test_symlink_fixture import create_symlink
 import io
 import json
 import os
@@ -113,7 +115,7 @@ class TestAuditStaleFiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
             with open(os.path.join(outside, "present"), "w", encoding="utf-8") as stream:
                 stream.write("outside\n")
-            os.symlink(outside, os.path.join(root, "escape"))
+            create_symlink(os.path.join(root, "escape"), outside, target_is_directory=True)
             entries = [
                 {"files": 123},
                 {"files": [

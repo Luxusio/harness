@@ -46,11 +46,15 @@ Fields:
   connections before startup, the service blocks unless `kill_port_on_conflict`
   is explicitly true.
 - `kill_port_on_conflict`: opt-in cleanup for local port conflicts. Uses `lsof`
-  when available; otherwise the service remains blocked with a clear reason.
+  on POSIX when available. Windows leaves an unowned port holder blocked;
+  this option does not authorize termination by an unverified PID.
 - `healthcheck`: shell command that exits `0` when the service is ready.
 - `ready_timeout_sec`: readiness wait, default `30`.
 - `stop_command`: optional graceful stop command. Without it, harness sends
-  SIGTERM then SIGKILL to the process group it started.
+  SIGTERM then SIGKILL to the process group it started on POSIX. On native
+  Windows it terminates the recorded private Job and confirms that all its
+  processes have exited. On Windows, a supplied stop command is followed by owned-tree
+  cleanup if processes remain.
 - `self_heal`: optional bounded list of shell commands to run after a failed
   start/healthcheck attempt. Harness restarts the service after each command.
 - `install_command`, `repair_command`, `seed_command`, `heal_command`:
@@ -59,7 +63,12 @@ Fields:
   no self-heal commands are declared.
 
 State lives at `doc/harness/runtime/services.json`; logs live under
-`doc/harness/runtime/logs/`. QA agents use this state as evidence for live
+`doc/harness/runtime/logs/`. Windows records the private Job identity and
+original process creation time before allowing the service to run. Status and
+restart reuse that owned tree, including children surviving the original
+shell; shutdown never signals a reused foreign PID. A legacy PID-only Windows
+entry requires explicit recovery instead of automatic process adoption.
+QA agents use this state as evidence for live
 HTTP/browser verification. A service that stays unhealthy becomes a visible
 `BLOCKED_ENV` reason rather than a silent downgrade to unit or mock tests.
 Blocked service state includes `failure_class`, `recommended_action`, and

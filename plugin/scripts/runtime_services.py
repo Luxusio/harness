@@ -6,9 +6,11 @@ Stdlib-only on purpose: this runs before project dependencies may be installed.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import re
+import secrets
 import signal
 import socket
 import subprocess
@@ -16,6 +18,10 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+if os.name == "nt":
+    import _wiki_windows as _win
+    import wiki_platform as _platform
 
 
 DEFAULT_MANIFEST = Path("doc/harness/manifest.yaml")
@@ -29,6 +35,10 @@ def _now() -> str:
 def _strip_quotes(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        # A command whose first executable and final argument are individually
+        # quoted is not one quoted scalar: stripping would corrupt native paths.
+        if re.search(r"(?<!\\)" + re.escape(value[0]), value[1:-1]):
+            return value
         return value[1:-1]
     return value
 
@@ -48,6 +58,13 @@ def _parse_scalar(value: str) -> Any:
         if not inner:
             return []
         return [_strip_quotes(part.strip()) for part in inner.split(",")]
+    if value.startswith('"') and value.endswith('"'):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, str):
+                return parsed
+        except ValueError:
+            pass
     return _strip_quotes(value)
 
 
@@ -122,6 +139,14 @@ def _state_path(runtime_dir: Path) -> Path:
 
 def _load_state(runtime_dir: Path) -> dict[str, Any]:
     path = _state_path(runtime_dir)
+    if os.name == "nt":
+        try:
+            state = json.loads(_platform.safe_read(path.absolute(), 4 * 1024 * 1024, private=True))
+        except FileNotFoundError:
+            return {"version": 1, "services": {}}
+        if not isinstance(state, dict) or not isinstance(state.get("services"), dict):
+            raise ValueError("Invalid runtime service state; preserve it for recovery")
+        return state
     if not path.exists():
         return {"version": 1, "services": {}}
     try:
@@ -131,24 +156,273 @@ def _load_state(runtime_dir: Path) -> dict[str, Any]:
 
 
 def _save_state(runtime_dir: Path, state: dict[str, Any]) -> None:
+    if os.name == "nt":
+        _platform.ensure_private_directory(runtime_dir.absolute())
+        _platform.atomic_write(_state_path(runtime_dir).absolute(),
+                               (json.dumps(state, indent=2, sort_keys=True) + "\n").encode())
+        return
     runtime_dir.mkdir(parents=True, exist_ok=True)
     _state_path(runtime_dir).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
 def _service_log(runtime_dir: Path, name: str) -> Path:
     path = runtime_dir / "logs" / f"{name}.log"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        _platform.ensure_private_directory(runtime_dir.absolute())
+        _platform.ensure_private_directory(path.parent.absolute())
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
+@contextmanager
+def _log_stream(path):
+    if os.name != "nt":
+        with path.open("a", encoding="utf-8") as stream:
+            yield stream
+        return
+    import msvcrt
+    with _win._walk(path.absolute().parent, secure=True, leaf="private", writing=True):
+        with _win._private_attributes() as attributes:
+            handle = _win._open(path.absolute(), _win.GENERIC_WRITE,
+                                create=_win.OPEN_ALWAYS, attributes=attributes,
+                                share=_win.FILE_SHARE_READ | _win.FILE_SHARE_WRITE)
+        try:
+            _win._security(handle, "private")
+            fd = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_APPEND)
+            handle = None
+            with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                yield stream
+        finally:
+            _win._close(handle)
+
+
 def _append_log(runtime_dir: Path, name: str, message: str) -> None:
-    with _service_log(runtime_dir, name).open("a", encoding="utf-8") as fh:
+    with _log_stream(_service_log(runtime_dir, name)) as fh:
         fh.write(f"[{_now()}] {message}\n")
+
+
+class _NativeService:
+    """One private, persistent Windows Job; no PID-only termination authority.
+
+    The random Job name and original process creation time live in the existing
+    service entry. A named Job survives its controller while descendants exist.
+    It never permits breakaway, so a shell exiting does not lose its children.
+    """
+
+    @staticmethod
+    def command_processor() -> str:
+        buffer = _win.C.create_unicode_buffer(32768)
+        get_directory = _win._bind(_win.K, "GetSystemDirectoryW", [_win.W.LPWSTR, _win.W.UINT], _win.W.UINT)
+        count = get_directory(buffer, len(buffer))
+        if not count or count >= len(buffer):
+            raise OSError("Windows system command processor unavailable")
+        return str(Path(buffer.value) / "cmd.exe")
+
+    @staticmethod
+    def _acl(job) -> str:
+        """Fingerprint the exact owner and DACL of this retained kernel object."""
+        owner, dacl, descriptor = _win.P(), _win.P(), _win.P()
+        result = _win._GetSecurityInfo(job, 6, 1 | 4, _win.C.byref(owner), None,
+                                       _win.C.byref(dacl), None, _win.C.byref(descriptor))
+        if result:
+            raise _win._error(result)
+        try:
+            if not owner.value or not dacl.value or _win._sid_text(owner) != _win.USER_SID:
+                raise ValueError("Runtime Job owner or private access list changed")
+            header = _win.C.cast(dacl, _win.C.POINTER(_win.ACL)).contents
+            if not _win.C.sizeof(_win.ACL) <= header.size <= 65535:
+                raise ValueError("Invalid runtime Job access list")
+            import hashlib
+            return hashlib.sha256(_win.C.string_at(dacl, header.size)).hexdigest()
+        finally:
+            _win._LocalFree(descriptor)
+
+    @staticmethod
+    def _created(process) -> int:
+        created, exited, kernel, user = (_win.W.FILETIME() for _ in range(4))
+        get_times = _win._bind(_win.K, "GetProcessTimes", [_win.HANDLE] + [_win.C.POINTER(_win.W.FILETIME)] * 4)
+        _win._check(get_times(process, *map(_win.C.byref, (created, exited, kernel, user))))
+        return (created.dwHighDateTime << 32) | created.dwLowDateTime
+
+    @classmethod
+    def _open(cls, entry: dict[str, Any], *, terminate=False):
+        name, acl = entry.get("windows_job"), entry.get("windows_job_acl")
+        if not name and not entry.get("pid"):
+            return None
+        prefix = "Local\\HarnessService." + _win.USER_SID + "."
+        if (not isinstance(name, str) or not name.startswith(prefix) or
+                not re.fullmatch(r"[a-f0-9]{64}", name[len(prefix):]) or
+                not isinstance(acl, str) or not re.fullmatch(r"[a-f0-9]{64}", acl) or
+                type(entry.get("windows_created")) is not int or entry["windows_created"] <= 0 or
+                type(entry.get("pid")) is not int or not 0 < entry["pid"] <= 0xFFFFFFFF):
+            raise ValueError("Unowned legacy Windows service PID; do not adopt or terminate it")
+        open_job = _win._bind(_win.K, "OpenJobObjectW", [_win.DWORD, _win.W.BOOL, _win.W.LPCWSTR], _win.HANDLE)
+        job = open_job(_win.READ_CONTROL | 4 | (8 if terminate else 0), False, name)
+        if not job:
+            if _win.C.get_last_error() == 2:
+                return None
+            raise _win._error()
+        try:
+            if cls._acl(job) != acl:
+                raise ValueError("Runtime Job access list changed; no termination authority")
+            # A reused PID is never authority. A surviving original leader
+            # must match its recorded birth and membership; descendants stay
+            # owned by the original Job even after that leader disappears.
+            open_process = _win._bind(_win.K, "OpenProcess", [_win.DWORD, _win.W.BOOL, _win.DWORD], _win.HANDLE)
+            process = open_process(0x1000, False, int(entry.get("pid") or 0))
+            if process:
+                try:
+                    in_job = _win.W.BOOL()
+                    member = _win._bind(_win.K, "IsProcessInJob", [_win.HANDLE, _win.HANDLE, _win.C.POINTER(_win.W.BOOL)])
+                    _win._check(member(process, job, _win.C.byref(in_job)))
+                    if in_job.value and cls._created(process) != entry["windows_created"]:
+                        raise ValueError("Runtime Job leader identity changed")
+                finally:
+                    _win._close(process)
+            elif _win.C.get_last_error() not in (5, 87):
+                raise _win._error()
+            return job
+        except BaseException:
+            _win._close(job)
+            raise
+
+    @staticmethod
+    def _active(job) -> int:
+        accounting = _win.JOB_ACCOUNTING()
+        _win._check(_win._QueryJob(job, 1, _win.C.byref(accounting), _win.C.sizeof(accounting), None))
+        return accounting.active
+
+    @classmethod
+    def alive(cls, entry: dict[str, Any]) -> bool:
+        job = cls._open(entry)
+        if job is None:
+            return False
+        try:
+            return cls._active(job) != 0
+        finally:
+            _win._close(job)
+
+    @classmethod
+    def stop(cls, entry: dict[str, Any], timeout: int = 5) -> None:
+        job = cls._open(entry, terminate=True)
+        if job is None:
+            return
+        try:
+            _win._check(_win._TerminateJobObject(job, 1))
+            deadline = time.monotonic() + timeout
+            while cls._active(job):
+                if time.monotonic() >= deadline:
+                    raise OSError("Owned Windows service tree termination could not be confirmed")
+                time.sleep(0.01)
+        finally:
+            _win._close(job)
+
+    @classmethod
+    def start(cls, service, runtime_dir, entry, publish):
+        """Publish durable ownership before the suspended shell may execute."""
+        from contextlib import ExitStack
+        import msvcrt
+        job = attribute_list = None
+        process = _win.PROCESS_INFORMATION()
+        attributes_initialized = False
+        assigned = resumed = False
+        with ExitStack() as stack:
+            log = stack.enter_context(_log_stream(_service_log(runtime_dir, str(service["name"]))))
+            log.write(f"[{_now()}] starting: {service['command']}\n")
+            log.flush()
+            null = stack.enter_context(open(os.devnull, "rb"))
+            # Explicit duplicates isolate the inherited handle list. The Job
+            # itself is never inherited by a child or an unrelated process.
+            copies = [os.dup(log.fileno()), os.dup(null.fileno())]
+            for fd in copies:
+                stack.callback(os.close, fd)
+                os.set_inheritable(fd, True)
+            output, stdin = map(msvcrt.get_osfhandle, copies)
+            try:
+                with _win._private_attributes() as security:
+                    name = "Local\\HarnessService." + _win.USER_SID + "." + secrets.token_hex(32)
+                    job = _win._CreateJobObject(_win.C.byref(security), name)
+                    if not job:
+                        raise _win._error()
+                    if _win.C.get_last_error() == 183:
+                        raise FileExistsError("Refusing an existing runtime Job")
+                limits = _win.JOB_EXTENDED_LIMIT()
+                limits.BasicLimitInformation.LimitFlags = 0x2000
+                _win._check(_win._SetInformationJobObject(job, 9, _win.C.byref(limits), _win.C.sizeof(limits)))
+                acl = cls._acl(job)
+                size = _win.SIZE_T()
+                _win._InitializeAttributes(None, 1, 0, _win.C.byref(size))
+                if not size.value or size.value > 65536:
+                    raise ValueError("Native service handle isolation unavailable")
+                buffer = _win.C.create_string_buffer(size.value)
+                attribute_list = _win.C.cast(buffer, _win.P)
+                _win._check(_win._InitializeAttributes(attribute_list, 1, 0, _win.C.byref(size)))
+                attributes_initialized = True
+                handles = (_win.HANDLE * 2)(output, stdin)
+                _win._check(_win._UpdateAttribute(attribute_list, 0, 0x20002, handles,
+                                                  _win.C.sizeof(handles), None, None))
+                startup = _win.STARTUPINFOEX()
+                startup.StartupInfo.cb = _win.C.sizeof(startup)
+                startup.StartupInfo.dwFlags = 0x100
+                startup.StartupInfo.hStdInput = stdin
+                startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = output
+                startup.lpAttributeList = attribute_list
+                executable = cls.command_processor()
+                command = _win.C.create_unicode_buffer(subprocess.list2cmdline([executable]) +
+                                                        ' /d /s /c "' + str(service["command"]) + '"')
+                env = _service_env(service)
+                environment = _win.C.create_unicode_buffer("\x00".join(
+                    f"{k}={v}" for k, v in sorted(env.items(), key=lambda item: item[0].upper())) + "\x00\x00")
+                _win._check(_win._CreateProcess(executable, command, None, None, True,
+                    4 | 0x400 | 0x80000 | 0x08000000, environment,
+                    str(Path(service.get("cwd") or os.getcwd()).resolve()),
+                    _win.C.byref(startup), _win.C.byref(process)))
+                _win._check(_win._AssignProcessToJobObject(job, process.process))
+                assigned = True
+                entry.update(pid=int(process.processId), windows_job=name,
+                             windows_job_acl=acl, windows_created=cls._created(process.process))
+                publish()
+                # The durable entry now owns cleanup even if this controller
+                # crashes. Background services deliberately outlive the CLI.
+                limits.BasicLimitInformation.LimitFlags = 0
+                _win._check(_win._SetInformationJobObject(job, 9, _win.C.byref(limits), _win.C.sizeof(limits)))
+                if _win._ResumeThread(process.thread) == 0xFFFFFFFF:
+                    raise _win._error()
+                resumed = True
+                return int(process.processId)
+            finally:
+                try:
+                    if not resumed and process.process:
+                        if assigned:
+                            _win._stop_job(job)
+                        else:
+                            _win._TerminateProcess(process.process, 1)
+                            _win._WaitForSingleObject(process.process, 5000)
+                finally:
+                    if attributes_initialized:
+                        _win._DeleteAttributes(attribute_list)
+                    _win._close(process.thread)
+                    _win._close(process.process)
+                    _win._close(job)
+
+
+def _entry_alive(entry: dict[str, Any]) -> bool:
+    return _NativeService.alive(entry) if os.name == "nt" else _pid_alive(int(entry.get("pid") or 0))
+
+
+def _stop_entry(entry: dict[str, Any], timeout: int = 5) -> None:
+    if os.name == "nt":
+        _NativeService.stop(entry, timeout)
+    else:
+        _stop_pid(int(entry.get("pid") or 0), timeout)
 
 
 def _pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
+    if os.name == "nt":
+        raise ValueError("Windows service liveness requires the recorded owned Job, not a PID")
     try:
         os.kill(pid, 0)
         return True
@@ -158,6 +432,16 @@ def _pid_alive(pid: int | None) -> bool:
 
 def _run_shell(command: str, cwd: str | None, timeout: int = 15,
                env: dict[str, str] | None = None) -> tuple[int, str]:
+    if os.name == "nt":
+        # Put the shell and every descendant in the existing bounded runner's
+        # Job. subprocess.run(timeout=...) alone only kills cmd.exe.
+        result = _platform.run_bounded(
+            [sys.executable, "-I", "-B", "-c",
+             "import subprocess,sys;sys.exit(subprocess.call(sys.argv[1],shell=True,executable=sys.argv[2]))",
+             command, _NativeService.command_processor()],
+            cwd=str(Path(cwd or os.getcwd()).resolve()), env=env if env is not None else dict(os.environ),
+            timeout=timeout, limit=4 * 1024 * 1024, capture_stderr=True)
+        return result.returncode, (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
     proc = subprocess.run(
         command,
         shell=True,
@@ -377,7 +661,7 @@ def _wait_ready(service: dict[str, Any], runtime_dir: Path, state_entry: dict[st
     deadline = time.time() + timeout
     last = "not checked"
     while time.time() < deadline:
-        if not _pid_alive(int(state_entry.get("pid") or 0)):
+        if not _entry_alive(state_entry):
             last = "process exited"
             break
         ok, detail = _health_ok(service)
@@ -426,9 +710,12 @@ def _preflight_service(service: dict[str, Any], runtime_dir: Path, entry: dict[s
     conflict, detail = _port_conflict(service)
     if conflict:
         if service.get("kill_port_on_conflict", False):
-            cmd = f"if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:{int(service['port'])} | xargs -r kill; else exit 127; fi"
-            _run_heal_command(service, runtime_dir, entry, cmd, 0)
-            conflict, detail = _port_conflict(service)
+            if os.name == "nt":
+                detail += "; automatic port cleanup cannot prove this listener belongs to the recorded service Job"
+            else:
+                cmd = f"if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:{int(service['port'])} | xargs -r kill; else exit 127; fi"
+                _run_heal_command(service, runtime_dir, entry, cmd, 0)
+                conflict, detail = _port_conflict(service)
         if conflict:
             _record_failure(entry, runtime_dir, name, detail)
             _append_log(runtime_dir, name, f"port conflict: {detail}")
@@ -459,7 +746,7 @@ def start_services(args: argparse.Namespace) -> int:
         name = str(service["name"])
         entry = state["services"].setdefault(name, {})
         pid = int(entry.get("pid") or 0)
-        if _pid_alive(pid):
+        if _entry_alive(entry):
             ok, detail = _health_ok(service)
             if ok:
                 entry.update({"status": "running", "health": "pass", "health_detail": detail, "updated_at": _now()})
@@ -467,7 +754,7 @@ def start_services(args: argparse.Namespace) -> int:
                 print(f"{name}: running pid={pid} ({detail})")
                 continue
             _append_log(runtime_dir, name, f"existing pid unhealthy, restarting pid={pid}: {detail}")
-            _stop_pid(pid)
+            _stop_entry(entry)
 
         if not _preflight_service(service, runtime_dir, entry):
             exit_code = 1
@@ -482,10 +769,8 @@ def start_services(args: argparse.Namespace) -> int:
                 cmd = attempt.split(":", 1)[1]
                 _run_heal_command(service, runtime_dir, entry, cmd, attempt_index - 1)
 
-            pid = _start_process(service, runtime_dir)
             entry.update({
                 "name": name,
-                "pid": pid,
                 "command": str(service["command"]),
                 "cwd": str(service.get("cwd") or ""),
                 "status": "starting",
@@ -494,12 +779,18 @@ def start_services(args: argparse.Namespace) -> int:
                 "updated_at": _now(),
                 "log": str(_service_log(runtime_dir, name)),
             })
+            if os.name == "nt":
+                pid = _NativeService.start(service, runtime_dir, entry,
+                                           lambda: _save_state(runtime_dir, state))
+            else:
+                pid = _start_process(service, runtime_dir)
+                entry["pid"] = pid
             _save_state(runtime_dir, state)
             if _wait_ready(service, runtime_dir, entry):
                 _save_state(runtime_dir, state)
                 print(f"{name}: started pid={pid}")
                 break
-            _stop_pid(pid)
+            _stop_entry(entry)
             _save_state(runtime_dir, state)
         else:
             print(f"{name}: BLOCKED ({entry.get('health_detail')})")
@@ -517,7 +808,7 @@ def status_services(args: argparse.Namespace) -> int:
         name = str(service["name"])
         entry = state.get("services", {}).get(name, {})
         pid = int(entry.get("pid") or 0)
-        alive = _pid_alive(pid)
+        alive = _entry_alive(entry)
         ok, detail = _health_ok(service) if alive else (False, "not running")
         status = "running" if alive and ok else "blocked" if entry.get("status") == "blocked" else "stopped"
         print(f"{name}: {status} pid={pid or '-'} health={'pass' if ok else 'fail'} detail={detail}")
@@ -533,12 +824,17 @@ def stop_services(args: argparse.Namespace) -> int:
         name = str(service["name"])
         entry = state.get("services", {}).setdefault(name, {})
         stop_command = str(service.get("stop_command") or "").strip()
+        if os.name == "nt":
+            # Validate durable ownership before running a configured shutdown
+            # command or publishing a stopped state.
+            _entry_alive(entry)
         if stop_command:
             _append_log(args.runtime_dir, name, f"stop_command: {stop_command}")
-            rc, output = _run_shell(stop_command, str(service.get("cwd") or "") or None, int(service.get("stop_timeout_sec") or 30))
+            rc, output = _run_shell(stop_command, str(service.get("cwd") or "") or None,
+                                    int(service.get("stop_timeout_sec") or 30), env=_service_env(service))
             _append_log(args.runtime_dir, name, f"stop_command rc={rc}: {output}")
-        else:
-            _stop_pid(int(entry.get("pid") or 0), int(service.get("stop_timeout_sec") or 5))
+        if not stop_command or os.name == "nt":
+            _stop_entry(entry, int(service.get("stop_timeout_sec") or 5))
         entry.update({"status": "stopped", "health": "stopped", "updated_at": _now()})
         print(f"{name}: stopped")
     _save_state(args.runtime_dir, state)
@@ -575,6 +871,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if os.name == "nt" and args.cmd in {"start", "status", "stop"}:
+        # Only one CLI may publish/restart a service at a time. The existing
+        # state remains the sole durable source of process ownership.
+        _platform.ensure_private_directory(args.runtime_dir.absolute())
+        with _platform.file_lock(args.runtime_dir.absolute() / ".services.lock", blocking=True):
+            return {"start": start_services, "status": status_services, "stop": stop_services}[args.cmd](args)
     if args.cmd == "start":
         return start_services(args)
     if args.cmd == "status":

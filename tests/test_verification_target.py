@@ -1,4 +1,6 @@
 """Actual copied-source ABA, restoration and relevant-input reuse scenarios."""
+
+from test_symlink_fixture import create_symlink
 import json
 import os
 from pathlib import Path
@@ -108,7 +110,7 @@ def test_diagnostic_does_not_certify_acceptance_or_enable_new_gate(tmp_path):
 
 def test_symlink_and_wbs_runtime_inputs_fail_without_omission(tmp_path):
     repo, td, _, _ = public(tmp_path)
-    (repo / "alias").symlink_to(repo / "src.txt")
+    create_symlink(repo / "alias", repo / "src.txt")
     with unittest.TestCase().assertRaisesRegex(ValueError, "symlink"):
         targets.issue_target(str(td), str(repo), dict(specification(), inputs={"source": ["alias"]}))
     with unittest.TestCase().assertRaisesRegex(ValueError, "recursively captured"):

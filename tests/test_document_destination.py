@@ -1,4 +1,6 @@
 """Project-selected document policy and actual prompt injection boundaries."""
+
+from test_symlink_fixture import create_symlink
 import builtins
 import importlib.util
 import json
@@ -218,7 +220,7 @@ def test_unsafe_config_file_is_unavailable(tmp_path, kind):
     else:
         source = tmp_path / "other"
         source.write_text("enabled: false")
-        target.symlink_to(source)
+        create_symlink(target, source)
     assert destination.select_destination(connection(), cwd=tmp_path)["mode"] == "unavailable"
 
 
@@ -414,14 +416,14 @@ def test_manifest_components_cannot_be_symlinks(tmp_path, component):
         path /= "manifest.yaml"
     moved = tmp_path / "moved"
     path.rename(moved)
-    path.symlink_to(moved, target_is_directory=component != "manifest.yaml")
+    create_symlink(path, moved, target_is_directory=component != "manifest.yaml")
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
 
 
 def test_symlink_and_nonregular_git_markers_are_unavailable(tmp_path):
     project = write_config(tmp_path / "project")
     target = tmp_path / "gitdir"; target.mkdir()
-    marker = project / ".git"; marker.symlink_to(target, target_is_directory=True)
+    marker = project / ".git"; create_symlink(marker, target, target_is_directory=True)
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"
     marker.unlink(); os.mkfifo(marker)
     assert destination.select_destination(connection(), cwd=project)["mode"] == "unavailable"

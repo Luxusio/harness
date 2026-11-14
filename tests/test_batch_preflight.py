@@ -12,6 +12,14 @@ import json
 import os
 import subprocess
 import sys
+
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +42,7 @@ def _isolate(monkeypatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     for key in list(os.environ):
         if key.upper().startswith("GIT_"):
@@ -625,18 +634,30 @@ def test_no_configured_fsmonitor_is_launched(monkeypatch, tmp_path):
     assert sorted(p.name for p in tmp_path.glob("fsmonitor-ran-*")) == []
 
 
+def _fixture_read_access(path, readable):
+    """Deny/restore fixture reads through the host's actual permission system."""
+    if os.name != "nt":
+        path.chmod(0o755 if readable and path.is_dir() else 0o644 if readable else 0)
+        return
+    from wiki_platform import _native
+    executable = Path(os.environ["SystemRoot"]) / "System32/icacls.exe"
+    operation = ["/remove:d", "*" + _native.USER_SID] if readable else ["/deny", "*" + _native.USER_SID + ":(RX)"]
+    result = subprocess.run([str(executable), str(path), *operation], capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr.decode("mbcs", errors="replace")
+
+
 def test_unreadable_directory_fails_closed(monkeypatch, tmp_path):
     _skip_as_root()
     _isolate(monkeypatch, tmp_path)
     main = _repo(tmp_path / "main", {"README.md": "r\n", ".gitignore": "secret/\n"})
     _repo(main / "secret/hidden", {"important.txt": "x\n"})
     (main / "secret/hidden/uncommitted.txt").write_text("work\n", encoding="utf-8")
-    (main / "secret").chmod(0)
+    _fixture_read_access(main / "secret", False)
     try:
         scan = mod.preflight(str(main), {})
         scoped = mod.preflight(str(main), {"a": ["secret/hidden/important.txt"]})
     finally:
-        (main / "secret").chmod(0o755)
+        _fixture_read_access(main / "secret", True)
     assert scan["verdict"] == "refuse"
     assert [r for r in scan["refusals"] if "cannot scan" in r], scan["refusals"]
     assert scoped["verdict"] == "refuse"
@@ -645,7 +666,7 @@ def test_unreadable_directory_fails_closed(monkeypatch, tmp_path):
 
 
 def _skip_as_root() -> None:
-    if os.geteuid() == 0:
+    if os.name != "nt" and os.geteuid() == 0:
         import pytest
 
         pytest.skip("root reads through mode-000 paths")
@@ -658,7 +679,7 @@ def test_unreadable_gitmodules_refuses(monkeypatch, tmp_path):
         tmp_path / "main",
         {"README.md": "r\n", ".gitmodules": '[submodule "d"]\n\tpath = vendor/d\n\turl = ./x\n'},
     )
-    (main / ".gitmodules").chmod(0)
+    _fixture_read_access(main / ".gitmodules", False)
     try:
         report = mod.preflight(str(main), {"a": ["vendor/d/x"]})
         # The .gitmodules read itself refuses, independent of the status check
@@ -668,11 +689,12 @@ def test_unreadable_gitmodules_refuses(monkeypatch, tmp_path):
         with pytest.raises(mod.PreflightError, match=r"\.gitmodules"):
             mod._gitmodules_paths(os.path.realpath(main))
     finally:
-        (main / ".gitmodules").chmod(0o644)
+        _fixture_read_access(main / ".gitmodules", True)
     assert report["verdict"] == "refuse"
     assert [r for r in report["refusals"] if ".gitmodules" in r], report["refusals"]
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO backend; Native reparse/nonregular rejection is covered separately")
 def test_non_regular_gitmodules_refuses_without_blocking(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     main = _repo(tmp_path / "main")
@@ -694,11 +716,11 @@ def test_untraversable_populated_submodule_refuses(monkeypatch, tmp_path):
     main = _with_submodule(tmp_path)
     (main / "libs/sub/s.txt").write_text("changed\n", encoding="utf-8")
     (main / "libs/sub/wip.txt").write_text("uncommitted\n", encoding="utf-8")
-    (main / "libs/sub").chmod(0)
+    _fixture_read_access(main / "libs/sub", False)
     try:
         report = mod.preflight(str(main), {})
     finally:
-        (main / "libs/sub").chmod(0o755)
+        _fixture_read_access(main / "libs/sub", True)
     assert report["verdict"] == "refuse", report
     assert [r for r in report["refusals"] if "libs/sub" in r], report["refusals"]
 
@@ -716,11 +738,11 @@ def test_unreadable_directory_inside_a_nested_repo_refuses(monkeypatch, tmp_path
     _git("add", "private/keep.txt", cwd=svc)
     _git("commit", "-q", "-m", "private", cwd=svc)
     (svc / "private/new.txt").write_text("uncommitted\n", encoding="utf-8")
-    (svc / "private").chmod(0)
+    _fixture_read_access(svc / "private", False)
     try:
         report = mod.preflight(str(main), {})
     finally:
-        (svc / "private").chmod(0o755)
+        _fixture_read_access(svc / "private", True)
     assert report["verdict"] == "refuse", report
     [refusal] = [
         r for r in report["refusals"]
@@ -758,11 +780,11 @@ def test_unreadable_tracked_directory_refuses(monkeypatch, tmp_path):
     main = _repo(tmp_path / "main", {"src/a.py": "a\n", ".gitignore": "src/vendor/\n"})
     _repo(main / "src/vendor/lib")
     (main / "src/vendor/lib/dirty.txt").write_text("uncommitted\n", encoding="utf-8")
-    (main / "src").chmod(0)
+    _fixture_read_access(main / "src", False)
     try:
         report = mod.preflight(str(main), {})
     finally:
-        (main / "src").chmod(0o755)
+        _fixture_read_access(main / "src", True)
     assert report["verdict"] == "refuse", report
     assert [r for r in report["refusals"] if "could not read part of" in r], report["refusals"]
 
@@ -1032,11 +1054,11 @@ def test_managed_discovery_refuses_unreadable_owned_history(monkeypatch, tmp_pat
     main = _repo(tmp_path / "main", {"owned/code.py": "pass\n", ".gitignore": "owned/.hidden/\n"})
     hidden = main / "owned/.hidden"
     hidden.mkdir()
-    hidden.chmod(0)
+    _fixture_read_access(hidden, False)
     try:
         report = mod.preflight(str(main), {"a": ["owned"]}, dirty_scopes=[str(main / "owned")])
     finally:
-        hidden.chmod(0o755)
+        _fixture_read_access(hidden, True)
     assert report["verdict"] == "refuse", report
     assert any("could not read part of" in item or "cannot scan" in item for item in report["refusals"])
 

@@ -1,4 +1,6 @@
 """Real stopped-lead migration must preserve history and finish disposal."""
+
+from test_symlink_fixture import create_symlink
 import json
 import os
 
@@ -74,7 +76,7 @@ def stopped_legacy_lead(tmp_path, monkeypatch, *, frozen=False, checkpoint=False
             external.write_bytes(b'outside bytes must survive')
         link = current / 'work/link-to-external'
         link.parent.mkdir()
-        link.symlink_to(external, target_is_directory=historical_link == 'directory')
+        create_symlink(link, external, target_is_directory=historical_link == 'directory')
     if frozen:
         snapshot = current / 'work/verification-targets/0123456789abcdef/source'
         snapshot.mkdir(parents=True)
@@ -140,7 +142,7 @@ def test_migration_history_disposal_refuses_unknown_or_changed_bytes(tmp_path, m
             target.write_bytes(b'changed after migration')
         else:
             target.unlink()
-            target.symlink_to(worktree / 'a.txt')
+            create_symlink(target, worktree / 'a.txt')
     result = pool.cli('finish', '--slug', 'a', ok=False)
     assert result['status'] == 'kept' and worktree.exists()
     assert not result['cleanup']['removed'] and not result['cleanup']['branch_deleted']
@@ -185,7 +187,7 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     residue.write_bytes(expected)
     link = residue.parent / 'work/link-to-external'
     link.parent.mkdir()
-    link.symlink_to(tmp_path / 'outside-sentinel', target_is_directory=True)
+    create_symlink(link, tmp_path / 'outside-sentinel', target_is_directory=True)
     precious = residue.parent / 'unrecorded.bin'
     precious.write_bytes(b'keep unknown residue')
     with pytest.raises(batch_harvest.HarvestError, match='unpreserved'):
@@ -216,7 +218,7 @@ def test_migrated_selected_module_lead_preserves_history_before_disposal(tmp_pat
     outside.write_bytes(b'preserve external module sentinel')
     link = current / 'work/module-link'
     link.parent.mkdir()
-    link.symlink_to(outside)
+    create_symlink(link, outside)
     old = worktree / 'doc/harness/tasks/TASK__a'
     old.parent.mkdir(parents=True)
     current.rename(old)
@@ -255,7 +257,7 @@ def test_changed_historical_link_keeps_worktree_and_external_targets(tmp_path, m
     other.write_bytes(b'other outside bytes')
     link = old / 'work/link-to-external'
     link.unlink()
-    link.symlink_to(other)
+    create_symlink(link, other)
     result = pool.cli('finish', '--slug', 'a', ok=False)
     assert result['status'] == 'kept' and worktree.exists() and link.is_symlink()
     assert other.read_bytes() == b'other outside bytes'
@@ -265,7 +267,7 @@ def test_changed_historical_link_keeps_worktree_and_external_targets(tmp_path, m
 def test_link_in_current_wbs_is_not_a_historical_disposal_exception(tmp_path, monkeypatch):
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch, historical_link='file')
     current = worktree / 'doc/harness/wbs/WBS__a/work/current-link'
-    current.symlink_to(tmp_path / 'outside-sentinel')
+    create_symlink(current, tmp_path / 'outside-sentinel')
     result = pool.cli('finish', '--slug', 'a', ok=False)
     assert result['status'] == 'kept' and current.is_symlink() and worktree.exists()
     assert (tmp_path / 'outside-sentinel').read_bytes() == b'outside bytes must survive'

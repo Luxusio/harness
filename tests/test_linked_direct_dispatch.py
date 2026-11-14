@@ -1,4 +1,6 @@
 """Direct linked admission uses the real public STDIO envelope and write gate."""
+
+from test_symlink_fixture import create_symlink
 import json
 import os
 import subprocess
@@ -214,13 +216,13 @@ def test_stdio_unrelated_common_metadata_still_rejects_unsafe_paths(tmp_path, un
     (outside / 'precious.txt').write_bytes(b'outside state must survive')
     if unsafe == 'ancestor-symlink':
         (outside / 'batches').mkdir()
-        batches.parent.symlink_to(outside, target_is_directory=True)
+        create_symlink(batches.parent, outside, target_is_directory=True)
     else:
         batches.parent.mkdir(parents=True)
         if unsafe == 'file':
             batches.write_bytes(b'invalid state directory, preserve bytes')
         else:
-            batches.symlink_to(outside, target_is_directory=True)
+            create_symlink(batches, outside, target_is_directory=True)
     before = controls(directory)
     assert check(cwd, tree / 'a.py').get('permissionDecision') == 'deny'
     assert controls(directory) == before

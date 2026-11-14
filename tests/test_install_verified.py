@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -243,7 +244,7 @@ def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
     assert json.loads((task / "WBS.control.json").read_text(encoding="utf-8")) == {"mutated": True}
 
 
-def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path):
+def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path, make_symlink):
     repo = tmp_path / "repo"
     payload = repo / "plugin/file.py"
     payload.parent.mkdir(parents=True)
@@ -251,13 +252,14 @@ def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path):
     payload.chmod(0o644)
     regular = mod._payload_fingerprint(repo, {"plugin/file.py"})
 
-    payload.chmod(0o755)
+    payload.chmod(0o444 if os.name == "nt" else 0o755)
     assert mod._payload_fingerprint(repo, {"plugin/file.py"}) != regular
+    payload.chmod(0o644)
 
     payload.unlink()
     outside = tmp_path / "outside.py"
     outside.write_text("print('outside')\n", encoding="utf-8")
-    payload.symlink_to(outside)
+    make_symlink(payload, outside)
     assert mod._payload_fingerprint(repo, {"plugin/file.py"}) == ""
 
 
@@ -282,7 +284,7 @@ def test_payload_modes_must_match_git_and_reject_hardlinks(tmp_path):
     paths = {"plugin/file.py"}
     assert mod._payload_modes_match_index(repo, paths)
 
-    payload.chmod(0o755)
+    payload.chmod(0o444 if os.name == "nt" else 0o755)
     assert not mod._payload_modes_match_index(repo, paths)
     payload.chmod(0o644)
     hardlink = repo / "plugin/file-hardlink.py"
@@ -297,11 +299,22 @@ def test_payload_read_rejects_writable_directory_chain(tmp_path):
     payload.write_text("print('ok')\n", encoding="utf-8")
     payload.chmod(0o644)
 
-    repo.chmod(0o777)
-    assert mod._read_payload_file(repo, "plugin/file.py") is None
-    repo.chmod(0o700)
-    payload.parent.chmod(0o777)
-    assert mod._read_payload_file(repo, "plugin/file.py") is None
+    if os.name == "nt":
+        from test_windows_core_runtime import _acl
+        private = ""
+        foreign_write = "(A;;GW;;;WD)"
+        _acl(repo, foreign_write)
+        assert mod._read_payload_file(repo, "plugin/file.py") is None
+        _acl(repo, private)
+        _acl(payload.parent, foreign_write)
+        assert mod._read_payload_file(repo, "plugin/file.py") is None
+        _acl(payload.parent, private)
+    else:
+        repo.chmod(0o777)
+        assert mod._read_payload_file(repo, "plugin/file.py") is None
+        repo.chmod(0o700)
+        payload.parent.chmod(0o777)
+        assert mod._read_payload_file(repo, "plugin/file.py") is None
 
 
 def test_payload_mode_check_fails_closed_on_git_index_error(tmp_path):
@@ -406,6 +419,7 @@ def test_snapshot_paths_exclude_deleted_payload(tmp_path):
 
 def test_global_lock_ignores_xdg_cache_and_follows_installer_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     assert mod._global_lock_path() == tmp_path / "home/.cache/harness/install.lock"
 
@@ -491,11 +505,25 @@ def test_real_install_uses_two_full_measurements_and_repeats_fresh(tmp_path, mon
             active = False
 
     monkeypatch.setattr(wbs, "fingerprint", fingerprint)
-    monkeypatch.setattr(wbs.os, "fdopen", fdopen)
+    if os.name == "nt":
+        from wiki_platform import _native
+        original_chunks = _native._file_chunks
+        def chunks(handle, limit, **kwargs):
+            if active:
+                totals["opens"] += 1
+            for data in original_chunks(handle, limit, **kwargs):
+                if active:
+                    totals["bytes"] += len(data)
+                    totals["reads"] += 1
+                yield data
+        monkeypatch.setattr(_native, "_file_chunks", chunks)
+    else:
+        monkeypatch.setattr(wbs.os, "fdopen", fdopen)
     # Same real fixture, old measurement lane versus the actual new install path.
     for _ in range(3):
         assert mod._verification_state(task)[0]
     three = dict(totals)
+    assert all(three[key] > 0 for key in ("bytes", "reads", "opens")), three
     for attempt in range(2):
         totals.update(dict.fromkeys(totals, 0))
         marker.unlink(missing_ok=True)
@@ -527,7 +555,7 @@ def test_real_preinstall_drift_never_executes_snapshot(tmp_path, monkeypatch, dr
         elif drift == "source":
             source.write_bytes(b"changed")
         elif drift == "mode":
-            source.chmod(0o755)
+            source.chmod(0o444 if os.name == "nt" else 0o755)
         elif drift == "path":
             (repo / "plugin/new.py").write_text("new")
         elif drift == "definition":
@@ -563,7 +591,7 @@ def test_real_postinstall_drift_withholds_success(tmp_path, monkeypatch, capsys,
             if drift == "source":
                 (repo / "plugin/source.bin").write_bytes(b"changed")
             elif drift == "mode":
-                (repo / "plugin/source.bin").chmod(0o755)
+                (repo / "plugin/source.bin").chmod(0o444 if os.name == "nt" else 0o755)
             elif drift == "path":
                 (repo / "plugin/new.py").write_text("new")
             elif drift == "definition":
@@ -588,15 +616,74 @@ def test_real_postinstall_drift_withholds_success(tmp_path, monkeypatch, capsys,
 def test_definition_baseline_rejects_unsafe_metadata(tmp_path, name):
     _, task = _repo(tmp_path)
     path = task / name
-    path.chmod(0o666)
+    if os.name == "nt":
+        from test_windows_core_runtime import _acl
+        _acl(path, "(A;;GW;;;WD)")
+    else:
+        path.chmod(0o666)
     with pytest.raises(ValueError, match="unsafe or unreadable"):
         mod._verification_definition(task)
+
+
+def _native_metadata_limit_probe(task, monkeypatch, name, limit, *, grow_during_read, canonical):
+    """Real NTFS writer exclusion, bounded reads and oversize pre-read refusal."""
+    import wbs
+    from wiki_platform import _native
+    path = task / name
+    initial = path.read_bytes()
+    oversized = initial + b" " * (limit + 128)
+    if not grow_during_read:
+        path.write_bytes(oversized)
+    original_open = _native._open
+    original_chunks = _native._file_chunks
+    handles = set()
+    attempts = 0
+    bytes_read = 0
+
+    def opened(value, *args, **kwargs):
+        handle = original_open(value, *args, **kwargs)
+        if Path(value) == path:
+            handles.add(handle)
+        else:
+            handles.discard(handle)
+        return handle
+
+    def chunks(handle, budget, **kwargs):
+        nonlocal attempts, bytes_read
+        if handle in handles and grow_during_read:
+            attempts += 1
+            with pytest.raises(PermissionError):
+                path.write_bytes(oversized)
+        for data in original_chunks(handle, budget, **kwargs):
+            if handle in handles:
+                bytes_read += len(data)
+            yield data
+
+    monkeypatch.setattr(_native, "_open", opened)
+    monkeypatch.setattr(_native, "_file_chunks", chunks)
+    if grow_during_read:
+        if canonical:
+            value = mod.read_wbs_control(str(task)) if name == "WBS.control.json" else wbs.read_state(str(task))
+            assert value
+        else:
+            assert mod._verification_definition(task)
+        assert attempts > 0 and 0 < bytes_read <= limit + 1
+        assert path.read_bytes() == initial
+    else:
+        with pytest.raises(ValueError, match="unsafe or unreadable"):
+            mod._verification_definition(task)
+        assert attempts == 0 and bytes_read == 0
 
 
 @pytest.mark.parametrize("name,limit", [("WBS.control.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
 @pytest.mark.parametrize("grow_during_read", [False, True])
 def test_definition_baseline_preserves_metadata_read_limits(tmp_path, monkeypatch, name, limit, grow_during_read):
-    import os
+    if os.name == "nt":
+        _, task = _repo(tmp_path)
+        _native_metadata_limit_probe(task, monkeypatch, name, limit,
+                                     grow_during_read=grow_during_read,
+                                     canonical=False)
+        return
     _, task = _repo(tmp_path)
     path = task / name
     initial = path.read_bytes()
@@ -636,7 +723,11 @@ def test_definition_baseline_preserves_metadata_read_limits(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("name,limit", [("WBS.control.json", 16 * 1024), ("WBS.json", 1024 * 1024)])
 def test_canonical_definition_rereads_bound_growth_after_stat(tmp_path, monkeypatch, name, limit):
-    import os
+    if os.name == "nt":
+        _, task = _repo(tmp_path)
+        _native_metadata_limit_probe(task, monkeypatch, name, limit,
+                                     grow_during_read=True, canonical=True)
+        return
     import wbs
     _, task = _repo(tmp_path)
     path = task / name
@@ -689,7 +780,6 @@ def test_bounded_snapshot_retains_utf8_and_universal_newlines(tmp_path):
 
 @pytest.mark.skipif(not hasattr(__import__("os"), "mkfifo"), reason="requires FIFO support")
 def test_definition_baseline_rejects_fifo_without_waiting_for_a_writer(tmp_path):
-    import os
     _, task = _repo(tmp_path)
     (task / "WBS.json").unlink()
     os.mkfifo(task / "WBS.json")

@@ -189,3 +189,31 @@ Accept that owner only when the OS reports it as the current default owner and
 the token has the enabled owner-capable Administrators group, without deny-only
 membership. This uses the already trusted administrator principal; it does not
 admit arbitrary token groups, foreign owners or SYSTEM-owned leaf files.
+
+## Native suite feedback revision 58
+
+User-requested follow-up, 2026-11-14: investigate the reported full-suite
+failures at `2b83df66` and repair applicable Harness problems. The reported
+831 root-suite failures and three standalone failures are observations, not
+831 established product defects. Preserve resolved findings and distinguish
+product defects, unsupported fixture assumptions and missing prerequisites.
+
+Derived repairs must preserve these existing contracts on native Windows:
+blocking ownership waits for another thread, while nonblocking or recursive
+ownership refuses; repository-relative logical paths agree with Git paths;
+aggregate operation timeouts stay distinct from independent network timeouts;
+and background-service liveness and shutdown use actual process identity and
+owned process-tree cleanup. Do not signal an unverified or reused PID.
+
+Updating an existing project document must preserve unrelated user text and
+line endings, detect concurrent replacement or content changes, and preserve
+the displaced original for guarded rollback. A second writer's edit must not
+be overwritten during recovery. Windows must execute this real publication
+path rather than depend on Linux exchange-rename support.
+
+Tests must use the selected platform's real publication, locking and security
+boundaries. Missing symlink privilege may skip only the affected real-link
+fixture; it cannot disable native reparse, ownership or ACL refusal coverage.
+The suite must continue protecting actual installed runtime files even when
+HOME or USERPROFILE is redirected. No global UID emulation, blanket Windows
+skip, permission weakening or CI run is authorized by this follow-up.

@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 import importlib.util
+import base64
+import contextlib
 import json
 import re
 import shlex
@@ -52,6 +54,7 @@ def isolated_installer_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
 
 
@@ -61,74 +64,93 @@ def _load_install_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    resolve_host = module.host_command
+
+    def fixture_host(runtime, *, cwd=None, env=None):
+        selected_env = os.environ if env is None else env
+        for directory in selected_env.get("PATH", "").split(os.pathsep):
+            fixture = Path(directory) / runtime
+            if fixture.is_file() and fixture.read_bytes().startswith(b"# Harness CLI protocol fixture\n"):
+                return [str(Path(getattr(sys, "_base_executable", sys.executable)).resolve()), "-B", str(fixture)]
+        return resolve_host(runtime, cwd=cwd, env=env)
+
+    run_command = module._run
+    def run_fixture(command, dry):
+        if not dry and command and command[0] in {"codex", "claude"}:
+            argv = fixture_host(command[0])
+            if len(argv) == 3 and Path(argv[2]).is_file() and Path(argv[2]).read_bytes().startswith(b"# Harness CLI protocol fixture\n"):
+                env = os.environ.copy()
+                if command[0] == "codex" and module._CODEX_RUNTIME_HOME.get() is not None:
+                    env["CODEX_HOME"] = str(module._CODEX_RUNTIME_HOME.get())
+                result = subprocess.run([*argv, *command[1:]], capture_output=True, text=True,
+                                        timeout=30, env=env)
+                return result.returncode, result.stdout, result.stderr
+        return run_command(command, dry)
+    module.host_command = fixture_host
+    module._run = run_fixture
     return module
 
 
+def _write_cli_fixture(path, version, *, log_env=None, marketplace="", failures=None):
+    """A literal Python argv fixture; real native host resolution is tested separately."""
+    options = dict(version=version, log_env=log_env, marketplace=marketplace, failures=failures or {})
+    path.write_text(
+        "# Harness CLI protocol fixture\n"
+        "import json, os, shutil, sys\nfrom pathlib import Path\n"
+        + "options = " + repr(options) + "\n"
+        + "mirror = None\n"
+        + "args = sys.argv[1:]\n"
+        + "if options['log_env'] and os.environ.get(options['log_env']):\n"
+        + " with Path(os.environ[options['log_env']]).open('a', encoding='utf-8') as stream: stream.write(' '.join(args) + '\\n')\n"
+        + "if args == ['--version']: print(options['version']); sys.exit(0)\n"
+        + "for prefix, failure in options['failures'].items():\n"
+        + " if args[:len(prefix.split())] == prefix.split(): print(failure[1], file=sys.stderr); sys.exit(failure[0])\n"
+        + "if args[:2] == ['app-server', 'daemon']: sys.exit(1)\n"
+        + "if mirror is not None and args[:2] == ['plugin', 'list']:\n"
+        + " root=Path(mirror); version=json.loads((root/'.codex-plugin/plugin.json').read_text())['version']\n"
+        + " print(json.dumps({'installed':[dict(pluginId='harness@harness',version=version,installed=True,enabled=True,source=dict(path=str(root)))]})); sys.exit(0)\n"
+        + "if args == ['plugin', 'marketplace', 'list']: print(options['marketplace']); sys.exit(0)\n"
+        + "if args[:2] == ['plugin', 'update'] and os.environ.get('HARNESS_DEST'):\n"
+        + " root=Path(os.environ['HARNESS_DEST'])/'plugin'; version=json.loads((root/'.claude-plugin/plugin.json').read_text())['version']\n"
+        + " config=Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home()/'.claude'))); cache=config/'plugins/cache/harness/harness'/version\n"
+        + " shutil.copytree(root,cache,dirs_exist_ok=True)\n"
+        + " (config/'plugins/installed_plugins.json').write_text(json.dumps({'version':2,'plugins':{'harness@harness':[{'scope':'user','version':version,'installPath':str(cache)}]}}))\n",
+        encoding="utf-8", newline="\n",
+    )
+
+
 def _model_codex_listing(executable, config_path):
-    """Existing fake hosts report native selection separately from version text."""
-    mirror = Path(config_path).parent / 'harness/plugins/harness'
-    code = ("import json;from pathlib import Path;root=Path(" + repr(str(mirror))
-            + ");version=json.loads((root/'.codex-plugin/plugin.json').read_text())['version'];"
-            + "print(json.dumps({'installed':[dict(pluginId='harness@harness',version=version,installed=True,enabled=True,source=dict(path=str(root)))]}))")
-    block = ('if [ "$1" = plugin ] && [ "$2" = list ]; then '
-             + shlex.quote(sys.executable) + ' -B -c ' + shlex.quote(code) + '; exit $?; fi\n')
-    executable.write_text(executable.read_text().replace('#!/bin/sh\n', '#!/bin/sh\n' + block, 1))
+    mirror = Path(config_path).parent / "harness/plugins/harness"
+    executable.write_text(executable.read_text().replace("mirror = None\n", "mirror = " + repr(str(mirror)) + "\n", 1),
+                          encoding="utf-8", newline="\n")
 
 
-def _model_mise_provider(env):
-    """Synthetic CLI regression provider; selected identity is not native proof."""
-    search = env.get("PATH", "")
-    if not any(shutil.which(host, path=search) for host in ("codex", "claude")):
-        return
-    first = Path(env["HOME"]) / ".test-mise-bin"
-    first.mkdir(parents=True, exist_ok=True)
-    env["PATH"] = str(first) + os.pathsep + search
-    version = ".".join(map(str, sys.version_info[:3]))
-    installation = Path(env["HOME"]) / ".local/share/mise/installs/python" / version
-    executable = installation / "bin/python"
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    probe = dict(executable=str(executable), prefix=str(installation), base_prefix=str(installation), version=list(sys.version_info[:3]), yaml=True)
-    source = ("#!" + sys.executable + "\nimport os,sys,json\n"
-              + "if '-c' in sys.argv and 'result = dict(executable=' in sys.argv[sys.argv.index('-c')+1]:\n"
-              + " print(" + repr(json.dumps(probe)) + ")\n"
-              + "else: os.execv(" + repr(sys.executable) + ", [" + repr(sys.executable) + ",*sys.argv[1:]])\n")
-    executable.write_text(source)
-    executable.chmod(0o700)
-    mise = first / "mise"
-    inventory = json.dumps([dict(version=version, install_path=str(installation), installed=True)])
-    mise.write_text("#!/bin/sh\ncase \" $* \" in\n*' where '*) printf '%s\\n' " + shlex.quote(str(installation)) + ";;\n*' ls '*) printf '%s\\n' " + shlex.quote(inventory) + ";;\n*' which '*) printf '%s\\n' " + shlex.quote(str(executable)) + ";;\n*) exit 1;;\nesac\n")
-    mise.chmod(0o700)
-    env.pop("MISE_DATA_DIR", None)
-    env.pop("XDG_DATA_HOME", None)
+def _run_fixture_install(args, env, timeout):
+    # CLI behavior unit tests model interpreter selection explicitly. This avoids
+    # copying a Windows venv redirector or inventing a POSIX mise executable.
+    bootstrap = (
+        "import importlib.util, pathlib, sys; "
+        + "spec=importlib.util.spec_from_file_location('installer_cli_fixture', " + repr(str(Path(__file__).resolve())) + "); "
+        + "fixture=importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture); "
+        + "module=fixture._load_install_module(); import mise_python; "
+        + "module.select_python=lambda **kwargs: str(pathlib.Path(getattr(sys, '_base_executable', sys.executable)).resolve()); "
+        + "sys.argv=[str(fixture.INSTALL_PY), *sys.argv[1:]]; raise SystemExit(module.main())"
+    )
+    return subprocess.run([sys.executable, "-B", "-c", bootstrap, *args], capture_output=True,
+                          text=True, timeout=timeout, env=env)
 
 
 def _run(args: list[str], extra_path: str | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     if extra_path is not None:
-        # Replace PATH so neither codex nor claude is discoverable
         env["PATH"] = extra_path
-    _model_mise_provider(env)
-    return subprocess.run(
-        [sys.executable, str(INSTALL_PY)] + args,
-        capture_output=True, text=True, timeout=30, env=env,
-    )
+    return _run_fixture_install(args, env, 30)
 
 
 def _run_with_env(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
     merged.update(env)
-    if "--claude-only" in args and env.get("HARNESS_DEST") and env.get("PATH"):
-        fake_cli = Path(env["PATH"].split(os.pathsep)[0]) / "claude"
-        if fake_cli.is_file():
-            publish = "import os,json,shutil;from pathlib import Path;root=Path(os.environ['HARNESS_DEST'])/'plugin';version=json.loads((root/'.claude-plugin/plugin.json').read_text())['version'];config=Path(os.environ.get('CLAUDE_CONFIG_DIR',str(Path.home()/'.claude')));cache=config/'plugins/cache/harness/harness'/version;shutil.copytree(root,cache,dirs_exist_ok=True);(config/'plugins/installed_plugins.json').write_text(json.dumps({'version':2,'plugins':{'harness@harness':[{'scope':'user','version':version,'installPath':str(cache)}]}}))"
-            action = 'if [ "$1" = "plugin" ] && [ "$2" = "update" ]; then printf \'%s\\n\' "$*" >> "$CLAUDE_LOG"; ' + shlex.quote(sys.executable) + ' -c ' + shlex.quote(publish) + '; exit $?; fi\n'
-            content = fake_cli.read_text()
-            fake_cli.write_text(content.replace("#!/bin/sh\n", "#!/bin/sh\n" + action, 1))
-    _model_mise_provider(merged)
-    return subprocess.run(
-        [sys.executable, str(INSTALL_PY)] + args,
-        capture_output=True, text=True, timeout=180, env=merged,
-    )
+    return _run_fixture_install(args, merged, 180)
 
 
 def test_install_py_exists():
@@ -203,7 +225,7 @@ def test_default_auto_detect_skips_missing_claude_when_codex_available(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text("#!/bin/sh\necho 'codex 0.130.0'\n")
+    _write_cli_fixture(fake_codex, 'codex 0.130.0')
     fake_codex.chmod(0o755)
     cfg = tmp_path / "fake-codex-config.toml"
 
@@ -244,7 +266,7 @@ def test_if_stale_flag_is_gone():
     assert "unrecognized arguments: --if-stale" in r.stderr
 
 
-def test_tree_comparison_ignores_only_runtime_cache_artifacts(tmp_path):
+def test_tree_comparison_ignores_only_runtime_cache_artifacts(tmp_path, make_symlink):
     module = _load_install_module()
     expected = tmp_path / "expected"
     actual = tmp_path / "actual"
@@ -266,11 +288,11 @@ def test_tree_comparison_ignores_only_runtime_cache_artifacts(tmp_path):
     assert "differs" in reason
 
     (actual / "pkg/stale.py").unlink()
-    (actual / "pkg/__pycache__/unsafe").symlink_to(expected / "pkg/tool.py")
+    make_symlink(actual / "pkg/__pycache__/unsafe", expected / "pkg/tool.py")
     assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_ERROR
 
 
-def test_tree_comparison_detects_content_mode_and_unsafe_nodes(tmp_path):
+def test_tree_comparison_detects_content_mode_and_unsafe_nodes(tmp_path, make_symlink):
     module = _load_install_module()
     expected = tmp_path / "expected"
     actual = tmp_path / "actual"
@@ -281,11 +303,12 @@ def test_tree_comparison_detects_content_mode_and_unsafe_nodes(tmp_path):
     assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_STALE
 
     (actual / "tool.py").write_text("one\n")
-    (actual / "tool.py").chmod(0o755)
+    (actual / "tool.py").chmod(0o444 if os.name == "nt" else 0o755)
     assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_STALE
 
+    (actual / "tool.py").chmod(0o644)
     (actual / "tool.py").unlink()
-    (actual / "tool.py").symlink_to(expected / "tool.py")
+    make_symlink(actual / "tool.py", expected / "tool.py")
     state, reason = module._compare_payload_trees(expected, actual)
     assert state == module.PAYLOAD_ERROR
     assert "unsupported file type" in reason or "open failed" in reason
@@ -295,7 +318,7 @@ def test_tree_comparison_detects_content_mode_and_unsafe_nodes(tmp_path):
 
 
 def test_tree_comparison_rejects_hardlinks_intermediate_symlinks_and_bounds(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, make_symlink,
 ):
     module = _load_install_module()
     expected = tmp_path / "expected"
@@ -315,7 +338,7 @@ def test_tree_comparison_rejects_hardlinks_intermediate_symlinks_and_bounds(
     real_actual.mkdir()
     (real_actual / "one").write_text("1\n")
     linked_parent = tmp_path / "linked-parent"
-    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    make_symlink(linked_parent, real_parent, target_is_directory=True)
     assert module._compare_payload_trees(
         expected, linked_parent / "tree",
     )[0] == module.PAYLOAD_ERROR
@@ -371,7 +394,7 @@ def test_tree_comparison_rejects_byte_bounds_and_concurrent_directory_mutation(
         nonlocal mutated
         entries = real_scandir(fd)
         try:
-            info = module.os.fstat(fd)
+            info = module.os.stat(fd) if os.name == "nt" else module.os.fstat(fd)
         except (OSError, TypeError):
             return entries
         if mutated or (info.st_dev, info.st_ino) != actual_identity:
@@ -386,12 +409,14 @@ def test_tree_comparison_rejects_byte_bounds_and_concurrent_directory_mutation(
             (actual / "late-extra").write_text("raced\n")
             mutated = True
 
-        return enumerate_then_mutate()
+        iterator = enumerate_then_mutate()
+        return contextlib.closing(iterator) if os.name == "nt" else iterator
 
     monkeypatch.setattr(module.os, "scandir", racing_scandir)
     state, reason = module._compare_payload_trees(expected, actual)
     assert state == module.PAYLOAD_ERROR
-    assert "changed during comparison" in reason
+    assert mutated, "directory-race injection did not reach the selected backend"
+    assert "changed during comparison" in reason or "changed during inventory" in reason
 
 
 def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
@@ -430,7 +455,7 @@ def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
 
 
 def test_codex_payload_state_error_overrides_earlier_stale_surface(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, make_symlink,
 ):
     module = _load_install_module()
     install_root = tmp_path / "codex" / "harness"
@@ -443,20 +468,18 @@ def test_codex_payload_state_error_overrides_earlier_stale_surface(
     unsafe_target = tmp_path / "unsafe-marketplace"
     unsafe_target.mkdir()
     (install_root / ".agents").mkdir(parents=True)
-    (install_root / ".agents/plugins").symlink_to(
-        unsafe_target, target_is_directory=True,
-    )
+    make_symlink(install_root / ".agents/plugins", unsafe_target, target_is_directory=True)
     state, reason = module._codex_payload_state(config_path)
     assert state == module.PAYLOAD_ERROR
     assert "marketplace" in reason
 
 
-def test_force_sync_removes_broken_legacy_symlink(tmp_path):
+def test_force_sync_removes_broken_legacy_symlink(tmp_path, make_symlink):
     module = _load_install_module()
     install_root = tmp_path / "codex" / "harness"
     install_root.mkdir(parents=True)
     legacy = install_root / "plugin-codex"
-    legacy.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    make_symlink(legacy, tmp_path / "missing-target", target_is_directory=True)
     assert os.path.lexists(legacy)
     assert not legacy.exists()
 
@@ -494,7 +517,7 @@ def test_conditional_runtime_skips_payload_mutation_when_current(tmp_path):
         # the staleness decision, so "no payload mutation" only holds for a root
         # this test owns.
         mock.patch.object(module, "CODEX_INSTALL_ROOT", tmp_path / "codex-harness"),
-        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "host_command", return_value=["/bin/codex"]),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
             module, "_codex_payload_state",
@@ -521,7 +544,7 @@ def test_force_skips_the_payload_comparison_on_both_runtimes(tmp_path, monkeypat
     never = AssertionError("payload comparison ran under --force")
     with (
         mock.patch.object(module, "CODEX_INSTALL_ROOT", tmp_path / "codex-harness"),
-        mock.patch.object(module.shutil, "which", return_value="/bin/runtime"),
+        mock.patch.object(module, "host_command", return_value=["/bin/runtime"]),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(module, "_codex_payload_state", side_effect=never),
         mock.patch.object(module, "_claude_payload_state", side_effect=never),
@@ -542,7 +565,7 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
     with (
         mock.patch.object(module, "_select_codex_plugin", return_value=(True, "selection stubbed for payload call-site test")),
         mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
-        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "host_command", return_value=["/bin/codex"]),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
             module, "_codex_payload_state",
@@ -579,7 +602,7 @@ def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(t
 
     with (
         mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
-        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "host_command", return_value=["/bin/codex"]),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
             module, "_codex_payload_state",
@@ -602,7 +625,7 @@ def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path, mo
     # real `~/.claude/harness-dev`.
     monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "harness-dev"))
     common = (
-        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "host_command", return_value=["/bin/claude"]),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
     )
     # The SYNCHRONIZED skip path now smokes the installed tree; this case
@@ -620,7 +643,7 @@ def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path, mo
     sync.assert_not_called()
 
     with (
-        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "host_command", return_value=["/bin/claude"]),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
         mock.patch.object(
             module, "_claude_payload_state",
@@ -633,7 +656,7 @@ def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path, mo
     assert "dry-run" in stale.summary
 
     with (
-        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "host_command", return_value=["/bin/claude"]),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
         mock.patch.object(
             module, "_claude_payload_state",
@@ -684,7 +707,7 @@ def test_installer_clears_stale_bytecode_cache_even_when_synchronized(
     )
 
     with (
-        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "host_command", return_value=["/bin/claude"]),
         mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
         mock.patch.object(module, "sync_claude_payload") as sync,
         mock.patch.object(module, "_verify_claude_selected_cache", return_value=(True, "verified")),
@@ -736,7 +759,7 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
     with (
         mock.patch.object(module, "_select_codex_plugin", return_value=(True, "selection stubbed for payload call-site test")),
         mock.patch.object(module, "CODEX_INSTALL_ROOT", codex_root),
-        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "host_command", return_value=["/bin/codex"]),
         mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
         mock.patch.object(
             module, "_codex_payload_state",
@@ -757,7 +780,7 @@ def test_codex_installer_clears_stale_bytecode_cache_even_when_synchronized(tmp_
         assert (pyc.parent.parent / "_lib.py").is_file()
 
 
-def test_prune_bytecode_caches_stays_inside_the_installer_owned_tree(tmp_path):
+def test_prune_bytecode_caches_stays_inside_the_installer_owned_tree(tmp_path, make_symlink):
     """The plan's stated risk: never delete anything but `__pycache__`."""
     module = _load_install_module()
     outside = tmp_path / "outside"
@@ -772,7 +795,7 @@ def test_prune_bytecode_caches_stays_inside_the_installer_owned_tree(tmp_path):
     (root / "pkg" / "__pycache__").mkdir(parents=True)
     (root / "pkg" / "__pycache__" / "m.pyc").write_bytes(b"x")
     (root / "pkg" / "keep.py").write_text("ok\n")
-    (root / "escape").symlink_to(outside, target_is_directory=True)
+    make_symlink(root / "escape", outside, target_is_directory=True)
 
     steps = module._prune_bytecode_caches(root)
 
@@ -789,9 +812,8 @@ def test_prune_bytecode_caches_stays_inside_the_installer_owned_tree(tmp_path):
 
 
 def _real_home() -> Path:
-    import pwd
-
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    import conftest
+    return conftest.real_install_home()
 
 
 def test_suite_run_cannot_reach_the_real_install_roots(tmp_path):
@@ -860,7 +882,7 @@ def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
 ):
     module = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py"])
-    monkeypatch.setattr(module.shutil, "which", lambda _: "/bin/runtime")
+    monkeypatch.setattr(module, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(
         module, "install_codex",
         lambda **_: module.InstallResult(
@@ -928,15 +950,18 @@ def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
     assert hooks_path.is_file()
     hooks = json.loads(hooks_path.read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
-    assert "hook_session_start.py" in hooks_path.read_text()
+    commands = [entry["command"] for rows in hooks.values() for row in rows for entry in row["hooks"]]
+    if os.name == "nt":
+        commands = [base64.b64decode(command.rsplit(" ", 1)[1]).decode("utf-16-le") for command in commands]
+    assert any("hook_session_start.py" in command for command in commands)
     assert "hook_session_start.sh" not in hooks_path.read_text()
     cache_root = module._codex_cached_plugin_root(module._codex_home_for_config(None), plugin_root)
-    assert str(cache_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
+    assert any(str(cache_root / "scripts" / "hook_session_start.py") in command for command in commands)
     mcp_path = tmp_path / "codex" / "harness" / "plugins" / "harness" / ".mcp.json"
     assert mcp_path.is_file()
     mcp = json.loads(mcp_path.read_text())["mcpServers"]["harness"]
     assert mcp["command"] == module._python_cmd()
-    assert mcp["args"] == ["-E", "-s", "-B", str(cache_root / "mcp" / "harness_server.py")]
+    assert mcp["args"] == module.owned_python_argv(module._python_cmd(), cache_root / "mcp" / "harness_server.py")[1:]
     assert mcp["env"]["HARNESS_PLUGIN_ROOT"] == str(cache_root)
     assert str(REPO_ROOT) not in mcp_path.read_text()
 
@@ -986,7 +1011,8 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     assert str(REPO_ROOT) not in hooks_text
     assert str(REPO_ROOT) not in mcp_text
     cache_root = module._codex_cached_plugin_root(module._codex_home_for_config(None), plugin_root)
-    assert str(cache_root) in mcp_text
+    assert json.loads(mcp_text)["mcpServers"]["harness"]["args"] == module.owned_python_argv(
+        module._python_cmd(), cache_root / "mcp/harness_server.py")[1:]
     assert (codex_plugin / "scripts" / "hook_pre_tool_use.py").is_file()
     for removed in (
         "goal_queue_runner.py",
@@ -1042,14 +1068,16 @@ def test_codex_hooks_config_uses_absolute_cache_python_and_reviews_all_events(tm
         # Codex hook commands are generated here rather than read from
         # plugin/hooks/hooks.json, so they were the uncovered half of the
         # bytecode-cache fix.
-        assert hook["command"] == f"{module._python_hook_cmd()} {command}"
-        assert hook["command"].startswith("PYTHONDONTWRITEBYTECODE=1 ")
-        # The interpreter must still be an absolute path — this test's original
-        # point, and the reason `_python_cmd` resolves `sys.executable`. The env
-        # assignment now precedes it, so check the interpreter token itself
-        # rather than the start of the string.
-        interpreter = hook["command"].split(" ", 2)[1]
-        assert interpreter.startswith("/"), hook["command"]
+        if os.name == "nt":
+            program = base64.b64decode(hook["command"].rsplit(" ", 1)[1]).decode("utf-16-le")
+            assert command in program
+            assert module._python_cmd().replace("'", "''") in program
+            assert "-I -B" in program and program.endswith("exit 0")
+        else:
+            assert hook["command"] == f"{module._python_hook_cmd()} {command}"
+            assert hook["command"].startswith("PYTHONDONTWRITEBYTECODE=1 ")
+            interpreter = hook["command"].split(" ", 2)[1]
+            assert Path(interpreter).is_absolute(), hook["command"]
         assert hook["timeout"] > 0
         assert hook["statusMessage"]
     assert hooks["PostToolUse"][0]["matcher"] == (
@@ -1117,7 +1145,7 @@ def test_codex_mcp_config_uses_absolute_python_and_installed_plugin_root(tmp_pat
 
     assert mcp["command"] == module._python_cmd()
     assert Path(mcp["command"]).is_absolute()
-    assert mcp["args"] == ["-E", "-s", "-B", str(plugin_root.resolve() / "mcp" / "harness_server.py")]
+    assert mcp["args"] == module.owned_python_argv(module._python_cmd(), plugin_root.resolve() / "mcp" / "harness_server.py")[1:]
     # Keep installed shared modules free from interpreter-specific caches.
     assert mcp["env"] == {
         "HARNESS_PLUGIN_ROOT": str(plugin_root.resolve()),
@@ -1198,7 +1226,7 @@ def test_emit_codex_config_rehomes_everything_to_installed_codex_root(tmp_path):
     assert parsed["marketplaces"]["harness"]["source"] == str(module.CODEX_INSTALL_ROOT)
     harness = parsed["mcp_servers"]["harness"]
     assert harness["command"] == module._python_cmd()
-    assert harness["args"] == ["-E", "-s", "-B", str(installed_plugin_root / "mcp" / "harness_server.py")]
+    assert harness["args"] == module.owned_python_argv(module._python_cmd(), installed_plugin_root / "mcp" / "harness_server.py")[1:]
     assert harness["env"]["HARNESS_PLUGIN_ROOT"] == str(installed_plugin_root)
     assert harness["env"]["CLAUDE_PLUGIN_ROOT"] == str(installed_plugin_root)
     assert str(REPO_ROOT) not in json.dumps(parsed)
@@ -1244,12 +1272,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0')
     fake_codex.chmod(0o755)
     config_path = tmp_path / ".codex" / "config.toml"
     config_path.parent.mkdir()
@@ -1267,7 +1290,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
         'command = "new-x11"\n'
     )
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
     _model_codex_listing(fake_codex, config_path)
@@ -1277,9 +1300,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
     parsed = tomllib.loads(config_path.read_text())
     assert parsed["mcp_servers"]["chrome-devtools"]["command"] == "new-chrome"
     assert parsed["mcp_servers"]["x11-display"]["command"] == "new-x11"
-    assert parsed["mcp_servers"]["harness"]["args"] == [
-        "-E", "-s", "-B", str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
-    ]
+    assert parsed["mcp_servers"]["harness"]["args"] == module.owned_python_argv(module._python_cmd(), codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")[1:]
 
 
 @pytest.mark.parametrize("reload_ok", [True, False])
@@ -1289,20 +1310,14 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     fake_bin.mkdir()
     log = tmp_path / "codex.log"
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0', log_env='CODEX_LOG')
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
     config_home = tmp_path / (".codex" if reload_ok else "codex home 'quoted' $literal; extra")
     codex_install_root = config_home / "harness"
     config_path = config_home / "config.toml"
     monkeypatch.setenv("CODEX_HOME", str(config_home))
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1362,9 +1377,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     parsed = tomllib.loads(config_path.read_text())
     assert parsed["plugins"]["harness@harness"]["enabled"] is True
     assert parsed["marketplaces"]["harness"]["source"] == str(codex_install_root)
-    assert parsed["mcp_servers"]["harness"]["args"] == [
-        "-E", "-s", "-B", str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
-    ]
+    assert parsed["mcp_servers"]["harness"]["args"] == module.owned_python_argv(module._python_cmd(), codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")[1:]
     assert parsed["hooks"]["state"]["harness@harness:hooks.json:pre_tool_use:0:0"][
         "trusted_hash"
     ].startswith("sha256:")
@@ -1378,12 +1391,12 @@ def test_codex_install_rejects_version_below_pin_before_mutating_payload(tmp_pat
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex 0.1.0'; exit 0; fi\nexit 0\n")
+    _write_cli_fixture(fake_codex, 'codex 0.1.0')
     fake_codex.chmod(0o755)
     pin = tmp_path / ".codex-version"
     pin.write_text("0.130.0\n")
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setattr(module, "CODEX_VERSION_PIN_FILE", pin)
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1401,17 +1414,10 @@ def test_codex_install_fails_if_plugin_hooks_feature_cannot_be_enabled(tmp_path,
     fake_bin.mkdir()
     log = tmp_path / "codex.log"
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1 $2 $3\" = \"features enable plugin_hooks\" ]; then echo 'feature unavailable' >&2; exit 42; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0', log_env='CODEX_LOG', failures={'features enable plugin_hooks': (42, 'feature unavailable')})
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1431,17 +1437,10 @@ def test_codex_install_fails_if_marketplace_add_fails_after_plugin_hooks(tmp_pat
     fake_bin.mkdir()
     log = tmp_path / "codex.log"
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1 $2 $3\" = \"plugin marketplace add\" ]; then echo 'add failed' >&2; exit 43; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0', log_env='CODEX_LOG', failures={'plugin marketplace add': (43, 'add failed')})
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1459,16 +1458,10 @@ def test_codex_install_treats_existing_marketplace_as_success(tmp_path, monkeypa
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1 $2 $3\" = \"plugin marketplace add\" ]; then echo 'already exists' >&2; exit 9; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0', failures={'plugin marketplace add': (9, 'already exists')})
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
     _model_codex_listing(fake_codex, tmp_path / ".codex" / "config.toml")
@@ -1489,19 +1482,13 @@ def test_default_codex_install_replaces_an_existing_harness_block_with_a_backup(
     fake_bin.mkdir()
     log = tmp_path / "codex.log"
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0', log_env='CODEX_LOG')
     fake_codex.chmod(0o755)
     config_path = tmp_path / ".codex" / "config.toml"
     config_path.parent.mkdir()
     config_path.write_text('[mcp_servers.harness]\ncommand = "old"\n')
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1736,26 +1723,14 @@ def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
     fake_bin.mkdir()
     log = tmp_path / "claude.log"
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CLAUDE_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then\n"
-        "  echo 'Configured marketplaces:'\n"
-        "  echo '  harness'\n"
-        "  echo '    Source: Directory (/stale/project/checkout)'\n"
-        "  exit 0\n"
-        "fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', log_env='CLAUDE_LOG', marketplace='Configured marketplaces:\n  harness\n    Source: Directory (/stale/project/checkout)')
     fake_claude.chmod(0o755)
     harness_dest = tmp_path / "claude" / "harness-dev"
 
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PATH": str(fake_bin) + os.pathsep + os.defpath,
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1780,23 +1755,13 @@ def test_claude_install_updates_marketplace_when_registered_to_install_root(tmp_
     log = tmp_path / "claude.log"
     harness_dest = tmp_path / "claude" / "harness-dev"
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CLAUDE_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then\n"
-        f"  echo 'harness Source: Directory ({harness_dest})'\n"
-        "  exit 0\n"
-        "fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', log_env='CLAUDE_LOG', marketplace=f"harness Source: Directory ({harness_dest})")
     fake_claude.chmod(0o755)
 
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PATH": str(fake_bin) + os.pathsep + os.defpath,
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1817,23 +1782,13 @@ def test_claude_install_adds_marketplace_when_not_registered(tmp_path):
     log = tmp_path / "claude.log"
     harness_dest = tmp_path / "claude" / "harness-dev"
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CLAUDE_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then\n"
-        "  echo 'Configured marketplaces:'\n"
-        "  exit 0\n"
-        "fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', log_env='CLAUDE_LOG', marketplace='Configured marketplaces:')
     fake_claude.chmod(0o755)
 
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PATH": str(fake_bin) + os.pathsep + os.defpath,
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1852,22 +1807,13 @@ def test_claude_install_accepts_existing_plugin_and_mcp_messages(tmp_path):
     log = tmp_path / "claude.log"
     harness_dest = tmp_path / "claude" / "harness-dev"
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CLAUDE_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"install\" ]; then echo 'already installed' >&2; exit 17; fi\n"
-        "if [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"add\" ]; then echo 'already exists' >&2; exit 18; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', log_env='CLAUDE_LOG', failures={'plugin install': (17, 'already installed'), 'mcp add': (18, 'already exists')})
     fake_claude.chmod(0o755)
 
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PATH": str(fake_bin) + os.pathsep + os.defpath,
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1881,18 +1827,12 @@ def test_claude_install_fails_when_marketplace_list_fails(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then echo 'boom' >&2; exit 22; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', failures={'plugin marketplace list': (22, 'boom')})
     fake_claude.chmod(0o755)
 
     r = _run_with_env(
         ["--claude-only"],
-        {"PATH": f"{fake_bin}:/usr/bin:/bin", "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
+        {"PATH": str(fake_bin) + os.pathsep + os.defpath, "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
     )
 
     assert r.returncode == 1
@@ -1903,19 +1843,12 @@ def test_claude_install_fails_when_mcp_add_hard_fails(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then exit 0; fi\n"
-        "if [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"add\" ]; then echo 'permission denied' >&2; exit 23; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', failures={'mcp add': (23, 'permission denied')})
     fake_claude.chmod(0o755)
 
     r = _run_with_env(
         ["--claude-only"],
-        {"PATH": f"{fake_bin}:/usr/bin:/bin", "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
+        {"PATH": str(fake_bin) + os.pathsep + os.defpath, "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
     )
 
     assert r.returncode == 1
@@ -1929,27 +1862,14 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
     codex_log = tmp_path / "codex.log"
     claude_log = tmp_path / "claude.log"
     fake_codex = fake_bin / "codex"
-    fake_codex.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CODEX_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_codex, 'codex 0.130.0', log_env='CODEX_LOG')
     fake_codex.chmod(0o755)
     fake_claude = fake_bin / "claude"
-    fake_claude.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$CLAUDE_LOG\"\n"
-        "if [ \"$1\" = \"--version\" ]; then echo 'claude 1.2.3'; exit 0; fi\n"
-        "if [ \"$1\" = \"plugin\" ] && [ \"$2\" = \"marketplace\" ] && [ \"$3\" = \"list\" ]; then echo 'list failed' >&2; exit 31; fi\n"
-        "if [ \"$1\" = \"app-server\" ]; then exit 1; fi\n"
-        "exit 0\n"
-    )
+    _write_cli_fixture(fake_claude, 'claude 1.2.3', log_env='CLAUDE_LOG', failures={'plugin marketplace list': (31, 'list failed')})
     fake_claude.chmod(0o755)
     cfg = tmp_path / ".codex" / "config.toml"
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
     monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "claude" / "harness-dev"))
     monkeypatch.setenv("CODEX_LOG", str(codex_log))
     monkeypatch.setenv("CLAUDE_LOG", str(claude_log))

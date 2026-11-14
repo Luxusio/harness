@@ -1,4 +1,6 @@
 """Explicit migration preserves measured work and opaque historical bytes."""
+
+from test_symlink_fixture import create_symlink
 import json
 
 try:
@@ -509,7 +511,7 @@ def test_focus_migration_rejects_symlink_before_control_changes(tmp_path):
     before = (td / 'WBS.control.json').read_bytes()
     outside = tmp_path / 'outside-focus'
     outside.write_bytes(b'preserve')
-    (td.parent / '.active').symlink_to(outside)
+    create_symlink(td.parent / '.active', outside)
     result = migrate(repo, apply=True)
     assert result.get('isError'), result
     assert (td / 'WBS.control.json').read_bytes() == before
@@ -585,7 +587,7 @@ def test_default_marker_refuses_unsafe_input_before_any_conversion(tmp_path, cor
         outside = tmp_path / 'outside-marker'
         outside.write_bytes(marker.read_bytes())
         marker.unlink()
-        marker.symlink_to(outside)
+        create_symlink(marker, outside)
     else:
         key, replacement = {
             'unknown': ('extra', 'unknown'), 'fence': ('binding_conflicts', []),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import json
 import os
@@ -459,7 +461,7 @@ def test_refuses_symlink_inside_task_evidence(tmp_path: Path):
     wbs_dir = _write_task(worktree, "WBS__demo")
     secret = tmp_path / "secret.txt"
     secret.write_text("secret\n", encoding="utf-8")
-    (wbs_dir / "leak").symlink_to(secret)
+    create_symlink(wbs_dir / "leak", secret)
     with _raises(mod.HarvestError, match="non-regular entry"):
         mod.harvest(str(repo), str(worktree), "WBS__demo")
     assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
@@ -470,7 +472,7 @@ def test_refuses_symlinked_evidence_parent_and_fifo(tmp_path: Path):
     worktree = _merged_lead(repo, tmp_path)
     outside = tmp_path / "outside-tasks"
     _write_task(outside, "WBS__demo")
-    (worktree / "doc/harness/wbs").symlink_to(outside / "doc/harness/wbs")
+    create_symlink(worktree / "doc/harness/wbs", outside / "doc/harness/wbs", target_is_directory=True)
     with _raises(mod.HarvestError, match="symlink"):
         mod.harvest(str(repo), str(worktree), "WBS__demo")
 
@@ -487,7 +489,7 @@ def test_learnings_links_refused_and_non_json_rows_skipped(tmp_path: Path):
     _write_task(worktree, "WBS__demo")
     real = tmp_path / "rows.jsonl"
     real.write_text('{"k": 1}\n', encoding="utf-8")
-    (worktree / "doc/harness/learnings.jsonl").symlink_to(real)
+    create_symlink(worktree / "doc/harness/learnings.jsonl", real)
     with _raises(mod.HarvestError, match="symlink"):
         mod.harvest(str(repo), str(worktree), "WBS__demo")
     assert not (repo / "doc/harness/archive/batch/WBS__demo").exists()
@@ -559,7 +561,7 @@ def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, pree
         target = tmp_path / "external"
         target.mkdir()
         (target / "precious").write_text("external data")
-        (main / "external-link").symlink_to(target, target_is_directory=True)
+        create_symlink(main / "external-link", target, target_is_directory=True)
     with (main / ".gitignore").open("a") as handle:
         handle.write("doc/harness/wbs/\ndoc/harness/archive/\ndoc/harness/runtime/\ndoc/harness/learnings.jsonl\n")
     fixture._commit(main, "ignore operational evidence")
@@ -729,7 +731,7 @@ def test_s1_guarded_removal_rejects_symlinked_state(tmp_path, monkeypatch):
     main, work, _, manifest, checkpoint, state_path, _, _ = _s1_removal_fixture(tmp_path, monkeypatch)
     saved = tmp_path / "redirected-state.json"
     state_path.rename(saved)
-    state_path.symlink_to(saved)
+    create_symlink(state_path, saved)
     with _raises(mod.HarvestError):
         mod.remove_s1_worktree(str(main), str(work), "WBS__lead", manifest, checkpoint)
     assert work.exists()
@@ -979,7 +981,7 @@ def test_ordinary_snapshots_refuse_foreign_malformed_and_unsafe_inputs(tmp_path)
     external = tmp_path / 'outside'
     external.write_bytes(raw)
     diagnostics.unlink()
-    diagnostics.symlink_to(external)
+    create_symlink(diagnostics, external)
     with _raises(mod.HarvestError):
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
     diagnostics.unlink()
@@ -1005,7 +1007,7 @@ def test_ordinary_snapshot_collisions_and_sidecar_links_never_overwrite(tmp_path
     destination.unlink()
     outside = tmp_path / 'outside'
     outside.write_bytes(diagnostics.read_bytes())
-    destination.symlink_to(outside)
+    create_symlink(destination, outside)
     with _raises(mod.HarvestError):
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
     destination.unlink()

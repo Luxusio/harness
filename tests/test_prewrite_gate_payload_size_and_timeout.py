@@ -18,6 +18,8 @@ from the environment it runs under.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import ast
 import contextlib
 import importlib.util
@@ -500,7 +502,7 @@ class ProtectedOnlyDecision(_TmpRepoCase):
     def test_symlink_escape_is_not_a_protected_denial(self):
         outside = self.base / "outside"
         outside.mkdir()
-        (self.repo / "linked").symlink_to(outside, target_is_directory=True)
+        create_symlink(self.repo / "linked", outside, target_is_directory=True)
         payload = _write(self.repo, "linked/notes.md", size=10)
         self.assertEqual(self._decide(payload), (None, ""))
         (decision, reason), _size = _run_script(GATE, payload, self.repo)
@@ -514,7 +516,7 @@ class ProtectedOnlyDecision(_TmpRepoCase):
         manifest = broken / "doc/harness/manifest.yaml"
         real = broken / "manifest.real.yaml"
         manifest.rename(real)
-        manifest.symlink_to(real)
+        create_symlink(manifest, real)
         ordinary = _write(broken, "README.md", size=10)
         self.assertEqual(self._decide(ordinary), (None, ""))
         (decision, reason), _size = _run_script(GATE, ordinary, broken)

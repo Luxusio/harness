@@ -1,4 +1,6 @@
 """Public WBS worktree ownership, admission and completion with real Git."""
+
+from test_symlink_fixture import create_symlink
 from pathlib import Path
 
 try:
@@ -505,7 +507,7 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
         if ancestor == 'symlink-runtime':
             external = tmp_path / 'external-runtime'
             external.mkdir()
-            batches.parent.symlink_to(external, target_is_directory=True)
+            create_symlink(batches.parent, external, target_is_directory=True)
         else:
             # Make main itself the nearest existing ancestor; the linked tree
             # retains its own manifest and admitted task throughout the check.
@@ -581,14 +583,14 @@ def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypa
         external = tmp_path / 'external-runtime'
         external.mkdir()
         (external / 'batches').mkdir()
-        batches.parent.symlink_to(external, target_is_directory=True)
+        create_symlink(batches.parent, external, target_is_directory=True)
         evidence = batches.parent
     else:
         batches.parent.mkdir()
         if unsafe == 'file':
             batches.write_bytes(b'precious invalid batch directory\x00\xff')
         elif unsafe == 'dangling-symlink':
-            batches.symlink_to(tmp_path / 'missing-batches', target_is_directory=True)
+            create_symlink(batches, tmp_path / 'missing-batches', target_is_directory=True)
         else:
             batches.mkdir()
             batches.parent.chmod(0o777)

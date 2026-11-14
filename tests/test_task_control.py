@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import hashlib
 import json
@@ -313,7 +315,7 @@ def test_symlinked_manifest_remains_untrusted(tmp_path):
     harness_dir.mkdir(parents=True)
     external = tmp_path / "manifest.yaml"
     external.write_text("version: 5\n", encoding="utf-8")
-    (harness_dir / "manifest.yaml").symlink_to(external)
+    create_symlink(harness_dir / "manifest.yaml", external)
     child = root / "child"
     child.mkdir()
 

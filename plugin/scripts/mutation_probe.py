@@ -786,14 +786,16 @@ def walk_tree(repo_root, root, patterns=_NORECURSEDIRS, pruned=None):
                 continue
             if _pytest_prunes(d, patterns):
                 if pruned is not None:
-                    pruned.append(os.path.relpath(os.path.join(dirpath, d), repo_root))
+                    pruned.append(os.path.relpath(os.path.join(dirpath, d), repo_root).replace(os.sep, "/"))
                 continue
             keep.append(d)
         dirnames[:] = keep
         for name in sorted(filenames):
             if _is_bytecode(name):
                 continue
-            yield os.path.relpath(os.path.join(dirpath, name), repo_root)
+            # Git names files with '/', including on native Windows. These
+            # logical keys also identify changed tests and the scratch copy set.
+            yield os.path.relpath(os.path.join(dirpath, name), repo_root).replace(os.sep, "/")
 
 
 def _contains_itself(dirpath):
@@ -1278,6 +1280,8 @@ class PytestRunner:
 
 def collect_sites(repo_root, rev, tests_dir, max_test_files, paths=(), notes=None):
     notes = [] if notes is None else notes
+    tests_dir = os.path.normpath(tests_dir).replace(os.sep, "/")
+    paths = tuple(prefix.replace(os.sep, "/") for prefix in paths)
     end = range_end(rev)
     changed = changed_python_lines(repo_root, rev, notes=notes)
     tests = discover_tests(repo_root, tests_dir)
@@ -1325,7 +1329,7 @@ def collect_sites(repo_root, rev, tests_dir, max_test_files, paths=(), notes=Non
     # per file, unlike the `--tests-dir .` case this note exists for, where
     # `tests_dir` names the whole repository and "under it" is not a
     # meaningful boundary to begin with.
-    test_prefix = "" if tests_dir == os.curdir else tests_dir.rstrip("/") + os.sep
+    test_prefix = "" if tests_dir == os.curdir else tests_dir.rstrip("/") + "/"
     for excluded in sorted(changed_tests):
         if test_prefix and excluded.startswith(test_prefix):
             continue

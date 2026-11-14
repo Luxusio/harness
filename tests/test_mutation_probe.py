@@ -202,6 +202,31 @@ def test_a_path_filter_does_not_hide_the_test_file_the_diff_wrote(tmp_path):
     assert sites and all(s.targeted == ("tests/test_written_for_it.py",) for s in sites)
 
 
+def test_native_directory_arguments_share_git_logical_keys_for_changed_tests(tmp_path):
+    """Discovery, change exclusion, ranking and copy keys must agree on NTFS."""
+    repo = _repo(tmp_path, {
+        "pkg/mod.py": "def widen(value):\n    return value > 10\n",
+        "suite/nested/test_old.py": "from pkg.mod import widen\n\ndef test_old():\n"
+                                    "    assert widen(13)\n    assert widen(13)\n",
+        "suite/nested/test_new.py": "def test_new():\n    assert True\n",
+    })
+    _write(repo, {
+        "pkg/mod.py": "def widen(value):\n    return value > 12\n",
+        "suite/nested/test_new.py": "from pkg.mod import widen\n\ndef test_new():\n    assert widen(13)\n",
+    })
+    tests_dir = os.path.join("suite", "nested")
+    notes = []
+    sites, _ = mp.collect_sites(str(repo), None, tests_dir, 1, notes=notes)
+    assert sites and {site.path for site in sites} == {"pkg/mod.py"}
+    assert all(site.targeted == ("suite/nested/test_new.py",) for site in sites)
+    assert not notes
+    assert mp.tests_tree_files(str(repo), tests_dir) == [
+        "suite/nested/test_new.py", "suite/nested/test_old.py"]
+    filtered, _ = mp.collect_sites(str(repo), None, tests_dir, 1,
+                                   paths=(os.path.join("pkg", ""),))
+    assert filtered == sites
+
+
 def test_a_range_that_does_not_describe_the_checkout_offers_no_sites(tmp_path):
     """`--rev` line numbers and working-tree bytes are two coordinate systems.
 
@@ -686,7 +711,7 @@ def test_the_scratch_copy_never_receives_bytecode(tmp_path):
     assert notes == [], notes
 
 
-def test_a_symlink_loop_under_the_tests_dir_terminates(tmp_path):
+def test_a_symlink_loop_under_the_tests_dir_terminates(tmp_path, make_symlink):
     """`followlinks=True` is what sees a symlinked suite, and what can loop.
 
     A self-referential directory symlink is not exotic (`tests/current -> .` in
@@ -694,7 +719,7 @@ def test_a_symlink_loop_under_the_tests_dir_terminates(tmp_path):
     returns, and the probe hangs before it runs anything.
     """
     repo = _repo(tmp_path, {"tests/test_m.py": "def test_a():\n    assert 1\n"})
-    os.symlink(".", repo / "tests" / "here")
+    make_symlink(repo / "tests" / "here", ".", target_is_directory=True)
 
     assert mp.tests_tree_files(str(repo)) == ["tests/test_m.py"]
 
@@ -742,7 +767,7 @@ def test_a_must_include_path_outside_the_scratch_tree_is_refused(tmp_path):
                     "--python", sys.executable]) == 1
 
 
-def test_a_must_include_path_that_is_not_a_regular_file_is_recorded(tmp_path):
+def test_a_must_include_path_that_is_not_a_regular_file_is_recorded(tmp_path, make_symlink):
     """A ranked path the copy cannot place becomes a note, never silence.
 
     A broken symlink named `test_*.py` is ranked by `discover_tests` — it walks
@@ -754,7 +779,7 @@ def test_a_must_include_path_that_is_not_a_regular_file_is_recorded(tmp_path):
     and it says what it did not do.
     """
     repo = _repo(tmp_path, {"tests/test_real.py": "def test_r():\n    assert True\n"})
-    os.symlink("nowhere.py", repo / "tests" / "test_broken.py")
+    make_symlink(repo / "tests" / "test_broken.py", "nowhere.py")
 
     ranked = mp.discover_tests(str(repo))
     assert ranked == ["tests/test_broken.py", "tests/test_real.py"], ranked
@@ -1051,7 +1076,7 @@ def test_a_test_file_pytest_collects_under_its_other_default_name_is_in_the_prob
     assert (scratch / "tests" / "local" / "boundary_test.py").is_file()
 
 
-def test_a_test_directory_reached_through_a_symlink_is_in_the_probed_tree(tmp_path):
+def test_a_test_directory_reached_through_a_symlink_is_in_the_probed_tree(tmp_path, make_symlink):
     """The same false survivor without git being wrong about anything.
 
     `tests/deep` is a tracked symlink to a directory outside the repository.
@@ -1067,7 +1092,7 @@ def test_a_test_directory_reached_through_a_symlink_is_in_the_probed_tree(tmp_pa
         "mod.py": CACHED_MODULE,
         "tests/test_base.py": "def test_base():\n    assert True\n",
     })
-    os.symlink("../../shared", repo / "tests" / "deep")
+    make_symlink(repo / "tests" / "deep", "../../shared", target_is_directory=True)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "symlinked suite")
     _write(repo, {"mod.py": "def widen(value):\n    return value == 2\n"})
@@ -1287,7 +1312,7 @@ def test_a_source_that_is_not_utf8_is_named_and_does_not_lose_the_rest(tmp_path)
     assert "does not match" not in notes[0], notes
 
 
-def test_an_aliased_directory_and_its_canonical_path_are_both_in_the_tree(tmp_path):
+def test_an_aliased_directory_and_its_canonical_path_are_both_in_the_tree(tmp_path, make_symlink):
     """The walk's prune is a cycle check, not a visited set.
 
     Keyed on the resolved directory, whichever path arrives *second* is pruned —
@@ -1297,8 +1322,8 @@ def test_an_aliased_directory_and_its_canonical_path_are_both_in_the_tree(tmp_pa
     collects both.
     """
     repo = _repo(tmp_path, {"tests/pkg/test_x.py": "def test_x():\n    assert 1\n"})
-    os.symlink("pkg", repo / "tests" / "link")
-    os.symlink(".", repo / "tests" / "here")  # and a cycle is still cut
+    make_symlink(repo / "tests" / "link", "pkg", target_is_directory=True)
+    make_symlink(repo / "tests" / "here", ".", target_is_directory=True)  # and a cycle is still cut
 
     assert mp.tests_tree_files(str(repo)) == [
         "tests/link/test_x.py",
@@ -1604,11 +1629,11 @@ def test_a_tests_dir_of_dot_is_not_mistaken_for_a_symlink_cycle(tmp_path):
     assert mp.discover_tests(str(repo), ".") == ["test_top.py"]
 
 
-def test_a_genuine_cycle_through_an_ancestor_still_terminates(tmp_path):
+def test_a_genuine_cycle_through_an_ancestor_still_terminates(tmp_path, make_symlink):
     """The normpath fix must not weaken real cycle detection: `self -> .`
     still resolves to an ancestor and the walk still terminates."""
     repo = _repo(tmp_path, {"tests/test_m.py": "def test_a():\n    assert 1\n"})
-    os.symlink(".", repo / "tests" / "self")
+    make_symlink(repo / "tests" / "self", ".", target_is_directory=True)
 
     assert mp.tests_tree_files(str(repo)) == ["tests/test_m.py"]
 
@@ -2315,7 +2340,7 @@ def test_an_unresolvable_config_file_is_named_when_the_default_is_used_instead(t
     assert any("pyproject.toml" in n and "default" in n for n in notes), notes
 
 
-def test_a_test_tree_symlink_that_resolves_outside_the_repo_is_still_copied(tmp_path):
+def test_a_test_tree_symlink_that_resolves_outside_the_repo_is_still_copied(tmp_path, make_symlink):
     """Pins the ceiling `copy_worktree`'s docstring states, so a future
     change cannot quietly turn it into a guard without a test failing first.
 
@@ -2334,7 +2359,7 @@ def test_a_test_tree_symlink_that_resolves_outside_the_repo_is_still_copied(tmp_
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "shared.py").write_text("SHARED = 1\n", encoding="utf-8")
-    os.symlink(str(outside), repo / "tests" / "link")
+    make_symlink(repo / "tests" / "link", outside, target_is_directory=True)
 
     must_include = mp.tests_tree_files(str(repo))
     assert "tests/link/shared.py" in must_include, must_include

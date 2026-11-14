@@ -25,6 +25,8 @@ else:
 
 _guard = threading.RLock()
 _active_locks = set()
+_native_lock_condition = threading.Condition(_guard)
+_native_lock_owners = {}
 _LOCK_LENGTH = (1 << 63) - 1
 
 
@@ -412,16 +414,20 @@ def file_lock(path, shared=False, blocking=False):
                 yield
         return
     path_key = ("path", os.path.normcase(str(path)))
-    with _guard:
-        if path_key in _active_locks:
-            raise BlockingIOError("Lock already owned by this process")
-        _active_locks.add(path_key)
+    owner = threading.get_ident()
+    with _native_lock_condition:
+        while path_key in _native_lock_owners:
+            if not blocking or _native_lock_owners[path_key] == owner:
+                raise BlockingIOError("Lock already owned by this process")
+            _native_lock_condition.wait()
+        _native_lock_owners[path_key] = owner
     try:
         with _native.file_lock(path, shared=shared, blocking=blocking):
             yield
     finally:
-        with _guard:
-            _active_locks.discard(path_key)
+        with _native_lock_condition:
+            del _native_lock_owners[path_key]
+            _native_lock_condition.notify_all()
 
 
 def same_file(left, right):

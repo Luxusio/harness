@@ -1,6 +1,8 @@
 """Versioned project-file repair is prompted on both runtime surfaces."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import json
 import os
@@ -234,7 +236,7 @@ def test_symlinked_version_marker_fails_closed_without_writes(tmp_path):
     root = repo(tmp_path)
     outside = tmp_path / "outside-version"
     outside.write_text("2.3.0\n")
-    (root / "doc/harness/.version").symlink_to(outside)
+    create_symlink(root / "doc/harness/.version", outside)
     result = migrate(root)
     assert result.returncode == 1
     assert "symlink" in result.stdout
@@ -310,7 +312,7 @@ def test_reminder_is_silent_for_migrated_project_with_symlinked_claude_dir(tmp_p
     root = repo(tmp_path)
     shared = tmp_path / "shared-claude"
     (shared / "worktrees").mkdir(parents=True)
-    (root / ".claude").symlink_to(shared, target_is_directory=True)
+    create_symlink(root / ".claude", shared, target_is_directory=True)
     assert "manifest version 5 -> 7" in load_check().reminder(root)
     assert migrate(root).returncode == 0
     assert load_check().reminder(root) == ""

@@ -1,4 +1,6 @@
 """Tests for the published-close self-improvement retro trigger (AC-008)."""
+
+from test_symlink_fixture import create_symlink
 import hashlib
 import importlib.util
 import json
@@ -154,7 +156,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             outside = Path(d, "outside")
             outside.mkdir()
             tasks_root = Path(d, "doc", "harness", "wbs")
-            tasks_root.joinpath("WBS__symlink").symlink_to(outside, target_is_directory=True)
+            create_symlink(tasks_root.joinpath("WBS__symlink"), outside, target_is_directory=True)
 
             self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
 
@@ -164,7 +166,7 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             real_root.mkdir()
             tasks_root = Path(d, "doc", "harness", "wbs")
             tasks_root.parent.mkdir(parents=True)
-            tasks_root.symlink_to(real_root, target_is_directory=True)
+            create_symlink(tasks_root, real_root, target_is_directory=True)
             self.assertEqual(RETRO.count_verified_closes_since(d, 0), 0)
 
         with tempfile.TemporaryDirectory() as d:
@@ -341,7 +343,7 @@ class TestRetroSafeIO(unittest.TestCase):
                 "key": "secret-key",
                 "insight": "TOP_SECRET_VALUE",
             }) + "\n", encoding="utf-8")
-            harness.joinpath("learnings.jsonl").symlink_to(outside_ledger)
+            create_symlink(harness.joinpath("learnings.jsonl"), outside_ledger)
 
             report = RETRO.generate(repo, 7)
 
@@ -375,7 +377,7 @@ class TestRetroSafeIO(unittest.TestCase):
             retros.mkdir(parents=True)
             target = Path(outside, "outside.md")
             target.write_text("KEEP\n", encoding="utf-8")
-            retros.joinpath("2026-09-01.md").symlink_to(target)
+            create_symlink(retros.joinpath("2026-09-01.md"), target)
 
             with self.assertRaises(RuntimeError):
                 RETRO._save_report(repo, "replacement\n", "2026-09-01")

@@ -4,7 +4,11 @@ import hashlib
 import os
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 try:
     import pytest
@@ -272,11 +276,92 @@ def test_lock_excludes_other_process_and_same_process_alias(tmp_path):
     lock = folder / "sync.lock"
     with platform.file_lock(lock):
         assert _lock_probe(lock) == 7
-        with pytest.raises(BlockingIOError):
-            with platform.file_lock(lock):
-                pass
+        for blocking in (False, True):
+            with pytest.raises(BlockingIOError):
+                with platform.file_lock(lock, blocking=blocking):
+                    pass
         assert _lock_probe(lock) == 7, "Rejected second acquisition must not release first record lock"
     assert _lock_probe(lock) == 0
+
+
+@pytest.fixture
+def native_lock_wrapper(monkeypatch):
+    """Model only the wrapper on POSIX; Windows retains its real handle lock."""
+    if os.name != "nt":
+        @contextmanager
+        def native_lock(*args, **kwargs):
+            yield
+        monkeypatch.setattr(platform, "os", SimpleNamespace(name="nt", path=os.path))
+        monkeypatch.setattr(platform, "_native", SimpleNamespace(file_lock=native_lock), raising=False)
+    return platform
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_native_blocking_lock_waits_for_foreign_thread_and_releases_after_error(
+    tmp_path, native_lock_wrapper, interrupted,
+):
+    folder = native_lock_wrapper.ensure_private_directory(tmp_path / "private") if os.name == "nt" else tmp_path
+    lock = folder / "sync.lock"
+    started, entered = threading.Event(), threading.Event()
+
+    def contender():
+        started.set()
+        with native_lock_wrapper.file_lock(lock, blocking=True):
+            entered.set()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            with native_lock_wrapper.file_lock(lock, blocking=True):
+                future = pool.submit(contender)
+                assert started.wait(5)
+                assert not entered.wait(.1)
+                if interrupted:
+                    raise RuntimeError("interrupted lock owner")
+        except RuntimeError as error:
+            assert interrupted and str(error) == "interrupted lock owner"
+        future.result(timeout=5)
+    assert entered.is_set()
+
+
+def test_native_nonblocking_foreign_thread_and_blocking_recursion_refuse(
+    tmp_path, native_lock_wrapper,
+):
+    folder = native_lock_wrapper.ensure_private_directory(tmp_path / "private") if os.name == "nt" else tmp_path
+    lock = folder / "sync.lock"
+
+    def contender():
+        with native_lock_wrapper.file_lock(lock):
+            pytest.fail("nonblocking contender entered an owned lock")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with native_lock_wrapper.file_lock(lock):
+            with pytest.raises(BlockingIOError):
+                with native_lock_wrapper.file_lock(lock, blocking=True):
+                    pass
+            with pytest.raises(BlockingIOError):
+                pool.submit(contender).result(timeout=5)
+
+
+def test_native_failed_lock_admission_does_not_reserve_path(tmp_path, native_lock_wrapper, monkeypatch):
+    folder = native_lock_wrapper.ensure_private_directory(tmp_path / "private") if os.name == "nt" else tmp_path
+    lock = folder / "sync.lock"
+    original = native_lock_wrapper._native.file_lock
+    attempts = []
+
+    @contextmanager
+    def interrupted(*args, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise OSError("native lock admission failed")
+        with original(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(native_lock_wrapper._native, "file_lock", interrupted)
+    with pytest.raises(OSError, match="native lock admission failed"):
+        with native_lock_wrapper.file_lock(lock):
+            pass
+    with native_lock_wrapper.file_lock(lock):
+        assert len(attempts) == 2
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Existing FileChannel/hook POSIX record-lock interop")

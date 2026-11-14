@@ -1,6 +1,8 @@
 """Registered cross-checkout targets enforce their own exact-session gates."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import io
 import json
@@ -179,7 +181,7 @@ class TestWorktreeCwdProtectsOtherCheckouts(CrossCheckoutFixture):
             with self.subTest(rel=rel):
                 alias = outside / name
                 if not alias.is_symlink():
-                    os.symlink(self.main / rel, alias)
+                    create_symlink(alias, self.main / rel)
                 decision, reason = _gate(self.lead, alias)
                 self.assertEqual(decision, "deny")
                 self.assertIn(f"owner={owner}", reason)

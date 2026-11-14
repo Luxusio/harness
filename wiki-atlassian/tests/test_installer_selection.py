@@ -197,9 +197,10 @@ def test_legacy_prepare_only_needs_no_host_cli(installer, monkeypatch, capsys):
 
 @pytest.mark.parametrize('arguments', [[], ['--runtime', 'codex']])
 def test_missing_host_refuses_before_preparing_or_resolving_python(installer, monkeypatch, capsys, arguments):
-    module, _, _ = installer
+    module, _, home = installer
     monkeypatch.setattr(module.sys, 'argv', ['install.py', *arguments])
-    monkeypatch.setattr(module.shutil, 'which', lambda *a, **k: None)
+    # Native host discovery also inspects npm shims independently of which().
+    monkeypatch.setenv('PATH', str(home))
     monkeypatch.setattr(module, 'prepare', lambda *a: pytest.fail('missing host prepared a payload'))
     monkeypatch.setattr(module, 'select_python', lambda **k: pytest.fail('missing host required mise'))
     assert module.main() == 1
@@ -286,18 +287,25 @@ def test_legacy_directory_enumeration_error_preserves_selection(installer, monke
     nested = package / 'plugin/skills/unreadable'
     module.ensure_private_directory(nested)
     module.atomic_write(nested / 'uninspected-file', b'must inspect this file')
+    before = module._inventory(package, private=False)
     real_scandir = os.scandir
+    expected = Path(module._io_path(nested))
+    failures = []
 
     def fail_nested(path):
-        if Path(path) == nested:
+        if Path(path) == expected:
+            failures.append(path)
             raise OSError(5, 'Synthetic directory enumeration failure')
         return real_scandir(path)
 
-    monkeypatch.setattr(module.os, 'scandir', fail_nested)
-    with pytest.raises(OSError, match='enumeration failure'):
-        with module.marketplace(payload):
-            pytest.fail('Partial legacy inventory was selected')
+    with monkeypatch.context() as fault:
+        fault.setattr(module.os, 'scandir', fail_nested)
+        with pytest.raises(OSError, match='enumeration failure'):
+            with module.marketplace(payload):
+                pytest.fail('Partial legacy inventory was selected')
+    assert len(failures) == 1
     assert metadata.read_bytes() == old
+    assert module._inventory(package, private=False) == before
 
 
 def test_only_legacy_jar_can_exceed_python_payload_file_limit(installer):

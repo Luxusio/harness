@@ -131,7 +131,33 @@ def _isolated_env(home: Path) -> dict[str, str]:
     env.update(HOME=str(home), CODEX_HOME=str(home / ".codex"),
                CLAUDE_PLUGIN_ROOT=str(REPO / "plugin"),
                PYTHONDONTWRITEBYTECODE="1")
+    if os.name == "nt":
+        env["USERPROFILE"] = str(home)
     return env
+
+
+def _run_registered_hook(hook: dict, *, payload: str, cwd: Path, env: dict):
+    if "args" in hook:
+        argv = [value.replace("${CLAUDE_PLUGIN_ROOT}", env["CLAUDE_PLUGIN_ROOT"])
+                for value in [hook["command"], *hook["args"]]]
+        return subprocess.run(argv, input=payload, text=True, capture_output=True,
+                              cwd=cwd, env=env, timeout=12)
+    return subprocess.run(hook["command"], shell=True, input=payload,
+                          text=True, capture_output=True, cwd=cwd, env=env, timeout=12)
+
+
+def test_registered_exec_hook_preserves_arguments_and_literal_plugin_root(tmp_path):
+    root = tmp_path / "plugin space 한글"
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(root))
+    hook = {"command": sys.executable, "args": [
+        "-B", "-c", "import json,sys;print(json.dumps(sys.argv[1:]));print(sys.stdin.read())",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/hook.py", "literal & argument",
+    ], "onFailure": "continue"}
+    result = _run_registered_hook(hook, payload="input bytes", cwd=tmp_path, env=env)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert json.loads(lines[0]) == [str(root) + "/scripts/hook.py", "literal & argument"]
+    assert lines[1] == "input bytes"
 
 
 def _tree(root: Path) -> dict[str, tuple[str, bytes | str]]:
@@ -179,13 +205,13 @@ def canonical_registered_hooks():
 @pytest.fixture
 def command(request, canonical_registered_hooks):
     event, index, hook_index = request.param
-    return canonical_registered_hooks[event][index]["hooks"][hook_index]["command"]
+    return canonical_registered_hooks[event][index]["hooks"][hook_index]
 
 
 @pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS, indirect=["command"])
 @pytest.mark.parametrize("kind", ["plain", "git", "nested-git"])
 def test_actual_registered_claude_hooks_are_inactive_outside_initialized_project(
-    tmp_path: Path, event: str, matcher: str, command: str, kind: str,
+    tmp_path: Path, event: str, matcher: str, command: dict, kind: str,
 ):
     home = tmp_path / "home"
     home.mkdir()
@@ -205,9 +231,8 @@ def test_actual_registered_claude_hooks_are_inactive_outside_initialized_project
     }
     before = _tree(tmp_path)
     # The host cwd is deliberately enabled: the event payload owns context.
-    result = subprocess.run(command, shell=True, input=json.dumps(payload),
-                            text=True, capture_output=True, cwd=enabled,
-                            env=_isolated_env(home), timeout=12)
+    result = _run_registered_hook(command, payload=json.dumps(payload), cwd=enabled,
+                                  env=_isolated_env(home))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "", result.stdout
     assert _tree(tmp_path) == before
@@ -285,10 +310,9 @@ def test_registered_welcome_activates_in_initialized_non_git_project_subdirector
         cwd = link / "src"
     home = tmp_path / "home"
     home.mkdir()
-    command = canonical_registered_hooks["SessionStart"][0]["hooks"][0]["command"]
-    result = subprocess.run(command, shell=True, input=json.dumps({"cwd": str(cwd)}),
-                            text=True, capture_output=True, cwd=tmp_path,
-                            env=_isolated_env(home), timeout=12)
+    command = canonical_registered_hooks["SessionStart"][0]["hooks"][0]
+    result = _run_registered_hook(command, payload=json.dumps({"cwd": str(cwd)}),
+                                  cwd=tmp_path, env=_isolated_env(home))
     assert result.returncode == 0, result.stderr
     assert "harness — ready." in result.stdout
     assert "Project: enabled" in result.stdout
@@ -321,7 +345,7 @@ def test_manifest_alias_is_not_hook_activation_authority(tmp_path: Path, compone
 @pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS, indirect=["command"])
 @pytest.mark.parametrize("cwd_value", [None, "missing", 42, ""])
 def test_registered_claude_hooks_ignore_invalid_explicit_cwd(
-    tmp_path: Path, event: str, matcher: str, command: str, cwd_value,
+    tmp_path: Path, event: str, matcher: str, command: dict, cwd_value,
 ):
     home = tmp_path / "home"
     home.mkdir()
@@ -334,9 +358,8 @@ def test_registered_claude_hooks_ignore_invalid_explicit_cwd(
                "tool_input": {"file_path": str(tmp_path / "app.py"), "content": "pass"},
                "tool_response": {"stderr": "bash: pytest: command not found"}}
     before = _tree(tmp_path)
-    result = subprocess.run(command, shell=True, input=json.dumps(payload),
-                            text=True, capture_output=True, cwd=enabled,
-                            env=_isolated_env(home), timeout=12)
+    result = _run_registered_hook(command, payload=json.dumps(payload), cwd=enabled,
+                                  env=_isolated_env(home))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "", result.stdout
     assert _tree(tmp_path) == before
@@ -345,7 +368,7 @@ def test_registered_claude_hooks_ignore_invalid_explicit_cwd(
 @pytest.mark.parametrize("event,matcher,command", _HOOK_COMMANDS, indirect=["command"])
 @pytest.mark.parametrize("kind", ["oversized", "malformed", "non-object"])
 def test_registered_hooks_never_fallback_after_rejected_input(
-    tmp_path: Path, event: str, matcher: str, command: str, kind: str,
+    tmp_path: Path, event: str, matcher: str, command: dict, kind: str,
 ):
     home = tmp_path / "home"
     home.mkdir()
@@ -358,9 +381,8 @@ def test_registered_hooks_never_fallback_after_rejected_input(
     else:
         payload = "{" if kind == "malformed" else "null"
     before = _tree(tmp_path)
-    result = subprocess.run(command, shell=True, input=payload, text=True,
-                            capture_output=True, cwd=enabled,
-                            env=_isolated_env(home), timeout=12)
+    result = _run_registered_hook(command, payload=payload, cwd=enabled,
+                                  env=_isolated_env(home))
     assert result.returncode == 0, result.stderr
     assert result.stdout == "", result.stdout
     assert _tree(tmp_path) == before

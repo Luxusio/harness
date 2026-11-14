@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import os
 import sys
@@ -26,11 +27,12 @@ def _load():
     return module
 
 
-def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monkeypatch):
+def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monkeypatch, selected_installer_python):
     home = tmp_path / "ordinary-home"
     home.mkdir()
     runtime = tmp_path / "runtime home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CODEX_HOME", str(runtime))
     log = tmp_path / "calls.jsonl"
     fake_bin = tmp_path / "bin"
@@ -56,6 +58,8 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
     install = _load()
+    # This fixture models the CLI protocol, not platform executable discovery.
+    monkeypatch.setattr(install, "host_command", lambda *a, **k: [selected_installer_python, "-B", str(fake)])
     result = install.install_codex(dry_run=False, force=True, config_path=None)
     assert result.ok, result.summary + '\n' + '\n'.join(result.steps)
     assert result.restart_required
@@ -65,7 +69,11 @@ def test_custom_codex_home_reaches_config_cache_trust_and_daemon(tmp_path, monke
     mirror = runtime / "harness" / "plugins" / "harness"
     cache = install._codex_cached_plugin_root(runtime, mirror)
     assert cache.is_dir()
-    assert str(cache) in (cache / "hooks.json").read_text()
+    hooks = json.loads((cache / "hooks.json").read_text())["hooks"]
+    commands = [item["command"] for rows in hooks.values() for row in rows for item in row["hooks"]]
+    if os.name == "nt":
+        commands = [base64.b64decode(command.rsplit(" ", 1)[1]).decode("utf-16-le") for command in commands]
+    assert all(str(cache) in command for command in commands)
     assert config["marketplaces"]["harness"]["source"] == str(runtime / "harness")
     records = [json.loads(line) for line in log.read_text().splitlines()]
     assert all(row["home"] == str(runtime) for row in records)

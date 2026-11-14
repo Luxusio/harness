@@ -1,6 +1,8 @@
 """Intent-based, real-Git checks for the durable batch coordinator CLI."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import json
 import os
@@ -192,7 +194,7 @@ def test_unsafe_or_corrupt_state_refuses_mutation(tmp_path, monkeypatch, unsafe)
     if unsafe in ("symlink", "hardlink", "directory"):
         pool.state.unlink()
         if unsafe == "symlink":
-            pool.state.symlink_to(other)
+            create_symlink(pool.state, other)
         elif unsafe == "hardlink":
             os.link(other, pool.state)
         else:
@@ -681,7 +683,7 @@ def test_bootstrap_and_bind_refuse_unsafe_marker(tmp_path, monkeypatch, bad_mark
     other = tmp_path / "marker-original"
     other.write_text(content)
     if bad_marker == "symlink":
-        marker.symlink_to(other)
+        create_symlink(marker, other)
     elif bad_marker == "hardlink":
         os.link(other, marker)
     elif bad_marker == "directory":
@@ -1410,11 +1412,11 @@ def test_partial_ordinary_residue_recovery_and_refusals(tmp_path, monkeypatch, c
         elif kind == 'unknown-dir': path.mkdir()
         elif kind == 'modified': (worktree / 'a.txt').write_text('changed')
         elif kind == 'exec-bit': (worktree / 'a.txt').chmod(0o755)
-        elif kind == 'symlink': path.symlink_to('a.txt')
+        elif kind == 'symlink': create_symlink(path, 'a.txt')
         elif kind == 'fifo': os.mkfifo(path)
         elif kind == 'missing-row': ledger.write_text(lead_row + '{\"key\":\"unpreserved\"}\n')
         elif kind == 'malformed-row': ledger.write_text(lead_row + 'invalid-json\n')
-        elif kind == 'cache-link': (cache / 'linked.pyc').symlink_to(worktree / 'a.txt')
+        elif kind == 'cache-link': create_symlink(cache / 'linked.pyc', worktree / 'a.txt')
         elif kind == 'cache-git': (cache / '.git').write_text('unowned metadata')
         elif kind == 'cache-special': os.mkfifo(cache / 'pipe')
         elif kind == 'unknown-parent-cache':

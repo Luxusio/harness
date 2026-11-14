@@ -599,6 +599,45 @@ def test_address_attempts_consume_one_aggregate_budget_with_decreasing_timeouts(
     assert not state.calls
 
 
+@pytest.mark.parametrize('phase', ['resolve', 'connect', 'tls', 'headers', 'body'])
+@pytest.mark.parametrize('operation_timeout', [.15, 30, 120, None])
+def test_native_timeout_preserves_configured_limit_before_clock_deadline(native, monkeypatch, phase, operation_timeout):
+    from contextlib import nullcontext
+    import http.client
+    from types import SimpleNamespace
+
+    _, remote, _ = native
+    clock = [100.0]
+    monkeypatch.setattr(sys.modules[Remote.__module__], 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    address = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '',
+               ('127.0.0.1', urlsplit(remote.origin).port))
+    monkeypatch.setattr(remote, '_resolve', lambda *args: [address])
+    failures = []
+
+    def timeout(*args, **kwargs):
+        failures.append(phase)
+        raise TimeoutError('Synthetic native timeout before the clock deadline')
+
+    if phase == 'resolve':
+        monkeypatch.setattr(remote, '_resolve', timeout)
+    elif phase == 'connect':
+        monkeypatch.setattr(socket.socket, 'connect', timeout)
+    elif phase == 'tls':
+        monkeypatch.setattr(remote._ssl_context, 'wrap_socket', timeout)
+    elif phase == 'headers':
+        monkeypatch.setattr(http.client.HTTPSConnection, 'getresponse', timeout)
+    else:
+        monkeypatch.setattr(http.client.HTTPResponse, 'read1', timeout)
+    operation = remote.operation(timeout=operation_timeout) if operation_timeout is not None else nullcontext()
+    with operation:
+        with pytest.raises(RemoteError) as failure:
+            remote.current_user()
+    aggregate_limited = operation_timeout is not None and operation_timeout <= (15 if phase == 'connect' else 60)
+    assert failure.value.code == ('wiki_timeout' if aggregate_limited else 'network_timeout')
+    assert failures == [phase]
+    assert clock[0] == 100.0
+
+
 def test_watchdog_start_failure_closes_the_actual_owned_tls_socket(native, monkeypatch):
     state, remote, _ = native
     sockets = []

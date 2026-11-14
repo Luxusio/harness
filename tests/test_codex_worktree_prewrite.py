@@ -1,6 +1,8 @@
 """Absolute Codex patch targets use their registered worktree's existing gates."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 import os
 from pathlib import Path
@@ -99,8 +101,8 @@ def test_symlink_outside_worktree_does_not_inherit_main_plan(tmp_path):
     active(main, plan=True)
     active(worktree, plan=True)
     (main / 'outside.py').write_text('x = 0\n')
-    (worktree / 'escape.py').symlink_to(main / 'outside.py')
-    (worktree / 'escape_dir').symlink_to(main, target_is_directory=True)
+    create_symlink(worktree / 'escape.py', main / 'outside.py')
+    create_symlink(worktree / 'escape_dir', main, target_is_directory=True)
     for target in (worktree / 'escape.py', worktree / 'escape_dir/outside.py'):
         result = check(main, target)
         assert 'symlink-outside-control' in result['permissionDecisionReason']
@@ -130,7 +132,7 @@ def test_symlink_outside_main_is_still_denied(tmp_path):
 
     main, _ = setup(tmp_path)
     foreign = _repo(tmp_path / 'foreign')
-    (main / 'escape').symlink_to(foreign, target_is_directory=True)
+    create_symlink(main / 'escape', foreign, target_is_directory=True)
     result = check(main, main / 'escape/engine.py')
     assert 'symlink-outside-control' in result['permissionDecisionReason']
 

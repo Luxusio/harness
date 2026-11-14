@@ -1,4 +1,6 @@
 """WBS measures assertions over outcomes, never planning activity."""
+
+from test_symlink_fixture import create_symlink
 import json
 from pathlib import Path
 import sys
@@ -237,7 +239,7 @@ def test_scope_symlinks_fail_closed(tmp_path):
     (repo / "src.txt").unlink()
     outside = tmp_path / "secret"
     outside.write_text("ok")
-    (repo / "src.txt").symlink_to(outside)
+    create_symlink(repo / "src.txt", outside)
     assert progress(repo, td)["percentage"] is None
 
 
@@ -524,7 +526,7 @@ def test_assertion_diagnostic_symlink_never_launches(tmp_path):
     repo, td = baseline(tmp_path, [dict(id='A', title='Safe diagnostic', weight=1, check=command)])
     target = tmp_path / 'outside'
     target.mkdir()
-    (td / 'work').symlink_to(target, target_is_directory=True)
+    create_symlink(td / 'work', target, target_is_directory=True)
     import pytest
     with pytest.raises(ValueError, match='symlink diagnostic'):
         wbs.verify(str(td), str(repo), 'run', 'A')

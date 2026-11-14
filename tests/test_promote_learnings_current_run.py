@@ -1,3 +1,5 @@
+
+from test_symlink_fixture import create_symlink
 import contextlib
 import importlib
 import io
@@ -305,7 +307,7 @@ class TestCurrentRunCandidateReporting(unittest.TestCase):
             outside = os.path.join(root, "outside.jsonl")
             with open(outside, "w", encoding="utf-8") as stream:
                 stream.write("outside\n")
-            os.symlink(outside, os.path.join(harness, "learnings.jsonl"))
+            create_symlink(os.path.join(harness, "learnings.jsonl"), outside)
             result, _, _ = self._run(root, threshold=1)
             self.assertEqual(result, 2)
             self.assertEqual(self._bytes(outside), b"outside\n")

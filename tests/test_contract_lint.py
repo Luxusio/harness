@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import tempfile
 import subprocess
 import sys
@@ -55,7 +57,7 @@ class ContractReferencePathTests(unittest.TestCase):
     def test_symlink_escape_and_non_regular_matches_do_not_count(self):
         outside = Path(self.tempdir.name) / "outside.md"
         outside.write_text("outside\n", encoding="utf-8")
-        (self.repo / "plugin" / "escape.md").symlink_to(outside)
+        create_symlink(self.repo / "plugin" / "escape.md", outside)
         (self.repo / "plugin" / "directory.md").mkdir()
 
         for ref in ("plugin/escape.md", "plugin/directory.md"):
@@ -69,10 +71,10 @@ class ContractReferencePathTests(unittest.TestCase):
         (outside / "child" / "item.md").write_text("outside\n", encoding="utf-8")
 
         literal_link = self.repo / "plugin" / "literal-link"
-        literal_link.symlink_to(outside, target_is_directory=True)
+        create_symlink(literal_link, outside, target_is_directory=True)
         parents = self.repo / "plugin" / "parents"
         parents.mkdir()
-        (parents / "wildcard-link").symlink_to(outside, target_is_directory=True)
+        create_symlink(parents / "wildcard-link", outside, target_is_directory=True)
 
         for ref in (
             "plugin/literal-link/*/item.md",

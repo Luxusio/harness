@@ -1,6 +1,8 @@
 """Independent real-Git acceptance tests for the bounded S1 helper."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import copy
 import importlib
 import json
@@ -123,7 +125,7 @@ def test_selection_rejects_dirty_unpopulated_and_symlink(tmp_path, monkeypatch):
     with pytest.raises(helper.SubmoduleError):
         helper.selection(main, paths)
     module.rmdir()
-    module.symlink_to(tmp_path / "source0", target_is_directory=True)
+    create_symlink(module, tmp_path / "source0", target_is_directory=True)
     with pytest.raises(helper.SubmoduleError):
         helper.selection(main, paths)
 

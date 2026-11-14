@@ -1,4 +1,6 @@
 """Content-version publication preserves caches already loaded by Codex."""
+
+from test_symlink_fixture import create_symlink
 import importlib.util
 import json
 import os
@@ -127,7 +129,7 @@ def test_native_shadow_or_unsafe_cache_refuses_without_changing_existing_paths(p
     if shadow == 'symlink':
         outside = tmp_path / 'outside'
         outside.mkdir()
-        entry.symlink_to(outside, target_is_directory=True)
+        create_symlink(entry, outside, target_is_directory=True)
     else:
         entry.mkdir()
         (entry / 'retained').write_text('existing session data')
@@ -276,7 +278,7 @@ def test_existing_identity_mismatch_refuses_without_overwrite(project, tmp_path,
     else:
         shutil.rmtree(target)
         if kind == 'symlink':
-            target.symlink_to(outside, target_is_directory=True)
+            create_symlink(target, outside, target_is_directory=True)
         elif kind == 'file':
             target.write_text('existing file')
         else:

@@ -8,6 +8,7 @@ import errno
 import fnmatch
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -748,7 +749,32 @@ def restore(path: Path, original: str | None, mode: int | None) -> None:
         os.chmod(path, mode)
 
 
+def _project_doc_disk_path(path):
+    if os.name == "nt":
+        from wiki_platform import _native
+        return _native._win32_path(Path(path).absolute())
+    return path
+
+
 def _project_doc_text(path: Path) -> tuple[str, os.stat_result | None]:
+    if os.name == "nt":
+        from wiki_platform import _native
+        with _native._walk(path.parent, secure=True):
+            try:
+                handle = _native._open(path, _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+            except FileNotFoundError:
+                return "", None
+            try:
+                before = _native._metadata_stamp(handle)
+                if before[3] > 2 * 1024 * 1024:
+                    raise ValueError("runtime project document is too large")
+                data = b"".join(_native._file_chunks(handle, 2 * 1024 * 1024))
+                info = os.lstat(_project_doc_disk_path(path))
+                if len(data) != before[3] or _native._metadata_stamp(handle) != before:
+                    raise ValueError("runtime project document changed during setup")
+                return data.decode("utf-8"), info
+            finally:
+                _native._close(handle)
     try:
         before = os.lstat(path)
     except FileNotFoundError:
@@ -868,8 +894,78 @@ def _with_routing_block(text: str) -> str:
     return working[:start] + block + working[end:]
 
 
+class _ProjectDocExchangeIncomplete(RuntimeError):
+    """An OS publication may have moved files; preserve every remaining name."""
+
+
+def _exchange_project_doc_native(left: str, right: str) -> None:
+    """Replace atomically, retaining the displaced object for guarded rollback.
+
+    ReplaceFileW preserves the destination ACL and keeps its old object at a
+    backup name. Move that exact backup handle to the vacated candidate name
+    to retain the existing exchange caller's identity/readback protocol. Never
+    discard names on an uncertain OS result or overwrite a new candidate name.
+    """
+    from ctypes import wintypes
+    from wiki_platform import _native
+
+    left, right = Path(left).absolute(), Path(right).absolute()
+    if left.parent != right.parent or left == right:
+        raise ValueError("project-document exchange requires distinct sibling files")
+    backup = left.with_name(left.name + "." + secrets.token_hex(16) + ".displaced")
+    replace = _native._bind(_native.K, "ReplaceFileW", [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+        wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p,
+    ])
+    with _native._walk(right.parent, secure=True, writing=True):
+        # Attribute-only retained handles authenticate both regular, nonlinked
+        # objects without conflicting with ReplaceFileW's exclusive data open.
+        handles = []
+        try:
+            for path in (left, right):
+                handle = _native._open(path, 0, share=(
+                    _native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE | _native.FILE_SHARE_DELETE))
+                handles.append(handle)
+                _native._metadata_stamp(handle)
+            if not replace(_project_doc_disk_path(right), _project_doc_disk_path(left),
+                           _project_doc_disk_path(backup), 0, None, None):
+                code = ctypes.get_last_error()
+                # In particular, error 1177 can leave the displaced original
+                # at backup with the destination absent. No blind cleanup.
+                raise _ProjectDocExchangeIncomplete(
+                    f"native project-document exchange failed ({code}); files preserved at "
+                    f"{left}, {right}, {backup}") from _native._error(code)
+            try:
+                displaced = _native._open(backup, _native.DELETE,
+                                          share=_native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE)
+                try:
+                    _native._metadata_stamp(displaced)
+                    encoded = _project_doc_disk_path(left).encode("utf-16-le")
+                    buffer = ctypes.create_string_buffer(max(
+                        ctypes.sizeof(_native.RENAME_INFO),
+                        _native.RENAME_INFO.name.offset + len(encoded) + 2))
+                    rename = ctypes.cast(buffer, ctypes.POINTER(_native.RENAME_INFO)).contents
+                    rename.flags = _native.FILE_RENAME_FLAG_POSIX_SEMANTICS
+                    rename.directory, rename.length = None, len(encoded)
+                    ctypes.memmove(ctypes.addressof(buffer) + _native.RENAME_INFO.name.offset,
+                                   encoded, len(encoded))
+                    _native._check(_native._SetFileInformation(
+                        displaced, _native.FileRenameInfoEx, buffer, len(buffer)))
+                finally:
+                    _native._close(displaced)
+            except BaseException as exc:
+                raise _ProjectDocExchangeIncomplete(
+                    f"native project-document exchange incomplete; files preserved at "
+                    f"{left}, {right}, {backup}") from exc
+        finally:
+            for handle in reversed(handles):
+                _native._close(handle)
+
+
 def _exchange_project_doc(left: str, right: str) -> None:
     """Atomically exchange two files, or fail closed when unsupported."""
+    if os.name == "nt":
+        return _exchange_project_doc_native(left, right)
     try:
         renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
     except (AttributeError, OSError) as exc:
@@ -904,8 +1000,16 @@ def _same_project_doc_snapshot(
 
 def _same_file_identity(path: Path, expected: os.stat_result) -> bool:
     try:
-        current = os.lstat(path)
-    except OSError:
+        if os.name == "nt":
+            # Reauthenticate ACL/link custody and reject same-object user edits
+            # before allowing rollback or retirement of the displaced file.
+            _, current = _project_doc_text(path)
+            if (current is None or current.st_size != expected.st_size
+                    or current.st_mtime_ns != expected.st_mtime_ns):
+                return False
+        else:
+            current = os.lstat(path)
+    except (OSError, ValueError):
         return False
     return (
         stat.S_ISREG(current.st_mode)
@@ -923,6 +1027,18 @@ def update_project_doc(
     ensure_contract_import: bool,
 ) -> bool:
     path = safe_path(repo, project_doc)
+    if os.name == "nt":
+        from wiki_platform import _native
+        # Retain every ancestor through publication, readback, rollback and
+        # cleanup. Ordinary public paths remain unchanged outside disk calls.
+        with _native._walk(path.parent, secure=True, writing=True):
+            return _update_project_doc(path, ensure_routing=ensure_routing,
+                                       ensure_contract_import=ensure_contract_import)
+    return _update_project_doc(path, ensure_routing=ensure_routing,
+                               ensure_contract_import=ensure_contract_import)
+
+
+def _update_project_doc(path: Path, *, ensure_routing: bool, ensure_contract_import: bool) -> bool:
     original, before = _project_doc_text(path)
     candidate = original
     if ensure_routing:
@@ -948,8 +1064,9 @@ def update_project_doc(
 
     mode = stat.S_IMODE(before.st_mode) if before else 0o644
     fd, tmp = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        dir=_project_doc_disk_path(path.parent), prefix=f".{path.name}.", suffix=".tmp"
     )
+    tmp = str(path.parent / Path(tmp).name)
     exchanged = False
     preserve_tmp = False
     try:
@@ -957,7 +1074,7 @@ def update_project_doc(
             handle.write(candidate)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(tmp, mode)
+        os.chmod(_project_doc_disk_path(tmp), mode)
         final_text, final_stat = _project_doc_text(path)
         if final_text != original:
             raise ValueError("runtime project document content changed during setup")
@@ -974,14 +1091,14 @@ def update_project_doc(
             raise ValueError("runtime project document changed during setup")
         if before is None:
             try:
-                os.link(tmp, path, follow_symlinks=False)
+                os.link(_project_doc_disk_path(tmp), _project_doc_disk_path(path), follow_symlinks=False)
             except FileExistsError as exc:
                 raise ValueError(
                     "runtime project document appeared during setup"
                 ) from exc
-            os.unlink(tmp)
+            os.unlink(_project_doc_disk_path(tmp))
         else:
-            candidate_stat = os.lstat(tmp)
+            candidate_stat = os.lstat(_project_doc_disk_path(tmp))
             _exchange_project_doc(tmp, str(path))
             exchanged = True
             try:
@@ -1015,9 +1132,11 @@ def update_project_doc(
                     f"runtime project document changed after atomic exchange; "
                     f"original preserved at {tmp}"
                 )
-            os.unlink(tmp)
+            os.unlink(_project_doc_disk_path(tmp))
             exchanged = False
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, _ProjectDocExchangeIncomplete):
+            preserve_tmp = True
         if exchanged and not preserve_tmp:
             if not _same_file_identity(path, candidate_stat):
                 preserve_tmp = True
@@ -1029,7 +1148,7 @@ def update_project_doc(
                     preserve_tmp = True
         if not preserve_tmp:
             try:
-                os.unlink(tmp)
+                os.unlink(_project_doc_disk_path(tmp))
             except FileNotFoundError:
                 pass
         raise

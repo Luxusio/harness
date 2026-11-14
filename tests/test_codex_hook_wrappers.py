@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import contextlib
 import importlib.util
 import io
@@ -462,7 +464,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             manifest.write_text("type: cli\n", encoding="utf-8")
             (external / ".git").mkdir(parents=True)
             link = outer / "plain-project"
-            link.symlink_to(external, target_is_directory=True)
+            create_symlink(link, external, target_is_directory=True)
             output = io.StringIO()
             with mock.patch("subprocess.run", side_effect=fake_run):
                 with mock.patch.object(

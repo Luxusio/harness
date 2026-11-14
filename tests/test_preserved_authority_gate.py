@@ -1,4 +1,6 @@
 """Receipt removal keeps native authentication and historical bytes immutable."""
+
+from test_symlink_fixture import create_symlink
 import json
 from datetime import datetime
 from pathlib import Path
@@ -57,7 +59,7 @@ def test_native_session_authentication_metadata_cannot_be_forged(tmp_path, monke
     assert authenticate_native_session(THREAD, str(root)) == expected
     target = root / 'metadata-alias.jsonl' if alias else native
     if alias:
-        target.symlink_to(native)
+        create_symlink(target, native)
     hook_cwd = root if hook_cwd_kind == 'main' else other
     _assert_denied(hook_cwd, target, tool, 'native-session-runtime', monkeypatch)
     assert native.read_bytes() == original

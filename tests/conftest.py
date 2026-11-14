@@ -44,9 +44,44 @@ def selected_installer_python(monkeypatch):
     """
     monkeypatch.syspath_prepend(SCRIPTS_DIR)
     import mise_python
-    selected = str(Path(sys.executable).absolute())
+    # Native Windows venv launchers need pyvenv.cfg beside them. Installer
+    # fixtures which copy an interpreter need the actual base executable.
+    selected = str(Path(getattr(sys, "_base_executable", sys.executable)).resolve())
+    probe = subprocess.run(
+        [selected, "-I", "-S", "-B", "-c",
+         "import json,sys; print(json.dumps([sys.prefix,sys.base_prefix]))"],
+        check=True, capture_output=True, text=True, timeout=15,
+    )
+    prefix, base_prefix = json.loads(probe.stdout)
+    assert prefix == base_prefix, "installer fixture requires a base interpreter"
     monkeypatch.setattr(mise_python, "select_python", lambda **kwargs: selected)
     return selected
+
+
+@pytest.fixture
+def make_symlink():
+    # Isolated guard probes import this conftest by filename without loading
+    # the source test directory. They do not need link fixtures at import time.
+    from test_symlink_fixture import create_symlink
+    return create_symlink
+
+
+def real_install_home() -> Path:
+    """Resolve actual OS profile custody, independent of fixture environment."""
+    if os.name != "nt":
+        import pwd
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    # Reuse the installer's token/profile lookup, rather than trusting an
+    # environment variable or maintaining a second Windows identity resolver.
+    import importlib.util
+    name = "_harness_test_profile_identity"
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, Path(REPO_ROOT) / "install.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return module._real_user_home()
 
 # Two CPython builds that share a cache tag (here /usr/bin/python3 3.12.3 and
 # the mise/.venv 3.12.14; on 2026-09-09 two 3.12.13 builds) accept each
@@ -92,12 +127,9 @@ def _default_install_tree_roots() -> list[str]:
     after 781 (the Claude cache's five orphaned versions are walked only
     after), about 5s for both passes together.
     """
-    try:
-        import pwd
-
-        home = pwd.getpwuid(os.getuid()).pw_dir
-    except Exception:  # no password database — nothing to protect
-        return []
+    # A missing Windows password database must never disable this protection.
+    # Failure to establish real profile identity refuses the suite instead.
+    home = str(real_install_home())
     return [
         os.path.join(home, ".claude", "harness-dev"),
         os.path.join(home, ".claude", "plugins", "cache", "harness", "harness"),

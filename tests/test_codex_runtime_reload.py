@@ -172,6 +172,7 @@ def pytest_generate_tests(metafunc):
         metafunc.parametrize("inspection", ["lstat", "stat"])
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_sends_only_empty_config_refresh(tmp_path, success_mode):
     module = _installer()
     config = tmp_path / "config.toml"
@@ -188,6 +189,7 @@ def test_native_reload_sends_only_empty_config_refresh(tmp_path, success_mode):
     assert config.read_bytes() == original
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_rejects_transport_and_rpc_failures(tmp_path, failure_mode):
     module = _installer()
     with _daemon(tmp_path, failure_mode) as (path, _):
@@ -199,6 +201,7 @@ def test_native_reload_rejects_transport_and_rpc_failures(tmp_path, failure_mode
                 module._reload_codex_daemon_hooks(path, timeout=0.15)
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_rejects_non_socket_without_writing(tmp_path):
     module = _installer()
     path = tmp_path / "not-a-socket"
@@ -223,6 +226,7 @@ def test_custom_config_never_refreshes_unrelated_native_daemon(tmp_path, monkeyp
     assert str(tmp_path / "config.toml") in detail
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_discovery_refreshes_only_reported_native_socket(tmp_path, monkeypatch):
     monkeypatch.delenv("CODEX_HOME", raising=False)
     module = _installer()
@@ -277,6 +281,7 @@ def test_discovery_rejects_unknown_or_malformed_native_status(monkeypatch):
         assert detail
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_discovery_reports_native_reload_failure(monkeypatch):
     monkeypatch.delenv("CODEX_HOME", raising=False)
     module = _installer()
@@ -289,6 +294,7 @@ def test_discovery_reports_native_reload_failure(monkeypatch):
     assert "test deadline" in detail
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_rejects_endpoint_parent_owned_by_another_user(tmp_path, monkeypatch):
     module = _installer()
     path = tmp_path / "foreign.sock"
@@ -299,11 +305,12 @@ def test_native_reload_rejects_endpoint_parent_owned_by_another_user(tmp_path, m
             module._reload_codex_daemon_hooks(str(path), timeout=0.1)
 
 
-def test_native_reload_supports_native_control_socket_symlink(tmp_path):
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
+def test_native_reload_supports_native_control_socket_symlink(tmp_path, make_symlink):
     module = _installer()
     with _daemon(tmp_path) as (path, requests):
         link = tmp_path / "control.sock"
-        link.symlink_to(path)
+        make_symlink(link, path)
         module._reload_codex_daemon_hooks(str(link), timeout=1)
     assert requests[-1]["method"] == "config/batchWrite"
 
@@ -320,14 +327,14 @@ def test_no_daemon_endpoint_defers_hooks_to_next_session(tmp_path, monkeypatch):
     assert "codex app-server daemon version exited with code 1: not running" in detail
 
 
-def test_dangling_control_endpoint_defers_without_removing_link(tmp_path, monkeypatch):
+def test_dangling_control_endpoint_defers_without_removing_link(tmp_path, monkeypatch, make_symlink):
     monkeypatch.delenv("CODEX_HOME", raising=False)
     module = _installer()
     monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", tmp_path / "config.toml")
     monkeypatch.setattr(module, "_run", lambda *args: (1, "", "permission denied"))
     endpoint = tmp_path / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir()
-    endpoint.symlink_to(tmp_path / "missing.sock")
+    make_symlink(endpoint, tmp_path / "missing.sock")
     target = endpoint.readlink()
     monkeypatch.setattr(module, "_reload_codex_daemon_hooks", lambda *_: TestCase().fail("no socket to reload"))
     ok, detail, restart_required = module._reload_codex_runtime(None)
@@ -340,8 +347,9 @@ def test_dangling_control_endpoint_defers_without_removing_link(tmp_path, monkey
     assert endpoint.readlink() == target
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_failed_discovery_reports_diagnostic_and_present_endpoint(
-    tmp_path, monkeypatch, stdout, stderr, expected, endpoint_kind,
+    tmp_path, monkeypatch, stdout, stderr, expected, endpoint_kind, make_symlink,
 ):
     module = _installer()
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
@@ -353,7 +361,7 @@ def test_failed_discovery_reports_diagnostic_and_present_endpoint(
             # The control link can be long under xdist; the Unix socket cannot.
             native_socket = Path(socket_dir) / "s"
             server.bind(str(native_socket))
-            endpoint.symlink_to(native_socket)
+            make_symlink(endpoint, native_socket)
         else:
             endpoint.write_text("keep this file")
         with mock.patch.object(module, "_run", return_value=(7, stdout, stderr)) as discover:
@@ -369,12 +377,12 @@ def test_failed_discovery_reports_diagnostic_and_present_endpoint(
             assert endpoint.read_text() == "keep this file"
 
 
-def test_endpoint_inspection_error_preserves_discovery_failure(tmp_path, monkeypatch, inspection):
+def test_endpoint_inspection_error_preserves_discovery_failure(tmp_path, monkeypatch, make_symlink, inspection):
     module = _installer()
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     endpoint = tmp_path / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir()
-    endpoint.symlink_to(tmp_path / "missing.sock")
+    make_symlink(endpoint, tmp_path / "missing.sock")
     original = getattr(Path, inspection)
 
     def denied(path, *args, **kwargs):
@@ -393,7 +401,7 @@ def test_endpoint_inspection_error_preserves_discovery_failure(tmp_path, monkeyp
 
 
 def test_daemon_install_reports_deferred_or_failed_discovery(
-        tmp_path, monkeypatch, capsys, missing_target, selected_installer_python):
+        tmp_path, monkeypatch, capsys, missing_target, selected_installer_python, make_symlink):
     module = _installer()
     # Match the runtime config while exercising shell quoting in its parent path.
     config = tmp_path / "home with 'quotes' $dollar; semicolon" / "config.toml"
@@ -403,7 +411,7 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
     manifest.parent.mkdir(parents=True)
     manifest.write_text('{"name":"harness","version":"9.9.9"}')
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", config.parent / "harness")
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(module, "host_command", lambda *a, **k: ["fixture-codex"])
     monkeypatch.setattr(module, "_normalize_payload_modes", lambda root: [])
     monkeypatch.setattr(module, "_prune_bytecode_caches", lambda root: [])
     # The daemon fixture models publication, but selected-cache validation
@@ -413,7 +421,7 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
     endpoint = config.parent / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir(parents=True)
     if missing_target:
-        endpoint.symlink_to(tmp_path / "missing-runtime.sock")
+        make_symlink(endpoint, tmp_path / "missing-runtime.sock")
     else:
         endpoint.write_text("preserve invalid endpoint")
     error = "Error: failed to connect to control socket\nCaused by: No such file or directory (os error 2)"
@@ -476,6 +484,7 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
     assert endpoint.read_text() == "preserve invalid endpoint"
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_rejects_writable_endpoint_parent(tmp_path):
     module = _installer()
     directory = tmp_path / "shared"
@@ -488,7 +497,8 @@ def test_native_reload_rejects_writable_endpoint_parent(tmp_path):
             module._reload_codex_daemon_hooks(str(path), timeout=0.1)
 
 
-def test_native_reload_rejects_unsafe_symlink_target_parent(tmp_path):
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
+def test_native_reload_rejects_unsafe_symlink_target_parent(tmp_path, make_symlink):
     module = _installer()
     directory = tmp_path / "shared"
     directory.mkdir()
@@ -497,11 +507,12 @@ def test_native_reload_rejects_unsafe_symlink_target_parent(tmp_path):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
         endpoint.bind(str(path))
         link = tmp_path / "safe-looking.sock"
-        link.symlink_to(path)
+        make_symlink(link, path)
         with TestCase().assertRaisesRegex(ValueError, "directory"):
             module._reload_codex_daemon_hooks(str(link), timeout=0.1)
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_checks_socket_owner_after_private_parent(tmp_path, monkeypatch):
     module = _installer()
     path = tmp_path / "foreign.sock"
@@ -518,6 +529,7 @@ def test_native_reload_checks_socket_owner_after_private_parent(tmp_path, monkey
             module._reload_codex_daemon_hooks(str(path), timeout=0.1)
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_checks_connected_peer_owner(tmp_path, monkeypatch):
     module = _installer()
     path = tmp_path / "peer.sock"
@@ -563,6 +575,7 @@ def _mock_getpeereid(monkeypatch, module, uid, *, syscall_error=False):
     return calls
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_without_so_peercred_verifies_getpeereid(tmp_path, monkeypatch):
     module = _installer()
     calls = _mock_getpeereid(monkeypatch, module, os.getuid())
@@ -572,6 +585,7 @@ def test_native_reload_without_so_peercred_verifies_getpeereid(tmp_path, monkeyp
     assert requests[-1]["method"] == "config/batchWrite"
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_native_reload_without_so_peercred_fails_before_handshake(tmp_path, monkeypatch, peer_failure):
     module = _installer()
     calls = _mock_getpeereid(
@@ -603,9 +617,11 @@ def test_explicit_config_matching_codex_home_refreshes_that_daemon(tmp_path, mon
     monkeypatch.setattr(module, "_reload_codex_daemon_hooks", lambda path: calls.append(path))
     ok, detail, restart_required = module._reload_codex_runtime(str(tmp_path / "config.toml"))
     assert ok, detail
-    assert calls == ["/test-only"]
+    assert calls == ([] if os.name == "nt" else ["/test-only"])
+    assert restart_required is (os.name == "nt")
 
 
+@skipUnless(os.name != "nt", "POSIX Unix-peer RPC; Windows explicitly defers installed hooks to a new session")
 def test_default_config_uses_effective_codex_home_daemon(tmp_path, monkeypatch):
     module = _installer()
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))

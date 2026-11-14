@@ -21,6 +21,16 @@ from test_install_writable_source_comparison import _load_install_module
 pytestmark = pytest.mark.usefixtures("selected_installer_python")
 
 
+def _assert_mode(path, mode):
+    """Check meaningful native read-only state or the exact POSIX permission bits."""
+    info = path.stat()
+    if os.name == "nt":
+        if path.is_file():
+            assert bool(info.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY) == (not bool(mode & stat.S_IWUSR))
+    else:
+        assert stat.S_IMODE(info.st_mode) == mode
+
+
 def test_claude_read_only_sources_are_writable_only_in_private_projection(tmp_path, monkeypatch):
     install = _load_install_module()
     source = tmp_path / "source"
@@ -45,16 +55,18 @@ def test_claude_read_only_sources_are_writable_only_in_private_projection(tmp_pa
     try:
         install._build_claude_payload(target)
         assert json.loads((target / "plugin/.claude-plugin/plugin.json").read_text())["version"].startswith("1.0.0+h")
-        assert stat.S_IMODE((target / ".claude-plugin/marketplace.json").stat().st_mode) == 0o644
-        assert stat.S_IMODE((target / "plugin/tool").stat().st_mode) == 0o755
-        assert all(stat.S_IMODE(p.stat().st_mode) == 0o755 for p in target.rglob("*") if p.is_dir())
+        _assert_mode(target / ".claude-plugin/marketplace.json", 0o644)
+        _assert_mode(target / "plugin/tool", 0o755)
+        for path in (p for p in target.rglob("*") if p.is_dir()):
+            _assert_mode(path, 0o755)
         assert not (target / "plugin/.git").exists()
         assert not (target / "plugin/__pycache__").exists()
         for name, content in contents.items():
             path = source / name
             assert path.read_text() == content
-            assert stat.S_IMODE(path.stat().st_mode) == (0o555 if name == "plugin/tool" else 0o444)
-        assert all(stat.S_IMODE(p.stat().st_mode) == 0o555 for p in directories)
+            _assert_mode(path, 0o555 if name == "plugin/tool" else 0o444)
+        for path in directories:
+            _assert_mode(path, 0o555)
     finally:
         for path in directories:
             path.chmod(0o755)
@@ -80,18 +92,18 @@ def test_read_only_source_directory_projects_without_source_mode_change(tmp_path
         install._build_codex_payload(target, tmp_path / "installed")
         assert (target / "scripts/_lib.py").is_file()
         assert (target / "hooks.json").is_file()
-        assert stat.S_IMODE(source.stat().st_mode) == 0o555
-        assert stat.S_IMODE(target.stat().st_mode) == 0o755
+        _assert_mode(source, 0o555)
+        _assert_mode(target, 0o755)
         for name, content in shared.items():
             original = canonical / "skills/setup" / name
             projected = target / "skills/setup" / name
             assert original.read_bytes() == projected.read_bytes() == content
-            assert stat.S_IMODE(original.stat().st_mode) == 0o444
-            assert stat.S_IMODE(projected.stat().st_mode) == 0o644
+            _assert_mode(original, 0o444)
+            _assert_mode(projected, 0o644)
         state, _, reason = install._tree_inventory(target)
         assert state == install.PAYLOAD_SYNCHRONIZED, reason
-        assert all(stat.S_IMODE((target / name).stat().st_mode) == 0o644
-                   for name in ("hooks.json", ".mcp.json"))
+        for name in ("hooks.json", ".mcp.json"):
+            _assert_mode(target / name, 0o644)
         cache_source = tmp_path / "cache-source"
         install._copytree_clean(target, cache_source)
         for name in ("hooks.json", ".mcp.json"):
@@ -100,14 +112,14 @@ def test_read_only_source_directory_projects_without_source_mode_change(tmp_path
         install._build_codex_cache_payload(cache_source, cache, tmp_path / "installed-cache")
         state, _, reason = install._tree_inventory(cache)
         assert state == install.PAYLOAD_SYNCHRONIZED, reason
-        assert all(stat.S_IMODE((cache / name).stat().st_mode) == 0o644
-                   for name in ("hooks.json", ".mcp.json"))
+        for name in ("hooks.json", ".mcp.json"):
+            _assert_mode(cache / name, 0o644)
         marketplace = tmp_path / "marketplace"
         marketplace.mkdir(mode=0o700)
         install._write_codex_marketplace(marketplace, version=install._codex_plugin_version(target))
         state, _, reason = install._tree_inventory(marketplace)
         assert state == install.PAYLOAD_SYNCHRONIZED, reason
-        assert stat.S_IMODE(marketplace.stat().st_mode) == 0o700
+        _assert_mode(marketplace, 0o700)
         monkeypatch.setattr(install, "CODEX_INSTALL_ROOT", tmp_path / "absent-install")
         state, reason = install._codex_payload_state(tmp_path / "config/config.toml")
         assert state == install.PAYLOAD_STALE, reason
@@ -128,16 +140,18 @@ def test_read_only_generated_configs_are_writable_only_in_private_copy(tmp_path)
     outside = tmp_path / "outside"
     outside.write_text("untouched")
     outside.chmod(0o666)
-    (source / "linked").symlink_to(outside)
+    if os.name != "nt":  # POSIX copier dereferences; Native custody refuses reparse sources.
+        (source / "linked").symlink_to(outside)
     target = tmp_path / "cache"
     install._build_codex_cache_payload(source, target, tmp_path / "installed")
     assert json.loads((target / "hooks.json").read_text()) != {}
-    assert stat.S_IMODE((target / "tool").stat().st_mode) == 0o755
-    assert stat.S_IMODE((source / "hooks.json").stat().st_mode) == 0o444
+    _assert_mode(target / "tool", 0o755)
+    _assert_mode(source / "hooks.json", 0o444)
     assert (source / "hooks.json").read_text() == "{}"
-    assert stat.S_IMODE(outside.stat().st_mode) == 0o666
+    _assert_mode(outside, 0o666)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX UID/xattr backend; actual Native owner/DACL refusal is covered in test_windows_install")
 def test_private_projection_does_not_copy_virtual_filesystem_ownership_xattrs(tmp_path):
     install = _load_install_module()
     source = tmp_path / "source"
@@ -169,6 +183,7 @@ def test_private_projection_does_not_copy_virtual_filesystem_ownership_xattrs(tm
     assert (projected / "mcp/server.py").read_bytes() == (source / "mcp/server.py").read_bytes()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX UID/xattr backend; actual Native owner/DACL refusal is covered in test_windows_install")
 def test_private_projection_foreign_owner_refusal_names_actual_and_installer_uid(tmp_path, monkeypatch):
     install = _load_install_module()
     source = tmp_path / "source"
@@ -185,25 +200,25 @@ def test_private_projection_foreign_owner_refusal_names_actual_and_installer_uid
     assert (source / "payload").read_bytes() == b"source unchanged"
 
 
-def test_post_activation_cleanup_failure_reports_active_and_retained_trees(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("requires effective filesystem permission enforcement")
+def test_post_activation_cleanup_failure_reports_active_and_retained_trees(tmp_path, monkeypatch):
     install = _load_install_module()
     target, staged = tmp_path / "payload", tmp_path / "staged"
     target.mkdir(); staged.mkdir()
     (target / "old").write_text("old")
     (staged / "new").write_text("new")
-    target.chmod(0o555)
     backup = tmp_path / ".payload.previous"
-    try:
-        with pytest.raises(RuntimeError, match="new payload active") as failure:
-            install._activate_staged_tree(staged, target)
-        assert str(backup) in str(failure.value)
-        assert (target / "new").read_text() == "new"
-        assert (backup / "old").read_text() == "old"
-    finally:
-        if backup.exists():
-            backup.chmod(0o755)
+    removed = []
+    def denied(path):
+        removed.append(Path(path))
+        assert Path(path) == backup
+        raise PermissionError(errno.EACCES, "backup cleanup denied", str(path))
+    monkeypatch.setattr(install, "_remove_owned_tree", denied)
+    with pytest.raises(RuntimeError, match="new payload active") as failure:
+        install._activate_staged_tree(staged, target)
+    assert removed == [backup]
+    assert str(backup) in str(failure.value)
+    assert (target / "new").read_text() == "new"
+    assert (backup / "old").read_text() == "old"
 
 
 @pytest.mark.parametrize("rollback_fails", [False, True])
@@ -213,7 +228,11 @@ def test_activation_failure_preserves_original_and_rollback_state(tmp_path, monk
     target.mkdir(); staged.mkdir()
     (target / "old").write_text("old")
     (staged / "new").write_text("new")
-    real_replace = install.os.replace
+    if os.name == "nt":
+        import wiki_platform
+        real_replace = wiki_platform.metadata_rename_directory
+    else:
+        real_replace = install.os.replace
     calls = []
     def replace(src, dst):
         calls.append((src, dst))
@@ -222,7 +241,8 @@ def test_activation_failure_preserves_original_and_rollback_state(tmp_path, monk
         if len(calls) == 3 and rollback_fails:
             raise PermissionError(errno.EACCES, "rollback denied", str(target))
         return real_replace(src, dst)
-    monkeypatch.setattr(install.os, "replace", replace)
+    monkeypatch.setattr(wiki_platform if os.name == "nt" else install.os,
+                        "metadata_rename_directory" if os.name == "nt" else "replace", replace)
     with pytest.raises((OSError, RuntimeError)) as failure:
         install._activate_staged_tree(staged, target)
     if rollback_fails:
@@ -241,7 +261,7 @@ def test_permission_failure_names_stage_path_and_preserves_progress(tmp_path, mo
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--force", "--verbose", "--config-path", str(tmp_path / "config.toml")])
     monkeypatch.setattr(install, "CODEX_INSTALL_ROOT", tmp_path / "harness")
-    monkeypatch.setattr(install.shutil, "which", lambda _: "/bin/codex")
+    monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-codex"])
     monkeypatch.setattr(install, "_run", lambda *a, **k: (0, "codex 1.0.0", ""))
     monkeypatch.setattr(install, "sync_codex_payload", lambda: install.PLUGIN_CODEX_ROOT)
     monkeypatch.setattr(install, "install_codex_plugin_cache", lambda *a: tmp_path / "cache")
@@ -261,7 +281,7 @@ def test_permission_failure_names_stage_path_and_preserves_progress(tmp_path, mo
 def test_compact_results_have_only_runtime_lines_and_failure_error(monkeypatch, capsys, failed):
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py"])
-    monkeypatch.setattr(install.shutil, "which", lambda _: "/bin/runtime")
+    monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(install, "install_claude", lambda **k: install.InstallResult("claude", True, "done", ["private step"]))
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", not failed, "cache install: denied /test/path" if failed else "synchronized", ["private step"]))
     assert install.main() == int(failed)
@@ -274,7 +294,7 @@ def test_compact_results_have_only_runtime_lines_and_failure_error(monkeypatch, 
 def test_preview_is_not_reported_as_applied_success(monkeypatch, capsys):
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--dry-run"])
-    monkeypatch.setattr(install.shutil, "which", lambda _: "/bin/runtime")
+    monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", True, "would install"))
     assert install.main() == 0
     assert capsys.readouterr().out == "Codex: DRY RUN\n"
@@ -283,7 +303,7 @@ def test_preview_is_not_reported_as_applied_success(monkeypatch, capsys):
 def test_verbose_explicitly_shows_diagnostic_details(monkeypatch, capsys):
     install = _load_install_module()
     monkeypatch.setattr(sys, "argv", ["install.py", "--codex-only", "--verbose"])
-    monkeypatch.setattr(install.shutil, "which", lambda _: "/bin/runtime")
+    monkeypatch.setattr(install, "host_command", lambda *a, **k: ["fixture-runtime"])
     monkeypatch.setattr(install, "install_codex", lambda **k: install.InstallResult("codex", False, "denied", ["completed phase"], repair="fix exact path"))
     assert install.main() == 1
     out = capsys.readouterr().out

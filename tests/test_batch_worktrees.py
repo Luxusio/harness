@@ -100,7 +100,7 @@ def test_lock_busy_has_no_git_effect(tmp_path, monkeypatch):
         with pytest.raises(batch.Busy):
             call(pool, spec)
     finally:
-        os.close(fd)
+        batch.release_lock(fd)
     assert pool.state.read_bytes() == before
     assert not (pool.repo / '.claude/worktrees').exists()
 

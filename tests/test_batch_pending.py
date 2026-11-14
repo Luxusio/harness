@@ -1,6 +1,8 @@
 """Read-only restart discovery never substitutes for batch completion proof."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import json
 import os
 from pathlib import Path
@@ -59,7 +61,7 @@ def test_corrupt_or_unsafe_metadata_remains_visible(tmp_path, corrupt):
     elif corrupt in {'symlink', 'hardlink'}:
         other = tmp_path / 'other'
         path.rename(other)
-        (path.symlink_to(other) if corrupt == 'symlink' else os.link(other, path))
+        (create_symlink(path, other) if corrupt == 'symlink' else os.link(other, path))
     elif corrupt == 'writable':
         path.chmod(0o666)
     else:

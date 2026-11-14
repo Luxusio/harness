@@ -94,7 +94,7 @@ def test_gate_script_imports_resolve():
     for script in ["prewrite_gate"]:
         r = subprocess.run(
             [sys.executable, "-c",
-             f"import sys; sys.path.insert(0, '{SCRIPTS}'); import {script}; "
+             f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); import {script}; "
              "from _lib import log_gate_crash, last_hook_input; "
              "print('OK')"],
             capture_output=True, text=True, timeout=10,
@@ -108,7 +108,7 @@ def test_last_hook_input_returns_cache_after_read():
     from _lib import read_hook_input, last_hook_input
     # Simulate hook input by piping via subprocess so stdin actually has bytes
     code = (
-        f"import sys; sys.path.insert(0, '{SCRIPTS}'); "
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); "
         "from _lib import read_hook_input, last_hook_input; "
         "read_hook_input(); "
         "import json; print(json.dumps(last_hook_input()))"

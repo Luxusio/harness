@@ -5,6 +5,8 @@ leak into the real repo's doc/harness/wbs/.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import json
 import os
@@ -327,7 +329,7 @@ class TestPromptMemory(unittest.TestCase):
             outside.mkdir()
             debug = base / "doc" / "harness" / "debug"
             debug.mkdir(parents=True, exist_ok=True)
-            (debug / "goal-hook-payloads").symlink_to(outside, target_is_directory=True)
+            create_symlink(debug / "goal-hook-payloads", outside, target_is_directory=True)
             r = _invoke(
                 str(base),
                 env_extra={"HARNESS_CAPTURE_GOAL_PAYLOADS": "1"},
@@ -343,7 +345,7 @@ class TestPromptMemory(unittest.TestCase):
             outside = Path(tmp) / "outside"
             outside.mkdir(mode=0o700)
             override = Path(tmp) / "override"
-            override.symlink_to(outside, target_is_directory=True)
+            create_symlink(override, outside, target_is_directory=True)
             r = _invoke(
                 str(base),
                 env_extra={

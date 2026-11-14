@@ -1,4 +1,6 @@
 """Bounded checkout observation and explicit non-attesting assertion results."""
+
+from test_symlink_fixture import create_symlink
 import json
 import os
 from pathlib import Path
@@ -32,7 +34,7 @@ def test_unsafe_plan_refuses_progress_and_check_without_executing(tmp_path, kind
     elif kind == "symlink":
         other = tmp_path / "plan-target"
         other.write_text(text)
-        target.symlink_to(other)
+        create_symlink(target, other)
     elif kind == "oversize":
         target.write_text(text + " " * (1024 * 1024))
     # Exercise both real callers in a bounded subprocess: the old FIFO read hangs.
@@ -214,7 +216,7 @@ def test_gitlink_ignores_build_artifacts_but_measures_dirty_and_new_source(tmp_p
     original = wbs.fingerprint(str(repo))
     (mod / "build").mkdir()
     (mod / "build" / "large.bin").write_bytes(b"x" * 8192)
-    (mod / "build" / "link").symlink_to(tmp_path)
+    create_symlink(mod / "build" / "link", tmp_path, target_is_directory=True)
     assert wbs.fingerprint(str(repo)) == original
     assert progress(repo, td)["percentage"] == 100
     # Index flags must never hide bytes from measurement.
@@ -355,7 +357,7 @@ def test_in_root_symlink_ancestor_never_attests_an_alias(tmp_path):
     git(repo, "add", "source/file.txt")
     target = repo / "actual"
     directory.rename(target)
-    directory.symlink_to(target, target_is_directory=True)
+    create_symlink(directory, target, target_is_directory=True)
     assert progress(repo, td)["percentage"] is None
 
 
@@ -368,6 +370,9 @@ def test_ancestor_swap_after_path_validation_cannot_attest_external_bytes(tmp_pa
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "file.txt").write_text("outside")
+    prerequisite = tmp_path / "symlink-prerequisite"
+    create_symlink(prerequisite, outside, target_is_directory=True)
+    prerequisite.unlink()
     actual = Path.is_symlink
     swapped = False
     def probe(path):
@@ -376,7 +381,7 @@ def test_ancestor_swap_after_path_validation_cannot_attest_external_bytes(tmp_pa
         if path == source and not swapped:
             swapped = True
             source.rename(repo / "saved-source")
-            source.symlink_to(outside, target_is_directory=True)
+            create_symlink(source, outside, target_is_directory=True)
         return answer
     monkeypatch.setattr(Path, "is_symlink", probe)
     assert progress(repo, td)["percentage"] is None
@@ -403,6 +408,9 @@ def test_module_rebinding_during_git_enumeration_is_unavailable(tmp_path, monkey
     mod = module(repo)
     outside = tmp_path / "outside-module"
     outside.mkdir()
+    prerequisite = tmp_path / "symlink-prerequisite"
+    create_symlink(prerequisite, outside, target_is_directory=True)
+    prerequisite.unlink()
     actual = wbs._execute
     swapped = False
     def execute(argv, cwd, *args, **kwargs):
@@ -410,7 +418,7 @@ def test_module_rebinding_during_git_enumeration_is_unavailable(tmp_path, monkey
         if argv[:3] == ["git", "ls-files", "--stage"] and Path(cwd).resolve() == mod and not swapped:
             swapped = True
             mod.rename(repo / "saved-module")
-            mod.symlink_to(outside, target_is_directory=True)
+            create_symlink(mod, outside, target_is_directory=True)
         return actual(argv, cwd, *args, **kwargs)
     monkeypatch.setattr(wbs, "_execute", execute)
     assert progress(repo, td)["percentage"] is None

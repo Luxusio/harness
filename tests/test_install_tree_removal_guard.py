@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import unittest
 from pathlib import Path
 
 import conftest
@@ -148,13 +149,27 @@ def test_the_codex_plugin_cache_entry_is_watched():
     runtime while `~/.codex/harness` and `~/.claude/harness-dev` stay intact —
     invisible to a guard that watches only those two.
     """
-    import pwd
-
-    home = pwd.getpwuid(os.getuid()).pw_dir
+    home = str(conftest.real_install_home())
     roots = conftest._default_install_tree_roots()
     assert os.path.join(home, ".codex", "plugins", "cache", "harness", "harness") in roots
     # Sibling marketplaces are other tools' trees, not the harness runtime.
     assert os.path.join(home, ".codex", "plugins", "cache") not in roots
+
+
+def test_real_install_roots_do_not_follow_fixture_home(tmp_path, monkeypatch):
+    before = conftest._default_install_tree_roots()
+    assert len(before) == 4
+    for name in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"):
+        monkeypatch.setenv(name, str(tmp_path))
+    assert conftest._default_install_tree_roots() == before
+
+
+def test_unknown_profile_does_not_disable_install_protection(monkeypatch):
+    def unavailable():
+        raise OSError("actual profile unavailable")
+    monkeypatch.setattr(conftest, "real_install_home", unavailable)
+    with unittest.TestCase().assertRaisesRegex(OSError, "actual profile unavailable"):
+        conftest._default_install_tree_roots()
 
 
 def _step_0_5_snippet() -> str:
@@ -164,6 +179,7 @@ def _step_0_5_snippet() -> str:
     return section.split("```bash", 1)[1].split("```", 1)[0]
 
 
+@unittest.skipIf(os.name == "nt", "POSIX bash documentation; native inventory is tested directly")
 def test_the_documented_snapshot_matches_the_fixture(tmp_path):
     """AC-4's manual procedure must agree with the fixture it mirrors.
 
@@ -259,14 +275,13 @@ def _snippet_removals(tmp_path: Path, home: Path, mutation: str) -> str:
 
 
 def test_the_claude_plugin_cache_is_watched():
-    import pwd
-
-    home = pwd.getpwuid(os.getuid()).pw_dir
+    home = str(conftest.real_install_home())
     roots = conftest._default_install_tree_roots()
     assert os.path.join(home, str(CLAUDE_CACHE)) in roots
     assert os.path.join(home, ".claude", "plugins", "cache") not in roots
 
 
+@unittest.skipIf(os.name == "nt", "POSIX bash snapshot; orphan handling also has portable fixture coverage")
 def test_a_version_orphaned_before_the_run_may_disappear(tmp_path):
     home = tmp_path / "home"
     cache = home / CLAUDE_CACHE
@@ -286,6 +301,7 @@ def test_a_version_orphaned_before_the_run_may_disappear(tmp_path):
     assert str(lib) in _snippet_removals(tmp_path, home, f"rm {lib}")
 
 
+@unittest.skipIf(os.name == "nt", "POSIX bash snapshot; orphan handling also has portable fixture coverage")
 def test_a_version_orphaned_during_the_run_is_not_a_removal(tmp_path):
     """An install mid-run orphans the live version with its files intact."""
     home = tmp_path / "home"
@@ -298,6 +314,7 @@ def test_a_version_orphaned_during_the_run_is_not_a_removal(tmp_path):
     assert _snippet_removals(tmp_path, home, f"printf 1 > {marker}") == ""
 
 
+@unittest.skipIf(os.name == "nt", "POSIX bash snapshot; portable inventory covers hidden and root files")
 def test_dot_dirs_and_root_level_files_get_the_same_verdict(tmp_path):
     home = tmp_path / "home"
     cache = home / CLAUDE_CACHE

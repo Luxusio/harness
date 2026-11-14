@@ -1,4 +1,6 @@
 """Control reads, explicit verification inputs, local parking and resume rollback."""
+
+from test_symlink_fixture import create_symlink
 import json
 import os
 import ctypes
@@ -134,7 +136,7 @@ def test_context_next_resume_plan_and_dispatch_do_not_hash_source(tmp_path, monk
 def test_denied_and_excluded_candidates_are_filtered_before_resolve_or_open(tmp_path, monkeypatch):
     repo, td = baseline(tmp_path)
     denied = repo / "mise.toml"
-    denied.symlink_to(tmp_path / "outside-secret")
+    create_symlink(denied, tmp_path / "outside-secret")
     publish(td, [node()], dict(source=["src.txt"], deny=["mise.toml"]))
     actual_resolve, actual_open = Path.resolve, os.open
     def resolve(path, *args, **kwargs):

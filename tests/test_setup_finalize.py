@@ -7,6 +7,13 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != "pytest":
+        raise
+    from unittest import SkipTest
+    raise SkipTest("pytest is required to collect this module") from error
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -435,6 +442,138 @@ def test_project_doc_rollback_preserves_second_concurrent_replacement(tmp_path):
     preserved = list(repo.glob(".AGENTS.md.*.tmp"))
     assert len(preserved) == 1
     assert preserved[0].read_text(encoding="utf-8") == "# Original\n"
+
+
+@pytest.fixture
+def native_project_doc(tmp_path):
+    if os.name != "nt":
+        pytest.skip("requires actual native Windows project-document publication")
+    from wiki_platform import _native
+    root = _native.ensure_private_directory(tmp_path / "setup native 한글 'quoted' & literal")
+    module = load_setup_finalize("setup_finalize_native_project_doc_test")
+    return module, _native, root
+
+
+def test_native_project_doc_exchange_preserves_both_file_identities(native_project_doc):
+    module, _, root = native_project_doc
+    left, right = root / "candidate.tmp", root / "AGENTS.md"
+    left.write_bytes(b"# Candidate\r\n")
+    right.write_bytes(b"# Original\r\n")
+    before_left, before_right = left.stat(), right.stat()
+
+    module._exchange_project_doc(str(left), str(right))
+
+    assert left.read_bytes() == b"# Original\r\n"
+    assert right.read_bytes() == b"# Candidate\r\n"
+    assert module._same_file_identity(left, before_right)
+    assert module._same_file_identity(right, before_left)
+    assert sorted(path.name for path in root.iterdir()) == ["AGENTS.md", "candidate.tmp"]
+
+
+def test_native_project_doc_update_preserves_deep_crlf_text_and_acl(native_project_doc):
+    module, native, root = native_project_doc
+    repo = root
+    while len(str(repo).encode("utf-16-le")) // 2 < 300:
+        repo = repo / "existing source 中文 with spaces"
+    native.ensure_private_directory(repo)
+    path = repo / "AGENTS.md"
+    disk = module._project_doc_disk_path(path)
+    original = "# User project\r\nkeep 'quotes' & $literal\r\n## User tail\r\nunchanged\r\n"
+    Path(disk).write_bytes(original.encode("utf-8"))
+
+    def acl():
+        handle = native._open(path, 0)
+        try:
+            return native._security(handle, "metadata")
+        finally:
+            native._close(handle)
+
+    before_acl = acl()
+    assert module.update_project_doc(repo, "AGENTS.md", ensure_routing=True,
+                                     ensure_contract_import=True)
+    expected = module._with_routing_block(module._with_contract_import(original))
+    assert Path(disk).read_bytes() == expected.encode("utf-8")
+    assert "keep 'quotes' & $literal\r\n## User tail\r\nunchanged\r\n" in expected
+    assert acl() == before_acl
+    assert not module.update_project_doc(repo, "AGENTS.md", ensure_routing=True,
+                                         ensure_contract_import=True)
+    assert [entry.name for entry in Path(module._project_doc_disk_path(repo)).iterdir()] == ["AGENTS.md"]
+
+
+def test_native_project_doc_backup_name_conflict_preserves_every_writer(native_project_doc, monkeypatch):
+    module, native, root = native_project_doc
+    path = root / "AGENTS.md"
+    path.write_bytes(b"# Original\r\n")
+    rename = native._SetFileInformation
+    raced = False
+
+    def competing_writer(handle, kind, buffer, size):
+        nonlocal raced
+        if kind == native.FileRenameInfoEx and not raced:
+            raced = True
+            # The random displaced name ends in .displaced; the vacated
+            # candidate name is the prefix before its final random token.
+            backups = list(root.glob(".AGENTS.md.*.displaced"))
+            assert len(backups) == 1
+            candidate = backups[0].with_name(backups[0].name.rsplit(".", 2)[0])
+            candidate.write_bytes(b"# Concurrent candidate-name writer\r\n")
+        return rename(handle, kind, buffer, size)
+
+    monkeypatch.setattr(native, "_SetFileInformation", competing_writer)
+    with pytest.raises(module._ProjectDocExchangeIncomplete, match="files preserved at"):
+        module.update_project_doc(root, "AGENTS.md", ensure_routing=False,
+                                  ensure_contract_import=True)
+
+    assert raced, "fault injection must reach the native backup handle rename"
+    assert path.read_bytes() == b"# Original\r\n@CONTRACTS.md\r\n"
+    backups = list(root.glob(".AGENTS.md.*.displaced"))
+    candidates = list(root.glob(".AGENTS.md.*.tmp"))
+    assert len(backups) == len(candidates) == 1
+    assert backups[0].read_bytes() == b"# Original\r\n"
+    assert candidates[0].read_bytes() == b"# Concurrent candidate-name writer\r\n"
+
+
+def test_native_project_doc_sharing_failure_preserves_original_and_candidate(native_project_doc, monkeypatch):
+    module, native, root = native_project_doc
+    path = root / "AGENTS.md"
+    path.write_bytes(b"# Original\r\n")
+    exchange = module._exchange_project_doc_native
+    blocked = False
+
+    def retained_reader(left, right):
+        nonlocal blocked
+        handle = native._open(left, native.GENERIC_READ, share=native.FILE_SHARE_READ)
+        try:
+            blocked = True
+            return exchange(left, right)
+        finally:
+            native._close(handle)
+
+    monkeypatch.setattr(module, "_exchange_project_doc_native", retained_reader)
+    with pytest.raises(module._ProjectDocExchangeIncomplete, match="files preserved at"):
+        module.update_project_doc(root, "AGENTS.md", ensure_routing=False,
+                                  ensure_contract_import=True)
+
+    assert blocked, "sharing failure must come from an actual retained native reader"
+    assert path.read_bytes() == b"# Original\r\n"
+    candidates = list(root.glob(".AGENTS.md.*.tmp"))
+    assert len(candidates) == 1
+    assert candidates[0].read_bytes() == b"# Original\r\n@CONTRACTS.md\r\n"
+    assert not list(root.glob("*.displaced"))
+
+
+def test_native_project_doc_hardlink_is_refused_without_touching_user_text(native_project_doc):
+    module, _, root = native_project_doc
+    original, path = root / "user.md", root / "AGENTS.md"
+    original.write_bytes(b"# User original\r\n")
+    path.hardlink_to(original)
+
+    with pytest.raises(ValueError, match="nonlinked"):
+        module.update_project_doc(root, "AGENTS.md", ensure_routing=False,
+                                  ensure_contract_import=True)
+
+    assert path.read_bytes() == original.read_bytes() == b"# User original\r\n"
+    assert not list(root.glob(".AGENTS.md.*"))
 
 
 def test_source_git_roots_reject_shell_metacharacters(tmp_path):

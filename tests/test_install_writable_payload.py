@@ -13,6 +13,8 @@ See `doc/harness/REQ__installed-tree-modes-are-installer-owned.md`.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import os
 import json
@@ -121,7 +123,7 @@ def test_normalize_payload_modes_skips_symlinks(tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("keep me\n", encoding="utf-8")
     os.chmod(outside, 0o666)
-    (root / "link").symlink_to(outside)
+    create_symlink(root / "link", outside)
 
     install._normalize_payload_modes(root)
 

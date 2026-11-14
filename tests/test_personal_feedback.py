@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location("personal_feedback_test", SCRIPTS / "personal_feedback.py")
 feedback = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(feedback)
+from wiki_platform import atomic_write, ensure_private_directory
 
 SITE = "https://feedback.example.invalid"
 PAGE = SITE + "/wiki/spaces/TOOLS/pages/790/Harness+feedback"
@@ -36,24 +37,35 @@ CREDS = {"ATLASSIAN_BASE_URL": SITE, "ATLASSIAN_EMAIL": "feedback@example.invali
 
 
 def private_settings(home, *, source=None, page=PAGE):
-    folder = home / ".config/harness"
-    folder.mkdir(parents=True, exist_ok=True)
-    home.chmod(0o700)
-    folder.parent.chmod(0o700)
-    folder.chmod(0o700)
+    folder = ensure_private_directory(home / ".config/harness")
     path = folder / "feedback.yaml"
-    path.write_text(source if source is not None else json.dumps({"backend": "atlassian", "page": page}))
-    path.chmod(0o600)
+    atomic_write(path, (source if source is not None else
+                       json.dumps({"backend": "atlassian", "page": page})).encode("utf-8"))
     return folder, path
 
 
 def private_auth(home):
     folder, _ = private_settings(home)
     path = folder / "mise.local.toml"
-    path.write_text('[env]\nATLASSIAN_BASE_URL="https://feedback.example.invalid"\n'
-                    'ATLASSIAN_EMAIL="feedback@example.invalid"\nATLASSIAN_API_TOKEN="synthetic-only"\n')
-    path.chmod(0o600)
+    atomic_write(path, b'[env]\nATLASSIAN_BASE_URL="https://feedback.example.invalid"\n'
+                      b'ATLASSIAN_EMAIL="feedback@example.invalid"\nATLASSIAN_API_TOKEN="synthetic-only"\n')
     return folder, path
+
+
+def _foreign_acl(path, rights):
+    """Set or clear a foreign grant only on this synthetic Windows fixture."""
+    import ctypes as C
+    from ctypes import wintypes as W
+    import _wiki_windows as win
+    descriptor = win.P()
+    grants = f"(A;;{rights};;;WD)" if rights else ""
+    sddl = f"O:{win.USER_SID}D:P(A;;FA;;;{win.USER_SID})(A;;FA;;;SY)(A;;FA;;;BA){grants}"
+    win._check(win._ConvertStringSecurityDescriptor(sddl, 1, C.byref(descriptor), None))
+    setter = win._bind(win.A, "SetFileSecurityW", [W.LPCWSTR, W.DWORD, win.P])
+    try:
+        win._check(setter(str(path), 4 | 0x80000000, descriptor))
+    finally:
+        win._LocalFree(descriptor)
 
 
 def forbidden(*args, **kwargs):
@@ -139,31 +151,50 @@ def test_unsupported_or_credential_bearing_page_urls_never_escape(tmp_path, monk
 
 
 @pytest.mark.parametrize("component", ["file", "harness", "config"])
-def test_symlinked_private_configuration_components_are_not_followed(tmp_path, monkeypatch, component):
+def test_symlinked_private_configuration_components_are_not_followed(tmp_path, monkeypatch, component, make_symlink):
     home = tmp_path / "home"
     folder, path = private_settings(home)
     if component == "file":
         target = tmp_path / "target.yaml"
         path.rename(target)
-        path.symlink_to(target)
+        make_symlink(path, target)
     elif component == "harness":
         target = tmp_path / "target-harness"
         folder.rename(target)
-        folder.symlink_to(target, target_is_directory=True)
+        make_symlink(folder, target, target_is_directory=True)
     else:
         target = tmp_path / "target-config"
         folder.parent.rename(target)
-        folder.parent.symlink_to(target, target_is_directory=True)
+        make_symlink(folder.parent, target, target_is_directory=True)
     monkeypatch.setattr(feedback, "_credentials", forbidden)
     monkeypatch.setattr(feedback, "_request", forbidden)
     assert feedback.perform("status", home=home)["status"] == "unavailable"
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o620, 0o606, 0o666])
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits; native private DACL refusals are tested separately")
 def test_nonprivate_destination_permissions_are_rejected(tmp_path, mode):
     _, path = private_settings(tmp_path)
     path.chmod(mode)
     assert feedback.load_destination(home=tmp_path)["status"] == "unavailable"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows DACL enforcement")
+@pytest.mark.parametrize("name", ["feedback.yaml", "mise.local.toml"])
+@pytest.mark.parametrize("rights", ["GR", "GW"])
+def test_native_nonprivate_configuration_acl_is_rejected_before_auth_or_network(tmp_path, monkeypatch, name, rights):
+    folder, _ = private_auth(tmp_path)
+    path = folder / name
+    monkeypatch.setattr(feedback.shutil, "which", lambda *a, **k: sys.executable)
+    monkeypatch.setattr(feedback, "_private_mise", forbidden)
+    monkeypatch.setattr(feedback, "_request", forbidden)
+    assert feedback.load_destination(home=tmp_path)["status"] == "configured"
+    try:
+        _foreign_acl(path, rights)
+        assert feedback.perform("check", home=tmp_path)["status"] == "unavailable"
+    finally:
+        _foreign_acl(path, "")
+    assert feedback.load_destination(home=tmp_path)["status"] == "configured"
 
 
 def mise_result(path, **changes):
@@ -394,17 +425,25 @@ def test_missing_yaml_parser_does_not_trigger_auth_or_network(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("fault", ["unsafe-mode", "symlink"])
-def test_private_auth_file_must_be_safe_before_mise_executes(tmp_path, monkeypatch, fault):
+def test_private_auth_file_must_be_safe_before_mise_executes(tmp_path, monkeypatch, fault, make_symlink):
     _, path = private_auth(tmp_path)
     if fault == "unsafe-mode":
-        path.chmod(0o644)
+        if os.name == "nt":
+            _foreign_acl(path, "GR")
+        else:
+            path.chmod(0o644)
     else:
         target = tmp_path / "target.toml"
         path.rename(target)
-        path.symlink_to(target)
-    monkeypatch.setattr(feedback.subprocess, "run", forbidden)
+        make_symlink(path, target)
+    monkeypatch.setattr(feedback.shutil, "which", lambda *a, **k: sys.executable)
+    monkeypatch.setattr(feedback, "_private_mise", forbidden)
     monkeypatch.setattr(feedback, "_request", forbidden)
-    assert feedback.perform("check", home=tmp_path)["status"] == "unavailable"
+    try:
+        assert feedback.perform("check", home=tmp_path)["status"] == "unavailable"
+    finally:
+        if os.name == "nt" and fault == "unsafe-mode":
+            _foreign_acl(path, "")
 
 
 def test_report_containing_the_private_token_is_not_sent(tmp_path, monkeypatch):

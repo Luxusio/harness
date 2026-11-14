@@ -1,6 +1,8 @@
 """WBS packs consume real batch integration and archival evidence."""
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import copy
 import json
 import sys
@@ -226,7 +228,7 @@ def test_integrated_labels_do_not_substitute_for_evidence(tmp_path, monkeypatch,
         archive = pool.repo / "doc/harness/archive/batch/WBS__a"
         target = archive.with_name("moved")
         archive.rename(target)
-        archive.symlink_to(target, target_is_directory=True)
+        create_symlink(archive, target, target_is_directory=True)
     elif change == "run":
         item["run_id"] = item["checkpoint"]["run_id"] = "0198c349-5800-7000-8000-000000000002"
         pool.state.write_text(json.dumps(state))
@@ -254,7 +256,7 @@ def test_symlinked_missing_state_parent_is_refused(tmp_path, monkeypatch):
     runtime = pool.repo / "doc/harness/runtime"
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    runtime.symlink_to(elsewhere, target_is_directory=True)
+    create_symlink(runtime, elsewhere, target_is_directory=True)
     with pytest.raises(ValueError, match="unsafe"):
         route(pool, spec)
 

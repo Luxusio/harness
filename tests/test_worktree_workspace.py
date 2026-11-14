@@ -8,6 +8,8 @@ See doc/harness/REQ__parallel-tasks-via-worktree-leads.md.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 def call_execution(*args, **kwargs):
     from test_harness_mcp_server import call_execution as execute
     return execute(*args, **kwargs)
@@ -179,7 +181,7 @@ def test_refuses_relative_and_symlinked_paths(tmp_path):
     main, wt = repo
     _refused(main, os.path.relpath(wt))
     link = tmp_path / "link"
-    link.symlink_to(wt)
+    create_symlink(link, wt, target_is_directory=True)
     _refused(main, str(link))
 
 

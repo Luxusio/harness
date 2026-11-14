@@ -40,6 +40,86 @@ def assert_rebinding_refused(error):
         assert error.value.__cause__.errno in {errno.ENXIO, errno.EACCES}
 
 
+def native_rebind_probe(tmp_path, monkeypatch, operation, relative=None):
+    """Attempt substitution at the selected backend's retained-handle boundary."""
+    import _wiki_windows as win
+    relative = relative or migration.GOALS + "/GOAL__old.json"
+    source = write(tmp_path, relative, b"original")
+    parent = tmp_path / "doc/harness" if operation == "create" else source.parent
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / source.name
+    marker.write_bytes(b"outside remains untouched")
+    attempted = []
+
+    def substitute():
+        if attempted:
+            return
+        attempted.append(True)
+        with pytest.raises(OSError) as error:
+            parent.rename(parent.with_name("retained"))
+        assert error.value.winerror in {5, 32}
+
+    if operation == "create":
+        original = win._CreateDirectory
+        def create(path, *args):
+            result = original(path, *args)
+            if str(path).endswith("archive"):
+                substitute()
+            return result
+        monkeypatch.setattr(win, "_CreateDirectory", create)
+    elif operation in {"publication", "retire", "cleanup"}:
+        original = win._SetFileInformation
+        def publish(*args):
+            substitute()
+            return original(*args)
+        monkeypatch.setattr(win, "_SetFileInformation", publish)
+    elif operation == "read":
+        original = win._ReadFile
+        def read(*args):
+            substitute()
+            return original(*args)
+        monkeypatch.setattr(win, "_ReadFile", read)
+    elif operation == "enumerate":
+        original = os.scandir
+        def scan(path):
+            if os.path.normcase(os.fspath(path)).endswith(os.path.normcase(str(parent))):
+                substitute()
+            return original(path)
+        monkeypatch.setattr(os, "scandir", scan)
+    else:
+        original = win._CreateFile
+        def opening(path, *args):
+            handle = original(path, *args)
+            if ".wiki-" in str(path) or ".metadata-" in str(path):
+                substitute()
+            return handle
+        monkeypatch.setattr(win, "_CreateFile", opening)
+
+    if operation == "read":
+        assert migration._read(tmp_path, relative) == b"original"
+    elif operation == "retire":
+        migration._retire(tmp_path, relative, migration._hash(b"original"))
+        assert not source.exists()
+    elif operation == "cleanup":
+        source.unlink()
+        migration._remove_empty(tmp_path, migration.GOALS)
+        assert not parent.exists()
+    elif operation == "enumerate":
+        assert [name for name, _ in migration._entries(tmp_path, migration.GOALS)] == [source.name]
+    elif operation == "create":
+        target = migration.ARCHIVE + "/original/source.json"
+        migration._write(tmp_path, target, b"archive")
+        assert (tmp_path / target).read_bytes() == b"archive"
+        assert source.read_bytes() == b"original"
+    else:
+        migration._write(tmp_path, relative, b"replacement")
+        assert source.read_bytes() == b"replacement"
+    assert attempted, "Native substitution injection did not reach its boundary"
+    assert marker.read_bytes() == b"outside remains untouched"
+    assert list(outside.iterdir()) == [marker]
+
+
 @pytest.fixture
 def owner(monkeypatch):
     monkeypatch.setattr(sys.modules["_lib"], "_trusted_control_writer", lambda: True)
@@ -321,17 +401,11 @@ def test_unstarted_binding_preserves_existing_control_identity(tmp_path, monkeyp
 
 
 def test_active_legacy_writer_refuses_without_retiring_sources(tmp_path, owner):
-    import fcntl
-    import os
     path = row(tmp_path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with migration._legacy_goal_lock(tmp_path):
         with pytest.raises(ValueError, match="legacy writer active"):
             migration.apply(tmp_path)
         assert path.exists() and not (tmp_path / migration.MANIFEST).exists()
-    finally:
-        os.close(fd)
 
 
 def test_migration_manifest_and_originals_are_hook_protected():
@@ -346,7 +420,9 @@ def test_migration_manifest_and_originals_are_hook_protected():
                                       "doc/harness/archive/goal-migration/original/doc/harness/goals/GOAL__old.json"])
 @pytest.mark.parametrize("stage", ["temporary", "publication"])
 def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative, stage):
-    import os
+    if os.name == "nt":
+        native_rebind_probe(tmp_path, monkeypatch, stage, relative)
+        return
     parent = (tmp_path / relative).parent
     parent.mkdir(parents=True)
     outside = tmp_path / "outside"
@@ -385,7 +461,9 @@ def test_fd_write_rebind_cannot_publish_outside(tmp_path, monkeypatch, relative,
 
 
 def test_fd_read_rebind_never_reads_outside(tmp_path, monkeypatch):
-    import os
+    if os.name == "nt":
+        native_rebind_probe(tmp_path, monkeypatch, "read")
+        return
     relative = "doc/harness/goals/GOAL__old.json"
     source = write(tmp_path, relative, b"original")
     outside = tmp_path / "outside"
@@ -412,7 +490,9 @@ def test_fd_read_rebind_never_reads_outside(tmp_path, monkeypatch):
 
 
 def test_fd_retire_rebind_never_deletes_outside(tmp_path, monkeypatch):
-    import os
+    if os.name == "nt":
+        native_rebind_probe(tmp_path, monkeypatch, "retire")
+        return
     relative = "doc/harness/goals/GOAL__old.json"
     source = write(tmp_path, relative, b"original")
     outside = tmp_path / "outside"
@@ -435,7 +515,9 @@ def test_fd_retire_rebind_never_deletes_outside(tmp_path, monkeypatch):
 
 
 def test_fd_directory_cleanup_refuses_rebound_goal_dir(tmp_path, monkeypatch):
-    import os
+    if os.name == "nt":
+        native_rebind_probe(tmp_path, monkeypatch, "cleanup")
+        return
     goals = tmp_path / migration.GOALS
     goals.mkdir(parents=True)
     outside = tmp_path / "outside"
@@ -457,12 +539,16 @@ def test_fd_directory_cleanup_refuses_rebound_goal_dir(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("operation", ["read", "write", "retire"])
-def test_fd_io_refuses_writable_storage_directory(tmp_path, operation):
+def test_fd_io_refuses_writable_storage_directory(tmp_path, monkeypatch, operation):
     relative = "doc/harness/goals/GOAL__old.json"
     source = write(tmp_path, relative, b"original")
-    source.parent.chmod(0o777)
+    if os.name == "nt":
+        from test_wiki_windows_native import _acl
+        _acl(source.parent, "(A;;GA;;;WD)")
+    else:
+        source.parent.chmod(0o777)
     try:
-        with pytest.raises(ValueError, match="unsafe storage directory"):
+        with pytest.raises(ValueError, match="unsafe storage directory|unsafe access"):
             if operation == "read":
                 migration._read(tmp_path, relative)
             elif operation == "write":
@@ -471,32 +557,30 @@ def test_fd_io_refuses_writable_storage_directory(tmp_path, operation):
                 migration._retire(tmp_path, relative, migration._hash(b"original"))
         assert source.read_bytes() == b"original"
     finally:
-        source.parent.chmod(0o700)
+        if os.name == "nt":
+            _acl(source.parent)
+        else:
+            source.parent.chmod(0o700)
 
 
 def test_pool_destination_holds_shared_batch_writer_lock(tmp_path, monkeypatch, owner):
-    import fcntl
-    import os
     source = row(tmp_path)
     pool_path = "doc/harness/runtime/batches/retained.json"
     write(tmp_path, pool_path, b"original pool")
     monkeypatch.setattr(migration, "_collect", lambda repo: (
         {migration.GOALS + "/" + source.name: source.read_bytes()},
         {pool_path: (b"original pool", b"owned pool")}, []))
-    lock = write(tmp_path, "doc/harness/runtime/batches/.lock", b"")
-    fd = os.open(lock, os.O_RDWR)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with migration._file_lock(tmp_path, "doc/harness/runtime/batches/.lock"):
         with pytest.raises(ValueError, match="batch writer active"):
             migration._apply_goals(tmp_path)
         assert not (tmp_path / migration.MANIFEST).exists()
         assert (tmp_path / pool_path).read_bytes() == b"original pool"
-    finally:
-        os.close(fd)
 
 
 def test_fd_archive_directory_creation_rebind_does_not_escape(tmp_path, monkeypatch):
-    import os
+    if os.name == "nt":
+        native_rebind_probe(tmp_path, monkeypatch, "create")
+        return
     parent = tmp_path / "doc/harness"
     parent.mkdir(parents=True)
     outside = tmp_path / "outside"
@@ -517,7 +601,9 @@ def test_fd_archive_directory_creation_rebind_does_not_escape(tmp_path, monkeypa
 
 
 def test_fd_directory_enumeration_rebind_refuses_external_rows(tmp_path, monkeypatch):
-    import os
+    if os.name == "nt":
+        native_rebind_probe(tmp_path, monkeypatch, "enumerate")
+        return
     goals = tmp_path / migration.GOALS
     goals.mkdir(parents=True)
     write(tmp_path, migration.GOALS + "/GOAL__old.json", b"original")
@@ -558,7 +644,21 @@ def test_publication_uses_journal_baseline_and_preserves_late_user_note(tmp_path
 
 
 def test_absent_publication_never_replaces_a_late_created_file(tmp_path, monkeypatch):
-    import os
+    if os.name == "nt":
+        import _wiki_windows as win
+        original = win._SetFileInformation
+        fired = []
+        def publish(handle, kind, *args):
+            if kind == win.FileRenameInfoEx and not fired:
+                fired.append(True)
+                (tmp_path / "note.md").write_bytes(b"late user content")
+            return original(handle, kind, *args)
+        monkeypatch.setattr(win, "_SetFileInformation", publish)
+        with pytest.raises((ValueError, OSError)):
+            migration._write(tmp_path, "note.md", b"imported content", expected=None)
+        assert fired and (tmp_path / "note.md").read_bytes() == b"late user content"
+        assert not list(tmp_path.glob(".wiki-*"))
+        return
     original = migration._rename_new
     def publish(parent, temporary, destination):
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600,
@@ -575,27 +675,36 @@ def test_absent_publication_never_replaces_a_late_created_file(tmp_path, monkeyp
 
 
 def test_wbs_destination_respects_its_existing_writer_lock(tmp_path, owner):
-    import fcntl
-    import os
     value = spec('GOAL__wbs-old')
     state = dict(version=1, nodes=[dict(id='A', title='Observed result', weight=1)],
                  checks={}, run_id='old', started_at=1, last_progress_at=1,
                  batch_goal_id='GOAL__wbs-old', batch=value)
     path = write(tmp_path, 'doc/harness/wbs/WBS__integration/WBS.json', state)
     before = path.read_bytes()
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with migration._locked_directory(tmp_path, list(path.parent.relative_to(tmp_path).parts)):
         with pytest.raises(ValueError, match='WBS writer active'):
             migration.apply(tmp_path)
-    finally:
-        os.close(fd)
     assert path.read_bytes() == before
 
 
 def test_interruption_after_atomic_new_publication_retries_without_hardlinks(tmp_path, monkeypatch, owner):
     source = row(tmp_path)
     destination = migration.preview(tmp_path)["destinations"][0]
+    if os.name == "nt":
+        original = migration._write
+        fired = []
+        def published(repo, relative, data, **kwargs):
+            original(repo, relative, data, **kwargs)
+            if relative == destination and not fired:
+                fired.append(True)
+                raise OSError("interrupted after native publication")
+        monkeypatch.setattr(migration, "_write", published)
+        with pytest.raises(OSError, match="interrupted after native publication"):
+            migration.apply(tmp_path)
+        assert fired and source.exists() and (tmp_path / destination).stat().st_nlink == 1
+        monkeypatch.setattr(migration, "_write", original)
+        assert migration.apply(tmp_path)["status"] == "complete"
+        return
     original = migration._rename_new
     fired = []
     def publish(parent, temporary, target):
@@ -625,6 +734,88 @@ def tree_snapshot(repo):
     return {str(path.relative_to(repo)): (path.read_bytes(), path.stat().st_ino, path.stat().st_nlink,
                                         path.stat().st_mtime_ns)
             for path in repo.rglob("*") if path.is_file()}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows write-through rename")
+@pytest.mark.parametrize("publication", ["archive", "prepared-manifest", "destination", "complete-manifest"])
+@pytest.mark.parametrize("boundary", ["before", "after"])
+def test_windows_publication_crash_retries(tmp_path, owner, publication, boundary):
+    source = row(tmp_path)
+    original = source.read_bytes()
+    destination = migration.preview(tmp_path)["destinations"][0]
+    relative = {"archive": migration.ARCHIVE + "/original/" + migration.GOALS + "/" + source.name,
+                "prepared-manifest": migration.MANIFEST, "destination": destination,
+                "complete-manifest": migration.MANIFEST}[publication]
+    script = r'''
+import ctypes as C, json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import _lib, goal_migration as migration, _wiki_windows as win
+_lib._trusted_control_writer = lambda: True
+relative, publication, boundary = sys.argv[3:6]
+original_write, original_set = migration._write, win._SetFileInformation
+selected = False
+def writing(repo, path, data, **kwargs):
+    global selected
+    selected = (path == relative and (publication not in {'prepared-manifest', 'complete-manifest'}
+                or json.loads(data)['status'] == ('complete' if publication == 'complete-manifest' else 'prepared')))
+    try:
+        return original_write(repo, path, data, **kwargs)
+    finally:
+        selected = False
+def setting(handle, kind, buffer, size):
+    if selected and kind == win.FileRenameInfoEx:
+        if boundary == 'before':
+            os._exit(73)
+        result = original_set(handle, kind, buffer, size)
+        if result:
+            os._exit(73)
+        return result
+    return original_set(handle, kind, buffer, size)
+migration._write, win._SetFileInformation = writing, setting
+migration.apply(Path(sys.argv[2]))
+raise SystemExit('Native publication fault did not fire')
+'''
+    result = subprocess.run([sys.executable, "-B", "-c", script, str(Path(migration.__file__).parent),
+                             str(tmp_path), relative, publication, boundary],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 73, result.stdout + result.stderr
+    before_preview = tree_snapshot(tmp_path)
+    migration.preview(tmp_path)
+    assert tree_snapshot(tmp_path) == before_preview
+    if publication != "complete-manifest":
+        assert source.read_bytes() == original
+    completed = migration.apply(tmp_path)
+    assert completed["status"] == "complete" and migration.apply(tmp_path) == completed
+    assert not source.exists()
+    archived = tmp_path / migration.ARCHIVE / "original" / migration.GOALS / source.name
+    assert archived.read_bytes() == original and archived.stat().st_nlink == 1
+    assert (tmp_path / destination).is_file()
+    assert json.loads((tmp_path / migration.MANIFEST).read_bytes())["status"] == "complete"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Windows metadata publication")
+@pytest.mark.parametrize("code", [5, 112, 1117], ids=["access-denied", "disk-full", "io-error"])
+def test_windows_publication_error_retains_sources(tmp_path, monkeypatch, owner, code):
+    import _wiki_windows as win
+    source = row(tmp_path)
+    original = source.read_bytes()
+    original_set = win._SetFileInformation
+    attempted = []
+    def setting(handle, kind, *args):
+        if kind == win.FileRenameInfoEx:
+            attempted.append(True)
+            ctypes.set_last_error(code)
+            return False
+        return original_set(handle, kind, *args)
+    monkeypatch.setattr(win, "_SetFileInformation", setting)
+    with pytest.raises(OSError):
+        migration.apply(tmp_path)
+    assert attempted and source.read_bytes() == original
+    assert not (tmp_path / migration.MANIFEST).exists()
+    assert not list(tmp_path.rglob(".wiki-*")), "failed publication leaked its owned staging handle"
+    monkeypatch.setattr(win, "_SetFileInformation", original_set)
+    assert migration.apply(tmp_path)["status"] == "complete"
 
 
 def crash_migration(repo, destination, *, boundary="after_link"):
@@ -689,6 +880,7 @@ raise SystemExit("requested publication boundary was never reached")
 
 @pytest.mark.parametrize("error", [errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, None],
                          ids=["invalid-filesystem-operation", "unimplemented", "unsupported", "missing-symbol"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX renameat2 fallback; Native write-through publication is covered by test_windows_publication_crash_retries')
 def test_unsupported_native_migration_publishes_complete_single_link_files(tmp_path, monkeypatch, owner, error):
     source = row(tmp_path)
     before = source.read_bytes()
@@ -719,6 +911,7 @@ def test_unsupported_native_migration_publishes_complete_single_link_files(tmp_p
 
 
 @pytest.mark.parametrize("error", [errno.EACCES, errno.EIO, errno.ENOSPC])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX renameat2 errors; Native errors are covered by test_windows_publication_error_retains_sources')
 def test_native_operational_errors_never_trigger_fallback(tmp_path, monkeypatch, owner, error):
     source = row(tmp_path)
     before = source.read_bytes()
@@ -729,6 +922,7 @@ def test_native_operational_errors_never_trigger_fallback(tmp_path, monkeypatch,
     assert source.read_bytes() == before and not (tmp_path / migration.MANIFEST).exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason='POSIX renameat2 ABI; Native no-hardlink publication is covered by test_windows_publication_crash_retries')
 def test_native_success_does_not_use_hardlink_fallback(tmp_path, monkeypatch, owner):
     row(tmp_path)
     calls = []
@@ -744,6 +938,7 @@ def test_native_success_does_not_use_hardlink_fallback(tmp_path, monkeypatch, ow
 
 
 @pytest.mark.parametrize("publication", ["archive", "prepared-manifest", "destination"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX two-link publication window; Native atomic rename is covered by test_windows_publication_crash_retries')
 def test_process_death_after_link_has_read_only_preview_and_exact_retry(tmp_path, monkeypatch, owner, publication):
     source = row(tmp_path)
     original = source.read_bytes()
@@ -767,6 +962,7 @@ def test_process_death_after_link_has_read_only_preview_and_exact_retry(tmp_path
 
 
 @pytest.mark.parametrize("boundary", ["before_link", "after_unlink", "before_directory_fsync"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX link/unlink/fsync boundaries; Native write-through rename is covered by test_windows_publication_crash_retries')
 def test_process_death_around_link_recovers_without_partial_destination(tmp_path, monkeypatch, owner, boundary):
     source = row(tmp_path)
     destination = migration.preview(tmp_path)["destinations"][0]
@@ -786,6 +982,7 @@ def test_process_death_around_link_recovers_without_partial_destination(tmp_path
 
 
 @pytest.mark.parametrize("sync_failure", [False, True], ids=["sync-before-retirement", "sync-error-retains-sources"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX directory fsync recovery; Native write-through publication is covered by test_windows_publication_crash_retries')
 def test_retry_after_alias_removal_syncs_publication_before_retiring_sources(tmp_path, monkeypatch, owner, sync_failure):
     source = row(tmp_path)
     original = source.read_bytes()
@@ -824,6 +1021,7 @@ def test_retry_after_alias_removal_syncs_publication_before_retiring_sources(tmp
 
 
 @pytest.mark.parametrize("publication", ["archive", "manifest", "destination"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX admitted publication alias; Native never publishes a hardlink pair')
 def test_completed_journal_normalizes_valid_pair_before_early_return(tmp_path, monkeypatch, owner, publication):
     source = row(tmp_path)
     unsupported_native(monkeypatch)
@@ -840,6 +1038,7 @@ def test_completed_journal_normalizes_valid_pair_before_early_return(tmp_path, m
 
 
 @pytest.mark.parametrize("boundary", ["before_complete_replace", "after_complete_replace"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX complete-manifest stage; Native complete-manifest rename is covered by test_windows_publication_crash_retries')
 def test_process_death_publishing_completed_manifest_resumes_without_sources(tmp_path, monkeypatch, owner, boundary):
     source = row(tmp_path)
     original = source.read_bytes()
@@ -862,6 +1061,7 @@ def test_process_death_publishing_completed_manifest_resumes_without_sources(tmp
 
 
 @pytest.mark.parametrize("corruption", ["wrong-inode", "third-link", "external-link", "symlink", "changed-bytes"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX admitted two-link recovery; Native refuses hardlinks in test_unsafe_paths_refuse')
 def test_retry_refuses_unsafe_publication_alias_without_cleanup(tmp_path, monkeypatch, owner, corruption):
     source = row(tmp_path)
     destination = migration.preview(tmp_path)["destinations"][0]
@@ -889,6 +1089,7 @@ def test_retry_refuses_unsafe_publication_alias_without_cleanup(tmp_path, monkey
     assert source.exists() and tree_snapshot(tmp_path) == before
 
 
+@pytest.mark.skipif(os.name == "nt", reason='POSIX deterministic staging alias; Native conflict preservation is covered by test_absent_publication_never_replaces_a_late_created_file')
 def test_single_link_orphan_with_changed_bytes_is_not_reused(tmp_path, monkeypatch, owner):
     source = row(tmp_path)
     destination = migration.preview(tmp_path)["destinations"][0]
@@ -903,6 +1104,7 @@ def test_single_link_orphan_with_changed_bytes_is_not_reused(tmp_path, monkeypat
     assert source.exists() and not target.exists() and tree_snapshot(tmp_path) == before
 
 
+@pytest.mark.skipif(os.name == "nt", reason='POSIX hardlink fallback boundary; Native conflict preservation is covered by test_absent_publication_never_replaces_a_late_created_file')
 def test_fallback_never_replaces_target_created_at_link_boundary(tmp_path, monkeypatch, owner):
     source = row(tmp_path)
     destination = migration.preview(tmp_path)["destinations"][0]
@@ -923,6 +1125,7 @@ def test_fallback_never_replaces_target_created_at_link_boundary(tmp_path, monke
     assert json.loads((tmp_path / migration.MANIFEST).read_text())["status"] == "prepared"
 
 
+@pytest.mark.skipif(os.name == "nt", reason='POSIX v9fs descriptor disappearance; Native uses retained Win32 handles')
 def test_successful_publication_does_not_stat_vanished_stage_descriptor(tmp_path, monkeypatch, owner):
     source = row(tmp_path)
     original = source.read_bytes()
@@ -969,6 +1172,7 @@ def test_successful_publication_does_not_stat_vanished_stage_descriptor(tmp_path
 
 
 @pytest.mark.parametrize("rebound", [False, True], ids=["owned-stage", "unrelated-stage-inode"])
+@pytest.mark.skipif(os.name == "nt", reason='POSIX inode cleanup proof; Native handle cleanup is covered by test_windows_publication_error_retains_sources')
 def test_failed_write_cleanup_requires_original_descriptor_proof(tmp_path, monkeypatch, rebound):
     target = tmp_path / "note.md"
     stage = target.with_name(migration._publication_stage(target.name))

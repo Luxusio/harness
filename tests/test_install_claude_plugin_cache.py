@@ -10,6 +10,8 @@ a payload hash, and every Claude install path ends with `claude plugin update`.
 """
 from __future__ import annotations
 
+from test_symlink_fixture import create_symlink
+
 import importlib.util
 import json
 import re
@@ -283,7 +285,7 @@ def test_selected_cache_rejects_missing_stale_ambiguous_and_unsafe_entries(tmp_p
             entry["installPath"] = str(Path(entry["installPath"]).with_name(entry["version"].replace("+", "-") + "unexpected"))
         elif change == "normalized_symlink":
             linked = Path(entry["installPath"]).with_name(entry["version"].replace("+", "-"))
-            linked.symlink_to(entry["installPath"], target_is_directory=True)
+            create_symlink(linked, entry["installPath"], target_is_directory=True)
             entry["installPath"] = str(linked)
         elif change == "duplicate":
             data["plugins"]["harness@harness"].append(dict(entry))

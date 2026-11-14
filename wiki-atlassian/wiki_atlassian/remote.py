@@ -187,7 +187,7 @@ class Remote:
                 budget.accept(error._wiki_response_bytes, mutating)
             if isinstance(error, RemoteError):
                 raise
-            if budget and time.monotonic() >= budget.deadline:
+            if budget and (getattr(error, '_wiki_aggregate_timeout', False) or time.monotonic() >= budget.deadline):
                 raise RemoteError('wiki_timeout', 'Operation exceeded its aggregate deadline', mutating) from None
             if isinstance(error, TimeoutError):
                 raise RemoteError('network_timeout', 'Native network request timed out', mutating) from None
@@ -275,6 +275,11 @@ class Remote:
         """
         uri = urlsplit(target)
         deadline = time.monotonic() + timeout
+        budget = _budget.get()
+        aggregate_deadline = budget is not None and budget.deadline <= deadline
+        if aggregate_deadline:
+            deadline = budget.deadline
+        aggregate_timeout = aggregate_deadline
         connection = http.client.HTTPSConnection(uri.hostname, uri.port, context=self._ssl_context, timeout=min(15, timeout))
         watchdog = None
         expired = threading.Event()
@@ -290,8 +295,10 @@ class Remote:
                     remaining_time = deadline - time.monotonic()
                     if remaining_time <= 0:
                         raise TimeoutError('native operation deadline')
+                    aggregate_timeout = aggregate_deadline and remaining_time <= 15
                     raw.settimeout(min(15, remaining_time))
                     raw.connect(address)
+                    aggregate_timeout = aggregate_deadline
                     raw.settimeout(max(.001, deadline - time.monotonic()))
                     connection.sock = self._ssl_context.wrap_socket(raw, server_hostname=uri.hostname)
                     break
@@ -354,6 +361,11 @@ class Remote:
                 raise TimeoutError('native operation deadline')
             return response.status, response_headers, b''.join(chunks)
         except Exception as error:
+            # Native timers can report expiry before monotonic() reaches the
+            # configured deadline. Preserve whether this phase used the
+            # aggregate limit or the independent connection/request cap.
+            if isinstance(error, TimeoutError) and aggregate_timeout:
+                error._wiki_aggregate_timeout = True
             # Even an interrupted framing/body read consumed aggregate bytes.
             # The caller charges these once, just as for a completed response.
             error._wiki_response_bytes = size
