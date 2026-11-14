@@ -181,8 +181,16 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   `batch_harvest.py`, runs `git worktree unlock` only when
   `git worktree list --porcelain` shows the worktree (compared by realpath)
   locked, and ordinarily runs `git worktree remove` and `git branch -d`,
-  never with `--force`. State-managed selected S1 modules have the sole guarded
-  removal exception owned by `batch_harvest.py`, defined in
+  without `--force` on POSIX. Native ordinary removal may use one guarded
+  `--force` only after validating the exact closed, harvested generation,
+  registered administrative binding and integrated branch/tip, complete
+  source/archive byte ownership, absence of administrative submodules, and
+  Git's equivalent clean-status check through the validated relative gitdir.
+  This avoids Git for Windows 2.54's overlong absolute `GIT_DIR` in its
+  duplicate internal status process; it does not authorize dirty, changed,
+  unowned or unpreserved work, double-force, retries after unknown effects,
+  relocation or registration changes. Selected S1 modules retain their separate
+  guarded removal proof owned by `batch_harvest.py`, defined in
   [Selected submodules](REQ__batch-submodule-support.md); branch deletion stays `-d`. It aborts a failed or interrupted rebase only when
   `rebase-merge` or `rebase-apply` exists (`rev-parse --git-path`), because
   the dirty-worktree and untracked-file refusals never start one and

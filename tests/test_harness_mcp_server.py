@@ -51,8 +51,9 @@ EXPECTED_TOOLS = {"wbs"}
 
 
 def _write_marker_fixture(repo_root: str, wbs_dir: str, session_id: str = "") -> None:
+    from test_batch_finish import _fixture_io
     sid = session_id or "pytest-mcp"
-    sessions = Path(repo_root) / "doc/harness/wbs/.active_sessions"
+    sessions = _fixture_io(Path(repo_root) / "doc/harness/wbs/.active_sessions")
     sessions.mkdir(parents=True, exist_ok=True)
     control = harness_server.read_wbs_control(wbs_dir)
     payload = {

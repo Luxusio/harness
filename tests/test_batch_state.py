@@ -1351,6 +1351,7 @@ def test_pool_owner_is_immutable_on_reinitialization(tmp_path, monkeypatch):
 
 
 def test_sealed_verification_source_disposal_preserves_archive(tmp_path, monkeypatch):
+    from test_batch_finish import _fixture_io
     monkeypatch.syspath_prepend(str(SCRIPT.parent))
     import verification_target
     from test_wbs import wbs, plan, node
@@ -1359,25 +1360,25 @@ def test_sealed_verification_source_disposal_preserves_archive(tmp_path, monkeyp
     pool.claim()
     worktree, branch, directory = complete(pool)
     state = wbs.prepare(str(directory), plan([node()]), RUN, now=100)
-    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    (_fixture_io(directory / 'WBS.json')).write_text(wbs.encode_state(state))
     target = verification_target.issue_target(str(directory), str(worktree), dict(
         inputs={'source': ['a.txt']}, commands=[], lenses=[], purpose='diagnostic'))
     view = Path(target['snapshot_root'])
-    assert view.stat().st_mode & 0o200 == 0
-    original = (view / 'a.txt').read_bytes()
+    assert _fixture_io(view).stat().st_mode & 0o200 == 0
+    original = (_fixture_io(view / 'a.txt')).read_bytes()
     # A supported new run retains already issued source copies as history.
-    current_control = (directory / 'WBS.control.json').read_bytes()
+    current_control = (_fixture_io(directory / 'WBS.control.json')).read_bytes()
     old_run = '0198c349-5800-7000-8000-000000000002'
     old_control = json.loads(current_control)
     old_control['run_id'] = old_run
-    (directory / 'WBS.control.json').write_text(json.dumps(old_control))
+    (_fixture_io(directory / 'WBS.control.json')).write_text(json.dumps(old_control))
     state['run_id'] = old_run
-    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    (_fixture_io(directory / 'WBS.json')).write_text(wbs.encode_state(state))
     historical = verification_target.issue_target(str(directory), str(worktree), dict(
         inputs={'source': ['a.txt']}, commands=[], lenses=[], purpose='diagnostic'))
-    (directory / 'WBS.control.json').write_bytes(current_control)
+    (_fixture_io(directory / 'WBS.control.json')).write_bytes(current_control)
     state['run_id'] = RUN
-    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    (_fixture_io(directory / 'WBS.json')).write_text(wbs.encode_state(state))
     try:
         verification_target.load_target(str(directory), historical['token'])
         raise AssertionError('historical target must not certify current acceptance')
@@ -1387,12 +1388,12 @@ def test_sealed_verification_source_disposal_preserves_archive(tmp_path, monkeyp
     result = pool.cli('finish', '--slug', 'a')
     assert result['status'] == 'integrated', result
     archived = pool.repo / 'doc/harness/archive/batch/WBS__a' / view.relative_to(directory)
-    assert (archived / 'a.txt').read_bytes() == original
-    assert archived.stat().st_mode & 0o200 == 0
+    assert (_fixture_io(archived / 'a.txt')).read_bytes() == original
+    assert _fixture_io(archived).stat().st_mode & 0o200 == 0
     historical_archive = pool.repo / 'doc/harness/archive/batch/WBS__a' / historical_view.relative_to(directory)
-    assert (historical_archive / 'a.txt').read_bytes() == original
-    assert historical_archive.stat().st_mode & 0o200 == 0
-    assert not worktree.exists()
+    assert (_fixture_io(historical_archive / 'a.txt')).read_bytes() == original
+    assert _fixture_io(historical_archive).stat().st_mode & 0o200 == 0
+    assert not _fixture_io(worktree).exists()
     assert not _git('branch', '--list', branch, cwd=pool.repo)
 
 
@@ -1457,6 +1458,7 @@ def test_native_disposal_keeps_readonly_on_identity_or_content_mismatch(tmp_path
 
 
 def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path, monkeypatch, capsys):
+    from test_batch_finish import _fixture_io
     import pytest
     if os.name != 'nt':
         pytest.skip('requires real Native readonly attributes and Git refusal')
@@ -1470,14 +1472,14 @@ def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path,
     pool.claim()
     tree, _, directory = complete(pool)
     state = wbs.prepare(str(directory), plan([node()]), RUN, now=100)
-    (directory / 'WBS.json').write_text(wbs.encode_state(state))
+    (_fixture_io(directory / 'WBS.json')).write_text(wbs.encode_state(state))
     target = verification_target.issue_target(str(directory), str(tree), dict(
         inputs={'source': ['a.txt']}, commands=[], lenses=[], purpose='diagnostic'))
     view = Path(target['snapshot_root'])
     paths = (view / 'a.txt', view.parent / 'target.json')
     before = {path: safe_metadata_snapshot(path, 1024 * 1024) for path in paths}
-    view_identity = (view.stat().st_dev, view.stat().st_ino)
-    assert view.stat().st_file_attributes & 1
+    view_identity = (_fixture_io(view).stat().st_dev, _fixture_io(view).stat().st_ino)
+    assert _fixture_io(view).stat().st_file_attributes & 1
     actual = subprocess.run
     attempted = []
     def lock_at_removal(command, *args, **kwargs):
@@ -1491,18 +1493,18 @@ def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path,
         boundary.setattr(subprocess, 'run', lock_at_removal)
         assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
     capsys.readouterr()
-    assert attempted and tree.exists()
+    assert attempted and _fixture_io(tree).exists()
     for path in paths:
         raw, stamp = safe_metadata_snapshot(path, 1024 * 1024)
         assert raw == before[path][0] and stamp[:4] == before[path][1][:4] and stamp[4] & 1
-    assert (view.stat().st_dev, view.stat().st_ino) == view_identity and view.stat().st_file_attributes & 1
+    assert (_fixture_io(view).stat().st_dev, _fixture_io(view).stat().st_ino) == view_identity and _fixture_io(view).stat().st_file_attributes & 1
     result = pool.cli('finish', '--slug', 'a', '--resume')
-    assert result['status'] == 'integrated' and not tree.exists()
+    assert result['status'] == 'integrated' and not _fixture_io(tree).exists()
     archive = pool.repo / 'doc/harness/archive/batch/WBS__a'
     for path in paths:
         raw, stamp = safe_metadata_snapshot(archive / path.relative_to(directory), 1024 * 1024)
         assert raw == before[path][0] and stamp[4] & 1
-    assert (archive / view.relative_to(directory)).stat().st_file_attributes & 1
+    assert (_fixture_io(archive / view.relative_to(directory))).stat().st_file_attributes & 1
 
 
 def test_native_finish_preserves_crlf_learning_rows_across_harvest_retry(tmp_path, monkeypatch, capsys):

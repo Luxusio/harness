@@ -11,6 +11,7 @@ except ModuleNotFoundError as error:
     from unittest import SkipTest
     raise SkipTest("pytest is required to collect this module") from error
 
+from test_batch_finish import _fixture_io
 from test_batch_state import RUN, _git, _head, task
 from test_managed_wbs import setup_parent, host_snapshot
 from test_wbs import plan
@@ -52,25 +53,25 @@ def extend(call, handoff, worktree, **changes):
 def test_public_scope_grant_preserves_intent_and_refills_independent_work(tmp_path, monkeypatch):
     pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch, three=True)
     parent = pool.repo / "doc/harness/wbs/WBS__managed/WBS.json"
-    original_intent = parent.read_bytes()
-    original_control = (directory / "WBS.control.json").read_bytes()
-    original_marker = (worktree / ".harness-batch-bootstrap").read_bytes()
+    original_intent = _fixture_io(parent).read_bytes()
+    original_control = (_fixture_io(directory / "WBS.control.json")).read_bytes()
+    original_marker = (_fixture_io(worktree / ".harness-batch-bootstrap")).read_bytes()
     granted = extend(call, handoff, worktree, reason="x" * 2000)
     assert not granted.get("isError"), granted
     operation = granted["structuredContent"]["operation_result"]
     assert operation["handoff"]["scopes"] == ["a.txt", "b.txt"]
-    state = json.loads(pool.state.read_text())
+    state = json.loads(_fixture_io(pool.state).read_text())
     owner = next(r for r in state["requests"] if r["slug"] == handoff["slug"])
     assert state["schema_version"] == 3
     assert owner["scopes"] == ["a.txt"]
     assert owner["extra_scopes"] == {"b.txt": str(pool.repo / "b.txt")}
-    assert parent.read_bytes() == original_intent
-    assert (directory / "WBS.control.json").read_bytes() == original_control
-    assert (worktree / ".harness-batch-bootstrap").read_bytes() == original_marker
-    assert not (directory / "RECEIPTS.jsonl").exists()
-    recorded = pool.state.read_bytes()
+    assert _fixture_io(parent).read_bytes() == original_intent
+    assert (_fixture_io(directory / "WBS.control.json")).read_bytes() == original_control
+    assert (_fixture_io(worktree / ".harness-batch-bootstrap")).read_bytes() == original_marker
+    assert not (_fixture_io(directory / "RECEIPTS.jsonl")).exists()
+    recorded = _fixture_io(pool.state).read_bytes()
     assert not extend(call, handoff, worktree, reason="x" * 2000).get("isError")
-    assert pool.state.read_bytes() == recorded
+    assert _fixture_io(pool.state).read_bytes() == recorded
     refill = call('dispatch', host={**host_snapshot(), 'reserved_slots': [dict(id='reserved-c', role='implementation')]})["structuredContent"]
     assert {h["slug"].rsplit("-", 1)[1] for h in refill["handoffs"]} == {"C"}
     assert refill["reasons"][handoff["slug"][:-1] + "B"].startswith("dependencies:")
@@ -95,19 +96,19 @@ def test_scope_refusals_preserve_record_and_current_source(tmp_path, monkeypatch
                     dict(expected_head="0" * 40), dict(expected_run_id=RUN[:-1] + "2"),
                     dict(scopes=["../outside"]), dict(scopes=[str(pool.repo / "b.txt")]),
                     dict(scopes=[".git/config"]), dict(reason="x" * 2001)):
-        before = pool.state.read_bytes()
+        before = _fixture_io(pool.state).read_bytes()
         refusal = extend(call, handoff, worktree, **changes)
         assert refusal.get("isError"), refusal
-        assert pool.state.read_bytes() == before
+        assert _fixture_io(pool.state).read_bytes() == before
     a, b = worktree / "a.txt", worktree / "b.txt"
     original_a, original_b = a.read_bytes(), b.read_bytes()
     for flag in ("assume-unchanged", "skip-worktree"):
         _git("update-index", "--" + flag, "b.txt", cwd=worktree)
         b.write_text("hidden outside old ownership\n")
-        before = pool.state.read_bytes()
+        before = _fixture_io(pool.state).read_bytes()
         refusal = extend(call, handoff, worktree)
         assert refusal.get("isError") and "index flags" in refusal["structuredContent"]["error"], refusal
-        assert pool.state.read_bytes() == before
+        assert _fixture_io(pool.state).read_bytes() == before
         assert b.read_text() == "hidden outside old ownership\n"
         assert _git("ls-files", "-v", "b.txt", cwd=worktree).startswith("h " if flag == "assume-unchanged" else "S ")
         _git("update-index", "--no-" + flag, "b.txt", cwd=worktree)
@@ -118,19 +119,19 @@ def test_scope_refusals_preserve_record_and_current_source(tmp_path, monkeypatch
             _git("add", "b.txt", cwd=worktree)
         if restored:
             b.write_bytes(original_b)  # staged changes must not hide behind worktree bytes
-        before = pool.state.read_bytes()
+        before = _fixture_io(pool.state).read_bytes()
         refusal = extend(call, handoff, worktree)
         assert refusal.get("isError") and "prior changes exceed" in refusal["structuredContent"]["error"]
-        assert pool.state.read_bytes() == before
+        assert _fixture_io(pool.state).read_bytes() == before
         if staged:
             _git("restore", "--staged", "b.txt", cwd=worktree)
         b.write_bytes(original_b)
     extra = worktree / "new-extra.txt"
     extra.write_text("unowned prior work\n")
-    before = pool.state.read_bytes()
+    before = _fixture_io(pool.state).read_bytes()
     refusal = extend(call, handoff, worktree, scopes=["new-extra.txt"])
     assert refusal.get("isError") and "prior changes exceed" in refusal["structuredContent"]["error"]
-    assert extra.read_text() == "unowned prior work\n" and pool.state.read_bytes() == before
+    assert extra.read_text() == "unowned prior work\n" and _fixture_io(pool.state).read_bytes() == before
     extra.unlink()
     _git("rm", "a.txt", cwd=worktree)
     _git("mv", "b.txt", "a.txt", cwd=worktree)
@@ -142,26 +143,26 @@ def test_scope_refusals_preserve_record_and_current_source(tmp_path, monkeypatch
     b.write_text("committed outside ownership\n")
     _git("add", "b.txt", cwd=worktree)
     _git("commit", "-qm", "unowned change fixture", cwd=worktree)
-    before = pool.state.read_bytes()
+    before = _fixture_io(pool.state).read_bytes()
     refusal = extend(call, handoff, worktree)
     assert refusal.get("isError") and "prior changes exceed" in refusal["structuredContent"]["error"]
-    assert pool.state.read_bytes() == before and b.read_text() == "committed outside ownership\n"
+    assert _fixture_io(pool.state).read_bytes() == before and b.read_text() == "committed outside ownership\n"
 
 
 def test_scope_conflict_and_replacement_worker_keep_grant_history(tmp_path, monkeypatch):
     pool, call, handoff, worktree, _ = prepared(tmp_path, monkeypatch, slots=2)
-    before = pool.state.read_bytes()
+    before = _fixture_io(pool.state).read_bytes()
     refused = extend(call, handoff, worktree)
     assert refused.get("isError") and "collides" in refused["structuredContent"]["error"]
-    assert pool.state.read_bytes() == before
+    assert _fixture_io(pool.state).read_bytes() == before
     granted = extend(call, handoff, worktree, scopes=["shared.txt"])
     assert not granted.get("isError"), granted
-    grants = json.loads(pool.state.read_text())["requests"][0]["scope_grants"]
+    grants = json.loads(_fixture_io(pool.state).read_text())["requests"][0]["scope_grants"]
     reserved = call("dispatch", operation="resume", slug=handoff["slug"], worker_stopped=True)
     assert not reserved.get("isError"), reserved
     rebound = call("dispatch", operation="bind", slug=handoff["slug"], worker_id="replacement")
     assert not rebound.get("isError"), rebound
-    state = json.loads(pool.state.read_text())
+    state = json.loads(_fixture_io(pool.state).read_text())
     assert state["requests"][0]["scope_grants"] == grants
     assert state["requests"][0]["worker_id"] == "replacement"
     assert state["requests"][0]["extra_scopes"] == {"shared.txt": str(pool.repo / "shared.txt")}
@@ -193,48 +194,48 @@ def test_same_path_changes_during_scope_grant_preserve_record(tmp_path, monkeypa
                     owned.write_text("first dirty contents\n")
             return report
 
-        before = pool.state.read_bytes()
+        before = _fixture_io(pool.state).read_bytes()
         with monkeypatch.context() as patch:
             patch.setattr(batch_state.batch_preflight, "preflight", mutate_after_path_observation)
             refused = extend(call, handoff, worktree)
         assert refused.get("isError") and "source changed" in refused["structuredContent"]["error"], refused
-        assert pool.state.read_bytes() == before
+        assert _fixture_io(pool.state).read_bytes() == before
         if kind in {"index", "untracked"}:
             _git("restore", "--staged", "a.txt", cwd=worktree)
 
 
 def test_legacy_scope_migration_is_publication_only(tmp_path, monkeypatch):
     pool, call, handoff, worktree, _ = prepared(tmp_path, monkeypatch)
-    legacy = json.loads(pool.state.read_text())
+    legacy = json.loads(_fixture_io(pool.state).read_text())
     legacy["schema_version"] = 1
-    pool.state.write_text(json.dumps(legacy))  # isolated legacy-state fixture
-    before = pool.state.read_bytes()
+    _fixture_io(pool.state).write_text(json.dumps(legacy))  # isolated legacy-state fixture
+    before = _fixture_io(pool.state).read_bytes()
     assert not call("dispatch", operation="status").get("isError")
-    assert pool.state.read_bytes() == before
+    assert _fixture_io(pool.state).read_bytes() == before
     migrated = extend(call, handoff, worktree)
     assert not migrated.get("isError"), migrated
-    assert json.loads(pool.state.read_text())["schema_version"] == 3
+    assert json.loads(_fixture_io(pool.state).read_text())["schema_version"] == 3
     legacy["requests"][0]["extra_scopes"] = {"b.txt": str(pool.repo / "b.txt")}
-    pool.state.write_text(json.dumps(legacy))
-    before = pool.state.read_bytes()
+    _fixture_io(pool.state).write_text(json.dumps(legacy))
+    before = _fixture_io(pool.state).read_bytes()
     refused = call("dispatch", operation="status")
     assert refused.get("isError"), refused
-    assert pool.state.read_bytes() == before
+    assert _fixture_io(pool.state).read_bytes() == before
 
 
 @pytest.mark.parametrize("verdict", ["blocked", "failed"])
 def test_resumed_scope_grant_preserves_historical_result_and_evidence(tmp_path, monkeypatch, verdict):
     pool, call, handoff, worktree, directory = prepared(tmp_path, monkeypatch)
     receipts = directory / "RECEIPTS.jsonl"
-    receipts.write_bytes(b'{"fixture":"historical nonaccepting execution"}\n')
-    original_evidence = {name: (directory / name).read_bytes()
+    _fixture_io(receipts).write_bytes(b'{"fixture":"historical nonaccepting execution"}\n')
+    original_evidence = {name: (_fixture_io(directory / name)).read_bytes()
                          for name in ("WBS.control.json", "PLAN.md", "RECEIPTS.jsonl")}
     result = dict(wbs_id=handoff["wbs_id"], worktree=str(worktree), branch=handoff["branch"],
                   verdict=verdict, run_id=RUN, blocked_reason="Original execution requires added caller scope")
     completed = call("dispatch", operation="complete", slug=handoff["slug"], worker_id="worker-a",
                      worker_stopped=True, result=result)
     assert not completed.get("isError"), completed
-    historical = json.loads(pool.state.read_text())["requests"][0]
+    historical = json.loads(_fixture_io(pool.state).read_text())["requests"][0]
     assert historical["status"] == verdict and historical["result"] == result
     resumed = call("dispatch", operation="resume", slug=handoff["slug"], worker_stopped=True)
     assert not resumed.get("isError"), resumed
@@ -242,14 +243,14 @@ def test_resumed_scope_grant_preserves_historical_result_and_evidence(tmp_path, 
     assert not rebound.get("isError"), rebound
     granted = extend(call, handoff, worktree, worker_id="replacement")
     assert not granted.get("isError"), granted
-    owner = json.loads(pool.state.read_text())["requests"][0]
+    owner = json.loads(_fixture_io(pool.state).read_text())["requests"][0]
     assert owner["status"] == "running" and owner["resuming"] is True
     assert owner["result"] == historical["result"]
     assert owner["returned_at"] == historical["returned_at"]
     assert owner["run_id"] == historical["run_id"] == RUN
     assert owner["worker_id"] == "replacement"
     assert granted["structuredContent"]["operation_result"]["handoff"]["scopes"] == ["a.txt", "b.txt"]
-    assert {name: (directory / name).read_bytes() for name in original_evidence} == original_evidence
+    assert {name: (_fixture_io(directory / name)).read_bytes() for name in original_evidence} == original_evidence
 
 
 @pytest.mark.parametrize("evidence", ["unresumed", "closed", "checkpoint", "finish_result", "closed_control"])
@@ -261,7 +262,7 @@ def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, m
                     worker_stopped=True, result=result).get("isError")
     assert not call("dispatch", operation="resume", slug=handoff["slug"], worker_stopped=True).get("isError")
     assert not call("dispatch", operation="bind", slug=handoff["slug"], worker_id="worker-a").get("isError")
-    state = json.loads(pool.state.read_text())
+    state = json.loads(_fixture_io(pool.state).read_text())
     owner = state["requests"][0]
     # Isolated persisted-state fixtures exercise each eligibility exclusion independently.
     if evidence == "unresumed":
@@ -276,10 +277,10 @@ def test_resumed_scope_grant_refuses_accepting_or_unresumed_evidence(tmp_path, m
         owner["finish_result"] = {"status": "kept"}
     else:
         owner["closed"] = True
-    pool.state.write_text(json.dumps(state))
-    before = pool.state.read_bytes()
-    original_control = (directory / "WBS.control.json").read_bytes()
+    _fixture_io(pool.state).write_text(json.dumps(state))
+    before = _fixture_io(pool.state).read_bytes()
+    original_control = (_fixture_io(directory / "WBS.control.json")).read_bytes()
     refused = extend(call, handoff, worktree)
     assert refused.get("isError") and "pre-result" in refused["structuredContent"]["error"], refused
-    assert pool.state.read_bytes() == before
-    assert (directory / "WBS.control.json").read_bytes() == original_control
+    assert _fixture_io(pool.state).read_bytes() == before
+    assert (_fixture_io(directory / "WBS.control.json")).read_bytes() == original_control

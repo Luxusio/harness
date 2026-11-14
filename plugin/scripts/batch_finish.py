@@ -43,7 +43,12 @@ Prints one JSON object and exits with its status:
 Whatever the status, a non-null `integrated_tip` means the lead's commits are
 on the original main branch. Usage errors exit 2 without a JSON object.
 
-Never passes `--force`, never stashes, never creates a merge commit. It
+POSIX ordinary removal never passes `--force`. Native ordinary removal uses
+one guarded `--force` only after the complete archive/byte proof and the same
+clean-status and no-submodule checks through validated relative Git metadata;
+this avoids Git for Windows' overlong absolute-GIT_DIR status subprocess.
+S1 removal retains its separate durable submodule-preservation proof.
+Never stashes or creates a merge commit. It
 releases Claude Code's agent lock on the worktree, so never run it for a lead
 that is still running. Git runs the repositories' own hooks as usual. Stdlib
 only.
@@ -435,8 +440,13 @@ def _removal_failure_note(repo: str, worktree: str, lock, cleanup: dict, prepare
             for field in listing.split("\0")
         )
         if not registered:
-            cleanup["removed"] = not os.path.lexists(worktree)
-            return "; worktree is no longer registered; " + ("partial residue and branch retained" if os.path.lexists(worktree) else "branch retained")
+            if os.name == 'nt':
+                from wiki_platform import metadata_probe
+                residue = metadata_probe(worktree) is not None
+            else:
+                residue = os.path.lexists(worktree)
+            cleanup["removed"] = not residue
+            return "; worktree is no longer registered; " + ("partial residue and branch retained" if residue else "branch retained")
         errors = batch_harvest._restore_native_disposal_files(prepared)
         note = '; readonly restoration refused: ' + '; '.join(errors) if errors else ''
         if cleanup["unlocked"]:
@@ -484,7 +494,15 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
                 os.unlink(os.path.join(worktree, RETENTION_MARKER))
         try:
             if submodules is None:
-                removed = _git(repo, "worktree", "remove", worktree)
+                if os.name == 'nt':
+                    try:
+                        removed = batch_harvest._remove_native_ordinary_worktree(
+                            repo, worktree, result['wbs_id'], branch, proof, git_runner=_git,
+                        )
+                    except (batch_submodules.SubmoduleError, OSError, ValueError, subprocess.SubprocessError) as exc:
+                        raise batch_harvest.HarvestError('Native ordinary removal proof refused: ' + str(exc)) from exc
+                else:
+                    removed = _git(repo, "worktree", "remove", worktree)
             else:
                 removed = batch_harvest.remove_s1_worktree(
                     repo, worktree, result['wbs_id'], submodules, proof, git_runner=_git,
@@ -492,7 +510,13 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
         finally:
             # A removal refusal must keep the native retention predicate too.
             marker = os.path.join(worktree, RETENTION_MARKER)
-            if retention is not None and os.path.isdir(worktree) and not os.path.lexists(marker):
+            if os.name == 'nt' and retention is not None:
+                from wiki_platform import metadata_probe
+                remaining = metadata_probe(worktree)
+                restore_marker = remaining is not None and remaining['kind'] == 'dir' and metadata_probe(marker) is None
+            else:
+                restore_marker = retention is not None and os.path.isdir(worktree) and not os.path.lexists(marker)
+            if restore_marker:
                 try:
                     registered = resolve_registered_worktree(repo, worktree)
                 except GitBindingError:
@@ -504,7 +528,8 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
                         cleanup['marker_restore_error'] = str(restore_error)
     except batch_harvest.HarvestError as exc:
         note = _removal_failure_note(repo, worktree, lock, cleanup, prepared)
-        raise Outcome("kept", f"S1 removal proof refused, worktree kept: {exc}{note}") from exc
+        kind = 'ordinary' if submodules is None else 'S1'
+        raise Outcome("kept", f"{kind} removal proof refused, worktree kept: {exc}{note}") from exc
     except (Exception, KeyboardInterrupt) as exc:
         note = _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         raise FinishError(f"{type(exc).__name__}: {exc}{note}") from exc

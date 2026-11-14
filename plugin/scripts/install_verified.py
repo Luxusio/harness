@@ -157,7 +157,7 @@ def _read_payload_file(repo_root: Path, path: str, *, consume=None, readonly=Fal
             handle = _native._open(target, _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
             stack.callback(_native._close, handle)
             before = _native._metadata_stamp(handle)
-            info = target.lstat()
+            info = os.lstat(_native._win32_path(target))
             if (readonly and not info.st_file_attributes & 1
                     or not readonly and not source_input and info.st_file_attributes & 1
                     or max_bytes is not None and info.st_size > max_bytes):

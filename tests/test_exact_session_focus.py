@@ -50,7 +50,7 @@ def _task(root, *, maintenance=False):
 
 
 def _write_marker(root, marker):
-    (root / 'doc/harness/wbs/.active_sessions' / (SID + '.json')).write_text(json.dumps(marker))
+    _fixture_io(root / 'doc/harness/wbs/.active_sessions' / (SID + '.json')).write_text(json.dumps(marker))
 
 
 def _gate(cwd, target, sid=SID):

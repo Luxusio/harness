@@ -51,9 +51,9 @@ def seed_legacy_outcome(repo, name):
 
 def close_imported_fixture(repo, name):
     path = repo / 'doc/harness/wbs' / ('WBS__' + name) / 'WBS.control.json'
-    control = json.loads(path.read_text())
+    control = json.loads(_fixture_io(path).read_text())
     control['closed'] = True
-    path.write_text(json.dumps(control))
+    _fixture_io(path).write_text(json.dumps(control))
 
 
 def _harvest_for_proof(pool, worktree, monkeypatch):

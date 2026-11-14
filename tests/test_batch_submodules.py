@@ -64,7 +64,8 @@ def _setup(tmp_path, monkeypatch, count=1):
         _git(main, "submodule", "add", "-q", source, path)
     _commit(main, "modules")
     work = main / ".claude/worktrees/lead"
-    _git(main, "worktree", "add", "-qb", "lead", work)
+    target = os.path.relpath(work, main) if os.name == "nt" else work
+    _git(main, "worktree", "add", "-qb", "lead", target)
     return main, work, paths
 
 
@@ -530,15 +531,16 @@ def test_selection_requires_checkout_at_recorded_gitlink(tmp_path, monkeypatch):
 def test_resume_rejects_replaced_private_gitdir_even_at_same_path(tmp_path, monkeypatch):
     import pytest
     import shutil
+    from test_batch_finish import _fixture_io
     helper, main, work, paths, value, _ = _prepared(tmp_path, monkeypatch)
     module = work / paths[0]
     gitdir = Path(_git(module, "rev-parse", "--absolute-git-dir"))
     moved = gitdir.with_name(gitdir.name + "-original")
-    gitdir.rename(moved)
-    shutil.copytree(moved, gitdir)
+    _fixture_io(gitdir).rename(_fixture_io(moved))
+    shutil.copytree(_fixture_io(moved), _fixture_io(gitdir))
     with pytest.raises(helper.SubmoduleError):
         helper.validate(main, work, value)
-    assert moved.exists() and gitdir.exists()
+    assert _fixture_io(moved).exists() and _fixture_io(gitdir).exists()
 
 
 def test_preserve_full_manifest_size_refuses_before_destination_writes(tmp_path, monkeypatch):

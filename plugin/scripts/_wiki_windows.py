@@ -539,7 +539,9 @@ def safe_metadata_snapshot(path, limit):
     if type(limit) is not int or limit < 0:
         raise ValueError("Nonnegative byte limit required")
     path = _path(path)
-    with _walk(path.parent, secure=True):
+    # Metadata ancestry is already ACL-validated. Permit sibling publication
+    # while retaining every directory name; the leaf still denies writes/deletes.
+    with _walk(path.parent, secure=True, writing=True):
         handle = _open(path, GENERIC_READ, share=FILE_SHARE_READ)
         try:
             before = _metadata_stamp(handle)

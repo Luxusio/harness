@@ -66,6 +66,9 @@ def _isolate(monkeypatch, tmp_path: Path) -> None:
 
 def _git(*args, cwd, env=None, check=True) -> str:
     paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
+    if os.name == "nt" and args[:2] == ("worktree", "add"):
+        # Fixture add commands have one absolute path: the destination.
+        args = tuple(os.path.relpath(arg, cwd) if os.path.isabs(arg) else arg for arg in args)
     result = subprocess.run(
         ["git", *paths, *_fixture_git_location(cwd), *args], cwd=cwd, capture_output=True, text=True, check=False,
         env={**os.environ, **(env or {})},
@@ -152,7 +155,7 @@ class _NativeOwner:
         item = next(item for item in state["requests"] if item["slug"] == lead.name)
         if item["status"] != "running":
             return
-        control = json.loads((lead.worktree / "doc/harness/wbs" / lead.wbs_id / "WBS.control.json").read_text())
+        control = json.loads(_fixture_io(lead.worktree / "doc/harness/wbs" / lead.wbs_id / "WBS.control.json").read_text())
         result = self.main.parent / (lead.name + "-result.json")
         result.write_text(json.dumps(dict(verdict="closed", wbs_id=lead.wbs_id,
             worktree=str(lead.worktree), branch=lead.branch, commit=lead.commit,

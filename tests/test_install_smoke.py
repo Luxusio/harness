@@ -343,10 +343,13 @@ def _codex_tree(destination):
     return root
 
 
-def test_codex_smoke_drives_task_source_checks_without_payload_writes(tmp_path):
+def test_codex_smoke_drives_task_source_checks_without_payload_writes(tmp_path, monkeypatch):
     import hashlib
     root = _codex_tree(tmp_path)
     smoke = _load("codex_native_smoke", SMOKE)
+    # Keep both supervisor and worker scratch under this retained test root.
+    # Native verification targets cross MAX_PATH here and seal readonly files.
+    monkeypatch.setattr(smoke.tempfile, "tempdir", str(tmp_path))
     def inventory():
         return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in root.rglob("*") if p.is_file()}
@@ -357,6 +360,7 @@ def test_codex_smoke_drives_task_source_checks_without_payload_writes(tmp_path):
     assert not any("ok WBS: bound subagent" in line for line in lines)
     assert inventory() == before
     assert not list(root.rglob("__pycache__"))
+    assert not list(tmp_path.glob("harness-wbs-*")), "successful probe leaked scratch directories"
 
 
 def test_codex_smoke_requires_the_installed_hook_to_publish_binding(tmp_path):

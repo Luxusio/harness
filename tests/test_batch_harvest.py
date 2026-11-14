@@ -30,6 +30,7 @@ sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
 _ARCHIVE_OWNERS = {}
 _ARCHIVE_LEADS = {}
+from test_batch_finish import _fixture_io
 
 
 def _admit_archive(repo, worktree, wbs_id):
@@ -262,7 +263,8 @@ def _init_repo(repo: Path) -> None:
 
 def _add_worktree(repo: Path, worktree: Path, branch: str) -> None:
     worktree.parent.mkdir(parents=True, exist_ok=True)
-    _git("worktree", "add", "-b", branch, str(worktree), cwd=repo)
+    target = os.path.relpath(worktree, repo) if os.name == "nt" else str(worktree)
+    _git("worktree", "add", "-b", branch, target, cwd=repo)
 
 
 def _write_task(root: Path, wbs_id: str, content: str = "plan\n") -> Path:
@@ -1094,12 +1096,12 @@ def test_ordinary_removal_preserves_typed_snapshots_exactly_and_idempotently(tmp
         mod.ordinary_removal_proof(str(repo), str(work), task.name)
         assert diagnostics.read_bytes() == original[diagnostics]
         assert checkpoint.read_bytes() == original[checkpoint]
-        assert (sidecar / 'watcher-diagnostics.json').read_bytes() == original[diagnostics]
-        assert (sidecar / 'checkpoint.md').read_bytes() == original[checkpoint]
+        assert _fixture_io(sidecar / 'watcher-diagnostics.json').read_bytes() == original[diagnostics]
+        assert _fixture_io(sidecar / 'checkpoint.md').read_bytes() == original[checkpoint]
         assert mod._tree_entries(str(archive)) == archived
     _git('worktree', 'remove', str(work), cwd=repo)
     assert not work.exists()
-    assert (sidecar / 'checkpoint.md').read_bytes() == original[checkpoint]
+    assert _fixture_io(sidecar / 'checkpoint.md').read_bytes() == original[checkpoint]
 
 
 def test_ordinary_snapshots_never_authorize_precious_ignored_content(tmp_path):
@@ -1117,7 +1119,7 @@ def test_ordinary_removal_preserves_historical_error_without_registration(tmp_pa
     raw = diagnostics.read_bytes()
     assert set(json.loads(raw)) == {'session_id', 'updated', 'last_watcher_error'}
     mod.ordinary_removal_proof(str(repo), str(work), task.name)
-    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == raw
+    assert _fixture_io(sidecar / 'watcher-diagnostics.json').read_bytes() == raw
     _git('worktree', 'remove', str(work), cwd=repo)
     assert not work.exists()
 
@@ -1198,7 +1200,7 @@ def test_ordinary_diagnostics_after_close_need_no_removed_session_marker(tmp_pat
     mod.ordinary_removal_proof(str(repo), str(work), task.name)
     _git('worktree', 'remove', str(work), cwd=repo)
     assert not work.exists()
-    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == raw
+    assert _fixture_io(sidecar / 'watcher-diagnostics.json').read_bytes() == raw
 
 
 def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
@@ -1219,12 +1221,12 @@ def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
     assert mod.ordinary_unregistered(str(repo), str(work))
-    saved = (sidecar / 'watcher-diagnostics.json').read_bytes()
-    (sidecar / 'watcher-diagnostics.json').unlink()
+    saved = _fixture_io(sidecar / 'watcher-diagnostics.json').read_bytes()
+    _fixture_io(sidecar / 'watcher-diagnostics.json').unlink()
     with _raises(mod.HarvestError, match='not preserved'):
         mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
-    assert not (sidecar / 'watcher-diagnostics.json').exists()
-    (sidecar / 'watcher-diagnostics.json').write_bytes(saved)
+    assert not _fixture_io(sidecar / 'watcher-diagnostics.json').exists()
+    _fixture_io(sidecar / 'watcher-diagnostics.json').write_bytes(saved)
     diagnostics.write_bytes(original[str(diagnostics.relative_to(work))] + b' ')
     with _raises(mod.HarvestError, match='collision'):
         mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
@@ -1237,15 +1239,15 @@ def test_partial_residue_requires_already_preserved_ancillary_bytes(tmp_path):
     precious.unlink()
     mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     assert not work.exists()
-    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved
-    assert (sidecar / 'checkpoint.md').read_bytes() == original[str(checkpoint.relative_to(work))]
+    assert _fixture_io(sidecar / 'watcher-diagnostics.json').read_bytes() == saved
+    assert _fixture_io(sidecar / 'checkpoint.md').read_bytes() == original[str(checkpoint.relative_to(work))]
     assert mod._tree_entries(str(archive)) == entries
     # Files may disappear before an interrupted removal leaves their known
     # empty checkpoint parent. Already-preserved typed copies still account for it.
     checkpoint.parent.mkdir(parents=True)
     mod.remove_ordinary_residue(str(repo), str(work), wbs_id, tip, proof)
     assert not work.exists()
-    assert (sidecar / 'watcher-diagnostics.json').read_bytes() == saved
+    assert _fixture_io(sidecar / 'watcher-diagnostics.json').read_bytes() == saved
 
 
 def _ordinary_checkpoint(repo, task):
@@ -1280,12 +1282,12 @@ def test_thaw_uses_one_complete_ordinary_proof_before_chmod(tmp_path, monkeypatc
 
     monkeypatch.setattr(mod, 'ordinary_removal_proof', actual_proof)
     monkeypatch.setattr(mutation_owner, mutation_name, actual_chmod)
-    assert not subject.stat().st_mode & 0o200
+    assert not _fixture_io(subject).stat().st_mode & 0o200
     mod.thaw_verification_sources(str(repo), str(work), task.name, None, checkpoint)
     assert events.count('proof') == 1 and 'chmod' in events
-    assert subject.stat().st_mode & 0o200
+    assert _fixture_io(subject).stat().st_mode & 0o200
     assert mod._tree_entries(str(archive)) == before
-    assert not (archive / subject.relative_to(task)).stat().st_mode & 0o200
+    assert not _fixture_io(archive / subject.relative_to(task)).stat().st_mode & 0o200
 
 
 def test_thaw_early_returns_still_run_actual_ordinary_proof(tmp_path, monkeypatch):
@@ -1318,8 +1320,8 @@ def test_thaw_rejects_source_and_archive_drift_during_collection(tmp_path, monke
         archived_source = Path(checkpoint['harvest']['archived']) / source.relative_to(task)
         target = (source if changed == 'source' else archived_source) / 'README.md'
         companion = (archived_source if changed == 'source' else source) / 'README.md'
-        original = target.read_bytes()
-        assert companion.read_bytes() == original
+        original = _fixture_io(target).read_bytes()
+        assert _fixture_io(companion).read_bytes() == original
         path_check = mod._s1_path
         seen = []
         chmods = []
@@ -1334,8 +1336,8 @@ def test_thaw_rejects_source_and_archive_drift_during_collection(tmp_path, monke
                 seen.append(path)
                 if len(seen) == 2:
                     # Second validation is the os.walk collection, after root admission.
-                    target.chmod(0o600)
-                    target.write_bytes(b'drift after candidate admission')
+                    _fixture_io(target).chmod(0o600)
+                    _fixture_io(target).write_bytes(b'drift after candidate admission')
                     injected.append(target)
             return result
 
@@ -1349,8 +1351,8 @@ def test_thaw_rejects_source_and_archive_drift_during_collection(tmp_path, monke
             with _raises(mod.HarvestError, match='WBS evidence differs'):
                 mod.thaw_verification_sources(str(repo), str(work), task.name, None, checkpoint)
         assert injected == [target] and len(seen) >= 2 and not chmods
-        assert target.read_bytes() == b'drift after candidate admission'
-        assert companion.read_bytes() == original
-        assert work.exists() and source.exists() and archived_source.exists()
-        assert not source.stat().st_mode & 0o200
-        assert not archived_source.stat().st_mode & 0o200
+        assert _fixture_io(target).read_bytes() == b'drift after candidate admission'
+        assert _fixture_io(companion).read_bytes() == original
+        assert work.exists() and _fixture_io(source).exists() and _fixture_io(archived_source).exists()
+        assert not _fixture_io(source).stat().st_mode & 0o200
+        assert not _fixture_io(archived_source).stat().st_mode & 0o200

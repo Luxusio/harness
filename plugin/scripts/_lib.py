@@ -1341,7 +1341,11 @@ def write_wbs_control(wbs_dir, control):
         raise _control_writer_error("WBS.control.json mutation requires the WBS-control MCP")
     from wbs_namespace_migration import require_complete
     require_complete(find_repo_root(wbs_dir))
-    os.makedirs(wbs_dir, exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(wbs_dir).absolute())
+    else:
+        os.makedirs(wbs_dir, exist_ok=True)
     _revalidate_wbs_control_transaction(wbs_dir)
     if os.path.lexists(path) and not read_wbs_control(wbs_dir):
         raise RuntimeError("existing WBS.control.json is unsafe or invalid")
@@ -1834,7 +1838,11 @@ def write_session_hint(repo_root, session_id):
     if not sid:
         return False
     try:
-        os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
+        if os.name == "nt":
+            from wiki_platform import ensure_private_directory
+            ensure_private_directory(Path(_active_sessions_dir(repo_root)))
+        else:
+            os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
         _atomic_text_write(_session_hint_path(repo_root), sid + "\n")
     except (OSError, ValueError):
         return False
@@ -1894,7 +1902,11 @@ def active_session_transaction(repo_root):
     """
     root = os.path.abspath(repo_root)
     sessions = _active_sessions_dir(root)
-    os.makedirs(sessions, mode=0o700, exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(sessions))
+    else:
+        os.makedirs(sessions, mode=0o700, exist_ok=True)
     if os.name == "nt":
         from wiki_platform import trusted_metadata_directory, file_lock
         stack = ExitStack()
@@ -1959,7 +1971,11 @@ def write_active_marker(repo_root, wbs_dir, session_id=None):
     wbs_run = read_wbs_control(wbs_dir)
     if not wbs_run:
         raise ValueError("invalid WBS execution control for exact session binding")
-    os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(_active_sessions_dir(repo_root)))
+    else:
+        os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
     if _has_binding_conflict_fence(read_active_session_marker(repo_root, sid)):
         raise RuntimeError("exact WBS result recovery must acknowledge the conflict fence first")
     _publish_session_marker(repo_root, sid, {
@@ -2028,7 +2044,11 @@ def write_binding_conflict_fence(repo_root, session_id, conflicts, *, overflow=F
         raise ValueError("invalid exact session id")
     overflow = overflow or _binding_conflicts_overflow({"conflicts": conflicts})
     conflicts = [] if overflow else conflicts
-    os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(_active_sessions_dir(repo_root)))
+    else:
+        os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
     _publish_session_marker(repo_root, sid, {
         "session_id": sid,
         "conflicts": conflicts,
@@ -2138,7 +2158,12 @@ def _session_revoked_in_registered_workspace(repo_root, session_id):
     """Read only this coordinator's existing peer markers, without recursion."""
     root = os.path.realpath(repo_root)
     git = Path(root) / '.git'
-    if not git.is_file() and not (git / 'worktrees').is_dir():
+    if os.name == 'nt':
+        from wiki_platform import _native
+        disk_git = Path(_native._win32_path(git))
+    else:
+        disk_git = git
+    if not disk_git.is_file() and not (disk_git / 'worktrees').is_dir():
         return False
     from codex_hook_registration import workspace_roots
     roots = workspace_roots(root)
@@ -2151,7 +2176,7 @@ def _session_revoked_in_registered_workspace(repo_root, session_id):
         # Permission/format errors on an existing marker cannot become a grant.
         candidate = os.path.join(peer, *WBS_DIR.split('/'), '.active_sessions', session_id + '.json')
         try:
-            os.lstat(candidate)
+            os.lstat(_native._win32_path(candidate) if os.name == 'nt' else candidate)
         except (FileNotFoundError, NotADirectoryError):
             continue
         marker = _read_session_marker(_session_active_path(peer, session_id), session_id, strict=True)
@@ -2286,7 +2311,11 @@ def ensure_wbs_scaffold(
     if sid:
         planned.append(WBS_DIR + "/.active_sessions/" + sid + ".json")
     ensure_runtime_ignored(root, paths=planned)
-    os.makedirs(wbs_dir, exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(wbs_dir).absolute())
+    else:
+        os.makedirs(wbs_dir, exist_ok=True)
     expected_tid = _normalize_wbs_id(wbs_id, wbs_dir=wbs_dir) or wbs_id
     path = wbs_control_file(wbs_dir)
     if os.path.lexists(path):
@@ -2782,7 +2811,11 @@ def _git_changed_paths(repo_root):
 
 
 def artifact_exists(wbs_dir, filename):
-    return os.path.isfile(os.path.join(wbs_dir, filename))
+    path = os.path.join(wbs_dir, filename)
+    if os.name == "nt":
+        from wiki_platform import _native
+        path = _native._win32_path(Path(path).absolute())
+    return os.path.isfile(path)
 
 
 # ── Atomic JSON state helpers ─────────────────────────────────────────────

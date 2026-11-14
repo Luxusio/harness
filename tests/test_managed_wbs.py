@@ -12,6 +12,7 @@ except ModuleNotFoundError as error:
     from unittest import SkipTest
     raise SkipTest("pytest is required to collect this module")
 
+from test_batch_finish import _fixture_io
 from test_batch_state import Pool, RUN, task, _git, _head
 from test_wbs import plan
 
@@ -61,7 +62,7 @@ def test_public_mcp_owns_creation_and_stopped_completion(tmp_path, monkeypatch):
         assert not done.get("isError"), done
         assert not worktree.exists()
         assert not _git("branch", "--list", handoff["branch"], cwd=pool.repo)
-        assert (pool.repo / "doc/harness/archive/batch" / handoff["wbs_id"] / "WBS.control.json").is_file()
+        assert (_fixture_io(pool.repo / "doc/harness/archive/batch" / handoff["wbs_id"] / "WBS.control.json")).is_file()
         replay = call("dispatch", operation="complete", slug=slug, worker_id=worker, result=actual, worker_stopped=True)
         assert not replay.get("isError"), replay
         changed = dict(actual, commit="0" * 40)
@@ -133,14 +134,14 @@ def test_public_complete_retains_unique_ignored_content(tmp_path, monkeypatch):
     exclude.write_text(exclude.read_text() + "\nprecious.local\n")
     precious = worktree / "precious.local"
     precious.write_bytes(b"unique ignored user data\x00\xff")
-    marker = (worktree / ".harness-batch-bootstrap").read_bytes()
+    marker = (_fixture_io(worktree / ".harness-batch-bootstrap")).read_bytes()
     kept = call("dispatch", operation="complete", slug=slug, worker_id="actual-worker", result=actual, worker_stopped=True)
     assert not kept.get("isError"), kept
     body = kept["structuredContent"]
     assert body["status"] in {"kept", "recovery-required"}, body
     assert body["operation_result"]["integrated_tip"]
     assert precious.read_bytes() == b"unique ignored user data\x00\xff"
-    assert (worktree / ".harness-batch-bootstrap").read_bytes() == marker
+    assert (_fixture_io(worktree / ".harness-batch-bootstrap")).read_bytes() == marker
     assert _git("branch", "--list", handoff["branch"], cwd=pool.repo)
     assert call("open").get("isError")
 
@@ -218,11 +219,11 @@ def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, mon
     requested = pool.repo / 'b.txt'
     baseline = requested.read_bytes()
     requested.write_text('user change in requested scope\n')
-    state_before = pool.state.read_bytes()
+    state_before = _fixture_io(pool.state).read_bytes()
     refused = extend(call, handoff, worktree)
     assert refused.get('isError'), refused
     assert 'overlap' in refused['structuredContent']['error']
-    assert pool.state.read_bytes() == state_before
+    assert _fixture_io(pool.state).read_bytes() == state_before
     assert requested.read_text() == 'user change in requested scope\n'
     requested.write_bytes(baseline)  # restore this isolated test's fixture only
     shared = pool.repo / 'shared.txt'
@@ -233,16 +234,16 @@ def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, mon
     note.write_bytes(b'untracked unrelated\x00\xff')
     status = _git('status', '--porcelain=v1', '-z', cwd=pool.repo)
     index = _git('ls-files', '--stage', '-z', cwd=pool.repo)
-    original_task = (directory / 'WBS.control.json').read_bytes()
-    original_intent = (pool.repo / 'doc/harness/wbs/WBS__managed/WBS.json').read_bytes()
+    original_task = (_fixture_io(directory / 'WBS.control.json')).read_bytes()
+    original_intent = (_fixture_io(pool.repo / 'doc/harness/wbs/WBS__managed/WBS.json')).read_bytes()
     granted = extend(call, handoff, worktree)
     assert not granted.get('isError'), granted
     assert not extend(call, handoff, worktree).get('isError')
-    owner = next(item for item in json.loads(pool.state.read_text())['requests'] if item['slug'] == handoff['slug'])
+    owner = next(item for item in json.loads(_fixture_io(pool.state).read_text())['requests'] if item['slug'] == handoff['slug'])
     assert owner['scopes'] == ['a.txt']
     assert owner['extra_scopes'] == {'b.txt': str(pool.repo / 'b.txt')}
-    assert (directory / 'WBS.control.json').read_bytes() == original_task
-    assert (pool.repo / 'doc/harness/wbs/WBS__managed/WBS.json').read_bytes() == original_intent
+    assert (_fixture_io(directory / 'WBS.control.json')).read_bytes() == original_task
+    assert (_fixture_io(pool.repo / 'doc/harness/wbs/WBS__managed/WBS.json')).read_bytes() == original_intent
     assert _git('status', '--porcelain=v1', '-z', cwd=pool.repo) == status
     assert _git('ls-files', '--stage', '-z', cwd=pool.repo) == index
     assert shared.read_text() == 'unstaged unrelated\n'
@@ -252,14 +253,14 @@ def test_public_scope_extension_preserves_unrelated_dirty_original(tmp_path, mon
 def test_public_dirty_ownership_overlap_refuses_before_parent_park(tmp_path, monkeypatch):
     pool, call = setup_parent(tmp_path, monkeypatch)
     parent = pool.repo / 'doc/harness/wbs/WBS__managed'
-    original = {name: (parent / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    original = {name: (_fixture_io(parent / name)).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     user = pool.repo / 'a.txt'
     user.write_bytes(b'uncommitted user implementation\x00\xff')
     refused = call('dispatch', ownership={'A': ['a.txt'], 'B': ['b.txt']}, host=host_snapshot())
     assert refused.get('isError'), refused
     assert 'overlap' in refused['structuredContent']['error']
-    assert all((parent / name).read_bytes() == raw for name, raw in original.items())
-    assert not (parent / 'BLOCKED.md').exists()
+    assert all((_fixture_io(parent / name)).read_bytes() == raw for name, raw in original.items())
+    assert not (_fixture_io(parent / 'BLOCKED.md')).exists()
     assert not (pool.repo / 'doc/harness/runtime/batches').exists()
     assert user.read_bytes() == b'uncommitted user implementation\x00\xff'
 
@@ -305,14 +306,14 @@ def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
     for unavailable in ('spawn_available', 'continuation_available'):
         host = host_snapshot(live=[dict(id='worker-1', role='implementation')])
         host[unavailable] = False
-        before = pool.state.read_bytes()
+        before = _fixture_io(pool.state).read_bytes()
         deferred = call('dispatch', host=host)
         assert not deferred.get('isError'), deferred
         body = deferred['structuredContent']
         assert body['capability_deferred'] is True
         assert body['handoffs'] == [] and body['execution_admission']['selected'] == []
         assert body['reasons']['capability'][0][unavailable] is False
-        assert pool.state.read_bytes() == before
+        assert _fixture_io(pool.state).read_bytes() == before
         assert Path(second['worktree']).is_dir()
     refill = call('dispatch', host=host_snapshot(live=[dict(id='worker-1', role='implementation')]))
     assert not refill.get('isError'), refill
@@ -322,7 +323,7 @@ def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
     assert third['slug'].endswith('-C')
     assert third['spawn_head'] == _head(pool.repo)
     pool.batch = prepared['structuredContent']['batch_id']
-    state = pool.state.read_text()
+    state = _fixture_io(pool.state).read_text()
     assert 'worker-1' in state and '"running"' in state
 
 
@@ -336,10 +337,10 @@ def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_pa
     assert not call('plan', plan=plan(nodes)).get('isError')
     td = pool.repo / 'doc/harness/wbs/WBS__managed'
     assert 'deny' == check(pool.repo, pool.repo/'a.py').get('permissionDecision')
-    control = json.loads((td/'WBS.control.json').read_bytes())
+    control = json.loads((_fixture_io(td/'WBS.control.json')).read_bytes())
     control['execution_mode'] = 'micro'
-    (td/'WBS.control.json').write_text(json.dumps(control))
-    (td/'MAINTENANCE').write_text('Admission gate regression\n')
+    (_fixture_io(td/'WBS.control.json')).write_text(json.dumps(control))
+    (_fixture_io(td/'MAINTENANCE')).write_text('Admission gate regression\n')
     assert 'deny' == check(pool.repo, pool.repo/'a.py').get('permissionDecision')
     assert check(pool.repo, pool.repo/'doc/harness/REQ__admission.md') == {}
     assignment = call('dispatch', ownership={'A': ['a.py'], 'B': ['b.py']}, host=host_snapshot())
@@ -349,7 +350,7 @@ def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_pa
     (pool.repo/'a.py').write_text('source changed\n')
     assert check(pool.repo, pool.repo/'a.py') == {}
     assert 'deny' == check(pool.repo, pool.repo/'b.py').get('permissionDecision')
-    before = (td/'WBS.json').read_bytes()
+    before = (_fixture_io(td/'WBS.json')).read_bytes()
     state = json.loads(before)
     for edit in ('nodes', 'checks', 'blocks', 'ownership'):
         changed = json.loads(before)
@@ -357,10 +358,10 @@ def test_public_direct_assignment_is_fresh_control_not_source_fingerprint(tmp_pa
         elif edit == 'checks': changed['checks']['A'] = {'passed': False}
         elif edit == 'blocks': changed['blocks'] = {'A': dict(reason='actual blocker', unblock_condition='restore capability')}
         else: changed['execution_admission']['ownership']['A'] = ['b.py']
-        (td/'WBS.json').write_text(json.dumps(changed))
+        (_fixture_io(td/'WBS.json')).write_text(json.dumps(changed))
         with pytest.raises(ValueError, match='missing or stale'):
             wbs.require_source_assignment(str(pool.repo), 'WBS__managed', 'a.py')
-    (td/'WBS.json').write_bytes(before)
+    (_fixture_io(td/'WBS.json')).write_bytes(before)
     assert call('context')['structuredContent']['context']['routing']['orchestration_mode'] == 'direct'
     assert not call('block', blocked_reason='Observed prerequisite unavailable', unblock_condition='Restore that prerequisite').get('isError')
     assert call('context')['structuredContent']['context']['source_write_allowed'] is False
@@ -411,18 +412,18 @@ def test_ordinary_linked_direct_requires_fresh_assignment_and_scope(tmp_path, mo
     denied = check(pool.repo, tree / 'outside.py')
     assert denied.get('permissionDecision') == 'deny'
     assert 'outside direct execution ownership' in denied['permissionDecisionReason']
-    original = (directory / 'WBS.json').read_bytes()
+    original = (_fixture_io(directory / 'WBS.json')).read_bytes()
     for mutation in ('run', 'definition'):
         state = json.loads(original)
         if mutation == 'run':
             state['execution_admission']['run_id'] = RUN
         else:
             state['nodes'][0]['title'] = 'Changed accepted intent'
-        (directory / 'WBS.json').write_text(json.dumps(state))
+        (_fixture_io(directory / 'WBS.json')).write_text(json.dumps(state))
         denied = check(pool.repo, tree / 'a.py')
         assert denied.get('permissionDecision') == 'deny'
         assert 'missing or stale' in denied['permissionDecisionReason']
-    (directory / 'WBS.json').write_bytes(original)
+    (_fixture_io(directory / 'WBS.json')).write_bytes(original)
     assert check(pool.repo, tree / 'a.py') == {}
     assert not (pool.repo / 'doc/harness/runtime/batches').exists()
 
@@ -434,13 +435,13 @@ def test_ordinary_linked_direct_with_unrelated_batch(tmp_path, monkeypatch):
     pool = Pool(tmp_path, monkeypatch)
     pool.init([request('unrelated')])
     pool.claim()
-    before = pool.state.read_bytes()
+    before = _fixture_io(pool.state).read_bytes()
     tree, _, call = _linked_direct(pool)
     _admit_linked_direct(call)
     assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
     assert check(pool.repo, tree / 'a.py') == {}
     assert check(pool.repo, tree / 'outside.py').get('permissionDecision') == 'deny'
-    assert pool.state.read_bytes() == before
+    assert _fixture_io(pool.state).read_bytes() == before
 
 
 @pytest.mark.parametrize('stage', ['reserved', 'creation-intent'])
@@ -463,7 +464,7 @@ def test_managed_checkout_cannot_escape_through_foreign_direct_task(tmp_path, mo
             fault.setattr(managed, '_call', stop)
             with pytest.raises(RuntimeError, match='after Git creation'):
                 prepare(pool, spec, available_slots=1)
-        owner = json.loads(pool.state.read_bytes())['requests'][0]
+        owner = json.loads(_fixture_io(pool.state).read_bytes())['requests'][0]
         assert not owner.get('worktree')
         tree = Path(owner['creation_intent']['worktree'])
     else:
@@ -474,13 +475,13 @@ def test_managed_checkout_cannot_escape_through_foreign_direct_task(tmp_path, mo
         wbs.require_source_assignment(str(tree), 'WBS__a', 'a.py')
     tree, directory, call = _linked_direct(pool, tree)
     _admit_linked_direct(call)
-    before = pool.state.read_bytes()
-    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    before = _fixture_io(pool.state).read_bytes()
+    controls = {name: (_fixture_io(directory / name)).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     denied = check(pool.repo, tree / 'a.py')
     assert denied.get('permissionDecision') == 'deny'
     assert 'managed' in denied['permissionDecisionReason']
-    assert pool.state.read_bytes() == before
-    assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+    assert _fixture_io(pool.state).read_bytes() == before
+    assert all((_fixture_io(directory / name)).read_bytes() == raw for name, raw in controls.items())
 
 
 @pytest.mark.parametrize('ancestor', ['writable-main', 'foreign-main', 'symlink-runtime'])
@@ -507,7 +508,7 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
             if not sudo or subprocess.run([sudo, '-n', 'true'], capture_output=True).returncode:
                 pytest.skip('changing isolated main-root ownership requires root or passwordless sudo')
             elevated = [sudo, '-n']
-    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    controls = {name: (_fixture_io(directory / name)).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     try:
         if ancestor == 'symlink-runtime':
             external = tmp_path / 'external-runtime'
@@ -540,7 +541,7 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
         assert not written.stdout.strip(), written.stdout
         with pytest.raises(FileNotFoundError):
             batches.lstat()
-        assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+        assert all((_fixture_io(directory / name)).read_bytes() == raw for name, raw in controls.items())
     finally:
         if ancestor == 'foreign-main':
             subprocess.run([*elevated, 'chown', f'{original.st_uid}:{original.st_gid}', str(pool.repo)],
@@ -558,14 +559,14 @@ def test_native_linked_direct_ignores_foreign_write_main_and_preserves_source(tm
     _admit_linked_direct(call)
     source = tree / 'a.py'
     source.write_bytes(b'uncommitted user bytes\x00\xff')
-    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    controls = {name: (_fixture_io(directory / name)).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     assert tree.parent == pool.repo.parent and tree != pool.repo
     _acl(pool.repo, '(A;;GW;;;WD)')
     try:
         assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
         assert check(tree, source) == {}
         assert source.read_bytes() == b'uncommitted user bytes\x00\xff'
-        assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+        assert all((_fixture_io(directory / name)).read_bytes() == raw for name, raw in controls.items())
     finally:
         _acl(pool.repo)
 
@@ -583,7 +584,7 @@ def test_ordinary_linked_direct_rejects_inaccessible_batch_ancestor(tmp_path, mo
     batches = pool.repo / 'doc/harness/runtime/batches'
     batches.parent.mkdir()
     original_mode = batches.parent.stat().st_mode & 0o7777
-    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    controls = {name: (_fixture_io(directory / name)).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     try:
         batches.parent.chmod(0)
         with pytest.raises(PermissionError):
@@ -593,7 +594,7 @@ def test_ordinary_linked_direct_rejects_inaccessible_batch_ancestor(tmp_path, mo
         denied = check(tree, tree / 'a.py')
         assert denied.get('permissionDecision') == 'deny'
         assert 'Permission denied' in denied['permissionDecisionReason']
-        assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+        assert all((_fixture_io(directory / name)).read_bytes() == raw for name, raw in controls.items())
     finally:
         batches.parent.chmod(original_mode)
     assert not batches.exists()
@@ -630,14 +631,14 @@ def test_ordinary_linked_direct_rejects_unsafe_batch_metadata(tmp_path, monkeypa
     content = (os.readlink(evidence) if evidence.is_symlink() else
                sorted(os.listdir(evidence)) if evidence.is_dir() else evidence.read_bytes())
     before = os.lstat(evidence)
-    controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    controls = {name: (_fixture_io(directory / name)).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
     assert check(pool.repo, tree / 'a.py').get('permissionDecision') == 'deny'
     after = os.lstat(evidence)
     assert (after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns) == (
         before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns)
     assert (os.readlink(evidence) if evidence.is_symlink() else
             sorted(os.listdir(evidence)) if evidence.is_dir() else evidence.read_bytes()) == content
-    assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
+    assert all((_fixture_io(directory / name)).read_bytes() == raw for name, raw in controls.items())
 
 
 def test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair(tmp_path, monkeypatch):
@@ -650,7 +651,7 @@ def test_public_wide_first_preserves_full_intake_and_selects_disjoint_pair(tmp_p
     body = result['structuredContent']
     assert {x['slug'].split('-')[-1] for x in body['handoffs']} == {'A', 'B'}
     assert set(body['execution_admission']['selected']) == {x['slug'] for x in body['handoffs']}
-    state = json.loads((pool.repo/'doc/harness/wbs/WBS__managed/WBS.json').read_bytes())
+    state = json.loads((_fixture_io(pool.repo/'doc/harness/wbs/WBS__managed/WBS.json')).read_bytes())
     assert len(state['batch']['requests']) == 3
 
 
@@ -660,7 +661,7 @@ def test_standalone_bound_and_resumed_lead_keeps_source_assignment(tmp_path, mon
     from test_codex_worktree_prewrite import check
     pool = Pool(tmp_path, monkeypatch)
     pool.init([request('a', 'a.py')])
-    assert 'owner_wbs_id' not in json.loads(pool.state.read_bytes())
+    assert 'owner_wbs_id' not in json.loads(_fixture_io(pool.state).read_bytes())
     pool.claim()
     worktree, branch = pool.bind()
     directory = task(worktree)
@@ -669,14 +670,14 @@ def test_standalone_bound_and_resumed_lead_keeps_source_assignment(tmp_path, mon
     assert check(pool.repo, worktree / 'a.py') == {}
     assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
     (worktree / 'a.py').write_text('preserved interrupted source\n')
-    proof = (directory / 'WBS.control.json').read_bytes()
+    proof = (_fixture_io(directory / 'WBS.control.json')).read_bytes()
     pool.cli('resume', '--slug', 'a', '--worker-stopped')
     assert check(pool.repo, worktree / 'a.py').get('permissionDecision') == 'deny'
     pool.cli('bind', '--slug', 'a', '--worker-id', 'replacement',
              '--worktree', worktree, '--branch', branch)
     assert check(pool.repo, worktree / 'a.py') == {}
     assert check(pool.repo, worktree / 'outside.py').get('permissionDecision') == 'deny'
-    assert (directory / 'WBS.control.json').read_bytes() == proof
+    assert (_fixture_io(directory / 'WBS.control.json')).read_bytes() == proof
     assert (worktree / 'a.py').read_text() == 'preserved interrupted source\n'
 
 

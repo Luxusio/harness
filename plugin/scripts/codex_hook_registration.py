@@ -222,7 +222,12 @@ def workspace_roots(control_root: str) -> list[str]:
     """Enumerate only revalidated linked worktrees with a bounded registry scan."""
     root = os.path.realpath(control_root)
     gitfile = Path(root) / ".git"
-    if gitfile.is_file():
+    if os.name == "nt":
+        from wiki_platform import _native
+        disk_gitfile = Path(_native._win32_path(gitfile))
+    else:
+        disk_gitfile = gitfile
+    if disk_gitfile.is_file():
         try:
             target = _read_regular_text_file(str(gitfile), max_size=4096).strip().removeprefix("gitdir: ")
             common = (Path(root) / target).resolve().parent.parent
@@ -233,13 +238,15 @@ def workspace_roots(control_root: str) -> list[str]:
             return []
     found = [root]
     registry = Path(root) / ".git" / "worktrees"
-    if registry.is_dir() and not registry.is_symlink():
-        entries = list(islice(registry.iterdir(), 257))
+    disk_registry = Path(_native._win32_path(registry)) if os.name == "nt" else registry
+    if disk_registry.is_dir() and not disk_registry.is_symlink():
+        entries = list(islice(disk_registry.iterdir(), 257))
         if len(entries) > 256:
             return []
-        for entry in entries:
+        for disk_entry in entries:
+            entry = registry / disk_entry.name
             try:
-                if entry.is_symlink():
+                if disk_entry.is_symlink():
                     continue
                 target = str(Path(_read_regular_text_file(str(entry / "gitdir"), max_size=4096).strip()).parent)
                 if target not in found and resolve_registered_worktree(root, target) == target:

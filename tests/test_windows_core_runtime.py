@@ -52,7 +52,7 @@ def _acl(path, grants=""):
     win._check(win._ConvertStringSecurityDescriptor(sddl, 1, C.byref(descriptor), None))
     setter = win._bind(win.A, "SetFileSecurityW", [W.LPCWSTR, W.DWORD, win.P])
     try:
-        win._check(setter(str(path), 4 | 0x80000000, descriptor))
+        win._check(setter(win._win32_path(path), 4 | 0x80000000, descriptor))
     finally:
         win._LocalFree(descriptor)
 
@@ -416,6 +416,18 @@ def test_native_canonical_control_writer_rejects_foreign_globals(private, monkey
     with pytest.raises(PermissionError, match="WBS-control"):
         harness_lib.begin_wbs_run(str(target))
     assert not target.exists()
+
+
+def test_native_batch_parents_distinguishes_existing_deep_metadata_from_missing(private):
+    import batch_state
+
+    directory = private
+    while len(str(directory).encode("utf-16-le")) // 2 <= 280:
+        directory /= "owned metadata directory"
+    win.ensure_private_directory(directory)
+    batch_state.parents(str(directory))
+    with pytest.raises(batch_state.Refusal, match="missing state directory"):
+        batch_state.parents(str(directory / "missing"))
 
 
 def test_native_verification_inputs_reject_junction_before_directory_listing(private, monkeypatch):
@@ -958,18 +970,18 @@ def test_native_saved_pool_prepares_selected_submodule_after_interruption_withou
     assert Path(saved["worktree"]) == worktree
     assert selected["phase"] == "owned"
     private_gitdir = Path(selected["private_gitdir"])
-    assert private_gitdir.is_dir()
-    identity = (private_gitdir.stat().st_dev, private_gitdir.stat().st_ino)
+    assert _disk(private_gitdir).is_dir()
+    identity = (_disk(private_gitdir).stat().st_dev, _disk(private_gitdir).stat().st_ino)
     assert not (worktree / "libs/module0/.git").exists()
 
     if resume == "foreign-stage":
         stage = private_gitdir.parent / "publish-worktree"
-        stage.mkdir(exist_ok=True)
+        _disk(stage).mkdir(exist_ok=True)
         precious = stage / "precious-user-file.bin"
-        precious.write_bytes(b"retain foreign Native staging bytes\x00\xff")
+        _disk(precious).write_bytes(b"retain foreign Native staging bytes\x00\xff")
         pool.cli("bind", "--slug", "a", "--worker-id", "worker-a",
                  "--worktree", worktree, "--branch", branch, ok=False)
-        assert precious.read_bytes() == b"retain foreign Native staging bytes\x00\xff"
+        assert _disk(precious).read_bytes() == b"retain foreign Native staging bytes\x00\xff"
         retained = json.loads(pool.state.read_bytes())["requests"][0]
         assert retained["status"] == "reserved" and retained["worker_id"] == "worker-a"
         assert retained["submodule_manifest"]["modules"][0]["phase"] == "owned"
@@ -984,9 +996,9 @@ def test_native_saved_pool_prepares_selected_submodule_after_interruption_withou
         assert _git("rev-parse", "HEAD", cwd=module) == original_tip
         assert _git("symbolic-ref", "--short", "HEAD", cwd=module) == selected["branch"]
         assert Path(_git("rev-parse", "--absolute-git-dir", cwd=module)) == private_gitdir
-        assert not (private_gitdir / "objects/info/alternates").exists()
+        assert not _disk(private_gitdir / "objects/info/alternates").exists()
         batch_submodules.validate(str(pool.repo), str(worktree), completed["submodule_manifest"])
-    assert (private_gitdir.stat().st_dev, private_gitdir.stat().st_ino) == identity
+    assert (_disk(private_gitdir).stat().st_dev, _disk(private_gitdir).stat().st_ino) == identity
     assert {path: path.read_bytes() for path in configs} == original_configs
     assert (source_module / "code.txt").read_bytes() == original_source
     assert _git("rev-parse", "HEAD", cwd=source_module) == original_tip

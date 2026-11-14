@@ -316,10 +316,10 @@ def mcp_integration(tmp_path, monkeypatch):
 
 def damage_pack_proof(pool, proof):
     if proof == "missing":
-        pool.state.unlink()
+        _fixture_io(pool.state).unlink()
     else:
         archive = pool.repo / "doc/harness/archive/batch/WBS__a/PLAN.md"
-        archive.write_text("altered preserved evidence\n")
+        _fixture_io(archive).write_text("altered preserved evidence\n")
 
 
 def test_mcp_completed_pack_closes_integration_child_and_goal(tmp_path, monkeypatch):

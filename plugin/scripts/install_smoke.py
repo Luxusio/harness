@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 
 CORE_MODULES = ("_lib", "codex_hook_registration")
 HOOK_SCRIPT_REFERENCE = re.compile(r"scripts/([A-Za-z0-9_]+)\.py")
@@ -28,6 +29,34 @@ def _io_path(path):
     if os.name != "nt" or value.startswith("\\\\?\\"):
         return value
     return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+
+
+@contextmanager
+def _temporary_directory(prefix):
+    """Retire only this probe's private scratch, including readonly targets."""
+    if os.name != "nt":
+        with tempfile.TemporaryDirectory(prefix=prefix) as scratch:
+            yield scratch
+        return
+    from pathlib import Path
+    from wiki_platform import (ensure_private_directory, metadata_tree_inventory,
+                               metadata_remove, metadata_remove_empty, trusted_metadata_directory)
+    parent = Path(tempfile.gettempdir()).absolute()
+    with trusted_metadata_directory(parent):
+        created = tempfile.mkdtemp(prefix=prefix, dir=_io_path(parent))
+        scratch = parent / Path(created).name
+        ensure_private_directory(scratch)
+    try:
+        yield str(scratch)
+    finally:
+        with trusted_metadata_directory(scratch):
+            rows = metadata_tree_inventory(scratch, max_entries=100_000, max_bytes=256 * 1024 * 1024)
+            for relative, row in reversed(list(rows.items())):
+                if row["kind"] == "dir":
+                    metadata_remove_empty(scratch / relative)
+                else:
+                    metadata_remove(scratch / relative, expected_sha256=row["sha256"], max_bytes=row["size"])
+        metadata_remove_empty(scratch)
 
 
 def _hook_modules(plugin_root: str) -> list[str]:
@@ -172,7 +201,7 @@ def _import_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
         "        print(f'{name}: {type(exc).__name__}: {exc}')\n"
         "        sys.exit(1)\n"
     )
-    with tempfile.TemporaryDirectory(prefix="harness-smoke-import-") as tmp:
+    with _temporary_directory(prefix="harness-smoke-import-") as tmp:
         try:
             argv = [_runtime_python(), "-I", "-B", "-c", program]
             if os.name == "nt":
@@ -216,14 +245,26 @@ def _wbs_probe_worker(plugin_root: str, timeout: float) -> int:
     """Drive actual installed owner APIs, without lifecycle event fixtures."""
     from pathlib import Path
     original_cwd = os.getcwd()
-    with tempfile.TemporaryDirectory(prefix="harness-wbs-smoke-") as scratch:
+    with _temporary_directory(prefix="harness-wbs-smoke-") as scratch:
         repo = Path(scratch) / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=timeout)
         manifest = repo / "doc/harness/manifest.yaml"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text("type: cli\n")
-        (repo / "source.txt").write_text("ok\n")
+        if os.name == "nt":
+            from wiki_platform import ensure_private_directory, atomic_write, native_executable, run_bounded
+            ensure_private_directory(manifest.parent)
+            git = native_executable("git", cwd=scratch, env=dict(os.environ))
+            initialized = run_bounded([git, "-c", "core.longpaths=true", "init", "-q", str(repo)],
+                                      cwd=scratch, env=dict(os.environ), timeout=timeout, limit=1024 * 1024,
+                                      capture_stderr=True)
+            if initialized.returncode:
+                raise RuntimeError("Installation smoke Git fixture initialization failed")
+            atomic_write(manifest, b"type: cli\n")
+            atomic_write(repo / "source.txt", b"ok\n")
+        else:
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=timeout)
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n")
+            (repo / "source.txt").write_text("ok\n")
         sys.path[:0] = [str(Path(plugin_root) / "scripts"), str(Path(plugin_root) / "mcp")]
         import _lib
         import harness_server
@@ -302,9 +343,10 @@ def _wbs_probe(plugin_root: str, timeout: float) -> tuple[bool, list[str]]:
     if not os.path.isfile(_io_path(server)):
         return False, [f"FAIL WBS: installed tree has no {server}"]
     env = _probe_env(plugin_root, "isolated-install-fixture")
-    with tempfile.TemporaryDirectory(prefix="harness-wbs-probe-") as scratch:
+    with _temporary_directory(prefix="harness-wbs-probe-") as scratch:
         env["TMPDIR"] = scratch
         if os.name == "nt":
+            env["TEMP"] = env["TMP"] = scratch
             from wiki_platform import run_bounded
             from native_cli import owned_python_argv
             try:

@@ -671,17 +671,20 @@ def _ordinary_markers(worktree, wbs_id):
         return set()  # standalone legacy evidence can be archived, never infer marker ownership
     allowed = set()
     if os.name == "nt":
+        from wiki_platform import metadata_names, metadata_probe
         promotion_lock = os.path.join(worktree, 'doc', 'harness', '.promotion.lock')
-        if os.path.lexists(promotion_lock):
+        if metadata_probe(promotion_lock) is not None:
             _s1_require(_ordinary_bytes(promotion_lock, 0) == b"", 'nonempty native promotion lock')
             allowed.add('doc/harness/.promotion.lock')
     tasks = os.path.dirname(source)
     sessions = os.path.join(tasks, '.active_sessions')
     owned_sessions = set()
-    if os.path.lexists(sessions):
+    sessions_present = metadata_probe(sessions) is not None if os.name == 'nt' else os.path.lexists(sessions)
+    if sessions_present:
         _s1_path(sessions, True)
         allowed.add('doc/harness/wbs/.active_sessions')
-        for name in os.listdir(sessions):
+        names = metadata_names(sessions, max_entries=100000) if os.name == 'nt' else os.listdir(sessions)
+        for name in names:
             if os.name == "nt" and name == ".session.lock":
                 _s1_require(_ordinary_bytes(os.path.join(sessions, name), 0) == b"",
                             'nonempty native session lock')
@@ -706,7 +709,8 @@ def _ordinary_markers(worktree, wbs_id):
             owned_sessions.add(sid)
             allowed.add('doc/harness/wbs/.active_sessions/' + name)
         hint = os.path.join(sessions, '.session-hint')
-        if os.path.lexists(hint):
+        hint_present = metadata_probe(hint) is not None if os.name == 'nt' else os.path.lexists(hint)
+        if hint_present:
             sid = _ordinary_bytes(hint, 4096).decode('utf-8').strip()
             _s1_require(sid in owned_sessions, 'session hint lacks exact closed-task marker')
             allowed.add('doc/harness/wbs/.active_sessions/.session-hint')
@@ -1029,7 +1033,7 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
     recovery = 'doc/harness/archive/worktree-recovery/' + wbs_id + '/' + control['run_id'] + '/namespace-history'
     selected = None
     for candidate in (Path(repo), Path(worktree), Path(repo) / recovery):
-        if not os.path.lexists(candidate):
+        if not metadata_present(candidate):
             continue
         for manifest_path, value in namespace.journals(candidate):
             _s1_require(value['status'] == 'complete', 'namespace migration is unfinished')
@@ -1071,14 +1075,16 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
         relative = tree['source'] + '/' + name
         if row.get('directory'):
             directories.add(relative)
-            if os.path.lexists(Path(worktree) / relative):
-                info = os.lstat(_s1_path(str(Path(worktree) / relative), True))
+            if metadata_present(Path(worktree) / relative):
+                path = _s1_path(str(Path(worktree) / relative), True)
                 if os.name == "nt":
-                    from wiki_platform import trusted_metadata_directory
+                    from wiki_platform import _native, trusted_metadata_directory
                     with trusted_metadata_directory(Path(worktree) / relative):
+                        info = os.lstat(_native._win32_path(path))
                         _s1_require(bool(info.st_file_attributes & 1) == (not bool(row['mode'] & 0o200)),
                                     'namespace history directory changed')
                 else:
+                    info = os.lstat(path)
                     _s1_require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode)
                                 in {row['mode'], row['mode'] | stat.S_IWUSR}, 'namespace history directory changed')
             else:
@@ -1095,11 +1101,11 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
         for relative in (manifest_path, namespace.ARCHIVE + '/.lock',
                          'doc/harness/runtime/batches/.lock'):
             source = Path(worktree) / relative
-            if os.path.lexists(source):
+            if metadata_present(source):
                 row = namespace._hash_file(Path(worktree), relative)
                 _s1_require(relative == manifest_path or row['size'] == 0, 'nonempty migration lock')
                 expected[relative] = row
-            elif not preserve and os.path.lexists(Path(repo) / recovery / relative):
+            elif not preserve and metadata_present(Path(repo) / recovery / relative):
                 expected[relative] = namespace._hash_file(Path(repo), recovery + '/' + relative)
     if os.name == "nt":
         # These are the complete retired coordination artifacts omitted by
@@ -1108,9 +1114,9 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
         for relative in (namespace.OLD_ROOT + '/.active_sessions/.session.lock',
                          tree['source'] + '/.control.lock'):
             row = None
-            if os.path.lexists(Path(worktree) / relative):
+            if metadata_present(Path(worktree) / relative):
                 row = namespace._hash_file(Path(worktree), relative)
-            elif not preserve and os.path.lexists(Path(repo) / recovery / relative):
+            elif not preserve and metadata_present(Path(repo) / recovery / relative):
                 row = namespace._hash_file(Path(repo), recovery + '/' + relative)
             if row is not None:
                 _s1_require(row['size'] == 0 and row['sha256'] == hashlib.sha256(b'').hexdigest(),
@@ -1119,14 +1125,18 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
     old_checkpoint = 'doc/harness/checkpoints/TASK__' + wbs_id[5:] + '.md'
     checkpoint_source = Path(worktree) / old_checkpoint
     checkpoint_copy = Path(repo) / recovery / old_checkpoint
-    if os.path.lexists(checkpoint_source) or not preserve and os.path.lexists(checkpoint_copy):
-        path = checkpoint_source if os.path.lexists(checkpoint_source) else checkpoint_copy
+    if metadata_present(checkpoint_source) or not preserve and metadata_present(checkpoint_copy):
+        path = checkpoint_source if metadata_present(checkpoint_source) else checkpoint_copy
         raw = _ordinary_bytes(str(path))
         text = raw.decode('utf-8').replace('\r\n', '\n')
         _s1_require(text.startswith('# Checkpoint — TASK__' + wbs_id[5:] + '\n\n- written: ')
                     and all(section in text for section in ('\n## Task state\n', '\n## Progress\n', '\n## Next action\n')),
                     'unknown or foreign historical checkpoint')
-        info = path.stat()
+        if os.name == 'nt':
+            from wiki_platform import _native
+            info = os.lstat(_native._win32_path(path))
+        else:
+            info = path.stat()
         mode = (0o444 if info.st_file_attributes & 1 else 0o600) if os.name == "nt" else stat.S_IMODE(info.st_mode)
         expected[old_checkpoint] = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=mode)
     for relative, row in expected.items():
@@ -1144,7 +1154,7 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
         _s1_require(namespace._hash_file(Path(repo), destination) == saved,
                     'namespace history is not durably preserved: ' + relative)
     old_sessions = namespace.OLD_ROOT + '/.active_sessions'
-    if os.path.lexists(Path(worktree) / old_sessions):
+    if metadata_present(Path(worktree) / old_sessions):
         _s1_require(not namespace.storage._entries(Path(worktree), old_sessions), 'unpreserved legacy session metadata')
         directories.add(old_sessions)
     return {**{relative: row if 'link' in row else row['sha256'] for relative, row in expected.items()},
@@ -1272,7 +1282,12 @@ def ordinary_removal_proof(repo, worktree, wbs_id, retention=None, checkpoint=No
         namespace = _ordinary_namespace_history(repo, worktree, wbs_id)
         allowed.update(namespace)
         learning = os.path.join(worktree, 'doc', 'harness', 'learnings.jsonl')
-        if os.path.lexists(learning):
+        if os.name == 'nt':
+            from wiki_platform import metadata_probe
+            learning_present = metadata_probe(learning) is not None
+        else:
+            learning_present = os.path.lexists(learning)
+        if learning_present:
             _ordinary_learning_proof(learning, os.path.join(repo, 'doc', 'harness', 'learnings.jsonl'))
         if retention is not None:
             from batch_finish import RETENTION_MARKER, validate_retention
@@ -1302,7 +1317,13 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     from verification_target import _spec
     task = _s1_path(os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id), True)
     store = os.path.join(task, 'work/verification-targets')
-    if not os.path.isdir(store):
+    if os.name == 'nt':
+        from wiki_platform import metadata_names, metadata_probe
+        store_info = metadata_probe(store)
+        store_present = store_info is not None and store_info['kind'] == 'dir'
+    else:
+        store_present = os.path.isdir(store)
+    if not store_present:
         ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
         return _thaw_namespace_history(repo, worktree, wbs_id)
     _s1_path(store, True)
@@ -1311,7 +1332,8 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
                 and checkpoint.get('harvest', {}).get('archived') == archive_task,
                 'task archive differs from durable removal checkpoint')
     directories, native_files = [], []
-    for token in os.listdir(store):
+    tokens = metadata_names(store, max_entries=100000) if os.name == 'nt' else os.listdir(store)
+    for token in tokens:
         if not re.fullmatch(r'[0-9a-f]{16}', token):
             continue
         # Disposal preserves history, including copies issued before fresh_run.
@@ -1329,7 +1351,9 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
             from wiki_platform import metadata_probe, metadata_tree_inventory
             target = Path(task) / relative
             native_files.append((target, hashlib.sha256(metadata).hexdigest(), metadata_probe(target)['identity'], False))
-        for name in os.listdir(os.path.join(store, token)):
+        location = os.path.join(store, token)
+        names = metadata_names(location, max_entries=100000) if os.name == 'nt' else os.listdir(location)
+        for name in names:
             if name != 'source' and not re.fullmatch(r'source-restored-[0-9a-f]{16}', name):
                 continue
             root = os.path.join(store, token, name)
@@ -1343,17 +1367,23 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
                         directory = row['kind'] == 'dir'
                         native_files.append((target, None if directory else row['sha256'],
                                              metadata_probe(target)['identity'], directory))
-            for current, dirs, files in os.walk(root):
-                _s1_path(current, True)
-                info = os.lstat(current)
-                directories.append((current, info.st_dev, info.st_ino, info.st_mode))
+            if os.name == 'nt':
+                from wiki_platform import _native
+                walk_root = _native._win32_path(root)
+            else:
+                walk_root = root
+            for current, dirs, files in os.walk(walk_root):
+                directory = os.path.normpath(os.path.join(root, os.path.relpath(current, walk_root)))
+                _s1_path(directory, True)
+                info = os.lstat(_native._win32_path(directory) if os.name == 'nt' else directory)
+                directories.append((directory, info.st_dev, info.st_ino, info.st_mode))
     # Inventory/proof must finish before any permission change.
     ordinary_removal_proof(repo, worktree, wbs_id, retention, checkpoint)
     for path, dev, ino, mode in directories:
         if os.name == "nt":
             from wiki_platform import trusted_metadata_directory
             with trusted_metadata_directory(Path(path)):
-                info = os.lstat(path)
+                info = os.lstat(_native._win32_path(path))
                 _s1_require((info.st_dev, info.st_ino, info.st_mode) == (dev, ino, mode),
                             'verification directory changed before disposal')
             continue
@@ -1376,6 +1406,72 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
             raise HarvestError(str(exc) + '; readonly restoration refused: ' + '; '.join(errors)) from exc
         raise
     return prepared
+
+
+def _remove_native_ordinary_worktree(repo, worktree, wbs_id, branch, checkpoint, *, git_runner):
+    """Replace Git's broken absolute-GIT_DIR status spawn after full proof.
+
+    The finish owner completes the ordinary byte/archive proof before unsealing
+    typed copies and releasing its lock. This check runs after that owned
+    unlock; it neither grants nor changes authority.
+    """
+    from _lib import read_wbs_control, wbs_control_status
+    from wiki_platform import metadata_probe
+    import batch_submodules
+
+    _s1_require(os.name == 'nt' and isinstance(checkpoint, dict)
+                and checkpoint.get('stage') == 'harvested' and checkpoint.get('closed') is True,
+                'Native ordinary removal requires the harvested closed generation')
+    tip = checkpoint.get('integrated_tip')
+    _s1_require(isinstance(tip, str) and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', tip)
+                and checkpoint.get('branch_tip') == tip and checkpoint.get('branch') == branch,
+                'Native ordinary removal branch checkpoint changed')
+    source = os.path.join(worktree, 'doc', 'harness', 'wbs', wbs_id)
+    archive = os.path.join(repo, 'doc', 'harness', 'archive', 'batch', wbs_id)
+    _s1_require(checkpoint.get('harvest', {}).get('archived') == archive,
+                'Native ordinary removal archive path changed')
+    for directory in (source, archive):
+        control = read_wbs_control(directory)
+        _s1_require(control and control.get('closed') is True
+                    and control.get('run_id') == checkpoint.get('run_id')
+                    and wbs_control_status(directory, control) == 'closed',
+                    'Native ordinary removal generation changed')
+    _verify_registered_worktree(repo, worktree)
+    admin = batch_submodules._admin(repo, worktree)
+    admin_identity = batch_submodules._identity(admin, True)
+    gitfile_identity = batch_submodules._identity(os.path.join(worktree, '.git'))
+    _s1_require(metadata_probe(os.path.join(admin, 'modules')) is None,
+                'ordinary worktree contains submodule administration')
+    for record in batch_submodules._git(worktree, 'ls-files', '--stage', '-z', gitdir=admin).split('\0'):
+        if record and record.startswith('160000 '):
+            path = record.split('\t', 1)[1]
+            _s1_require(metadata_probe(os.path.join(worktree, path, '.git')) is None,
+                        'ordinary worktree contains a populated submodule')
+    _s1_require(_s1_git_text(repo, 'symbolic-ref', '-q', 'HEAD') == checkpoint.get('destination_ref')
+                and _s1_git_text(repo, 'rev-parse', 'HEAD') == tip
+                and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin) == 'refs/heads/' + branch
+                and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip,
+                'Native ordinary removal branch or destination changed')
+    status = git_runner(worktree, '--git-dir=' + os.path.relpath(admin, worktree),
+                        'status', '--porcelain', '--ignore-submodules=none', '--untracked-files=all')
+    _s1_require(status.returncode == 0 and len(status.stdout) <= 4 * 1024 * 1024
+                and len(status.stderr) <= 4096
+                and not any(error in status.stderr for error in
+                            ('Permission denied', 'could not open directory', 'unable to open loose object')),
+                'cannot inspect Native ordinary worktree status')
+    _s1_require(not status.stdout, 'worktree contains modified or untracked files')
+    _verify_registered_worktree(repo, worktree)
+    _s1_require(batch_submodules._admin(repo, worktree) == admin
+                and batch_submodules._identity(admin, True) == admin_identity
+                and batch_submodules._identity(os.path.join(worktree, '.git')) == gitfile_identity
+                and metadata_probe(os.path.join(admin, 'modules')) is None,
+                'Native ordinary removal administration changed')
+    _s1_require(_s1_git_text(repo, 'symbolic-ref', '-q', 'HEAD') == checkpoint.get('destination_ref')
+                and _s1_git_text(repo, 'rev-parse', 'HEAD') == tip
+                and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin) == 'refs/heads/' + branch
+                and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip,
+                'Native ordinary removal branch or destination changed during status')
+    return git_runner(repo, 'worktree', 'remove', '--force', worktree)
 
 
 def ordinary_unregistered(repo, worktree):

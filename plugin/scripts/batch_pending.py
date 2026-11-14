@@ -42,7 +42,15 @@ def _control_root(repo):
     """Accept ordinary roots or exact, bidirectionally linked Git metadata."""
     root = os.path.realpath(os.fspath(repo))
     git = os.path.join(root, '.git')
-    if not os.path.lexists(git) or stat.S_ISDIR(os.lstat(git).st_mode):
+    if os.name == 'nt':
+        from wiki_platform import _native
+        try:
+            info = os.lstat(_native._win32_path(git))
+        except FileNotFoundError:
+            return root
+        if stat.S_ISDIR(info.st_mode):
+            return root
+    elif not os.path.lexists(git) or stat.S_ISDIR(os.lstat(git).st_mode):
         return root
     line = _pointer(git)
     owner.require(line.startswith('gitdir: '), 'invalid Git pointer')
@@ -88,7 +96,15 @@ def pending(repo):
     try:
         root = _control_root(repo)
         directory = os.path.join(root, 'doc/harness/runtime/batches')
-        if not os.path.lexists(directory):
+        if os.name == 'nt':
+            from pathlib import Path
+            from wiki_platform import metadata_probe, _native
+            present = metadata_probe(Path(directory)) is not None
+            disk_directory = _native._win32_path(directory)
+        else:
+            present = os.path.lexists(directory)
+            disk_directory = directory
+        if not present:
             # Check existing ancestors even when the leaf does not exist.
             try:
                 owner.parents(directory)
@@ -98,7 +114,7 @@ def pending(repo):
             return result
         owner.parents(directory)
         names = []
-        with os.scandir(directory) as entries:
+        with os.scandir(disk_directory) as entries:
             for index, entry in enumerate(entries):
                 owner.require(index < MAX_DIRECTORY_ENTRIES, 'directory limit')
                 if entry.name.endswith('.json'):
@@ -112,7 +128,7 @@ def pending(repo):
             owner.require(owner.IDENT.fullmatch(batch_id), 'invalid batch filename')
             path = os.path.join(directory, name)
             owner.safe(path)
-            total += os.lstat(path).st_size
+            total += os.lstat(_native._win32_path(path) if os.name == 'nt' else path).st_size
             owner.require(total <= MAX_TOTAL_BYTES, 'read budget')
             data = owner.validate(owner.read_json(path), root, batch_id)
             for item in data['requests']:

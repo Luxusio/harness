@@ -86,13 +86,13 @@ def safe(path, directory=False):
 def parents(path, create=False):
     if os.name == "nt":
         from pathlib import Path
-        from wiki_platform import trusted_metadata_directory, ensure_private_directory
+        from wiki_platform import trusted_metadata_directory, ensure_private_directory, metadata_probe
         target = Path(path).absolute()
         if create:
             ensure_private_directory(target)
-        if not target.exists():
+        if metadata_probe(target) is None:
             existing = target
-            while not existing.exists():
+            while metadata_probe(existing) is None:
                 existing = existing.parent
             with trusted_metadata_directory(existing):
                 raise Refusal(f'missing state directory: {path}')

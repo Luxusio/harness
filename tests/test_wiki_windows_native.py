@@ -964,3 +964,44 @@ def test_native_notice_observes_other_process_snapshot_lock(private):
     finally:
         child.communicate(timeout=5)
     assert "page 101" in notice.render_notice(request, "codex", env)
+
+
+def test_native_retained_metadata_read_allows_sibling_result_publication(private, monkeypatch):
+    directory = win.ensure_private_directory(private / "verification")
+    logs = win.ensure_private_directory(directory / "results.json.logs")
+    log, result = logs / "success.log", directory / "results.json"
+    original = b"retained diagnostic\n"
+    win.atomic_write(log, original)
+    win.atomic_write(result, b"old result\n")
+    entered, release = threading.Event(), threading.Event()
+    reads, errors = [], []
+    actual_read = win._ReadFile
+
+    def paused_read(handle, *args):
+        if threading.current_thread() is worker and not entered.is_set():
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("retained-reader release deadline")
+        return actual_read(handle, *args)
+
+    def read_log():
+        try:
+            reads.append(win.safe_metadata_snapshot(log, 1024)[0])
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=read_log)
+    monkeypatch.setattr(win, "_ReadFile", paused_read)
+    worker.start()
+    try:
+        # Pause at the genuine read, with its ordinary ancestry and leaf handles
+        # retained. A different metadata name must remain writable concurrently.
+        assert entered.wait(5), "reader did not reach the retained-handle boundary"
+        win.atomic_write(result, b"new result\n")
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive(), "retained-reader worker did not stop"
+    assert not errors and reads == [original]
+    assert win.safe_metadata_snapshot(result, 1024)[0] == b"new result\n"
+    assert win.safe_metadata_snapshot(log, 1024)[0] == original

@@ -496,6 +496,14 @@ def _with_codex_main_focus(args: dict, operation: Callable[..., dict]) -> dict:
     return result
 
 
+def _wbs_path_present(path):
+    """Inspect exact control/history presence without treating Native errors as absence."""
+    if os.name == "nt":
+        from wiki_platform import metadata_probe
+        return metadata_probe(Path(path).absolute()) is not None
+    return os.path.lexists(path)
+
+
 def handle_wbs_open(args: dict) -> dict:
     # Reject an already invalid control before creating session lock storage.
     # The implementation rechecks under its WBS lock before any mutation.
@@ -510,22 +518,22 @@ def handle_wbs_open(args: dict) -> dict:
     reserved_archives = (Path(repo_root, "doc/harness/archive/batch", legacy_dir.name),
                          Path(repo_root, "doc/harness/archive/batch", Path(wbs_dir).name))
     intent_only = False
-    if os.path.lexists(Path(wbs_dir, "WBS.json")) and not os.path.lexists(wbs_control_file(wbs_dir)):
+    if _wbs_path_present(Path(wbs_dir, "WBS.json")) and not _wbs_path_present(wbs_control_file(wbs_dir)):
         try:
             import wbs
             state = wbs.read_state(wbs_dir)
             intent_only = bool(state and state.get("pack_only") is True and state.get("run_id") == "")
         except (OSError, ValueError):
             pass  # Damaged current evidence cannot grant a new generation.
-    if (not os.path.lexists(wbs_control_file(wbs_dir))
-            and any(os.path.lexists(path) for path in (legacy_dir, *reserved_archives))
+    if (not _wbs_path_present(wbs_control_file(wbs_dir))
+            and any(_wbs_path_present(path) for path in (legacy_dir, *reserved_archives))
             and not intent_only and args.get("fresh_run", False) is False):
         return _err("This WBS identity has retained historical execution data.", data={
             "error_code": "historical_wbs_identity",
             "wbs_id": Path(wbs_dir).name,
             "next_action": 'Use wbs(action="migrate") for resumable legacy data. A deliberately new generation requires wbs(action="open", fresh_run=true); historical evidence is never promoted.',
         })
-    if os.path.lexists(wbs_control_file(wbs_dir)) and not read_wbs_control(wbs_dir):
+    if _wbs_path_present(wbs_control_file(wbs_dir)) and not read_wbs_control(wbs_dir):
         return _err(
             "wbs_open refused invalid WBS.control.json: unsupported WBS-control schema or unsafe control",
             data={
@@ -588,7 +596,7 @@ def _handle_wbs_open(
     tid = canonical_wbs_id(wbs_dir=wbs_dir, repo_root=repo_root)
     wbs.require_integrated_for_wbs(repo_root, tid, measure=False)
     existing_control_path = wbs_control_file(wbs_dir)
-    resumed_existing = os.path.lexists(existing_control_path)
+    resumed_existing = _wbs_path_present(existing_control_path)
     exact_session_id = _current_session_identity(control_root)
     codex_workspace = _server_runtime() == "codex" and args.get("workspace") is not None
     if codex_workspace or defer_binding:
@@ -605,7 +613,11 @@ def _handle_wbs_open(
             },
         )
     if not resumed_existing:
-        os.makedirs(wbs_dir, exist_ok=True)
+        if os.name == "nt":
+            from wiki_platform import ensure_private_directory
+            ensure_private_directory(Path(wbs_dir))
+        else:
+            os.makedirs(wbs_dir, exist_ok=True)
     transaction_stack = ExitStack()
     transaction_stack.enter_context(wbs_control_transaction(wbs_dir))
     prior_marker_snapshot = active_marker_snapshot(repo_root, session_id=session_id)

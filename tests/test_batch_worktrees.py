@@ -21,6 +21,7 @@ import batch_state as batch
 import batch_worktrees as managed
 import work_pack
 from test_batch_state import Pool, request, task, _git, _write, _head, RUN
+from test_batch_finish import _fixture_io
 
 
 def setup(tmp_path, monkeypatch, requests=None):
@@ -465,7 +466,7 @@ def test_ordinary_complete_retains_unknown_ignored_bytes_and_original_lock(tmp_p
     original_lock = lock_path.read_bytes()
     response = call(pool, spec, operation='complete', slug='a', worker_id='actual-a', result=result, worker_stopped=True)
     assert response['status'] == 'kept'
-    assert precious.read_text() == 'unique ignored evidence\n'
+    assert _fixture_io(precious).read_text() == 'unique ignored evidence\n'
     assert marker.read_bytes() == original_marker and lock_path.read_bytes() == original_lock
     assert _git('branch', '--list', result['branch'], cwd=pool.repo)
     assert response['operation_result']['cleanup']['unlocked'] is False
@@ -515,7 +516,7 @@ def test_reproducible_cache_directories_and_exact_closed_metadata_allow_disposal
     for name in ('.venv', 'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'):
         _write(worktree / name / 'generated-cache.bin', 'reproducible content\n')
     sessions = worktree / 'doc/harness/wbs/.active_sessions'
-    sessions.mkdir()
+    _fixture_io(sessions).mkdir()
     if markers == 'exact-marker':
         _write(sessions / 'closed-session.json', json.dumps(dict(session_id='closed-session', wbs_dir=str(worktree / 'doc/harness/wbs/WBS__a'),
                     wbs_id='WBS__a', run_id=RUN, updated='2026-10-20T00:00:00+00:00')))
@@ -621,7 +622,7 @@ def test_resume_missing_worktree_reports_retained_branch_without_new_task(tmp_pa
         call(pool, spec, operation='resume', slug='a', worker_stopped=True)
     assert pool.state.read_bytes() == before
     assert _git('rev-parse', 'refs/heads/' + handoff['branch'], cwd=pool.repo) == handoff['spawn_head']
-    assert (moved / 'doc/harness/wbs/WBS__a/WBS.control.json').is_file()
+    assert _fixture_io(moved / 'doc/harness/wbs/WBS__a/WBS.control.json').is_file()
 
 
 def test_managed_parallel_divergent_siblings_integrate_owned_subsets(tmp_path, monkeypatch):
