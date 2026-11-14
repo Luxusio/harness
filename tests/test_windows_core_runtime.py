@@ -1287,13 +1287,14 @@ def test_native_trusted_git_environment_clones_and_rebases_deep_paths_without_pe
     setup(*identity, "commit", "-qm", "fixture baseline")
     original = platform.metadata_tree_inventory(source, max_entries=1024, max_bytes=64 * 1024 * 1024)
 
-    deep = win.ensure_private_directory(private / ".local/share/wiki-atlassian-python/qa-db766")
-    while len(str(deep).encode("utf-16-le")) // 2 <= 300:
-        deep = win.ensure_private_directory(deep / ("retained-native-metadata-" + "depth" * 5))
-    clone_parent = win.ensure_private_directory(deep / "private-submodule/clone")
-    # Deep retained metadata is the reported boundary. A supported ordinary
-    # checkout cwd avoids conflating it with CreateProcess's cwd limit.
-    gitdir, checkout = clone_parent / "git", private / "deep git checkout"
+    # Git for Windows rejects an overlong GIT_DIR itself before cloning. The
+    # reported failure instead crosses MAX_PATH at the pack .keep file inside
+    # a supported gitdir. Retain that actual boundary and the original basetemp.
+    dirname = "retained-git"
+    padding = max(0, 220 - len(str(private).encode("utf-16-le")) // 2 - 1 - len(dirname))
+    gitdir = private / (dirname + "x" * padding)
+    checkout = private / "deep git checkout"
+    assert len(str(gitdir).encode("utf-16-le")) // 2 < 260
     assert len(str(gitdir / "objects/pack" / ("pack-" + "0" * 40 + ".keep")).encode("utf-16-le")) // 2 > 260
 
     decoy = win.ensure_private_directory(private / "unrelated ambient overrides")
