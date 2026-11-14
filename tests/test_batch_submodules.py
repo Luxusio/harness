@@ -20,8 +20,11 @@ def _helper():
 
 
 def _git(repo, *args):
+    # Fixture setup/inspection also needs Native long-path support; product
+    # calls independently strip ambient Git settings and supply their own.
+    paths = ["-c", "core.longpaths=true"] if os.name == "nt" else []
     result = subprocess.run(
-        ["git", "-c", "protocol.file.allow=always", *map(str, args)], cwd=repo,
+        ["git", "-c", "protocol.file.allow=always", *paths, *map(str, args)], cwd=repo,
         env={**os.environ, "GIT_AUTHOR_NAME": "S1 Test", "GIT_AUTHOR_EMAIL": "s1@example.test",
              "GIT_COMMITTER_NAME": "S1 Test", "GIT_COMMITTER_EMAIL": "s1@example.test"},
         capture_output=True, text=True,

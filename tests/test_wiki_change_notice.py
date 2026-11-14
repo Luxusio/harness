@@ -24,13 +24,29 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugin/scripts"
 EPOCH = "1" * 32
 
+if os.name == "nt":
+    sys.path.insert(0, str(SCRIPTS))
+    import _wiki_windows as win
+
+
+def _fixture_path(path):
+    # Extended spelling belongs only to fixture I/O, never hook inputs or HOME.
+    return Path(win._win32_path(path)) if os.name == "nt" else path
+
+
+def _fixture_directory(path, *, parents=False):
+    if os.name == "nt":
+        win.ensure_private_directory(path)
+    else:
+        path.mkdir(parents=parents)
+
 
 @pytest.fixture
 def setup_wiki(tmp_path):
     repo = tmp_path / "project"
-    (repo / "doc/harness").mkdir(parents=True)
-    (repo / "doc/harness/manifest.yaml").write_text("type: library\n")
-    (repo / ".git").mkdir()
+    _fixture_directory(repo / "doc/harness", parents=True)
+    _fixture_path(repo / "doc/harness/manifest.yaml").write_text("type: library\n")
+    _fixture_directory(repo / ".git")
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("HARNESS_", "CLAUDE_", "CODEX_", "WIKI_", "ATLASSIAN_"))}
     # Hooks intentionally execute python3; declare the parser-capable fixture interpreter.
@@ -44,18 +60,18 @@ def setup_wiki(tmp_path):
         ATLASSIAN_EMAIL="fixture@example.invalid",
         ATLASSIAN_API_TOKEN="fixture-token",
     )
-    (repo / "doc/harness/manifest.yaml").write_text(json.dumps({"type": "library", "wiki": {
+    _fixture_path(repo / "doc/harness/manifest.yaml").write_text(json.dumps({"type": "library", "wiki": {
         "backend": "atlassian", "enabled": True, "site": "https://example.invalid/",
         "spaces": [{"key": "TEAM", "rootPageId": "456"}],
     }}))
     identity = ["https://example.invalid", "fixture@example.invalid", "456", "TEAM"]
     partition = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
     control = tmp_path / "home/.local/share/wiki-atlassian" / partition / "confluence/TEAM/.sync"
-    control.mkdir(parents=True)
-    (control / "sync.lock").touch()
+    _fixture_directory(control, parents=True)
+    _fixture_path(control / "sync.lock").touch()
     credential = ["https://example.invalid", "fixture@example.invalid", "fixture-token"]
     binding = hashlib.sha256(json.dumps(credential, separators=(",", ":")).encode()).hexdigest()
-    (control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
+    _fixture_path(control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
     return repo, env, control
 
 
@@ -64,27 +80,27 @@ def page_event(seq, page, kind="updated"):
 
 
 def publish(control, events, head=None, epoch=EPOCH):
-    (control / "changes.json").write_text(json.dumps({
+    _fixture_path(control / "changes.json").write_text(json.dumps({
         "epoch": epoch, "head": len(events) if head is None else head, "events": events,
     }))
 
 
 def add_space(repo, env, key, root=None, **selection):
     path = repo / "doc/harness/manifest.yaml"
-    document = json.loads(path.read_text())
+    document = json.loads(_fixture_path(path).read_text())
     space = {"key": key, **selection}
     if root is not None:
         space["rootPageId"] = root
     document["wiki"]["spaces"].append(space)
-    path.write_text(json.dumps(document))
+    _fixture_path(path).write_text(json.dumps(document))
     identity = [document["wiki"]["site"].rstrip("/"), env["ATLASSIAN_EMAIL"], root or "*", key]
     partition = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
     control = Path(env["HOME"]) / ".local/share/wiki-atlassian" / partition / "confluence" / key / ".sync"
-    control.mkdir(parents=True)
-    (control / "sync.lock").touch()
+    _fixture_directory(control, parents=True)
+    _fixture_path(control / "sync.lock").touch()
     binding = hashlib.sha256(json.dumps([document["wiki"]["site"].rstrip("/"), env["ATLASSIAN_EMAIL"],
         env["ATLASSIAN_API_TOKEN"]], separators=(",", ":")).encode()).hexdigest()
-    (control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
+    _fixture_path(control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
     return control
 
 
@@ -109,7 +125,7 @@ def test_prompt_and_tool_hooks_deliver_once_per_session(setup_wiki, runtime):
     repo, env, control = setup_wiki
     publish(control, [])
     assert "wiki-changes" not in hook(repo, env, runtime=runtime, prompt=True)
-    assert not (control / "harness-cursors.json").exists()
+    assert not _fixture_path(control / "harness-cursors.json").exists()
     publish(control, [page_event(1, 101), page_event(2, 103, "comments")])
     context = hook(repo, env, runtime=runtime)
     assert "Document changed — page 101, observed version 2" in context
@@ -206,13 +222,13 @@ def test_replaced_token_reuses_feed_only_after_current_authorization(setup_wiki,
     publish(control, [page_event(1, 101)])
     replacement = dict(env, ATLASSIAN_API_TOKEN="replacement-token")
     assert not hook(repo, replacement)
-    assert not (control / "harness-cursors.json").exists()
+    assert not _fixture_path(control / "harness-cursors.json").exists()
     binding = hashlib.sha256(json.dumps(["https://example.invalid", "fixture@example.invalid", "replacement-token"],
         separators=(",", ":")).encode()).hexdigest()
-    (control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
+    _fixture_path(control / "state.json").write_text(json.dumps({"credentialBinding": binding}))
     assert "page 101" in hook(repo, replacement)
     assert not hook(repo, env, session="retired-session")
-    assert not (tmp_path / "ignored-override").exists()
+    assert not _fixture_path(tmp_path / "ignored-override").exists()
 
 
 def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, monkeypatch, selected_installer_python):
@@ -256,27 +272,27 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
 def test_configured_memory_guides_prompt_and_invalid_watch_stays_pending(setup_wiki):
     repo, env, control = setup_wiki
     path = repo / "doc/harness/manifest.yaml"
-    config = json.loads(path.read_text())
+    config = json.loads(_fixture_path(path).read_text())
     config["wiki"]["spaces"][0]["memoryPageId"] = "456"
-    path.write_text(json.dumps(config))
+    _fixture_path(path).write_text(json.dumps(config))
     context = hook(repo, env, prompt=True)
     assert "harness-wiki-memory" in context and "existing source reference" in context
     publish(control, [page_event(1, 101)])
     config["wiki"]["spaces"][0]["watchCommentPages"] = "101,101"
-    path.write_text(json.dumps(config))
+    _fixture_path(path).write_text(json.dumps(config))
     invalid = env
     assert "remain pending" in hook(repo, invalid, prompt=True)
     assert not hook(repo, invalid)
-    assert not (control / "harness-cursors.json").exists()
+    assert not _fixture_path(control / "harness-cursors.json").exists()
 
 
 @pytest.mark.parametrize("runtime", ["codex", "claude"])
 def test_payload_cwd_drives_both_hooks_and_old_environment_is_ignored(setup_wiki, tmp_path, runtime):
     repo, env, control = setup_wiki
-    process = tmp_path / "process"; process.mkdir()
+    process = tmp_path / "process"; _fixture_directory(process)
     # The process directory's local config must never replace payload selection.
-    (process / "doc/harness").mkdir(parents=True)
-    (process / "doc/harness/manifest.yaml").write_text('{"type":"library","wiki":{"enabled": false}}')
+    _fixture_directory(process / "doc/harness", parents=True)
+    _fixture_path(process / "doc/harness/manifest.yaml").write_text('{"type":"library","wiki":{"enabled": false}}')
     stale = dict(env, WIKI_ATLASSIAN_ENABLED="false", WIKI_ATLASSIAN_SITE="https://other.invalid",
                  WIKI_ATLASSIAN_ROOT_PAGE_ID="999")
     publish(control, [page_event(1, 101)])
@@ -287,19 +303,19 @@ def test_payload_cwd_drives_both_hooks_and_old_environment_is_ignored(setup_wiki
 def test_two_projects_share_home_scope_without_replay_and_different_scope_is_inert(setup_wiki, tmp_path):
     repo, env, control = setup_wiki
     other = tmp_path / "second-project"
-    (other / "doc/harness").mkdir(parents=True)
-    (other / "doc/harness/manifest.yaml").write_text("type: library\n")
-    (other / ".git").mkdir()
+    _fixture_directory(other / "doc/harness", parents=True)
+    _fixture_path(other / "doc/harness/manifest.yaml").write_text("type: library\n")
+    _fixture_directory(other / ".git")
     path = other / "doc/harness/manifest.yaml"
-    config = json.loads((repo / "doc/harness/manifest.yaml").read_text())
-    path.write_text(json.dumps(config))
+    config = json.loads(_fixture_path(repo / "doc/harness/manifest.yaml").read_text())
+    _fixture_path(path).write_text(json.dumps(config))
     publish(control, [page_event(1, 101)])
     assert "page 101" in hook(repo, env)
     assert not hook(other, env)  # same runtime/session already consumed shared feed
     assert "page 101" in hook(other, env, session="second-session")
-    config["wiki"]["spaces"][0]["rootPageId"] = "999"; path.write_text(json.dumps(config))
+    config["wiki"]["spaces"][0]["rootPageId"] = "999"; _fixture_path(path).write_text(json.dumps(config))
     assert not hook(other, env, session="different-root")
-    config["wiki"]["spaces"][0]["rootPageId"] = "456"; path.write_text(json.dumps(config))
+    config["wiki"]["spaces"][0]["rootPageId"] = "456"; _fixture_path(path).write_text(json.dumps(config))
     assert not hook(other, dict(env, ATLASSIAN_EMAIL="other@example.invalid"), session="different-account")
 
 
@@ -307,11 +323,11 @@ def test_disabled_or_missing_yaml_never_reads_feed(setup_wiki):
     repo, env, control = setup_wiki
     publish(control, [page_event(1, 101)])
     path = repo / "doc/harness/manifest.yaml"
-    path.write_text('{"type":"library","wiki":{"enabled": false}}')
+    _fixture_path(path).write_text('{"type":"library","wiki":{"enabled": false}}')
     assert not hook(repo, env)
-    path.write_text("type: library\n")
+    _fixture_path(path).write_text("type: library\n")
     assert not hook(repo, dict(env, WIKI_ATLASSIAN_ENABLED="true"))
-    assert not (control / "harness-cursors.json").exists()
+    assert not _fixture_path(control / "harness-cursors.json").exists()
 
 
 def test_two_spaces_deliver_labelled_notices_with_independent_shared_cursors(setup_wiki):
@@ -329,7 +345,7 @@ def test_two_spaces_deliver_labelled_notices_with_independent_shared_cursors(set
     context = hook(repo, env)
     assert "Space TEAM:" not in context and "page 202" in context
     assert "page 101" in hook(repo, env, session="independent-session")
-    assert (team / "harness-cursors.json").exists() and (dev / "harness-cursors.json").exists()
+    assert _fixture_path(team / "harness-cursors.json").exists() and _fixture_path(dev / "harness-cursors.json").exists()
 
 
 @pytest.mark.parametrize("failure", ["malformed", "denied", "transaction", "wrong-credential", "busy"])
@@ -341,21 +357,21 @@ def test_unavailable_first_space_does_not_suppress_other_space_or_consume_its_fe
     publish(team, [page_event(1, 101)])
     publish(dev, [page_event(1, 201)])
     if failure == "malformed":
-        (team / "changes.json").write_text("{malformed")
+        _fixture_path(team / "changes.json").write_text("{malformed")
     elif failure == "denied":
-        (team / "notice-access-denied").touch()
+        _fixture_path(team / "notice-access-denied").touch()
     elif failure == "transaction":
-        (team / "transaction.json").touch()
+        _fixture_path(team / "transaction.json").touch()
     elif failure == "wrong-credential":
-        (team / "state.json").write_text('{"credentialBinding":"wrong"}')
-    with (team / "sync.lock").open("r+b") as lock:
+        _fixture_path(team / "state.json").write_text('{"credentialBinding":"wrong"}')
+    with _fixture_path(team / "sync.lock").open("r+b") as lock:
         if failure == "busy":
             fcntl.lockf(lock, fcntl.LOCK_EX)
         context = hook(repo, env)
     assert "page 201" in context and "Space DEV:" in context
     assert "Space TEAM:" not in context
-    assert not (team / "harness-cursors.json").exists()
-    assert (dev / "harness-cursors.json").exists()
+    assert not _fixture_path(team / "harness-cursors.json").exists()
+    assert _fixture_path(dev / "harness-cursors.json").exists()
 
 
 def test_notice_budget_is_fair_across_maximum_spaces_and_does_not_advance_undelivered_events(setup_wiki):
@@ -370,21 +386,21 @@ def test_notice_budget_is_fair_across_maximum_spaces_and_does_not_advance_undeli
     assert first.count("More notices will appear") == 32
     assert first.count("If relevant to the current task") == 1
     for control in controls:
-        cursors = json.loads((control / "harness-cursors.json").read_text())
+        cursors = json.loads(_fixture_path(control / "harness-cursors.json").read_text())
         assert list(cursors.values()) == [[EPOCH, 1]]
     second = hook(repo, env)
     assert second.count("Document changed —") == 32
     for control in controls:
-        cursors = json.loads((control / "harness-cursors.json").read_text())
+        cursors = json.loads(_fixture_path(control / "harness-cursors.json").read_text())
         assert list(cursors.values()) == [[EPOCH, 2]]
 
 
 def test_memory_destinations_name_each_space_and_do_not_choose_the_first(setup_wiki):
     repo, env, control = setup_wiki
     path = repo / "doc/harness/manifest.yaml"
-    document = json.loads(path.read_text())
+    document = json.loads(_fixture_path(path).read_text())
     document["wiki"]["spaces"][0]["memoryPageId"] = "456"
-    path.write_text(json.dumps(document))
+    _fixture_path(path).write_text(json.dumps(document))
     add_space(repo, env, "DEV", memoryPageId="789")
     context = hook(repo, env, prompt=True)
     assert "TEAM: page 456" in context and "DEV: page 789" in context
@@ -410,9 +426,9 @@ def test_local_notice_path_requires_no_network_resolution(setup_wiki, monkeypatc
 def test_many_memory_destinations_use_bounded_explicit_selection_summary(setup_wiki):
     repo, env, control = setup_wiki
     path = repo / "doc/harness/manifest.yaml"
-    document = json.loads(path.read_text())
+    document = json.loads(_fixture_path(path).read_text())
     document["wiki"]["spaces"][0]["memoryPageId"] = "456"
-    path.write_text(json.dumps(document))
+    _fixture_path(path).write_text(json.dumps(document))
     for index in range(1, 32):
         add_space(repo, env, "S" + str(index), memoryPageId=str(456 + index))
     context = hook(repo, env, runtime="claude", prompt=True)

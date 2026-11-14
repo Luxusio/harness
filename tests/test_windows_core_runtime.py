@@ -1285,7 +1285,7 @@ def test_native_trusted_git_environment_clones_and_rebases_deep_paths_without_pe
     win.atomic_write(source / "base.txt", b"base\n")
     setup("add", "base.txt")
     setup(*identity, "commit", "-qm", "fixture baseline")
-    original = platform.metadata_tree_inventory(source)
+    original = platform.metadata_tree_inventory(source, max_entries=1024, max_bytes=64 * 1024 * 1024)
 
     deep = win.ensure_private_directory(private / ".local/share/wiki-atlassian-python/qa-db766")
     while len(str(deep).encode("utf-16-le")) // 2 <= 300:
@@ -1336,7 +1336,7 @@ def test_native_trusted_git_environment_clones_and_rebases_deep_paths_without_pe
     assert platform.safe_metadata_snapshot(checkout / "candidate.txt", 64)[0] == b"candidate\n"
     assert platform.safe_metadata_snapshot(checkout / "integration.txt", 64)[0] == b"integration\n"
     assert platform.safe_metadata_snapshot(gitdir / "config", 65536)[0] == clone_config
-    assert platform.metadata_tree_inventory(source) == original
+    assert platform.metadata_tree_inventory(source, max_entries=1024, max_bytes=64 * 1024 * 1024) == original
     assert platform.safe_metadata_snapshot(global_config, 65536)[0] == global_bytes
     assert list(decoy.iterdir()) == []
 
