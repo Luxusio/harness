@@ -811,6 +811,47 @@ class ReplicaTests(unittest.TestCase):
         self.assertFalse((self.replica.control / 'transaction.json').exists())
         self.assertIn('Retained descendant', self.replica.get_document(dict(document='212'))['content'])
 
+    def interrupt_reverse_topology_publication(self):
+        from unittest.mock import patch
+        import wiki_atlassian.replica as implementation
+        self.remote.pages['212'] = Page(Node('212', 'Child', '211', 'page', '20', 1), '<p>Retained descendant</p>')
+        self.replica.synchronize()
+        before, after = self.change('211', title='Operations.md', version=2)
+        self.replica.publish_verified(after, before)
+        before, after = self.change('211', title='Operations', version=3)
+        original = implementation.atomic_write
+        def interrupt_manifest(path, data):
+            if Path(path) == self.replica.control / 'manifest.json':
+                raise OSError('Synthetic interruption after reverse topology publication')
+            return original(path, data)
+        with patch.object(implementation, 'atomic_write', side_effect=interrupt_manifest), self.assertRaises(OSError):
+            self.replica.publish_verified(after, before)
+        self.assertTrue((self.replica.control / 'transaction.json').exists())
+        replacement = self.replica.base / 'pages/Knowledge/Operations.md'
+        self.assertTrue(replacement.is_file())
+        return replacement
+
+    def test_reverse_topology_replays_after_desired_file_replaces_old_subtree(self):
+        self.interrupt_reverse_topology_publication()
+        self.assertEqual('replica_recovery_pending', self.replica.get_document(dict(document='212'))['code'])
+        self.replica.synchronize()
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+        self.assertIn('Retained descendant', self.replica.get_document(dict(document='212'))['content'])
+        self.assertEqual('pages/Knowledge/Operations/Child.md', self.metadata('manifest.json')['pages']['212']['path'])
+
+    def test_reverse_topology_replay_preserves_mismatching_ancestor_bytes_and_journal(self):
+        replacement = self.interrupt_reverse_topology_publication()
+        unknown = b'SOURCE_REPO_BYTES: unrelated private content must survive'
+        atomic_write(replacement, unknown)
+        journal = (self.replica.control / 'transaction.json').read_bytes()
+        manifest = (self.replica.control / 'manifest.json').read_bytes()
+        with self.assertRaises(RemoteError) as caught:
+            self.replica.synchronize()
+        self.assertEqual('replica_path_collision', caught.exception.code)
+        self.assertEqual(unknown, replacement.read_bytes())
+        self.assertEqual(journal, (self.replica.control / 'transaction.json').read_bytes())
+        self.assertEqual(manifest, (self.replica.control / 'manifest.json').read_bytes())
+
     def test_expanded_markdown_generation_is_refused_before_any_journal(self):
         body = ''.join('<ac:image><ri:attachment ri:filename="'+('a'*4000)+str(i)+'" /></ac:image>' for i in range(980))
         self.assertLess(len(body.encode('utf-8')), 4*1024*1024)

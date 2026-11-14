@@ -1179,6 +1179,7 @@ class Replica:
         _, desired_directories = _owners(pages)
         obsolete_files = owned_canonical-desired_canonical
         total, entry_count, directory_entries = 0, 0, {}
+        published_ancestors = set()
         for relative in desired:
             _relative(relative)
             source = self._path(relative, stage) if relative in files else self._path(relative)
@@ -1214,6 +1215,8 @@ class Replica:
                     # Recovery can resume after Markdown reached disk but before
                     # the manifest did. Only byte-identical staged content is replayable.
                     permitted_existing = True
+                    if _canonical(relative) in prior_directories:
+                        published_ancestors.add(_canonical(relative))
                 else:
                     raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
             parent_info = metadata_probe(destination.parent)
@@ -1240,6 +1243,10 @@ class Replica:
                     raise RemoteError('replica_path_collision', 'Unowned file obstructs mirror publication')
         for row in prior.values():
             if row['path'] not in desired:
+                if any(_canonical(str(parent)) in published_ancestors for parent in PurePosixPath(row['path']).parents):
+                    # A byte-verified staged ancestor already replaced the old
+                    # subtree. Its obsolete children no longer have pathnames.
+                    continue
                 obsolete = self._path(row['path'])
                 obsolete_info = metadata_probe(obsolete)
                 if (_canonical(row['path']) in desired_directories and obsolete_info is not None
