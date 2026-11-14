@@ -467,6 +467,27 @@ def test_manifest_bound_refuses_more_than_sixteen_modules(tmp_path, monkeypatch)
         helper.validate_manifest(value)
 
 
+def test_git_refuses_successful_partial_inventory_with_object_read_error(tmp_path, monkeypatch):
+    import pytest
+    source = _repo(tmp_path / "source")
+    helper = _helper()
+    oid = _git(source, "rev-parse", "HEAD")
+    original = subprocess.run
+    attempted = []
+
+    def partial_inventory(command, *args, **kwargs):
+        if Path(command[0]).name.lower() in {"git", "git.exe"} and "for-each-ref" in command:
+            attempted.append(True)
+            return subprocess.CompletedProcess(command, 0, f"{oid} refs/heads/main\n".encode(),
+                b"error: unable to open loose object " + oid.encode() + b": Filename too long\n")
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", partial_inventory)
+    with pytest.raises(helper.SubmoduleError, match="Git could not inspect all content"):
+        helper._git(source, "for-each-ref", "--format=%(objectname) %(refname)")
+    assert attempted == [True]
+
+
 def test_preserve_ref_inventory_limit_refuses_before_destination_writes(tmp_path, monkeypatch):
     import pytest
     from test_batch_finish import _fixture_git_location

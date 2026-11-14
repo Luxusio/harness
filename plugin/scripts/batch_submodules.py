@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import subprocess
 
@@ -81,7 +82,12 @@ def _git(root, *args, allow=False, gitdir=None):
             conversion.extend(('-c', key + '=' + value))
     location = (['--git-dir=' + os.path.relpath(gitdir, root)]
                 if os.name == 'nt' and gitdir is not None else [])
-    command = [_git_executable(root, env), '--no-optional-locks', *conversion, '-c', 'core.fsmonitor=false',
+    executable = _git_executable(root, env)
+    if os.name == 'nt' and args[0] == 'fetch':
+        # Git's local transport strips process configuration before upload-pack.
+        service = shlex.quote(executable.replace('\\', '/')) + ' -c core.longpaths=true upload-pack'
+        args = ('fetch', '--upload-pack=' + service, *args[1:])
+    command = [executable, '--no-optional-locks', *conversion, '-c', 'core.fsmonitor=false',
                '-c', 'core.hooksPath=' + os.devnull, '-c', 'submodule.recurse=false',
                '-c', 'fetch.recurseSubmodules=false', '-c', 'protocol.allow=never',
                '-c', 'protocol.file.allow=always', '-c', 'maintenance.auto=false',
@@ -93,7 +99,8 @@ def _git(root, *args, allow=False, gitdir=None):
     _require(len(result.stdout) <= 4 * 1024 * 1024, 'Git inventory exceeds bound')
     if not allow:
         _require(result.returncode == 0, 'local Git operation refused: ' + args[0])
-        _require(not any(x in result.stderr for x in (b'Permission denied', b'could not open directory')), 'Git could not inspect all content')
+        _require(not any(x in result.stderr for x in (b'Permission denied', b'could not open directory',
+                                                     b'unable to open loose object')), 'Git could not inspect all content')
     return result if allow else os.fsdecode(result.stdout).strip('\n')
 
 

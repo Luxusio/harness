@@ -701,7 +701,8 @@ def _s1_removal_fixture(tmp_path, monkeypatch, count=1, tracked_link=False, pree
         with monkeypatch.context() as patch:
             patch.setattr(batch_finish, "_cleanup", stopped_after_durable_harvest)
             with _raises(SystemExit, match="after durable harvest"):
-                _native_s1_finish(fixture, {})
+                verdict = _native_s1_finish(fixture, {})
+                pytest.fail(f"Native finish returned before durable-harvest interruption: {verdict!r}")
         state = json.loads(fixture["state_path"].read_bytes())
         item = state["requests"][0]
         assert item["status"] == "integrating" and item["checkpoint"]["stage"] == "harvested"
