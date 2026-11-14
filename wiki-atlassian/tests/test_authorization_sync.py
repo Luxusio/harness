@@ -14,6 +14,7 @@ from wiki_atlassian.models import RemoteError
 from wiki_atlassian.multispace import MultiSpaceKnowledge
 from wiki_atlassian.remote import Remote
 from wiki_atlassian.replica import Replica
+from wiki_platform import metadata_probe, safe_read
 
 
 def connected(tmp_path):
@@ -127,7 +128,7 @@ def test_whole_space_final_bulk_401_fences_all_configured_spaces(tmp_path):
             manager.synchronize('DOC')
         assert failure.value.code == 'http_401' and failure.value.details['authorizationDenied']
         assert not manager.status()['ready']
-        assert all((slot.replica.control/'notice-access-denied').exists() for slot in manager.slots.values())
+        assert all(metadata_probe(slot.replica.control/'notice-access-denied') is not None for slot in manager.slots.values())
     finally:
         manager.close()
 
@@ -193,10 +194,10 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario
         worker.start()
         assert confirmed.wait(2)
         deadline = time.monotonic() + .5
-        while not (manager.slots['OTHER'].denied and (sibling.control / 'notice-access-denied').exists()) and time.monotonic() < deadline:
+        while not (manager.slots['OTHER'].denied and metadata_probe(sibling.control / 'notice-access-denied') is not None) and time.monotonic() < deadline:
             time.sleep(.01)
         assert manager.slots['OTHER'].denied
-        assert (sibling.control / 'notice-access-denied').exists()
+        assert metadata_probe(sibling.control / 'notice-access-denied') is not None
         assert 'content' not in manager.execute('get_document', dict(document='21'))
         independent = Replica(manager.slots['OTHER'].settings, remote)
         assert independent.get_document(dict(document='21'))['code'] == 'root_scope_denied'
@@ -217,7 +218,7 @@ def test_wrapped_401_fences_free_siblings_before_waiting_once(tmp_path, scenario
             worker.join(5)
     # A later call retries publication; the prior pending result is not durable state.
     assert manager._deny_all() == {}
-    assert (selected.control / 'notice-access-denied').exists()
+    assert metadata_probe(selected.control / 'notice-access-denied') is not None
     manager.close()
 
 
@@ -297,11 +298,11 @@ def test_hook_notice_read_and_denial_publication_share_the_same_lease(tmp_path, 
         with notice._directory(replica.control) as directory:
             result = notice._consume(directory, 'lease-test', replica.settings.credential_fingerprint, 'DOC', 8)
         assert observed and 'page 11, observed version 2' in result
-        assert not (replica.control / 'notice-access-denied').exists()
+        assert metadata_probe(replica.control / 'notice-access-denied') is None
         replica.deny()
-        cursor = (replica.control / 'harness-cursors.json').read_bytes()
+        cursor = safe_read(replica.control / 'harness-cursors.json', notice.MAX_BYTES, private=True)
         with notice._directory(replica.control) as directory:
             assert notice._consume(directory, 'new-session', replica.settings.credential_fingerprint, 'DOC', 8) == ''
-        assert (replica.control / 'harness-cursors.json').read_bytes() == cursor
+        assert safe_read(replica.control / 'harness-cursors.json', notice.MAX_BYTES, private=True) == cursor
     finally:
         manager.close()

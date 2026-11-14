@@ -281,7 +281,12 @@ def list_nested_repos(root: str, submodule_paths: set, worktrees: set, *, inspec
         info = _lstat_or_none(start)
         if info is None or not stat.S_ISDIR(info.st_mode):
             continue
-        for dirpath, dirnames, filenames in os.walk(start, onerror=unreadable):
+        disk_start = start
+        if os.name == "nt":
+            from wiki_platform import _native
+            disk_start = _native._win32_path(Path(start).absolute())
+        for disk_path, dirnames, filenames in os.walk(disk_start, onerror=unreadable):
+            dirpath = os.path.normpath(os.path.join(start, os.path.relpath(disk_path, disk_start)))
             if os.path.realpath(dirpath) == root:
                 dirnames[:] = [name for name in dirnames if name != ".git"]
                 continue
@@ -398,7 +403,11 @@ def status_entries(repo_dir: str) -> list:
 def _lstat_or_none(path: str):
     """``os.lstat(path)``, or None when it does not exist; any other error fails closed."""
     try:
-        return os.lstat(path)
+        disk_path = path
+        if os.name == "nt":
+            from wiki_platform import _native
+            disk_path = _native._win32_path(Path(path).absolute())
+        return os.lstat(disk_path)
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError as exc:

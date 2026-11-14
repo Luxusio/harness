@@ -63,6 +63,7 @@ try:
         wbs_control_status,
         current_session_id,
         is_harness_enabled_repo,
+        artifact_exists,
     )
 except Exception:
     # _lib unavailable: fail-open. `|| true` would mask an ImportError exit
@@ -884,8 +885,8 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
     if _is_workflow_control_surface(file_path, repo_root=repo_root):
         maint = False
         active_dir = resolve_session_wbs_binding(repo_root, current_session_id()).get("wbs_dir", "")
-        if active_dir and os.path.isdir(active_dir):
-            maint = os.path.isfile(os.path.join(active_dir, "MAINTENANCE"))
+        if active_dir and artifact_exists(active_dir, "WBS.control.json"):
+            maint = artifact_exists(active_dir, "MAINTENANCE")
         if not maint:
             rel = _rel(file_path, repo_root)
             human = (
@@ -946,7 +947,7 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         _deny("no-active-wbs", file_path, "plan-skill", human, repo_root)
         return 0
 
-    if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(wbs_root)):
+    if not (active_dir and artifact_exists(active_dir, "WBS.control.json") and active_dir.startswith(wbs_root)):
         human = (
             "Active WBS points to invalid path. On Codex invoke $harness:run "
             "to repair or resume routing before source writes."
@@ -954,10 +955,10 @@ def _check_path(data: dict, file_path: str, protected_only: bool = False) -> Non
         _deny("invalid-active", file_path, "plan-skill", human, repo_root)
         return 0
 
-    if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
+    if not artifact_exists(active_dir, "PLAN.md"):
         control = read_wbs_control(active_dir)
         micro_loop = control.get("execution_mode") == "micro"
-        if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")) and not micro_loop:
+        if not artifact_exists(active_dir, "MAINTENANCE") and not micro_loop:
             human = (
                 "PLAN.md does not exist yet. On Codex invoke $harness:run; "
                 "the public entry loads the internal plan phase."

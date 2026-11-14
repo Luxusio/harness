@@ -733,13 +733,14 @@ def test_default_marker_migration_covers_main_linked_roots_and_disposed_history(
 
 
 def test_explicit_default_marker_migration_unblocks_exact_ordinary_removal_proof(tmp_path, monkeypatch):
-    from test_batch_state import Pool, complete
+    from test_batch_finish import _fixture_io
+    from test_batch_state import Pool, complete, _git
     from _lib import wbs_control_transaction
     import batch_harvest
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
     pool.claim()
-    worktree, _, td = complete(pool)
+    worktree, branch, td = complete(pool)
     # The batch helper synthesizes closed control directly. A real Native WBS
     # lifecycle has already acquired its coordination lock before harvest.
     with wbs_control_transaction(td):
@@ -760,9 +761,15 @@ def test_explicit_default_marker_migration_unblocks_exact_ordinary_removal_proof
     assert not marker.exists()
     assert batch_harvest._tree_entries(str(td)) == batch_harvest._tree_entries(archive) == evidence
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), td.name, checkpoint=checkpoint)
-    pool.cli('recover', '--slug', 'a', '--worker-stopped')
-    pool.cli('finish', '--slug', 'a', '--resume')
-    assert not worktree.exists()
+    recovered = pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    if os.name == 'nt':
+        assert recovered['status'] == 'integrated', recovered
+    else:
+        assert recovered['status'] == 'returned', recovered
+        pool.cli('finish', '--slug', 'a', '--resume')
+    assert not _fixture_io(worktree).exists()
+    assert not _git('branch', '--list', branch, cwd=pool.repo)
+    assert batch_harvest._tree_entries(archive) == evidence
 
 
 def test_completed_control_migration_preserves_unreferenced_archived_task(tmp_path):

@@ -52,10 +52,10 @@ def _setup(
         loaded_dir.mkdir(parents=True)
         for name, content in loaded_files.items():
             (loaded_dir / name).write_text(content)
-        # The script needs its own module neighbours to import _lib. Files that
-        # exist only in the loaded tree are never counted as drift, so these
-        # copies do not perturb the comparison.
-        for helper in ("drift_warn.py", "_lib.py"):
+        # Include _lib's Native root-resolution dependencies as genuine loaded
+        # neighbours. Files present only in the loaded tree do not count as
+        # drift, so these copies do not perturb the comparison.
+        for helper in ("drift_warn.py", "_lib.py", "wiki_platform.py", "_wiki_windows.py"):
             shutil.copy2(SCRIPTS / helper, loaded_dir / helper)
         if loaded_pyc:
             pyc_dir = loaded_dir / "__pycache__"

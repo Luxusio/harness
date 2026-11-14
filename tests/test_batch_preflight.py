@@ -313,6 +313,19 @@ def test_deep_and_gitfile_nested_repos_are_found(monkeypatch, tmp_path):
     assert report["verdict"] == "ok", report
 
 
+def test_deep_nested_scan_preserves_logical_paths_and_registered_exclusions(tmp_path):
+    from test_batch_finish import _fixture_io
+    root = tmp_path / 'main'
+    nested = root / 'ignored/archive'
+    while len(str(nested).encode('utf-16-le')) // 2 <= 300:
+        nested /= 'retained-namespace-history'
+    _fixture_io(nested / '.git').mkdir(parents=True)
+    relative = nested.relative_to(root).as_posix()
+    assert mod.list_nested_repos(str(root), set(), set(), inspection_scopes=['ignored']) == [relative]
+    assert mod.list_nested_repos(str(root), set(), {os.path.realpath(nested)}, inspection_scopes=['ignored']) == []
+    assert mod.list_nested_repos(str(root), {relative}, set(), inspection_scopes=['ignored']) == []
+
+
 def test_registered_lead_worktree_under_root_is_not_a_nested_repo(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     main = _repo(tmp_path / "main", {"README.md": "r\n", ".gitignore": ".claude/worktrees/\n"})
@@ -1060,7 +1073,8 @@ def test_managed_discovery_never_walks_unrelated_ignored_history(monkeypatch, tm
     real_walk = mod.os.walk
 
     def owned_walk(path, *args, **kwargs):
-        assert not Path(path).is_relative_to(history), "unrelated history was inspected"
+        from test_batch_finish import _fixture_io
+        assert not Path(path).is_relative_to(_fixture_io(history)), "unrelated history was inspected"
         return real_walk(path, *args, **kwargs)
 
     monkeypatch.setattr(mod.os, "walk", owned_walk)
@@ -1114,7 +1128,8 @@ def test_managed_discovery_does_not_expand_an_ignored_ancestor(monkeypatch, tmp_
     real_walk = mod.os.walk
 
     def bounded_walk(path, *args, **kwargs):
-        assert Path(path).is_relative_to(owned), "ignored ancestor escaped ownership"
+        from test_batch_finish import _fixture_io
+        assert Path(path).is_relative_to(_fixture_io(owned)), "ignored ancestor escaped ownership"
         return real_walk(path, *args, **kwargs)
 
     monkeypatch.setattr(mod.os, "walk", bounded_walk)

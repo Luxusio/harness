@@ -124,7 +124,12 @@ class ChangesTests(unittest.TestCase):
         from wiki_atlassian.replica import Replica
         from wiki_platform import file_lock
         from test_replica import Native
-        with tempfile.TemporaryDirectory() as temporary:
+        temporary_directory = tempfile.TemporaryDirectory()
+        with temporary_directory as temporary:
+            if sys.platform == 'win32':
+                from wiki_platform import _native
+                # Keep the body at its ordinary path; only teardown needs the Native spelling.
+                temporary_directory.name = _native._win32_path(temporary)
             home = Path(temporary)
             credentials = Credentials('https://example.test', 'fixture@example.test', 'fixture-token')
             root = corpus_path(home / '.local/share/wiki-atlassian', credentials, 'COMMON', '210')

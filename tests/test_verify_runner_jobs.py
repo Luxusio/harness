@@ -1259,3 +1259,79 @@ def test_producer_manifest_budget_refuses_before_execution(tmp_path, monkeypatch
     assert not (tmp_path / 'executed').exists()
     assert all(not (tmp_path / name).exists() for name in outputs)
     assert not result['commands'][0].get('execution_pending')
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires actual Native directory sharing and private ACLs")
+@pytest.mark.parametrize("guard_kind", ["private-diagnostic", "external-diagnostic", "source-reader"])
+def test_native_log_validation_sharing_matches_its_actual_custody(tmp_path, monkeypatch, guard_kind):
+    from contextlib import contextmanager, nullcontext
+    from test_windows_core_runtime import _acl
+    import _wiki_windows as win
+    import wbs
+
+    logs = win.ensure_private_directory(tmp_path / "verification/results.json.logs")
+    source = logs / (runner._digest("alpha") + "-" + "0" * 16 + "-attempt.log")
+    destination = logs / (runner._digest("alpha") + "-success.log")
+    peer = logs / (runner._digest("beta") + "-" + "1" * 16 + "-attempt.log")
+    body, peer_body = b"completed diagnostic\r\n", b"peer diagnostic\r\n"
+    win.atomic_write(source, body)
+    win.atomic_write(peer, peer_body)
+    entered, release = threading.Event(), threading.Event()
+    failures = []
+    actual_walk = win._walk
+
+    @contextmanager
+    def paused_walk(value, **kwargs):
+        with actual_walk(value, **kwargs) as held:
+            if threading.current_thread() is worker and Path(value) == logs and not entered.is_set():
+                entered.set()
+                if not release.wait(10):
+                    raise RuntimeError("diagnostic guard release deadline")
+            yield held
+
+    def validate_peer():
+        try:
+            if guard_kind == "source-reader":
+                with win.trusted_source_directory(logs):
+                    pass
+            else:
+                wbs._diagnostic_path(peer, tmp_path)
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = threading.Thread(target=validate_peer)
+    monkeypatch.setattr(win, "_walk", paused_walk)
+    external = guard_kind == "external-diagnostic"
+    try:
+        if external:
+            # A real foreign-write DACL cannot authorize a private publisher.
+            _acl(logs, "(A;;GW;;;WD)")
+            with pytest.raises(ValueError, match="unsafe access"):
+                with win.trusted_metadata_directory(logs):
+                    pass
+        worker.start()
+        try:
+            assert entered.wait(5), "validator did not retain its actual directory handles"
+            context = nullcontext() if external else win.trusted_metadata_directory(logs)
+            with context:
+                if guard_kind == "private-diagnostic":
+                    os.replace(win._win32_path(source), win._win32_path(destination))
+                else:
+                    with pytest.raises(OSError) as denied:
+                        os.replace(win._win32_path(source), win._win32_path(destination))
+                    assert denied.value.winerror == 32
+        finally:
+            release.set()
+            worker.join(5)
+    finally:
+        release.set()
+        if worker.is_alive():
+            worker.join(5)
+        if external:
+            _acl(logs)
+    assert not worker.is_alive() and not failures, failures
+    retained = destination if guard_kind == "private-diagnostic" else source
+    assert win.safe_metadata_snapshot(retained, 1024)[0] == body
+    assert win.safe_metadata_snapshot(peer, 1024)[0] == peer_body
+    missing = source if guard_kind == "private-diagnostic" else destination
+    assert win.metadata_probe(missing) is None

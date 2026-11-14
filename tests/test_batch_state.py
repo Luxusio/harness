@@ -894,17 +894,18 @@ def test_unknown_integration_outcome_cannot_be_abandoned(tmp_path, monkeypatch, 
 
 
 def test_native_remove_refusal_restores_retention_marker_then_retry_succeeds(tmp_path, monkeypatch, capsys):
+    from test_batch_finish import _fixture_io
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
     pool.claim()
     worktree, branch = unbound_worktree(pool)
     pool.cli("bootstrap", "--slug", "a", "--worktree", worktree, "--branch", branch)
     marker = worktree / ".harness-batch-bootstrap"
-    marker_bytes = marker.read_bytes()
+    marker_bytes = _fixture_io(marker).read_bytes()
     pool.cli("bind", "--slug", "a", "--worker-id", "worker-a",
              "--worktree", worktree, "--branch", branch)
     directory = task(worktree, closed=True)
-    evidence = (directory / "WBS.control.json").read_bytes()
+    evidence = _fixture_io(directory / "WBS.control.json").read_bytes()
     _git("worktree", "lock", "--reason", "native agent retention", str(worktree), cwd=pool.repo)
     pool.cli(*pool.result("a", worktree, branch, "closed", run_id=RUN))
     module = load_state_module()
@@ -922,21 +923,61 @@ def test_native_remove_refusal_restores_retention_marker_then_retry_succeeds(tmp
             assert locked.returncode == 0, locked.stderr
         return original_run(command, *args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", refuse_native_remove)
-    assert module.main(pool.argv("finish", "--slug", "a")[2:]) != 0
+    if os.name == 'nt':
+        from wiki_platform import _native
+        tracked = worktree / 'a.txt'
+        tracked_before = (_fixture_io(tracked).read_bytes(), _fixture_io(tracked).stat().st_dev,
+                          _fixture_io(tracked).stat().st_ino)
+        actual_open = _native._open
+
+        def observe_blocked_delete(path, access, *args, **kwargs):
+            try:
+                return actual_open(path, access, *args, **kwargs)
+            except OSError as error:
+                if Path(path) == tracked and access & _native.DELETE:
+                    attempted.append((error.errno, error.winerror))
+                raise
+
+        reader = actual_open(tracked, _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+        try:
+            with monkeypatch.context() as boundary:
+                boundary.setattr(_native, '_open', observe_blocked_delete)
+                assert module.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+        finally:
+            _native._close(reader)
+    else:
+        with monkeypatch.context() as boundary:
+            boundary.setattr(subprocess, 'run', refuse_native_remove)
+            assert module.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
     capsys.readouterr()
-    monkeypatch.setattr(subprocess, "run", original_run)
-    assert attempted and worktree.exists()
-    assert marker.read_bytes() == marker_bytes
-    assert (directory / "WBS.control.json").read_bytes() == evidence
+    saved = json.loads(_fixture_io(pool.state).read_bytes())['requests'][0]
+    assert attempted == ([(32, None)] if os.name == 'nt' else [True]), saved.get('finish_result')
+    assert _fixture_io(worktree).exists()
+    assert _fixture_io(marker).read_bytes() == marker_bytes
+    assert _fixture_io(directory / 'WBS.control.json').read_bytes() == evidence
+    if os.name == 'nt':
+        assert (_fixture_io(tracked).read_bytes(), _fixture_io(tracked).stat().st_dev,
+                _fixture_io(tracked).stat().st_ino) == tracked_before
+    assert saved['checkpoint']['stage'] == 'harvested' and saved['checkpoint']['closed'] is True
+    assert saved['checkpoint']['run_id'] == RUN
+    archive = Path(saved['checkpoint']['harvest']['archived'])
+    assert _fixture_io(archive / 'WBS.control.json').read_bytes() == evidence
     listing = _git("worktree", "list", "--porcelain", cwd=pool.repo)
     assert any(line.startswith('worktree ') and os.path.realpath(line[9:]) == str(worktree)
                for line in listing.splitlines())
-    pool.cli("recover", "--slug", "a", "--worker-stopped")
-    if worktree.exists():
+    recovered = pool.cli('recover', '--slug', 'a', '--worker-stopped')
+    if os.name == 'nt':
+        assert recovered['status'] == 'integrated', recovered
+    else:
+        assert recovered['status'] == 'returned', recovered
         pool.cli("finish", "--slug", "a", "--resume")
-    assert not worktree.exists()
+    assert not _fixture_io(worktree).exists()
     assert not _git("branch", "--list", branch, cwd=pool.repo)
+    assert _fixture_io(archive / 'WBS.control.json').read_bytes() == evidence
+    current = json.loads(_fixture_io(pool.state).read_bytes())['requests'][0]
+    assert current['run_id'] == RUN and current['checkpoint']['run_id'] == RUN
+    if os.name == 'nt':
+        assert current['checkpoint'] == saved['checkpoint']
     pool.cli("close")
 
 

@@ -272,6 +272,10 @@ def host_snapshot(capacity=4, live=()):
 
 
 def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
+    if os.name == 'nt':
+        from wiki_platform import ensure_private_directory
+        while len(str(tmp_path).encode('utf-16-le')) // 2 < 180:
+            tmp_path = ensure_private_directory(tmp_path / 'deep-managed')
     pool, call = setup_parent(tmp_path, monkeypatch)
     nodes = [dict(id=k, title='Observable result ' + k, weight=1,
                   **({'depends_on': ['A']} if k == 'C' else {})) for k in ('A', 'B', 'C')]
@@ -289,6 +293,14 @@ def test_public_dispatch_admission_and_completion_refill(tmp_path, monkeypatch):
     directory = task(sibling, second['slug'])
     from test_harness_mcp_server import _write_marker_fixture
     _write_marker_fixture(str(sibling), str(directory), session_id='codex-prewrite-fixture')
+    assert check(pool.repo, sibling/'b.py') == {}
+    planned = directory / 'PLAN.md'
+    if os.name == 'nt':
+        assert len(str(planned).encode('utf-16-le')) // 2 > 260
+    original_plan = _fixture_io(planned).read_bytes()
+    _fixture_io(planned).unlink()
+    assert 'C-02-plan-first' in check(pool.repo, sibling/'b.py')['permissionDecisionReason']
+    _fixture_io(planned).write_bytes(original_plan)
     assert check(pool.repo, sibling/'b.py') == {}
     assert check(pool.repo, sibling/'a.py').get('permissionDecision') == 'deny'
     worktree = Path(first['worktree'])
@@ -565,6 +577,13 @@ def test_native_linked_direct_ignores_foreign_write_main_and_preserves_source(tm
     try:
         assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
         assert check(tree, source) == {}
+        import wbs_namespace_migration as migration
+        manifest = pool.repo / migration.MANIFEST
+        _fixture_io(manifest.parent).mkdir(parents=True, exist_ok=True)
+        _fixture_io(manifest).write_text('{"version":1,"status":"complete"}')
+        refused = check(tree, source)
+        assert refused['permissionDecision'] == 'deny'
+        assert 'wbs-migration-required' in refused['permissionDecisionReason']
         assert source.read_bytes() == b'uncommitted user bytes\x00\xff'
         assert all((_fixture_io(directory / name)).read_bytes() == raw for name, raw in controls.items())
     finally:

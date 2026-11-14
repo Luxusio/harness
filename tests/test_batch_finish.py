@@ -910,21 +910,31 @@ def test_removal_refusal_relocks_with_the_original_reason(tmp_path, monkeypatch)
     lead = Lead(main, "sticky")
     lead.commit_files({"s.txt": "s\n"})
     real_git = mod._git
+    attempted = []
 
     def refuse_removal(cwd, *args):
-        if args[:2] == ("worktree", "remove"):
-            _write(lead.worktree / "late-untracked.txt", "x\n")
+        if os.name == 'nt' and args[:2] == ("worktree", "unlock"):
+            result = real_git(cwd, *args)
+            assert result.returncode == 0
+            _fixture_io(lead.worktree / "late-untracked.txt").write_bytes(b"x\n")
+            attempted.append(True)
+            return result
+        if os.name != 'nt' and args[:2] == ("worktree", "remove"):
+            _fixture_io(lead.worktree / "late-untracked.txt").write_bytes(b"x\n")
+            attempted.append(True)
         return real_git(cwd, *args)
 
     monkeypatch.setattr(mod, "_git", refuse_removal)
     result = lead.finish()
+    assert attempted == [True], result
     assert result["status"] == "kept", result
-    assert "git worktree remove" in result["reason"]
+    assert ("unknown ignored or untracked" if lead.owner else "git worktree remove") in result["reason"]
     assert result["integrated_tip"] == _head(main)
     assert result["cleanup"] == {
         "unlocked": True, "relocked": True, "removed": False, "branch_deleted": False,
     }
-    assert lead.worktree.is_dir()
+    assert _fixture_io(lead.worktree).is_dir()
+    assert _fixture_io(lead.worktree / "late-untracked.txt").read_bytes() == b"x\n"
     assert _lock_reason(main, lead.worktree) == LOCK_REASON
 
 
@@ -1238,6 +1248,8 @@ def test_exceptional_removal_restores_lock_and_preserves_failure(
     main = _main(tmp_path, monkeypatch)
     lead = Lead(main, "remove-error")
     lead.commit_files({"change.txt": "committed\n"})
+    control = lead.worktree / 'doc/harness/wbs' / lead.wbs_id / 'WBS.control.json'
+    control_bytes = _fixture_io(control).read_bytes() if lead.owner else None
     real_run = subprocess.run
 
     def remove_raises(command, *args, **kwargs):
@@ -1259,7 +1271,7 @@ def test_exceptional_removal_restores_lock_and_preserves_failure(
     assert result["cleanup"]["relocked"] is not relock_fails
     assert not result["cleanup"]["removed"]
     assert not result["cleanup"]["branch_deleted"]
-    assert lead.worktree.is_dir()
+    assert _fixture_io(lead.worktree).is_dir() is (lead.owner is None)
     assert _tip(main, lead.branch) == lead.commit
     if relock_fails:
         assert "relock unavailable" in result["reason"]
@@ -1267,6 +1279,26 @@ def test_exceptional_removal_restores_lock_and_preserves_failure(
         assert _lock_reason(main, lead.worktree) is None
     else:
         assert _lock_reason(main, lead.worktree) == LOCK_REASON
+    if lead.owner:
+        # Native file retirement has completed before this final Git failure.
+        archive = main / 'doc/harness/archive/batch' / lead.wbs_id
+        assert _fixture_io(archive / 'WBS.control.json').read_bytes() == control_bytes
+        assert _git('show', 'refs/heads/' + lead.branch + ':change.txt', cwd=main) == 'committed'
+        state_path = main / 'doc/harness/runtime/batches' / (lead.owner.batch + '.json')
+        saved = next(item for item in json.loads(_fixture_io(state_path).read_bytes())['requests']
+                     if item['slug'] == lead.name)
+        assert saved['checkpoint']['stage'] == 'harvested' and saved['checkpoint']['closed'] is True
+        assert saved['checkpoint']['run_id'] == json.loads(control_bytes)['run_id']
+        entries = mod.batch_harvest._tree_entries(str(archive))
+        monkeypatch.setattr(subprocess, 'run', real_run)
+        recovered = lead.owner.call('recover', '--slug', lead.name, '--worker-stopped')
+        assert recovered['status'] == 'integrated', recovered
+        assert not _fixture_io(lead.worktree).exists()
+        assert _git('branch', '--list', lead.branch, cwd=main) == ''
+        current = next(item for item in json.loads(_fixture_io(state_path).read_bytes())['requests']
+                       if item['slug'] == lead.name)
+        assert current['checkpoint'] == saved['checkpoint']
+        assert mod.batch_harvest._tree_entries(str(archive)) == entries
 
 
 def test_main_checkout_identity_change_preserves_original_ref_and_lead(
@@ -1844,12 +1876,15 @@ def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_
         (lead.worktree / mod.RETENTION_MARKER).write_bytes(mod.retention_bytes(retention))
         mod.batch_harvest.harvest(str(main), str(lead.worktree), lead.wbs_id)
     real_git = mod._git
+    returned_error = []
     def partial_remove(repo, *args):
         if args[:2] == ('worktree', 'remove'):
             removed = real_git(repo, *args)
             assert removed.returncode == 0
-            lead.worktree.mkdir()
-            (lead.worktree / 'change.txt').write_text('committed\n')
+            if lead.owner is None:
+                lead.worktree.mkdir()
+                (lead.worktree / 'change.txt').write_text('committed\n')
+            returned_error.append(True)
             return subprocess.CompletedProcess(args, 7, '', 'original Git removal detail')
         return real_git(repo, *args)
     monkeypatch.setattr(mod, '_git', partial_remove)
@@ -1865,7 +1900,25 @@ def test_partial_remove_keeps_original_git_error_when_marker_cannot_restore(tmp_
         except mod.Outcome as exc:
             assert exc.status == 'kept'
             reason = exc.reason
+    assert returned_error == [True]
     assert 'exit 7' in reason and 'original Git removal detail' in reason
-    assert 'partial residue and branch retained' in reason
+    assert ('branch retained' if lead.owner else 'partial residue and branch retained') in reason
     assert 'worktree kept' not in reason
-    assert lead.worktree.exists() and _tip(main, lead.branch) == lead.commit
+    assert _fixture_io(lead.worktree).exists() is (lead.owner is None)
+    assert _tip(main, lead.branch) == lead.commit
+    if lead.owner:
+        archive = main / 'doc/harness/archive/batch' / lead.wbs_id
+        entries = mod.batch_harvest._tree_entries(str(archive))
+        state_path = main / 'doc/harness/runtime/batches' / (lead.owner.batch + '.json')
+        saved = next(item for item in json.loads(_fixture_io(state_path).read_bytes())['requests']
+                     if item['slug'] == lead.name)
+        assert saved['checkpoint']['stage'] == 'harvested' and saved['checkpoint']['closed'] is True
+        assert _git('show', 'refs/heads/' + lead.branch + ':change.txt', cwd=main) == 'committed'
+        monkeypatch.setattr(mod, '_git', real_git)
+        recovered = lead.owner.call('recover', '--slug', lead.name, '--worker-stopped')
+        assert recovered['status'] == 'integrated', recovered
+        assert _git('branch', '--list', lead.branch, cwd=main) == ''
+        current = next(item for item in json.loads(_fixture_io(state_path).read_bytes())['requests']
+                       if item['slug'] == lead.name)
+        assert current['checkpoint'] == saved['checkpoint']
+        assert mod.batch_harvest._tree_entries(str(archive)) == entries

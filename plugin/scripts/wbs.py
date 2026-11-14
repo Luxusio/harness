@@ -744,9 +744,19 @@ def _diagnostic_path(path, repo, policy=None):
         existing = path.parent
         while not os.path.lexists(_native._win32_path(existing)):
             existing = existing.parent
-        with _native._walk(existing, owner_neutral=True):
+        with ExitStack() as ancestry:
+            # Verified metadata ancestry permits sibling log publication.
+            # External paths retain the original restrictive source-style lease.
+            private_metadata = False
+            try:
+                ancestry.enter_context(_native._walk(existing, secure=True, writing=True))
+            except (PermissionError, ValueError):
+                ancestry.enter_context(_native._walk(existing, owner_neutral=True))
+            else:
+                private_metadata = True
             if os.path.lexists(_native._win32_path(path)):
-                with _native._walk(path.parent, owner_neutral=True):
+                with _native._walk(path.parent, secure=private_metadata, writing=private_metadata,
+                                   owner_neutral=not private_metadata):
                     handle = _native._open(path, 0, owner_neutral=True, allow_hardlinks=True)
                     _native._close(handle)
     if policy is not None and path.is_relative_to(Path(repo).resolve()):

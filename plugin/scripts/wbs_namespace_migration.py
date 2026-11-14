@@ -38,8 +38,14 @@ def require(ok, message):
 def _present(path):
     """Inspect migration metadata without treating Native path errors as absence."""
     if os.name == "nt":
-        from wiki_platform import metadata_probe
-        return metadata_probe(Path(path).absolute()) is not None
+        from wiki_platform import _native
+        # Unused absent metadata does not select its ancestors for trust checks.
+        # Selected objects still pass the migration reader's ownership checks.
+        try:
+            os.lstat(_native._win32_path(Path(path).absolute()))
+            return True
+        except (FileNotFoundError, NotADirectoryError):
+            return False
     return os.path.lexists(path)
 
 
