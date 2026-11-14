@@ -96,17 +96,17 @@ def stopped_legacy_lead(tmp_path, monkeypatch, *, frozen=False, checkpoint=False
     _git('add', 'a.txt', cwd=worktree)
     _git('commit', '-qm', 'implementation', '--trailer', 'Harness-Task: TASK__a', cwd=worktree)
     current = task(worktree, 'a', closed=True)
-    (current / 'historical-review.bin').write_bytes(b'Original TASK__a review\x00\xff' + (b'x' * (128 * 1024) if large else b''))
+    _fixture_io(current / 'historical-review.bin').write_bytes(b'Original TASK__a review\x00\xff' + (b'x' * (128 * 1024) if large else b''))
     if historical_link:
         external = tmp_path / 'outside-sentinel'
         if historical_link == 'directory':
-            external.mkdir()
-            (external / 'precious.bin').write_bytes(b'outside bytes must survive')
+            _fixture_io(external).mkdir()
+            _fixture_io(external / 'precious.bin').write_bytes(b'outside bytes must survive')
         else:
-            external.write_bytes(b'outside bytes must survive')
+            _fixture_io(external).write_bytes(b'outside bytes must survive')
         link = current / 'work/link-to-external'
-        link.parent.mkdir()
-        create_symlink(link, external, target_is_directory=historical_link == 'directory')
+        _fixture_io(link.parent).mkdir()
+        create_symlink(_fixture_io(link), external, target_is_directory=historical_link == 'directory')
     if frozen:
         snapshot = current / 'work/verification-targets/0123456789abcdef/source'
         _fixture_io(snapshot).mkdir(parents=True)
@@ -117,15 +117,15 @@ def stopped_legacy_lead(tmp_path, monkeypatch, *, frozen=False, checkpoint=False
         _fixture_io(snapshot).chmod(0o500)
     pool.cli(*pool.result('a', worktree, branch, 'closed', 'actual-worker', run_id=RUN))
     old = worktree / 'doc/harness/tasks/TASK__a'
-    old.parent.mkdir(parents=True, exist_ok=True)
-    current.rename(old)
-    (old / 'WBS.control.json').rename(old / 'TASK.json')
+    _fixture_io(old.parent).mkdir(parents=True, exist_ok=True)
+    _fixture_io(current).rename(_fixture_io(old))
+    _fixture_io(old / 'WBS.control.json').rename(_fixture_io(old / 'TASK.json'))
     if checkpoint:
         path = worktree / 'doc/harness/checkpoints/TASK__a.md'
-        path.parent.mkdir(parents=True)
-        path.write_text('# Checkpoint — TASK__a\n\n- written: earlier\n\n## Task state\nclosed\n\n## Progress\nreviewed\n\n## Next action\nfinish\n')
+        _fixture_io(path.parent).mkdir(parents=True)
+        _fixture_io(path).write_text('# Checkpoint — TASK__a\n\n- written: earlier\n\n## Task state\nclosed\n\n## Progress\nreviewed\n\n## Next action\nfinish\n')
 
-    pool.state.write_text(json.dumps(retire_pool_identity(json.loads(pool.state.read_text()))))
+    _fixture_io(pool.state).write_text(json.dumps(retire_pool_identity(json.loads(_fixture_io(pool.state).read_text()))))
     # The fixture injects original on-disk data, then uses the real importer
     # body. Public migration writer authentication is tested separately.
     assert migration.apply.__wrapped__(pool.repo)['status'] == 'complete'

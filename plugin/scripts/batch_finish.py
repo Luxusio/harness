@@ -531,12 +531,15 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
     except batch_harvest.HarvestError as exc:
         note = _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         kind = 'ordinary' if submodules is None else 'S1'
-        raise Outcome("kept", f"{kind} removal proof refused, worktree kept: {exc}{note}") from exc
+        raise Outcome("kept", f"{kind} removal proof refused: {exc}{note}") from exc
     except (Exception, KeyboardInterrupt) as exc:
         note = _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         raise FinishError(f"{type(exc).__name__}: {exc}{note}") from exc
     if removed.returncode != 0:
         reason = f"`git worktree remove` failed (exit {removed.returncode}): {_detail(removed)}"
+        if os.name == 'nt' and submodules is None:
+            reason += ('; captured worktree body retired; branch and preserved archive retained; '
+                       'use the batch owner recover command with --worker-stopped')
         reason += _removal_failure_note(repo, worktree, lock, cleanup, prepared)
         if cleanup.get('marker_restore_error'):
             reason += '; marker restoration failed: ' + cleanup['marker_restore_error']

@@ -37,6 +37,7 @@ def _write(path, text):
 def pytest_generate_tests(metafunc):
     cases = {
         "s1_resume_worker": ["worker-a", "replacement-worker"],
+        "sealed_refusal": ["sealed-file", "final-git", "final-git-recreated"],
         "capacity": [(None, None, 3), ("2", None, 2), ("99", None, 8),
                      (None, "2", 2), (None, "true", 3), (None, "'2'", 3),
                      (None, "0", 3), ("1", "4", 1)],
@@ -1457,20 +1458,20 @@ def test_native_disposal_keeps_readonly_on_identity_or_content_mismatch(tmp_path
     assert safe_metadata_snapshot(path, 1024) == (changed, writable)
 
 
-def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path, monkeypatch, capsys):
+def test_native_sealed_retirement_refusal_preserves_readonly_archive_and_recovers(tmp_path, monkeypatch, capsys, sealed_refusal):
     from test_batch_finish import _fixture_io
     import pytest
     if os.name != 'nt':
-        pytest.skip('requires real Native readonly attributes and Git refusal')
+        pytest.skip('requires real Native readonly retirement and Git refusal')
     monkeypatch.syspath_prepend(str(SCRIPT.parent))
     import batch_state
     import verification_target
     from test_wbs import wbs, plan, node
-    from wiki_platform import safe_metadata_snapshot
+    from wiki_platform import _native, safe_metadata_snapshot
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
     pool.claim()
-    tree, _, directory = complete(pool)
+    tree, branch, directory = complete(pool)
     state = wbs.prepare(str(directory), plan([node()]), RUN, now=100)
     (_fixture_io(directory / 'WBS.json')).write_text(wbs.encode_state(state))
     target = verification_target.issue_target(str(directory), str(tree), dict(
@@ -1489,22 +1490,71 @@ def test_native_sealed_source_refusal_restores_attributes_before_retry(tmp_path,
                             cwd=pool.repo, capture_output=True, text=True)
             assert result.returncode == 0, result.stderr
         return actual(command, *args, **kwargs)
-    with monkeypatch.context() as boundary:
-        boundary.setattr(subprocess, 'run', lock_at_removal)
-        assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+    if sealed_refusal == 'sealed-file':
+        actual_open = _native._open
+
+        def observe_blocked_delete(path, access, *args, **kwargs):
+            try:
+                return actual_open(path, access, *args, **kwargs)
+            except OSError as error:
+                if Path(path) == paths[0] and access & _native.DELETE:
+                    attempted.append((error.errno, error.winerror))
+                raise
+
+        reader = actual_open(paths[0], _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
+        try:
+            with monkeypatch.context() as boundary:
+                boundary.setattr(_native, '_open', observe_blocked_delete)
+                assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
+        finally:
+            _native._close(reader)
+    else:
+        with monkeypatch.context() as boundary:
+            boundary.setattr(subprocess, 'run', lock_at_removal)
+            assert batch_state.main(pool.argv('finish', '--slug', 'a')[2:]) != 0
     capsys.readouterr()
-    assert attempted and _fixture_io(tree).exists()
-    for path in paths:
-        raw, stamp = safe_metadata_snapshot(path, 1024 * 1024)
-        assert raw == before[path][0] and stamp[:4] == before[path][1][:4] and stamp[4] & 1
-    assert (_fixture_io(view).stat().st_dev, _fixture_io(view).stat().st_ino) == view_identity and _fixture_io(view).stat().st_file_attributes & 1
-    result = pool.cli('finish', '--slug', 'a', '--resume')
-    assert result['status'] == 'integrated' and not _fixture_io(tree).exists()
+    saved = json.loads(_fixture_io(pool.state).read_bytes())['requests'][0]
+    assert saved['checkpoint']['stage'] == 'harvested' and saved['checkpoint']['closed'] is True
+    assert saved['checkpoint']['run_id'] == RUN and saved['run_id'] == RUN
+    assert _git('rev-parse', 'refs/heads/' + branch, cwd=pool.repo) == saved['checkpoint']['branch_tip']
     archive = pool.repo / 'doc/harness/archive/batch/WBS__a'
     for path in paths:
         raw, stamp = safe_metadata_snapshot(archive / path.relative_to(directory), 1024 * 1024)
         assert raw == before[path][0] and stamp[4] & 1
     assert (_fixture_io(archive / view.relative_to(directory))).stat().st_file_attributes & 1
+    if sealed_refusal == 'sealed-file':
+        assert attempted == [(32, None)] and _fixture_io(tree).exists()
+        for path in paths:
+            raw, stamp = safe_metadata_snapshot(path, 1024 * 1024)
+            assert raw == before[path][0] and stamp[:4] == before[path][1][:4] and stamp[4] & 1
+        assert (_fixture_io(view).stat().st_dev, _fixture_io(view).stat().st_ino) == view_identity
+        assert _fixture_io(view).stat().st_file_attributes & 1
+    else:
+        assert attempted == [True] and not _fixture_io(tree).exists()
+    if sealed_refusal == 'final-git-recreated':
+        _fixture_io(tree).mkdir()
+        precious = tree / 'precious-recreated-root.bin'
+        _fixture_io(precious).write_bytes(b'new unowned bytes must survive recovery\n')
+        identity = (_fixture_io(tree).stat().st_dev, _fixture_io(tree).stat().st_ino,
+                    _fixture_io(precious).stat().st_dev, _fixture_io(precious).stat().st_ino)
+        registration = _git('worktree', 'list', '--porcelain', '-z', cwd=pool.repo)
+        refused = pool.cli('recover', '--slug', 'a', '--worker-stopped', ok=False)
+        assert refused['status'] == 'refused', refused
+        assert _fixture_io(precious).read_bytes() == b'new unowned bytes must survive recovery\n'
+        assert (_fixture_io(tree).stat().st_dev, _fixture_io(tree).stat().st_ino,
+                _fixture_io(precious).stat().st_dev, _fixture_io(precious).stat().st_ino) == identity
+        assert _git('worktree', 'list', '--porcelain', '-z', cwd=pool.repo) == registration
+        assert _git('rev-parse', 'refs/heads/' + branch, cwd=pool.repo) == saved['checkpoint']['branch_tip']
+    else:
+        result = pool.cli('recover', '--slug', 'a', '--worker-stopped')
+        assert result['status'] == 'integrated' and not _fixture_io(tree).exists(), result
+        assert _git('branch', '--list', branch, cwd=pool.repo) == ''
+    current = json.loads(_fixture_io(pool.state).read_bytes())['requests'][0]
+    assert current['run_id'] == RUN and current['checkpoint'] == saved['checkpoint']
+    for path in paths:
+        raw, stamp = safe_metadata_snapshot(archive / path.relative_to(directory), 1024 * 1024)
+        assert raw == before[path][0] and stamp[4] & 1
+    assert _fixture_io(archive / view.relative_to(directory)).stat().st_file_attributes & 1
 
 
 def test_native_finish_preserves_crlf_learning_rows_across_harvest_retry(tmp_path, monkeypatch, capsys):

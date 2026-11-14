@@ -53,7 +53,13 @@ Derived Native adaptation, based on that completion/preservation intent and
 retain captured source objects through the final preservation proof and clean
 status check, then retire only unchanged current names through retained handles.
 Remove directories only when empty and remove Git registration without force.
-New or replaced work remains retained. Interrupted disposal reuses the existing
+Keep custody of the retired root name and its ancestors until Git registration
+cleanup returns, so that cleanup cannot delete a replacement body. If the body
+is already absent, closed-checkpoint recovery validates current canonical Git
+administration before exclusively reserving a private empty name; an existing
+replacement is never adopted. A failure after body retirement reports the
+preserved archive and branch, with explicit stopped-worker recovery as the next
+step. New or replaced work remains retained. Interrupted disposal reuses the existing
 closed, harvested checkpoint and archive to prove any remaining subset; missing
 authority or unknown content requires explicit recovery and preserves the branch.
 This mechanism is an implementation decision, not a user request for force.

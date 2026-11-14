@@ -1453,7 +1453,11 @@ def _native_ordinary_custody(worktree):
 
 
 def _retire_native_ordinary_tree(worktree, held):
-    """Retire only current captured names; directory disposition is empty-only."""
+    """Retire captured names, returning the pending-delete original root handle.
+
+    The caller must retain its custody context and this handle through any Git
+    registration cleanup, then close the handle before releasing parent pins.
+    """
     import ctypes
     from wiki_platform import _native
     base = Path(worktree)
@@ -1507,20 +1511,27 @@ def _retire_native_ordinary_tree(worktree, held):
             _native._close(pin)
             current = _native._open(path, _native.FILE_LIST_DIRECTORY | _native.DELETE, directory=True,
                                     owner_neutral=True, share=_native.FILE_SHARE_READ, write_through=True)
+            retained = False
             try:
                 _s1_require(_native._identity(current) == stamp[:3], 'ordinary named directory replaced')
                 with os.scandir(_native._win32_path(path)) as children:
                     _s1_require(next(children, None) is None, 'new ordinary content retained in: ' + relative)
                 flags = _native.DWORD(1 | 0x10)
                 _native._check(_native._SetFileInformation(current, 21, ctypes.byref(flags), ctypes.sizeof(flags)))
+                if relative == '.':
+                    # Non-POSIX disposition reserves this exact name until the
+                    # last handle closes; Git must never see a recreated body.
+                    retained = True
+                    return current
             finally:
-                _native._close(current)
+                if not retained:
+                    _native._close(current)
 
 
 def _remove_native_ordinary_worktree(repo, worktree, wbs_id, branch, checkpoint, *, git_runner):
-    """Retire a proven body under read pins, then remove missing registration."""
+    """Retire a proven body and its registration under continuous name custody."""
     from _lib import read_wbs_control, wbs_control_status
-    from wiki_platform import metadata_probe
+    from wiki_platform import _native, metadata_probe
     import batch_submodules
 
     _s1_require(os.name == 'nt' and isinstance(checkpoint, dict)
@@ -1579,8 +1590,82 @@ def _remove_native_ordinary_worktree(repo, worktree, wbs_id, branch, checkpoint,
                     and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin) == 'refs/heads/' + branch
                     and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip,
                     'Native ordinary removal branch or destination changed during status')
-        _retire_native_ordinary_tree(worktree, held)
-    return git_runner(repo, 'worktree', 'remove', worktree)
+        pending_root = None
+        try:
+            pending_root = _retire_native_ordinary_tree(worktree, held)
+            try:
+                return git_runner(repo, 'worktree', 'remove', worktree)
+            except (Exception, KeyboardInterrupt) as exc:
+                raise HarvestError('captured worktree body retired; branch and preserved archive retained; '
+                                   'use the batch owner recover command with --worker-stopped: '
+                                   + type(exc).__name__ + ': ' + str(exc)) from exc
+        finally:
+            _native._close(pending_root)
+
+
+def _remove_native_missing_ordinary_worktree(repo, worktree, branch, checkpoint, *, git_runner):
+    """Reserve an absent, closed worktree name through registration retirement.
+
+    The caller authenticates the closed run and preserved archive. An existing
+    body is never adopted here, including an empty directory from another try.
+    """
+    import ctypes
+    import batch_submodules
+    from wiki_platform import _native, metadata_names, metadata_probe, safe_metadata_snapshot
+
+    tip = checkpoint.get('integrated_tip')
+    _s1_require(os.name == 'nt' and checkpoint.get('stage') == 'harvested'
+                and checkpoint.get('closed') is True and checkpoint.get('branch') == branch
+                and checkpoint.get('branch_tip') == tip and isinstance(tip, str)
+                and re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', tip),
+                'missing body requires the exact closed harvested branch')
+    common = Path(batch_submodules._safe(os.path.join(repo, '.git')))
+    admins = common / 'worktrees'
+    pointer = os.path.normcase(os.path.join(worktree, '.git'))
+    matches = []
+    with _native._walk(admins, secure=True):
+        for name in metadata_names(admins, max_entries=batch_submodules.MAX_INVENTORY):
+            admin = admins / name
+            probe = metadata_probe(admin)
+            _s1_require(probe and probe['kind'] == 'dir', 'unsafe worktree administration')
+            raw, stamp = safe_metadata_snapshot(admin / 'gitdir', 65536)
+            backlink = raw.decode('utf-8').strip()
+            _s1_require(os.path.isabs(backlink), 'nonabsolute worktree administrative pointer')
+            if os.path.normcase(os.path.normpath(backlink)) == pointer:
+                matches.append((admin, probe['identity'], raw, stamp))
+        _s1_require(len(matches) == 1, 'missing body has no unique trusted registration')
+        admin, identity, raw, stamp = matches[0]
+        with _native._walk(admin, secure=True):
+            head = safe_metadata_snapshot(admin / 'HEAD', 1024)
+            _s1_require(head[0] == ('ref: refs/heads/' + branch + '\n').encode('utf-8')
+                        and metadata_probe(admin / 'modules') is None
+                        and batch_submodules._git(repo, 'rev-parse', 'HEAD', gitdir=str(admin)) == tip
+                        and os.path.normpath(os.path.abspath(os.path.join(repo,
+                            batch_submodules._git(repo, 'rev-parse', '--git-common-dir', gitdir=str(admin)))))
+                        == str(common), 'missing body administration or branch changed')
+            _s1_require(metadata_probe(admin)['identity'] == identity
+                        and safe_metadata_snapshot(admin / 'gitdir', 65536) == (raw, stamp)
+                        and safe_metadata_snapshot(admin / 'HEAD', 1024) == head,
+                        'missing body administration changed during proof')
+    with _native._walk(Path(worktree).parent, owner_neutral=True):
+        with _native._private_attributes(directory=True) as attributes:
+            # ALREADY_EXISTS is a refusal: no contents of a recreated name are
+            # inspected or retired by this empty-name reservation.
+            _native._check(_native._CreateDirectory(_native._win32_path(worktree), ctypes.byref(attributes)))
+        current = _native._open(worktree, _native.FILE_LIST_DIRECTORY | _native.DELETE, directory=True,
+                                share=_native.FILE_SHARE_READ, write_through=True)
+        try:
+            # Creation returns no identity handle. Only the CURRENT private,
+            # empty directory is authorized; a replacement containing any byte
+            # survives the kernel's empty-only disposition check.
+            _native._security(current, 'private')
+            with os.scandir(_native._win32_path(worktree)) as children:
+                _s1_require(next(children, None) is None, 'recreated worktree content retained')
+            flags = _native.DWORD(1 | 0x10)
+            _native._check(_native._SetFileInformation(current, 21, ctypes.byref(flags), ctypes.sizeof(flags)))
+            return git_runner(repo, 'worktree', 'remove', worktree)
+        finally:
+            _native._close(current)
 
 
 def ordinary_unregistered(repo, worktree):
@@ -1831,10 +1916,14 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint, *, register
                             'registered subset changed before captured retirement')
             else:
                 _s1_require(ordinary_unregistered(repo, worktree), 'residue registered before retirement')
-            _retire_native_ordinary_tree(worktree, held)
-        if registered:
-            removed = (git_runner or _s1_git)(repo, 'worktree', 'remove', worktree)
-            _s1_require(removed.returncode == 0, 'captured body retired; unforced registration cleanup refused: ' + removed.stderr)
+            pending_root = None
+            try:
+                pending_root = _retire_native_ordinary_tree(worktree, held)
+                if registered:
+                    removed = (git_runner or _s1_git)(repo, 'worktree', 'remove', worktree)
+                    _s1_require(removed.returncode == 0, 'captured body retired; unforced registration cleanup refused: ' + removed.stderr)
+            finally:
+                _native._close(pending_root)
         return
     # Keep verified directory descriptors through deletion; never traverse a
     # newly replaced parent by pathname while removing its children.

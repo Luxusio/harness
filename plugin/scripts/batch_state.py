@@ -1422,7 +1422,8 @@ def execute(args, directory, records):
                                                                   git_runner=finish_helper._git,
                                                                   retention=item.get('retention'))
                         else:
-                            removed = finish_helper._git(repo, 'worktree', 'remove', item['worktree'])
+                            removed = batch_harvest._remove_native_missing_ordinary_worktree(
+                                repo, item['worktree'], item['branch'], checkpoint, git_runner=finish_helper._git)
                             require(removed.returncode == 0,
                                     'missing body retained registration cleanup refused: ' + removed.stderr)
                     except BaseException as exc:

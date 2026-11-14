@@ -337,9 +337,11 @@ def test_two_leads_integrate_in_order_on_a_linear_history(tmp_path, monkeypatch)
 
 
 def test_native_ordinary_retirement_preserves_late_writes(tmp_path, monkeypatch, retirement_race):
+    import errno
     import pytest
     if os.name != "nt":
         pytest.skip("Native file sharing and named deletion require Windows")
+    from wiki_platform import _native
     main = _main(tmp_path, monkeypatch)
     ignore = main / ".gitignore"
     _write(ignore, _fixture_io(ignore).read_text() + "*.local\n")
@@ -353,8 +355,11 @@ def test_native_ordinary_retirement_preserves_late_writes(tmp_path, monkeypatch,
     precious = b"precious bytes created after the last clean status\n"
     replacement = tmp_path / "replacement.txt"
     _fixture_io(replacement).write_bytes(precious)
+    replacement_identity = (_fixture_io(replacement).stat().st_dev, _fixture_io(replacement).stat().st_ino)
     actual_git = mod._git
     attempted, denied, commands = [], [], []
+    target_before, replacement_denied, replaced = [], [], []
+    native_denied, target_after = [], []
 
     def after_clean_status(root, *args):
         commands.append(args)
@@ -363,13 +368,29 @@ def test_native_ordinary_retirement_preserves_late_writes(tmp_path, monkeypatch,
                 and "--untracked-files=all" in args and any(arg.startswith("--git-dir=") for arg in args)):
             assert result.returncode == 0 and not result.stdout
             attempted.append(retirement_race)
+            if retirement_race != "ignored":
+                info = _fixture_io(target).stat()
+                target_before.append((_fixture_io(target).read_bytes(), info.st_dev, info.st_ino))
             if retirement_race == "in-place":
                 try:
                     _fixture_io(target).write_bytes(precious)
                 except OSError as error:
-                    denied.append(error.winerror)
+                    denied.append((type(error).__name__, error.errno, error.winerror))
+                try:
+                    handle = _native._open(target, _native.GENERIC_WRITE, owner_neutral=True)
+                except OSError as error:
+                    native_denied.append((type(error).__name__, error.errno, error.winerror))
+                else:
+                    _native._close(handle)
+                info = _fixture_io(target).stat()
+                target_after.append((_fixture_io(target).read_bytes(), info.st_dev, info.st_ino))
             elif retirement_race == "replace":
-                os.replace(_fixture_io(replacement), _fixture_io(target))
+                try:
+                    os.replace(_fixture_io(replacement), _fixture_io(target))
+                except OSError as error:
+                    replacement_denied.append(error.winerror)
+                    raise
+                replaced.append(True)
             else:
                 _fixture_io(target).write_bytes(precious)
         return result
@@ -383,14 +404,95 @@ def test_native_ordinary_retirement_preserves_late_writes(tmp_path, monkeypatch,
     archive = main / "doc/harness/archive/batch" / lead.wbs_id
     assert _fixture_io(archive / "PLAN.md").read_bytes() == plan
     if retirement_race == "in-place":
-        assert denied == [32], result
+        assert denied == [("PermissionError", errno.EACCES, None)], result
+        assert native_denied == [("BlockingIOError", 32, None)], result
+        assert target_after == target_before
         assert result["status"] == "integrated", result
         assert not _fixture_io(lead.worktree).exists()
     else:
         assert result["status"] == "kept", result
-        assert _fixture_io(target).read_bytes() == precious
+        if retirement_race == "replace" and replacement_denied:
+            assert replacement_denied == [32] and not replaced, result
+            info = _fixture_io(target).stat()
+            assert (_fixture_io(target).read_bytes(), info.st_dev, info.st_ino) == target_before[0]
+            assert _fixture_io(replacement).read_bytes() == precious
+            assert (_fixture_io(replacement).stat().st_dev, _fixture_io(replacement).stat().st_ino) == replacement_identity
+        else:
+            assert _fixture_io(target).read_bytes() == precious
+            if retirement_race == "replace":
+                assert replaced == [True] and not replacement_denied
+                assert not _fixture_io(replacement).exists()
+                assert (_fixture_io(target).stat().st_dev, _fixture_io(target).stat().st_ino) == replacement_identity
         assert _tip(main, lead.branch) == lead.commit
         assert not result["cleanup"]["removed"] and not result["cleanup"]["branch_deleted"]
+
+
+def test_native_ordinary_retirement_reserves_root_and_parent_through_git_cleanup(tmp_path, monkeypatch):
+    import pytest
+    if os.name != "nt":
+        pytest.skip("Native pending-delete names and ancestor sharing require Windows")
+    main = _main(tmp_path, monkeypatch)
+    lead = Lead(main, "root-custody")
+    lead.commit_files({lead.name + ".txt": "known committed bytes\n"})
+    parent = lead.worktree.parent
+    moved_parent = parent.with_name(parent.name + "-unexpectedly-moved")
+    parent_identity = (_fixture_io(parent).stat().st_dev, _fixture_io(parent).stat().st_ino)
+    precious = b"new fixture bytes must survive an unexpectedly available name\n"
+    actual_git = mod._git
+    attempted, root_denials, parent_denials, delegated, unexpected = [], [], [], [], []
+
+    def at_registration_cleanup(root, *args):
+        if args[:2] != ("worktree", "remove"):
+            return actual_git(root, *args)
+        attempted.append(True)
+        assert args == ("worktree", "remove", str(lead.worktree))
+        try:
+            _fixture_io(lead.worktree).mkdir()
+        except OSError as error:
+            root_denials.append((error.errno, error.winerror))
+        else:
+            marker = lead.worktree / "precious-before-git.bin"
+            _fixture_io(marker).write_bytes(precious)
+            unexpected.append(marker)
+            return subprocess.CompletedProcess(args, 1, "", "fixture stops before Git: retired root name was recreated")
+        try:
+            os.rename(_fixture_io(parent), _fixture_io(moved_parent))
+        except OSError as error:
+            parent_denials.append((error.errno, error.winerror))
+        else:
+            marker = moved_parent / "precious-moved-parent.bin"
+            _fixture_io(marker).write_bytes(precious)
+            unexpected.append(marker)
+            return subprocess.CompletedProcess(args, 1, "", "fixture stops before Git: held parent was renamed")
+        delegated.append(True)
+        result = actual_git(root, *args)
+        try:
+            _fixture_io(lead.worktree).mkdir()
+        except OSError as error:
+            root_denials.append((error.errno, error.winerror))
+        else:
+            marker = lead.worktree / "precious-after-git.bin"
+            _fixture_io(marker).write_bytes(precious)
+            unexpected.append(marker)
+            return subprocess.CompletedProcess(args, 1, "", "fixture stops after Git: pending root name was released")
+        return result
+
+    monkeypatch.setattr(mod, "_git", at_registration_cleanup)
+    result = lead.finish()
+    if unexpected:
+        assert all(_fixture_io(marker).read_bytes() == precious for marker in unexpected)
+        pytest.fail(f"Native name custody was released during registration cleanup: {unexpected!r}; {result!r}")
+    assert attempted == [True] and delegated == [True], result
+    assert root_denials == [(13, 5), (13, 5)], result
+    assert parent_denials == [(13, 32)], result
+    assert result["status"] == "integrated", result
+    assert not _fixture_io(lead.worktree).exists() and not _fixture_io(moved_parent).exists()
+    assert (_fixture_io(parent).stat().st_dev, _fixture_io(parent).stat().st_ino) == parent_identity
+    _fixture_io(lead.worktree).mkdir()
+    after_close = lead.worktree / "precious-after-owner-close.bin"
+    _fixture_io(after_close).write_bytes(precious)
+    assert _fixture_io(after_close).read_bytes() == precious
+    assert _git("branch", "--list", lead.branch, cwd=main) == ""
 
 
 def test_native_ordinary_retirement_retries_actual_known_subset_under_same_closed_run(tmp_path, monkeypatch):
