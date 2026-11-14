@@ -1663,3 +1663,49 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
                         win._WaitForSingleObject(handle, 2000)
                 finally:
                     win._close(handle)
+
+
+def test_native_deep_public_plan_failure_restores_exact_artifact_bundle(private, monkeypatch):
+    from test_harness_mcp_server import harness_lib, harness_server
+
+    repo = _project(private)
+    monkeypatch.chdir(repo)
+    _inprocess_project_context(repo, monkeypatch)
+    monkeypatch.setenv("HARNESS_RUNTIME", "claude")
+    monkeypatch.setenv("HARNESS_SESSION_ID", SID)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "")
+    wbs_id = "native-" + "n" * 160
+    directory = repo / "doc/harness/wbs" / ("WBS__" + wbs_id)
+    assert len(str(directory).encode("utf-16-le")) // 2 > 260
+    opened = harness_server.call_tool("wbs", dict(action="open", wbs_id=wbs_id))
+    assert not opened.get("isError"), opened
+    assert harness_lib.find_repo_root(str(directory)) == str(repo)
+    assert harness_lib.is_harness_enabled_repo(str(repo))
+    planned = harness_server.call_tool("wbs", dict(action="plan", wbs_id=wbs_id, plan=_plan()))
+    assert not planned.get("isError"), planned
+    paths = [directory / name for name in ("PLAN.md", "WBS.control.json", "WBS.json")]
+    before = {path: win.safe_metadata_snapshot(path, 1024 * 1024)[0] for path in paths}
+    run = json.loads(before[directory / "WBS.control.json"])["run_id"]
+    actual_set = win._SetFileInformation
+    attempted = []
+
+    def refuse_state_publication(handle, kind, buffer, length):
+        if kind == win.FileRenameInfoEx:
+            info = C.cast(buffer, C.POINTER(win.RENAME_INFO)).contents
+            destination = C.string_at(C.addressof(buffer) + win.RENAME_INFO.name.offset,
+                                      info.length).decode("utf-16-le")
+            if destination == win._win32_path(directory / "WBS.json") and not attempted:
+                attempted.append(destination)
+                C.set_last_error(5)
+                return False
+        return actual_set(handle, kind, buffer, length)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(win, "_SetFileInformation", refuse_state_publication)
+        result = harness_server.call_tool("wbs", dict(action="plan", wbs_id=wbs_id,
+            plan=_plan().replace("# Native fixture", "# Refined Native fixture"),
+            required_lenses=["review-code", "review-security", "qa-cli"]))
+    assert attempted and result.get("isError"), result
+    assert result["structuredContent"]["written"] == []
+    assert {path: win.safe_metadata_snapshot(path, 1024 * 1024)[0] for path in paths} == before
+    assert harness_lib.read_wbs_control(str(directory))["run_id"] == run

@@ -1386,7 +1386,49 @@ def execute(args, directory, records):
                 checkpoint['integrated_tip'] = tip
                 if checkpoint.get('stage') in {'started', 'rebase'}:
                     checkpoint['stage'] = 'integrated'
-            if (os.path.lexists(item['worktree']) and not item.get('submodule_manifest')
+            def worktree_present():
+                if os.name == 'nt':
+                    from wiki_platform import _native
+                    try:
+                        os.lstat(_native._win32_path(item['worktree']))
+                    except FileNotFoundError:
+                        return False
+                    return True
+                return os.path.lexists(item['worktree'])
+            if (os.name == 'nt' and not item.get('submodule_manifest') and integrated
+                    and checkpoint.get('stage') == 'harvested' and checkpoint.get('archive_fingerprint')):
+                archive = checkpoint['harvest']['archived']
+                require(fingerprint(archive) == checkpoint['archive_fingerprint'], 'archive fingerprint changed')
+                control(item, base=archive, closed=True)
+                listing = finish_helper._git_out(repo, 'worktree', 'list', '--porcelain', '-z')
+                require(len(listing) <= 4 * 1024 * 1024, 'worktree registration inventory exceeds bound')
+                matches = [record.split('\0') for record in listing.split('\0\0')
+                           if any(field.startswith('worktree ') and os.path.normcase(os.path.realpath(field[9:]))
+                                  == os.path.normcase(item['worktree']) for field in record.split('\0'))]
+                require(len(matches) <= 1, 'ambiguous partial worktree registration')
+                if matches:
+                    require('HEAD ' + tip in matches[0] and 'branch refs/heads/' + item['branch'] in matches[0],
+                            'partial worktree registration branch changed')
+                    lock = finish_helper._worktree_lock(repo, item['worktree'])
+                    cleanup = dict(unlocked=False, relocked=False, removed=False)
+                    if lock is not None:
+                        unlocked = finish_helper._git(repo, 'worktree', 'unlock', item['worktree'])
+                        require(unlocked.returncode == 0, 'partial worktree unlock refused')
+                        cleanup['unlocked'] = True
+                    try:
+                        if worktree_present():
+                            batch_harvest.remove_ordinary_residue(repo, item['worktree'], item['wbs_id'], tip,
+                                                                  checkpoint, registered=True,
+                                                                  git_runner=finish_helper._git,
+                                                                  retention=item.get('retention'))
+                        else:
+                            removed = finish_helper._git(repo, 'worktree', 'remove', item['worktree'])
+                            require(removed.returncode == 0,
+                                    'missing body retained registration cleanup refused: ' + removed.stderr)
+                    except BaseException as exc:
+                        note = finish_helper._removal_failure_note(repo, item['worktree'], lock, cleanup)
+                        raise Refusal('captured partial retirement requires recovery: ' + str(exc) + note) from exc
+            if (worktree_present() and not item.get('submodule_manifest')
                     and batch_harvest.ordinary_unregistered(repo, item['worktree'])):
                 require(integrated and checkpoint.get('integrated_tip') == tip
                         and checkpoint.get('archive_fingerprint'), 'integration/archive proof missing for residue')
@@ -1394,7 +1436,7 @@ def execute(args, directory, records):
                 require(fingerprint(archive) == checkpoint['archive_fingerprint'], 'archive fingerprint changed')
                 control(item, base=archive, closed=True)
                 batch_harvest.remove_ordinary_residue(repo, item['worktree'], item['wbs_id'], tip, checkpoint)
-            if os.path.exists(item['worktree']):
+            if worktree_present():
                 require(bound(repo, item) == tip, 'worktree tip changed')
                 control(item, closed=True)
                 # A retained worktree can safely retry harvest through the existing helper.

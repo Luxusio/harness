@@ -303,6 +303,10 @@ def _restore_text_snapshots(snapshots):
     first_error = None
     for path, snapshot in snapshots.items():
         try:
+            disk_path = path
+            if os.name == "nt":
+                from wiki_platform import _native
+                disk_path = _native._win32_path(Path(path).absolute())
             if not snapshot["exists"]:
                 parent = os.path.abspath(os.path.dirname(path) or ".")
                 leaf = os.path.basename(path)
@@ -312,18 +316,22 @@ def _restore_text_snapshots(snapshots):
                         _validate_wbs_control_dir_binding(binding)
                         os.unlink(leaf, dir_fd=binding[1])
                     else:
-                        os.unlink(path)
+                        os.unlink(disk_path)
                 except FileNotFoundError:
                     pass
             elif snapshot.get("kind") == "symlink":
                 parent, leaf = os.path.abspath(os.path.dirname(path) or "."), os.path.basename(path)
                 try:
-                    os.unlink(path)
+                    os.unlink(disk_path)
                 except FileNotFoundError:
                     pass
-                os.symlink(snapshot["target"], path)
+                os.symlink(snapshot["target"], disk_path)
             else:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
+                if os.name == "nt":
+                    from wiki_platform import ensure_private_directory
+                    ensure_private_directory(Path(path).absolute().parent)
+                else:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
                 _atomic_text_write(path, snapshot["text"])
         except Exception as exc:
             if first_error is None:
@@ -1401,7 +1409,12 @@ def find_repo_root(start_dir=None):
     # while the hook payload still carries the project cwd. Prefer that payload
     # cwd so gates read the user's repo, not ~/.codex/harness/plugins/harness.
     hook_cwd = _hook_payload_cwd()
-    if start_dir is not None and (not start_dir or not os.path.isdir(start_dir)):
+    disk_start = start_dir
+    if os.name == "nt":
+        from wiki_platform import _native
+        if start_dir:
+            disk_start = _native._win32_path(Path(start_dir).absolute())
+    if start_dir is not None and (not start_dir or not os.path.isdir(disk_start)):
         return ""
     if start_dir is None and (
         _HOOK_INPUT_REJECTED or ("cwd" in _LAST_HOOK_INPUT and hook_cwd is None)
@@ -1414,7 +1427,8 @@ def find_repo_root(start_dir=None):
     d = initial
     while True:
         git_path = os.path.join(d, ".git")
-        if os.path.isdir(git_path) or os.path.isfile(git_path):
+        disk_git = _native._win32_path(git_path) if os.name == "nt" else git_path
+        if os.path.isdir(disk_git) or os.path.isfile(disk_git):
             return d
         parent = os.path.dirname(d)
         if parent == d:
@@ -1646,7 +1660,12 @@ def harness_root_resolution(start_dir=None):
     installation authority across that boundary.
     """
     hook_cwd = _hook_payload_cwd()
-    if start_dir is not None and (not start_dir or not os.path.isdir(start_dir)):
+    disk_start = start_dir
+    if os.name == "nt":
+        from wiki_platform import _native
+        if start_dir:
+            disk_start = _native._win32_path(Path(start_dir).absolute())
+    if start_dir is not None and (not start_dir or not os.path.isdir(disk_start)):
         return "", ""
     if start_dir is None and (
         _HOOK_INPUT_REJECTED or ("cwd" in _LAST_HOOK_INPUT and hook_cwd is None)
@@ -1656,15 +1675,17 @@ def harness_root_resolution(start_dir=None):
     current = start
     while True:
         manifest_path = os.path.join(current, MANIFEST_PATH)
-        if os.path.lexists(manifest_path):
+        disk_manifest = _native._win32_path(manifest_path) if os.name == "nt" else manifest_path
+        if os.path.lexists(disk_manifest):
             try:
                 manifest_info = None
                 probe = current
                 components = MANIFEST_PATH.split("/")
                 for index, component in enumerate(components):
                     probe = os.path.join(probe, component)
-                    info = os.lstat(probe)
-                    if stat.S_ISLNK(info.st_mode):
+                    info = os.lstat(_native._win32_path(probe) if os.name == "nt" else probe)
+                    if (stat.S_ISLNK(info.st_mode) or os.name == "nt"
+                            and info.st_file_attributes & _native.FILE_ATTRIBUTE_REPARSE_POINT):
                         if index == len(components) - 1:
                             return current, (
                                 "Harness manifest must be a regular non-symlink file"
@@ -1685,7 +1706,8 @@ def harness_root_resolution(start_dir=None):
                     return current, ""
             except ValueError:
                 return "", ""
-        if os.path.lexists(os.path.join(current, ".git")):
+        git_path = os.path.join(current, ".git")
+        if os.path.lexists(_native._win32_path(git_path) if os.name == "nt" else git_path):
             return "", ""
         parent = os.path.dirname(current)
         if parent == current:
@@ -1707,7 +1729,11 @@ def is_harness_enabled_repo(repo_root=None):
     ``doc/harness`` runtime files; setup creates ``doc/harness/manifest.yaml``.
     """
     root = find_harness_root() if repo_root is None else repo_root
-    if not root or not os.path.isdir(root):
+    disk_root = root
+    if os.name == "nt" and root:
+        from wiki_platform import _native
+        disk_root = _native._win32_path(Path(root).absolute())
+    if not root or not os.path.isdir(disk_root):
         return False
     resolved, error = harness_root_resolution(root)
     return bool(not error and resolved == os.path.realpath(root))

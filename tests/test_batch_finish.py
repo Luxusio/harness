@@ -47,6 +47,7 @@ def pytest_generate_tests(metafunc):
         "checkout": ["detached", "sibling"],
         "checkpoint_stage": ["rebase", "integrated", "harvested"],
         "s1_interrupt": ["before-update", "before-integrated-checkpoint"],
+        "retirement_race": ["in-place", "replace", "ignored"],
     }
     for name, values in cases.items():
         if name in metafunc.fixturenames:
@@ -297,6 +298,14 @@ def test_two_leads_integrate_in_order_on_a_linear_history(tmp_path, monkeypatch)
     first, second = Lead(main, "a"), Lead(main, "b")
     first.commit_files({"a.txt": "a\n"})
     second.commit_files({"b.txt": "b\n"})
+    commands = []
+    actual_git = mod._git
+
+    def observe_git(root, *args):
+        commands.append(args)
+        return actual_git(root, *args)
+
+    monkeypatch.setattr(mod, "_git", observe_git)
 
     one = first.finish()
     assert one["status"] == "integrated", one
@@ -321,6 +330,134 @@ def test_two_leads_integrate_in_order_on_a_linear_history(tmp_path, monkeypatch)
     learnings = (main / "doc/harness/learnings.jsonl").read_text()
     assert "a learned" in learnings and "b learned" in learnings
     assert _git("status", "--porcelain", cwd=main) == ""
+    removals = [args for args in commands if args[:2] == ("worktree", "remove")]
+    assert removals == [("worktree", "remove", str(first.worktree)),
+                        ("worktree", "remove", str(second.worktree))]
+    assert not any(args[:2] == ("branch", "-D") for args in commands)
+
+
+def test_native_ordinary_retirement_preserves_late_writes(tmp_path, monkeypatch, retirement_race):
+    import pytest
+    if os.name != "nt":
+        pytest.skip("Native file sharing and named deletion require Windows")
+    main = _main(tmp_path, monkeypatch)
+    ignore = main / ".gitignore"
+    _write(ignore, _fixture_io(ignore).read_text() + "*.local\n")
+    _git("add", ".gitignore", cwd=main)
+    _git("commit", "-qm", "ignore disposable local files", cwd=main)
+    lead = Lead(main, "retirement-race")
+    tracked_name = lead.name + ".txt"
+    lead.commit_files({tracked_name: "committed bytes\n"})
+    plan = _fixture_io(lead.worktree / "doc/harness/wbs" / lead.wbs_id / "PLAN.md").read_bytes()
+    target = lead.worktree / ("late.local" if retirement_race == "ignored" else tracked_name)
+    precious = b"precious bytes created after the last clean status\n"
+    replacement = tmp_path / "replacement.txt"
+    _fixture_io(replacement).write_bytes(precious)
+    actual_git = mod._git
+    attempted, denied, commands = [], [], []
+
+    def after_clean_status(root, *args):
+        commands.append(args)
+        result = actual_git(root, *args)
+        if (not attempted and Path(root) == lead.worktree and "status" in args
+                and "--untracked-files=all" in args and any(arg.startswith("--git-dir=") for arg in args)):
+            assert result.returncode == 0 and not result.stdout
+            attempted.append(retirement_race)
+            if retirement_race == "in-place":
+                try:
+                    _fixture_io(target).write_bytes(precious)
+                except OSError as error:
+                    denied.append(error.winerror)
+            elif retirement_race == "replace":
+                os.replace(_fixture_io(replacement), _fixture_io(target))
+            else:
+                _fixture_io(target).write_bytes(precious)
+        return result
+
+    monkeypatch.setattr(mod, "_git", after_clean_status)
+    result = lead.finish()
+    assert attempted == [retirement_race], result
+    removals = [args for args in commands if args[:2] == ("worktree", "remove")]
+    assert len(removals) <= 1 and all("--force" not in args and "-f" not in args for args in removals)
+    assert not any(args[:2] == ("branch", "-D") for args in commands)
+    archive = main / "doc/harness/archive/batch" / lead.wbs_id
+    assert _fixture_io(archive / "PLAN.md").read_bytes() == plan
+    if retirement_race == "in-place":
+        assert denied == [32], result
+        assert result["status"] == "integrated", result
+        assert not _fixture_io(lead.worktree).exists()
+    else:
+        assert result["status"] == "kept", result
+        assert _fixture_io(target).read_bytes() == precious
+        assert _tip(main, lead.branch) == lead.commit
+        assert not result["cleanup"]["removed"] and not result["cleanup"]["branch_deleted"]
+
+
+def test_native_ordinary_retirement_retries_actual_known_subset_under_same_closed_run(tmp_path, monkeypatch):
+    import pytest
+    if os.name != "nt":
+        pytest.skip("Native file disposition and registered subset recovery require Windows")
+    from wiki_platform import _native
+    main = _main(tmp_path, monkeypatch)
+    lead = Lead(main, "retirement-subset")
+    tracked_name = lead.name + ".txt"
+    lead.commit_files({tracked_name: "known committed bytes\n"})
+    target = lead.worktree / tracked_name
+    identity = tuple(_native.metadata_probe(target)["identity"])
+    control = lead.worktree / "doc/harness/wbs" / lead.wbs_id / "WBS.control.json"
+    run_id = json.loads(_fixture_io(control).read_bytes())["run_id"]
+    actual_retire = mod.batch_harvest._retire_native_ordinary_tree
+    actual_disposition = _native._SetFileInformation
+    actual_git = mod._git
+    retired, commands = [], []
+
+    def observe_git(root, *args):
+        commands.append(args)
+        return actual_git(root, *args)
+
+    def interrupt_after_actual_retirement(worktree, custody):
+        def disposition(handle, kind, *args):
+            selected = kind == 21 and _native._identity(handle) == identity
+            result = actual_disposition(handle, kind, *args)
+            if result and selected and not retired:
+                retired.append(True)
+                raise OSError("injected after actual known-file retirement")
+            return result
+
+        with monkeypatch.context() as boundary:
+            boundary.setattr(_native, "_SetFileInformation", disposition)
+            return actual_retire(worktree, custody)
+
+    monkeypatch.setattr(mod, "_git", observe_git)
+    with monkeypatch.context() as boundary:
+        boundary.setattr(mod.batch_harvest, "_retire_native_ordinary_tree", interrupt_after_actual_retirement)
+        first = lead.finish()
+    assert retired == [True], first
+    assert first["status"] == "kept", first
+    assert not _fixture_io(target).exists()
+    assert _tip(main, lead.branch) == lead.commit
+    state_path = main / "doc/harness/runtime/batches" / (lead.owner.batch + ".json")
+    saved = json.loads(_fixture_io(state_path).read_bytes())["requests"][0]
+    assert saved["checkpoint"]["stage"] == "harvested"
+    assert saved["checkpoint"]["closed"] is True and saved["checkpoint"]["run_id"] == run_id
+    archive = Path(saved["checkpoint"]["harvest"]["archived"])
+    archive_bytes = {p.relative_to(_fixture_io(archive)): p.read_bytes()
+                     for p in _fixture_io(archive).rglob("*") if p.is_file()}
+    assert archive_bytes and _fixture_io(control).is_file()
+    assert _fixture_io(lead.worktree / ".git").is_file()
+    # Only the interrupted in-process attempt is observed here. Recovery runs
+    # through the actual owner CLI with explicit stopped-worker authorization.
+    assert not any(args[:2] == ("worktree", "remove") for args in commands)
+    assert not any(args[:2] == ("branch", "-D") for args in commands)
+    recovered = lead.owner.call("recover", "--slug", lead.name, "--worker-stopped")
+    assert recovered["status"] == "integrated", recovered
+    assert not _fixture_io(lead.worktree).exists()
+    assert _git("branch", "--list", lead.branch, cwd=main) == ""
+    current = json.loads(_fixture_io(state_path).read_bytes())["requests"][0]
+    assert current["run_id"] == run_id and current["checkpoint"]["run_id"] == run_id
+    assert current["checkpoint"] == saved["checkpoint"]
+    assert {p.relative_to(_fixture_io(archive)): p.read_bytes()
+            for p in _fixture_io(archive).rglob("*") if p.is_file()} == archive_bytes
 
 
 def test_trailer_is_reported_not_enforced(tmp_path, monkeypatch):

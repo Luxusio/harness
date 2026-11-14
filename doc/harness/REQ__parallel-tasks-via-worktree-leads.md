@@ -48,6 +48,16 @@ User source: current conversation, “야 지금 작업하면서 자꾸 worktree
 
 Derived implementation decision: authenticate process-owned Codex native identity before eager workspace binding and reuse the existing binding/registration owners. This is an engineering mechanism for the requested completion outcome, not a claim that the user requested a particular authentication design. Retention of unresolved work remains required; successful integration and evidence harvest precede disposal.
 
+Derived Native adaptation, based on that completion/preservation intent and
+[Native repair requirements](REQ__python-native-wiki.md#native-repair-completion):
+retain captured source objects through the final preservation proof and clean
+status check, then retire only unchanged current names through retained handles.
+Remove directories only when empty and remove Git registration without force.
+New or replaced work remains retained. Interrupted disposal reuses the existing
+closed, harvested checkpoint and archive to prove any remaining subset; missing
+authority or unknown content requires explicit recovery and preserves the branch.
+This mechanism is an implementation decision, not a user request for force.
+
 ## Managed lifecycle approval and derived API (2026-10-20)
 
 User-explicit source: “worktree정리 안되는문제를 구조적으로 해결할 방법 없냐? 너의 기억에 의존하는거 말고” and “애초에 워크트리 만들고 시작하는거자체를 mcp로 넣어놔야하나?”.
@@ -181,15 +191,8 @@ owns exact inputs and failure semantics. Unrelated repair tasks are not blocked.
   `batch_harvest.py`, runs `git worktree unlock` only when
   `git worktree list --porcelain` shows the worktree (compared by realpath)
   locked, and ordinarily runs `git worktree remove` and `git branch -d`,
-  without `--force` on POSIX. Native ordinary removal may use one guarded
-  `--force` only after validating the exact closed, harvested generation,
-  registered administrative binding and integrated branch/tip, complete
-  source/archive byte ownership, absence of administrative submodules, and
-  Git's equivalent clean-status check through the validated relative gitdir.
-  This avoids Git for Windows 2.54's overlong absolute `GIT_DIR` in its
-  duplicate internal status process; it does not authorize dirty, changed,
-  unowned or unpreserved work, double-force, retries after unknown effects,
-  relocation or registration changes. Selected S1 modules retain their separate
+  without `--force`. Dirty, changed, unowned or unpreserved work remains
+  retained. Selected S1 modules retain their separate
   guarded removal proof owned by `batch_harvest.py`, defined in
   [Selected submodules](REQ__batch-submodule-support.md); branch deletion stays `-d`. It aborts a failed or interrupted rebase only when
   `rebase-merge` or `rebase-apply` exists (`rev-parse --git-path`), because

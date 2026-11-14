@@ -43,10 +43,9 @@ Prints one JSON object and exits with its status:
 Whatever the status, a non-null `integrated_tip` means the lead's commits are
 on the original main branch. Usage errors exit 2 without a JSON object.
 
-POSIX ordinary removal never passes `--force`. Native ordinary removal uses
-one guarded `--force` only after the complete archive/byte proof and the same
-clean-status and no-submodule checks through validated relative Git metadata;
-this avoids Git for Windows' overlong absolute-GIT_DIR status subprocess.
+Ordinary removal never passes `--force`.
+Native ordinary removal keeps source read pins through verification and retires
+only captured names before unforced Git registration cleanup.
 S1 removal retains its separate durable submodule-preservation proof.
 Never stashes or creates a merge commit. It
 releases Claude Code's agent lock on the worktree, so never run it for a lead
@@ -467,7 +466,10 @@ def _cleanup(repo: str, worktree: str, branch: str, result: dict, retention=None
     lock = _worktree_lock(repo, worktree)
     if submodules is None:
         try:
-            prepared = batch_harvest.thaw_verification_sources(repo, worktree, result['wbs_id'], retention, proof) or []
+            if os.name == 'nt':
+                batch_harvest.ordinary_removal_proof(repo, worktree, result['wbs_id'], retention, proof)
+            else:
+                prepared = batch_harvest.thaw_verification_sources(repo, worktree, result['wbs_id'], retention, proof) or []
         except batch_harvest.HarvestError as exc:
             raise Outcome('kept', f'ordinary removal proof refused, worktree kept: {exc}') from exc
     if lock is not None:

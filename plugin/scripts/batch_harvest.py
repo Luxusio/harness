@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -1408,13 +1409,116 @@ def thaw_verification_sources(repo, worktree, wbs_id, retention, checkpoint):
     return prepared
 
 
-def _remove_native_ordinary_worktree(repo, worktree, wbs_id, branch, checkpoint, *, git_runner):
-    """Replace Git's broken absolute-GIT_DIR status spawn after full proof.
+@contextmanager
+def _native_ordinary_custody(worktree):
+    """Pin the captured source objects before proving or retiring their names."""
+    from wiki_platform import _native
+    base, held, pending = Path(worktree), {}, ['.']
+    with _native._walk(base.parent, owner_neutral=True):
+        try:
+            while pending:
+                relative = pending.pop()
+                target = base if relative == '.' else base / relative
+                handle = _native._open(target, _native.FILE_LIST_DIRECTORY, directory=True,
+                                       share=_native.FILE_SHARE_READ, owner_neutral=True)
+                try:
+                    stamp = _native._metadata_free_stamp(handle)
+                except BaseException:
+                    _native._close(handle)
+                    raise
+                held[relative] = (handle, stamp, True)
+                with os.scandir(_native._win32_path(target)) as children:
+                    for child in children:
+                        name = child.name if relative == '.' else relative + '/' + child.name
+                        _s1_require(name not in held and name not in pending, 'ordinary name changed during custody capture')
+                        _s1_require(len(held) + len(pending) < 100000, 'ordinary custody inventory exceeds bound')
+                        path = base / name
+                        info = os.lstat(_native._win32_path(path))
+                        if stat.S_ISDIR(info.st_mode):
+                            pending.append(name)
+                            continue
+                        leaf = _native._open(path, _native.GENERIC_READ, owner_neutral=True,
+                                             allow_hardlinks=True,
+                                             share=_native.FILE_SHARE_READ | _native.FILE_SHARE_DELETE)
+                        try:
+                            stamp = _native._metadata_free_stamp(leaf)
+                        except BaseException:
+                            _native._close(leaf)
+                            raise
+                        held[name] = (leaf, stamp, False)
+            yield held
+        finally:
+            for handle, _, _ in reversed(list(held.values())):
+                _native._close(handle)
 
-    The finish owner completes the ordinary byte/archive proof before unsealing
-    typed copies and releasing its lock. This check runs after that owned
-    unlock; it neither grants nor changes authority.
-    """
+
+def _retire_native_ordinary_tree(worktree, held):
+    """Retire only current captured names; directory disposition is empty-only."""
+    import ctypes
+    from wiki_platform import _native
+    base = Path(worktree)
+
+    def target(relative):
+        return base if relative == '.' else base / relative
+
+    found = {'.'}
+    for current, dirs, files in os.walk(_native._win32_path(base), followlinks=False):
+        for name in dirs + files:
+            relative = os.path.relpath(os.path.join(current, name), _native._win32_path(base)).replace(os.sep, '/')
+            _s1_require(relative in held, 'new ordinary content retained: ' + relative)
+            found.add(relative)
+    _s1_require(found == set(held), 'ordinary captured names changed')
+    for relative, (_, stamp, directory) in held.items():
+        current = _native._open(target(relative), _native.FILE_LIST_DIRECTORY if directory else _native.GENERIC_READ,
+                                directory=directory, owner_neutral=True, allow_hardlinks=True,
+                                share=_native.FILE_SHARE_READ | _native.FILE_SHARE_DELETE)
+        try:
+            actual = _native._metadata_free_stamp(current)
+            _s1_require(actual[:3] == stamp[:3] if directory else actual == stamp,
+                        'ordinary captured object changed: ' + relative)
+        finally:
+            _native._close(current)
+    files = [relative for relative, (_, _, directory) in held.items() if not directory]
+    def last(relative):
+        return (2 if relative == '.git' else 1 if relative == 'doc/harness/manifest.yaml'
+                or relative.endswith('/WBS.control.json') else 0, relative)
+    for relative in sorted(files, key=last):
+        path = target(relative)
+        parent = os.path.dirname(relative) or '.'
+        with _native._walk(path.parent, owner_neutral=True) as (_, directory):
+            _s1_require(_native._identity(directory) == held[parent][1][:3], 'ordinary parent replaced')
+            current = _native._open(path, _native.DELETE, owner_neutral=True, allow_hardlinks=True,
+                                    share=_native.FILE_SHARE_READ, write_through=True)
+            try:
+                _s1_require(_native._metadata_free_stamp(current) == held[relative][1],
+                            'ordinary named file changed before retirement: ' + relative)
+                flags = _native.DWORD(1 | 0x10)
+                _native._check(_native._SetFileInformation(current, 21, ctypes.byref(flags), ctypes.sizeof(flags)))
+            finally:
+                _native._close(current)
+            _native._close(held.pop(relative)[0])
+    for relative in sorted(held, key=lambda name: (-1 if name == '.' else name.count('/'), name), reverse=True):
+        path = target(relative)
+        parent = os.path.dirname(relative) or '.'
+        with _native._walk(path.parent, owner_neutral=True) as (_, directory):
+            if relative != '.':
+                _s1_require(_native._identity(directory) == held[parent][1][:3], 'ordinary parent replaced')
+            pin, stamp, _ = held.pop(relative)
+            _native._close(pin)
+            current = _native._open(path, _native.FILE_LIST_DIRECTORY | _native.DELETE, directory=True,
+                                    owner_neutral=True, share=_native.FILE_SHARE_READ, write_through=True)
+            try:
+                _s1_require(_native._identity(current) == stamp[:3], 'ordinary named directory replaced')
+                with os.scandir(_native._win32_path(path)) as children:
+                    _s1_require(next(children, None) is None, 'new ordinary content retained in: ' + relative)
+                flags = _native.DWORD(1 | 0x10)
+                _native._check(_native._SetFileInformation(current, 21, ctypes.byref(flags), ctypes.sizeof(flags)))
+            finally:
+                _native._close(current)
+
+
+def _remove_native_ordinary_worktree(repo, worktree, wbs_id, branch, checkpoint, *, git_runner):
+    """Retire a proven body under read pins, then remove missing registration."""
     from _lib import read_wbs_control, wbs_control_status
     from wiki_platform import metadata_probe
     import batch_submodules
@@ -1452,26 +1556,31 @@ def _remove_native_ordinary_worktree(repo, worktree, wbs_id, branch, checkpoint,
                 and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin) == 'refs/heads/' + branch
                 and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip,
                 'Native ordinary removal branch or destination changed')
-    status = git_runner(worktree, '--git-dir=' + os.path.relpath(admin, worktree),
-                        'status', '--porcelain', '--ignore-submodules=none', '--untracked-files=all')
-    _s1_require(status.returncode == 0 and len(status.stdout) <= 4 * 1024 * 1024
-                and len(status.stderr) <= 4096
-                and not any(error in status.stderr for error in
-                            ('Permission denied', 'could not open directory', 'unable to open loose object')),
-                'cannot inspect Native ordinary worktree status')
-    _s1_require(not status.stdout, 'worktree contains modified or untracked files')
-    _verify_registered_worktree(repo, worktree)
-    _s1_require(batch_submodules._admin(repo, worktree) == admin
-                and batch_submodules._identity(admin, True) == admin_identity
-                and batch_submodules._identity(os.path.join(worktree, '.git')) == gitfile_identity
-                and metadata_probe(os.path.join(admin, 'modules')) is None,
-                'Native ordinary removal administration changed')
-    _s1_require(_s1_git_text(repo, 'symbolic-ref', '-q', 'HEAD') == checkpoint.get('destination_ref')
-                and _s1_git_text(repo, 'rev-parse', 'HEAD') == tip
-                and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin) == 'refs/heads/' + branch
-                and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip,
-                'Native ordinary removal branch or destination changed during status')
-    return git_runner(repo, 'worktree', 'remove', '--force', worktree)
+    with _native_ordinary_custody(worktree) as held:
+        # This is the effective content proof: its source objects remain pinned
+        # through status and current-name retirement, without permission edits.
+        ordinary_removal_proof(repo, worktree, wbs_id, checkpoint=checkpoint)
+        status = git_runner(worktree, '--git-dir=' + os.path.relpath(admin, worktree),
+                            'status', '--porcelain', '--ignore-submodules=none', '--untracked-files=all')
+        _s1_require(status.returncode == 0 and len(status.stdout) <= 4 * 1024 * 1024
+                    and len(status.stderr) <= 4096
+                    and not any(error in status.stderr for error in
+                                ('Permission denied', 'could not open directory', 'unable to open loose object')),
+                    'cannot inspect Native ordinary worktree status')
+        _s1_require(not status.stdout, 'worktree contains modified or untracked files')
+        _verify_registered_worktree(repo, worktree)
+        _s1_require(batch_submodules._admin(repo, worktree) == admin
+                    and batch_submodules._identity(admin, True) == admin_identity
+                    and batch_submodules._identity(os.path.join(worktree, '.git')) == gitfile_identity
+                    and metadata_probe(os.path.join(admin, 'modules')) is None,
+                    'Native ordinary removal administration changed')
+        _s1_require(_s1_git_text(repo, 'symbolic-ref', '-q', 'HEAD') == checkpoint.get('destination_ref')
+                    and _s1_git_text(repo, 'rev-parse', 'HEAD') == tip
+                    and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin) == 'refs/heads/' + branch
+                    and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip,
+                    'Native ordinary removal branch or destination changed during status')
+        _retire_native_ordinary_tree(worktree, held)
+    return git_runner(repo, 'worktree', 'remove', worktree)
 
 
 def ordinary_unregistered(repo, worktree):
@@ -1503,9 +1612,28 @@ def ordinary_unregistered(repo, worktree):
     return True
 
 
-def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
+def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint, *, registered=False, git_runner=None,
+                            retention=None):
     """Dispose only a proven remaining subset; caller owns closed-run authority."""
-    _s1_require(ordinary_unregistered(repo, worktree), 'residue is still registered')
+    if registered:
+        _s1_require(os.name == 'nt', 'registered subset retirement requires Native custody')
+        _verify_registered_worktree(repo, worktree)
+        from _lib import read_wbs_control, wbs_control_status
+        import batch_submodules
+        control = read_wbs_control(os.path.join(worktree, 'doc/harness/wbs', wbs_id))
+        _s1_require(control and control.get('closed') is True and checkpoint.get('closed') is True
+                    and control.get('run_id') == checkpoint.get('run_id')
+                    and wbs_control_status(os.path.join(worktree, 'doc/harness/wbs', wbs_id), control) == 'closed',
+                    'registered partial source authority missing; retain bytes and branch for explicit recovery')
+        admin = batch_submodules._admin(repo, worktree)
+        from wiki_platform import metadata_probe
+        _s1_require(metadata_probe(os.path.join(admin, 'modules')) is None,
+                    'registered ordinary subset contains submodule administration')
+        _s1_require(batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip
+                    and batch_submodules._git(worktree, 'symbolic-ref', '-q', 'HEAD', gitdir=admin)
+                    == 'refs/heads/' + checkpoint.get('branch', ''), 'registered subset branch changed')
+    else:
+        _s1_require(ordinary_unregistered(repo, worktree), 'residue is still registered')
     _s1_path(worktree, True)
     _s1_require(os.path.abspath(worktree) == os.path.realpath(worktree)
                 and os.path.commonpath([repo, worktree]) != worktree,
@@ -1519,6 +1647,12 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                 and checkpoint.get('harvest', {}).get('archived') == archive
                 and checkpoint.get('integrated_tip') == tip and checkpoint.get('stage') == 'harvested',
                 'residue archive/integration proof changed')
+    if registered:
+        archived_control = read_wbs_control(archive)
+        _s1_require(archived_control and archived_control.get('closed') is True
+                    and archived_control.get('run_id') == checkpoint.get('run_id')
+                    and wbs_control_status(archive, archived_control) == 'closed',
+                    'registered subset archive generation changed')
     tree = _s1_git_text(repo, 'ls-tree', '-r', '-t', '-z', tip)
     tracked, directories, gitlinks = {}, set(), set()
     for entry in filter(None, tree.split('\0')):
@@ -1537,6 +1671,19 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
     ancillary_entries = {rel: hashlib.sha256(_ordinary_bytes(os.path.join(worktree, rel))).hexdigest()
                          for rel in ancillary if os.path.lexists(os.path.join(worktree, rel))}
     ancillary_entries.update({rel: digest for rel, digest in namespace.items() if isinstance(digest, str)})
+    if registered:
+        for relative in _ordinary_markers(worktree, wbs_id):
+            path = os.path.join(worktree, relative)
+            probe = metadata_probe(path)
+            if probe and probe['kind'] == 'dir':
+                directories.add(relative)
+            elif probe:
+                ancillary_entries[relative] = hashlib.sha256(_ordinary_bytes(path)).hexdigest()
+        if retention is not None:
+            from batch_finish import RETENTION_MARKER, retention_bytes, validate_retention
+            if metadata_probe(os.path.join(worktree, RETENTION_MARKER)) is not None:
+                validate_retention(worktree, retention)
+                ancillary_entries[RETENTION_MARKER] = hashlib.sha256(retention_bytes(retention)).hexdigest()
     directories.update(rel for rel, digest in namespace.items() if digest is None)
     task_rel = 'doc/harness/wbs/' + wbs_id
     preserved = {task_rel + '/' + rel: digest for rel, digest in archived.items() if digest is not None}
@@ -1552,12 +1699,22 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
         found, cache_dirs = {}, set()
         def unreadable(exc):
             raise HarvestError('cannot inspect residue') from exc
-        for current, dirs, files in os.walk(worktree, followlinks=False, onerror=unreadable):
-            for path in [current] + [os.path.join(current, n) for n in files + dirs]:
-                rel = os.path.relpath(path, worktree).replace(os.sep, "/")
+        if os.name == 'nt':
+            from wiki_platform import _native
+            walk_root = _native._win32_path(worktree)
+        else:
+            walk_root = worktree
+        for current, dirs, files in os.walk(walk_root, followlinks=False, onerror=unreadable):
+            for named in [current] + [os.path.join(current, n) for n in files + dirs]:
+                rel = os.path.relpath(named, walk_root).replace(os.sep, "/")
+                path = os.path.normpath(os.path.join(worktree, rel))
                 _s1_require(len(found) < 100000, 'residue inventory exceeds bound')
-                info = os.lstat(path)
+                info = os.lstat(_native._win32_path(path) if os.name == 'nt' else path)
                 identity = (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
+                if registered and rel == '.git':
+                    _s1_require(batch_submodules._admin(repo, worktree) == admin, 'registered subset Git binding changed')
+                    found[rel] = identity
+                    continue
                 if os.name == 'nt':
                     from wiki_platform import _native
                     with _native._walk(Path(path).parent, secure=True):
@@ -1585,7 +1742,7 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                     if rel in gitlinks:
                         # An uninitialized placeholder owns no module bytes.
                         # Observe only whether an entry exists; never descend.
-                        with os.scandir(path) as children:
+                        with os.scandir(_native._win32_path(path) if os.name == 'nt' else path) as children:
                             _s1_require(next(children, None) is None, 'populated gitlink residue: ' + rel)
                     elif (in_cache or os.path.basename(rel) in ORDINARY_CACHES
                           and (parent == '.' or parent in directories)):
@@ -1609,7 +1766,7 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                         handle = _native._open(Path(path), _native.GENERIC_READ, share=_native.FILE_SHARE_READ)
                         try:
                             stamp = _native._metadata_stamp(handle)
-                            before = os.lstat(path)
+                            before = os.lstat(_native._win32_path(path))
                             _s1_require((before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns) == identity,
                                         'residue changed during open')
                             for chunk in _native._file_chunks(handle, info.st_size):
@@ -1647,63 +1804,37 @@ def remove_ordinary_residue(repo, worktree, wbs_id, tip, checkpoint):
                 _s1_require(matches, 'unpreserved or changed residue: ' + rel)
                 found[rel] = identity
             dirs[:] = [name for name in dirs
-                       if os.path.relpath(os.path.join(current, name), worktree).replace(os.sep, "/") not in gitlinks]
+                       if os.path.relpath(os.path.join(current, name), walk_root).replace(os.sep, "/") not in gitlinks]
         return found
     expected = inventory()
     _s1_require(inventory() == expected, 'residue inventory changed')
-    _s1_require(ordinary_unregistered(repo, worktree), 'residue registered during proof')
+    if registered:
+        _verify_registered_worktree(repo, worktree)
+    else:
+        _s1_require(ordinary_unregistered(repo, worktree), 'residue registered during proof')
     _s1_require(_tree_entries(archive) == archived, 'archive changed during residue proof')
     _s1_require(_ordinary_ancillary(repo, worktree, wbs_id, control_dir=archive, preserve=False) == ancillary,
                 'ancillary preservation changed during residue proof')
     _s1_require(_ordinary_namespace_history(repo, worktree, wbs_id, control_dir=archive, preserve=False) == namespace,
                 'namespace preservation changed during residue proof')
     if os.name == 'nt':
-        from wiki_platform import _native, metadata_remove_empty
-        import ctypes
-        handles = {}
-        base = Path(worktree)
-        with _native._walk(base.parent, secure=True):
-            try:
-                for relative in sorted(expected, key=lambda value: (value.count('/'), value)):
-                    original = expected[relative]
-                    if not stat.S_ISDIR(original[2]):
-                        continue
-                    target = base if relative == '.' else base / relative
-                    handle = _native._open(target, _native.FILE_LIST_DIRECTORY, directory=True,
-                                           share=_native.FILE_SHARE_READ | _native.FILE_SHARE_WRITE)
-                    handles[relative] = handle
-                    _native._security(handle, 'metadata')
-                    info = target.lstat()
-                    _s1_require((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns) == original,
-                                'residue directory changed before disposal')
-                # Every directory name remains retained until its own empty
-                # removal; current files use real DELETE handles, never chmod.
-                for relative in sorted((value for value in expected if value != '.'),
-                                       key=lambda value: (value.count('/'), value), reverse=True):
-                    target, original = base / relative, expected[relative]
-                    if stat.S_ISDIR(original[2]):
-                        _native._close(handles.pop(relative))
-                        info = target.lstat()
-                        _s1_require((info.st_dev, info.st_ino) == original[:2], 'residue directory replaced before disposal')
-                        metadata_remove_empty(target)
-                        continue
-                    handle = _native._open(target, _native.DELETE, share=_native.FILE_SHARE_READ, write_through=True)
-                    try:
-                        _native._security(handle, 'metadata')
-                        info = target.lstat()
-                        _s1_require((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns) == original,
-                                    'residue changed before deletion')
-                        flags = _native.DWORD(1 | 0x10)
-                        _native._check(_native._SetFileInformation(handle, 21, ctypes.byref(flags), ctypes.sizeof(flags)))
-                    finally:
-                        _native._close(handle)
-                _native._close(handles.pop('.'))
-                info = base.lstat()
-                _s1_require((info.st_dev, info.st_ino) == expected['.'][:2], 'residue root replaced')
-                metadata_remove_empty(base)
-            finally:
-                for handle in handles.values():
-                    _native._close(handle)
+        with _native_ordinary_custody(worktree) as held:
+            _s1_require(inventory() == expected, 'residue changed before captured retirement')
+            _s1_require(_tree_entries(archive) == archived, 'archive changed before captured retirement')
+            if registered:
+                _verify_registered_worktree(repo, worktree)
+                _s1_require(batch_submodules._admin(repo, worktree) == admin
+                            and batch_submodules._git(worktree, 'rev-parse', 'HEAD', gitdir=admin) == tip
+                            and _s1_git_text(repo, 'symbolic-ref', '-q', 'HEAD') == checkpoint.get('destination_ref')
+                            and _s1_git(repo, 'merge-base', '--is-ancestor', tip,
+                                        checkpoint['destination_ref']).returncode == 0,
+                            'registered subset changed before captured retirement')
+            else:
+                _s1_require(ordinary_unregistered(repo, worktree), 'residue registered before retirement')
+            _retire_native_ordinary_tree(worktree, held)
+        if registered:
+            removed = (git_runner or _s1_git)(repo, 'worktree', 'remove', worktree)
+            _s1_require(removed.returncode == 0, 'captured body retired; unforced registration cleanup refused: ' + removed.stderr)
         return
     # Keep verified directory descriptors through deletion; never traverse a
     # newly replaced parent by pathname while removing its children.

@@ -269,7 +269,11 @@ def _wbs_artifact_rel(td: str, fn: str) -> str:
 
 
 def _atomic_write_text(path: str, text: str) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if os.name == "nt":
+        from wiki_platform import ensure_private_directory
+        ensure_private_directory(Path(path).absolute().parent)
+    else:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     _lib_atomic_text_write(path, text)
 
 
