@@ -83,6 +83,33 @@ def test_runner_from_worktree_runs_the_worktree_manifest_in_the_worktree():
     assert payload["commands"][0]["stdout"].strip() == str(wt)
 
 
+def test_plain_manifest_command_preserves_quoted_argument_in_actual_cli(tmp_path):
+    command = ("call " if os.name == "nt" else "exec ") + subprocess.list2cmdline(
+        [sys.executable, "-c", "print('plain scalar ok')"])
+    assert command.endswith('"')
+    manifest = tmp_path / "doc" / "harness" / "manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(f"verify_commands:\n  - {command}\n", encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(RUNNER_PATH), "--root", str(tmp_path), "--json"],
+                          cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    record = json.loads(proc.stdout)["commands"][0]
+    assert record["command"] == command
+    assert record["stdout"].strip() == "plain scalar ok"
+
+
+def test_manifest_command_outer_quote_pairs_remain_supported(tmp_path):
+    manifest = tmp_path / "doc" / "harness" / "manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    for body, expected in (
+        ("verify_commands:\n  - 'echo single'\n  - \"echo double\"\n", ["echo single", "echo double"]),
+        ("verify_commands: 'echo scalar'\n", ["echo scalar"]),
+        ("verify_commands: ['echo inline', \"echo double\"]\n", ["echo inline", "echo double"]),
+    ):
+        manifest.write_text(body, encoding="utf-8")
+        assert verify_runner._read_verify_commands(tmp_path) == expected
+
+
 def test_parallel_runner_aggregates_failure():
     commands = ["python3 -c 'print(\"ok\")'", "python3 -c 'raise SystemExit(7)'"]
     if os.name == "nt":

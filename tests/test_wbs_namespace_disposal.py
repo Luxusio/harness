@@ -185,7 +185,8 @@ def test_durable_history_copy_cannot_be_overwritten_on_retry(tmp_path, monkeypat
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
     copy = recovery / 'doc/harness/tasks/TASK__a/historical-review.bin'
     copy.write_bytes(b'existing different historical bytes')
-    with pytest.raises(batch_harvest.HarvestError, match='copy changed'):
+    reason = 'Metadata source size changed or exceeds budget' if os.name == 'nt' else 'copy changed'
+    with pytest.raises(batch_harvest.HarvestError, match=reason):
         batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), 'WBS__a')
     assert copy.read_bytes() == b'existing different historical bytes'
     assert (old / 'historical-review.bin').read_bytes() == b'Original TASK__a review\x00\xff'
@@ -195,7 +196,11 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     import batch_harvest
     import batch_state
 
-    pool, worktree, old = stopped_legacy_lead(tmp_path, monkeypatch, large=True,
+    fixture_root = tmp_path
+    if os.name == 'nt':
+        fixture_root = tmp_path / ('retained namespace ' + 'n' * 24)
+        fixture_root.mkdir()
+    pool, worktree, old = stopped_legacy_lead(fixture_root, monkeypatch, large=True,
                                            historical_link=None if os.name == 'nt' else 'directory')
     _git('merge', '--ff-only', 'worktree-a', cwd=pool.repo)
     tip = _git('rev-parse', 'HEAD', cwd=pool.repo)
@@ -205,6 +210,14 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     expected = (worktree / relative).read_bytes()
     proof = dict(stage='harvested', integrated_tip=tip, harvest=harvested,
                  archive_fingerprint=batch_state.fingerprint(harvested['archived']))
+    preserved_entries = batch_harvest._tree_entries(harvested['archived'])
+    recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
+    original_control = recovery / 'doc/harness/archive/wbs-namespace-migration/original/doc/harness/tasks/TASK__a/TASK.json'
+    if os.name == 'nt':
+        from wiki_platform import safe_metadata_snapshot
+        assert len(str(original_control).encode('utf-16-le')) // 2 > 260
+        original_bytes = safe_metadata_snapshot(original_control, 16384)[0]
+        assert json.loads(original_bytes)['run_id'] == RUN
     _git('worktree', 'unlock', str(worktree), cwd=pool.repo, check=False)
     _git('worktree', 'remove', str(worktree), cwd=pool.repo)
     # Model native interruption: only a subset of old history survived after
@@ -224,8 +237,12 @@ def test_partial_native_removal_reuses_preserved_streamed_history(tmp_path, monk
     precious.unlink()
     batch_harvest.remove_ordinary_residue(str(pool.repo), str(worktree), 'WBS__a', tip, proof)
     assert not worktree.exists()
-    recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'
-    assert (recovery / relative).read_bytes() == expected
+    assert batch_harvest._tree_entries(harvested['archived']) == preserved_entries
+    if os.name == 'nt':
+        assert safe_metadata_snapshot(original_control, 16384)[0] == original_bytes
+        assert safe_metadata_snapshot(recovery / relative, len(expected))[0] == expected
+    else:
+        assert (recovery / relative).read_bytes() == expected
     if os.name != 'nt':
         assert (tmp_path / 'outside-sentinel/precious.bin').read_bytes() == b'outside bytes must survive'
 
@@ -309,10 +326,14 @@ def test_link_in_current_wbs_is_not_a_historical_disposal_exception(tmp_path, mo
     pool, worktree, _ = stopped_legacy_lead(tmp_path, monkeypatch,
                                          historical_link=None if os.name == 'nt' else 'file')
     current = worktree / 'doc/harness/wbs/WBS__a/work/current-link'
-    create_symlink(current, tmp_path / 'outside-sentinel')
+    sentinel = tmp_path / 'outside-sentinel'
+    if os.name == 'nt':
+        sentinel.write_bytes(b'outside bytes must survive')
+    current.parent.mkdir(parents=True, exist_ok=True)
+    create_symlink(current, sentinel)
     result = pool.cli('finish', '--slug', 'a', ok=False)
     assert result['status'] == 'kept' and current.is_symlink() and worktree.exists()
-    assert (tmp_path / 'outside-sentinel').read_bytes() == b'outside bytes must survive'
+    assert sentinel.read_bytes() == b'outside bytes must survive'
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX imported link proof; actual Native no-follow migration refusal is tested below')
@@ -486,7 +507,11 @@ def test_worker_imported_in_later_epoch_uses_its_exact_control_prefix(tmp_path, 
     prefix = current['archive_prefix']
     assert prefix.startswith(migration.ARCHIVE + '/epochs/')
     original_control = prefix + '/doc/harness/tasks/TASK__a/TASK.json'
-    before = (worktree / original_control).read_bytes()
+    if os.name == 'nt':
+        from wiki_platform import safe_metadata_snapshot
+        before = safe_metadata_snapshot(worktree / original_control, 16384)[0]
+    else:
+        before = (worktree / original_control).read_bytes()
     result = pool.cli('finish', '--slug', 'a')
     assert result['status'] == 'integrated' and not worktree.exists()
     recovery = pool.repo / 'doc/harness/archive/worktree-recovery/WBS__a' / RUN / 'namespace-history'

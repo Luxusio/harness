@@ -438,9 +438,6 @@ def register_wbs_result(
 ) -> bool:
     """Bind a successful Harness WBS result to this exact Codex session."""
     if os.name == "nt" and not _NATIVE_SUBPROCESS:
-        cwd, _ = _registration_identity(payload)
-        if not cwd or not find_harness_root(cwd):
-            return False
         return bool(_native_operation('register-result', [base64.b64encode(payload).decode('ascii')],
                                       budget_seconds, False, status_out=status_out))
     deadline = time.monotonic() + max(0.0, float(budget_seconds))

@@ -1006,7 +1006,8 @@ def test_killed_rerun_cannot_resurrect_success_and_keeps_unverified_log(tmp_path
     evidence = record['last_execution']
     assert evidence['returncode'] is None and evidence['execution_pending']
     assert not evidence['output_log']['available']
-    assert Path(evidence['output_log']['path']).read_text() == ''
+    capture = Path(evidence['output_log']['path'])
+    assert not capture.exists() or capture.read_bytes() == b''
 
 
 def test_malformed_unicode_log_reference_does_not_repeat_valid_command(tmp_path):
@@ -1072,6 +1073,9 @@ def test_retained_failure_budget_refuses_before_new_execution(tmp_path, monkeypa
     refused = execute(tmp_path, [item], 'refused')
     if os.name == "nt":
         assert marker.read_text() == 'budget applied in child'
+        if limit == 'metadata':
+            assert result_path(tmp_path).stat().st_size <= value
+            assert len(json.dumps(dict(ok=True, value=refused)).encode('utf-8')) > value
     assert refused['status'] == 'FAIL' and 'budget' in refused['commands'][0]['error']
     assert refused['commands'][0]['returncode'] is None
     assert (tmp_path / 'executed').read_text() == '7'

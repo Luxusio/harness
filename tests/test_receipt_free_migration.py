@@ -734,22 +734,31 @@ def test_default_marker_migration_covers_main_linked_roots_and_disposed_history(
 
 def test_explicit_default_marker_migration_unblocks_exact_ordinary_removal_proof(tmp_path, monkeypatch):
     from test_batch_state import Pool, complete
+    from _lib import wbs_control_transaction
     import batch_harvest
     pool = Pool(tmp_path, monkeypatch)
     pool.init()
     pool.claim()
     worktree, _, td = complete(pool)
+    # The batch helper synthesizes closed control directly. A real Native WBS
+    # lifecycle has already acquired its coordination lock before harvest.
+    with wbs_control_transaction(td):
+        pass
+    evidence = batch_harvest._tree_entries(str(td))
     marker = default_marker(td)
     failed = pool.cli('finish', '--slug', 'a', ok=False)
     assert failed['status'] == 'kept', failed
     state = json.loads(pool.state.read_text())
     checkpoint = state['requests'][0]['checkpoint']
+    archive = checkpoint['harvest']['archived']
+    assert batch_harvest._tree_entries(archive) == evidence
     with pytest.raises(Exception, match='session marker'):
         batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), td.name, checkpoint=checkpoint)
     assert marker.exists()
     result = migrate(pool.repo, apply=True)
     assert not result.get('isError'), result
     assert not marker.exists()
+    assert batch_harvest._tree_entries(str(td)) == batch_harvest._tree_entries(archive) == evidence
     batch_harvest.ordinary_removal_proof(str(pool.repo), str(worktree), td.name, checkpoint=checkpoint)
     pool.cli('recover', '--slug', 'a', '--worker-stopped')
     pool.cli('finish', '--slug', 'a', '--resume')
@@ -835,6 +844,7 @@ def test_legacy_focus_retry_normalizes_archive_durably_before_retiring(tmp_path,
 @pytest.mark.parametrize('linked_archive', [False, True])
 @pytest.mark.parametrize('default', [False, True])
 def test_native_legacy_focus_retry_preserves_archive_and_refuses_hardlinked_history(tmp_path, monkeypatch, linked_archive, default):
+    import base64
     import goal_migration
     repo, td, _, _ = public(tmp_path)
     source_path = goal_migration.LEGACY_DEFAULT_MARKER_PATH if default else goal_migration.LEGACY_FOCUS_PATH
@@ -857,7 +867,9 @@ def test_native_legacy_focus_retry_preserves_archive_and_refuses_hardlinked_hist
     assert fired == [source_path]
     archive = repo / archive_path
     preserved = archive.read_bytes()
-    assert source.read_bytes() == original == preserved
+    assert source.read_bytes() == original
+    assert json.loads(preserved) == dict(version=1, entries=[dict(
+        root=str(repo), before=base64.b64encode(original).decode('ascii'))])
     stage = archive.with_name(goal_migration._publication_stage(archive.name))
     if linked_archive:
         os.link(archive, stage)

@@ -89,7 +89,11 @@ def _main(tmp_path: Path, monkeypatch, name: str = "main", *, leads=()) -> Path:
     _write(main / "README.md", "root\n")
     _write(main / "shared.txt", "base\n")
     _write(main / "doc/harness/manifest.yaml", "version: 7\n")
-    _write(main / ".gitignore", IGNORES)
+    ignores = IGNORES
+    if os.name == "nt":
+        from setup_finalize import OPERATIONAL_IGNORES
+        ignores = "\n".join(OPERATIONAL_IGNORES) + "\n"
+    _write(main / ".gitignore", ignores)
     _git("add", "-A", cwd=main)
     _git("commit", "-q", "-m", "init", cwd=main)
     _NATIVE_LEADS[str(main)] = leads
@@ -443,7 +447,15 @@ def test_conflict_is_aborted_back_to_the_exact_tip(tmp_path, monkeypatch):
         assert result["integrated_tip"] is None
         _assert_untouched(lead, main_head)
         assert _git("symbolic-ref", "HEAD", cwd=lead.worktree) == f"refs/heads/{lead.branch}"
-        assert _git("status", "--porcelain", cwd=lead.worktree) == ""
+        if lead.owner is None:
+            assert _git("status", "--porcelain", cwd=lead.worktree) == ""
+        else:
+            import batch_state
+            with batch_state.locked_records(str(main)) as (_, records):
+                item = next(item for item in records[lead.owner.batch]["requests"] if item["slug"] == lead.name)
+                assert item["worktree"] == str(lead.worktree)
+                mod.validate_retention(str(lead.worktree), item["retention"])
+                assert not mod.lead_status(str(lead.worktree), item["retention"])
         assert _lock_reason(main, lead.worktree) == LOCK_REASON
 
 
@@ -510,12 +522,22 @@ def test_a_rebase_already_in_progress_is_never_aborted(tmp_path, monkeypatch):
     main_head = _commit_on_main(main, "shared.txt", "main\n")
     _git("rebase", "--no-autostash", main_head, cwd=lead.worktree, check=False)
     assert mod._rebase_in_progress(str(lead.worktree))
+    stopped_head = _head(lead.worktree)
+    stopped_ref = _git("symbolic-ref", "-q", "HEAD", cwd=lead.worktree, check=False)
+    stopped_tip = _tip(main, lead.branch)
 
     for resume in (False, True):
         result = lead.finish(resume=resume)
-        assert result["status"] == "kept", result
-        assert "already in progress" in result["reason"]
+        if lead.owner is None:
+            assert result["status"] == "kept", result
+            assert "already in progress" in result["reason"]
+        else:
+            assert result["status"] == "error", result
+            assert '"reason": "worktree branch changed"' in result["reason"]
         assert mod._rebase_in_progress(str(lead.worktree))
+        assert _head(lead.worktree) == stopped_head
+        assert _git("symbolic-ref", "-q", "HEAD", cwd=lead.worktree, check=False) == stopped_ref
+        assert _tip(main, lead.branch) == stopped_tip
     assert _head(main) == main_head
 
 
@@ -878,17 +900,25 @@ def test_real_post_merge_hook_timeout_reports_integrated_tip_without_cleanup(tmp
     lead = Lead(main, "hook-timeout")
     lead.commit_files({"change.txt": "committed\n"})
     hook = main / ".git/hooks/post-merge"
-    _write(hook, "#!/bin/sh\nexec sleep 0.5\n")
+    if os.name == "nt":
+        interpreter = sys.executable.replace("\\", "/")
+        hook.write_bytes(("#!" + interpreter + "\nimport time\ntime.sleep(0.5)\n").encode("utf-8"))
+    else:
+        hook.write_bytes(b"#!/bin/sh\nexec sleep 0.5\n")
     hook.chmod(0o755)
     real_run = subprocess.run
+    timeout_applied = False
 
     def shorten_merge_timeout(command, *args, **kwargs):
+        nonlocal timeout_applied
         if "merge" in command and "--ff-only" in command:
             kwargs["timeout"] = 0.2
+            timeout_applied = True
         return real_run(command, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", shorten_merge_timeout)
     result = lead.finish()
+    assert timeout_applied
     assert _head(main) == lead.commit  # real Git advanced HEAD before the timeout
     assert result["status"] != "integrated", result
     assert result["integrated_tip"] == lead.commit, result

@@ -80,6 +80,7 @@ def _harvest(repo, worktree, wbs_id):
                       branch_tip=lead.commit, integrated_tip=lead.commit)
         try:
             publication = checkpoint("archive-pending", result.copy())
+            result["archive_publication"] = mod.validate_native_publication(root, str(tree), wbs_id, publication)
             result["harvest"] = mod.harvest(root, str(tree), wbs_id, publication=publication)
             checkpoint("harvested", result.copy())
             summary.append(result["harvest"])
@@ -245,7 +246,11 @@ def _init_repo(repo: Path) -> None:
     _git("config", "user.email", "test@example.com", cwd=repo)
     _git("config", "user.name", "Test", cwd=repo)
     (repo / ".git/info/exclude").write_text("doc/harness/runtime/\n", encoding="utf-8")
-    (repo / ".gitignore").write_text(".claude/worktrees/\n", encoding="utf-8")
+    ignores = ".claude/worktrees/\n"
+    if os.name == "nt":
+        from setup_finalize import OPERATIONAL_IGNORES
+        ignores = "\n".join(OPERATIONAL_IGNORES) + "\n"
+    (repo / ".gitignore").write_text(ignores, encoding="utf-8")
     (repo / "README.md").write_text("root\n", encoding="utf-8")
     (repo / "doc/harness").mkdir(parents=True, exist_ok=True)
     (repo / "doc/harness/manifest.yaml").write_text("version: 5\n", encoding="utf-8")
@@ -427,10 +432,13 @@ def test_refuses_unmerged_branch(tmp_path: Path):
 def _ignore_task_evidence(repo: Path) -> None:
     """Commit the ignores a real project has, so WBS evidence stays out of git
     and `git worktree remove` sees a clean lead worktree."""
-    (repo / ".gitignore").write_text(
-        ".claude/worktrees/\ndoc/harness/wbs/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n",
-        encoding="utf-8",
-    )
+    ignores = ".claude/worktrees/\ndoc/harness/wbs/\ndoc/harness/learnings.jsonl\ndoc/harness/archive/\n"
+    if os.name == "nt":
+        from setup_finalize import OPERATIONAL_IGNORES
+        ignores = "\n".join(OPERATIONAL_IGNORES) + "\n"
+        if (repo / ".gitignore").read_text(encoding="utf-8") == ignores:
+            return
+    (repo / ".gitignore").write_text(ignores, encoding="utf-8")
     _git("add", ".gitignore", cwd=repo)
     _git("commit", "-q", "-m", "ignore WBS evidence", cwd=repo)
 
@@ -927,12 +935,12 @@ def test_s1_guarded_removal_rejects_staged_change_hidden_by_restored_worktree(tm
 
 
 def _s1_reharvest_learnings(main, work, checkpoint, state_path, state):
+    if os.name == "nt":
+        return mod.harvest(str(main), str(work), "WBS__lead", publication=checkpoint)
     import copy
     import batch_state
-    harvested = (mod.harvest(str(main), str(work), "WBS__lead", publication=checkpoint)
-                 if os.name == "nt" else _harvest(str(main), str(work), "WBS__lead"))
-    batch_state.sync_harvest(str(main), harvested["archived"],
-                             **({"publication": checkpoint} if os.name == "nt" else {}))
+    harvested = _harvest(str(main), str(work), "WBS__lead")
+    batch_state.sync_harvest(str(main), harvested["archived"])
     checkpoint["harvest"] = harvested
     state["requests"][0]["checkpoint"] = copy.deepcopy(checkpoint)
     batch_state.write_json(str(state_path), state)

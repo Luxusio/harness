@@ -492,7 +492,7 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
     from test_codex_worktree_prewrite import check
     from test_prewrite_gate_dormant import _invoke_payload
     if os.name == 'nt' and ancestor == 'writable-main':
-        pytest.skip('POSIX mode-only ancestor; Native physical foreign-write ancestor custody is tested separately')
+        pytest.skip('POSIX mode-only main; Native foreign-write main independence is tested separately')
     pool = Pool(tmp_path, monkeypatch)
     tree, directory, call = _linked_direct(pool)
     _admit_linked_direct(call)
@@ -548,8 +548,8 @@ def test_ordinary_linked_direct_ignores_main_ancestors_without_batch_metadata(tm
         pool.repo.chmod(original.st_mode & 0o7777)
 
 
-@pytest.mark.skipif(os.name != 'nt', reason='requires actual Native ancestor DACL enforcement')
-def test_native_linked_direct_refuses_foreign_write_ancestor_and_preserves_source(tmp_path, monkeypatch):
+@pytest.mark.skipif(os.name != 'nt', reason='requires actual Native main-checkout DACL mutation')
+def test_native_linked_direct_ignores_foreign_write_main_and_preserves_source(tmp_path, monkeypatch):
     import wbs
     from test_windows_core_runtime import _acl
     from test_codex_worktree_prewrite import check
@@ -559,11 +559,11 @@ def test_native_linked_direct_refuses_foreign_write_ancestor_and_preserves_sourc
     source = tree / 'a.py'
     source.write_bytes(b'uncommitted user bytes\x00\xff')
     controls = {name: (directory / name).read_bytes() for name in ('WBS.control.json', 'WBS.json')}
+    assert tree.parent == pool.repo.parent and tree != pool.repo
     _acl(pool.repo, '(A;;GW;;;WD)')
     try:
-        with pytest.raises((OSError, ValueError)):
-            wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')
-        assert check(tree, source).get('permissionDecision') == 'deny'
+        assert wbs.require_source_assignment(str(tree), 'WBS__ordinary', 'a.py')['mode'] == 'direct'
+        assert check(tree, source) == {}
         assert source.read_bytes() == b'uncommitted user bytes\x00\xff'
         assert all((directory / name).read_bytes() == raw for name, raw in controls.items())
     finally:

@@ -192,7 +192,7 @@ def test_plugin_update_failure_fails_the_install(tmp_path, monkeypatch):
         (subprocess.TimeoutExpired(UPDATE, 120), "claude plugin update harness@harness timed out"),
     ):
         with (
-            mock.patch.object(install.shutil, "which", return_value="/bin/claude"),
+            mock.patch.object(install, "_host_available", return_value=True),
             mock.patch.object(install, "_run", side_effect=_fake_run(install_root, update=failure)),
         ):
             result = install.install_claude(dry_run=False, force=False)
@@ -314,7 +314,7 @@ def test_forced_current_cache_needs_no_restart_but_first_install_does(tmp_path, 
     monkeypatch.setenv("HARNESS_DEST", str(root))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     run = _fake_run(root, update=(0, CURRENT, ""))
-    with mock.patch.object(install.shutil, "which", return_value="/bin/claude"), mock.patch.object(install, "_run", side_effect=run):
+    with mock.patch.object(install, "_host_available", return_value=True), mock.patch.object(install, "_run", side_effect=run):
         first = install.install_claude(dry_run=False, force=True)
         current = install.install_claude(dry_run=False, force=True)
     assert first.ok and first.restart_required, first.summary

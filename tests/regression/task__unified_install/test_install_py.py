@@ -103,6 +103,16 @@ def _load_install_module():
     return module
 
 
+def _fixture_cli_path(fake_bin):
+    """Keep the genuine Git prerequisite for installed WBS smoke, without hosts."""
+    directories = [str(fake_bin)]
+    git = shutil.which("git")
+    if git:
+        directories.append(str(Path(git).parent))
+    directories.append(os.defpath)
+    return os.pathsep.join(directories)
+
+
 def _write_cli_fixture(path, version, *, log_env=None, marketplace="", failures=None):
     """A literal Python argv fixture; real native host resolution is tested separately."""
     options = dict(version=version, log_env=log_env, marketplace=marketplace, failures=failures or {})
@@ -1345,7 +1355,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
         'command = "new-x11"\n'
     )
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
     _model_codex_listing(fake_codex, config_path)
@@ -1372,7 +1382,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     codex_install_root = config_home / "harness"
     config_path = config_home / "config.toml"
     monkeypatch.setenv("CODEX_HOME", str(config_home))
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1451,7 +1461,7 @@ def test_codex_install_rejects_version_below_pin_before_mutating_payload(tmp_pat
     pin = tmp_path / ".codex-version"
     pin.write_text("0.200.0\n")
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setattr(module, "CODEX_VERSION_PIN_FILE", pin)
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1472,7 +1482,7 @@ def test_codex_install_fails_if_plugin_hooks_feature_cannot_be_enabled(tmp_path,
     _write_cli_fixture(fake_codex, 'codex 0.167.2', log_env='CODEX_LOG', failures={'features enable plugin_hooks': (42, 'feature unavailable')})
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1495,7 +1505,7 @@ def test_codex_install_fails_if_marketplace_add_fails_after_plugin_hooks(tmp_pat
     _write_cli_fixture(fake_codex, 'codex 0.167.2', log_env='CODEX_LOG', failures={'plugin marketplace add': (43, 'add failed')})
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1516,7 +1526,7 @@ def test_codex_install_treats_existing_marketplace_as_success(tmp_path, monkeypa
     _write_cli_fixture(fake_codex, 'codex 0.167.2', failures={'plugin marketplace add': (9, 'already exists')})
     fake_codex.chmod(0o755)
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
     _model_codex_listing(fake_codex, tmp_path / ".codex" / "config.toml")
@@ -1543,7 +1553,7 @@ def test_default_codex_install_replaces_an_existing_harness_block_with_a_backup(
     config_path.parent.mkdir()
     config_path.write_text('[mcp_servers.harness]\ncommand = "old"\n')
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
 
@@ -1792,7 +1802,7 @@ def test_claude_install_rehomes_stale_marketplace_source(tmp_path):
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": str(fake_bin) + os.pathsep + os.defpath,
+            "PATH": _fixture_cli_path(fake_bin),
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1823,7 +1833,7 @@ def test_claude_install_updates_marketplace_when_registered_to_install_root(tmp_
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": str(fake_bin) + os.pathsep + os.defpath,
+            "PATH": _fixture_cli_path(fake_bin),
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1850,7 +1860,7 @@ def test_claude_install_adds_marketplace_when_not_registered(tmp_path):
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": str(fake_bin) + os.pathsep + os.defpath,
+            "PATH": _fixture_cli_path(fake_bin),
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1875,7 +1885,7 @@ def test_claude_install_accepts_existing_plugin_and_mcp_messages(tmp_path):
     r = _run_with_env(
         ["--claude-only"],
         {
-            "PATH": str(fake_bin) + os.pathsep + os.defpath,
+            "PATH": _fixture_cli_path(fake_bin),
             "HARNESS_DEST": str(harness_dest),
             "CLAUDE_LOG": str(log),
         },
@@ -1894,7 +1904,7 @@ def test_claude_install_fails_when_marketplace_list_fails(tmp_path):
 
     r = _run_with_env(
         ["--claude-only"],
-        {"PATH": str(fake_bin) + os.pathsep + os.defpath, "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
+        {"PATH": _fixture_cli_path(fake_bin), "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
     )
 
     assert r.returncode == 1
@@ -1910,7 +1920,7 @@ def test_claude_install_fails_when_mcp_add_hard_fails(tmp_path):
 
     r = _run_with_env(
         ["--claude-only"],
-        {"PATH": str(fake_bin) + os.pathsep + os.defpath, "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
+        {"PATH": _fixture_cli_path(fake_bin), "HARNESS_DEST": str(tmp_path / "claude" / "harness-dev")},
     )
 
     assert r.returncode == 1
@@ -1931,7 +1941,7 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
     fake_claude.chmod(0o755)
     cfg = tmp_path / ".codex" / "config.toml"
     codex_install_root = tmp_path / ".codex" / "harness"
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.defpath)
+    monkeypatch.setenv("PATH", _fixture_cli_path(fake_bin))
     monkeypatch.setenv("HARNESS_DEST", str(tmp_path / "claude" / "harness-dev"))
     monkeypatch.setenv("CODEX_LOG", str(codex_log))
     monkeypatch.setenv("CLAUDE_LOG", str(claude_log))

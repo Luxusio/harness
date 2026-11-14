@@ -989,6 +989,11 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
     control = read_wbs_control(control_path)
     if not control:
         return {}
+    def metadata_present(path):
+        if os.name == 'nt':
+            from wiki_platform import metadata_probe
+            return metadata_probe(path) is not None
+        return os.path.lexists(path)
     recovery = 'doc/harness/archive/worktree-recovery/' + wbs_id + '/' + control['run_id'] + '/namespace-history'
     selected = None
     for candidate in (Path(repo), Path(worktree), Path(repo) / recovery):
@@ -1004,9 +1009,9 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
                 prefix = value.get('archive_prefix', namespace.ARCHIVE + '/original')
                 original_path = prefix + '/' + tree['source'] + '/TASK.json'
                 original_location = Path(worktree) / original_path
-                if not os.path.lexists(original_location) and not preserve:
+                if not metadata_present(original_location) and not preserve:
                     original_location = Path(repo) / recovery / original_path
-                if not os.path.lexists(original_location):
+                if not metadata_present(original_location):
                     continue  # A disposed earlier checkout does not own this one.
                 raw = _ordinary_bytes(str(original_location), 16384)
                 original = tree['entries']['TASK.json']
@@ -1025,7 +1030,7 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
     _s1_require(wbs_control_status(control_path, control) == 'closed',
                 'namespace history preservation requires the exact closed WBS')
     expected, directories = {}, {tree['source']}
-    _s1_require(not os.path.lexists(Path(worktree) / tree['source'] / 'TASK.json'),
+    _s1_require(not metadata_present(Path(worktree) / tree['source'] / 'TASK.json'),
                 'retired namespace authority reappeared')
     expected[original_path] = dict(original, mode=0o600)
     for name, row in tree['entries'].items():
@@ -1094,7 +1099,7 @@ def _ordinary_namespace_history(repo, worktree, wbs_id, *, control_dir=None, pre
         expected[old_checkpoint] = dict(sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), mode=mode)
     for relative, row in expected.items():
         destination = recovery + '/' + relative
-        source_exists = os.path.lexists(Path(worktree) / relative)
+        source_exists = metadata_present(Path(worktree) / relative)
         _s1_require(source_exists or not preserve, 'namespace history disappeared: ' + relative)
         if source_exists:
             observed = (namespace._link_file(Path(worktree), relative) if 'link' in row

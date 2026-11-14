@@ -228,7 +228,8 @@ def test_generated_codex_and_claude_commands_deliver_native_context(setup_wiki, 
         entry = config["hooks"]["PostToolUse"][-1]
         assert re.fullmatch(entry["matcher"], "Read")
         hook_record = entry["hooks"][0]
-        command = hook_record["command"]
+        command = (hook_record.get("commandWindows", hook_record["command"])
+                   if os.name == "nt" else hook_record["command"])
         if "args" in hook_record:
             command = [value.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT / "plugin"))
                        for value in [command, *hook_record["args"]]]

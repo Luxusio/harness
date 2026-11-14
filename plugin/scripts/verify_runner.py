@@ -28,6 +28,9 @@ VERSION = 2
 MAX_FAILURES = 128
 MAX_FAILURE_LOG_BYTES = 32 * 1024 * 1024
 MAX_RESULT_BYTES = 16 * 1024 * 1024
+# A successful Native response frames the unchanged result value with these
+# fixed JSON bytes. The result store and request keep their existing limits.
+_NATIVE_RESPONSE_OVERHEAD = len(json.dumps(dict(ok=True, value=None)).encode('utf-8')) - len(b'null')
 _SCOPED_CONTEXT_CODE = "import verification_target as vt\nprint(json.dumps(vt._context(value, root)))"
 _SCOPED_EXECUTE_CODE = "from wbs import _execute\ntry:\n result=_execute(value['argv'], str(root), value['timeout'], env=dict(os.environ), log_path=value['log_path'])\nexcept OSError as exc:\n result=dict(returncode=None,error=str(exc),start_failed=True,output='')\nprint(json.dumps(result))"
 _SCOPED_REQUEST_BYTES = 2 * 1024 * 1024
@@ -98,14 +101,15 @@ def _native_run_jobs(jobs, repo_root, **options):
         except (OSError, ValueError) as exc:
             failures.append(exc)
     writer = threading.Thread(target=send)
-    readers = [threading.Thread(target=read, args=(process.stdout, MAX_RESULT_BYTES, output)),
+    response_limit = MAX_RESULT_BYTES + _NATIVE_RESPONSE_OVERHEAD
+    readers = [threading.Thread(target=read, args=(process.stdout, response_limit, output)),
                threading.Thread(target=read, args=(process.stderr, 65536, errors))]
     try:
         for worker in (writer, *readers):
             worker.start()
             started.append(worker)
         while process.poll() is None:
-            if failures or (output and len(output[0]) > MAX_RESULT_BYTES) or (errors and len(errors[0]) > 65536):
+            if failures or (output and len(output[0]) > response_limit) or (errors and len(errors[0]) > 65536):
                 # Closing only this writer signals cancellation to the actual
                 # lease owner; do not kill the owner and release locks early.
                 if not writer.is_alive():
@@ -197,7 +201,7 @@ def _native_owner_main():
         _native._join_input(watcher, reader_state)
         _native._close(reader_state.get('thread'))
     raw = json.dumps(response).encode('utf-8')
-    if len(raw) > MAX_RESULT_BYTES:
+    if len(raw) > MAX_RESULT_BYTES + _NATIVE_RESPONSE_OVERHEAD:
         raise ValueError('Native execution response exceeds byte limit')
     sys.stdout.buffer.write(raw)
     sys.stdout.buffer.flush()
@@ -917,6 +921,11 @@ def _read_verify_commands(repo_root: Path) -> list[str]:
     lines = manifest.read_text(encoding="utf-8").splitlines()
     commands: list[str] = []
     in_block = False
+    def scalar(value):
+        value = value.strip()
+        if len(value) >= 2 and value[0] in {'"', "'"} and value[-1] == value[0]:
+            return value[1:-1]
+        return value
     for line in lines:
         if line.startswith("verify_commands:"):
             in_block = True
@@ -925,13 +934,13 @@ def _read_verify_commands(repo_root: Path) -> list[str]:
                 if rest.startswith("[") and rest.endswith("]"):
                     inner = rest[1:-1].strip()
                     if inner:
-                        commands.extend(x.strip().strip('"').strip("'") for x in inner.split(",") if x.strip())
+                        commands.extend(scalar(x) for x in inner.split(",") if x.strip())
                 else:
-                    commands.append(rest.strip('"').strip("'"))
+                    commands.append(scalar(rest))
             continue
         if in_block:
             if line.startswith("  - "):
-                commands.append(line.split("  - ", 1)[1].strip().strip('"').strip("'"))
+                commands.append(scalar(line.split("  - ", 1)[1]))
                 continue
             if line and not line.startswith(" ") and not line.startswith("#"):
                 break

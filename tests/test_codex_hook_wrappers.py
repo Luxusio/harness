@@ -560,12 +560,71 @@ def test_codex_wrappers_safely_ignore_nonobject_and_malformed_json_payloads(tmp_
 
 def test_posttool_binding_discovery_shares_hard_budget_and_preserves_caller_alarm(tmp_path):
     mod = _load("codex_hook_registration")
-    payload = json.dumps({"cwd": str(tmp_path), "session_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42"}).encode()
-    with mock.patch.object(mod, "_registration_identity", side_effect=lambda _: time.sleep(1)):
+    _binding_task(tmp_path, "WBS__budget")
+    sid = _load("_lib").new_uuid7()
+    payload = json.dumps({"cwd": str(tmp_path), "session_id": sid}).encode()
+    identity = mod._registration_identity
+    if os.name == "nt":
+        import base64
+        import ctypes as C
+        import wiki_platform
+        import _wiki_windows as win
+        from native_cli import owned_python_argv
+        real_execute = wiki_platform.execute_bounded
+        real_create_job, real_close = win._CreateJobObject, win._close
+        jobs, closed, observed = [], [], []
+
+        def create_job(*args):
+            handle = real_create_job(*args)
+            jobs.append(handle)
+            return handle
+
+        def close(handle):
+            real_close(handle)
+            closed.append(handle)
+
+        def slow_worker(argv, **kwargs):
+            assert argv == owned_python_argv(sys.executable, Path(mod.__file__).absolute(),
+                                             ["--native-operation", "register-result"])
+            request = json.loads(kwargs["input_bytes"])
+            assert request == dict(version=1, arguments=[base64.b64encode(payload).decode("ascii")],
+                                   budget_seconds=0.05)
+            assert kwargs["timeout"] == 0.05
+            # Model a stalled worker through the real Native Job, not a fake result.
+            worker = [sys.executable, "-I", "-B", "-c",
+                      "import sys,time;sys.stdin.buffer.read();time.sleep(1)"]
+            result = real_execute(worker, **kwargs)
+            observed.append(result)
+            return result
+
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": sid}):
+            assert identity(payload) == (str(tmp_path), sid)
+            with mock.patch.object(mod, "_registration_identity", side_effect=AssertionError("parent discovery ran")), \
+                 mock.patch.object(wiki_platform, "execute_bounded", side_effect=slow_worker), \
+                 mock.patch.object(win, "_CreateJobObject", side_effect=create_job), \
+                 mock.patch.object(win, "_close", side_effect=close):
+                started, status = time.monotonic(), {}
+                assert not mod.register_wbs_result(payload, budget_seconds=0.05, status_out=status)
+                assert time.monotonic() - started < 0.5
+        assert status["status"] == mod.REGISTRATION_FAILED
+        assert len(observed) == 1 and observed[0]["error"] == "timeout"
+        assert len(jobs) == 1 and jobs[0] in closed
+        accounting = win.JOB_ACCOUNTING()
+        assert not win._QueryJob(jobs[0], 1, C.byref(accounting), C.sizeof(accounting), None)
+        assert C.get_last_error() == 6  # The real Job handle was closed.
+        return
+
+    def slow_identity(raw):
+        time.sleep(1)
+        return identity(raw)
+    with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": sid}), \
+         mock.patch.object(mod, "_registration_identity", side_effect=slow_identity), \
+         mock.patch.object(mod, "_native_operation", return_value=False) as native_operation:
         started, status = time.monotonic(), {}
         assert not mod.register_wbs_result(payload, budget_seconds=0.05, status_out=status)
         assert time.monotonic() - started < 0.5
         assert status["status"] == mod.REGISTRATION_FAILED
+        native_operation.assert_not_called()
         delivered = []
         def caller_alarm(signum, _frame):
             delivered.append(signum)
@@ -765,8 +824,46 @@ def test_native_session_auth_uses_only_owned_metadata_and_exact_env_identity(tmp
     path.write_text(json.dumps({"type": "session_meta", "payload": {"id": "different", "cwd": str(repo)}}) + "\n")
     assert not mod.authenticate_native_session(sid, str(repo))
     path.write_text(json.dumps({"type": "session_meta", "payload": {"id": sid, "cwd": str(repo)}}) + "\n")
-    path.chmod(0o666)
-    assert not mod.authenticate_native_session(sid, str(repo))
-    path.chmod(0o600)
+    if os.name == "nt":
+        import ctypes as C
+        from ctypes import wintypes as W
+        import _wiki_windows as win
+        from test_windows_core_runtime import _acl
+        owner, dacl, descriptor = win.P(), win.P(), win.P()
+        handle = win._open(path, win.READ_CONTROL)
+        try:
+            original = win._security(handle, "metadata")
+            error = win._GetSecurityInfo(handle, 1, 1 | 4, C.byref(owner), None,
+                                         C.byref(dacl), None, C.byref(descriptor))
+            if error:
+                raise win._error(error)
+        finally:
+            win._close(handle)
+        control, revision = W.WORD(), W.DWORD()
+        get_control = win._bind(win.A, "GetSecurityDescriptorControl",
+                                [win.P, C.POINTER(W.WORD), C.POINTER(W.DWORD)])
+        setter = win._bind(win.A, "SetFileSecurityW", [W.LPCWSTR, W.DWORD, win.P])
+        try:
+            win._check(get_control(descriptor, C.byref(control), C.byref(revision)))
+            _acl(path, "(A;;GW;;;WD)")
+            assert not mod.authenticate_native_session(sid, str(repo))
+        finally:
+            try:
+                protection = 0x80000000 if control.value & 0x1000 else 0x20000000
+                win._check(setter(str(path), 4 | protection, descriptor))
+            finally:
+                win._LocalFree(descriptor)
+        handle = win._open(path, win.READ_CONTROL)
+        try:
+            assert win._security(handle, "metadata") == original
+        finally:
+            win._close(handle)
+    else:
+        path.chmod(0o666)
+        try:
+            assert not mod.authenticate_native_session(sid, str(repo))
+        finally:
+            path.chmod(0o600)
+    assert mod.authenticate_native_session(sid, str(repo)) == str(repo)
     monkeypatch.delenv("CODEX_THREAD_ID")
     assert not mod.authenticate_native_session(sid, str(repo))

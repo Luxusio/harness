@@ -631,7 +631,7 @@ def test_every_test_the_ranker_can_name_is_in_the_probed_tree(tmp_path):
     scratch.mkdir()
     mp.copy_worktree(str(repo), str(scratch),
                      must_include=mp.tests_tree_files(str(repo)))
-    copied = {str(f.relative_to(scratch)) for f in scratch.rglob("*") if f.is_file()}
+    copied = {f.relative_to(scratch).as_posix() for f in scratch.rglob("*") if f.is_file()}
     assert ranked - copied == set(), sorted(ranked - copied)
 
 
@@ -789,7 +789,7 @@ def test_a_must_include_path_that_is_not_a_regular_file_is_recorded(tmp_path, ma
     notes: list = []
     mp.copy_worktree(str(repo), str(scratch), must_include=ranked, notes=notes)
 
-    copied = {str(f.relative_to(scratch)) for f in scratch.rglob("*") if f.is_file()}
+    copied = {f.relative_to(scratch).as_posix() for f in scratch.rglob("*") if f.is_file()}
     assert "tests/test_real.py" in copied and "tests/test_broken.py" not in copied, copied
     assert len(notes) == 1 and "tests/test_broken.py" in notes[0], notes
 
@@ -1092,7 +1092,8 @@ def test_a_test_directory_reached_through_a_symlink_is_in_the_probed_tree(tmp_pa
         "mod.py": CACHED_MODULE,
         "tests/test_base.py": "def test_base():\n    assert True\n",
     })
-    make_symlink(repo / "tests" / "deep", "../../shared", target_is_directory=True)
+    make_symlink(repo / "tests" / "deep", os.path.join("..", "..", "shared"), target_is_directory=True)
+    assert (repo / "tests/deep/test_deep.py").samefile(tmp_path / "shared/test_deep.py")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "symlinked suite")
     _write(repo, {"mod.py": "def widen(value):\n    return value == 2\n"})

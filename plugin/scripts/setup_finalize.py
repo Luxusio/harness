@@ -69,6 +69,7 @@ OPERATIONAL_IGNORES = (
     "doc/harness/goals/",
     "doc/harness/reviews/",
     "doc/harness/learnings.jsonl",
+    "doc/harness/.promotion.lock",
     "doc/harness/runbook_candidates.yaml",
     "doc/harness/checkpoints/",
     "doc/harness/visual-baselines/",

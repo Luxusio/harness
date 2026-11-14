@@ -424,7 +424,14 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
     endpoint = config.parent / "app-server-control" / "app-server-control.sock"
     endpoint.parent.mkdir(parents=True)
     if missing_target:
-        make_symlink(endpoint, tmp_path / "missing-runtime.sock")
+        expected_missing = tmp_path / "missing-runtime.sock"
+        make_symlink(endpoint, expected_missing)
+        created_target = endpoint.readlink()
+        # The OS may spell a Windows reparse target as an extended path. Match
+        # its real parent identity without rewriting the stored target spelling.
+        assert created_target.name == expected_missing.name
+        assert created_target.parent.samefile(expected_missing.parent)
+        assert not expected_missing.exists() and not endpoint.exists()
     else:
         endpoint.write_text("preserve invalid endpoint")
     error = "Error: failed to connect to control socket\nCaused by: No such file or directory (os error 2)"
@@ -463,7 +470,8 @@ def test_daemon_install_reports_deferred_or_failed_discovery(
         assert module.main() == 0
         assert capsys.readouterr().out == "Codex: SUCCESS\n  Start a new Codex session to load the installed hooks.\n"
         assert endpoint.is_symlink()
-        assert endpoint.readlink() == tmp_path / "missing-runtime.sock"
+        assert endpoint.readlink() == created_target
+        assert not expected_missing.exists() and not endpoint.exists()
         assert any(error in step and "next session" in step for step in result.steps)
         return
     assert module.main() == 1
