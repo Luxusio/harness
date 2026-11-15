@@ -704,14 +704,15 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
         while (held := runner._lease({"resource:" + name: True})) is None:
             assert time.monotonic() < deadline
             time.sleep(.01)
-        # Once the next owner is admitted, the old command cannot still write.
+        # Attempt a write as soon as the new owner acquires the lease.
+        (tmp_path / "release").touch()
         if os.name == "nt":
-            assert process_exited(worker), "owned synthetic worker survived lease release"
+            # The native process object can be signaled shortly after lease transfer.
+            assert process_exited(worker, timeout_ms=2000), "owned synthetic worker survived lease release"
         else:
             state = Path('/proc') / str(worker) / 'stat'
             if state.exists():
                 assert state.read_text().split()[2] == 'Z'
-        (tmp_path / "release").touch()
         assert not (tmp_path / "finished").exists()
         interrupted = json.loads((result_path(tmp_path, "result.json")).read_text())
         assert interrupted["status"] == "FAIL" and interrupted["successful"] == []
