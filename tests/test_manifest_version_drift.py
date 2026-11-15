@@ -84,13 +84,13 @@ def test_every_prose_version_mirror_matches_manifest_version():
 def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
     """QA finding: CRLF, quoted, and keyless manifests were reported as current."""
     import subprocess
-    import shutil
     import shlex
     import pytest
+    from conftest import fixture_bash
 
-    bash = shutil.which("bash")
+    bash = fixture_bash()
     if not bash:
-        pytest.skip("the documented Bash version-check snippet requires Bash")
+        pytest.skip("the documented Bash version-check snippet requires Bash compatible with native paths")
 
     current = load_setup_finalize().MANIFEST_VERSION
     previous = current - 1
@@ -120,9 +120,9 @@ def test_setup_skill_version_check_block_reads_the_manifest_robustly(tmp_path):
                 (root / "doc/harness/manifest.yaml").write_bytes(manifest)
             result = subprocess.run(
                 [bash, "-s"],
-                input=f"_ROOT={shlex.quote(root.as_posix())}\n{block}",
-                capture_output=True, text=True, encoding="utf-8", timeout=10,
+                input=f"_ROOT={shlex.quote(root.as_posix())}\n{block}".encode("utf-8"),
+                capture_output=True, timeout=10,
             )
             assert result.returncode == 0, (rel, manifest, result.stdout, result.stderr)
-            assert result.stdout.strip() == expected, (rel, manifest, result.stdout, result.stderr)
-            assert result.stderr == "", (rel, manifest, result.stderr)
+            assert result.stdout.decode("utf-8").strip() == expected, (rel, manifest, result.stdout, result.stderr)
+            assert result.stderr == b"", (rel, manifest, result.stderr)

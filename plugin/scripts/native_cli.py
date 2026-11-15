@@ -114,39 +114,16 @@ def _run_owned_entry(import_roots, entrypoint, arguments):
     exec(code, namespace)
 
 
-def host_command(runtime, *, cwd=None, env=None):
-    from wiki_platform import native_executable, safe_read
-    if runtime not in ("codex", "claude"):
-        raise ValueError("Unsupported host CLI")
-    env = dict(os.environ) if env is None else env
-    cwd = Path(cwd or os.getcwd()).absolute()
-    if os.name != "nt":
-        executable = shutil.which(runtime, path=env.get("PATH", os.defpath))
-        if not executable:
-            raise ValueError(runtime.title() + " CLI is unavailable")
-        return [executable]
-    try:
-        return [native_executable(runtime + ".exe", cwd=cwd, env=env)]
-    except FileNotFoundError:
-        pass
-    shim = None
-    for entry in env.get("PATH", os.defpath).split(os.pathsep):
-        directory = Path(entry)
-        if not directory.is_absolute():
-            directory = cwd / directory
-        for suffix in (".cmd", ".bat"):
-            candidate = directory / (runtime + suffix)
-            try:
-                safe_read(candidate, 65536)
-            except FileNotFoundError:
-                continue
-            shim = candidate
-            break
-        if shim is not None:
-            break
-    if shim is None:
-        raise ValueError(runtime.title() + " CLI is unavailable")
-    package = shim.parent / "node_modules" / ("@openai/codex" if runtime == "codex" else "@anthropic-ai/claude-code")
+class HostUnavailableError(ValueError):
+    """No supported host command was found."""
+
+
+class HostUnverifiedError(ValueError):
+    """No host command was found and a candidate could not be verified."""
+
+
+def _npm_host_command(runtime, directory, env, executable, read, search_dirs):
+    package = directory / "node_modules" / ("@openai/codex" if runtime == "codex" else "@anthropic-ai/claude-code")
     if runtime == "claude":
         candidates = [package / "bin/claude.exe"]
     else:
@@ -157,20 +134,73 @@ def host_command(runtime, *, cwd=None, env=None):
         if arch:
             name, triple = arch
             roots = [package, package / "node_modules" / ("@openai/codex-win32-" + name),
-                     shim.parent / "node_modules" / ("@openai/codex-win32-" + name)]
+                     directory / "node_modules" / ("@openai/codex-win32-" + name)]
             candidates = [root / "vendor" / triple / relative for root in roots
                           for relative in ("bin/codex.exe", "codex/codex.exe")]
     for candidate in candidates:
-        try:
-            executable = native_executable(str(candidate), cwd=cwd, env=env)
-        except FileNotFoundError:
-            continue
-        return [executable]
+        resolved = executable(candidate)
+        if resolved is not None:
+            return [resolved]
     # Older official packages expose a JavaScript entrypoint, not a batch file.
     script = package / ("cli.js" if runtime == "claude" else "bin/codex.js")
-    try:
-        safe_read(script, 64 * 1024 * 1024)
-        node = native_executable("node.exe", cwd=cwd, env=env)
-    except FileNotFoundError:
-        raise ValueError("Native host executable unavailable; install the native CLI or a supported npm layout") from None
-    return [node, str(script)]
+    if read(script, 64 * 1024 * 1024) is not None:
+        for node_dir in search_dirs:
+            node = executable(node_dir / "node.exe")
+            if node is not None:
+                return [node, str(script)]
+    return None
+
+
+def host_command(runtime, *, cwd=None, env=None):
+    """Return a launch argv, or distinguish absence from an incomplete search."""
+    from wiki_platform import native_executable_at, safe_read
+    if runtime not in ("codex", "claude"):
+        raise ValueError("Unsupported host CLI")
+    env = dict(os.environ) if env is None else env
+    title = runtime.title()
+    if os.name != "nt":
+        executable = shutil.which(runtime, path=env.get("PATH", os.defpath))
+        if executable:
+            return [executable]
+        raise HostUnavailableError(title + " CLI is unavailable")
+
+    cwd = Path(cwd or os.getcwd()).absolute()
+    first_problem = None
+
+    def probe(operation, candidate, *args, **kwargs):
+        nonlocal first_problem
+        try:
+            return operation(candidate, *args, **kwargs)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as error:
+            if first_problem is None:
+                first_problem = (candidate, error)
+            return None
+
+    def executable(candidate):
+        return probe(native_executable_at, candidate)
+
+    def read(candidate, limit):
+        return probe(safe_read, candidate, limit)
+
+    search_dirs = [Path(os.path.normpath(cwd / entry)) for entry in env.get("PATH", os.defpath).split(os.pathsep)]
+    for directory in search_dirs:
+        resolved = executable(directory / (runtime + ".exe"))
+        if resolved is not None:
+            return [resolved]
+
+    for directory in search_dirs:
+        if not any(read(directory / (runtime + suffix), 65536) is not None for suffix in (".cmd", ".bat")):
+            continue
+        command = _npm_host_command(runtime, directory, env, executable, read, search_dirs)
+        if command is not None:
+            return command
+
+    if first_problem is not None:
+        candidate, error = first_problem
+        raise HostUnverifiedError(
+            f"{title} CLI could not be verified. Could not inspect {candidate}: {error}. "
+            f"Ensure a supported {title} installation is accessible on PATH."
+        ) from error
+    raise HostUnavailableError(f"{title} CLI is unavailable; install the native CLI or a supported npm layout")

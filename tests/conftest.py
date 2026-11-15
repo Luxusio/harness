@@ -34,6 +34,23 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
 
 
+def fixture_bash():
+    """Find Bash that accepts test paths from the current OS."""
+    if os.name != "nt":
+        return shutil.which("bash")
+    git = shutil.which("git.exe")
+    if git:
+        # Git for Windows' Bash accepts Windows paths. System32/bash.exe is a WSL launcher.
+        git_bin = Path(git).parent
+        git_root = git_bin.parent
+        if git_root.name.lower() in {"mingw64", "mingw32", "clangarm64"}:
+            git_root = git_root.parent
+        bash = git_root / "bin/bash.exe"
+        if bash.is_file():
+            return str(bash)
+    return None
+
+
 @pytest.fixture
 def selected_installer_python(monkeypatch):
     """Model selection explicitly for installer tests about other behavior.

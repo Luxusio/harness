@@ -74,7 +74,7 @@ DEFAULT_CLAUDE_INSTALL_ROOT = Path.home() / ".claude" / "harness-dev"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 from mise_python import select_python, MisePythonError
-from native_cli import host_command, owned_python_argv
+from native_cli import HostUnverifiedError, host_command, owned_python_argv
 
 
 def _python_cmd() -> str:
@@ -687,6 +687,8 @@ def _host_available(runtime: str) -> bool:
     try:
         host_command(runtime)
         return True
+    except HostUnverifiedError:
+        raise
     except (OSError, ValueError):
         return False
 
@@ -2931,24 +2933,36 @@ def main() -> int:
     explicit_runtime = args.codex_only or args.claude_only
     tasks: list[tuple[str, callable]] = []
     skipped: list[str] = []
-    if not args.claude_only and (explicit_runtime or _host_available("codex")):
+    unverified: dict[str, str] = {}
+
+    def available(runtime: str) -> bool:
+        try:
+            return _host_available(runtime)
+        except HostUnverifiedError as error:
+            if not explicit_runtime:
+                unverified[runtime] = str(error)
+            return False
+
+    if not args.claude_only and (explicit_runtime or available("codex")):
         tasks.append(("codex", lambda: install_codex(
             dry_run=args.dry_run, force=args.force, config_path=args.config_path)))
-    elif not args.claude_only:
+    elif not args.claude_only and "codex" not in unverified:
         skipped.append("codex (codex CLI not found in PATH)")
-    if not args.codex_only and (explicit_runtime or _host_available("claude")):
+    if not args.codex_only and (explicit_runtime or available("claude")):
         tasks.append(("claude", lambda: install_claude(
             dry_run=args.dry_run, force=args.force)))
-    elif not args.codex_only:
+    elif not args.codex_only and "claude" not in unverified:
         skipped.append("claude (claude CLI not found in PATH)")
 
+    for runtime, reason in unverified.items():
+        print(f"WARNING: skipping {runtime}: {reason}", file=sys.stderr)
     if not tasks:
         detail = f"; skipped: {', '.join(skipped)}" if skipped else ""
         print(f"ERROR: no supported runtime CLI found{detail}", file=sys.stderr)
         return 2
 
     # Select before either worker can prune, chmod, copy, or register anything.
-    if any(_host_available(name) for name, _ in tasks):
+    if not explicit_runtime or any(available(name) for name, _ in tasks):
         try:
             _python_cmd()
         except MisePythonError as error:

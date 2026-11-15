@@ -1265,6 +1265,16 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, capture_stderr=Fal
     return subprocess.CompletedProcess(argv, result["returncode"], result["output"], result.get("stderr", b""))
 
 
+def native_executable_at(path):
+    """Inspect an exact native executable path without masking denied access."""
+    path = _path(path)
+    if path.suffix.lower() not in (".exe", ".com"):
+        raise ValueError("Native executable path required")
+    if not stat.S_ISREG(os.stat(_win32_path(path)).st_mode):
+        raise FileNotFoundError("Native executable is not a regular file")
+    return str(path)
+
+
 def native_executable(command, *, cwd, env):
     """Resolve a native command from explicit paths, without an implicit cwd."""
     env = dict(os.environ) if env is None else env

@@ -114,17 +114,25 @@ def native_install(tmp_path, monkeypatch):
                            claude=claude, env=env, python=selected)
 
 
-def _core_install(fixture, runtime, *, force=False):
+def _require_native_host(fixture, runtime):
+    from native_cli import HostUnavailableError, HostUnverifiedError, host_command
+
+    try:
+        host_command(runtime, cwd=fixture.consumer, env=fixture.env)
+    except (HostUnavailableError, HostUnverifiedError) as error:
+        pytest.skip(str(error))
+
+
+def _core_install(fixture, runtime, *, force=False, use_default=False):
     argv = [fixture.python, "-E", "-s", "-B", str(fixture.source / "install.py")]
-    if runtime:
+    if not use_default:
         argv.append(f"--{runtime}-only")
-    if runtime in (None, "codex"):
+    if runtime == "codex":
         argv.extend(["--config-path", str(fixture.codex / "config.toml")])
     if force:
         argv.append("--force")
     output = _run(argv, cwd=fixture.consumer, env=fixture.env)
-    for name in ([runtime] if runtime else ["codex", "claude"]):
-        assert (name.title() + ": SUCCESS").encode() in output, output
+    assert (runtime.title() + ": SUCCESS").encode() in output, output
     return output
 
 
@@ -282,6 +290,7 @@ def _selected_claude_startup(fixture, marker):
 @pytest.mark.parametrize("runtime", ["codex", "claude"])
 def test_native_core_clean_default_force_and_update_preserve_prior_selected_cache(native_install, runtime):
     fixture = native_install
+    _require_native_host(fixture, runtime)
     if runtime == "claude":
         units = len(str(fixture.claude).encode("utf-16-le")) // 2
         parent = win.ensure_private_directory(fixture.claude / ("deep registered mirror-" + "界" * max(80, 270 - units)))
@@ -299,7 +308,7 @@ def test_native_core_clean_default_force_and_update_preserve_prior_selected_cach
     else:
         _exercise_installed_claude_hooks(first_cache, fixture)
     for force in (False, True):
-        _core_install(fixture, None if runtime == "codex" and not force else runtime, force=force)
+        _core_install(fixture, runtime, force=force, use_default=runtime == "codex" and not force)
         version, cache = _core_selection(fixture, runtime)
         assert version == first_version and cache == first_cache
         _preserved_core_cache(first_cache, first)
@@ -360,6 +369,7 @@ def test_native_wiki_public_install_update_and_rerun_preserve_immutable_launcher
     import mise_python
 
     fixture = native_install
+    _require_native_host(fixture, runtime)
     # Path.home supplies the supported wiki data destination. Keep discovery
     # on the genuine, independently validated installed mise store while all
     # test data and host registries remain in this disposable profile.
@@ -404,6 +414,7 @@ def test_native_host_discovery_uses_real_executable_and_preserves_literal_argume
     from test_windows_core_runtime import _copy_base_python_shadow
 
     fixture = native_install
+    _require_native_host(fixture, runtime)
     cli = _load(fixture.source / "plugin/scripts/native_cli.py", "native_host_cli_fixture")
     shadow = fixture.consumer / (runtime + ".exe")
     fixture.env = _copy_base_python_shadow(shadow, fixture.env)
@@ -421,6 +432,55 @@ def test_native_host_discovery_uses_real_executable_and_preserves_literal_argume
         cwd=fixture.consumer, env=fixture.env, timeout=30, limit=64 * 1024)
     assert result["returncode"] not in (None, 0) and not result["error"], result
     assert not marker.exists(), "a host CLI argument was interpreted by a shell"
+
+
+@pytest.mark.parametrize("denied_kind", ["executable", "shim"])
+def test_native_host_discovery_distinguishes_missing_and_denied_candidates(tmp_path, monkeypatch, denied_kind):
+    from native_cli import HostUnavailableError, HostUnverifiedError, host_command
+
+    denied, stale, valid = [win.ensure_private_directory(tmp_path / name) for name in ("denied", "stale", "valid")]
+    if denied_kind == "executable":
+        original_stat = os.stat
+        denied_path = win._win32_path(denied / "claude.exe")
+
+        def guarded_stat(path, *args, **kwargs):
+            if path == denied_path:
+                raise PermissionError(5, "PATH candidate cannot be inspected")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", guarded_stat)
+    else:
+        read = platform.safe_read
+
+        def guarded_read(path, limit):
+            if path.parent == denied:
+                raise PermissionError(5, "PATH candidate cannot be inspected")
+            return read(path, limit)
+
+        monkeypatch.setattr(platform, "safe_read", guarded_read)
+    (stale / "claude.cmd").write_bytes(b"unusable npm shim")
+    (valid / "claude.cmd").write_bytes(b"never execute this shim")
+    executable = valid / "node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"test path identity")
+
+    with pytest.raises(HostUnavailableError, match="CLI is unavailable"):
+        host_command("claude", cwd=tmp_path, env={"PATH": str(stale)})
+    with pytest.raises(HostUnverifiedError, match="PATH candidate cannot be inspected"):
+        host_command("claude", cwd=tmp_path, env={"PATH": os.pathsep.join(map(str, (denied, stale)))})
+    assert host_command("claude", cwd=tmp_path, env={"PATH": os.pathsep.join(map(str, (denied, stale, valid)))}) == [
+        str(executable)
+    ]
+
+
+def test_native_host_discovery_resolves_relative_path_against_child_cwd(tmp_path):
+    from native_cli import host_command
+
+    consumer = win.ensure_private_directory(tmp_path / "consumer")
+    tools = win.ensure_private_directory(tmp_path / "tools")
+    executable = tools / "claude.exe"
+    executable.write_bytes(b"test path identity")
+    assert host_command("claude", cwd=consumer, env={"PATH": "../tools"}) == [str(executable)]
 
 
 def test_native_real_profile_guard_survives_home_environment_spoofing(native_install, monkeypatch):

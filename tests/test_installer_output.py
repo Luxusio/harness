@@ -28,11 +28,16 @@ def installer():
     return module
 
 
-def run_main(installer, monkeypatch, capsys, results, *args, available=("codex", "claude")):
+def run_main(installer, monkeypatch, capsys, results, *args, available=("codex", "claude"), unverified=()):
     calls = {}
     monkeypatch.setattr(sys, "argv", ["install.py", *args])
     # Output policy consumes availability; native host resolution is tested separately.
-    monkeypatch.setattr(installer, "_host_available", lambda name: name in available)
+    def host_available(name):
+        if name in unverified:
+            raise installer.HostUnverifiedError(f"{name} CLI could not be verified: PATH access denied")
+        return name in available
+
+    monkeypatch.setattr(installer, "_host_available", host_available)
     for runtime, result in results.items():
         def install(*, _runtime=runtime, _result=result, **kwargs):
             calls[_runtime] = kwargs
@@ -42,6 +47,17 @@ def run_main(installer, monkeypatch, capsys, results, *args, available=("codex",
         monkeypatch.setattr(installer, f"install_{runtime}", install)
     rc = installer.main()
     return rc, capsys.readouterr(), calls
+
+
+@pytest.mark.parametrize("unverified", [(), ("claude",)])
+def test_default_install_uses_available_host_and_distinguishes_unverified_host(installer, monkeypatch, capsys, unverified):
+    result = installer.InstallResult("codex", True, "Codex install complete")
+    rc, captured, calls = run_main(
+        installer, monkeypatch, capsys, {"codex": result}, available=("codex",), unverified=unverified,
+    )
+    assert rc == 0 and set(calls) == {"codex"}
+    assert "Codex: SUCCESS" in captured.out
+    assert ("claude CLI could not be verified: PATH access denied" in captured.err) == bool(unverified)
 
 
 @pytest.mark.parametrize("verbose", [False, True])

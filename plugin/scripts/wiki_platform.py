@@ -526,6 +526,13 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
             process.stdin.close()
 
 
+def native_executable_at(path):
+    """Inspect one exact Windows executable path, preserving access errors."""
+    if os.name != "nt":
+        raise NotImplementedError("Native command resolution requires Windows")
+    return _native.native_executable_at(path)
+
+
 def native_executable(command, *, cwd, env):
     """Resolve an explicitly selected native Windows command."""
     if os.name != "nt":
