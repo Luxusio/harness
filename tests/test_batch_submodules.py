@@ -1020,6 +1020,47 @@ def test_conversion_policy_uses_selected_source_for_clone_when_outer_repository_
     assert {path: path.read_bytes() for path in before} == before
 
 
+def test_conversion_policy_uses_one_probe_and_keeps_git_precedence(tmp_path, monkeypatch):
+    helper, source, home = _conversion_fixture(tmp_path, monkeypatch)
+    import wiki_platform
+
+    included = tmp_path / "conversion-include.gitconfig"
+    included.write_text("[core]\n\tautocrlf = overridden-invalid\n\teol = LF\n", encoding="utf-8")
+    _git(source, "config", "--add", "include.path", str(included))
+    config = source / ".git/config"
+    # Git's --add can insert into the earlier [core] section before the include.
+    with config.open("a", encoding="utf-8") as stream:
+        stream.write("\n[core]\n\tautocrlf = input\n")
+    outer = _repo(tmp_path / "outer-conversion-repository")
+    _git(outer, "config", "core.autocrlf", "true")
+    _git(outer, "config", "core.eol", "crlf")
+
+    invocations = []
+    original = wiki_platform.run_bounded
+
+    def observe(argv, **kwargs):
+        invocations.append(argv)
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(wiki_platform, "run_bounded", observe)
+    root = outer if os.name == "nt" else source
+    gitdir = source / ".git"
+    paths = (config, home / ".gitconfig", included)
+    before = {path: path.read_bytes() for path in paths}
+    expected = {key: _git(source, "config", "--includes", "--type=bool-or-str", "--get", key).lower()
+                for key in ("core.autocrlf", "core.eol")}
+    assert helper._conversion_policy(root, gitdir=gitdir) == expected == {
+        "core.autocrlf": "input", "core.eol": "lf",
+    }
+    assert len(invocations) == 1
+    assert {path: path.read_bytes() for path in paths} == before
+
+    with config.open("a", encoding="utf-8") as stream:
+        stream.write("\n[core]\n\tautocrlf = off\n")
+    assert helper._conversion_policy(root, gitdir=gitdir) == {"core.autocrlf": "false", "core.eol": "lf"}
+    assert len(invocations) == 2
+
+
 def test_conversion_policy_honors_git_boolean_aliases_implicit_and_empty_values(
         tmp_path, monkeypatch, conversion_boolean):
     helper, source, home = _conversion_fixture(tmp_path, monkeypatch)

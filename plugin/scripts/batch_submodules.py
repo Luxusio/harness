@@ -36,39 +36,42 @@ def _require(condition, message):
 
 
 def _conversion_policy(root, *, gitdir=None):
-    """Read only safe effective conversion values, never execute configured tools."""
+    """Read both effective conversion values in one bounded Git process."""
     from wiki_platform import run_bounded
     env = _trusted_git_env()
     env.update(GIT_TERMINAL_PROMPT='0', LC_ALL='C')
     location = (['--git-dir=' + os.path.relpath(gitdir, root)]
                 if os.name == 'nt' and gitdir is not None else [])
+    try:
+        result = run_bounded(
+            [_git_executable(root, env), '--no-pager', '--no-optional-locks', *location, 'config', '--includes',
+             '--null', '--type=bool-or-str', '--get-regexp', r'^core\.(autocrlf|eol)$'],
+            cwd=root, env=env, timeout=10, limit=64 * 1024)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SubmoduleError('Git conversion policy unavailable') from exc
+    except ValueError as exc:
+        raise SubmoduleError('invalid Git conversion policy') from exc
+    raw = result.stdout
+    _require(len(result.stderr) <= 4096 and
+             ((result.returncode == 1 and not raw) or (result.returncode == 0 and raw.endswith(b'\0'))),
+             'invalid Git conversion policy output')
+    rules = {
+        b'core.autocrlf': (b'false', {b'false', b'true', b'input'}),
+        b'core.eol': (b'native', {b'lf', b'crlf', b'native'}),
+    }
+    effective = {}
+    # Git lists values in precedence order, including resolved includes. Use
+    # the last value per key, as the individual `git config --get` would.
+    for row in raw.split(b'\0')[:-1]:
+        key, separator, value = row.partition(b'\n')
+        _require(separator and key in rules, 'invalid Git conversion policy record')
+        effective[key] = value
     policy = {}
-    for key, default, allowed in (
-            ('core.autocrlf', 'false', {'false', 'true', 'input'}),
-            ('core.eol', 'native', {'lf', 'crlf', 'native'})):
-        try:
-            result = run_bounded(
-                [_git_executable(root, env), '--no-pager', '--no-optional-locks', *location, 'config', '--includes',
-                 '--null', '--type=bool-or-str', '--get', key],
-                cwd=root, env=env, timeout=10, limit=32)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise SubmoduleError('Git conversion policy unavailable: ' + key) from exc
-        except ValueError as exc:
-            raise SubmoduleError('invalid Git conversion policy: ' + key) from exc
-        _require(len(result.stdout) <= 32 and len(result.stderr) <= 4096
-                 and result.returncode in (0, 1), 'invalid Git conversion policy: ' + key)
-        if result.returncode == 1:
-            _require(not result.stdout, 'invalid Git conversion policy: ' + key)
-            value = default
-        else:
-            raw = result.stdout
-            _require(raw.endswith(b'\0'), 'invalid Git conversion policy: ' + key)
-            try:
-                value = raw[:-1].decode('ascii').lower()
-            except UnicodeError as exc:
-                raise SubmoduleError('invalid Git conversion policy: ' + key) from exc
-            _require(value in allowed, 'invalid Git conversion policy: ' + key)
-        policy[key] = value
+    for key, (default, allowed) in rules.items():
+        name = key.decode('ascii')
+        value = effective.get(key, default).lower()
+        _require(value in allowed, 'invalid Git conversion policy: ' + name)
+        policy[name] = value.decode('ascii')
     return policy
 
 
