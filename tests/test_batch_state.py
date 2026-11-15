@@ -92,6 +92,20 @@ class Pool:
         assert isinstance(body, dict) and "status" in body, body
         return body
 
+    def crash_finish(self, program, *, posix_timeout=30):
+        command = [sys.executable, "-c", program, str(SCRIPT.parent), *self.argv("finish", "--slug", "a")[2:]]
+        if os.name == "nt":
+            from wiki_platform import run_bounded
+
+            # An injected crash covers the entire native finish. Give its
+            # Git/filesystem checks room under parallel load and reap the
+            # entire fixture tree if the watchdog expires.
+            result = run_bounded(command, cwd=Path.cwd(), env=dict(os.environ), timeout=180,
+                                 limit=64 * 1024, capture_stderr=True)
+        else:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=posix_timeout)
+        assert result.returncode == 91, (result.stdout, result.stderr)
+
     def init(self, requests=None, cap=None, ok=True, owner=None):
         path = self.tmp / (self.batch + "-requests.json")
         path.write_text(json.dumps(requests if requests is not None else [request("a")]))
@@ -453,10 +467,7 @@ def cleanup_then_die(*args, **kwargs):
 batch_finish._cleanup = cleanup_then_die
 batch_state.main(sys.argv[1:])
 """
-    result = subprocess.run([sys.executable, "-c", program, str(SCRIPT.parent),
-                             *pool.argv("finish", "--slug", "a")[2:]],
-                            capture_output=True, text=True, timeout=30)
-    assert result.returncode == 91, (result.stdout, result.stderr)
+    pool.crash_finish(program)
     persisted = pool.state.read_bytes()
     pool.cli("status")
     assert pool.state.read_bytes() == persisted
@@ -1006,10 +1017,7 @@ def die_after_successful_merge(command, *args, **kwargs):
 subprocess.run = die_after_successful_merge
 batch_state.main(sys.argv[1:])
 """
-    result = subprocess.run([sys.executable, "-c", program, str(SCRIPT.parent),
-                             *pool.argv("finish", "--slug", "a")[2:]],
-                            capture_output=True, text=True, timeout=30)
-    assert result.returncode == 91, (result.stdout, result.stderr)
+    pool.crash_finish(program)
     integrated_tip = _head(pool.repo)
     assert integrated_tip == _head(worktree) and integrated_tip != returned_tip
     assert not (pool.repo / "doc/harness/archive/batch/WBS__a").exists()
@@ -1075,10 +1083,7 @@ def die_after_merge(command, *args, **kwargs):
 subprocess.run = die_after_merge
 batch_state.main(sys.argv[1:])
 """
-    crashed = subprocess.run([sys.executable, "-c", program, str(SCRIPT.parent),
-                              *pool.argv("finish", "--slug", "a")[2:]],
-                             capture_output=True, text=True, timeout=30)
-    assert crashed.returncode == 91, (crashed.stdout, crashed.stderr)
+    pool.crash_finish(program)
     module = load_state_module()
     original_run = subprocess.run
     queries = []
@@ -1317,27 +1322,13 @@ def test_s1_cli_full_finish_preserves_objects_and_removes_worktree_and_branch(tm
     assert (pool.repo / "doc/harness/archive/batch/WBS__a/WBS.control.json").read_bytes() == evidence
 
 
-def _s1_crash_finish(pool, program):
-    command = [sys.executable, "-c", program, str(SCRIPT.parent), *pool.argv("finish", "--slug", "a")[2:]]
-    if os.name == "nt":
-        from wiki_platform import run_bounded
-
-        # This watchdog covers the entire native finish, including hundreds
-        # of Git and filesystem checks under parallel test load.
-        result = run_bounded(command, cwd=Path.cwd(), env=dict(os.environ), timeout=180,
-                             limit=64 * 1024, capture_stderr=True)
-    else:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=90)
-    assert result.returncode == 91, (result.stdout, result.stderr)
-
-
 def test_s1_recover_reconciles_landed_witness_before_cleanliness_guard(tmp_path, monkeypatch):
     pool = _s1_pool(tmp_path, monkeypatch)
     pool.init([_s1_request()])
     pool.claim()
     worktree, branch, _, tip = _s1_complete(pool)
     old_module = _head(pool.repo / "libs/module0")
-    _s1_crash_finish(pool, """
+    pool.crash_finish("""
 import os, subprocess, sys
 sys.path.insert(0, sys.argv.pop(1))
 import batch_state
@@ -1349,7 +1340,7 @@ def crash(command, *args, **kwargs):
     return result
 subprocess.run = crash
 batch_state.main(sys.argv[1:])
-""")
+""", posix_timeout=90)
     assert _head(pool.repo) == _head(worktree)
     assert _head(pool.repo / "libs/module0") == old_module != tip
     assert _git("status", "--porcelain", cwd=pool.repo)
@@ -1367,7 +1358,7 @@ def test_s1_removed_worktree_recovery_requires_preserved_objects(tmp_path, monke
     pool.init([_s1_request()])
     pool.claim()
     worktree, branch, _, _ = _s1_complete(pool)
-    _s1_crash_finish(pool, """
+    pool.crash_finish("""
 import os, sys
 sys.path.insert(0, sys.argv.pop(1))
 import batch_state, batch_finish
@@ -1377,7 +1368,7 @@ def crash(*args, **kwargs):
     os._exit(91)
 batch_finish._cleanup = crash
 batch_state.main(sys.argv[1:])
-""")
+""", posix_timeout=90)
     assert not worktree.exists()
     item = json.loads(pool.state.read_text())["requests"][0]
     pin = next(iter(item["submodule_manifest"]["modules"][0]["pins"].values()))
