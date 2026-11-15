@@ -1318,9 +1318,16 @@ def test_s1_cli_full_finish_preserves_objects_and_removes_worktree_and_branch(tm
 
 
 def _s1_crash_finish(pool, program):
-    result = subprocess.run([sys.executable, "-c", program, str(SCRIPT.parent),
-                             *pool.argv("finish", "--slug", "a")[2:]],
-                            capture_output=True, text=True, timeout=90)
+    command = [sys.executable, "-c", program, str(SCRIPT.parent), *pool.argv("finish", "--slug", "a")[2:]]
+    if os.name == "nt":
+        from wiki_platform import run_bounded
+
+        # This watchdog covers the entire native finish, including hundreds
+        # of Git and filesystem checks under parallel test load.
+        result = run_bounded(command, cwd=Path.cwd(), env=dict(os.environ), timeout=180,
+                             limit=64 * 1024, capture_stderr=True)
+    else:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=90)
     assert result.returncode == 91, (result.stdout, result.stderr)
 
 
