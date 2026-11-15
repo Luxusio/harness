@@ -38,6 +38,7 @@ if os.name == "nt":
     import _wiki_windows as win
     import wiki_platform as platform
     import wbs
+    from windows_process_fixture import WINDOWS_PROCESS_IMPORT, process_exited, process_identity, terminate_fixture_process
 
 
 @pytest.fixture
@@ -1118,26 +1119,35 @@ def test_native_codex_metadata_never_authenticates_invalid_authority(private, mo
     assert _disk(path).read_bytes() == before
 
 
-def _dead(pid):
-    opener = win._bind(win.K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
-    handle = opener(0x1000 | 0x100000, False, pid)
-    if not handle:
-        assert C.get_last_error() in (87, 1168), "could not inspect synthetic descendant"
-        return
+def test_native_process_fixture_rejects_reused_pid():
+    interpreter = getattr(sys, "_base_executable", sys.executable)
+    child = subprocess.Popen([interpreter, "-B", "-c", "import time; time.sleep(30)"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        assert win._WaitForSingleObject(handle, 2000) == 0, "assertion descendant survived cleanup"
+        identity = process_identity(child.pid)
+        other_generation = identity[0], identity[1] + 1
+        assert not process_exited(identity)
+        assert process_exited(other_generation)
+        terminate_fixture_process(other_generation)
+        assert child.poll() is None
+        terminate_fixture_process(identity)
+        assert process_exited(identity)
+        assert child.wait(timeout=2) == 1
     finally:
-        win._close(handle)
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
 
 
 @pytest.mark.parametrize("finish", ["success", "timeout", "overflow"])
 def test_native_assertion_retains_bounded_merged_diagnostics_and_reaps_tree(private, finish):
-    pidfile = private / "descendant.pid"
+    identity_file = private / "descendant.json"
     script = (
-        "import subprocess,sys,time; from pathlib import Path; "
+        WINDOWS_PROCESS_IMPORT +
+        "import json,subprocess,sys,time; from pathlib import Path; "
         "p=subprocess.Popen([sys.executable,'-B','-c','import time; time.sleep(30)'],"
         "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
-        f"Path({str(pidfile)!r}).write_text(str(p.pid)); "
+        f"Path({str(identity_file)!r}).write_text(json.dumps(process_identity(p.pid))); "
         "print('native stdout',flush=True); print('native stderr',file=sys.stderr,flush=True); "
     )
     script += {"success": "pass", "timeout": "time.sleep(30)",
@@ -1151,19 +1161,21 @@ def test_native_assertion_retains_bounded_merged_diagnostics_and_reaps_tree(priv
     assert result["error"] == {"success": None, "timeout": "timeout", "overflow": "output limit exceeded"}[finish]
     if finish == "success":
         assert result["returncode"] == 0
-    assert pidfile.exists(), result
-    _dead(int(pidfile.read_text()))
+    assert identity_file.exists(), result
+    assert process_exited(json.loads(identity_file.read_text()), timeout_ms=2000)
 
 
 def test_native_assertion_cancellation_preserves_partial_output_and_reaps_tree(private):
-    pidfile = private / "cancelled-descendant.pid"
+    identity_file = private / "cancelled-descendant.json"
     ready = private / "cancellation ready"
     script = (
-        "import subprocess,sys,time; from pathlib import Path; "
+        WINDOWS_PROCESS_IMPORT +
+        "import json,subprocess,sys,time; from pathlib import Path; "
         "p=subprocess.Popen([sys.executable,'-B','-c','import time; time.sleep(30)'],"
         "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
         "print('before cancellation',file=sys.stderr,flush=True); "
-        f"Path({str(pidfile)!r}).write_text(str(p.pid)); Path({str(ready)!r}).touch(); time.sleep(30)"
+        f"Path({str(identity_file)!r}).write_text(json.dumps(process_identity(p.pid))); "
+        f"Path({str(ready)!r}).touch(); time.sleep(30)"
     )
     started = time.monotonic()
     result = platform.execute_bounded(
@@ -1172,8 +1184,8 @@ def test_native_assertion_cancellation_preserves_partial_output_and_reaps_tree(p
     )
     assert time.monotonic() - started < 5
     assert result["error"] and "before cancellation" in result["output"].decode()
-    assert pidfile.exists(), result
-    _dead(int(pidfile.read_text()))
+    assert identity_file.exists(), result
+    assert process_exited(json.loads(identity_file.read_text()), timeout_ms=2000)
 
 
 def test_native_bounded_stdin_roundtrips_unicode_json_without_request_files(private):
@@ -1216,13 +1228,14 @@ def test_native_bounded_stdin_rejects_invalid_inputs_before_spawn(private, inval
 
 @pytest.mark.parametrize("finish", ["timeout", "cancel"])
 def test_native_bounded_stdin_backpressure_returns_and_cleans_writer_and_processes(private, finish):
-    pidfile = private / "stdin consumer pids.json"
+    identity_file = private / "stdin consumers.json"
     ready = private / "stdin consumer ready"
     script = (
+        WINDOWS_PROCESS_IMPORT +
         "import json,os,subprocess,sys,time; from pathlib import Path; "
         "p=subprocess.Popen([sys.executable,'-B','-c','import time; time.sleep(30)'],"
         "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
-        f"Path({str(pidfile)!r}).write_text(json.dumps([os.getpid(),p.pid])); "
+        f"Path({str(identity_file)!r}).write_text(json.dumps([process_identity(os.getpid()),process_identity(p.pid)])); "
         "print('input consumer deliberately never reads',file=sys.stderr,flush=True); "
         f"Path({str(ready)!r}).touch(); time.sleep(30)"
     )
@@ -1243,20 +1256,12 @@ def test_native_bounded_stdin_backpressure_returns_and_cleans_writer_and_process
         assert b"input consumer deliberately never reads" in result["output"]
         assert not [thread for thread in threading.enumerate()
                     if thread not in before_threads and thread.is_alive()], "stdin writer outlived its operation"
-        for pid in json.loads(pidfile.read_text()):
-            _dead(pid)
+        for identity in json.loads(identity_file.read_text()):
+            assert process_exited(identity, timeout_ms=2000), identity
     finally:
         if ready.exists():
-            for pid in json.loads(pidfile.read_text()):
-                opener = win._bind(win.K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
-                handle = opener(1 | 0x100000, False, pid)
-                if handle:
-                    try:
-                        if win._WaitForSingleObject(handle, 0) != 0:
-                            win._TerminateProcess(handle, 1)
-                            win._WaitForSingleObject(handle, 2000)
-                    finally:
-                        win._close(handle)
+            for identity in json.loads(identity_file.read_text()):
+                terminate_fixture_process(identity)
 
 
 def test_native_bare_git_uses_explicit_path_without_implicit_repository_shadow(private, monkeypatch):
@@ -1474,13 +1479,15 @@ def test_native_retro_reads_real_utf8_git_commits_under_default_python_encoding(
 def test_native_scoped_verification_cancellation_reaps_nested_job(private):
     import verify_runner
 
-    pidfile = private / "scoped descendant.pid"
+    identity_file = private / "scoped descendant.json"
     ready = private / "scoped ready"
     script = (
-        "import subprocess,sys,time; from pathlib import Path; "
+        WINDOWS_PROCESS_IMPORT +
+        "import json,subprocess,sys,time; from pathlib import Path; "
         "p=subprocess.Popen([sys.executable,'-B','-c','import time; time.sleep(30)'],"
         "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
-        f"Path({str(pidfile)!r}).write_text(str(p.pid)); Path({str(ready)!r}).touch(); time.sleep(30)"
+        f"Path({str(identity_file)!r}).write_text(json.dumps(process_identity(p.pid))); "
+        f"Path({str(ready)!r}).touch(); time.sleep(30)"
     )
     cancelled = threading.Event()
     started = time.monotonic()
@@ -1501,7 +1508,7 @@ def test_native_scoped_verification_cancellation_reaps_nested_job(private):
                                       private, _environment(), cancelled=cancelled)
         assert ready.exists(), "scoped command never reached the cancellation boundary"
         assert time.monotonic() - started < 12
-        _dead(int(pidfile.read_text()))
+        assert process_exited(json.loads(identity_file.read_text()), timeout_ms=2000)
     finally:
         cancelled.set()
         cancellation.join(11)
@@ -1567,10 +1574,11 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
     monkeypatch.setenv("USERPROFILE", str(home))
     resource = "native-fixture:" + str(private)
     code = (
+        WINDOWS_PROCESS_IMPORT +
         "from pathlib import Path\nimport json,os,subprocess,sys,time\n"
         "p=subprocess.Popen([sys.executable,'-B','-c','import time; time.sleep(30)'],"
         "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
-        "Path('runner-pids.json').write_text(json.dumps([os.getpid(),p.pid]))\n"
+        "Path('runner-identities.json').write_text(json.dumps([process_identity(os.getpid()),process_identity(p.pid)]))\n"
         "Path('runner-ready').touch()\n"
         "while not Path('release-old-command').exists(): time.sleep(.01)\n"
         "Path('old-command-finished').touch()\n"
@@ -1608,7 +1616,7 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
                 + "\nstderr:\n" + owner_output[1].decode("utf-8", errors="replace")
                 + "\nadvisory result:\n" + (advisory.read_bytes().decode("utf-8", errors="replace") if advisory.exists() else "not published"))
 
-    pids = []
+    identities = []
     try:
         deadline = time.monotonic() + 15
         while not (private / "runner-ready").exists():
@@ -1617,23 +1625,16 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
             if time.monotonic() >= deadline:
                 pytest.fail("native job failed to start within its fixture budget; " + collect_owner_diagnostics())
             time.sleep(0.01)
-        pids = json.loads((private / "runner-pids.json").read_text())
+        identities = json.loads((private / "runner-identities.json").read_text())
         collect_owner_diagnostics()
         # A new public CLI claimant uses the same resource. At command admission
         # both the old writer and its redirected descendant must already be dead.
         probe = private / "runner-next-owner.py"
         probe.write_text(
-            "import ctypes as C,json\nfrom ctypes import wintypes as W\n"
-            "from pathlib import Path\nk=C.WinDLL('kernel32',use_last_error=True)\n"
-            "k.OpenProcess.argtypes=[W.DWORD,W.BOOL,W.DWORD];k.OpenProcess.restype=W.HANDLE\n"
-            "k.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]\n"
-            "k.CloseHandle.argtypes=[W.HANDLE]\n"
-            "for pid in json.loads(Path('runner-pids.json').read_text()):\n"
-            " h=k.OpenProcess(0x1000|0x100000,False,pid)\n"
-            " if h:\n"
-            "  try: assert k.WaitForSingleObject(h,0)==0, 'prior writer survived new resource admission'\n"
-            "  finally: k.CloseHandle(h)\n"
-            " else: assert C.get_last_error() in (87,1168)\n"
+            WINDOWS_PROCESS_IMPORT +
+            "import json\nfrom pathlib import Path\n"
+            "for identity in json.loads(Path('runner-identities.json').read_text()):\n"
+            " assert process_exited(identity), ('prior writer survived new resource admission', identity)\n"
             "print('new resource owner admitted after cleanup')\n", encoding="utf-8")
         claimant = dict(item, job_id="next-owner", kind="consumer",
                         argv=[sys.executable, "-B", probe.name],
@@ -1642,27 +1643,19 @@ def test_native_verify_runner_parent_death_releases_work_only_after_cleanup(priv
                                    capture_output=True, text=True, encoding="utf-8", timeout=30)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         assert json.loads(completed.stdout)["status"] == "PASS"
-        for pid in pids:
-            _dead(pid)
+        for identity in identities:
+            assert process_exited(identity, timeout_ms=2000), identity
         (private / "release-old-command").touch()
         assert not (private / "old-command-finished").exists()
         interrupted = json.loads((results / "owner-result.json").read_text())
         assert interrupted["status"] == "FAIL" and interrupted["successful"] == []
         assert interrupted["commands"][0]["returncode"] is None
     finally:
-        collect_owner_diagnostics()
-        # On a product failure, dispose only the exact synthetic processes whose
-        # identities this fixture recorded; do not leave a thirty-second writer.
-        for pid in pids:
-            opener = win._bind(win.K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
-            handle = opener(1 | 0x100000, False, pid)
-            if handle:
-                try:
-                    if win._WaitForSingleObject(handle, 0) != 0:
-                        win._TerminateProcess(handle, 1)
-                        win._WaitForSingleObject(handle, 2000)
-                finally:
-                    win._close(handle)
+        try:
+            collect_owner_diagnostics()
+        finally:
+            for identity in identities:
+                terminate_fixture_process(identity)
 
 
 def test_native_deep_public_plan_failure_restores_exact_artifact_bundle(private, monkeypatch):

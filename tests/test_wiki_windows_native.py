@@ -26,6 +26,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "plugin/scripts"
 if os.name == "nt":
     sys.path.insert(0, str(SCRIPTS))
     import _wiki_windows as win
+    from windows_process_fixture import WINDOWS_PROCESS_IMPORT, process_exited
 
 
 @pytest.fixture
@@ -53,18 +54,6 @@ def _child_lock(path, shared=False):
             "except BlockingIOError: print('busy')\n")
     return subprocess.run([sys.executable, "-B", "-c", code, str(SCRIPTS), str(path), str(int(shared))],
                           capture_output=True, text=True, encoding="utf-8", timeout=10, check=True).stdout.strip()
-
-
-def _dead(pid):
-    opener = win._bind(win.K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
-    handle = opener(0x1000 | 0x100000, False, pid)
-    if not handle:
-        assert C.get_last_error() in (87, 1168), "could not verify synthetic descendant identity"
-        return
-    try:
-        assert win._WaitForSingleObject(handle, 2000) == 0, "owned synthetic descendant survived cleanup"
-    finally:
-        win._close(handle)
 
 
 def test_native_private_acl_unicode_atomic_snapshot_and_bound(private):
@@ -718,28 +707,30 @@ def test_native_abi_layouts_match_documented_win32_structures():
 
 
 def test_native_job_closes_descendants_even_after_leader_exit(private):
-    code = ("import subprocess,sys; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
-            "print(p.pid,flush=True)")
+    code = (WINDOWS_PROCESS_IMPORT +
+            "import json,subprocess,sys; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+            "print(json.dumps(process_identity(p.pid)),flush=True)")
     start = time.monotonic()
     result = win.run_bounded([sys.executable, "-B", "-c", code], cwd=private,
                               env=dict(os.environ), timeout=5, limit=100)
     assert result.returncode == 0 and time.monotonic() - start < 5
-    _dead(int(result.stdout))
+    assert process_exited(json.loads(result.stdout), timeout_ms=2000)
 
 
 @pytest.mark.parametrize("failure", ["timeout", "overflow"])
 def test_native_job_cleanup_on_timeout_and_output_overflow(private, failure):
-    pidfile = private / "descendant.pid"
-    code = ("import pathlib,subprocess,sys,time; "
+    identity_file = private / "descendant.json"
+    code = (WINDOWS_PROCESS_IMPORT +
+            "import json,pathlib,subprocess,sys,time; "
             "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
-            "pathlib.Path(sys.argv[1]).write_text(str(p.pid),encoding='ascii'); " +
+            "pathlib.Path(sys.argv[1]).write_text(json.dumps(process_identity(p.pid)),encoding='ascii'); " +
             ("print('x'*8192,flush=True); " if failure == "overflow" else "") + "time.sleep(60)")
     error = subprocess.TimeoutExpired if failure == "timeout" else ValueError
     with pytest.raises(error):
-        win.run_bounded([sys.executable, "-B", "-c", code, str(pidfile)], cwd=private,
+        win.run_bounded([sys.executable, "-B", "-c", code, str(identity_file)], cwd=private,
                          env=dict(os.environ), timeout=1 if failure == "timeout" else 5, limit=256)
-    assert pidfile.is_file(), "synthetic child must start before testing cleanup"
-    _dead(int(pidfile.read_text(encoding="ascii")))
+    assert identity_file.is_file(), "synthetic child must start before testing cleanup"
+    assert process_exited(json.loads(identity_file.read_text(encoding="ascii")), timeout_ms=2000)
 
 
 def test_native_subprocess_utf8_bytes_and_shell_script_rejection(private):
@@ -811,18 +802,19 @@ def test_native_private_helper_streams_and_publication_preserve_user_cwd_fence(p
 def test_native_private_helper_rejects_incomplete_stdin_after_child_closes_it(private):
     from wiki_platform import run_bounded
 
-    pidfile = private / "early stdin close.pid"
-    code = ("import os,pathlib,sys;"
-            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()),encoding='ascii');"
+    identity_file = private / "early stdin close.json"
+    code = (WINDOWS_PROCESS_IMPORT +
+            "import json,os,pathlib,sys;"
+            "pathlib.Path(sys.argv[1]).write_text(json.dumps(process_identity(os.getpid())),encoding='ascii');"
             "os.close(0);os.write(1,b'closed stdin early\\n')")
     started = time.monotonic()
     with pytest.raises(subprocess.SubprocessError, match="stdin delivery failed") as error:
-        run_bounded([sys.executable, "-I", "-B", "-c", code, str(pidfile)], cwd=private,
+        run_bounded([sys.executable, "-I", "-B", "-c", code, str(identity_file)], cwd=private,
                     env=dict(os.environ), timeout=5, limit=4096, capture_stderr=True,
                     input_bytes=b"x" * (2 * 1024 * 1024))
     assert time.monotonic() - started < 6
     assert isinstance(error.value.stdout, bytes) and isinstance(error.value.stderr, bytes)
-    _dead(int(pidfile.read_text(encoding="ascii")))
+    assert process_exited(json.loads(identity_file.read_text(encoding="ascii")), timeout_ms=2000)
 
 
 @pytest.mark.parametrize("stdout_size,stderr_size", [(0, 513), (192, 192)])
@@ -842,14 +834,15 @@ def test_native_separate_capture_enforces_one_combined_byte_budget(private, stdo
 def test_native_separate_capture_reaps_active_stderr_writer_and_process_tree(private, failure):
     from wiki_platform import execute_bounded
 
-    pidfile = private / "separate descendant pids.json"
+    identity_file = private / "separate descendants.json"
     prefix = "active descendant stderr 한글\n".encode("utf-8")
     child = (f"import os,time;os.write(2,{prefix!r})\n"
              "for _ in range(3000):\n os.write(2,b'.');time.sleep(0.02)\n")
-    code = ("import json,os,pathlib,subprocess,sys,time;"
+    code = (WINDOWS_PROCESS_IMPORT +
+            "import json,os,pathlib,subprocess,sys,time;"
             "os.write(1,b'{\"started\":true}\\n');"
             f"p=subprocess.Popen([sys.executable,'-I','-B','-c',{child!r}]);"
-            "pathlib.Path(sys.argv[1]).write_text(json.dumps([os.getpid(),p.pid]),encoding='ascii');"
+            "pathlib.Path(sys.argv[1]).write_text(json.dumps([process_identity(os.getpid()),process_identity(p.pid)]),encoding='ascii');"
             "time.sleep(60)")
     cancelled = threading.Event()
     timer = threading.Timer(2, cancelled.set) if failure == "cancel" else None
@@ -857,17 +850,17 @@ def test_native_separate_capture_reaps_active_stderr_writer_and_process_tree(pri
         timer.start()
     started = time.monotonic()
     try:
-        result = execute_bounded([sys.executable, "-I", "-B", "-c", code, str(pidfile)],
+        result = execute_bounded([sys.executable, "-I", "-B", "-c", code, str(identity_file)],
             cwd=private, env=dict(os.environ), timeout=10 if timer else 2, limit=64 * 1024,
             capture_stderr=True, cancelled=cancelled.is_set if timer else None)
         assert result["error"] == ("parent execution ended" if timer else "timeout"), result
         assert time.monotonic() - started < 6, result
         assert json.loads(result["output"]) == dict(started=True)
         assert result["stderr"].startswith(prefix), "descendant stderr writer never reached the boundary"
-        pids = json.loads(pidfile.read_text(encoding="ascii"))
-        assert len(pids) == 2
-        for pid in pids:
-            _dead(pid)
+        identities = json.loads(identity_file.read_text(encoding="ascii"))
+        assert len(identities) == 2
+        for identity in identities:
+            assert process_exited(identity, timeout_ms=2000), identity
     finally:
         if timer:
             timer.cancel()

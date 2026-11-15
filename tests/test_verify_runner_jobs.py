@@ -662,7 +662,14 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
     import signal
 
     name = "death-test:" + str(tmp_path)
-    code = "from pathlib import Path\nimport os,time\nPath('worker.pid').write_text(str(os.getpid()))\n"
+    identity = "os.getpid()"
+    code = ""
+    if os.name == "nt":
+        from windows_process_fixture import WINDOWS_PROCESS_IMPORT, process_exited
+        code = WINDOWS_PROCESS_IMPORT
+        identity = "process_identity(os.getpid())"
+    code += ("from pathlib import Path\nimport json,os,time\n"
+             f"Path('worker-identity.json').write_text(json.dumps({identity}))\n")
     if closed_stdout:
         code += "os.close(1)\nos.close(2)\n"
     code += "Path('ready').touch()\nwhile not Path('release').exists(): time.sleep(.01)\nPath('finished').touch()\n"
@@ -683,7 +690,7 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
         while not (tmp_path / "ready").exists():
             assert proc.poll() is None and time.monotonic() < deadline
             time.sleep(.01)
-        worker = int((tmp_path / "worker.pid").read_text())
+        worker = json.loads((tmp_path / "worker-identity.json").read_text())
         assert runner._lease({"resource:" + name: True}) is None
         if termination == "pid":
             proc.kill()
@@ -699,8 +706,7 @@ def test_killed_runner_keeps_leases_until_supervisor_cleans_command(tmp_path, te
             time.sleep(.01)
         # Once the next owner is admitted, the old command cannot still write.
         if os.name == "nt":
-            from test_wiki_windows_native import _dead
-            _dead(worker)
+            assert process_exited(worker), "owned synthetic worker survived lease release"
         else:
             state = Path('/proc') / str(worker) / 'stat'
             if state.exists():

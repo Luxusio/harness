@@ -349,37 +349,32 @@ def test_manifest_preserves_individually_quoted_command_paths(tmp_path, monkeypa
     assert module._parse_manifest_services(path)[0]["command"] == command
 
 
-def _native_process_alive(module, pid, created=None):
-    win = module._win
-    open_process = win._bind(win.K, "OpenProcess", [win.DWORD, win.W.BOOL, win.DWORD], win.HANDLE)
-    handle = open_process(0x100000 | 0x1000, False, pid)
-    if not handle:
-        assert win.C.get_last_error() == 87
-        return False
-    try:
-        if created is not None and module._NativeService._created(handle) != created:
-            return False
-        result = win._WaitForSingleObject(handle, 0)
-        assert result in (0, 258)
-        return result == 258
-    finally:
-        win._close(handle)
+def _native_process_alive(pid, created):
+    from windows_process_fixture import process_exited
+    return not process_exited((pid, created))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires real Windows Job/process ownership")
 def test_native_persistent_job_reuses_descendants_after_leader_exit_and_preserves_foreign_pid(tmp_path, monkeypatch):
+    from windows_process_fixture import WINDOWS_PROCESS_IMPORT, process_exited
+
     module = _runtime_module(monkeypatch)
-    pid_path = tmp_path / "child.pid"
-    launcher_pid_path = tmp_path / "launcher.pid"
+    child_identity_path = tmp_path / "child-identity.json"
+    launcher_identity_path = tmp_path / "launcher-identity.json"
     child = tmp_path / "child service.py"
-    child.write_text("import os,pathlib,sys,time\npathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\ntime.sleep(300)\n")
+    child.write_text(WINDOWS_PROCESS_IMPORT +
+                     "import json,os,pathlib,sys,time\n"
+                     "pathlib.Path(sys.argv[1]).write_text(json.dumps(process_identity(os.getpid())))\n"
+                     "time.sleep(300)\n")
     launcher = tmp_path / "launcher.py"
-    launcher.write_text("import os,pathlib,subprocess,sys\npathlib.Path(sys.argv[3]).write_text(str(os.getpid()))\n"
+    launcher.write_text(WINDOWS_PROCESS_IMPORT +
+                        "import json,os,pathlib,subprocess,sys\n"
+                        "pathlib.Path(sys.argv[3]).write_text(json.dumps(process_identity(os.getpid())))\n"
                         "subprocess.Popen([sys.executable,sys.argv[1],sys.argv[2]])\n")
     (tmp_path / "manifest.yaml").write_text(
         "runtime:\n  services:\n    - name: tree\n"
-        f"      command: {_command(sys.executable, launcher, child, pid_path, launcher_pid_path)}\n"
-        f"      healthcheck: {_exists(pid_path)}\n      ready_timeout_sec: 8\n")
+        f"      command: {_command(sys.executable, launcher, child, child_identity_path, launcher_identity_path)}\n"
+        f"      healthcheck: {_exists(child_identity_path)}\n      ready_timeout_sec: 8\n")
     foreign = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(300)"])
     original = None
     try:
@@ -387,24 +382,24 @@ def test_native_persistent_job_reuses_descendants_after_leader_exit_and_preserve
         assert first.returncode == 0, first.stdout + first.stderr
         state = module._load_state(tmp_path / "runtime")
         original = dict(state["services"]["tree"])
-        child_pid = int(pid_path.read_text())
-        launcher_pid = int(launcher_pid_path.read_text())
+        child_identity = json.loads(child_identity_path.read_text())
+        launcher_identity = json.loads(launcher_identity_path.read_text())
         deadline = time.monotonic() + 5
-        while _native_process_alive(module, launcher_pid):
+        while not process_exited(launcher_identity):
             assert time.monotonic() < deadline, "fixture leader did not exit"
             time.sleep(0.05)
-        assert _native_process_alive(module, original["pid"], original["windows_created"]), "execution owner must retain the Job after command-leader exit"
+        assert _native_process_alive(original["pid"], original["windows_created"]), "execution owner must retain the Job after command-leader exit"
         assert module._entry_alive(original), "live descendant must retain the named Job"
         second = _run(tmp_path, "start")
         assert second.returncode == 0 and "running pid=" in second.stdout, second.stdout + second.stderr
-        assert int(pid_path.read_text()) == child_pid
+        assert json.loads(child_identity_path.read_text()) == child_identity
         # Simulate PID reuse by pointing the recorded leader at an unrelated
         # actual process. Job ownership, not that PID, defines termination.
         state["services"]["tree"]["pid"] = foreign.pid
         module._save_state(tmp_path / "runtime", state)
         stopped = _run(tmp_path, "stop")
         assert stopped.returncode == 0, stopped.stdout + stopped.stderr
-        assert not _native_process_alive(module, child_pid)
+        assert process_exited(child_identity)
         assert foreign.poll() is None, "unrelated/reused PID was terminated"
     finally:
         if original is not None:
@@ -426,7 +421,7 @@ def test_native_failed_ownership_publication_never_executes_and_reaps_suspended_
                                     tmp_path / "runtime", entry, fail_publish)
     assert not marker.exists()
     assert not module._entry_alive(entry)
-    assert not _native_process_alive(module, entry["pid"], entry["windows_created"])
+    assert not _native_process_alive(entry["pid"], entry["windows_created"])
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires real Windows process identity and private state")
@@ -555,7 +550,7 @@ def test_native_unfinished_startup_is_not_running_and_recovers_owned_job(tmp_pat
             assert module._entry_alive(abandoned), "acknowledged host must retain its actual Job handle"
         if crash_stage == "before-resume":
             deadline = time.monotonic() + 5
-            while _native_process_alive(module, abandoned["pid"], abandoned["windows_created"]):
+            while _native_process_alive(abandoned["pid"], abandoned["windows_created"]):
                 assert time.monotonic() < deadline, "controller death did not reap the suspended owned host"
                 time.sleep(0.01)
             assert not module._entry_alive(abandoned)
@@ -659,7 +654,7 @@ def test_native_deep_source_relaunches_owned_host_without_shortening_paths(tmp_p
         stopped = run("stop")
         assert stopped.returncode == 0, stopped.stdout + stopped.stderr
         assert not module._entry_alive(owner)
-        assert not _native_process_alive(module, owner["pid"], owner["windows_created"])
+        assert not _native_process_alive(owner["pid"], owner["windows_created"])
     finally:
         if owner is None:
             owner = module._load_state(runtime_dir).get("services", {}).get("deep")
