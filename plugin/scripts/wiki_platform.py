@@ -30,6 +30,14 @@ _native_lock_owners = {}
 _LOCK_LENGTH = (1 << 63) - 1
 
 
+def host_architecture():
+    """Return the host machine used in verification applicability."""
+    if os.name == "nt":
+        return _native.host_architecture()
+    import platform
+    return platform.machine()
+
+
 def _absolute(path):
     path = Path(path)
     if not path.is_absolute() or ".." in path.parts:

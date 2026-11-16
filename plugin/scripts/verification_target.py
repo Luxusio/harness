@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import re
 import secrets
 import shutil
@@ -20,6 +19,7 @@ import sys
 import time
 
 import wbs
+from wiki_platform import host_architecture
 
 FIELD = "verification_targets"
 
@@ -93,7 +93,7 @@ def _context(spec, repo):
         _require(version["returncode"] == 0 and not version["error"], "toolchain version unavailable: " + name)
         tools[name] = dict(binary=digest.hexdigest(), version=version["output"].strip())
     # Absolute installation paths are provenance, not content identity.
-    return dict(platform=[sys.platform, platform.machine()], toolchains=tools,
+    return dict(platform=[sys.platform, host_architecture()], toolchains=tools,
                 environment={key: wbs.digest(os.environ.get(key)) for key in spec["environment"]})
 
 

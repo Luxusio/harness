@@ -116,6 +116,22 @@ _OpenProcessToken = _bind(A, "OpenProcessToken", [HANDLE, DWORD, C.POINTER(HANDL
 _GetTokenInformation = _bind(A, "GetTokenInformation", [HANDLE, C.c_int, P, DWORD, C.POINTER(DWORD)])
 
 
+def host_architecture():
+    """Read the native machine type directly from the OS, including under WOW64."""
+    try:
+        query = _bind(K, "IsWow64Process2", [HANDLE, C.POINTER(W.USHORT), C.POINTER(W.USHORT)])
+    except AttributeError as exc:
+        raise OSError("Windows host architecture lookup requires IsWow64Process2") from exc
+    process_machine, native_machine = W.USHORT(), W.USHORT()
+    _check(query(_GetCurrentProcess(), C.byref(process_machine), C.byref(native_machine)))
+    # IMAGE_FILE_MACHINE values mapped to the existing platform.machine() names.
+    names = {0x014C: "x86", 0x01C4: "ARM", 0x8664: "AMD64", 0xAA64: "ARM64"}
+    try:
+        return names[native_machine.value]
+    except KeyError:
+        raise ValueError(f"Unsupported native Windows machine type: 0x{native_machine.value:04x}") from None
+
+
 def _error(code=None):
     code = C.get_last_error() if code is None else code
     message = "Native Windows operation failed or its security could not be verified"

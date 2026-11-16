@@ -807,10 +807,47 @@ def test_real_cli_consumers_enter_in_parallel_after_shared_preparation(tmp_path,
         assert len(json.loads(stdout)["commands"]) == 3, diagnostic
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires the native scoped context observer")
+def test_native_reuse_is_independent_of_wmi(tmp_path, monkeypatch):
+    scoped_probe = """
+import platform
+from pathlib import Path
+
+# Model CPython's empty architecture when WMI times out after execution.
+def machine():
+    return "" if Path("command-ran").is_file() else "AMD64"
+platform.machine = machine
+"""
+    native_owner_fault(monkeypatch, tmp_path, f"""
+import native_cli
+native_cli._BOOTSTRAP = {scoped_probe!r} + native_cli._BOOTSTRAP
+""")
+    item = job(tmp_path, "check", "from pathlib import Path\nPath('command-ran').touch()\n")
+    first = execute(tmp_path, [item])["commands"][0]
+    assert first["status"] == "PASS", first
+    reused = execute(tmp_path, [item], "two", reuse_only=True)["commands"][0]
+    assert reused["reused"] and reused["origin_generation"] == "one", reused
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native host architecture lookup")
+def test_native_context_rejects_unknown_machine_type(tmp_path, monkeypatch):
+    import _wiki_windows
+    import verification_target
+
+    # A successful query with IMAGE_FILE_MACHINE_UNKNOWN cannot certify reuse.
+    def unknown_machine(process, process_machine, native_machine):
+        return True
+
+    monkeypatch.setattr(_wiki_windows.K, "IsWow64Process2", unknown_machine)
+    with pytest.raises(ValueError, match="Unsupported native Windows machine type"):
+        verification_target._context({"environment": [], "toolchains": []}, tmp_path)
+
+
 def test_repeated_reuse_and_reuse_only_misses_preserve_origin_and_diagnostics(tmp_path):
     original = "print('EARLY diagnostic')\nprint('x' * 9000)\n"
     item = job(tmp_path, 'check', original)
     first = execute(tmp_path, [item])['commands'][0]
+    assert first['status'] == 'PASS', first
     reference = first['output_log']
     log = Path(reference['path'])
     assert _fixture_io(log).read_text().startswith('EARLY diagnostic\n')
