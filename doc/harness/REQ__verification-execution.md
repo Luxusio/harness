@@ -52,6 +52,15 @@ output using the existing verification-target API. A tool without a usable
 version identity is unavailable for reusable execution. Arbitrary shell-command
 reuse is unsupported.
 
+On Linux, typed verification jobs omit live Codex helper alias directories from
+their effective `PATH`. Recognition requires the current profile's private
+`tmp/arg0-linux` directory, the known helpers pointing to one Codex executable,
+and the live owner lock. Capability lookup, executable resolution, toolchain
+probes, context hashing and execution all use that effective value. Other
+entries retain their order and continue to affect reuse. If filtering would
+leave an empty value, the original `PATH` is retained to preserve lookup
+semantics. The invoking Codex session retains its own `PATH`.
+
 `requires` lists host-provided agent capability names (supplied through repeated
 `--capability`) and/or automatically detected `platform:<sys.platform>` and
 `executable:<name>` requirements. The host must supply actual available agent

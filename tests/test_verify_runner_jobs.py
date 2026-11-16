@@ -843,6 +843,127 @@ def test_native_context_rejects_unknown_machine_type(tmp_path, monkeypatch):
         verification_target._context({"environment": [], "toolchains": []}, tmp_path)
 
 
+@pytest.fixture
+def linux_codex_aliases(tmp_path, monkeypatch):
+    import fcntl
+    from contextlib import ExitStack
+
+    home = tmp_path / "codex-home"
+    alias_root = home / "tmp" / "arg0-linux"
+    alias_root.mkdir(mode=0o700, parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    binary = home / "codex-x86_64-unknown-linux-musl"
+    binary.write_text("#!/bin/sh\nprintf 'unexpected Codex alias\\n'\n")
+    binary.chmod(0o755)
+    with ExitStack() as handles:
+        aliases = []
+        for suffix in ("A1b2C3", "D4e5F6"):
+            path = alias_root / ("codex-arg0" + suffix)
+            path.mkdir()
+            for name in ("apply_patch", "applypatch", "codex-linux-sandbox"):
+                (path / name).symlink_to(binary)
+            lock = handles.enter_context((path / ".lock").open("w"))
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            aliases.append(path)
+        yield aliases
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires the Linux Codex alias and lock layout")
+def test_codex_linux_arg0_rotates_without_invalidating_reuse(tmp_path, monkeypatch, linux_codex_aliases):
+    first_alias, next_alias = linux_codex_aliases
+    profile_link = tmp_path / "profile-link"
+    profile_link.symlink_to(first_alias.parents[2], target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_HOME", profile_link.name)
+    paths = []
+    tools = []
+    for label in ("left", "right"):
+        directory = tmp_path / label
+        directory.mkdir()
+        tool = directory / "apply_patch"
+        tool.write_text(f"#!/bin/sh\nprintf '%s\\n' {label} \"$PATH\"\n")
+        tool.chmod(0o755)
+        paths.append(str(directory))
+        tools.append(str(tool.relative_to(tmp_path)))
+    effective = os.pathsep.join(paths)
+    item = dict(job_id="path", outcome_id="path", kind="consumer", argv=["apply_patch"],
+                inputs=dict(source=tools), requires=["executable:apply_patch"], toolchains=["apply_patch"])
+    monkeypatch.setenv("PATH", os.pathsep.join([str(first_alias), *paths]))
+    first = execute(tmp_path, [item])["commands"][0]
+    assert first["status"] == "PASS", first
+    assert first["output"].splitlines() == ["left", effective], first
+    monkeypatch.setenv("PATH", os.pathsep.join([str(next_alias), *paths]))
+    reused = execute(tmp_path, [item], "next", reuse_only=True)["commands"][0]
+    assert reused["reused"] and reused["context_fingerprint"] == first["context_fingerprint"], reused
+    monkeypatch.setenv("PATH", os.pathsep.join([str(next_alias), *reversed(paths)]))
+    changed = execute(tmp_path, [item], "reordered", reuse_only=True)["commands"][0]
+    assert not changed["reused"] and changed["context_fingerprint"] != first["context_fingerprint"], changed
+    item["requires"] = ["executable:codex-linux-sandbox"]
+    unavailable = execute(tmp_path, [item], "capability")["commands"][0]
+    assert unavailable["state"] == "capability_unavailable", unavailable
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires the Linux Codex alias and lock layout")
+@pytest.mark.parametrize("case", ("outside-home", "unexpected-file", "unlocked", "directory-symlink", "lock-symlink", "binary-symlink-ancestor", "writable"))
+def test_unrecognized_codex_linux_path_entries_are_preserved(tmp_path, monkeypatch, linux_codex_aliases, case):
+    candidate = linux_codex_aliases[0]
+    if case == "outside-home":
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "other-home"))
+    elif case == "unexpected-file":
+        tool = candidate / "git"
+        tool.write_text("ordinary executable")
+        tool.chmod(0o755)
+    elif case == "unlocked":
+        original = candidate
+        candidate = candidate.parent / "codex-arg0StalE1"
+        candidate.mkdir()
+        for name in ("apply_patch", "applypatch", "codex-linux-sandbox"):
+            (candidate / name).symlink_to(os.readlink(original / name))
+        (candidate / ".lock").touch()
+    elif case == "directory-symlink":
+        alias = candidate.parent / "codex-arg0LinkE1"
+        alias.symlink_to(candidate, target_is_directory=True)
+        candidate = alias
+    elif case == "lock-symlink":
+        lock = candidate / ".lock"
+        target = lock.rename(tmp_path / "outside-lock")
+        lock.symlink_to(target)
+    elif case == "binary-symlink-ancestor":
+        binary = Path(os.readlink(candidate / "apply_patch"))
+        alias_dir = tmp_path / "binary-alias"
+        alias_dir.symlink_to(binary.parent, target_is_directory=True)
+        for name in ("apply_patch", "applypatch", "codex-linux-sandbox"):
+            member = candidate / name
+            member.unlink()
+            member.symlink_to(alias_dir / binary.name)
+    elif case == "writable":
+        candidate.chmod(0o777)
+    raw = os.pathsep.join([str(candidate), "bin", ""])
+    assert runner._verification_path(raw) == raw
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires the Linux Codex alias and lock layout")
+def test_codex_linux_arg0_preserves_path_lookup_semantics(tmp_path, monkeypatch, linux_codex_aliases):
+    first, second = map(str, linux_codex_aliases)
+    assert runner._verification_path(first) == first
+    assert runner._verification_path(first + ":") == first + ":"
+    assert runner._verification_path("") == ""
+    assert runner._verification_path(os.pathsep.join([first, "", "bin", second, ""])) == ":bin:"
+    local = tmp_path / "local-probe"
+    local.write_text("#!/bin/sh\nprintf '%s\\n' \"$PATH\"\n")
+    local.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", first + ":")
+    typed = dict(job_id="local", outcome_id="local", kind="consumer", argv=[local.name],
+                 inputs=dict(source=[local.name]), requires=["executable:" + local.name], toolchains=[local.name])
+    checked = execute(tmp_path, [typed])["commands"][0]
+    assert checked["status"] == "PASS" and checked["output"].strip() == first + ":", checked
+    monkeypatch.delenv("PATH", raising=False)
+    item = job(tmp_path, "environment", "import os\nprint('PATH' in os.environ)\n")
+    result = execute(tmp_path, [item])["commands"][0]
+    assert result["status"] == "PASS" and result["output"].strip() == "False", result
+
+
 def test_repeated_reuse_and_reuse_only_misses_preserve_origin_and_diagnostics(tmp_path):
     original = "print('EARLY diagnostic')\nprint('x' * 9000)\n"
     item = job(tmp_path, 'check', original)

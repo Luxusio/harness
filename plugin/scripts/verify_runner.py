@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -453,6 +454,79 @@ def _job_spec(value, root):
     return job
 
 
+def _is_live_codex_linux_alias(entry):
+    """Recognize the owned alias directory created by a live Linux Codex CLI."""
+    import fcntl
+    from wiki_platform import _parent
+
+    aliases = {"apply_patch", "applypatch", "codex-linux-sandbox"}
+    expected = aliases | {".lock"}
+    uid = os.getuid()
+    try:
+        with _parent(entry, private=True) as (parent, name), ExitStack() as handles:
+            root = os.fstat(parent)
+            if root.st_uid != uid or stat.S_IMODE(root.st_mode) != 0o700:
+                return False
+            directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            handles.callback(os.close, directory)
+            info = os.fstat(directory)
+            if info.st_uid != uid or info.st_mode & 0o022:
+                return False
+            members = set()
+            with os.scandir(directory) as entries:
+                for member in entries:
+                    if member.name not in expected:
+                        return False
+                    members.add(member.name)
+            if members != expected:
+                return False
+            targets = {os.readlink(alias, dir_fd=directory) for alias in aliases}
+            if len(targets) != 1:
+                return False
+            binary = Path(targets.pop())
+            binary_name = r"codex(?:-app-server)?(?:-(?:x86_64|aarch64)-unknown-linux-(?:gnu|musl))?"
+            if not binary.is_absolute() or not re.fullmatch(binary_name, binary.name):
+                return False
+            with _parent(binary, private=True) as (binary_parent, filename):
+                info = os.stat(filename, dir_fd=binary_parent, follow_symlinks=False)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, uid) or info.st_mode & 0o022
+                        or not os.access(filename, os.X_OK, dir_fd=binary_parent, follow_symlinks=False)):
+                    return False
+            lock = os.open(".lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            handles.callback(os.close, lock)
+            info = os.fstat(lock)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != uid or info.st_mode & 0o022:
+                return False
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def _verification_path(path):
+    if sys.platform != "linux":
+        return path
+    try:
+        configured_home = os.environ.get("CODEX_HOME")
+        home = Path(configured_home).resolve(strict=True) if configured_home else Path.home() / ".codex"
+    except (OSError, RuntimeError):
+        return path
+    root = home / "tmp" / "arg0-linux"
+    retained = []
+    for component in path.split(os.pathsep):
+        entry = Path(component)
+        if (entry.is_absolute() and str(entry) == component and entry.parent == root
+                and re.fullmatch(r"codex-arg0[A-Za-z0-9]{6}", entry.name)
+                and _is_live_codex_linux_alias(entry)):
+            continue
+        retained.append(component)
+    # Some resolvers treat PATH="" differently from an explicit empty component.
+    return os.pathsep.join(retained) or path
+
+
 def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_path,
              capabilities=(), max_workers=4, timeout=60, reuse_only=False):
     """One producer and its read-only consumers; records are advisory, not QA."""
@@ -711,10 +785,11 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
             try:
                 available = set(capabilities) | {"platform:" + sys.platform}
                 base_environment = _NATIVE_BASE_ENVIRONMENT if os.name == 'nt' else {"PATH"}
+                spec = dict(job["spec"])
+                spec["environment"] = sorted(set(spec["environment"]) | base_environment)
+                env = {key: os.environ[key] for key in spec["environment"] if key in os.environ}
                 if os.name == 'nt':
                     from wiki_platform import native_executable
-                    env = {key: os.environ[key] for key in set(job["spec"]["environment"]) | base_environment
-                           if key in os.environ}
                     def capability_available(capability):
                         if not capability.startswith("executable:"):
                             return False
@@ -725,7 +800,20 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                             return False
                     missing = [c for c in job["requires"] if c not in available and not capability_available(c)]
                 else:
-                    missing = [c for c in job["requires"] if c not in available and not (c.startswith("executable:") and shutil.which(c[11:]))]
+                    original_path = env.get("PATH")
+                    if original_path is not None:
+                        env["PATH"] = _verification_path(original_path)
+                    search_path = os.pathsep.join(str((root / p).resolve()) if not os.path.isabs(p) else p
+                                                 for p in os.get_exec_path(env))
+
+                    def posix_executable(name):
+                        candidate = str(root / name) if os.sep in name else name
+                        return shutil.which(candidate, path=search_path)
+
+                    # Keep the existing capability lookup when PATH needed no filtering.
+                    capability_lookup = posix_executable if env.get("PATH") != original_path else shutil.which
+                    missing = [c for c in job["requires"] if c not in available
+                               and not (c.startswith("executable:") and capability_lookup(c[11:]))]
                 if missing:
                     record.update(state="capability_unavailable", error="missing capabilities: " + ", ".join(missing))
                     return record
@@ -737,17 +825,12 @@ def run_jobs(jobs, repo_root, *, wbs_id, run_id, execution_generation, results_p
                         record.update(state="start_failed", error=str(exc))
                         return record
                 else:
-                    search_path = os.pathsep.join(str((root / p).resolve()) if not os.path.isabs(p) else p
-                                                 for p in os.get_exec_path())
-                    executable = shutil.which(str(root / command) if os.sep in command else command, path=search_path)
+                    executable = posix_executable(command)
                 if not executable:
                     record.update(state="start_failed", error="executable unavailable")
                     return record
-                spec = dict(job["spec"])
-                spec["environment"] = sorted(set(spec["environment"]) | base_environment)
                 spec["toolchains"] = sorted(set(spec["toolchains"]) | {executable})
                 argv = [executable, *job["argv"][1:]]
-                env = {key: os.environ[key] for key in spec["environment"] if key in os.environ}
                 def observe_context():
                     observed = scoped_call(_SCOPED_CONTEXT_CODE, spec, root, env, [*held, *result_lease])
                     if not os.path.isabs(command) and Path(executable).is_relative_to(root) and executable not in job["spec"]["toolchains"]:
